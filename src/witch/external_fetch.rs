@@ -199,7 +199,11 @@ fn run_fetch_thread(
                 break;
             }
             FetchRequest::Refresh { source, eligible_dirs } => {
-                process_refresh(&db, &result_tx, &shared_config, source, &eligible_dirs);
+                let shutdown = process_refresh(&db, &request_rx, &result_tx, &shared_config, source, &eligible_dirs);
+                if shutdown {
+                    crate::logging::log_general("[FETCH] Shutdown during batch, exiting");
+                    break;
+                }
             }
         }
     }
@@ -208,13 +212,17 @@ fn run_fetch_thread(
 }
 
 /// Process a single refresh request: query DB, build work queue, HTTP calls.
+///
+/// Checks `request_rx` between items so Shutdown is respected mid-batch.
+/// Returns `true` if a Shutdown was received (caller should exit the thread).
 fn process_refresh(
     db: &Database,
+    request_rx: &Receiver<FetchRequest>,
     result_tx: &Sender<FetchResult>,
     shared_config: &SharedConfig,
     source: ExternalSource,
     eligible_dirs: &[PathBuf],
-) {
+) -> bool {
     // Read config for API key and rate limit
     let (api_key, requests_per_second) = {
         let config = shared_config.read().expect("SharedConfig lock poisoned");
@@ -231,7 +239,7 @@ fn process_refresh(
             no_match: 0,
             retries: 0,
         });
-        return;
+        return false;
     }
 
     // Build work queue from DB
@@ -239,8 +247,8 @@ fn process_refresh(
 
     let mut work_queue: VecDeque<WorkItem> = VecDeque::new();
 
-    // Get new candidates
-    match db.get_inodes_needing_lookup(source.to_key(), &dir_refs, 1000) {
+    // Get all candidates — rate limiter is the real throttle, not batch size
+    match db.get_inodes_needing_lookup(source.to_key(), &dir_refs, i64::MAX as usize) {
         Ok(candidates) => {
             for c in candidates {
                 let blob = fingerprint_to_blob(&c.fingerprint);
@@ -258,7 +266,7 @@ fn process_refresh(
     }
 
     // Get retry candidates
-    match db.get_retry_candidates(source.to_key(), 100) {
+    match db.get_retry_candidates(source.to_key(), i64::MAX as usize) {
         Ok(retries) => {
             for c in retries {
                 let blob = fingerprint_to_blob(&c.fingerprint);
@@ -284,7 +292,7 @@ fn process_refresh(
             no_match: 0,
             retries: 0,
         });
-        return;
+        return false;
     }
 
     crate::logging::log_general(format!(
@@ -310,7 +318,19 @@ fn process_refresh(
         retries: 0,
     }));
 
+    let mut shutdown_requested = false;
+
     while let Some(item) = work_queue.pop_front() {
+        // Check for shutdown between items so exit is prompt
+        if let Ok(FetchRequest::Shutdown) = request_rx.try_recv() {
+            crate::logging::log_general(format!(
+                "[FETCH] Shutdown received mid-batch at {}/{}, stopping gracefully",
+                processed, total_items
+            ));
+            shutdown_requested = true;
+            break;
+        }
+
         let start = Instant::now();
 
         match client.lookup_with_raw(&item.fingerprint_raw, item.duration_secs) {
@@ -390,6 +410,8 @@ fn process_refresh(
         no_match: no_match_count,
         retries: retry_count,
     });
+
+    shutdown_requested
 }
 
 /// Convert fingerprint Vec<u32> to BLOB bytes (little-endian).

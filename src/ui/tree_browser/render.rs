@@ -3,6 +3,9 @@
 //! Unified rendering for the tree browser.
 //! Dispatches to variant-specific layouts while sharing common tree rendering.
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -45,8 +48,12 @@ fn render_corpus_browser(
     let content_area = outer[0];
     let hints_area = outer[1];
 
-    // Check if config panel is open for horizontal split
+    // Extract pending edit info from variant for tree rendering
     let BrowserVariant::CorpusBrowser(ref v) = variant;
+    let pending_edit_paths = v.pending_edit_paths().clone();
+    let corpus_dir = v.corpus_dir().to_path_buf();
+
+    // Check if config panel is open for horizontal split
     if v.config_panel.is_some() {
         // Horizontal split: tree (65%) | config panel (35%)
         let h_chunks = Layout::default()
@@ -54,7 +61,7 @@ fn render_corpus_browser(
             .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
             .split(content_area);
 
-        render_corpus_tree(f, h_chunks[0], nav, variant);
+        render_corpus_tree(f, h_chunks[0], nav, variant, &pending_edit_paths, &corpus_dir);
 
         // Render config panel
         let BrowserVariant::CorpusBrowser(ref v) = variant;
@@ -62,7 +69,7 @@ fn render_corpus_browser(
             panel.render_config_panel(f, h_chunks[1]);
         }
     } else {
-        render_corpus_tree(f, content_area, nav, variant);
+        render_corpus_tree(f, content_area, nav, variant, &pending_edit_paths, &corpus_dir);
     }
 
     // Render control hints
@@ -75,6 +82,8 @@ fn render_corpus_tree(
     area: Rect,
     nav: &mut TreeNavigator,
     variant: &mut BrowserVariant,
+    pending_edit_paths: &HashSet<PathBuf>,
+    corpus_dir: &Path,
 ) {
     // Layout: Filter bar | Tree (full width)
     let main_chunks = Layout::default()
@@ -89,7 +98,7 @@ fn render_corpus_tree(
     render_filter_bar(f, main_chunks[0], nav);
 
     // Tree pane at full width
-    render_tree_pane(f, main_chunks[1], nav);
+    render_tree_pane(f, main_chunks[1], nav, pending_edit_paths, corpus_dir);
 
     // Overlays (match selection modal)
     variant.render_overlays(f, area);
@@ -122,7 +131,13 @@ fn render_filter_bar(f: &mut Frame, area: Rect, nav: &TreeNavigator) {
 }
 
 /// Render the tree pane.
-fn render_tree_pane(f: &mut Frame, area: Rect, nav: &mut TreeNavigator) {
+fn render_tree_pane(
+    f: &mut Frame,
+    area: Rect,
+    nav: &mut TreeNavigator,
+    pending_edit_paths: &HashSet<PathBuf>,
+    corpus_dir: &Path,
+) {
     let inner_height = area.height.saturating_sub(2) as usize;
     nav.set_visible_height(inner_height);
 
@@ -135,7 +150,18 @@ fn render_tree_pane(f: &mut Frame, area: Rect, nav: &mut TreeNavigator) {
         .enumerate()
         .skip(scroll)
         .take(inner_height)
-        .map(|(idx, entry)| render_entry_line(entry, idx == cursor_idx))
+        .map(|(idx, entry)| {
+            let is_pending = if entry.is_directory && !pending_edit_paths.is_empty() {
+                // Compute relative path from corpus dir to check against pending edits
+                entry.path.strip_prefix(corpus_dir)
+                    .ok()
+                    .map(|rel| pending_edit_paths.contains(rel))
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            render_entry_line(entry, idx == cursor_idx, is_pending)
+        })
         .collect();
 
     let title = format!("Files [{}/{}]", cursor_idx + 1, entries.len());
@@ -184,6 +210,12 @@ fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &Browse
             spans.push(control_colors::text(" config"));
         }
 
+        if v.has_pending_edits() {
+            spans.push(control_colors::text("  "));
+            spans.push(control_colors::confirm("R"));
+            spans.push(control_colors::text(" review"));
+        }
+
         Line::from(spans)
     };
 
@@ -191,16 +223,14 @@ fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &Browse
 }
 
 /// Render a single tree entry line.
-fn render_entry_line(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
+fn render_entry_line(entry: &TreeEntry, is_cursor: bool, is_pending_edit: bool) -> Line<'static> {
     let indent = "  ".repeat(entry.depth);
 
     let expand_indicator = if entry.is_directory {
-        if entry.has_children {
-            if entry.is_expanded {
-                "▼ "
-            } else {
-                "▶ "
-            }
+        if entry.is_expanded {
+            "▼ "
+        } else if entry.has_children {
+            "▶ "
         } else {
             "  "
         }
@@ -234,12 +264,19 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
 
     let expand_style = Style::default().fg(Color::Yellow);
     let count_style = Style::default().fg(Color::DarkGray);
+    let pending_style = Style::default().fg(Color::Yellow);
 
-    Line::from(vec![
+    let mut spans = vec![
         Span::raw(indent),
         Span::styled(expand_indicator, expand_style),
         Span::styled(format!("{}{}", icon, entry.name), base_style),
         Span::styled(count_suffix, count_style),
         Span::styled(deploy_suffix, deploy_style),
-    ])
+    ];
+
+    if is_pending_edit {
+        spans.push(Span::styled("  [*]", pending_style));
+    }
+
+    Line::from(spans)
 }

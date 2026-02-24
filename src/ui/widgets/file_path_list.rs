@@ -1,10 +1,10 @@
 //! File Path List rendering helper.
 //!
 //! Provides a common "scrollable list of paths" pattern with:
-//! - Left-truncation via `truncate_left()` from `ui/helpers.rs`
+//! - Right-truncation via `truncate_right()` from `ui/helpers.rs`
 //! - Standard cursor highlighting via `CURSOR_STYLE`
 //! - Optional prefix/suffix `Span`s per entry (for `[WAV]` tags, `> ` cursors, etc.)
-//! - Multi-line balloon expansion for the cursor item when its path exceeds available width
+//! - Multi-line balloon expansion showing the hidden tail when a cursor path exceeds available width
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -14,7 +14,7 @@ use ratatui::Frame;
 
 use super::path_display::wrap_path;
 use super::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
-use crate::ui::helpers::truncate_left;
+use crate::ui::helpers::truncate_right;
 
 /// A single entry in a file path list.
 pub struct PathEntry<'a> {
@@ -47,10 +47,10 @@ const BALLOON_PREFIX: &str = "  \u{21b3} ";
 /// Returns the full untruncated path of the cursor item (useful for info bars).
 ///
 /// **Balloon behavior:** When the cursor item's path exceeds the available width
-/// (after accounting for prefix/suffix), one or more continuation lines are shown
-/// with a `↳` prefix containing the hidden directory portion, wrapped at `/`
-/// boundaries via `wrap_path`. The visible height is reduced by the balloon line
-/// count when active.
+/// (after accounting for prefix/suffix), the main line shows the start of the path
+/// (right-truncated) and one or more continuation lines with a `↳` prefix show
+/// the hidden tail, wrapped at `/` boundaries via `wrap_path`. The visible height
+/// is reduced by the balloon line count when active.
 pub fn render_file_path_list(
     f: &mut Frame,
     area: Rect,
@@ -79,11 +79,9 @@ pub fn render_file_path_list(
             if entry.path.chars().count() <= path_budget {
                 return 0;
             }
-            // Hidden portion = everything truncate_left replaced with "..."
+            // Hidden portion = tail that truncate_right replaced with "..."
             let visible_chars = path_budget.saturating_sub(3);
-            let char_count = entry.path.chars().count();
-            let hidden_count = char_count.saturating_sub(visible_chars);
-            let hidden_part: String = entry.path.chars().take(hidden_count).collect();
+            let hidden_part: String = entry.path.chars().skip(visible_chars).collect();
             let balloon_prefix_width = BALLOON_PREFIX.chars().count();
             let balloon_budget = total_width.saturating_sub(balloon_prefix_width);
             wrap_path(&hidden_part, balloon_budget).len()
@@ -122,7 +120,7 @@ pub fn render_file_path_list(
         let suffix_width = span_char_width(&entry.suffix);
         let path_budget = total_width.saturating_sub(prefix_width + suffix_width);
 
-        let truncated = truncate_left(entry.path, path_budget);
+        let truncated = truncate_right(entry.path, path_budget);
         let path_style = if is_cursor { CURSOR_STYLE } else { LIST_ITEM_STYLE };
 
         let mut spans = Vec::with_capacity(entry.prefix.len() + 1 + entry.suffix.len());
@@ -172,16 +170,14 @@ pub fn render_file_path_list(
     cursor_entry.map(|e| e.path.to_string())
 }
 
-/// Build balloon continuation lines showing the truncated-away directory portion.
+/// Build balloon continuation lines showing the truncated-away tail portion.
 ///
 /// Uses `wrap_path` to split the hidden portion at `/` boundaries so the
 /// full path is always visible across multiple balloon lines.
 fn build_balloon_lines(full_path: &str, path_budget: usize, total_width: usize) -> Vec<Line<'static>> {
-    let char_count = full_path.chars().count();
-    // The part that was truncated away (the left portion that got replaced by "...")
+    // The part that was truncated away (the tail that got replaced by "...")
     let visible_chars = path_budget.saturating_sub(3); // "..." takes 3
-    let hidden_count = char_count.saturating_sub(visible_chars);
-    let hidden_part: String = full_path.chars().take(hidden_count).collect();
+    let hidden_part: String = full_path.chars().skip(visible_chars).collect();
 
     let prefix_width = BALLOON_PREFIX.chars().count();
     let balloon_budget = total_width.saturating_sub(prefix_width);

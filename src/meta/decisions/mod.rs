@@ -38,6 +38,8 @@ pub enum DecisionSource {
     ManualReview,
     IntakeIndex,
     DirConfigEdit,
+    EditReversal,
+    ExternalMatch,
 }
 
 impl std::fmt::Display for DecisionSource {
@@ -65,6 +67,8 @@ impl std::fmt::Display for DecisionSource {
             Self::ManualReview => write!(f, "Manual Review"),
             Self::IntakeIndex => write!(f, "Intake Index"),
             Self::DirConfigEdit => write!(f, "Dir Config Edit"),
+            Self::EditReversal => write!(f, "Edit Reversal"),
+            Self::ExternalMatch => write!(f, "External Match"),
         }
     }
 }

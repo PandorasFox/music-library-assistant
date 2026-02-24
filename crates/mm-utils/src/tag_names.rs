@@ -209,33 +209,57 @@ pub fn find_tag_value<'a>(
     tags: impl Iterator<Item = (&'a str, &'a str)>,
     target_name: &str,
 ) -> Option<TagLookupResult<'a>> {
+    let mut exact_match: Option<(&str, &str)> = None;
     let mut variant_match: Option<(&str, &str)> = None;
 
     for (name, value) in tags {
         match tag_names_match(name, target_name) {
             TagNameMatch::Exact => {
-                return Some(TagLookupResult {
-                    value,
-                    match_type: TagNameMatch::Exact,
-                    found_name: name,
+                // When multiple keys normalize to the same form (e.g., ALBUMARTIST
+                // and ALBUM_ARTIST), pick deterministically: alphabetical by key,
+                // then by value. This prevents HashMap iteration order from producing
+                // non-deterministic deploy paths.
+                exact_match = Some(match exact_match {
+                    None => (name, value),
+                    Some((prev_name, prev_value)) => {
+                        if (name, value) < (prev_name, prev_value) {
+                            (name, value)
+                        } else {
+                            (prev_name, prev_value)
+                        }
+                    }
                 });
             }
             TagNameMatch::LikelyVariant => {
-                // Store first variant match, but keep looking for exact
-                if variant_match.is_none() {
-                    variant_match = Some((name, value));
-                }
+                // Same tiebreaker for variant matches.
+                variant_match = Some(match variant_match {
+                    None => (name, value),
+                    Some((prev_name, prev_value)) => {
+                        if (name, value) < (prev_name, prev_value) {
+                            (name, value)
+                        } else {
+                            (prev_name, prev_value)
+                        }
+                    }
+                });
             }
             TagNameMatch::NoMatch => {}
         }
     }
 
-    // Return variant match if found
-    variant_match.map(|(found_name, value)| TagLookupResult {
-        value,
-        match_type: TagNameMatch::LikelyVariant,
-        found_name,
-    })
+    if let Some((found_name, value)) = exact_match {
+        Some(TagLookupResult {
+            value,
+            match_type: TagNameMatch::Exact,
+            found_name,
+        })
+    } else {
+        variant_match.map(|(found_name, value)| TagLookupResult {
+            value,
+            match_type: TagNameMatch::LikelyVariant,
+            found_name,
+        })
+    }
 }
 
 /// Find a tag value in a HashMap-like structure, using fuzzy matching.
@@ -365,5 +389,42 @@ mod tests {
         assert_eq!(find_tag_in_map(&tag_map, "catalognumber"), Some("MCB009"));
         assert_eq!(find_tag_in_map(&tag_map, "CATALOG_NUMBER"), Some("MCB009"));
         assert_eq!(find_tag_in_map(&tag_map, "genre"), None);
+    }
+
+    #[test]
+    fn test_find_tag_value_deterministic_tiebreak() {
+        use std::collections::HashMap;
+
+        // Both ALBUMARTIST and ALBUM_ARTIST normalize to the same form.
+        // When they have different values, the result must be deterministic
+        // regardless of HashMap iteration order.
+        let mut tag_map = HashMap::new();
+        tag_map.insert("ALBUMARTIST".to_string(), "RAWRDCORE RECORDS".to_string());
+        tag_map.insert("ALBUM_ARTIST".to_string(), "4lung".to_string());
+
+        // "ALBUMARTIST" < "ALBUM_ARTIST" in ASCII (A=0x41 < _=0x5F at position 5)
+        // So ALBUMARTIST wins the tiebreak.
+        let result = find_tag_in_map(&tag_map, "albumartist");
+        assert_eq!(result, Some("RAWRDCORE RECORDS"));
+
+        // Verify stability across many calls (HashMap iteration order can vary)
+        for _ in 0..100 {
+            assert_eq!(find_tag_in_map(&tag_map, "albumartist"), Some("RAWRDCORE RECORDS"));
+        }
+    }
+
+    #[test]
+    fn test_find_tag_value_tiebreak_by_value() {
+        // When keys are identical after normalization and one is an exact string match,
+        // it should still be deterministic. If keys are the same string, tiebreak by value.
+        let tags = vec![
+            ("ARTIST", "Zebra"),
+            ("ARTIST", "Alpha"),
+        ];
+
+        // Same key name: tiebreak by value, "Alpha" < "Zebra"
+        let result = find_tag_value(tags.iter().copied(), "artist");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().value, "Alpha");
     }
 }

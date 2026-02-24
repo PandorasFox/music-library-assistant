@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::logging::log_general;
+use crate::logging::{log_general, log_error};
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::computations::helpers::{ComputedAggregateSignal, ComputedCorpusSignal, reconcile_aggregate_signals, reconcile_corpus_signals};
 use crate::meta::signals::data::{
@@ -42,14 +42,28 @@ pub fn execute_detect_deploy_conflicts(
         }
     };
 
-    let healthy_signals = read_only_db
-        .get_healthy_file_signals()
-        .unwrap_or_default();
+    let healthy_signals = match read_only_db.get_healthy_file_signals() {
+        Ok(v) => v,
+        Err(e) => {
+            log_error(format!(
+                "[COMPUTE] DetectDeployConflicts: get_healthy_file_signals failed: {}", e
+            ));
+            return Result::failure(computation, start.elapsed().as_millis() as u64, format!("get_healthy_file_signals: {}", e));
+        }
+    };
 
     let mut deploy_path_to_tracks: HashMap<String, Vec<i64>> = HashMap::new();
 
     for signal in &healthy_signals {
-        let tags = read_only_db.get_corpus_tags(signal.inode).unwrap_or_default();
+        let tags = match read_only_db.get_corpus_tags(signal.inode) {
+            Ok(v) => v,
+            Err(e) => {
+                log_error(format!(
+                    "[COMPUTE] DetectDeployConflicts: get_corpus_tags failed for inode {}: {}", signal.inode, e
+                ));
+                Vec::new()
+            }
+        };
         let tag_map: HashMap<String, String> = tags
             .into_iter()
             .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
@@ -175,7 +189,15 @@ pub fn execute_derive_deploy_health_signals(
         .collect();
 
     // Get all corpus audio file inodes
-    let corpus_inodes = read_only_db.get_all_corpus_inodes().unwrap_or_default();
+    let corpus_inodes = match read_only_db.get_all_corpus_inodes() {
+        Ok(v) => v,
+        Err(e) => {
+            log_error(format!(
+                "[COMPUTE] DeriveDeployHealthSignals '{}': get_all_corpus_inodes failed: {}", library_name, e
+            ));
+            return Result::failure(computation, start.elapsed().as_millis() as u64, format!("get_all_corpus_inodes: {}", e));
+        }
+    };
 
     log_general(format!(
         "[COMPUTE] DeriveDeployHealthSignals '{}': {} corpus inodes loaded",
@@ -215,7 +237,16 @@ pub fn execute_derive_deploy_health_signals(
             // Has corpus backing — check if stale
             let is_stale = if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
                 let inode = audio_file.inode();
-                let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
+                let tags = match read_only_db.get_corpus_tags(inode) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log_error(format!(
+                            "[COMPUTE] DeriveDeployHealthSignals '{}': get_corpus_tags failed for inode {} (corpus={}): {}",
+                            library_name, inode, corpus_path, e
+                        ));
+                        Vec::new()
+                    }
+                };
                 let tag_map: std::collections::HashMap<String, String> = tags
                     .into_iter()
                     .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
@@ -327,9 +358,15 @@ pub fn execute_derive_corpus_deploy_status(
     };
 
     // Get all HealthyFile signals
-    let healthy_signals = read_only_db
-        .get_healthy_file_signals()
-        .unwrap_or_default();
+    let healthy_signals = match read_only_db.get_healthy_file_signals() {
+        Ok(v) => v,
+        Err(e) => {
+            log_error(format!(
+                "[COMPUTE] DeriveCorpusDeployStatus: get_healthy_file_signals failed: {}", e
+            ));
+            return Result::failure(computation, start.elapsed().as_millis() as u64, format!("get_healthy_file_signals: {}", e));
+        }
+    };
 
     // Build inode → library paths map from files table (source='library')
     // This replaces the old stale_signals/stale_inodes approach that had a race
@@ -349,8 +386,8 @@ pub fn execute_derive_corpus_deploy_status(
             }
         }
         Err(e) => {
-            log_general(format!(
-                "[COMPUTE] DeriveCorpusDeployStatus: WARNING - get_all_library_files failed: {}",
+            log_error(format!(
+                "[COMPUTE] DeriveCorpusDeployStatus: get_all_library_files failed: {}",
                 e,
             ));
         }
@@ -390,7 +427,16 @@ pub fn execute_derive_corpus_deploy_status(
             continue;
         }
 
-        let tags = read_only_db.get_corpus_tags(signal.inode).unwrap_or_default();
+        let tags = match read_only_db.get_corpus_tags(signal.inode) {
+            Ok(v) => v,
+            Err(e) => {
+                log_error(format!(
+                    "[COMPUTE] DeriveCorpusDeployStatus: get_corpus_tags failed for inode {} (path={}): {}",
+                    signal.inode, signal.path, e
+                ));
+                Vec::new()
+            }
+        };
         let tag_map: HashMap<String, String> = tags
             .into_iter()
             .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
@@ -465,6 +511,35 @@ pub fn execute_derive_corpus_deploy_status(
 
     let deploy_ready_count = computed_deploy_ready.len();
     let deployed_healthy_count = computed_deployed_healthy.len();
+
+    // Signal-flip detection: identify inodes losing DeployedHealthy status.
+    // This catches the scenario where UpdateDeploySignals wrote DeployedHealthy
+    // but this bulk recomputation is about to clear it (likely a bug or race).
+    let existing_deployed_healthy: HashSet<i64> = read_only_db
+        .corpus_signal_all_inodes::<DeployedHealthySignal>()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let newly_deployed_healthy: HashSet<i64> = computed_deployed_healthy.iter().map(|s| s.inode).collect();
+    let newly_deploy_ready: HashSet<i64> = computed_deploy_ready.iter().map(|s| s.inode).collect();
+    for &inode in &existing_deployed_healthy {
+        if !newly_deployed_healthy.contains(&inode) {
+            let reason = if newly_deploy_ready.contains(&inode) {
+                "reclassified as DeployReady (inode not found in library files, or path mismatch)"
+            } else {
+                "dropped entirely (not in configured sources, or not healthy)"
+            };
+            // Find the path from precomputed if available
+            let path = precomputed.iter()
+                .find(|f| f.inode == inode)
+                .map(|f| f.corpus_path.as_str())
+                .unwrap_or("<unknown>");
+            log_error(format!(
+                "[COMPUTE] DeriveCorpusDeployStatus: inode {} was DeployedHealthy, now {} — {}",
+                inode, reason, path,
+            ));
+        }
+    }
 
     let (dr_cleared, dr_new, dr_updated, dr_unchanged) = reconcile_corpus_signals::<DeployReadySignal>(
         read_only_db,

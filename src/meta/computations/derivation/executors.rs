@@ -1106,6 +1106,11 @@ pub fn execute_update_deploy_signals(
     let library_path_str = relative_library_path.to_string_lossy().to_string();
     let corpus_path_str = relative_corpus_path.to_string_lossy().to_string();
 
+    log_general(format!(
+        "[COMPUTE] UpdateDeploySignals: corpus={} library={}",
+        corpus_path_str, library_path_str,
+    ));
+
     // Clear library-side signals for this path
     clear_library_signals_for_path(&sender, &library_path_str, witness);
 
@@ -1129,6 +1134,7 @@ pub fn execute_update_deploy_signals(
     };
 
     // Clear DeployReady for corpus file (inode-keyed)
+    let had_deploy_ready = read_only_db.corpus_signal_exists::<DeployReadySignal>(corpus_inode);
     drop_stale_corpus_signal::<DeployReadySignal>(
         read_only_db,
         &sender,
@@ -1137,16 +1143,24 @@ pub fn execute_update_deploy_signals(
     );
 
     // Ensure DeployedHealthy with library_path (inode-keyed)
-    if !read_only_db.corpus_signal_exists::<DeployedHealthySignal>(corpus_inode) {
+    let had_deployed_healthy = read_only_db.corpus_signal_exists::<DeployedHealthySignal>(corpus_inode);
+    if !had_deployed_healthy {
         sender.write_typed_signal(
             TypedSignalWrite::DeployedHealthy(DeployedHealthySignal {
                 inode: corpus_inode,
                 path: corpus_path_str.clone(),
-                library_path: library_path_str,
+                library_path: library_path_str.clone(),
             }),
             witness,
         );
     }
+
+    log_general(format!(
+        "[COMPUTE] UpdateDeploySignals: inode={} DeployReady {} DeployedHealthy {}",
+        corpus_inode,
+        if had_deploy_ready { "CLEARED" } else { "absent" },
+        if had_deployed_healthy { "already existed" } else { "WRITTEN" },
+    ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }

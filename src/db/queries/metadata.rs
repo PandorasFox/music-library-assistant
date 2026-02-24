@@ -359,4 +359,126 @@ impl Database {
 
         Ok(files)
     }
+
+    // ========================================================================
+    // Edit History Queries
+    // ========================================================================
+
+    /// All sessions, most recent first.
+    pub fn get_edit_sessions(&self) -> Result<Vec<crate::meta::views::EditSessionSummary>> {
+        use crate::meta::views::EditSessionSummary;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id,
+                    MIN(edited_at) AS earliest,
+                    COUNT(*) AS edit_count,
+                    COUNT(DISTINCT inode) AS inode_count
+             FROM tag_edit_history
+             GROUP BY session_id
+             ORDER BY MIN(edited_at) DESC"
+        )?;
+
+        let rows = stmt.query_map(params![], |row| {
+            Ok(EditSessionSummary {
+                session_id: row.get(0)?,
+                earliest_at: row.get(1)?,
+                edit_count: row.get::<_, i64>(2)? as usize,
+                inode_count: row.get::<_, i64>(3)? as usize,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// All edits within a single session, ordered by id.
+    pub fn get_session_edits(&self, session_id: &str) -> Result<Vec<crate::meta::views::EditRecord>> {
+        use crate::meta::views::EditRecord;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, inode, field_name, old_value, new_value, edited_at
+             FROM tag_edit_history
+             WHERE session_id = ?1
+             ORDER BY id"
+        )?;
+
+        let rows = stmt.query_map(params![session_id], |row| {
+            Ok(EditRecord {
+                id: row.get(0)?,
+                inode: row.get(1)?,
+                field_name: row.get(2)?,
+                old_value: row.get(3)?,
+                new_value: row.get(4)?,
+                edited_at: row.get(5)?,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// All edit history rows for export, ordered by id.
+    pub fn get_all_edit_history(&self) -> Result<Vec<crate::meta::views::EditHistoryExportRow>> {
+        use crate::meta::views::EditHistoryExportRow;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, inode, field_name, old_value, new_value, edited_at, session_id
+             FROM tag_edit_history
+             ORDER BY id"
+        )?;
+
+        let rows = stmt.query_map(params![], |row| {
+            Ok(EditHistoryExportRow {
+                id: row.get(0)?,
+                inode: row.get(1)?,
+                field_name: row.get(2)?,
+                old_value: row.get(3)?,
+                new_value: row.get(4)?,
+                edited_at: row.get(5)?,
+                session_id: row.get(6)?,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Edit history rows for a single session, for export.
+    pub fn get_session_edit_history(&self, session_id: &str) -> Result<Vec<crate::meta::views::EditHistoryExportRow>> {
+        use crate::meta::views::EditHistoryExportRow;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, inode, field_name, old_value, new_value, edited_at, session_id
+             FROM tag_edit_history
+             WHERE session_id = ?1
+             ORDER BY id"
+        )?;
+
+        let rows = stmt.query_map(params![session_id], |row| {
+            Ok(EditHistoryExportRow {
+                id: row.get(0)?,
+                inode: row.get(1)?,
+                field_name: row.get(2)?,
+                old_value: row.get(3)?,
+                new_value: row.get(4)?,
+                edited_at: row.get(5)?,
+                session_id: row.get(6)?,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
 }

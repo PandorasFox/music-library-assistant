@@ -417,6 +417,18 @@ enum DbWriteOp {
     },
 
     // =========================================================================
+    // Edit History Purge Operations (operator-confirmed UI action)
+    // =========================================================================
+
+    /// Delete all rows from tag_edit_history.
+    ClearTagEditHistory,
+
+    /// Delete all rows from tag_edit_history for a single session.
+    ClearTagEditHistorySession {
+        session_id: String,
+    },
+
+    // =========================================================================
     // Shutdown
     // =========================================================================
 
@@ -1076,6 +1088,27 @@ impl SignalWriteSender {
             source,
         });
     }
+
+    // =========================================================================
+    // Edit History Purge Operations (operator-confirmed UI action)
+    // =========================================================================
+
+    /// Delete all tag edit history rows.
+    ///
+    /// Operator-confirmed action from the History view, not a corpus mutation,
+    /// so no witness is required.
+    pub fn clear_tag_edit_history(&self) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::ClearTagEditHistory);
+    }
+
+    /// Delete tag edit history rows for a single session.
+    pub fn clear_tag_edit_history_session(&self, session_id: &str) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::ClearTagEditHistorySession {
+            session_id: session_id.to_string(),
+        });
+    }
 }
 
 // IndexWriteSender has been removed - all operations now go through SignalWriteSender.
@@ -1561,6 +1594,25 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::DeleteExternalRetry { inode, source } => {
             with_retry("delete_external_retry", &inode.to_string(), || {
                 execute_delete_external_retry(db, *inode, *source)
+            });
+        }
+
+        DbWriteOp::ClearTagEditHistory => {
+            with_retry("clear_tag_edit_history", "all", || {
+                db.conn().execute("DELETE FROM tag_edit_history", [])
+                    .map(|_| ())
+                    .map_err(Into::into)
+            });
+        }
+
+        DbWriteOp::ClearTagEditHistorySession { session_id } => {
+            with_retry("clear_tag_edit_history_session", session_id, || {
+                db.conn().execute(
+                    "DELETE FROM tag_edit_history WHERE session_id = ?1",
+                    rusqlite::params![session_id],
+                )
+                .map(|_| ())
+                .map_err(Into::into)
             });
         }
 

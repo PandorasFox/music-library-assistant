@@ -750,6 +750,16 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_session_edits(session_id)
     }
 
+    /// Get all edit history rows for export (includes session_id).
+    pub fn get_all_edit_history(&self) -> Result<Vec<crate::meta::views::EditHistoryExportRow>> {
+        self.db.get_all_edit_history()
+    }
+
+    /// Get edit history rows for a single session, for export.
+    pub fn get_session_edit_history(&self, session_id: &str) -> Result<Vec<crate::meta::views::EditHistoryExportRow>> {
+        self.db.get_session_edit_history(session_id)
+    }
+
     // =========================================================================
     // Health / Cache Queries
     // =========================================================================

@@ -498,6 +498,18 @@ pub struct EditRecord {
     pub edited_at: String,
 }
 
+/// Full edit history row for export (includes session_id).
+#[derive(Debug, Clone)]
+pub struct EditHistoryExportRow {
+    pub id: i64,
+    pub inode: i64,
+    pub field_name: String,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub edited_at: String,
+    pub session_id: String,
+}
+
 /// Data payload for the History view cache refresh.
 #[derive(Debug, Clone, Default)]
 pub struct EditHistoryData {

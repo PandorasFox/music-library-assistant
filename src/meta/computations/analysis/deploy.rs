@@ -421,10 +421,10 @@ pub fn execute_derive_corpus_deploy_status(
 
     for signal in &healthy_signals {
         let corpus_path_buf = Path::new(&signal.path);
+        let in_source = config.is_path_in_source(corpus_path_buf);
 
-        if !config.is_path_in_source(corpus_path_buf) {
+        if !in_source {
             skipped_not_configured += 1;
-            continue;
         }
 
         let tags = match read_only_db.get_corpus_tags(signal.inode) {
@@ -444,13 +444,18 @@ pub fn execute_derive_corpus_deploy_status(
         let expected_relative = compute_deployment_path_with_tags(&signal.path, &tag_map);
         let deploy_path = expected_relative.to_string_lossy().to_string();
 
+        // Count ALL healthy files' deploy paths for conflict detection,
+        // matching DetectDeployConflicts which has no source filter.
         *deploy_path_counts.entry(deploy_path.clone()).or_insert(0) += 1;
 
-        precomputed.push(PrecomputedFile {
-            inode: signal.inode,
-            corpus_path: signal.path.clone(),
-            deploy_path,
-        });
+        // Only emit signals for source-configured files.
+        if in_source {
+            precomputed.push(PrecomputedFile {
+                inode: signal.inode,
+                corpus_path: signal.path.clone(),
+                deploy_path,
+            });
+        }
     }
 
     // Phase 2: Build conflict set — deploy paths claimed by 2+ corpus files.

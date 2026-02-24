@@ -18,6 +18,9 @@ mm
 .DS_Store
 ._*
 
+# Local test scripts
+test_instance.sh
+
 # claude lol
 .claude/
 analysis_reports/

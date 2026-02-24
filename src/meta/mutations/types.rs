@@ -26,7 +26,7 @@ use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
 use super::album_art::EmbedAlbumArtMutation;
 use super::config_edit::ApplyConfigEditsMutation;
-use super::dir_config_edit::ApplyDirConfigEditMutation;
+use super::dir_config_edit::{ApplyDirConfigEditMutation, ApplyBatchDirConfigEditsMutation};
 
 // ============================================================================
 // TagOp - Incremental Tag Operations
@@ -327,6 +327,10 @@ pub enum Mutation {
 
     /// Apply a source directory config edit to dirs.kdl.
     ApplyDirConfigEdit(ApplyDirConfigEditMutation),
+
+    /// Batch-apply multiple source directory config edits to dirs.kdl atomically.
+    /// Produced by coalescing individual ApplyDirConfigEdit mutations at commit time.
+    ApplyBatchDirConfigEdits(ApplyBatchDirConfigEditsMutation),
 }
 
 impl Mutation {
@@ -359,6 +363,7 @@ impl Mutation {
             Mutation::EmbedAlbumArt(m) => m,
             Mutation::ApplyConfigEdits(m) => m,
             Mutation::ApplyDirConfigEdit(m) => m,
+            Mutation::ApplyBatchDirConfigEdits(m) => m,
         }
     }
 
@@ -383,6 +388,7 @@ impl Mutation {
                 | Mutation::EmitExpectedMissingTag(_)
             // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
             // Note: InboxToCorpus moves files + updates DB, so NOT db-only
+            // Note: ApplyBatchDirConfigEdits writes to disk, so NOT db-only
         )
     }
 
@@ -417,7 +423,8 @@ impl Mutation {
             | Mutation::EmitExpectedDuplicate(_)
             | Mutation::EmitExpectedMissingTag(_)
             | Mutation::ApplyConfigEdits(_)
-            | Mutation::ApplyDirConfigEdit(_) => None,
+            | Mutation::ApplyDirConfigEdit(_)
+            | Mutation::ApplyBatchDirConfigEdits(_) => None,
         }
     }
 
@@ -543,6 +550,7 @@ impl Mutation {
 
             // Dir config edits: no corpus directories affected
             Mutation::ApplyDirConfigEdit(_) => {}
+            Mutation::ApplyBatchDirConfigEdits(_) => {}
         }
 
         // Deduplicate directories

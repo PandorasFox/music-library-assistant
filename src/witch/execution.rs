@@ -171,6 +171,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         match &mutation {
             Mutation::ApplyConfigEdits(ref m) => Some(m.new_config.clone()),
             Mutation::ApplyDirConfigEdit(ref m) => Some(m.new_config.clone()),
+            Mutation::ApplyBatchDirConfigEdits(ref m) => Some(m.new_config.clone()),
             _ => None,
         }
     } else {

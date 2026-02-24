@@ -807,6 +807,9 @@ impl App {
             tree_browser::TreeBrowserAction::CloseDirConfig => {
                 self.close_dir_config_panel();
             }
+            tree_browser::TreeBrowserAction::ReviewTransaction => {
+                self.after_staging_decisions();
+            }
         }
     }
 
@@ -946,15 +949,29 @@ impl App {
             gesture,
         );
 
-        // Close panel
+        // Close panel and stay in browser for batch editing
         self.close_dir_config_panel();
-        self.after_staging_decisions();
+        self.sync_browser_pending_edits();
+        self.status_message = Some(format!("Dir config staged: {}", source_path.display()));
     }
 
     /// Close the dir config panel.
     fn close_dir_config_panel(&mut self) {
         if let super::active_view::ActiveView::CorpusBrowser(ref mut browser) = self.view {
             browser.clear_config_panel();
+        }
+    }
+
+    /// Sync browser's pending-edit markers from the current transaction's DirConfigEdit decisions.
+    fn sync_browser_pending_edits(&mut self) {
+        let mut pending = std::collections::HashSet::new();
+        for key in self.witch.decision_keys() {
+            if key.source == DecisionSource::DirConfigEdit {
+                pending.insert(std::path::PathBuf::from(&key.item));
+            }
+        }
+        if let super::active_view::ActiveView::CorpusBrowser(ref mut browser) = self.view {
+            browser.set_pending_edit_paths(pending);
         }
     }
 
@@ -1252,6 +1269,7 @@ impl App {
                     let _ = super::operator_decisions::discard_transaction(&mut self.witch);
                     // Re-open transaction immediately
                     let _ = self.witch.start_transaction("Open");
+                    self.sync_browser_pending_edits();
                     self.status_message = Some("Transaction discarded".into());
                 }
                 TransactionReviewAction::RequestRemoval => {
@@ -1266,6 +1284,7 @@ impl App {
                     let Some(g) = gesture else { return };
                     let _ = super::operator_decisions::remove_decision(&mut self.witch, &key, g);
                     self.status_message = Some("Decision removed".into());
+                    self.sync_browser_pending_edits();
                     // Clamp cursor
                     if let ActiveView::TabbedTransactionReview(ref mut state) = self.view {
                         let remaining = transaction_review::fetch_decision_summaries(&self.witch).len();

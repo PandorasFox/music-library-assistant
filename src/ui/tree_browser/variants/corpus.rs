@@ -2,6 +2,7 @@
 //!
 //! Browse files and directories with persistent search bar and tag editor launch.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -235,6 +236,8 @@ pub struct CorpusBrowserVariant {
     match_selection_idx: usize,
     /// Directory config panel state (open when Some)
     pub config_panel: Option<DirConfigPanelState>,
+    /// Relative paths of dirs with staged config edits (for [*] marker).
+    pending_edit_paths: HashSet<PathBuf>,
 }
 
 impl CorpusBrowserVariant {
@@ -249,6 +252,7 @@ impl CorpusBrowserVariant {
             match_selection_mode: false,
             match_selection_idx: 0,
             config_panel: None,
+            pending_edit_paths: HashSet::new(),
         }
     }
 
@@ -265,6 +269,21 @@ impl CorpusBrowserVariant {
     /// Set focus to tree browser.
     pub fn set_focus_tree(&mut self) {
         self.focus = CorpusBrowserFocus::TreeBrowser;
+    }
+
+    /// Set the pending edit paths (relative paths of dirs with staged config edits).
+    pub fn set_pending_edit_paths(&mut self, paths: HashSet<PathBuf>) {
+        self.pending_edit_paths = paths;
+    }
+
+    /// Get pending edit paths for render.
+    pub fn pending_edit_paths(&self) -> &HashSet<PathBuf> {
+        &self.pending_edit_paths
+    }
+
+    /// Whether there are any pending dir config edits.
+    pub fn has_pending_edits(&self) -> bool {
+        !self.pending_edit_paths.is_empty()
     }
 
     /// Called when cursor moves - no-op now that preview pane is removed.
@@ -391,6 +410,10 @@ impl CorpusBrowserVariant {
                     }
                 }
                 TreeBrowserAction::None
+            }
+            // R opens transaction review when pending dir config edits exist
+            KeyCode::Char('R') if self.has_pending_edits() => {
+                TreeBrowserAction::ReviewTransaction
             }
             // Ctrl+F opens filter popup
             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {

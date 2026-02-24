@@ -34,7 +34,7 @@ deployment operations.
 
 | Stage | Order | Mutations |
 |-------|-------|-----------|
-| Config | 0 | ApplyConfigEdits, ApplyDirConfigEdit |
+| Config | 0 | ApplyConfigEdits, ApplyDirConfigEdit, ApplyBatchDirConfigEdits |
 | DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, InboxToCorpus, InboxDirToCorpus, ApplyDbTagsToDisk |
 | DiskFlush | 2 | Transcode, EmbedAlbumArt, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex |
 | DiskDeploy | 3 | HardLink, LibraryMove |
@@ -165,6 +165,7 @@ The EmitExpectedMissingTag mutation is used when an operator confirms that certa
 |----------|------------------|---------------------|-----------------|-----------------|-------|
 | ApplyConfigEdits | — | — | — | — | Writes edited config to disk via comment-preserving KDL modification. Returns new Config in `TaskResult.config_update` for in-memory update via `Witch::update_shared_config()` |
 | ApplyDirConfigEdit | — | — | — | — | Writes edited source directory config to dirs.kdl. Replaces a single SourceDir entry by matching on path. Fields: libraries, can_stash_dupes, interior_dupes, path_schema. Recomputation scope: FILES \| DEPLOY \| TAGS |
+| ApplyBatchDirConfigEdits | — | — | — | — | Atomically applies multiple dir config edits to dirs.kdl in a single read-modify-write. Produced by coalescing multiple ApplyDirConfigEdit mutations at transaction commit time — never directly staged. Recomputation scope: union of per-entry scopes |
 
 The ApplyConfigEdits mutation is created by the Config Editor view when the operator saves edited config fields. It carries the original KDL text, old config, and new config. On execution, it backs up `config.kdl` to `config.kdl.bak`, then applies field-level edits to the KDL document preserving comments and formatting. The new config is propagated back to the main thread via `TaskResult.config_update`, where `Witch::tick()` updates the `SharedConfig` (Arc<RwLock<Config>>). `is_db_only: false` (writes to filesystem), `signal_clear_scope: None`, `affected_inodes: empty`. No spawned computations or signal effects.
 

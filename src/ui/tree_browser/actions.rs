@@ -37,4 +37,7 @@ pub enum TreeBrowserAction {
 
     /// Close dir config panel (Esc or Discard)
     CloseDirConfig,
+
+    /// Review pending transaction (R key with pending dir config edits)
+    ReviewTransaction,
 }

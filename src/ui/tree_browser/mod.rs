@@ -161,4 +161,10 @@ impl TreeBrowserState {
         let BrowserVariant::CorpusBrowser(ref v) = self.variant;
         v.config_panel.as_ref()
     }
+
+    /// Set pending edit paths for visual markers.
+    pub fn set_pending_edit_paths(&mut self, paths: HashSet<std::path::PathBuf>) {
+        let BrowserVariant::CorpusBrowser(ref mut v) = self.variant;
+        v.set_pending_edit_paths(paths);
+    }
 }

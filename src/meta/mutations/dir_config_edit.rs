@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::SourceDir;
+use crate::config::{Config, SourceDir};
 use crate::meta::computations::Computation;
 use crate::meta::mutations::types::{DiffEntry, MutationResult, SignalClearScope, SignalToClear};
 use crate::meta::recomputation::RecomputationScope;
@@ -174,6 +174,188 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
             ));
         }
 
+        diffs
+    }
+}
+
+// ============================================================================
+// Batch Dir Config Edit Mutation
+// ============================================================================
+
+/// A single dir config edit entry within a batch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirConfigEditEntry {
+    pub source_path: PathBuf,
+    pub old_dir: SourceDir,
+    pub new_dir: SourceDir,
+}
+
+/// Batch mutation that atomically applies multiple dir config edits to dirs.kdl.
+/// Produced by coalescing individual ApplyDirConfigEdit mutations at commit time —
+/// never directly staged by UI code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyBatchDirConfigEditsMutation {
+    pub edits: Vec<DirConfigEditEntry>,
+    /// Full config with all edits applied, for SharedConfig update.
+    pub new_config: Config,
+}
+
+impl PartialEq for ApplyBatchDirConfigEditsMutation {
+    fn eq(&self, other: &Self) -> bool {
+        self.edits.len() == other.edits.len()
+            && self.edits.iter().zip(other.edits.iter()).all(|(a, b)| a.source_path == b.source_path)
+    }
+}
+
+impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
+    fn label(&self) -> &'static str {
+        "Batch dir config update"
+    }
+
+    fn staging(&self) -> super::traits::MutationStaging {
+        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::Config)
+    }
+
+    fn execute(&self, _ctx: &MutationContext) -> MutationResult {
+        let result = (|| -> anyhow::Result<()> {
+            let config_dir = crate::config::get_config_dir()?;
+            let dirs_path = config_dir.join("dirs.kdl");
+
+            // Load current dirs once
+            let mut dirs = if dirs_path.exists() {
+                let content = std::fs::read_to_string(&dirs_path)?;
+                crate::config::parse_dirs_kdl(&content)?
+            } else {
+                Vec::new()
+            };
+
+            // Apply all edits
+            for entry in &self.edits {
+                let mut found = false;
+                for dir in &mut dirs {
+                    if dir.path == entry.source_path {
+                        *dir = entry.new_dir.clone();
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    dirs.push(entry.new_dir.clone());
+                }
+            }
+
+            // Write once
+            crate::config::write_dirs_to_disk(&dirs)?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                crate::logging::log_general(format!(
+                    "[DIR CONFIG] Batch updated {} dir configs",
+                    self.edits.len()
+                ));
+                MutationResult {
+                    _mutation: super::Mutation::ApplyBatchDirConfigEdits(self.clone()),
+                    success: true,
+                    error: None,
+                    _duration_ms: 0,
+                    spawn_mutations: Vec::new(),
+                    pending_signals: Vec::new(),
+                    discovered_inodes: Vec::new(),
+                }
+            }
+            Err(e) => {
+                crate::logging::log_error(format!(
+                    "[DIR CONFIG] Batch config write failed: {:#}",
+                    e
+                ));
+                MutationResult {
+                    _mutation: super::Mutation::ApplyBatchDirConfigEdits(self.clone()),
+                    success: false,
+                    error: Some(format!("Batch dir config write failed: {:#}", e)),
+                    _duration_ms: 0,
+                    spawn_mutations: Vec::new(),
+                    pending_signals: Vec::new(),
+                    discovered_inodes: Vec::new(),
+                }
+            }
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope {
+        SignalClearScope::None
+    }
+
+    fn affected_inodes(&self) -> Vec<i64> {
+        Vec::new()
+    }
+
+    fn additional_computations(&self) -> Vec<Computation> {
+        Vec::new()
+    }
+
+    fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
+        Vec::new()
+    }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    fn recomputation_scope(&self) -> RecomputationScope {
+        let mut scope = RecomputationScope::EMPTY;
+        for entry in &self.edits {
+            scope |= dir_config_recomputation_scope(&entry.old_dir, &entry.new_dir);
+        }
+        scope
+    }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        let mut diffs = Vec::new();
+        for entry in &self.edits {
+            let old = &entry.old_dir;
+            let new = &entry.new_dir;
+            let prefix = entry.source_path.display().to_string();
+
+            if old.libraries != new.libraries {
+                diffs.push(DiffEntry::new(
+                    format!("{}: Libraries", prefix),
+                    old.libraries.join(", "),
+                    new.libraries.join(", "),
+                ));
+            }
+            if old.can_stash_dupes != new.can_stash_dupes {
+                diffs.push(DiffEntry::new(
+                    format!("{}: Can stash dupes", prefix),
+                    old.can_stash_dupes,
+                    new.can_stash_dupes,
+                ));
+            }
+            if old.interior_dupes != new.interior_dupes {
+                diffs.push(DiffEntry::new(
+                    format!("{}: Interior dupes", prefix),
+                    old.interior_dupes,
+                    new.interior_dupes,
+                ));
+            }
+            let old_schema = old.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or("(none)");
+            let new_schema = new.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or("(none)");
+            if old_schema != new_schema {
+                diffs.push(DiffEntry::new(
+                    format!("{}: Path schema", prefix),
+                    old_schema,
+                    new_schema,
+                ));
+            }
+            if old.enable_acoustid != new.enable_acoustid {
+                diffs.push(DiffEntry::new(
+                    format!("{}: Enable AcoustID", prefix),
+                    old.enable_acoustid,
+                    new.enable_acoustid,
+                ));
+            }
+        }
         diffs
     }
 }

@@ -11,6 +11,7 @@ use crate::meta::decisions::{
 use crate::db::types::Zone;
 use crate::meta::mutations::{Mutation, MutationExecutionStage, MutationStaging, TagOp};
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
+use crate::meta::mutations::dir_config_edit::{ApplyBatchDirConfigEditsMutation, DirConfigEditEntry};
 
 /// Coalesce ApplyTagOps mutations into per-zone mutations.
 ///
@@ -71,6 +72,69 @@ fn coalesce_tag_ops(mutations: Vec<Mutation>) -> Vec<Mutation> {
     result.extend(other);
     result
 }
+/// Coalesce ApplyDirConfigEdit mutations into a single batch write.
+///
+/// Multiple dir config edits targeting the same dirs.kdl file would race
+/// when executed in parallel on rayon. This function:
+/// 1. Extracts all ApplyDirConfigEdit mutations
+/// 2. If there are 2+, merges them into a single ApplyBatchDirConfigEdits
+/// 3. Builds a merged Config by overlaying each edit's changes
+///
+/// With only 0-1 dir config edits, returns mutations unchanged.
+fn coalesce_dir_config_edits(mutations: Vec<Mutation>) -> Vec<Mutation> {
+    let mut dir_edits: Vec<crate::meta::mutations::dir_config_edit::ApplyDirConfigEditMutation> = Vec::new();
+    let mut other: Vec<Mutation> = Vec::new();
+
+    for mutation in mutations {
+        match mutation {
+            Mutation::ApplyDirConfigEdit(m) => dir_edits.push(m),
+            m => other.push(m),
+        }
+    }
+
+    if dir_edits.len() <= 1 {
+        // Nothing to coalesce — put back as-is
+        for m in dir_edits {
+            other.push(Mutation::ApplyDirConfigEdit(m));
+        }
+        return other;
+    }
+
+    // Build merged new_config: start from first, overlay subsequent edits
+    let mut merged_config = dir_edits[0].new_config.clone();
+    for edit in &dir_edits[1..] {
+        let mut found = false;
+        for sd in &mut merged_config.source_dirs {
+            if sd.path == edit.source_path {
+                *sd = edit.new_dir.clone();
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            merged_config.source_dirs.push(edit.new_dir.clone());
+        }
+    }
+
+    // Build batch entries
+    let entries: Vec<DirConfigEditEntry> = dir_edits
+        .into_iter()
+        .map(|m| DirConfigEditEntry {
+            source_path: m.source_path,
+            old_dir: m.old_dir,
+            new_dir: m.new_dir,
+        })
+        .collect();
+
+    other.push(Mutation::ApplyBatchDirConfigEdits(
+        ApplyBatchDirConfigEditsMutation {
+            edits: entries,
+            new_config: merged_config,
+        },
+    ));
+    other
+}
+
 impl super::Witch {
     // -------------------------------------------------------------------------
     // Transaction Helpers
@@ -245,6 +309,8 @@ impl super::Witch {
 
         // Coalesce ApplyTagOps mutations to handle overlapping edits from multiple signals
         let all_mutations = coalesce_tag_ops(raw_mutations);
+        // Coalesce ApplyDirConfigEdit mutations into a single atomic dirs.kdl write
+        let all_mutations = coalesce_dir_config_edits(all_mutations);
 
         crate::logging::log_mutation(format!(
             "[TRANSACTION] confirm_transaction OK - {} decisions, {} mutations (after coalescing: {})",

@@ -556,6 +556,67 @@ pub fn execute_detect_compound_tags_for_inode(
 }
 
 // ============================================================================
+// Seed Compound Tag Dirty Inodes (config change)
+// ============================================================================
+
+/// Execute SeedCompoundTagDirtyInodes - mark inodes dirty after tag_splitting config change.
+///
+/// For each new (tag_name, separator) pair, queries corpus_tags for inodes whose
+/// tag values contain the separator, then marks those inodes dirty for compound_tag
+/// detection so DetectCompoundTagValues will reprocess them.
+pub fn execute_seed_compound_tag_dirty_inodes(
+    read_only_db: &ReadOnlyDb<'_>,
+    new_separators: &[(String, String)],
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    use std::collections::HashSet;
+
+    let computation = Computation::SeedCompoundTagDirtyInodes {
+        new_separators: new_separators.to_vec(),
+    };
+
+    let sender = match write_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    let mut all_inodes: HashSet<i64> = HashSet::new();
+
+    for (tag_name, separator) in new_separators {
+        match read_only_db.get_corpus_inodes_with_tag_separator(tag_name, separator) {
+            Ok(inodes) => {
+                all_inodes.extend(inodes);
+            }
+            Err(e) => {
+                log_general(format!(
+                    "[COMPUTE] SeedCompoundTagDirtyInodes: query failed for {}/'{}': {}",
+                    tag_name, separator, e
+                ));
+            }
+        }
+    }
+
+    let count = all_inodes.len();
+    let inodes: Vec<i64> = all_inodes.into_iter().collect();
+    sender.mark_dirty_inodes(inodes, COMPOUND_TAG_COMPUTATION, witness);
+
+    log_general(format!(
+        "[COMPUTE] SeedCompoundTagDirtyInodes: marked {} inodes dirty for {} new separator pair(s)",
+        count,
+        new_separators.len()
+    ));
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+// ============================================================================
 // Inconsistent Album Artist Detection
 // ============================================================================
 

@@ -214,6 +214,15 @@ pub enum Computation {
     /// ExternalMatch signals with classification (ExactMatch, ContentDiff,
     /// MetadataOnly) and per-tag diffs.
     DeriveExternalMatches,
+
+    /// Seed dirty inodes for compound tag recomputation after config change.
+    ///
+    /// Carries the new (tag_name, separator) pairs from a tag_splitting config
+    /// change. Queries corpus_tags for inodes whose values contain each new
+    /// separator and marks them dirty for compound_tag detection.
+    SeedCompoundTagDirtyInodes {
+        new_separators: Vec<(String, String)>,
+    },
 }
 
 impl Computation {
@@ -243,6 +252,7 @@ impl Computation {
             Computation::DetectEmbeddedDiscNumbers => "Detecting embedded disc numbers",
             Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
             Computation::DeriveExternalMatches => "Deriving external match signals",
+            Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
         }
     }
 
@@ -317,6 +327,9 @@ impl Computation {
             }
             Computation::DeriveExternalMatches => {
                 execute_derive_external_matches(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::SeedCompoundTagDirtyInodes { ref new_separators } => {
+                execute_seed_compound_tag_dirty_inodes(ctx.read_db, new_separators, ctx.witness, ctx.start)
             }
         }
     }

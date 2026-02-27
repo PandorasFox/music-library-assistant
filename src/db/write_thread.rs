@@ -380,6 +380,12 @@ enum DbWriteOp {
         computation_type: String,
     },
 
+    /// Mark a batch of inodes dirty for a specific computation type.
+    MarkDirtyInodes {
+        inodes: Vec<i64>,
+        computation_type: String,
+    },
+
     // =========================================================================
     // External Matching Operations (AcoustID fetch thread results)
     // =========================================================================
@@ -1014,6 +1020,24 @@ impl SignalWriteSender {
         });
     }
 
+    /// Mark a batch of inodes dirty for a specific computation type.
+    ///
+    /// Used when config changes introduce new separators that may affect
+    /// existing corpus files. Only processes non-empty batches.
+    pub fn mark_dirty_inodes(
+        &self,
+        inodes: Vec<i64>,
+        computation_type: &str,
+        _witness: &ComputationWitness,
+    ) {
+        if inodes.is_empty() { return; }
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::MarkDirtyInodes {
+            inodes,
+            computation_type: computation_type.to_string(),
+        });
+    }
+
     // =========================================================================
     // External Matching Operations (fetch thread results — no witness needed)
     // =========================================================================
@@ -1568,6 +1592,12 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::ClearDirtyInode { inode, computation_type } => {
             with_retry("clear_dirty_inode", computation_type, || {
                 execute_clear_dirty_inode(db, *inode, computation_type)
+            });
+        }
+
+        DbWriteOp::MarkDirtyInodes { inodes, computation_type } => {
+            with_retry("mark_dirty_inodes", computation_type, || {
+                execute_mark_dirty_inodes(db, inodes, computation_type)
             });
         }
 
@@ -2338,6 +2368,22 @@ fn execute_clear_dirty_inode(db: &Database, inode: i64, computation_type: &str) 
         "DELETE FROM dirty_inodes WHERE inode = ?1 AND computation_type = ?2",
         params![inode, computation_type],
     )?;
+
+    Ok(())
+}
+
+/// Execute MarkDirtyInodes: mark a batch of inodes dirty for a computation type.
+fn execute_mark_dirty_inodes(db: &Database, inodes: &[i64], computation_type: &str) -> anyhow::Result<()> {
+    use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    for inode in inodes {
+        db.conn().execute(
+            "INSERT OR IGNORE INTO dirty_inodes (inode, computation_type, dirtied_at) VALUES (?1, ?2, ?3)",
+            params![inode, computation_type, now],
+        )?;
+    }
 
     Ok(())
 }

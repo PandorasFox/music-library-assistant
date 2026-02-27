@@ -77,7 +77,15 @@ impl MutationExecutor for ApplyConfigEditsMutation {
     }
 
     fn additional_computations(&self) -> Vec<Computation> {
-        Vec::new()
+        let new_pairs = new_tag_separator_pairs(&self.old_config, &self.new_config);
+        if new_pairs.is_empty() {
+            return Vec::new();
+        }
+        vec![Computation::Analysis(
+            crate::meta::computations::analysis::Computation::SeedCompoundTagDirtyInodes {
+                new_separators: new_pairs,
+            },
+        )]
     }
 
     fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
@@ -179,6 +187,26 @@ fn config_diff_entries(old: &Config, new: &Config) -> Vec<DiffEntry> {
     cmp!("Timing instrumentation", o.performance.timing_instrumentation, n.performance.timing_instrumentation);
 
     diffs
+}
+
+/// Extract (tag_name, separator) pairs that are new in the updated config.
+///
+/// Compares old and new tag_splitting.tag_separators, returning pairs where
+/// the separator was not present for that tag in the old config.
+fn new_tag_separator_pairs(old: &Config, new: &Config) -> Vec<(String, String)> {
+    let old_seps = &old.opinions.tag_splitting.tag_separators;
+    let new_seps = &new.opinions.tag_splitting.tag_separators;
+    let mut pairs = Vec::new();
+    for (tag, new_sep_list) in new_seps {
+        let old_sep_list = old_seps.get(tag);
+        for sep in new_sep_list {
+            let is_new = old_sep_list.map_or(true, |old| !old.contains(sep));
+            if is_new {
+                pairs.push((tag.clone(), sep.clone()));
+            }
+        }
+    }
+    pairs
 }
 
 /// Determine which domains a config change affects.

@@ -879,11 +879,21 @@ impl Database {
             }
         }
 
-        // Mark inode dirty for re-computation
-        self.conn.execute(
-            "INSERT OR IGNORE INTO dirty_inodes (inode) VALUES (?1)",
-            params![inode],
-        )?;
+        // Mark inode dirty for all per-inode computations (shit_format, compound_tag, etc.)
+        // Zone changes mean the file is now corpus — needs format/tag recomputation.
+        {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            for computation_type in &["compound_tag", "shit_format"] {
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO dirty_inodes (inode, computation_type, dirtied_at) VALUES (?1, ?2, ?3)",
+                    params![inode, *computation_type, now],
+                )?;
+            }
+        }
 
         Ok(())
     }
@@ -902,6 +912,35 @@ impl Database {
         )?;
 
         let rows = stmt.query_map(params![computation_type], |row| row.get(0))?;
+
+        let mut inodes = Vec::new();
+        for row in rows {
+            inodes.push(row?);
+        }
+
+        Ok(inodes)
+    }
+
+    /// Get corpus inodes whose tag values contain a given separator string.
+    ///
+    /// Used by SeedCompoundTagDirtyInodes to find files affected by new
+    /// tag_splitting separator config.
+    pub fn get_corpus_inodes_with_tag_separator(
+        &self,
+        tag_name: &str,
+        separator: &str,
+    ) -> Result<Vec<i64>> {
+        let like_pattern = format!("%{}%", separator);
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT ct.inode
+             FROM corpus_tags ct
+             JOIN files f ON ct.inode = f.inode
+             WHERE f.zone = 'corpus'
+               AND UPPER(ct.tag_name) = UPPER(?1)
+               AND ct.tag_value LIKE ?2"
+        )?;
+
+        let rows = stmt.query_map(params![tag_name, like_pattern], |row| row.get(0))?;
 
         let mut inodes = Vec::new();
         for row in rows {

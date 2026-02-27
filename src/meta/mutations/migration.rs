@@ -630,6 +630,24 @@ impl MigrationRegistry {
             },
         });
 
+        // v21→v22: Re-seed all per-inode dirty inodes
+        //
+        // update_file_zone() had a broken INSERT that silently failed (missing
+        // computation_type and dirtied_at columns with OR IGNORE). Files that
+        // moved from inbox→corpus never got dirty inodes flagged, so
+        // DetectShitFormats and DetectCompoundTagValues never processed them.
+        // Re-seed everything to catch up.
+        registry.register(Migration {
+            from_version: 21,
+            to_version: 22,
+            description: "Re-seed dirty inodes for all per-inode computations (fix broken zone-change dirty flagging)",
+            apply: |db| {
+                seed_dirty_inodes_for(db, "shit_format")?;
+                seed_dirty_inodes_for(db, "compound_tag")?;
+                Ok(())
+            },
+        });
+
         registry
     }
 

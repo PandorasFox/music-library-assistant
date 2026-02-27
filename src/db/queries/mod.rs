@@ -708,6 +708,15 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_dirty_inodes(computation_type)
     }
 
+    /// Get corpus inodes whose tag values contain a given separator string.
+    pub fn get_corpus_inodes_with_tag_separator(
+        &self,
+        tag_name: &str,
+        separator: &str,
+    ) -> Result<Vec<i64>> {
+        self.db.get_corpus_inodes_with_tag_separator(tag_name, separator)
+    }
+
     // =========================================================================
     // Directory Entry Freshness Check
     // =========================================================================

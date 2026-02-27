@@ -12,7 +12,7 @@
 //! - Ctrl+R: Jump to transaction review
 //! - Escape: Cancel
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -241,43 +241,34 @@ impl DirectoryClusterPreviewState {
         }
     }
 
-    /// Handle key input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> DirectoryClusterPreviewAction {
-        // Shift+Up/Down: move focus between panes
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
-            match key.code {
-                KeyCode::Up => {
-                    self.focus_pane = self.focus_pane.prev();
-                    return DirectoryClusterPreviewAction::None;
-                }
-                KeyCode::Down => {
-                    self.focus_pane = self.focus_pane.next();
-                    return DirectoryClusterPreviewAction::None;
-                }
-                _ => {}
+    /// Handle semantic input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> DirectoryClusterPreviewAction {
+        match action {
+            // Shift+Up/Down: move focus between panes
+            InputAction::FocusUp => {
+                self.focus_pane = self.focus_pane.prev();
+                DirectoryClusterPreviewAction::None
             }
-        }
+            InputAction::FocusDown => {
+                self.focus_pane = self.focus_pane.next();
+                DirectoryClusterPreviewAction::None
+            }
 
-        // Ctrl+R: show review
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('r') {
-            return DirectoryClusterPreviewAction::ShowReview;
-        }
+            // Ctrl+R: show review
+            InputAction::Shortcut('r') => DirectoryClusterPreviewAction::ShowReview,
 
-        // Ctrl+F: mark expected overlap
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('f') {
-            return DirectoryClusterPreviewAction::MarkExpected;
-        }
+            // Ctrl+F: mark expected overlap
+            InputAction::OpenFilter => DirectoryClusterPreviewAction::MarkExpected,
 
-        match key.code {
             // Navigate options (only when options focused)
-            KeyCode::Up if self.focus_pane == FocusPane::Options => {
+            InputAction::NavUp if self.focus_pane == FocusPane::Options => {
                 if self.selected_option_index > 0 {
                     self.selected_option_index -= 1;
                     self.recompute_stash_files();
                 }
                 DirectoryClusterPreviewAction::None
             }
-            KeyCode::Down if self.focus_pane == FocusPane::Options => {
+            InputAction::NavDown if self.focus_pane == FocusPane::Options => {
                 if self.selected_option_index + 1 < self.current_options.len() {
                     self.selected_option_index += 1;
                     self.recompute_stash_files();
@@ -286,32 +277,26 @@ impl DirectoryClusterPreviewState {
             }
 
             // Navigate file list (when file list focused)
-            KeyCode::Up if self.focus_pane == FocusPane::FileList => {
+            InputAction::NavUp if self.focus_pane == FocusPane::FileList => {
                 self.file_cursor = self.file_cursor.saturating_sub(1);
                 DirectoryClusterPreviewAction::None
             }
-            KeyCode::Down if self.focus_pane == FocusPane::FileList => {
+            InputAction::NavDown if self.focus_pane == FocusPane::FileList => {
                 if self.file_cursor + 1 < self.stash_files.len() {
                     self.file_cursor += 1;
                 }
                 DirectoryClusterPreviewAction::None
             }
 
-            // Tab: navigate to next cluster
-            KeyCode::Tab => {
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    DirectoryClusterPreviewAction::NavigatePrev
-                } else {
-                    DirectoryClusterPreviewAction::NavigateNext
-                }
-            }
-            KeyCode::BackTab => DirectoryClusterPreviewAction::NavigatePrev,
+            // Tab / Shift+Tab: navigate between clusters
+            InputAction::CycleNext => DirectoryClusterPreviewAction::NavigateNext,
+            InputAction::CyclePrev => DirectoryClusterPreviewAction::NavigatePrev,
 
             // Enter: confirm current option
-            KeyCode::Enter => DirectoryClusterPreviewAction::ConfirmCurrent,
+            InputAction::Confirm => DirectoryClusterPreviewAction::ConfirmCurrent,
 
             // Cancel
-            KeyCode::Esc => DirectoryClusterPreviewAction::Cancel,
+            InputAction::Cancel => DirectoryClusterPreviewAction::Cancel,
 
             _ => DirectoryClusterPreviewAction::None,
         }

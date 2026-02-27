@@ -3,18 +3,18 @@
 //! Unified keyboard input handling for the tree browser.
 //! Common navigation keys are handled here; variant-specific keys delegate to variants.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 
 use super::actions::TreeBrowserAction;
 use super::navigator::TreeNavigator;
 use super::variants::BrowserVariant;
 
-/// Handle a key event for the tree browser.
+/// Handle a semantic input action for the tree browser.
 ///
 /// Returns the resulting action. Common navigation is handled here;
 /// variant-specific behavior delegates to the variant.
-pub fn handle_key(
-    key: KeyEvent,
+pub fn handle_input(
+    action: &InputAction,
     nav: &mut TreeNavigator,
     variant: &mut BrowserVariant,
 ) -> TreeBrowserAction {
@@ -22,7 +22,7 @@ pub fn handle_key(
     let variant_captures_nav = variant.wants_navigation_keys();
 
     // Handle Escape first - variant gets priority
-    if key.code == KeyCode::Esc {
+    if matches!(action, InputAction::Cancel) {
         if variant.handle_escape(nav) {
             return TreeBrowserAction::None;
         }
@@ -32,15 +32,11 @@ pub fn handle_key(
     // Tab for lateral ring cycling — but NOT when variant captures navigation
     // (config panel uses Tab internally for focus switching)
     if !variant_captures_nav {
-        match key.code {
-            KeyCode::Tab => {
-                return if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    TreeBrowserAction::CyclePrev
-                } else {
-                    TreeBrowserAction::CycleNext
-                };
+        match action {
+            InputAction::CycleNext => {
+                return TreeBrowserAction::CycleNext;
             }
-            KeyCode::BackTab => {
+            InputAction::CyclePrev => {
                 return TreeBrowserAction::CyclePrev;
             }
             _ => {}
@@ -49,26 +45,26 @@ pub fn handle_key(
 
     // If variant wants navigation keys, delegate everything to it
     if variant_captures_nav {
-        return variant.handle_key(key, nav);
+        return variant.handle_input(action, nav);
     }
 
     // Common navigation keys (only when variant doesn't capture)
-    match key.code {
-        KeyCode::Up => {
+    match action {
+        InputAction::NavUp => {
             nav.move_up();
             variant.on_cursor_move(nav);
             return TreeBrowserAction::None;
         }
-        KeyCode::Down => {
+        InputAction::NavDown => {
             nav.move_down();
             variant.on_cursor_move(nav);
             return TreeBrowserAction::None;
         }
-        KeyCode::Right => {
+        InputAction::NavRight => {
             nav.expand_current();
             return TreeBrowserAction::None;
         }
-        KeyCode::Left => {
+        InputAction::NavLeft => {
             nav.collapse_or_parent();
             return TreeBrowserAction::None;
         }
@@ -76,5 +72,5 @@ pub fn handle_key(
     }
 
     // Delegate remaining keys to variant
-    variant.handle_key(key, nav)
+    variant.handle_input(action, nav)
 }

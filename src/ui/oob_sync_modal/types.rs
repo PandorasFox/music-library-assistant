@@ -1,6 +1,6 @@
 //! Types for OOB tag sync resolution modal.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 
 use crate::meta::views::{OobSyncDirection, OobSyncFile};
 use crate::ui::bulk_selection::BulkSelectionState;
@@ -156,50 +156,44 @@ impl OobSyncState {
         self.files.iter().filter(|f| f.direction == OobSyncDirection::IndexToDisk).count()
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> OobSyncAction {
-        // Shift+Up / Shift+Down: cycle focus pane
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
-            match key.code {
-                KeyCode::Up => {
-                    self.focus_pane = self.focus_pane.prev();
-                    return OobSyncAction::None;
-                }
-                KeyCode::Down => {
-                    self.focus_pane = self.focus_pane.next();
-                    return OobSyncAction::None;
-                }
-                _ => {}
+    pub fn handle_input(&mut self, action: &InputAction) -> OobSyncAction {
+        match action {
+            // Shift+Up / Shift+Down: cycle focus pane
+            InputAction::FocusUp => {
+                self.focus_pane = self.focus_pane.prev();
+                OobSyncAction::None
             }
-        }
+            InputAction::FocusDown => {
+                self.focus_pane = self.focus_pane.next();
+                OobSyncAction::None
+            }
 
-        // Ctrl+A: toggle all selection (respects active filter)
-        if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            let indices = self.get_filtered_indices();
-            self.selection.toggle_all_filtered(&indices);
-            return OobSyncAction::None;
-        }
+            // Ctrl+A: toggle all selection (respects active filter)
+            InputAction::TextHome => {
+                let indices = self.get_filtered_indices();
+                self.selection.toggle_all_filtered(&indices);
+                OobSyncAction::None
+            }
 
-        // Ctrl+F: open filter popup
-        if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return OobSyncAction::OpenFilter;
-        }
+            // Ctrl+F: open filter popup
+            InputAction::OpenFilter => OobSyncAction::OpenFilter,
 
-        match key.code {
             // Space: toggle selection on current file
-            KeyCode::Char(' ') => {
+            InputAction::Toggle => {
                 if !self.files.is_empty() {
                     self.selection.toggle(self.current_file);
                 }
                 OobSyncAction::None
             }
+
             // Up/Down: navigate file list (regardless of focus)
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 if self.current_file > 0 {
                     self.current_file -= 1;
                 }
                 OobSyncAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if self.current_file + 1 < self.files.len() {
                     self.current_file += 1;
                 }
@@ -207,13 +201,13 @@ impl OobSyncState {
             }
 
             // Left/Right: navigate buttons when focused on buttons pane
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 if self.focus_pane == FocusPane::Buttons {
                     self.selected_button = self.selected_button.left();
                 }
                 OobSyncAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 if self.focus_pane == FocusPane::Buttons {
                     self.selected_button = self.selected_button.right();
                 }
@@ -221,7 +215,7 @@ impl OobSyncState {
             }
 
             // Confirm selected button (when focused on buttons)
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 if self.focus_pane == FocusPane::Buttons {
                     match self.selected_button {
                         OobSyncButton::AcceptDisk => {
@@ -246,7 +240,7 @@ impl OobSyncState {
                 }
             }
 
-            KeyCode::Esc => OobSyncAction::Cancel,
+            InputAction::Cancel => OobSyncAction::Cancel,
 
             _ => OobSyncAction::None,
         }

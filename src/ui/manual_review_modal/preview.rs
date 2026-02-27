@@ -12,7 +12,7 @@
 //! - Ctrl+R: Show transaction review
 //! - Esc: Cancel and return to insights
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -152,24 +152,24 @@ impl ManualReviewState {
         self.current_group + 1 >= self.data.groups.len()
     }
 
-    /// Handle key input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> ManualReviewAction {
-        // If stash confirmation popup is showing, handle popup keys
+    /// Handle input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> ManualReviewAction {
+        // If stash confirmation popup is showing, handle popup actions
         if let Some(ref mut button) = self.stash_confirm {
-            return match key.code {
-                KeyCode::Esc => {
+            return match action {
+                InputAction::Cancel => {
                     self.stash_confirm = None;
                     ManualReviewAction::CancelStash
                 }
-                KeyCode::Left => {
+                InputAction::NavLeft => {
                     *button = button.prev();
                     ManualReviewAction::None
                 }
-                KeyCode::Right => {
+                InputAction::NavRight => {
                     *button = button.next();
                     ManualReviewAction::None
                 }
-                KeyCode::Enter | KeyCode::Char(' ') => {
+                InputAction::Confirm | InputAction::Toggle => {
                     let action = match *button {
                         StashConfirmButton::Cancel => ManualReviewAction::CancelStash,
                         StashConfirmButton::Confirm => ManualReviewAction::ConfirmStash,
@@ -182,16 +182,16 @@ impl ManualReviewState {
             };
         }
 
-        // Normal key handling
-        match key.code {
-            KeyCode::Esc => ManualReviewAction::Cancel,
+        // Normal action handling
+        match action {
+            InputAction::Cancel => ManualReviewAction::Cancel,
 
             // File navigation
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 self.file_cursor = self.file_cursor.saturating_sub(1);
                 ManualReviewAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if let Some(group) = self.current_group_ref() {
                     let max = group.files.len().saturating_sub(1);
                     if self.file_cursor < max {
@@ -202,20 +202,18 @@ impl ManualReviewState {
             }
 
             // Group navigation
-            KeyCode::Tab => {
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    ManualReviewAction::NavigateGroup(false)
-                } else if self.is_last_group() {
+            InputAction::CycleNext => {
+                if self.is_last_group() {
                     // Tab past last group → show review
                     ManualReviewAction::ShowReview
                 } else {
                     ManualReviewAction::NavigateGroup(true)
                 }
             }
-            KeyCode::BackTab => ManualReviewAction::NavigateGroup(false),
+            InputAction::CyclePrev => ManualReviewAction::NavigateGroup(false),
 
             // Stash
-            KeyCode::Char('s') | KeyCode::Char('S') => {
+            InputAction::Char('s') | InputAction::Char('S') => {
                 // Check if selected file is already stashed
                 if let Some(file) = self.selected_file() {
                     if file.stashed {
@@ -227,14 +225,14 @@ impl ManualReviewState {
             }
 
             // Tag editor
-            KeyCode::Char('t') => {
+            InputAction::Char('t') => {
                 if self.kind.supports_tag_edit() {
                     ManualReviewAction::OpenTagEditorIndividual
                 } else {
                     ManualReviewAction::None
                 }
             }
-            KeyCode::Char('T') => {
+            InputAction::Char('T') => {
                 if self.kind.supports_tag_edit() {
                     ManualReviewAction::OpenTagEditorAggregated
                 } else {
@@ -243,12 +241,12 @@ impl ManualReviewState {
             }
 
             // Mark expected duplicate
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            InputAction::OpenFilter => {
                 ManualReviewAction::MarkExpectedDuplicate
             }
 
             // Transaction review
-            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            InputAction::Shortcut('r') => {
                 ManualReviewAction::ShowReview
             }
 

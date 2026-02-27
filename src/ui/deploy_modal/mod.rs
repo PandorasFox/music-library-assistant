@@ -11,7 +11,7 @@ pub mod types;
 pub use preview::DeploymentPreviewState;
 pub use types::DeployModalData;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -49,50 +49,38 @@ pub enum DeployViewState {
 }
 
 impl DeployViewState {
-    /// Handle key input for the Deploy view.
-    pub fn handle_key(&mut self, key: KeyEvent) -> DeployAction {
+    /// Handle semantic input action for the Deploy view.
+    pub fn handle_input(&mut self, action: &InputAction) -> DeployAction {
         match self {
             DeployViewState::UpToDate { .. } => {
-                match key.code {
-                    KeyCode::Tab => {
-                        if key.modifiers.contains(KeyModifiers::SHIFT) {
-                            DeployAction::CyclePrev
-                        } else {
-                            DeployAction::CycleNext
-                        }
-                    }
-                    KeyCode::BackTab => DeployAction::CyclePrev,
-                    KeyCode::Esc => DeployAction::RequestQuit,
+                match action {
+                    InputAction::CycleNext => DeployAction::CycleNext,
+                    InputAction::CyclePrev => DeployAction::CyclePrev,
+                    InputAction::Cancel => DeployAction::RequestQuit,
                     _ => DeployAction::None,
                 }
             }
             DeployViewState::Preview(preview) => {
-                match key.code {
-                    KeyCode::Tab => {
-                        if key.modifiers.contains(KeyModifiers::SHIFT) {
-                            DeployAction::CyclePrev
-                        } else {
-                            DeployAction::CycleNext
-                        }
-                    }
-                    KeyCode::BackTab => DeployAction::CyclePrev,
-                    KeyCode::Esc => DeployAction::RequestQuit,
-                    KeyCode::Enter => DeployAction::Confirm,
+                match action {
+                    InputAction::CycleNext => DeployAction::CycleNext,
+                    InputAction::CyclePrev => DeployAction::CyclePrev,
+                    InputAction::Cancel => DeployAction::RequestQuit,
+                    InputAction::Confirm => DeployAction::Confirm,
                     // Left/Right switch deploy tabs, Up/Down/PgUp/PgDn scroll
-                    KeyCode::Left => {
+                    InputAction::NavLeft => {
                         preview.active_tab = preview.active_tab.prev();
                         DeployAction::None
                     }
-                    KeyCode::Right => {
+                    InputAction::NavRight => {
                         preview.active_tab = preview.active_tab.next();
                         DeployAction::None
                     }
-                    KeyCode::Up => {
+                    InputAction::NavUp => {
                         let idx = preview.active_tab.index();
                         preview.tab_scroll[idx] = preview.tab_scroll[idx].saturating_sub(1);
                         DeployAction::None
                     }
-                    KeyCode::Down => {
+                    InputAction::NavDown => {
                         let idx = preview.active_tab.index();
                         let max_scroll = preview.max_scroll_for_current_tab();
                         if preview.tab_scroll[idx] < max_scroll {
@@ -100,12 +88,12 @@ impl DeployViewState {
                         }
                         DeployAction::None
                     }
-                    KeyCode::PageUp => {
+                    InputAction::PageUp => {
                         let idx = preview.active_tab.index();
                         preview.tab_scroll[idx] = preview.tab_scroll[idx].saturating_sub(10);
                         DeployAction::None
                     }
-                    KeyCode::PageDown => {
+                    InputAction::PageDown => {
                         let idx = preview.active_tab.index();
                         let max_scroll = preview.max_scroll_for_current_tab();
                         preview.tab_scroll[idx] = (preview.tab_scroll[idx] + 10).min(max_scroll);

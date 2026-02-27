@@ -6,7 +6,7 @@
 //! - **TabbedTransactionReview** (`tabbed_transaction_review` module):
 //!   Persistent lateral tab. No Cancel, Tab/BackTab for cycling.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -141,17 +141,17 @@ impl TransactionReviewState {
         };
     }
 
-    /// Handle key input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> TransactionReviewAction {
-        // Confirmation popup mode — intercept all keys
+    /// Handle input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> TransactionReviewAction {
+        // Confirmation popup mode — intercept all actions
         if let Some(ref key_to_remove) = self.pending_removal {
-            return match key.code {
-                KeyCode::Enter | KeyCode::Char(' ') => {
+            return match action {
+                InputAction::Confirm | InputAction::Toggle => {
                     let k = key_to_remove.clone();
                     self.pending_removal = None;
                     TransactionReviewAction::ConfirmRemoval(k)
                 }
-                KeyCode::Esc | KeyCode::Backspace | KeyCode::Delete => {
+                InputAction::Cancel | InputAction::Backspace | InputAction::Delete => {
                     self.pending_removal = None;
                     TransactionReviewAction::None
                 }
@@ -159,50 +159,48 @@ impl TransactionReviewState {
             };
         }
 
-        // Shift+Up/Down: switch focus between decisions list and buttons
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
-            return match key.code {
-                KeyCode::Up => {
-                    self.focus_pane = self.focus_pane.prev();
-                    TransactionReviewAction::None
-                }
-                KeyCode::Down => {
-                    self.focus_pane = self.focus_pane.next();
-                    TransactionReviewAction::None
-                }
-                _ => TransactionReviewAction::None,
-            };
+        // FocusUp/FocusDown: switch focus between decisions list and buttons
+        match action {
+            InputAction::FocusUp => {
+                self.focus_pane = self.focus_pane.prev();
+                return TransactionReviewAction::None;
+            }
+            InputAction::FocusDown => {
+                self.focus_pane = self.focus_pane.next();
+                return TransactionReviewAction::None;
+            }
+            _ => {}
         }
 
-        // Normal mode — arrow keys scoped to focused pane
-        match key.code {
+        // Normal mode — actions scoped to focused pane
+        match action {
             // List navigation (only when list is focused)
-            KeyCode::Up if self.focus_pane == FocusPane::List => {
+            InputAction::NavUp if self.focus_pane == FocusPane::List => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                 }
                 TransactionReviewAction::None
             }
-            KeyCode::Down if self.focus_pane == FocusPane::List => {
+            InputAction::NavDown if self.focus_pane == FocusPane::List => {
                 // Cursor bounds checked at render time against actual decision count
                 self.cursor = self.cursor.saturating_add(1);
                 TransactionReviewAction::None
             }
             // Button navigation (only when buttons are focused)
-            KeyCode::Left if self.focus_pane == FocusPane::Buttons => {
+            InputAction::NavLeft if self.focus_pane == FocusPane::Buttons => {
                 self.focus_left();
                 TransactionReviewAction::None
             }
-            KeyCode::Right if self.focus_pane == FocusPane::Buttons => {
+            InputAction::NavRight if self.focus_pane == FocusPane::Buttons => {
                 self.focus_right();
                 TransactionReviewAction::None
             }
             // Remove decision (only when list is focused)
-            KeyCode::Backspace | KeyCode::Delete if self.focus_pane == FocusPane::List => {
+            InputAction::Backspace | InputAction::Delete if self.focus_pane == FocusPane::List => {
                 TransactionReviewAction::RequestRemoval
             }
             // Activate button (only when buttons are focused)
-            KeyCode::Enter | KeyCode::Char(' ') if self.focus_pane == FocusPane::Buttons => {
+            InputAction::Confirm | InputAction::Toggle if self.focus_pane == FocusPane::Buttons => {
                 match self.button_focus {
                     ReviewButtonFocus::Cancel => TransactionReviewAction::Cancel,
                     ReviewButtonFocus::Discard => TransactionReviewAction::Discard,
@@ -210,15 +208,9 @@ impl TransactionReviewState {
                 }
             }
             // Global shortcuts (work regardless of pane focus)
-            KeyCode::Esc => TransactionReviewAction::Cancel,
-            KeyCode::Char('y') | KeyCode::Char('Y') => TransactionReviewAction::Confirm,
-            KeyCode::Char('d') | KeyCode::Char('D') => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    TransactionReviewAction::Discard
-                } else {
-                    TransactionReviewAction::None
-                }
-            }
+            InputAction::Cancel => TransactionReviewAction::Cancel,
+            InputAction::Char('y') | InputAction::Char('Y') => TransactionReviewAction::Confirm,
+            InputAction::Shortcut('d') => TransactionReviewAction::Discard,
             _ => TransactionReviewAction::None,
         }
     }

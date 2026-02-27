@@ -13,7 +13,6 @@
 mod state;
 mod types;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -21,6 +20,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::ui::helpers::render_pane;
+use crate::ui::input::InputAction;
 
 // TODO: Re-enable when corpus::deploy is available
 // use crate::corpus::deploy::compute_deployment_path_with_tags;
@@ -31,28 +31,28 @@ pub use types::{
 };
 
 impl TagSearchState {
-    /// Handle a key event. Returns an action that may require db access.
-    pub fn handle_key(&mut self, key: KeyEvent) -> TagSearchAction {
+    /// Handle a semantic input action. Returns an action that may require db access.
+    pub fn handle_input(&mut self, action: &InputAction) -> TagSearchAction {
         // Handle modal first if active
         if self.modal.is_some() {
-            return self.handle_modal_key(key);
+            return self.handle_modal_input(action);
         }
 
         match self.mode {
-            TagSearchMode::QueryBuilder => self.handle_query_builder_key(key),
-            TagSearchMode::Results => self.handle_results_mode_key(key),
+            TagSearchMode::QueryBuilder => self.handle_query_builder_input(action),
+            TagSearchMode::Results => self.handle_results_mode_input(action),
         }
     }
 
-    fn handle_modal_key(&mut self, key: KeyEvent) -> TagSearchAction {
+    fn handle_modal_input(&mut self, action: &InputAction) -> TagSearchAction {
         // GatheringTags modal is non-interactive - handled by tick
         if matches!(self.modal, Some(types::TagSearchModal::GatheringTags)) {
             return TagSearchAction::None;
         }
 
-        match key.code {
+        match action {
             // Enter or Escape dismisses the modal
-            KeyCode::Enter | KeyCode::Esc => {
+            InputAction::Confirm | InputAction::Cancel => {
                 self.modal = None;
                 TagSearchAction::None
             }
@@ -60,10 +60,10 @@ impl TagSearchState {
         }
     }
 
-    fn handle_query_builder_key(&mut self, key: KeyEvent) -> TagSearchAction {
-        match key.code {
+    fn handle_query_builder_input(&mut self, action: &InputAction) -> TagSearchAction {
+        match action {
             // Tab: if on TagName field with partial text, apply tab-completion; otherwise cycle views
-            KeyCode::Tab if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+            InputAction::CycleNext => {
                 if self.field_focus == QueryFieldFocus::TagName
                     && !self
                         .conditions
@@ -77,31 +77,31 @@ impl TagSearchState {
                     TagSearchAction::CycleNext
                 }
             }
-            KeyCode::Tab | KeyCode::BackTab => TagSearchAction::CyclePrev,
+            InputAction::CyclePrev => TagSearchAction::CyclePrev,
 
             // Escape
-            KeyCode::Esc => TagSearchAction::Cancel,
+            InputAction::Cancel => TagSearchAction::Cancel,
 
             // Navigate between conditions and fields
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 self.move_focus_up();
                 TagSearchAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 self.move_focus_down();
                 TagSearchAction::None
             }
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 self.move_focus_left();
                 TagSearchAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 self.move_focus_right();
                 TagSearchAction::None
             }
 
             // Enter to execute search or add condition
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 if self.is_on_search_button() {
                     // Return action to execute search (db access happens in action handler)
                     TagSearchAction::ExecuteSearch
@@ -128,15 +128,15 @@ impl TagSearchState {
             }
 
             // Character input
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.insert_char(c);
+            InputAction::Char(c) => {
+                self.insert_char(*c);
                 TagSearchAction::None
             }
-            KeyCode::Backspace => {
+            InputAction::Backspace => {
                 self.backspace();
                 TagSearchAction::None
             }
-            KeyCode::Delete => {
+            InputAction::Delete => {
                 self.delete();
                 TagSearchAction::None
             }
@@ -145,30 +145,30 @@ impl TagSearchState {
         }
     }
 
-    fn handle_results_mode_key(&mut self, key: KeyEvent) -> TagSearchAction {
-        match key.code {
+    fn handle_results_mode_input(&mut self, action: &InputAction) -> TagSearchAction {
+        match action {
             // Tab/Shift-Tab for lateral view cycling
-            KeyCode::Tab if !key.modifiers.contains(KeyModifiers::SHIFT) => TagSearchAction::CycleNext,
-            KeyCode::Tab | KeyCode::BackTab => TagSearchAction::CyclePrev,
+            InputAction::CycleNext => TagSearchAction::CycleNext,
+            InputAction::CyclePrev => TagSearchAction::CyclePrev,
 
             // Escape returns to query builder
-            KeyCode::Esc => {
+            InputAction::Cancel => {
                 self.mode = TagSearchMode::QueryBuilder;
                 TagSearchAction::None
             }
 
             // Navigate results
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 self.results_select_prev();
                 TagSearchAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 self.results_select_next();
                 TagSearchAction::None
             }
 
             // B = bulk edit all results (show gathering modal first)
-            KeyCode::Char('b') | KeyCode::Char('B') => {
+            InputAction::Char('b' | 'B') => {
                 let audio_files = self.all_result_audio_files();
                 if !audio_files.is_empty() {
                     // Show gathering modal and store pending audio files
@@ -181,7 +181,7 @@ impl TagSearchState {
             }
 
             // Enter = edit single audio file
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 if let Some(aft) = self.selected_result() {
                     TagSearchAction::EditAudioFile(aft.audio_file.clone())
                 } else {

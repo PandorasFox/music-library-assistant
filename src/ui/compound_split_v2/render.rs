@@ -330,14 +330,8 @@ fn render_edit_input(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
 
     let inner = render_pane(f, area, block);
 
-    // Render the text input
-    let input_text = state.part_input.value();
-    let cursor_pos = state.part_input.cursor;
-
-    // Show cursor
-    let (before, after) = input_text.split_at(cursor_pos.min(input_text.len()));
-    let cursor_char = after.chars().next().unwrap_or(' ');
-    let after_cursor = if after.len() > 1 { &after[cursor_char.len_utf8()..] } else { "" };
+    // Render the text input using UTF-8 safe cursor splits
+    let (before, cursor_char, after_cursor) = state.part_input.cursor_splits();
 
     let line = Line::from(vec![
         Span::styled(before, Style::default().fg(Color::White)),

@@ -7,7 +7,7 @@
 //! - Enter: Execute selected button action
 //! - Escape: Cancel
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -81,45 +81,45 @@ impl MissingDirectoryPreviewState {
         }
     }
 
-    /// Handle key input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> MissingDirectoryPreviewAction {
+    /// Handle input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> MissingDirectoryPreviewAction {
         let has_directories = self.cached_data.count() > 0;
 
-        match key.code {
+        match action {
             // Scroll within list
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 self.scroll = self.scroll.saturating_sub(1);
                 MissingDirectoryPreviewAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 let max = self.cached_data.count().saturating_sub(1);
                 if self.scroll < max {
                     self.scroll += 1;
                 }
                 MissingDirectoryPreviewAction::None
             }
-            KeyCode::PageUp => {
+            InputAction::PageUp => {
                 self.scroll = self.scroll.saturating_sub(10);
                 MissingDirectoryPreviewAction::None
             }
-            KeyCode::PageDown => {
+            InputAction::PageDown => {
                 let max = self.cached_data.count().saturating_sub(1);
                 self.scroll = (self.scroll + 10).min(max);
                 MissingDirectoryPreviewAction::None
             }
 
             // Button navigation
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 self.selected_button.left(has_directories);
                 MissingDirectoryPreviewAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 self.selected_button.right();
                 MissingDirectoryPreviewAction::None
             }
 
             // Execute selected button
-            KeyCode::Enter => match self.selected_button {
+            InputAction::Confirm => match self.selected_button {
                 SelectedButton::Drop if has_directories => {
                     MissingDirectoryPreviewAction::ConfirmDrop
                 }
@@ -128,7 +128,7 @@ impl MissingDirectoryPreviewState {
             },
 
             // Cancel
-            KeyCode::Esc => MissingDirectoryPreviewAction::Cancel,
+            InputAction::Cancel => MissingDirectoryPreviewAction::Cancel,
 
             _ => MissingDirectoryPreviewAction::None,
         }

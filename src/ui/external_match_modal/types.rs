@@ -1,6 +1,6 @@
 //! State and input handling for the external match review modal.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 
 use crate::meta::views::ExternalMatchReviewEntry;
 use crate::ui::widgets::{ButtonRects, FocusPane};
@@ -80,31 +80,29 @@ impl ExternalMatchReviewState {
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> ExternalMatchReviewAction {
-        // Shift+Up / Shift+Down: cycle focus pane
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
-            match key.code {
-                KeyCode::Up => {
-                    self.focus_pane = self.focus_pane.prev();
-                    return ExternalMatchReviewAction::None;
-                }
-                KeyCode::Down => {
-                    self.focus_pane = self.focus_pane.next();
-                    return ExternalMatchReviewAction::None;
-                }
-                _ => {}
+    pub fn handle_input(&mut self, action: &InputAction) -> ExternalMatchReviewAction {
+        // FocusUp / FocusDown: cycle focus pane
+        match action {
+            InputAction::FocusUp => {
+                self.focus_pane = self.focus_pane.prev();
+                return ExternalMatchReviewAction::None;
             }
+            InputAction::FocusDown => {
+                self.focus_pane = self.focus_pane.next();
+                return ExternalMatchReviewAction::None;
+            }
+            _ => {}
         }
 
-        match key.code {
+        match action {
             // Up/Down: navigate list (regardless of focus)
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                 }
                 ExternalMatchReviewAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if self.cursor + 1 < self.entries.len() {
                     self.cursor += 1;
                 }
@@ -112,13 +110,13 @@ impl ExternalMatchReviewState {
             }
 
             // Left/Right: navigate buttons when focused on buttons pane
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 if self.focus_pane == FocusPane::Buttons {
                     self.selected_button = self.selected_button.left();
                 }
                 ExternalMatchReviewAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 if self.focus_pane == FocusPane::Buttons {
                     self.selected_button = self.selected_button.right();
                 }
@@ -126,7 +124,7 @@ impl ExternalMatchReviewState {
             }
 
             // Enter: confirm selected button
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 if self.focus_pane == FocusPane::Buttons {
                     match self.selected_button {
                         ExternalMatchButton::Accept => ExternalMatchReviewAction::Accept,
@@ -138,7 +136,7 @@ impl ExternalMatchReviewState {
                 }
             }
 
-            KeyCode::Esc => ExternalMatchReviewAction::Cancel,
+            InputAction::Cancel => ExternalMatchReviewAction::Cancel,
 
             _ => ExternalMatchReviewAction::None,
         }

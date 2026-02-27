@@ -8,7 +8,7 @@
 
 pub mod render;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::input::InputAction;
 
 use crate::meta::views::{ConfidenceTier, ExternalMatchesData};
 
@@ -120,34 +120,34 @@ impl ExternalMatchesViewState {
 // ============================================================================
 
 impl ExternalMatchesViewState {
-    pub fn handle_key(&mut self, key: KeyEvent) -> ExternalMatchesAction {
+    pub fn handle_input(&mut self, action: &InputAction) -> ExternalMatchesAction {
         let entries = self.navigable_entries();
         let entry_count = entries.len();
 
-        match key.code {
-            KeyCode::Up => {
+        match action {
+            InputAction::NavUp => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                 }
                 ExternalMatchesAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if entry_count > 0 && self.cursor < entry_count - 1 {
                     self.cursor += 1;
                 }
                 ExternalMatchesAction::None
             }
-            KeyCode::Home => {
+            InputAction::Home => {
                 self.cursor = 0;
                 ExternalMatchesAction::None
             }
-            KeyCode::End => {
+            InputAction::End => {
                 if entry_count > 0 {
                     self.cursor = entry_count - 1;
                 }
                 ExternalMatchesAction::None
             }
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 match entries.get(self.cursor) {
                     Some(NavigableEntry::FetchAction) => {
                         if self.has_api_key && !self.fetch_active {
@@ -165,9 +165,9 @@ impl ExternalMatchesViewState {
                     None => ExternalMatchesAction::None,
                 }
             }
-            KeyCode::Tab => ExternalMatchesAction::CycleNext,
-            KeyCode::BackTab => ExternalMatchesAction::CyclePrev,
-            KeyCode::Esc => ExternalMatchesAction::RequestQuit,
+            InputAction::CycleNext => ExternalMatchesAction::CycleNext,
+            InputAction::CyclePrev => ExternalMatchesAction::CyclePrev,
+            InputAction::Cancel => ExternalMatchesAction::RequestQuit,
             _ => ExternalMatchesAction::None,
         }
     }

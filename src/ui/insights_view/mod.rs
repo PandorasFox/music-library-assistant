@@ -28,7 +28,7 @@ mod render;
 
 use std::collections::HashSet;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
@@ -930,32 +930,32 @@ impl InsightsViewState {
         false
     }
 
-    /// Handle key input
-    pub fn handle_key(&mut self, key: KeyEvent) -> InsightsAction {
-        match key.code {
-            KeyCode::Esc => InsightsAction::RequestQuit,
+    /// Handle semantic input action
+    pub fn handle_input(&mut self, action: &InputAction) -> InsightsAction {
+        match action {
+            InputAction::Cancel => InsightsAction::RequestQuit,
 
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 self.navigate_up();
                 InsightsAction::None
             }
 
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 self.navigate_down();
                 InsightsAction::None
             }
 
-            KeyCode::Home => {
+            InputAction::Home => {
                 self.navigate_to_start();
                 InsightsAction::None
             }
 
-            KeyCode::End => {
+            InputAction::End => {
                 self.navigate_to_end();
                 InsightsAction::None
             }
 
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 // Block launch if the Witch is busy
                 if self.is_witch_busy() {
                     return InsightsAction::None;
@@ -964,15 +964,9 @@ impl InsightsViewState {
                 InsightsAction::Launch
             }
 
-            KeyCode::Tab => {
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    InsightsAction::CyclePrev
-                } else {
-                    InsightsAction::CycleNext
-                }
-            }
+            InputAction::CycleNext => InsightsAction::CycleNext,
 
-            KeyCode::BackTab => InsightsAction::CyclePrev,
+            InputAction::CyclePrev => InsightsAction::CyclePrev,
 
             _ => InsightsAction::None,
         }
@@ -1031,7 +1025,7 @@ mod tests {
     #[test]
     fn test_insights_action_exit() {
         let mut state = InsightsViewState::new();
-        let action = state.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let action = state.handle_input(&InputAction::Cancel);
         assert_eq!(action, InsightsAction::RequestQuit);
     }
 
@@ -1041,12 +1035,12 @@ mod tests {
 
         // Not busy - Enter should launch modal
         state.modal = InsightsModal::Ready;
-        let action = state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let action = state.handle_input(&InputAction::Confirm);
         assert_eq!(action, InsightsAction::Launch);
 
         // Busy - Enter should be blocked
         state.modal = InsightsModal::NotReady_WitchBusy;
-        let action = state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let action = state.handle_input(&InputAction::Confirm);
         assert_eq!(action, InsightsAction::None);
     }
 
@@ -1174,10 +1168,10 @@ mod tests {
         state.modal = InsightsModal::NotReady_WitchBusy;
 
         // Tab should still work even when the Witch is busy
-        let action = state.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        let action = state.handle_input(&InputAction::CycleNext);
         assert_eq!(action, InsightsAction::CycleNext);
 
-        let action = state.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+        let action = state.handle_input(&InputAction::CyclePrev);
         assert_eq!(action, InsightsAction::CyclePrev);
     }
 

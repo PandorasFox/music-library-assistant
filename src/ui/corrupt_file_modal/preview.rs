@@ -8,7 +8,7 @@
 //! - Enter: Execute selected button action
 //! - Escape: Cancel
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -58,45 +58,45 @@ impl CorruptFilePreviewState {
         }
     }
 
-    /// Handle key input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> CorruptFilePreviewAction {
+    /// Handle input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> CorruptFilePreviewAction {
         let has_files = self.cached_data.has_files();
 
-        match key.code {
+        match action {
             // Scroll file list
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 self.scroll = self.scroll.saturating_sub(1);
                 CorruptFilePreviewAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 let max = self.cached_data.files.len().saturating_sub(1);
                 if self.scroll < max {
                     self.scroll += 1;
                 }
                 CorruptFilePreviewAction::None
             }
-            KeyCode::PageUp => {
+            InputAction::PageUp => {
                 self.scroll = self.scroll.saturating_sub(10);
                 CorruptFilePreviewAction::None
             }
-            KeyCode::PageDown => {
+            InputAction::PageDown => {
                 let max = self.cached_data.files.len().saturating_sub(1);
                 self.scroll = (self.scroll + 10).min(max);
                 CorruptFilePreviewAction::None
             }
 
             // Button navigation
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 self.selected_button.left(has_files);
                 CorruptFilePreviewAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 self.selected_button.right(has_files);
                 CorruptFilePreviewAction::None
             }
 
             // Execute selected button
-            KeyCode::Enter => match self.selected_button {
+            InputAction::Confirm => match self.selected_button {
                 SelectedButton::StashAll if has_files => {
                     CorruptFilePreviewAction::ConfirmStashAll
                 }
@@ -105,7 +105,7 @@ impl CorruptFilePreviewState {
             },
 
             // Cancel
-            KeyCode::Esc => CorruptFilePreviewAction::Cancel,
+            InputAction::Cancel => CorruptFilePreviewAction::Cancel,
 
             _ => CorruptFilePreviewAction::None,
         }

@@ -10,7 +10,7 @@
 //! - Enter: Execute selected button action
 //! - Escape: Cancel
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -78,37 +78,37 @@ impl ShitFormatPreviewState {
         }
     }
 
-    /// Handle key input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> ShitFormatPreviewAction {
+    /// Handle input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> ShitFormatPreviewAction {
         let has_lossless = self.cached_data.has_lossless();
         let has_lossy = self.cached_data.has_lossy();
         let total_files = self.cached_data.total_count();
 
-        match key.code {
+        match action {
             // Scroll file list
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 self.scroll = self.scroll.saturating_sub(1);
                 ShitFormatPreviewAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 let max = total_files.saturating_sub(1);
                 if self.scroll < max {
                     self.scroll += 1;
                 }
                 ShitFormatPreviewAction::None
             }
-            KeyCode::PageUp => {
+            InputAction::PageUp => {
                 self.scroll = self.scroll.saturating_sub(10);
                 ShitFormatPreviewAction::None
             }
-            KeyCode::PageDown => {
+            InputAction::PageDown => {
                 let max = total_files.saturating_sub(1);
                 self.scroll = (self.scroll + 10).min(max);
                 ShitFormatPreviewAction::None
             }
 
             // Bitrate adjustment (only when on lossy buttons, and not in FLAC capture mode)
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 let on_lossy_button = self.selected_button == SelectedButton::TranscodeLossy
                     || self.selected_button == SelectedButton::ConvertAll;
                 if on_lossy_button && !self.cached_data.lossy_to_flac {
@@ -118,7 +118,7 @@ impl ShitFormatPreviewState {
                 }
                 ShitFormatPreviewAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 let on_lossy_button = self.selected_button == SelectedButton::TranscodeLossy
                     || self.selected_button == SelectedButton::ConvertAll;
                 if on_lossy_button && !self.cached_data.lossy_to_flac {
@@ -130,17 +130,17 @@ impl ShitFormatPreviewState {
             }
 
             // Tab cycles between buttons
-            KeyCode::Tab => {
+            InputAction::CycleNext => {
                 self.selected_button.next(has_lossless, has_lossy);
                 ShitFormatPreviewAction::None
             }
-            KeyCode::BackTab => {
+            InputAction::CyclePrev => {
                 self.selected_button.prev(has_lossless, has_lossy);
                 ShitFormatPreviewAction::None
             }
 
             // Execute selected button
-            KeyCode::Enter => match self.selected_button {
+            InputAction::Confirm => match self.selected_button {
                 SelectedButton::RemuxLossless if has_lossless => {
                     ShitFormatPreviewAction::ConfirmRemuxLossless
                 }
@@ -155,7 +155,7 @@ impl ShitFormatPreviewState {
             },
 
             // Cancel
-            KeyCode::Esc => ShitFormatPreviewAction::Cancel,
+            InputAction::Cancel => ShitFormatPreviewAction::Cancel,
 
             _ => ShitFormatPreviewAction::None,
         }

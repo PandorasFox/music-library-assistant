@@ -7,7 +7,7 @@
 //! - Enter: Confirm embed all
 //! - Escape: Cancel
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -118,33 +118,33 @@ impl EmbedAlbumArtPreviewState {
         self.cached_data.signals.get(self.scroll).map(|s| s.key.as_str())
     }
 
-    /// Handle key input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> EmbedAlbumArtPreviewAction {
-        match key.code {
-            KeyCode::Esc => EmbedAlbumArtPreviewAction::Cancel,
+    /// Handle input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> EmbedAlbumArtPreviewAction {
+        match action {
+            InputAction::Cancel => EmbedAlbumArtPreviewAction::Cancel,
 
-            KeyCode::Enter => EmbedAlbumArtPreviewAction::ConfirmEmbedAll,
+            InputAction::Confirm => EmbedAlbumArtPreviewAction::ConfirmEmbedAll,
 
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 if self.scroll > 0 {
                     self.scroll -= 1;
                 }
                 EmbedAlbumArtPreviewAction::None
             }
 
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if self.scroll + 1 < self.cached_data.directory_count() {
                     self.scroll += 1;
                 }
                 EmbedAlbumArtPreviewAction::None
             }
 
-            KeyCode::Home => {
+            InputAction::Home => {
                 self.scroll = 0;
                 EmbedAlbumArtPreviewAction::None
             }
 
-            KeyCode::End => {
+            InputAction::End => {
                 self.scroll = self.cached_data.directory_count().saturating_sub(1);
                 EmbedAlbumArtPreviewAction::None
             }

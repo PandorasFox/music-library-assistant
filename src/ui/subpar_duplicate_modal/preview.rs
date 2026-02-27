@@ -10,7 +10,7 @@
 //! - Enter: Execute selected button action
 //! - Escape: Cancel
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -87,60 +87,58 @@ impl SubparDuplicatePreviewState {
         }
     }
 
-    /// Handle key input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> SubparDuplicatePreviewAction {
+    /// Handle input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> SubparDuplicatePreviewAction {
         let has_files = self.cached_data.has_files();
 
-        // Shift+Up/Down: move focus between panes
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
-            match key.code {
-                KeyCode::Up => {
-                    self.focus_pane = self.focus_pane.prev();
-                    return SubparDuplicatePreviewAction::None;
-                }
-                KeyCode::Down => {
-                    self.focus_pane = self.focus_pane.next();
-                    return SubparDuplicatePreviewAction::None;
-                }
-                _ => {}
+        // FocusUp/FocusDown: move focus between panes
+        match action {
+            InputAction::FocusUp => {
+                self.focus_pane = self.focus_pane.prev();
+                return SubparDuplicatePreviewAction::None;
             }
+            InputAction::FocusDown => {
+                self.focus_pane = self.focus_pane.next();
+                return SubparDuplicatePreviewAction::None;
+            }
+            _ => {}
         }
 
-        match key.code {
+        match action {
             // Scroll file list (only when list focused)
-            KeyCode::Up if self.focus_pane == FocusPane::List => {
+            InputAction::NavUp if self.focus_pane == FocusPane::List => {
                 self.scroll = self.scroll.saturating_sub(1);
                 SubparDuplicatePreviewAction::None
             }
-            KeyCode::Down if self.focus_pane == FocusPane::List => {
+            InputAction::NavDown if self.focus_pane == FocusPane::List => {
                 let max = self.cached_data.files.len().saturating_sub(1);
                 if self.scroll < max {
                     self.scroll += 1;
                 }
                 SubparDuplicatePreviewAction::None
             }
-            KeyCode::PageUp => {
+            InputAction::PageUp => {
                 self.scroll = self.scroll.saturating_sub(10);
                 SubparDuplicatePreviewAction::None
             }
-            KeyCode::PageDown => {
+            InputAction::PageDown => {
                 let max = self.cached_data.files.len().saturating_sub(1);
                 self.scroll = (self.scroll + 10).min(max);
                 SubparDuplicatePreviewAction::None
             }
 
             // Button navigation (when buttons focused)
-            KeyCode::Left if self.focus_pane == FocusPane::Buttons => {
+            InputAction::NavLeft if self.focus_pane == FocusPane::Buttons => {
                 self.selected_button.left(has_files);
                 SubparDuplicatePreviewAction::None
             }
-            KeyCode::Right if self.focus_pane == FocusPane::Buttons => {
+            InputAction::NavRight if self.focus_pane == FocusPane::Buttons => {
                 self.selected_button.right(has_files);
                 SubparDuplicatePreviewAction::None
             }
 
             // Execute selected button (only when buttons focused)
-            KeyCode::Enter if self.focus_pane == FocusPane::Buttons => {
+            InputAction::Confirm if self.focus_pane == FocusPane::Buttons => {
                 match self.selected_button {
                     SelectedButton::StashAll if has_files => {
                         SubparDuplicatePreviewAction::ConfirmStashAll
@@ -151,7 +149,7 @@ impl SubparDuplicatePreviewState {
             }
 
             // Cancel
-            KeyCode::Esc => SubparDuplicatePreviewAction::Cancel,
+            InputAction::Cancel => SubparDuplicatePreviewAction::Cancel,
 
             _ => SubparDuplicatePreviewAction::None,
         }

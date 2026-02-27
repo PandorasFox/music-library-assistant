@@ -20,9 +20,10 @@ pub mod variants;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
 use ratatui::Frame;
+
+use crate::ui::input::InputAction;
 
 pub use actions::TreeBrowserAction;
 pub use config::CorpusBrowserConfig;
@@ -79,9 +80,9 @@ impl TreeBrowserState {
         Self { navigator, variant }
     }
 
-    /// Handle a key event.
-    pub fn handle_key(&mut self, key: KeyEvent) -> TreeBrowserAction {
-        input::handle_key(key, &mut self.navigator, &mut self.variant)
+    /// Handle a semantic input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> TreeBrowserAction {
+        input::handle_input(action, &mut self.navigator, &mut self.variant)
     }
 
     /// Render the browser.

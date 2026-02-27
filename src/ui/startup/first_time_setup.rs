@@ -32,6 +32,7 @@ use crate::ui::tree_browser::{EntryFilter, TreeEntry, TreeNavigator};
 /// Constructor is private to this module; type is pub(crate) so db/ can require it.
 pub(crate) struct FirstTimeSetupToken(());
 
+use crate::ui::input;
 use crate::ui::widgets::selection_styles::CURSOR_STYLE;
 use crate::ui::widgets::TextInputState;
 
@@ -173,7 +174,7 @@ fn run_directory_picker<B: Backend>(terminal: &mut Terminal<B>) -> Result<PathBu
                         state.creating_dir = None;
                     }
                     _ => {
-                        creating.input.handle_key(key);
+                        creating.input.handle_input(&input::map_key(key));
                     }
                 }
             } else {

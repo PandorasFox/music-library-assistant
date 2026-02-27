@@ -7,9 +7,10 @@ pub mod corpus;
 
 pub use corpus::CorpusBrowserVariant;
 
-use crossterm::event::KeyEvent;
 use ratatui::Frame;
 use ratatui::layout::Rect;
+
+use crate::ui::input::InputAction;
 
 use super::actions::TreeBrowserAction;
 use super::navigator::TreeNavigator;
@@ -36,7 +37,7 @@ impl BrowserVariant {
         }
     }
 
-    /// Check if variant wants to capture navigation keys (arrows, hjkl).
+    /// Check if variant wants to capture navigation keys (arrows).
     /// When true, navigation keys are delegated to the variant instead of tree browser.
     pub fn wants_navigation_keys(&self) -> bool {
         match self {
@@ -44,10 +45,10 @@ impl BrowserVariant {
         }
     }
 
-    /// Handle variant-specific key input.
-    pub fn handle_key(&mut self, key: KeyEvent, nav: &mut TreeNavigator) -> TreeBrowserAction {
+    /// Handle variant-specific input action.
+    pub fn handle_input(&mut self, action: &InputAction, nav: &mut TreeNavigator) -> TreeBrowserAction {
         match self {
-            BrowserVariant::CorpusBrowser(v) => v.handle_key(key, nav),
+            BrowserVariant::CorpusBrowser(v) => v.handle_input(action, nav),
         }
     }
 

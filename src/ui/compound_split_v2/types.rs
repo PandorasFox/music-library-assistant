@@ -292,11 +292,14 @@ impl CompoundSplitStateV2 {
             }
         }
 
-        // Then: find all add operations (old_value=None) for this tag
+        // Then: find unique add operations (old_value=None) for this tag.
+        // Ops are duplicated per-file, so deduplicate by value.
         for op in &ops {
-            if op.old_value.is_none() && op.new_value.is_some() {
+            if op.old_value.is_none() {
                 if let Some(ref new_val) = op.new_value {
-                    parts.push(new_val.clone());
+                    if !parts.contains(new_val) {
+                        parts.push(new_val.clone());
+                    }
                 }
             }
         }

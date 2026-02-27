@@ -2,9 +2,8 @@
 //!
 //! Manages cursor navigation, field editing, and the Save/Discard flow.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
 use crate::config::Config;
+use crate::ui::input::InputAction;
 use crate::ui::widgets::TextInputState;
 use super::build;
 use super::types::*;
@@ -23,7 +22,7 @@ pub enum EditorButton {
     Discard,
 }
 
-/// Action produced by `handle_key`, consumed by the action handler.
+/// Action produced by `handle_input`, consumed by the action handler.
 pub enum ConfigEditorAction {
     None,
     Save,
@@ -138,35 +137,35 @@ impl ConfigEditorState {
         }
     }
 
-    /// Handle a key event, producing an action for the dispatch layer.
-    pub fn handle_key(&mut self, key: KeyEvent) -> ConfigEditorAction {
+    /// Handle a semantic input action, producing an action for the dispatch layer.
+    pub fn handle_input(&mut self, action: &InputAction) -> ConfigEditorAction {
         // Text input mode intercepts most keys
         if self.text_input.is_some() {
-            return self.handle_text_input_key(key);
+            return self.handle_text_input(action);
         }
 
         // Sub-collection editing mode (separator list within a StringListMap item)
         if self.sub_collection_pos.is_some() {
-            return self.handle_sub_collection_key(key);
+            return self.handle_sub_collection_input(action);
         }
 
         // Collection editing mode
         if self.collection_pos.is_some() {
-            return self.handle_collection_key(key);
+            return self.handle_collection_input(action);
         }
 
         match self.focus {
-            EditorFocus::Fields => self.handle_fields_key(key),
-            EditorFocus::Buttons => self.handle_buttons_key(key),
+            EditorFocus::Fields => self.handle_fields_input(action),
+            EditorFocus::Buttons => self.handle_buttons_input(action),
         }
     }
 
-    /// Handle key events while editing within a collection field.
-    fn handle_collection_key(&mut self, key: KeyEvent) -> ConfigEditorAction {
+    /// Handle input while editing within a collection field.
+    fn handle_collection_input(&mut self, action: &InputAction) -> ConfigEditorAction {
         let item_count = self.current_collection_len();
 
-        match key.code {
-            KeyCode::Up => {
+        match action {
+            InputAction::NavUp => {
                 match self.collection_pos {
                     Some(CollectionPosition::Item(0)) => {
                         // Exit collection mode, stay on field
@@ -186,7 +185,7 @@ impl ConfigEditorState {
                 }
                 ConfigEditorAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 match self.collection_pos {
                     Some(CollectionPosition::Item(n)) => {
                         if n + 1 < item_count {
@@ -207,7 +206,7 @@ impl ConfigEditorState {
                 }
                 ConfigEditorAction::None
             }
-            KeyCode::Left | KeyCode::Right => {
+            InputAction::NavLeft | InputAction::NavRight => {
                 // For StringPairMap, switch between key and value
                 let Some((gi, fi)) = self.cursor_to_group_field() else {
                     return ConfigEditorAction::None;
@@ -217,15 +216,15 @@ impl ConfigEditorState {
                 }
                 ConfigEditorAction::None
             }
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 self.activate_collection_item();
                 ConfigEditorAction::None
             }
-            KeyCode::Char('x') | KeyCode::Delete => {
+            InputAction::Char('x') | InputAction::Delete => {
                 self.delete_collection_item();
                 ConfigEditorAction::None
             }
-            KeyCode::Esc => {
+            InputAction::Cancel => {
                 self.collection_pos = None;
                 ConfigEditorAction::None
             }
@@ -241,12 +240,12 @@ impl ConfigEditorState {
         if idx < items.len() { items[idx].1.len() } else { 0 }
     }
 
-    /// Handle key events while editing within a separator sub-list.
-    fn handle_sub_collection_key(&mut self, key: KeyEvent) -> ConfigEditorAction {
+    /// Handle input while editing within a separator sub-list.
+    fn handle_sub_collection_input(&mut self, action: &InputAction) -> ConfigEditorAction {
         let item_count = self.current_sub_collection_len();
 
-        match key.code {
-            KeyCode::Up => {
+        match action {
+            InputAction::NavUp => {
                 match self.sub_collection_pos {
                     Some(CollectionPosition::Item(0)) => {
                         // Exit sub-collection, stay on the tag item
@@ -266,7 +265,7 @@ impl ConfigEditorState {
                 }
                 ConfigEditorAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 match self.sub_collection_pos {
                     Some(CollectionPosition::Item(n)) => {
                         if n + 1 < item_count {
@@ -294,15 +293,15 @@ impl ConfigEditorState {
                 }
                 ConfigEditorAction::None
             }
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 self.activate_sub_collection_item();
                 ConfigEditorAction::None
             }
-            KeyCode::Char('x') | KeyCode::Delete => {
+            InputAction::Char('x') | InputAction::Delete => {
                 self.delete_sub_collection_item();
                 ConfigEditorAction::None
             }
-            KeyCode::Esc => {
+            InputAction::Cancel => {
                 self.sub_collection_pos = None;
                 ConfigEditorAction::None
             }
@@ -469,85 +468,82 @@ impl ConfigEditorState {
         }
     }
 
-    /// Key handling while navigating fields.
-    fn handle_fields_key(&mut self, key: KeyEvent) -> ConfigEditorAction {
+    /// Input handling while navigating fields.
+    fn handle_fields_input(&mut self, action: &InputAction) -> ConfigEditorAction {
         let total = self.visible_field_count();
         if total == 0 {
             return ConfigEditorAction::None;
         }
 
-        match key.code {
-            KeyCode::Up => {
+        match action {
+            InputAction::NavUp => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                 }
                 ConfigEditorAction::None
             }
-            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            InputAction::FocusDown => {
                 self.focus = EditorFocus::Buttons;
                 ConfigEditorAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if self.cursor + 1 < total {
                     self.cursor += 1;
                 }
                 ConfigEditorAction::None
             }
-            KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            InputAction::CyclePrev => {
                 self.try_cycle(CycleDirection::Prev)
             }
-            KeyCode::BackTab => {
-                self.try_cycle(CycleDirection::Prev)
-            }
-            KeyCode::Tab => {
+            InputAction::CycleNext => {
                 self.try_cycle(CycleDirection::Next)
             }
-            KeyCode::Enter | KeyCode::Char(' ') => {
+            InputAction::Confirm | InputAction::Toggle => {
                 self.activate_field();
                 ConfigEditorAction::None
             }
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 self.cycle_enum_left();
                 ConfigEditorAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 self.cycle_enum_right();
                 ConfigEditorAction::None
             }
-            KeyCode::Char('[') => {
+            InputAction::Char('[') => {
                 self.jump_to_prev_group();
                 ConfigEditorAction::None
             }
-            KeyCode::Char(']') => {
+            InputAction::Char(']') => {
                 self.jump_to_next_group();
                 ConfigEditorAction::None
             }
-            KeyCode::Char('r') => {
+            InputAction::Char('r') => {
                 self.reset_current_field();
                 ConfigEditorAction::None
             }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            InputAction::Char('C') => {
                 self.toggle_current_group_collapse();
                 ConfigEditorAction::None
             }
-            KeyCode::Esc => {
+            InputAction::Cancel => {
                 ConfigEditorAction::Discard
             }
             _ => ConfigEditorAction::None,
         }
     }
 
-    /// Key handling while focused on buttons.
-    fn handle_buttons_key(&mut self, key: KeyEvent) -> ConfigEditorAction {
-        match key.code {
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+    /// Input handling while focused on buttons.
+    fn handle_buttons_input(&mut self, action: &InputAction) -> ConfigEditorAction {
+        match action {
+            InputAction::NavLeft | InputAction::NavRight | InputAction::CycleNext => {
                 self.selected_button = match self.selected_button {
                     EditorButton::Save => EditorButton::Discard,
                     EditorButton::Discard => EditorButton::Save,
                 };
                 ConfigEditorAction::None
             }
-            KeyCode::Enter | KeyCode::Char(' ') => {
+            InputAction::Confirm | InputAction::Toggle => {
                 match self.selected_button {
                     EditorButton::Save => ConfigEditorAction::Save,
                     EditorButton::Discard => {
@@ -561,7 +557,7 @@ impl ConfigEditorState {
                     }
                 }
             }
-            KeyCode::Esc | KeyCode::Up | KeyCode::Down => {
+            InputAction::Cancel | InputAction::NavUp | InputAction::NavDown => {
                 self.focus = EditorFocus::Fields;
                 self.pending_cycle = None;
                 ConfigEditorAction::None
@@ -586,20 +582,20 @@ impl ConfigEditorState {
         }
     }
 
-    /// Key handling while text input is active.
-    fn handle_text_input_key(&mut self, key: KeyEvent) -> ConfigEditorAction {
-        match key.code {
-            KeyCode::Enter => {
+    /// Input handling while text input is active.
+    fn handle_text_input(&mut self, action: &InputAction) -> ConfigEditorAction {
+        match action {
+            InputAction::Confirm => {
                 self.commit_text_input();
                 ConfigEditorAction::None
             }
-            KeyCode::Esc => {
+            InputAction::Cancel => {
                 self.text_input = None;
                 ConfigEditorAction::None
             }
             _ => {
                 if let Some(ref mut input) = self.text_input {
-                    input.handle_key(key);
+                    input.handle_input(action);
                 }
                 ConfigEditorAction::None
             }

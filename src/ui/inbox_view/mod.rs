@@ -17,7 +17,7 @@
 
 mod render;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::input::InputAction;
 use ratatui::style::Color;
 
 use crate::meta::views::InboxOverviewData;
@@ -174,14 +174,14 @@ impl InboxViewState {
         self.entries.get(self.selected)
     }
 
-    /// Handle a key event and return the resulting action.
-    pub fn handle_key(&mut self, key: KeyEvent) -> InboxAction {
-        match key.code {
-            KeyCode::Esc => InboxAction::RequestQuit,
-            KeyCode::Tab => InboxAction::CycleNext,
-            KeyCode::BackTab => InboxAction::CyclePrev,
+    /// Handle a semantic input action and return the resulting action.
+    pub fn handle_input(&mut self, action: &InputAction) -> InboxAction {
+        match action {
+            InputAction::Cancel => InboxAction::RequestQuit,
+            InputAction::CycleNext => InboxAction::CycleNext,
+            InputAction::CyclePrev => InboxAction::CyclePrev,
 
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 if self.busy {
                     return InboxAction::None;
                 }
@@ -199,23 +199,23 @@ impl InboxViewState {
                 }
             }
 
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
                 InboxAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if !self.entries.is_empty() && self.selected < self.entries.len() - 1 {
                     self.selected += 1;
                 }
                 InboxAction::None
             }
-            KeyCode::Home => {
+            InputAction::Home => {
                 self.selected = 0;
                 InboxAction::None
             }
-            KeyCode::End => {
+            InputAction::End => {
                 if !self.entries.is_empty() {
                     self.selected = self.entries.len() - 1;
                 }

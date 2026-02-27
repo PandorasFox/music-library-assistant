@@ -3,10 +3,9 @@
 //! Keyboard input handling for the unified tag editor.
 //! Dispatches key events to appropriate handlers based on focus state.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
 use super::state::UnifiedTagEditorState;
 use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::ui::input::InputAction;
 use super::types::{
     FieldEditState, NavigationDirection, StageChangesButton, TagEditorButton,
     TagEditorLaunchMode, UnifiedTagEditorAction, UnifiedTagEditorFocus,
@@ -14,24 +13,24 @@ use super::types::{
 };
 
 impl UnifiedTagEditorState {
-    /// Handle a key event.
-    pub fn handle_key(&mut self, key: KeyEvent) -> UnifiedTagEditorAction {
+    /// Handle a semantic input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> UnifiedTagEditorAction {
         // Handle modal first if active
         if self.modal.is_some() {
-            return self.handle_modal_key(key);
+            return self.handle_modal_input(action);
         }
 
         match self.focus {
-            UnifiedTagEditorFocus::TagFields => self.handle_tag_fields_key(key),
-            UnifiedTagEditorFocus::Actions => self.handle_actions_key(key),
+            UnifiedTagEditorFocus::TagFields => self.handle_tag_fields_input(action),
+            UnifiedTagEditorFocus::Actions => self.handle_actions_input(action),
         }
     }
 
-    fn handle_modal_key(&mut self, key: KeyEvent) -> UnifiedTagEditorAction {
+    fn handle_modal_input(&mut self, action: &InputAction) -> UnifiedTagEditorAction {
         match &mut self.modal {
             Some(UnifiedTagEditorModal::UnsavedChanges { selected_button }) => {
-                match key.code {
-                    KeyCode::Enter => {
+                match action {
+                    InputAction::Confirm => {
                         // Execute selected button action
                         match selected_button {
                             UnsavedChangesButton::KeepEditing => {
@@ -49,12 +48,12 @@ impl UnifiedTagEditorState {
                             }
                         }
                     }
-                    KeyCode::Esc => {
+                    InputAction::Cancel => {
                         // Escape always cancels (keeps editing)
                         self.modal = None;
                         UnifiedTagEditorAction::CloseModal
                     }
-                    KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                    InputAction::NavLeft | InputAction::NavRight | InputAction::CycleNext => {
                         // Toggle button selection
                         *selected_button = match selected_button {
                             UnsavedChangesButton::KeepEditing => {
@@ -79,8 +78,8 @@ impl UnifiedTagEditorState {
                 let num_values = values.len();
                 let add_entry_idx = num_values; // "+ Add value" is at end
 
-                match key.code {
-                    KeyCode::Esc => {
+                match action {
+                    InputAction::Cancel => {
                         if *editing {
                             // Cancel edit, revert buffer
                             *editing = false;
@@ -94,7 +93,7 @@ impl UnifiedTagEditorState {
                         }
                         UnifiedTagEditorAction::None
                     }
-                    KeyCode::Enter => {
+                    InputAction::Confirm => {
                         if *editing {
                             // Commit edit
                             if *current_value_idx < num_values {
@@ -116,19 +115,19 @@ impl UnifiedTagEditorState {
                         }
                         UnifiedTagEditorAction::None
                     }
-                    KeyCode::Up => {
+                    InputAction::NavUp => {
                         if !*editing && *current_value_idx > 0 {
                             *current_value_idx -= 1;
                         }
                         UnifiedTagEditorAction::None
                     }
-                    KeyCode::Down => {
+                    InputAction::NavDown => {
                         if !*editing && *current_value_idx < add_entry_idx {
                             *current_value_idx += 1;
                         }
                         UnifiedTagEditorAction::None
                     }
-                    KeyCode::Delete | KeyCode::Backspace if !*editing => {
+                    InputAction::Delete | InputAction::Backspace if !*editing => {
                         // Delete current value (not the add entry)
                         if *current_value_idx < num_values && num_values > 0 {
                             values.remove(*current_value_idx);
@@ -138,20 +137,20 @@ impl UnifiedTagEditorState {
                         }
                         UnifiedTagEditorAction::None
                     }
-                    KeyCode::Backspace if *editing => {
+                    InputAction::Backspace if *editing => {
                         edit_buffer.pop();
                         UnifiedTagEditorAction::None
                     }
-                    KeyCode::Char(c) if *editing => {
-                        edit_buffer.push(c);
+                    InputAction::Char(c) if *editing => {
+                        edit_buffer.push(*c);
                         UnifiedTagEditorAction::None
                     }
                     _ => UnifiedTagEditorAction::None,
                 }
             }
             Some(UnifiedTagEditorModal::StageChangesConfirm { direction, selected_button }) => {
-                match key.code {
-                    KeyCode::Enter => {
+                match action {
+                    InputAction::Confirm => {
                         let direction = *direction;
                         match selected_button {
                             StageChangesButton::Yes => {
@@ -180,11 +179,11 @@ impl UnifiedTagEditorState {
                             }
                         }
                     }
-                    KeyCode::Esc => {
+                    InputAction::Cancel => {
                         self.modal = None;
                         UnifiedTagEditorAction::CloseModal
                     }
-                    KeyCode::Left => {
+                    InputAction::NavLeft => {
                         *selected_button = match selected_button {
                             StageChangesButton::Yes => StageChangesButton::Yes,
                             StageChangesButton::No => StageChangesButton::Yes,
@@ -192,7 +191,7 @@ impl UnifiedTagEditorState {
                         };
                         UnifiedTagEditorAction::None
                     }
-                    KeyCode::Right | KeyCode::Tab => {
+                    InputAction::NavRight | InputAction::CycleNext => {
                         *selected_button = match selected_button {
                             StageChangesButton::Yes => StageChangesButton::No,
                             StageChangesButton::No => StageChangesButton::Cancel,
@@ -207,9 +206,9 @@ impl UnifiedTagEditorState {
         }
     }
 
-    fn handle_tag_fields_key(&mut self, key: KeyEvent) -> UnifiedTagEditorAction {
-        match key.code {
-            KeyCode::Esc => {
+    fn handle_tag_fields_input(&mut self, action: &InputAction) -> UnifiedTagEditorAction {
+        match action {
+            InputAction::Cancel => {
                 if self.field_edit_state != FieldEditState::NonEditable {
                     self.field_edit_state = FieldEditState::NonEditable;
                     UnifiedTagEditorAction::None
@@ -224,7 +223,7 @@ impl UnifiedTagEditorState {
                     UnifiedTagEditorAction::DiscardTransaction
                 }
             }
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 if self.field_edit_state != FieldEditState::NonEditable {
                     self.commit_field_buffer();
                 }
@@ -237,7 +236,7 @@ impl UnifiedTagEditorState {
                 self.load_field_buffer();
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if self.field_edit_state != FieldEditState::NonEditable {
                     self.commit_field_buffer();
                 }
@@ -256,14 +255,14 @@ impl UnifiedTagEditorState {
                 self.load_field_buffer();
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 // Left arrow: move focus from value to name (ContextList is not focusable)
                 if self.field_edit_state == FieldEditState::NonEditable && self.focus_on_value {
                     self.focus_on_value = false;
                 }
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 if self.field_edit_state == FieldEditState::NonEditable {
                     if self.focus_on_value {
                         self.focus = UnifiedTagEditorFocus::Actions;
@@ -273,7 +272,7 @@ impl UnifiedTagEditorState {
                 }
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Tab => {
+            InputAction::CycleNext => {
                 // Tab: advance to next item (individual mode only)
                 // In aggregated mode, Tab does nothing - use ReviewAll button
                 if self.is_aggregated_mode() {
@@ -289,7 +288,7 @@ impl UnifiedTagEditorState {
                     UnifiedTagEditorAction::NextItem
                 }
             }
-            KeyCode::BackTab => {
+            InputAction::CyclePrev => {
                 // Shift-Tab: go to previous item (individual mode only)
                 // In aggregated mode, Shift-Tab does nothing - use ReviewAll button
                 if self.is_aggregated_mode() {
@@ -305,11 +304,11 @@ impl UnifiedTagEditorState {
                     UnifiedTagEditorAction::PrevItem
                 }
             }
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 self.handle_field_enter();
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            InputAction::Shortcut('r') => {
                 if self.is_embedded() {
                     // Ctrl+R disabled in embedded mode (parent owns transaction)
                     UnifiedTagEditorAction::None
@@ -318,21 +317,21 @@ impl UnifiedTagEditorState {
                     UnifiedTagEditorAction::RequestTransactionReview
                 }
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            InputAction::KillToStart => {
                 self.clear_current_field();
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Char('n') if self.field_edit_state == FieldEditState::NonEditable => {
+            InputAction::Char('n') if self.field_edit_state == FieldEditState::NonEditable => {
                 self.create_new_tag();
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Char(c) => {
+            InputAction::Char(c) => {
                 if self.field_edit_state != FieldEditState::NonEditable {
-                    self.insert_char(c);
+                    self.insert_char(*c);
                 }
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Backspace => {
+            InputAction::Backspace => {
                 if self.field_edit_state != FieldEditState::NonEditable {
                     self.delete_char();
                 } else {
@@ -341,7 +340,7 @@ impl UnifiedTagEditorState {
                 }
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Delete => {
+            InputAction::Delete => {
                 if self.field_edit_state == FieldEditState::NonEditable {
                     // In navigation mode, toggle deletion mark on current field
                     self.toggle_current_field_deleted();
@@ -352,28 +351,28 @@ impl UnifiedTagEditorState {
         }
     }
 
-    fn handle_actions_key(&mut self, key: KeyEvent) -> UnifiedTagEditorAction {
+    fn handle_actions_input(&mut self, action: &InputAction) -> UnifiedTagEditorAction {
         let buttons = self.available_buttons();
         let current_idx = buttons.iter().position(|b| *b == self.selected_button).unwrap_or(0);
 
-        match key.code {
-            KeyCode::Left | KeyCode::Esc => {
+        match action {
+            InputAction::NavLeft | InputAction::Cancel => {
                 self.focus = UnifiedTagEditorFocus::TagFields;
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 if current_idx > 0 {
                     self.selected_button = buttons[current_idx - 1];
                 }
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if current_idx < buttons.len().saturating_sub(1) {
                     self.selected_button = buttons[current_idx + 1];
                 }
                 UnifiedTagEditorAction::None
             }
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 match self.selected_button {
                     TagEditorButton::ReviewAll => {
                         if self.is_embedded() {

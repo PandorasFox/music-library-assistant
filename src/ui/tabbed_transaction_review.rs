@@ -4,7 +4,7 @@
 //! Thin wrapper: adds Tab/BackTab cycling, delegates everything else to
 //! `TransactionReviewState`.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::input::InputAction;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -30,16 +30,16 @@ impl TabbedTransactionReviewState {
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> TabbedTransactionReviewAction {
+    pub fn handle_input(&mut self, action: &InputAction) -> TabbedTransactionReviewAction {
         // Intercept Tab/BackTab for lateral cycling
-        match key.code {
-            KeyCode::Tab => return TabbedTransactionReviewAction::CycleNext,
-            KeyCode::BackTab => return TabbedTransactionReviewAction::CyclePrev,
+        match action {
+            InputAction::CycleNext => return TabbedTransactionReviewAction::CycleNext,
+            InputAction::CyclePrev => return TabbedTransactionReviewAction::CyclePrev,
             _ => {}
         }
 
         // Delegate everything else to the core
-        match self.review.handle_key(key) {
+        match self.review.handle_input(action) {
             TransactionReviewAction::Cancel => {
                 // No cancel in tabbed mode — Esc produces Cancel from core,
                 // but here it's a no-op (tabbed view has no parent to pop to)

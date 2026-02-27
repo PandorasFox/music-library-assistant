@@ -10,7 +10,7 @@ pub mod render;
 
 use std::collections::{HashMap, HashSet};
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::input::InputAction;
 
 use crate::meta::views::{EditHistoryData, EditRecord, EditSessionSummary};
 
@@ -199,107 +199,107 @@ impl HistoryViewState {
 // ============================================================================
 
 impl HistoryViewState {
-    pub fn handle_key(&mut self, key: KeyEvent) -> HistoryAction {
+    pub fn handle_input(&mut self, action: &InputAction) -> HistoryAction {
         match self.phase {
-            HistoryPhase::SessionList => self.handle_session_list_key(key),
-            HistoryPhase::SessionDetail => self.handle_session_detail_key(key),
+            HistoryPhase::SessionList => self.handle_session_list_input(action),
+            HistoryPhase::SessionDetail => self.handle_session_detail_input(action),
             HistoryPhase::ConflictResolution(ref mut state) => {
-                handle_conflict_resolution_key(state, key)
+                handle_conflict_resolution_input(state, action)
             }
             HistoryPhase::ConfirmJettisonSession(_) => {
-                handle_jettison_confirm_key(key, HistoryAction::ConfirmJettisonSession)
+                handle_jettison_confirm_input(action, HistoryAction::ConfirmJettisonSession)
             }
             HistoryPhase::ConfirmJettisonAll(_) => {
-                handle_jettison_confirm_key(key, HistoryAction::AdvanceJettisonAll)
+                handle_jettison_confirm_input(action, HistoryAction::AdvanceJettisonAll)
             }
             HistoryPhase::ConfirmJettisonAllFinal(_) => {
-                handle_jettison_confirm_key(key, HistoryAction::ConfirmJettisonAll)
+                handle_jettison_confirm_input(action, HistoryAction::ConfirmJettisonAll)
             }
         }
     }
 
-    fn handle_session_list_key(&mut self, key: KeyEvent) -> HistoryAction {
-        match key.code {
-            KeyCode::Up => {
+    fn handle_session_list_input(&mut self, action: &InputAction) -> HistoryAction {
+        match action {
+            InputAction::NavUp => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                 }
                 HistoryAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if !self.sessions.is_empty() && self.cursor < self.sessions.len() - 1 {
                     self.cursor += 1;
                 }
                 HistoryAction::None
             }
-            KeyCode::Home => {
+            InputAction::Home => {
                 self.cursor = 0;
                 HistoryAction::None
             }
-            KeyCode::End => {
+            InputAction::End => {
                 if !self.sessions.is_empty() {
                     self.cursor = self.sessions.len() - 1;
                 }
                 HistoryAction::None
             }
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 if let Some(session) = self.sessions.get(self.cursor) {
                     HistoryAction::ExpandSession(session.session_id.clone())
                 } else {
                     HistoryAction::None
                 }
             }
-            KeyCode::Char('d') => {
+            InputAction::Char('d') => {
                 if self.sessions.is_empty() {
                     HistoryAction::None
                 } else {
                     HistoryAction::JettisonSession
                 }
             }
-            KeyCode::Char('D') => {
+            InputAction::Char('D') => {
                 if self.sessions.is_empty() {
                     HistoryAction::None
                 } else {
                     HistoryAction::JettisonAll
                 }
             }
-            KeyCode::Tab => HistoryAction::CycleNext,
-            KeyCode::BackTab => HistoryAction::CyclePrev,
-            KeyCode::Esc => HistoryAction::RequestQuit,
+            InputAction::CycleNext => HistoryAction::CycleNext,
+            InputAction::CyclePrev => HistoryAction::CyclePrev,
+            InputAction::Cancel => HistoryAction::RequestQuit,
             _ => HistoryAction::None,
         }
     }
 
-    fn handle_session_detail_key(&mut self, key: KeyEvent) -> HistoryAction {
+    fn handle_session_detail_input(&mut self, action: &InputAction) -> HistoryAction {
         let detail = match self.detail {
             Some(ref mut d) => d,
             None => return HistoryAction::CollapseDetail,
         };
 
-        match key.code {
-            KeyCode::Up => {
+        match action {
+            InputAction::NavUp => {
                 if detail.detail_cursor > 0 {
                     detail.detail_cursor -= 1;
                 }
                 HistoryAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if !detail.edits.is_empty() && detail.detail_cursor < detail.edits.len() - 1 {
                     detail.detail_cursor += 1;
                 }
                 HistoryAction::None
             }
-            KeyCode::Home => {
+            InputAction::Home => {
                 detail.detail_cursor = 0;
                 HistoryAction::None
             }
-            KeyCode::End => {
+            InputAction::End => {
                 if !detail.edits.is_empty() {
                     detail.detail_cursor = detail.edits.len() - 1;
                 }
                 HistoryAction::None
             }
-            KeyCode::Char(' ') => {
+            InputAction::Toggle => {
                 let idx = detail.detail_cursor;
                 if idx < detail.edits.len() {
                     if detail.selected.contains(&idx) {
@@ -310,16 +310,16 @@ impl HistoryViewState {
                 }
                 HistoryAction::None
             }
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 if detail.selected.is_empty() {
                     HistoryAction::None
                 } else {
                     HistoryAction::InitiateReversal
                 }
             }
-            KeyCode::Tab => HistoryAction::CycleNext,
-            KeyCode::BackTab => HistoryAction::CyclePrev,
-            KeyCode::Esc => {
+            InputAction::CycleNext => HistoryAction::CycleNext,
+            InputAction::CyclePrev => HistoryAction::CyclePrev,
+            InputAction::Cancel => {
                 self.detail = None;
                 self.phase = HistoryPhase::SessionList;
                 HistoryAction::None
@@ -329,34 +329,34 @@ impl HistoryViewState {
     }
 }
 
-/// Shared key handler for all jettison confirmation phases.
-fn handle_jettison_confirm_key(key: KeyEvent, confirm_action: HistoryAction) -> HistoryAction {
-    match key.code {
-        KeyCode::Enter => confirm_action,
-        KeyCode::Esc => HistoryAction::CancelJettison,
+/// Shared input handler for all jettison confirmation phases.
+fn handle_jettison_confirm_input(action: &InputAction, confirm_action: HistoryAction) -> HistoryAction {
+    match action {
+        InputAction::Confirm => confirm_action,
+        InputAction::Cancel => HistoryAction::CancelJettison,
         _ => HistoryAction::None,
     }
 }
 
-fn handle_conflict_resolution_key(state: &mut ConflictResolutionState, key: KeyEvent) -> HistoryAction {
-    match key.code {
-        KeyCode::Up => {
+fn handle_conflict_resolution_input(state: &mut ConflictResolutionState, action: &InputAction) -> HistoryAction {
+    match action {
+        InputAction::NavUp => {
             if state.conflict_cursor > 0 {
                 state.conflict_cursor -= 1;
             }
             HistoryAction::None
         }
-        KeyCode::Down => {
+        InputAction::NavDown => {
             if !state.conflicts.is_empty() && state.conflict_cursor < state.conflicts.len() - 1 {
                 state.conflict_cursor += 1;
             }
             HistoryAction::None
         }
-        KeyCode::Char(' ') => {
+        InputAction::Toggle => {
             HistoryAction::ToggleConflictDisposition(state.conflict_cursor)
         }
-        KeyCode::Enter => HistoryAction::ConfirmReversal,
-        KeyCode::Esc => HistoryAction::CancelConflictResolution,
+        InputAction::Confirm => HistoryAction::ConfirmReversal,
+        InputAction::Cancel => HistoryAction::CancelConflictResolution,
         _ => HistoryAction::None,
     }
 }

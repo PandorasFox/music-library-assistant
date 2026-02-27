@@ -10,7 +10,7 @@
 //! - Enter: Execute selected button action
 //! - Escape: Cancel
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -83,54 +83,49 @@ impl InboxCorpusMatchPreviewState {
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> InboxCorpusMatchPreviewAction {
-        // Shift+Up/Down: move focus between panes
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
-            match key.code {
-                KeyCode::Up => {
-                    self.focus_pane = self.focus_pane.prev();
-                    return InboxCorpusMatchPreviewAction::None;
-                }
-                KeyCode::Down => {
-                    self.focus_pane = self.focus_pane.next();
-                    return InboxCorpusMatchPreviewAction::None;
-                }
-                _ => {}
+    pub fn handle_input(&mut self, action: &InputAction) -> InboxCorpusMatchPreviewAction {
+        match action {
+            // Shift+Up/Down: move focus between panes
+            InputAction::FocusUp => {
+                self.focus_pane = self.focus_pane.prev();
+                InboxCorpusMatchPreviewAction::None
             }
-        }
+            InputAction::FocusDown => {
+                self.focus_pane = self.focus_pane.next();
+                InboxCorpusMatchPreviewAction::None
+            }
 
-        match key.code {
-            KeyCode::Up if self.focus_pane == FocusPane::List => {
+            InputAction::NavUp if self.focus_pane == FocusPane::List => {
                 self.scroll = self.scroll.saturating_sub(1);
                 InboxCorpusMatchPreviewAction::None
             }
-            KeyCode::Down if self.focus_pane == FocusPane::List => {
+            InputAction::NavDown if self.focus_pane == FocusPane::List => {
                 let max = self.cached_data.entries.len().saturating_sub(1);
                 if self.scroll < max {
                     self.scroll += 1;
                 }
                 InboxCorpusMatchPreviewAction::None
             }
-            KeyCode::PageUp => {
+            InputAction::PageUp => {
                 self.scroll = self.scroll.saturating_sub(10);
                 InboxCorpusMatchPreviewAction::None
             }
-            KeyCode::PageDown => {
+            InputAction::PageDown => {
                 let max = self.cached_data.entries.len().saturating_sub(1);
                 self.scroll = (self.scroll + 10).min(max);
                 InboxCorpusMatchPreviewAction::None
             }
 
-            KeyCode::Left if self.focus_pane == FocusPane::Buttons => {
+            InputAction::NavLeft if self.focus_pane == FocusPane::Buttons => {
                 self.selected_button.left();
                 InboxCorpusMatchPreviewAction::None
             }
-            KeyCode::Right if self.focus_pane == FocusPane::Buttons => {
+            InputAction::NavRight if self.focus_pane == FocusPane::Buttons => {
                 self.selected_button.right();
                 InboxCorpusMatchPreviewAction::None
             }
 
-            KeyCode::Enter if self.focus_pane == FocusPane::Buttons => {
+            InputAction::Confirm if self.focus_pane == FocusPane::Buttons => {
                 let has_entries = !self.cached_data.entries.is_empty();
                 match self.selected_button {
                     SelectedButton::StashEquivalents if self.cached_data.stashable_count() > 0 => {
@@ -144,7 +139,7 @@ impl InboxCorpusMatchPreviewState {
                 }
             }
 
-            KeyCode::Esc => InboxCorpusMatchPreviewAction::Cancel,
+            InputAction::Cancel => InboxCorpusMatchPreviewAction::Cancel,
 
             _ => InboxCorpusMatchPreviewAction::None,
         }

@@ -1,6 +1,6 @@
 //! Types for moved file acknowledgement modal.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::input::InputAction;
 
 use crate::meta::views::MovedFileInfo;
 use crate::ui::widgets::FocusPane;
@@ -85,31 +85,29 @@ impl MovedFileState {
             .collect()
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> MovedFileAction {
-        // Shift+Up / Shift+Down: cycle focus pane
-        if key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
-            match key.code {
-                KeyCode::Up => {
-                    self.focus_pane = self.focus_pane.prev();
-                    return MovedFileAction::None;
-                }
-                KeyCode::Down => {
-                    self.focus_pane = self.focus_pane.next();
-                    return MovedFileAction::None;
-                }
-                _ => {}
+    pub fn handle_input(&mut self, action: &InputAction) -> MovedFileAction {
+        // FocusUp / FocusDown: cycle focus pane
+        match action {
+            InputAction::FocusUp => {
+                self.focus_pane = self.focus_pane.prev();
+                return MovedFileAction::None;
             }
+            InputAction::FocusDown => {
+                self.focus_pane = self.focus_pane.next();
+                return MovedFileAction::None;
+            }
+            _ => {}
         }
 
-        match key.code {
+        match action {
             // Up/Down: navigate file list
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 if self.current_file > 0 {
                     self.current_file -= 1;
                 }
                 MovedFileAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if self.current_file + 1 < self.files.len() {
                     self.current_file += 1;
                 }
@@ -117,13 +115,13 @@ impl MovedFileState {
             }
 
             // Left/Right: navigate buttons when focused on buttons pane
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 if self.focus_pane == FocusPane::Buttons {
                     self.selected_button = self.selected_button.left();
                 }
                 MovedFileAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 if self.focus_pane == FocusPane::Buttons {
                     self.selected_button = self.selected_button.right();
                 }
@@ -131,7 +129,7 @@ impl MovedFileState {
             }
 
             // Confirm selected button (when focused on buttons)
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 if self.focus_pane == FocusPane::Buttons {
                     match self.selected_button {
                         MovedFileButton::Acknowledge => {
@@ -148,7 +146,7 @@ impl MovedFileState {
                 }
             }
 
-            KeyCode::Esc => MovedFileAction::Cancel,
+            InputAction::Cancel => MovedFileAction::Cancel,
 
             _ => MovedFileAction::None,
         }

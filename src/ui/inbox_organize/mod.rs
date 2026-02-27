@@ -23,7 +23,7 @@ pub mod render;
 
 use std::path::PathBuf;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::input::InputAction;
 
 use crate::config::{InboxOrganizeGranularity, Config};
 use crate::db::ReadOnlyDb;
@@ -193,12 +193,12 @@ impl InboxOrganizeState {
         format!("{}/{}", self.current_dir_idx + 1, self.directories.len())
     }
 
-    /// Handle a key event.
-    pub fn handle_key(&mut self, key: KeyEvent) -> InboxOrganizeAction {
+    /// Handle a semantic input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> InboxOrganizeAction {
         match self.phase {
-            OrganizePhase::BrowsingCorpus => self.handle_browsing_key(key),
-            OrganizePhase::NewDirectoryInput => self.handle_new_dir_input_key(key),
-            OrganizePhase::EmplacePopup => self.handle_emplace_key(key),
+            OrganizePhase::BrowsingCorpus => self.handle_browsing_input(action),
+            OrganizePhase::NewDirectoryInput => self.handle_new_dir_input(action),
+            OrganizePhase::EmplacePopup => self.handle_emplace_input(action),
         }
     }
 
@@ -206,32 +206,32 @@ impl InboxOrganizeState {
     // Phase: Browsing Corpus
     // =========================================================================
 
-    fn handle_browsing_key(&mut self, key: KeyEvent) -> InboxOrganizeAction {
-        match key.code {
-            KeyCode::Esc => InboxOrganizeAction::Cancel,
+    fn handle_browsing_input(&mut self, action: &InputAction) -> InboxOrganizeAction {
+        match action {
+            InputAction::Cancel => InboxOrganizeAction::Cancel,
 
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 self.corpus_navigator.move_up();
                 InboxOrganizeAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 self.corpus_navigator.move_down();
                 InboxOrganizeAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 self.corpus_navigator.expand_current();
                 InboxOrganizeAction::None
             }
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 self.corpus_navigator.collapse_or_parent();
                 InboxOrganizeAction::None
             }
 
-            KeyCode::Char('s') | KeyCode::Char('S') => {
+            InputAction::Char('s') | InputAction::Char('S') => {
                 self.advance_to_next_dir()
             }
 
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 if let Some(entry) = self.corpus_navigator.current_entry().cloned() {
                     if entry.is_synthetic {
                         // "[+ new directory]" — switch to text input
@@ -257,13 +257,13 @@ impl InboxOrganizeState {
     // Phase: New Directory Input
     // =========================================================================
 
-    fn handle_new_dir_input_key(&mut self, key: KeyEvent) -> InboxOrganizeAction {
-        match key.code {
-            KeyCode::Esc => {
+    fn handle_new_dir_input(&mut self, action: &InputAction) -> InboxOrganizeAction {
+        match action {
+            InputAction::Cancel => {
                 self.phase = OrganizePhase::BrowsingCorpus;
                 InboxOrganizeAction::None
             }
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 let name = self.new_dir_input.value().to_string();
                 if name.is_empty() {
                     self.phase = OrganizePhase::BrowsingCorpus;
@@ -276,7 +276,7 @@ impl InboxOrganizeState {
                 InboxOrganizeAction::None
             }
             _ => {
-                self.new_dir_input.handle_key(key);
+                self.new_dir_input.handle_input(action);
                 InboxOrganizeAction::None
             }
         }
@@ -286,21 +286,21 @@ impl InboxOrganizeState {
     // Phase: Emplace Popup
     // =========================================================================
 
-    fn handle_emplace_key(&mut self, key: KeyEvent) -> InboxOrganizeAction {
-        match key.code {
-            KeyCode::Esc => {
+    fn handle_emplace_input(&mut self, action: &InputAction) -> InboxOrganizeAction {
+        match action {
+            InputAction::Cancel => {
                 self.phase = OrganizePhase::BrowsingCorpus;
                 InboxOrganizeAction::None
             }
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 self.popup_selection = self.popup_selection.prev();
                 InboxOrganizeAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 self.popup_selection = self.popup_selection.next();
                 InboxOrganizeAction::None
             }
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 match self.popup_selection {
                     EmplaceOption::EmplaceDirectory => {
                         self.generate_emplace_directory_mutations();

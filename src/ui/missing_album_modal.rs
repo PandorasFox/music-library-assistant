@@ -15,7 +15,7 @@
 //! - Ctrl+R: Show transaction review
 //! - Escape: Cancel
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Style},
@@ -190,43 +190,41 @@ impl MissingAlbumState {
             .unwrap_or_default()
     }
 
-    /// Handle key input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> MissingAlbumAction {
-        // Shift+Up/Down: cycle focus pane
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
-            match key.code {
-                KeyCode::Up => {
-                    self.focus_pane = self.focus_pane.prev();
-                    return MissingAlbumAction::None;
-                }
-                KeyCode::Down => {
-                    self.focus_pane = self.focus_pane.next();
-                    return MissingAlbumAction::None;
-                }
-                _ => {}
+    /// Handle input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> MissingAlbumAction {
+        // FocusUp/FocusDown: cycle focus pane
+        match action {
+            InputAction::FocusUp => {
+                self.focus_pane = self.focus_pane.prev();
+                return MissingAlbumAction::None;
             }
+            InputAction::FocusDown => {
+                self.focus_pane = self.focus_pane.next();
+                return MissingAlbumAction::None;
+            }
+            _ => {}
         }
 
         // Ctrl+R: show transaction review
-        if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if matches!(action, InputAction::Shortcut('r')) {
             return MissingAlbumAction::ShowReview;
         }
 
-        match key.code {
-            KeyCode::Esc => MissingAlbumAction::Cancel,
+        match action {
+            InputAction::Cancel => MissingAlbumAction::Cancel,
 
             // Group navigation
-            KeyCode::Tab => MissingAlbumAction::NavigateGroup(true),
-            KeyCode::BackTab => MissingAlbumAction::NavigateGroup(false),
+            InputAction::CycleNext => MissingAlbumAction::NavigateGroup(true),
+            InputAction::CyclePrev => MissingAlbumAction::NavigateGroup(false),
 
             // Track list navigation (List focus)
-            KeyCode::Up if self.focus_pane == FocusPane::List => {
+            InputAction::NavUp if self.focus_pane == FocusPane::List => {
                 if self.track_cursor > 0 {
                     self.track_cursor -= 1;
                 }
                 MissingAlbumAction::None
             }
-            KeyCode::Down if self.focus_pane == FocusPane::List => {
+            InputAction::NavDown if self.focus_pane == FocusPane::List => {
                 if let Some(group) = self.current_group_data() {
                     if self.track_cursor + 1 < group.tracks.len() {
                         self.track_cursor += 1;
@@ -236,17 +234,17 @@ impl MissingAlbumState {
             }
 
             // Resolution button cycling (Buttons focus)
-            KeyCode::Left if self.focus_pane == FocusPane::Buttons => {
+            InputAction::NavLeft if self.focus_pane == FocusPane::Buttons => {
                 self.selected_resolution = self.selected_resolution.prev();
                 MissingAlbumAction::None
             }
-            KeyCode::Right if self.focus_pane == FocusPane::Buttons => {
+            InputAction::NavRight if self.focus_pane == FocusPane::Buttons => {
                 self.selected_resolution = self.selected_resolution.next();
                 MissingAlbumAction::None
             }
 
             // Confirm resolution (Buttons focus)
-            KeyCode::Enter if self.focus_pane == FocusPane::Buttons => {
+            InputAction::Confirm if self.focus_pane == FocusPane::Buttons => {
                 if self.current_group_data().is_some() {
                     MissingAlbumAction::Confirm(self.selected_resolution)
                 } else {
@@ -255,10 +253,8 @@ impl MissingAlbumState {
             }
 
             // Tag editor shortcuts (available regardless of focus)
-            KeyCode::Char('t') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
-                MissingAlbumAction::EditTracks
-            }
-            KeyCode::Char('T') => MissingAlbumAction::EditTracksAggregated,
+            InputAction::Char('t') => MissingAlbumAction::EditTracks,
+            InputAction::Char('T') => MissingAlbumAction::EditTracksAggregated,
 
             _ => MissingAlbumAction::None,
         }

@@ -10,13 +10,13 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crossterm::event::KeyCode;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+use crate::ui::input::InputAction;
 use crate::ui::widgets::centered_rect_fixed;
 
 use crate::meta::signals::data::UnindexedFileSignal;
@@ -353,16 +353,16 @@ impl IntakeConfirmationState {
         }
     }
 
-    /// Handle keyboard input.
-    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent, visible_height: usize) -> IntakeConfirmationAction {
-        match key.code {
-            KeyCode::Enter => IntakeConfirmationAction::Confirmed,
-            KeyCode::Esc => IntakeConfirmationAction::Skipped,
-            KeyCode::Up => {
+    /// Handle semantic input action.
+    pub fn handle_input(&mut self, action: &InputAction, visible_height: usize) -> IntakeConfirmationAction {
+        match action {
+            InputAction::Confirm => IntakeConfirmationAction::Confirmed,
+            InputAction::Cancel => IntakeConfirmationAction::Skipped,
+            InputAction::NavUp => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
                 IntakeConfirmationAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 let max_scroll = self.total_list_lines().saturating_sub(visible_height);
                 if self.scroll_offset < max_scroll {
                     self.scroll_offset += 1;
@@ -414,7 +414,7 @@ impl IntakeConfirmationState {
 }
 
 /// Compute the visible height for the file list given an area.
-/// Used by callers to pass to handle_key for scroll bounds.
+/// Used by callers to pass to handle_input for scroll bounds.
 pub fn compute_list_visible_height(area: Rect) -> usize {
     // Dialog sizing matches render()
     let dialog_height = 24.min(area.height.saturating_sub(2));

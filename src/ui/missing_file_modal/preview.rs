@@ -9,7 +9,7 @@
 //! - Enter: Execute selected button action
 //! - Escape: Cancel
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -78,14 +78,14 @@ impl MissingFilePreviewState {
         }
     }
 
-    /// Handle key input.
-    pub fn handle_key(&mut self, key: KeyEvent) -> MissingFilePreviewAction {
+    /// Handle input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> MissingFilePreviewAction {
         let has_restorable = self.cached_data.has_restorable();
         let has_non_restorable = self.cached_data.has_non_restorable();
 
-        match key.code {
+        match action {
             // Switch between lists
-            KeyCode::Tab | KeyCode::BackTab => {
+            InputAction::CycleNext | InputAction::CyclePrev => {
                 if has_restorable && has_non_restorable {
                     self.focused_list = 1 - self.focused_list;
                 }
@@ -93,39 +93,39 @@ impl MissingFilePreviewState {
             }
 
             // Scroll within focused list
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 self.scroll[self.focused_list] = self.scroll[self.focused_list].saturating_sub(1);
                 MissingFilePreviewAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 let max = self.max_scroll_for_list(self.focused_list);
                 if self.scroll[self.focused_list] < max {
                     self.scroll[self.focused_list] += 1;
                 }
                 MissingFilePreviewAction::None
             }
-            KeyCode::PageUp => {
+            InputAction::PageUp => {
                 self.scroll[self.focused_list] = self.scroll[self.focused_list].saturating_sub(10);
                 MissingFilePreviewAction::None
             }
-            KeyCode::PageDown => {
+            InputAction::PageDown => {
                 let max = self.max_scroll_for_list(self.focused_list);
                 self.scroll[self.focused_list] = (self.scroll[self.focused_list] + 10).min(max);
                 MissingFilePreviewAction::None
             }
 
             // Button navigation
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 self.selected_button.left(has_restorable);
                 MissingFilePreviewAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 self.selected_button.right(has_restorable);
                 MissingFilePreviewAction::None
             }
 
             // Execute selected button
-            KeyCode::Enter => match self.selected_button {
+            InputAction::Confirm => match self.selected_button {
                 SelectedButton::RestoreAll if has_restorable => {
                     MissingFilePreviewAction::ConfirmRestore
                 }
@@ -135,7 +135,7 @@ impl MissingFilePreviewState {
             },
 
             // Cancel
-            KeyCode::Esc => MissingFilePreviewAction::Cancel,
+            InputAction::Cancel => MissingFilePreviewAction::Cancel,
 
             _ => MissingFilePreviewAction::None,
         }

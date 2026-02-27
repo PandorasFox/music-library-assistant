@@ -6,7 +6,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
@@ -14,6 +13,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::ui::helpers::truncate_left;
+use crate::ui::input::InputAction;
 use crate::ui::widgets::TextInputState;
 use crate::ui::widgets::detail_panel::{DetailField, DetailWidget, PanelButton, render_detail_panel};
 
@@ -341,32 +341,32 @@ impl CorpusBrowserVariant {
             || !self.search.matches.is_empty()
     }
 
-    /// Handle variant-specific keys.
-    pub fn handle_key(&mut self, key: KeyEvent, nav: &mut TreeNavigator) -> TreeBrowserAction {
+    /// Handle variant-specific input actions.
+    pub fn handle_input(&mut self, action: &InputAction, nav: &mut TreeNavigator) -> TreeBrowserAction {
         // Config panel has priority when focused
         if self.focus == CorpusBrowserFocus::ConfigPanel {
-            return self.handle_config_panel_key(key);
+            return self.handle_config_panel_input(action);
         }
 
         // Match selection mode has priority (modal overlay)
         if self.match_selection_mode {
-            return self.handle_match_selection_key(key, nav);
+            return self.handle_match_selection_input(action, nav);
         }
 
         // Route based on focus
         match self.focus {
-            CorpusBrowserFocus::SearchBar => self.handle_search_bar_key(key, nav),
-            CorpusBrowserFocus::TreeBrowser => self.handle_tree_browser_key(key, nav),
+            CorpusBrowserFocus::SearchBar => self.handle_search_bar_input(action, nav),
+            CorpusBrowserFocus::TreeBrowser => self.handle_tree_browser_input(action, nav),
             CorpusBrowserFocus::ConfigPanel => unreachable!(),
         }
     }
 
-    /// Handle keys when tree browser is focused.
-    fn handle_tree_browser_key(&mut self, key: KeyEvent, nav: &mut TreeNavigator) -> TreeBrowserAction {
+    /// Handle input when tree browser is focused.
+    fn handle_tree_browser_input(&mut self, action: &InputAction, nav: &mut TreeNavigator) -> TreeBrowserAction {
         // If we have search results visible, capture navigation keys
         if !self.search.matches.is_empty() {
-            match key.code {
-                KeyCode::Up => {
+            match action {
+                InputAction::NavUp => {
                     if !self.match_selection_mode {
                         self.match_selection_mode = true;
                         self.match_selection_idx = 0;
@@ -374,7 +374,7 @@ impl CorpusBrowserVariant {
                     self.match_selection_up();
                     return TreeBrowserAction::None;
                 }
-                KeyCode::Down => {
+                InputAction::NavDown => {
                     if !self.match_selection_mode {
                         self.match_selection_mode = true;
                         self.match_selection_idx = 0;
@@ -383,15 +383,15 @@ impl CorpusBrowserVariant {
                     return TreeBrowserAction::None;
                 }
                 // Consume Left/Right to prevent tree navigation when search results visible
-                KeyCode::Left | KeyCode::Right => {
+                InputAction::NavLeft | InputAction::NavRight => {
                     return TreeBrowserAction::None;
                 }
                 _ => {}
             }
         }
 
-        match key.code {
-            KeyCode::Enter => {
+        match action {
+            InputAction::Confirm => {
                 if let Some(entry) = nav.current_entry() {
                     if entry.is_directory {
                         TreeBrowserAction::EditDirectory(entry.path.clone())
@@ -403,7 +403,7 @@ impl CorpusBrowserVariant {
                 }
             }
             // C opens dir config panel on any corpus directory
-            KeyCode::Char('C') => {
+            InputAction::Char('C') => {
                 if let Some(entry) = nav.current_entry() {
                     if entry.is_directory && entry.path.starts_with(&self.corpus_dir) {
                         return TreeBrowserAction::OpenDirConfig(entry.path.clone());
@@ -412,19 +412,19 @@ impl CorpusBrowserVariant {
                 TreeBrowserAction::None
             }
             // R opens transaction review when pending dir config edits exist
-            KeyCode::Char('R') if self.has_pending_edits() => {
+            InputAction::Char('R') if self.has_pending_edits() => {
                 TreeBrowserAction::ReviewTransaction
             }
             // Ctrl+F opens filter popup
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            InputAction::OpenFilter => {
                 TreeBrowserAction::OpenFilter
             }
             _ => TreeBrowserAction::None,
         }
     }
 
-    /// Handle keys when config panel is focused.
-    fn handle_config_panel_key(&mut self, key: KeyEvent) -> TreeBrowserAction {
+    /// Handle input when config panel is focused.
+    fn handle_config_panel_input(&mut self, action: &InputAction) -> TreeBrowserAction {
         let panel = match self.config_panel {
             Some(ref mut p) => p,
             None => return TreeBrowserAction::None,
@@ -432,8 +432,8 @@ impl CorpusBrowserVariant {
 
         // Text input mode intercepts all keys
         if let Some(ref mut input) = panel.text_input {
-            match key.code {
-                KeyCode::Enter => {
+            match action {
+                InputAction::Confirm => {
                     let value = input.value().to_string();
                     if panel.field_cursor == 3 {
                         // Path schema text input
@@ -453,12 +453,12 @@ impl CorpusBrowserVariant {
                     panel.text_input = None;
                     return TreeBrowserAction::None;
                 }
-                KeyCode::Esc => {
+                InputAction::Cancel => {
                     panel.text_input = None;
                     return TreeBrowserAction::None;
                 }
                 _ => {
-                    input.handle_key(key);
+                    input.handle_input(action);
                     return TreeBrowserAction::None;
                 }
             }
@@ -466,24 +466,24 @@ impl CorpusBrowserVariant {
 
         // Button focus
         if panel.focus == PanelFocus::Buttons {
-            match key.code {
-                KeyCode::Left => {
+            match action {
+                InputAction::NavLeft => {
                     if panel.button_cursor > 0 {
                         panel.button_cursor -= 1;
                     }
                     return TreeBrowserAction::None;
                 }
-                KeyCode::Right => {
+                InputAction::NavRight => {
                     if panel.button_cursor < 1 {
                         panel.button_cursor += 1;
                     }
                     return TreeBrowserAction::None;
                 }
-                KeyCode::Up => {
+                InputAction::NavUp => {
                     panel.focus = PanelFocus::Fields;
                     return TreeBrowserAction::None;
                 }
-                KeyCode::Enter => {
+                InputAction::Confirm => {
                     if panel.button_cursor == 0 {
                         // Save
                         return TreeBrowserAction::SaveDirConfig;
@@ -492,7 +492,7 @@ impl CorpusBrowserVariant {
                         return TreeBrowserAction::CloseDirConfig;
                     }
                 }
-                KeyCode::Esc => {
+                InputAction::Cancel => {
                     panel.focus = PanelFocus::Fields;
                     return TreeBrowserAction::None;
                 }
@@ -501,8 +501,8 @@ impl CorpusBrowserVariant {
         }
 
         // Field focus
-        match key.code {
-            KeyCode::Up => {
+        match action {
+            InputAction::NavUp => {
                 if panel.field_cursor == 0 {
                     // Within libraries field, navigate items
                     if let Some(ref mut cursor) = panel.lib_cursor {
@@ -519,7 +519,7 @@ impl CorpusBrowserVariant {
                 }
                 TreeBrowserAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if panel.field_cursor == 0 {
                     // Navigate into library items first
                     if !panel.libraries.is_empty() {
@@ -543,12 +543,12 @@ impl CorpusBrowserVariant {
                 }
                 TreeBrowserAction::None
             }
-            KeyCode::Tab => {
+            InputAction::CycleNext => {
                 panel.focus = PanelFocus::Buttons;
                 panel.button_cursor = 0;
                 TreeBrowserAction::None
             }
-            KeyCode::Enter | KeyCode::Char(' ') => {
+            InputAction::Confirm | InputAction::Toggle => {
                 match panel.field_cursor {
                     0 => {
                         // Libraries: edit selected item
@@ -582,7 +582,7 @@ impl CorpusBrowserVariant {
                 TreeBrowserAction::None
             }
             // n: add new library
-            KeyCode::Char('n') => {
+            InputAction::Char('n') => {
                 if panel.field_cursor == 0 {
                     panel.lib_cursor = None; // New item, no cursor position
                     panel.text_input = Some(TextInputState::new());
@@ -590,7 +590,7 @@ impl CorpusBrowserVariant {
                 TreeBrowserAction::None
             }
             // x: delete selected library
-            KeyCode::Char('x') => {
+            InputAction::Char('x') => {
                 if panel.field_cursor == 0 {
                     if let Some(cursor) = panel.lib_cursor {
                         if cursor < panel.libraries.len() {
@@ -605,21 +605,21 @@ impl CorpusBrowserVariant {
                 }
                 TreeBrowserAction::None
             }
-            KeyCode::Esc => {
+            InputAction::Cancel => {
                 TreeBrowserAction::CloseDirConfig
             }
             _ => TreeBrowserAction::None,
         }
     }
 
-    /// Handle keys when search bar is focused.
-    fn handle_search_bar_key(&mut self, key: KeyEvent, nav: &mut TreeNavigator) -> TreeBrowserAction {
-        match key.code {
-            KeyCode::Enter => {
+    /// Handle input when search bar is focused.
+    fn handle_search_bar_input(&mut self, action: &InputAction, nav: &mut TreeNavigator) -> TreeBrowserAction {
+        match action {
+            InputAction::Confirm => {
                 self.handle_search_enter(nav);
                 TreeBrowserAction::None
             }
-            KeyCode::Esc => {
+            InputAction::Cancel => {
                 // Clear search and return to tree
                 self.search_input.clear();
                 self.search.clear();
@@ -627,7 +627,7 @@ impl CorpusBrowserVariant {
                 self.search_input.focused = false;
                 TreeBrowserAction::None
             }
-            KeyCode::Tab => {
+            InputAction::CycleNext => {
                 // Apply suggestion if available
                 if let Some(suggestion) = self.get_suggestion() {
                     self.search_input.set_value(suggestion);
@@ -636,7 +636,7 @@ impl CorpusBrowserVariant {
                 TreeBrowserAction::None
             }
             // Up/Down navigate search results (if any), or do nothing
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 if !self.search.matches.is_empty() {
                     // Enter match selection mode and navigate
                     if !self.match_selection_mode {
@@ -647,7 +647,7 @@ impl CorpusBrowserVariant {
                 }
                 TreeBrowserAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if !self.search.matches.is_empty() {
                     // Enter match selection mode and navigate
                     if !self.match_selection_mode {
@@ -658,21 +658,21 @@ impl CorpusBrowserVariant {
                 }
                 TreeBrowserAction::None
             }
-            // Arrow keys for cursor navigation in text input
-            KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End => {
-                self.search_input.handle_key(key);
+            // Arrow keys and Home/End for cursor navigation in text input
+            InputAction::NavLeft | InputAction::NavRight | InputAction::Home | InputAction::End => {
+                self.search_input.handle_input(action);
                 TreeBrowserAction::None
             }
             // Character input
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.search_input.insert_char(c);
+            InputAction::Char(c) => {
+                self.search_input.insert_char(*c);
                 self.update_search_matches(nav);
                 // Reset match selection when typing
                 self.match_selection_mode = false;
                 self.match_selection_idx = 0;
                 TreeBrowserAction::None
             }
-            KeyCode::Backspace => {
+            InputAction::Backspace => {
                 self.search_input.backspace();
                 if self.search_input.is_empty() {
                     self.search.clear();
@@ -684,7 +684,7 @@ impl CorpusBrowserVariant {
                 self.match_selection_idx = 0;
                 TreeBrowserAction::None
             }
-            KeyCode::Delete => {
+            InputAction::Delete => {
                 self.search_input.delete();
                 if self.search_input.is_empty() {
                     self.search.clear();
@@ -697,7 +697,7 @@ impl CorpusBrowserVariant {
                 TreeBrowserAction::None
             }
             // Ctrl+U clears input
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            InputAction::KillToStart => {
                 self.search_input.clear();
                 self.search.clear();
                 self.match_selection_mode = false;
@@ -732,26 +732,26 @@ impl CorpusBrowserVariant {
         }
     }
 
-    /// Handle keys during match selection mode.
-    fn handle_match_selection_key(
+    /// Handle input during match selection mode.
+    fn handle_match_selection_input(
         &mut self,
-        key: KeyEvent,
+        action: &InputAction,
         nav: &mut TreeNavigator,
     ) -> TreeBrowserAction {
-        match key.code {
-            KeyCode::Up => {
+        match action {
+            InputAction::NavUp => {
                 self.match_selection_up();
                 TreeBrowserAction::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 self.match_selection_down();
                 TreeBrowserAction::None
             }
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 self.confirm_match_selection(nav);
                 TreeBrowserAction::None
             }
-            KeyCode::Esc => {
+            InputAction::Cancel => {
                 self.cancel_match_selection();
                 TreeBrowserAction::None
             }

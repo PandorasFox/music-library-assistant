@@ -43,19 +43,19 @@ pub use types::{
     CompoundSplitStateV2, FocusPaneV2,
 };
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 
 impl CompoundSplitStateV2 {
-    /// Handle keyboard input for the modal.
-    pub fn handle_key(&mut self, key: KeyEvent) -> CompoundSplitActionV2 {
+    /// Handle semantic input for the modal.
+    pub fn handle_input(&mut self, action: &InputAction) -> CompoundSplitActionV2 {
         // If confirming canonicalize, intercept all input
         if self.confirming_canonicalize {
-            return match key.code {
-                KeyCode::Enter => {
+            return match action {
+                InputAction::Confirm => {
                     self.confirming_canonicalize = false;
                     CompoundSplitActionV2::Canonicalize
                 }
-                KeyCode::Esc => {
+                InputAction::Cancel => {
                     self.confirming_canonicalize = false;
                     CompoundSplitActionV2::None
                 }
@@ -65,12 +65,12 @@ impl CompoundSplitStateV2 {
 
         // If confirming bulk stage all, intercept all input
         if self.confirming_bulk_stage {
-            return match key.code {
-                KeyCode::Enter => {
+            return match action {
+                InputAction::Confirm => {
                     self.confirming_bulk_stage = false;
                     CompoundSplitActionV2::StageAllAndReview
                 }
-                KeyCode::Esc => {
+                InputAction::Cancel => {
                     self.confirming_bulk_stage = false;
                     CompoundSplitActionV2::None
                 }
@@ -78,48 +78,46 @@ impl CompoundSplitStateV2 {
             };
         }
 
-        // If editing, handle edit-specific keys first
+        // If editing, handle edit-specific input first
         if self.is_editing() {
-            return self.handle_editing_key(key);
+            return self.handle_editing_input(action);
         }
 
-        // Ctrl shortcuts
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Char('r' | 'R') => return CompoundSplitActionV2::ShowReview,
-                KeyCode::Char('f' | 'F') => {
-                    self.confirming_canonicalize = true;
-                    return CompoundSplitActionV2::None;
-                }
-                // Ctrl+A only available in safe mode (bulk confirm all)
-                KeyCode::Char('a' | 'A') if self.is_safe_mode => {
-                    self.confirming_bulk_stage = true;
-                    return CompoundSplitActionV2::None;
-                }
-                _ => {}
+        // Ctrl shortcuts (mapped to semantic actions by map_key)
+        match action {
+            InputAction::Shortcut('r') => return CompoundSplitActionV2::ShowReview,
+            InputAction::OpenFilter => {
+                self.confirming_canonicalize = true;
+                return CompoundSplitActionV2::None;
             }
+            // Ctrl+A maps to TextHome; in this context it means bulk confirm all (safe mode only)
+            InputAction::TextHome if self.is_safe_mode => {
+                self.confirming_bulk_stage = true;
+                return CompoundSplitActionV2::None;
+            }
+            _ => {}
         }
 
-        match key.code {
+        match action {
             // Pane switching with Left/Right
-            KeyCode::Left => {
+            InputAction::NavLeft => {
                 self.focus_pane = FocusPaneV2::Parts;
                 CompoundSplitActionV2::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 self.focus_pane = FocusPaneV2::Files;
                 CompoundSplitActionV2::None
             }
 
             // Navigation within pane
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 match self.focus_pane {
                     FocusPaneV2::Parts => self.part_cursor_up(),
                     FocusPaneV2::Files => self.file_cursor_up(),
                 }
                 CompoundSplitActionV2::None
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 match self.focus_pane {
                     FocusPaneV2::Parts => self.part_cursor_down(),
                     FocusPaneV2::Files => self.file_cursor_down(),
@@ -128,13 +126,13 @@ impl CompoundSplitStateV2 {
             }
 
             // Toggle file selection (files pane only)
-            KeyCode::Char(' ') if self.focus_pane == FocusPaneV2::Files => {
+            InputAction::Toggle if self.focus_pane == FocusPaneV2::Files => {
                 self.toggle_file_selection();
                 CompoundSplitActionV2::None
             }
 
             // Edit part (review mode only, parts pane)
-            KeyCode::Char('e' | 'E')
+            InputAction::Char('e' | 'E')
                 if self.focus_pane == FocusPaneV2::Parts && !self.is_safe_mode =>
             {
                 self.start_editing();
@@ -142,12 +140,12 @@ impl CompoundSplitStateV2 {
             }
 
             // T: open tag editor for current group (individual mode)
-            KeyCode::Char('t') => CompoundSplitActionV2::OpenTagEditorIndividual,
+            InputAction::Char('t') => CompoundSplitActionV2::OpenTagEditorIndividual,
             // Shift+T: open tag editor for current group (aggregated mode)
-            KeyCode::Char('T') => CompoundSplitActionV2::OpenTagEditorAggregated,
+            InputAction::Char('T') => CompoundSplitActionV2::OpenTagEditorAggregated,
 
             // Enter: confirm split
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 if self.can_submit() {
                     CompoundSplitActionV2::Confirmed
                 } else {
@@ -156,31 +154,29 @@ impl CompoundSplitStateV2 {
             }
 
             // Tab/Shift-Tab: navigate signals
-            KeyCode::Tab => CompoundSplitActionV2::Navigate {
-                forward: !key.modifiers.contains(KeyModifiers::SHIFT),
-            },
-            KeyCode::BackTab => CompoundSplitActionV2::Navigate { forward: false },
+            InputAction::CycleNext => CompoundSplitActionV2::Navigate { forward: true },
+            InputAction::CyclePrev => CompoundSplitActionV2::Navigate { forward: false },
 
             // Esc: cancel
-            KeyCode::Esc => CompoundSplitActionV2::Cancelled,
+            InputAction::Cancel => CompoundSplitActionV2::Cancelled,
 
             _ => CompoundSplitActionV2::None,
         }
     }
 
-    /// Handle keyboard input while editing a part.
-    fn handle_editing_key(&mut self, key: KeyEvent) -> CompoundSplitActionV2 {
-        match key.code {
-            KeyCode::Enter => {
+    /// Handle input while editing a part.
+    fn handle_editing_input(&mut self, action: &InputAction) -> CompoundSplitActionV2 {
+        match action {
+            InputAction::Confirm => {
                 self.confirm_edit();
                 CompoundSplitActionV2::None
             }
-            KeyCode::Esc => {
+            InputAction::Cancel => {
                 self.cancel_edit();
                 CompoundSplitActionV2::None
             }
             _ => {
-                self.part_input.handle_key(key);
+                self.part_input.handle_input(action);
                 CompoundSplitActionV2::None
             }
         }

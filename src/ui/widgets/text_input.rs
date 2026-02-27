@@ -10,7 +10,7 @@
 //! - Character insertion at cursor position
 //! - Emacs-style editing (Ctrl+A/E/U/K)
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 
 /// State for a text input field
 #[derive(Clone, Debug, Default)]
@@ -115,6 +115,22 @@ impl TextInputState {
         self.cursor = 0;
     }
 
+    /// Split value into (before_cursor, cursor_char, after_cursor) for rendering.
+    ///
+    /// Returns UTF-8 safe slices based on the character-level cursor position.
+    /// The cursor_char is the character under the cursor (or space if at end).
+    pub fn cursor_splits(&self) -> (&str, char, &str) {
+        let byte_idx = self.cursor_byte_index();
+        let (before, rest) = self.value.split_at(byte_idx);
+        let cursor_char = rest.chars().next().unwrap_or(' ');
+        let after = if rest.len() > cursor_char.len_utf8() {
+            &rest[cursor_char.len_utf8()..]
+        } else {
+            ""
+        };
+        (before, cursor_char, after)
+    }
+
     /// Convert character index to byte index
     fn cursor_byte_index(&self) -> usize {
         self.value
@@ -124,47 +140,26 @@ impl TextInputState {
             .unwrap_or(self.value.len())
     }
 
-    /// Handle a key event, returning true if the event was consumed
-    pub fn handle_key(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Char(c) => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    match c {
-                        'u' | 'U' => self.kill_to_start(),
-                        'k' | 'K' => self.kill_to_end(),
-                        'a' | 'A' => self.move_home(),
-                        'e' | 'E' => self.move_end(),
-                        _ => return false,
-                    }
-                } else {
-                    self.insert_char(c);
-                }
-                true
-            }
-            KeyCode::Backspace => {
-                self.backspace();
-                true
-            }
-            KeyCode::Delete => {
-                self.delete();
-                true
-            }
-            KeyCode::Left => {
-                self.move_left();
-                true
-            }
-            KeyCode::Right => {
-                self.move_right();
-                true
-            }
-            KeyCode::Home => {
-                self.move_home();
-                true
-            }
-            KeyCode::End => {
-                self.move_end();
-                true
-            }
+    /// Insert a string at cursor position (for paste support).
+    pub fn insert_str(&mut self, s: &str) {
+        for c in s.chars() {
+            self.insert_char(c);
+        }
+    }
+
+    /// Handle a semantic input action, returning true if the event was consumed.
+    pub fn handle_input(&mut self, action: &InputAction) -> bool {
+        match action {
+            InputAction::Char(c) => { self.insert_char(*c); true }
+            InputAction::Paste(text) => { self.insert_str(text); true }
+            InputAction::Backspace => { self.backspace(); true }
+            InputAction::Delete => { self.delete(); true }
+            InputAction::NavLeft => { self.move_left(); true }
+            InputAction::NavRight => { self.move_right(); true }
+            InputAction::Home | InputAction::TextHome => { self.move_home(); true }
+            InputAction::End | InputAction::TextEnd => { self.move_end(); true }
+            InputAction::KillToStart => { self.kill_to_start(); true }
+            InputAction::KillToEnd => { self.kill_to_end(); true }
             _ => false,
         }
     }
@@ -273,5 +268,48 @@ mod tests {
         state.kill_to_start();
         assert_eq!(state.value(), " world");
         assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn test_cursor_splits_multibyte() {
+        let mut state = TextInputState::new();
+        // 4-byte mathematical bold fraktur characters
+        state.set_value("𝕮𝖆𝖒");
+        assert_eq!(state.cursor, 3); // 3 chars
+
+        // Cursor at end: cursor_char should be space (past end)
+        let (before, ch, after) = state.cursor_splits();
+        assert_eq!(before, "𝕮𝖆𝖒");
+        assert_eq!(ch, ' ');
+        assert_eq!(after, "");
+
+        // Cursor at start
+        state.cursor = 0;
+        let (before, ch, after) = state.cursor_splits();
+        assert_eq!(before, "");
+        assert_eq!(ch, '𝕮');
+        assert_eq!(after, "𝖆𝖒");
+
+        // Cursor in middle
+        state.cursor = 1;
+        let (before, ch, after) = state.cursor_splits();
+        assert_eq!(before, "𝕮");
+        assert_eq!(ch, '𝖆');
+        assert_eq!(after, "𝖒");
+    }
+
+    #[test]
+    fn test_cursor_splits_mixed_unicode() {
+        let mut state = TextInputState::new();
+        state.set_value("HHSU 𓃚 𝕮");
+        // 'H','H','S','U',' ','𓃚',' ','𝕮' = 8 chars
+        assert_eq!(state.cursor, 8);
+
+        // Cursor on the hieroglyph
+        state.cursor = 5;
+        let (before, ch, after) = state.cursor_splits();
+        assert_eq!(before, "HHSU ");
+        assert_eq!(ch, '𓃚');
+        assert_eq!(after, " 𝕮");
     }
 }

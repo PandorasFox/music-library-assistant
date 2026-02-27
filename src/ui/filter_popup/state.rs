@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 
 use crate::ui::tag_search::{ComparisonOperator, FileTypeCategory};
 
@@ -304,12 +304,12 @@ impl FilterPopupState {
         }
     }
 
-    /// Handle a key event.
-    pub fn handle_key(&mut self, key: KeyEvent) -> FilterPopupAction {
-        match key.code {
-            KeyCode::Esc => FilterPopupAction::Cancel,
+    /// Handle an input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> FilterPopupAction {
+        match action {
+            InputAction::Cancel => FilterPopupAction::Cancel,
 
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 match self.focus {
                     FilterFieldFocus::ApplyButton => FilterPopupAction::Apply,
                     FilterFieldFocus::ClearButton => FilterPopupAction::Clear,
@@ -321,40 +321,41 @@ impl FilterPopupState {
                 }
             }
 
-            KeyCode::Tab => {
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    self.focus_prev();
-                } else {
-                    self.focus_next();
-                }
-                FilterPopupAction::None
-            }
-
-            KeyCode::Up => {
-                self.focus_prev();
-                FilterPopupAction::None
-            }
-
-            KeyCode::Down => {
+            InputAction::CycleNext => {
                 self.focus_next();
                 FilterPopupAction::None
             }
 
-            KeyCode::Left => {
+            InputAction::CyclePrev => {
+                self.focus_prev();
+                FilterPopupAction::None
+            }
+
+            InputAction::NavUp => {
+                self.focus_prev();
+                FilterPopupAction::None
+            }
+
+            InputAction::NavDown => {
+                self.focus_next();
+                FilterPopupAction::None
+            }
+
+            InputAction::NavLeft => {
                 self.handle_cycle_key(CycleDirection::Backward);
                 FilterPopupAction::None
             }
-            KeyCode::Right => {
+            InputAction::NavRight => {
                 self.handle_cycle_key(CycleDirection::Forward);
                 FilterPopupAction::None
             }
 
-            KeyCode::Char(c) => {
-                self.handle_char(c);
+            InputAction::Char(c) => {
+                self.handle_char(*c);
                 FilterPopupAction::None
             }
 
-            KeyCode::Backspace => {
+            InputAction::Backspace => {
                 self.handle_backspace();
                 FilterPopupAction::None
             }

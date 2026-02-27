@@ -1,6 +1,6 @@
 //! Types for OOB tag bucketed resolution modal.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::ui::input::InputAction;
 
 use crate::meta::views::{BucketedOobFile, ConflictBucket, TagMismatchEntry};
 use crate::ui::bulk_selection::BulkSelectionState;
@@ -234,38 +234,31 @@ impl OobConflictState {
         self.active_bucket_state_mut().clear_filter();
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> OobConflictAction {
-        // Shift+Up / Shift+Down: cycle focus pane
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
-            match key.code {
-                KeyCode::Up => {
-                    self.focus_pane = self.focus_pane.prev();
-                    return OobConflictAction::None;
-                }
-                KeyCode::Down => {
-                    self.focus_pane = self.focus_pane.next();
-                    return OobConflictAction::None;
-                }
-                _ => {}
+    pub fn handle_input(&mut self, action: &InputAction) -> OobConflictAction {
+        match action {
+            // Shift+Up / Shift+Down: cycle focus pane
+            InputAction::FocusUp => {
+                self.focus_pane = self.focus_pane.prev();
+                OobConflictAction::None
             }
-        }
+            InputAction::FocusDown => {
+                self.focus_pane = self.focus_pane.next();
+                OobConflictAction::None
+            }
 
-        // Ctrl+A: toggle all selection in active bucket (respects filter)
-        if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            let bucket = self.active_bucket_state_mut();
-            let indices = bucket.get_filtered_indices();
-            bucket.selection.toggle_all_filtered(&indices);
-            return OobConflictAction::None;
-        }
+            // Ctrl+A: toggle all selection in active bucket (respects filter)
+            InputAction::TextHome => {
+                let bucket = self.active_bucket_state_mut();
+                let indices = bucket.get_filtered_indices();
+                bucket.selection.toggle_all_filtered(&indices);
+                OobConflictAction::None
+            }
 
-        // Ctrl+F: open filter popup
-        if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return OobConflictAction::OpenFilter;
-        }
+            // Ctrl+F: open filter popup
+            InputAction::OpenFilter => OobConflictAction::OpenFilter,
 
-        match key.code {
             // Space: toggle selection on current file in active bucket
-            KeyCode::Char(' ') => {
+            InputAction::Toggle => {
                 let bucket = self.active_bucket_state_mut();
                 if !bucket.files.is_empty() {
                     let cursor = bucket.cursor;
@@ -275,38 +268,38 @@ impl OobConflictState {
             }
 
             // Bucket tab navigation
-            KeyCode::Tab => {
+            InputAction::CycleNext => {
                 self.active_bucket = self.active_bucket.next();
                 OobConflictAction::Navigate
             }
-            KeyCode::BackTab => {
+            InputAction::CyclePrev => {
                 self.active_bucket = self.active_bucket.prev();
                 OobConflictAction::Navigate
             }
 
             // File navigation within active bucket
-            KeyCode::Up => {
+            InputAction::NavUp => {
                 if self.active_bucket_state_mut().navigate_up() {
                     OobConflictAction::Navigate
                 } else {
                     OobConflictAction::None
                 }
             }
-            KeyCode::Down => {
+            InputAction::NavDown => {
                 if self.active_bucket_state_mut().navigate_down() {
                     OobConflictAction::Navigate
                 } else {
                     OobConflictAction::None
                 }
             }
-            KeyCode::PageUp => {
+            InputAction::PageUp => {
                 if self.active_bucket_state_mut().page_up() {
                     OobConflictAction::Navigate
                 } else {
                     OobConflictAction::None
                 }
             }
-            KeyCode::PageDown => {
+            InputAction::PageDown => {
                 if self.active_bucket_state_mut().page_down() {
                     OobConflictAction::Navigate
                 } else {
@@ -315,7 +308,7 @@ impl OobConflictState {
             }
 
             // Resolution button toggle (resolvable buckets only, when focused on buttons)
-            KeyCode::Left | KeyCode::Right => {
+            InputAction::NavLeft | InputAction::NavRight => {
                 if self.focus_pane == FocusPane::Buttons && self.active_bucket.is_resolvable() {
                     self.selected_button = self.selected_button.toggle();
                 }
@@ -323,7 +316,7 @@ impl OobConflictState {
             }
 
             // Confirm resolution (when focused on buttons)
-            KeyCode::Enter => {
+            InputAction::Confirm => {
                 if self.focus_pane == FocusPane::Buttons
                     && !self.active_bucket_state().files.is_empty()
                 {
@@ -339,7 +332,7 @@ impl OobConflictState {
                 }
             }
 
-            KeyCode::Esc => OobConflictAction::Cancel,
+            InputAction::Cancel => OobConflictAction::Cancel,
 
             _ => OobConflictAction::None,
         }

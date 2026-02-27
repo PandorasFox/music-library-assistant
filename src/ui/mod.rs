@@ -15,6 +15,7 @@
 
 pub(crate) mod active_view;
 pub(crate) mod action_handlers;
+pub(crate) mod input;
 mod suspended_views;
 mod tag_editor_ops;
 mod tick;
@@ -72,10 +73,11 @@ use types::ProgressStatsUpdater;
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseButton, MouseEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, DisableBracketedPaste, EnableBracketedPaste, Event, MouseButton, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use input::InputAction;
 use ratatui::{
     backend::CrosstermBackend,
     Frame, Terminal,
@@ -190,10 +192,10 @@ impl App {
         self.start_lateral_view(self.last_lateral_view);
     }
 
-    fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
-        // Filter popup intercepts keys when active
+    fn handle_input(&mut self, action: InputAction) {
+        // Filter popup intercepts when active
         if let Some(ref mut overlay) = self.filter_overlay {
-            let action = overlay.state.handle_key(key);
+            let action = overlay.state.handle_input(&action);
             match action {
                 filter_popup::FilterPopupAction::None => return,
                 filter_popup::FilterPopupAction::Apply => {
@@ -276,20 +278,20 @@ impl App {
             }
         }
 
-        // Phase 1: borrow view, produce action
-        let action = match &mut self.view {
+        // Phase 1: borrow view, produce view action
+        let view_action = match &mut self.view {
             ActiveView::MigrationApproval(s) => {
-                let a = match (s.phase, key.code) {
-                    (MigrationPhase::Approval, KeyCode::Enter) => MigrationAction::Approve,
-                    (MigrationPhase::Approval, KeyCode::Esc) => MigrationAction::Cancel,
+                let a = match (s.phase, &action) {
+                    (MigrationPhase::Approval, InputAction::Confirm) => MigrationAction::Approve,
+                    (MigrationPhase::Approval, InputAction::Cancel) => MigrationAction::Cancel,
                     _ => MigrationAction::None,
                 };
                 ViewAction::MigrationApproval(a)
             }
             ActiveView::VacuumPrompt(s) => {
-                let a = match (s.phase, key.code) {
-                    (VacuumPhase::Prompt, KeyCode::Enter) => VacuumAction::Compact,
-                    (VacuumPhase::Prompt, KeyCode::Esc) => VacuumAction::Skip,
+                let a = match (s.phase, &action) {
+                    (VacuumPhase::Prompt, InputAction::Confirm) => VacuumAction::Compact,
+                    (VacuumPhase::Prompt, InputAction::Cancel) => VacuumAction::Skip,
                     _ => VacuumAction::None,
                 };
                 ViewAction::VacuumPrompt(a)
@@ -297,26 +299,24 @@ impl App {
             ActiveView::Progress { .. } => ViewAction::None,
             ActiveView::ProgressiveWork(_) => ViewAction::None,
             ActiveView::TagCanonicityLoading { .. } => ViewAction::None,
-            ActiveView::ConfigEditor(s) => ViewAction::ConfigEditor(s.handle_key(key)),
-            ActiveView::Insights(s) => ViewAction::Insights(s.handle_key(key)),
-            ActiveView::CorpusBrowser(s) => ViewAction::CorpusBrowser(s.handle_key(key)),
-            ActiveView::TagSearch(s) => ViewAction::TagSearch(s.handle_key(key)),
-            ActiveView::Inbox(s) => ViewAction::Inbox(s.handle_key(key)),
+            ActiveView::ConfigEditor(s) => ViewAction::ConfigEditor(s.handle_input(&action)),
+            ActiveView::Insights(s) => ViewAction::Insights(s.handle_input(&action)),
+            ActiveView::CorpusBrowser(s) => ViewAction::CorpusBrowser(s.handle_input(&action)),
+            ActiveView::TagSearch(s) => ViewAction::TagSearch(s.handle_input(&action)),
+            ActiveView::Inbox(s) => ViewAction::Inbox(s.handle_input(&action)),
             ActiveView::TabbedTransactionReview(ref mut state) => {
-                ViewAction::TabbedTransactionReview(state.handle_key(key))
+                ViewAction::TabbedTransactionReview(state.handle_input(&action))
             }
             ActiveView::ExitConfirm(state) => {
-                let a = match key.code {
-                    KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                let a = match action {
+                    InputAction::FocusLeft | InputAction::FocusRight => {
                         state.selected_no = !state.selected_no;
                         ExitConfirmAction::None
                     }
-                    KeyCode::Enter | KeyCode::Char(' ') => {
+                    InputAction::Confirm | InputAction::Toggle => {
                         if state.selected_no { ExitConfirmAction::Cancel } else { ExitConfirmAction::Quit }
                     }
-                    KeyCode::Esc => ExitConfirmAction::Cancel,
-                    KeyCode::Char('y') | KeyCode::Char('Y') => ExitConfirmAction::Quit,
-                    KeyCode::Char('n') | KeyCode::Char('N') => ExitConfirmAction::Cancel,
+                    InputAction::Cancel => ExitConfirmAction::Cancel,
                     _ => ExitConfirmAction::None,
                 };
                 ViewAction::ExitConfirm(a)
@@ -327,35 +327,35 @@ impl App {
                         ratatui::layout::Rect::new(0, 0, 80, h)
                     ))
                     .unwrap_or(10);
-                ViewAction::IntakeConfirmation(state.handle_key(key, visible_height))
+                ViewAction::IntakeConfirmation(state.handle_input(&action, visible_height))
             }
-            ActiveView::UnifiedTagEditor(s) => ViewAction::UnifiedTagEditor(s.handle_key(key)),
-            ActiveView::Deploy(s) => ViewAction::Deploy(s.handle_key(key)),
-            ActiveView::ExternalMatches(s) => ViewAction::ExternalMatches(s.handle_key(key)),
-            ActiveView::MissingFileResolution(s) => ViewAction::MissingFileResolution(s.handle_key(key)),
-            ActiveView::MissingDirectoryResolution(s) => ViewAction::MissingDirectoryResolution(s.handle_key(key)),
-            ActiveView::CorruptFileResolution(s) => ViewAction::CorruptFileResolution(s.handle_key(key)),
-            ActiveView::ShitFormatResolution(s) => ViewAction::ShitFormatResolution(s.handle_key(key)),
-            ActiveView::EmbedAlbumArtResolution(s) => ViewAction::EmbedAlbumArtResolution(s.handle_key(key)),
-            ActiveView::SubparDuplicateResolution(s) => ViewAction::SubparDuplicateResolution(s.handle_key(key)),
-            ActiveView::InboxCorpusMatchResolution(s) => ViewAction::InboxCorpusMatchResolution(s.handle_key(key)),
-            ActiveView::InboxOrganize(s) => ViewAction::InboxOrganize(s.handle_key(key)),
-            ActiveView::DirectoryClusterResolution(s) => ViewAction::DirectoryClusterResolution(s.handle_key(key)),
-            ActiveView::MovedFileAcknowledge(s) => ViewAction::MovedFileAcknowledge(s.handle_key(key)),
-            ActiveView::OobSyncResolution(s) => ViewAction::OobSyncResolution(s.handle_key(key)),
-            ActiveView::OobConflictInspection(s) => ViewAction::OobConflictInspection(s.handle_key(key)),
-            ActiveView::ExternalMatchReview(s) => ViewAction::ExternalMatchReview(s.handle_key(key)),
-            ActiveView::History(s) => ViewAction::History(s.handle_key(key)),
-            ActiveView::TagCanonicityResolution { state, .. } => ViewAction::TagCanonicityResolution(state.handle_key(key)),
-            ActiveView::CompoundTagSplit { state, .. } => ViewAction::CompoundTagSplit(state.handle_key(key)),
-            ActiveView::MissingAlbumSingleResolution(s) => ViewAction::MissingAlbumSingleResolution(s.handle_key(key)),
-            ActiveView::ManualReview(s) => ViewAction::ManualReview(s.handle_key(key)),
-            ActiveView::TransactionReview(review) => ViewAction::TransactionReview(review.handle_key(key)),
+            ActiveView::UnifiedTagEditor(s) => ViewAction::UnifiedTagEditor(s.handle_input(&action)),
+            ActiveView::Deploy(s) => ViewAction::Deploy(s.handle_input(&action)),
+            ActiveView::ExternalMatches(s) => ViewAction::ExternalMatches(s.handle_input(&action)),
+            ActiveView::MissingFileResolution(s) => ViewAction::MissingFileResolution(s.handle_input(&action)),
+            ActiveView::MissingDirectoryResolution(s) => ViewAction::MissingDirectoryResolution(s.handle_input(&action)),
+            ActiveView::CorruptFileResolution(s) => ViewAction::CorruptFileResolution(s.handle_input(&action)),
+            ActiveView::ShitFormatResolution(s) => ViewAction::ShitFormatResolution(s.handle_input(&action)),
+            ActiveView::EmbedAlbumArtResolution(s) => ViewAction::EmbedAlbumArtResolution(s.handle_input(&action)),
+            ActiveView::SubparDuplicateResolution(s) => ViewAction::SubparDuplicateResolution(s.handle_input(&action)),
+            ActiveView::InboxCorpusMatchResolution(s) => ViewAction::InboxCorpusMatchResolution(s.handle_input(&action)),
+            ActiveView::InboxOrganize(s) => ViewAction::InboxOrganize(s.handle_input(&action)),
+            ActiveView::DirectoryClusterResolution(s) => ViewAction::DirectoryClusterResolution(s.handle_input(&action)),
+            ActiveView::MovedFileAcknowledge(s) => ViewAction::MovedFileAcknowledge(s.handle_input(&action)),
+            ActiveView::OobSyncResolution(s) => ViewAction::OobSyncResolution(s.handle_input(&action)),
+            ActiveView::OobConflictInspection(s) => ViewAction::OobConflictInspection(s.handle_input(&action)),
+            ActiveView::ExternalMatchReview(s) => ViewAction::ExternalMatchReview(s.handle_input(&action)),
+            ActiveView::History(s) => ViewAction::History(s.handle_input(&action)),
+            ActiveView::TagCanonicityResolution { state, .. } => ViewAction::TagCanonicityResolution(state.handle_input(&action)),
+            ActiveView::CompoundTagSplit { state, .. } => ViewAction::CompoundTagSplit(state.handle_input(&action)),
+            ActiveView::MissingAlbumSingleResolution(s) => ViewAction::MissingAlbumSingleResolution(s.handle_input(&action)),
+            ActiveView::ManualReview(s) => ViewAction::ManualReview(s.handle_input(&action)),
+            ActiveView::TransactionReview(review) => ViewAction::TransactionReview(review.handle_input(&action)),
         };
 
         // Phase 2: dispatch with confirmation flag
-        let is_confirmation = matches!(key.code, KeyCode::Enter);
-        self.dispatch_action(action, is_confirmation);
+        let is_confirmation = matches!(action, InputAction::Confirm);
+        self.dispatch_action(view_action, is_confirmation);
     }
 
     /// Handle exit confirm modal action.
@@ -647,7 +647,7 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -687,7 +687,8 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
 
@@ -715,8 +716,7 @@ fn run_app<B: ratatui::backend::Backend>(
         let frame_start = std::time::Instant::now();
 
         if signal_received.swap(false, Ordering::SeqCst) {
-            let esc_key = KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
-            app.handle_key(esc_key);
+            app.handle_input(InputAction::Cancel);
         }
 
         // Tick startup views first (they have their own Witch tick calls)
@@ -894,30 +894,30 @@ fn run_app<B: ratatui::backend::Backend>(
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
-                    if key.code == KeyCode::Char('c')
+                    if key.code == crossterm::event::KeyCode::Char('c')
                         && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
                     {
-                        let esc_key = KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
-                        app.handle_key(esc_key);
+                        app.handle_input(InputAction::Cancel);
                     } else {
-                        app.handle_key(key);
+                        app.handle_input(input::map_key(key));
                     }
                 }
                 Event::Mouse(mouse) => {
                     match mouse.kind {
                         MouseEventKind::ScrollUp => {
-                            let key = KeyEvent::new(KeyCode::Up, crossterm::event::KeyModifiers::NONE);
-                            app.handle_key(key);
+                            app.handle_input(InputAction::NavUp);
                         }
                         MouseEventKind::ScrollDown => {
-                            let key = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE);
-                            app.handle_key(key);
+                            app.handle_input(InputAction::NavDown);
                         }
                         MouseEventKind::Down(MouseButton::Left) => {
                             app.handle_click(mouse.column, mouse.row);
                         }
                         _ => {}
                     }
+                }
+                Event::Paste(text) => {
+                    app.handle_input(InputAction::Paste(text));
                 }
                 _ => {}
             }

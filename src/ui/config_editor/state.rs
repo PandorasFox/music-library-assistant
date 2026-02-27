@@ -64,6 +64,8 @@ pub struct ConfigEditorState {
     pub text_input: Option<TextInputState>,
     /// Position within expanded collection field (None = not in collection).
     pub collection_pos: Option<CollectionPosition>,
+    /// Position within a StringListMap item's separator sub-list (None = not in sub-list).
+    pub sub_collection_pos: Option<CollectionPosition>,
     /// For StringPairMap: which field is focused (0=key, 1=value).
     pub pair_field_focus: usize,
     /// Focus: Fields vs Buttons.
@@ -86,6 +88,7 @@ impl ConfigEditorState {
             scroll_offset: 0,
             text_input: None,
             collection_pos: None,
+            sub_collection_pos: None,
             pair_field_focus: 0,
             focus: EditorFocus::Fields,
             selected_button: EditorButton::Save,
@@ -140,6 +143,11 @@ impl ConfigEditorState {
         // Text input mode intercepts most keys
         if self.text_input.is_some() {
             return self.handle_text_input_key(key);
+        }
+
+        // Sub-collection editing mode (separator list within a StringListMap item)
+        if self.sub_collection_pos.is_some() {
+            return self.handle_sub_collection_key(key);
         }
 
         // Collection editing mode
@@ -225,6 +233,130 @@ impl ConfigEditorState {
         }
     }
 
+    /// Get the separator count for the currently focused StringListMap item.
+    fn current_sub_collection_len(&self) -> usize {
+        let Some((gi, fi)) = self.cursor_to_group_field() else { return 0 };
+        let ConfigValue::StringListMap(items) = &self.groups[gi].fields[fi].value else { return 0 };
+        let Some(CollectionPosition::Item(idx)) = self.collection_pos else { return 0 };
+        if idx < items.len() { items[idx].1.len() } else { 0 }
+    }
+
+    /// Handle key events while editing within a separator sub-list.
+    fn handle_sub_collection_key(&mut self, key: KeyEvent) -> ConfigEditorAction {
+        let item_count = self.current_sub_collection_len();
+
+        match key.code {
+            KeyCode::Up => {
+                match self.sub_collection_pos {
+                    Some(CollectionPosition::Item(0)) => {
+                        // Exit sub-collection, stay on the tag item
+                        self.sub_collection_pos = None;
+                    }
+                    Some(CollectionPosition::Item(n)) => {
+                        self.sub_collection_pos = Some(CollectionPosition::Item(n - 1));
+                    }
+                    Some(CollectionPosition::AddNew) => {
+                        if item_count > 0 {
+                            self.sub_collection_pos = Some(CollectionPosition::Item(item_count - 1));
+                        } else {
+                            self.sub_collection_pos = None;
+                        }
+                    }
+                    None => {}
+                }
+                ConfigEditorAction::None
+            }
+            KeyCode::Down => {
+                match self.sub_collection_pos {
+                    Some(CollectionPosition::Item(n)) => {
+                        if n + 1 < item_count {
+                            self.sub_collection_pos = Some(CollectionPosition::Item(n + 1));
+                        } else {
+                            self.sub_collection_pos = Some(CollectionPosition::AddNew);
+                        }
+                    }
+                    Some(CollectionPosition::AddNew) => {
+                        // Exit sub-collection, move to next tag in collection
+                        self.sub_collection_pos = None;
+                        let collection_len = self.current_collection_len();
+                        match self.collection_pos {
+                            Some(CollectionPosition::Item(n)) => {
+                                if n + 1 < collection_len {
+                                    self.collection_pos = Some(CollectionPosition::Item(n + 1));
+                                } else {
+                                    self.collection_pos = Some(CollectionPosition::AddNew);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    None => {}
+                }
+                ConfigEditorAction::None
+            }
+            KeyCode::Enter => {
+                self.activate_sub_collection_item();
+                ConfigEditorAction::None
+            }
+            KeyCode::Char('x') | KeyCode::Delete => {
+                self.delete_sub_collection_item();
+                ConfigEditorAction::None
+            }
+            KeyCode::Esc => {
+                self.sub_collection_pos = None;
+                ConfigEditorAction::None
+            }
+            _ => ConfigEditorAction::None,
+        }
+    }
+
+    /// Activate (edit) a separator within the sub-collection.
+    fn activate_sub_collection_item(&mut self) {
+        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
+        let ConfigValue::StringListMap(items) = &self.groups[gi].fields[fi].value else { return };
+        let Some(CollectionPosition::Item(tag_idx)) = self.collection_pos else { return };
+        if tag_idx >= items.len() { return; }
+
+        match self.sub_collection_pos {
+            Some(CollectionPosition::Item(sep_idx)) => {
+                if sep_idx < items[tag_idx].1.len() {
+                    let mut input = TextInputState::new();
+                    input.set_value(&items[tag_idx].1[sep_idx]);
+                    input.focused = true;
+                    self.text_input = Some(input);
+                }
+            }
+            Some(CollectionPosition::AddNew) => {
+                let mut input = TextInputState::new();
+                input.focused = true;
+                self.text_input = Some(input);
+            }
+            None => {}
+        }
+    }
+
+    /// Delete a separator within the sub-collection.
+    fn delete_sub_collection_item(&mut self) {
+        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
+        let Some(CollectionPosition::Item(tag_idx)) = self.collection_pos else { return };
+
+        let field = &mut self.groups[gi].fields[fi];
+        let ConfigValue::StringListMap(ref mut items) = field.value else { return };
+        if tag_idx >= items.len() { return; }
+
+        if let Some(CollectionPosition::Item(sep_idx)) = self.sub_collection_pos {
+            if sep_idx < items[tag_idx].1.len() {
+                items[tag_idx].1.remove(sep_idx);
+                if sep_idx >= items[tag_idx].1.len() && !items[tag_idx].1.is_empty() {
+                    self.sub_collection_pos = Some(CollectionPosition::Item(items[tag_idx].1.len() - 1));
+                } else if items[tag_idx].1.is_empty() {
+                    self.sub_collection_pos = Some(CollectionPosition::AddNew);
+                }
+                Self::recompute_source(field);
+            }
+        }
+    }
+
     /// Activate (edit) the current collection item.
     fn activate_collection_item(&mut self) {
         let Some((gi, fi)) = self.cursor_to_group_field() else { return };
@@ -265,11 +397,12 @@ impl ConfigEditorState {
             }
             (ConfigValue::StringListMap(items), Some(CollectionPosition::Item(idx))) => {
                 if idx < items.len() {
-                    // Edit the separators as comma-separated
-                    let mut input = TextInputState::new();
-                    input.set_value(items[idx].1.join(", "));
-                    input.focused = true;
-                    self.text_input = Some(input);
+                    // Enter sub-collection mode to edit individual separators
+                    if items[idx].1.is_empty() {
+                        self.sub_collection_pos = Some(CollectionPosition::AddNew);
+                    } else {
+                        self.sub_collection_pos = Some(CollectionPosition::Item(0));
+                    }
                 }
             }
             (ConfigValue::StringListMap(_), Some(CollectionPosition::AddNew)) => {
@@ -548,8 +681,16 @@ impl ConfigEditorState {
         let Some(input) = self.text_input.take() else { return };
         let Some((gi, fi)) = self.cursor_to_group_field() else { return };
 
-        let field = &mut self.groups[gi].fields[fi];
         let text = input.value;
+
+        // Handle sub-collection (separator) commits
+        if let Some(sub_pos) = self.sub_collection_pos {
+            let ok = self.commit_sub_collection_input(&text, gi, fi, sub_pos);
+            if ok {
+                Self::recompute_source(&mut self.groups[gi].fields[fi]);
+            }
+            return;
+        }
 
         // Handle collection item commits
         if let Some(pos) = self.collection_pos {
@@ -560,6 +701,7 @@ impl ConfigEditorState {
             return;
         }
 
+        let field = &mut self.groups[gi].fields[fi];
         let ok = match &mut field.value {
             ConfigValue::Float(ref mut v) => {
                 if let Ok(parsed) = text.parse::<f64>() {
@@ -709,6 +851,33 @@ impl ConfigEditorState {
                 }
             }
             _ => false,
+        }
+    }
+
+    /// Commit text input for a sub-collection separator item.
+    fn commit_sub_collection_input(&mut self, text: &str, gi: usize, fi: usize, sub_pos: CollectionPosition) -> bool {
+        let field = &mut self.groups[gi].fields[fi];
+        let ConfigValue::StringListMap(ref mut items) = field.value else { return false };
+        let Some(CollectionPosition::Item(tag_idx)) = self.collection_pos else { return false };
+        if tag_idx >= items.len() { return false; }
+
+        // Don't trim — separators can be intentional whitespace
+        if text.is_empty() { return false; }
+
+        match sub_pos {
+            CollectionPosition::Item(sep_idx) => {
+                if sep_idx < items[tag_idx].1.len() {
+                    items[tag_idx].1[sep_idx] = text.to_string();
+                    true
+                } else {
+                    false
+                }
+            }
+            CollectionPosition::AddNew => {
+                items[tag_idx].1.push(text.to_string());
+                self.sub_collection_pos = Some(CollectionPosition::Item(items[tag_idx].1.len() - 1));
+                true
+            }
         }
     }
 

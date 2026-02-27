@@ -122,8 +122,8 @@ fn render_field_line<'a>(
         "  "
     };
 
-    // If text input is active on this row, show the input
-    if is_cursor && state.text_input.is_some() {
+    // If text input is active on this row (not in collection/sub-collection), show the input
+    if is_cursor && state.text_input.is_some() && state.collection_pos.is_none() {
         let input = state.text_input.as_ref().unwrap();
         return Line::from(vec![
             Span::styled(cursor_indicator, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
@@ -318,45 +318,109 @@ fn render_collection_items<'a>(
         }
 
         ConfigValue::StringListMap(items) => {
+            let sub_pos = state.sub_collection_pos;
+
             for (i, (tag, separators)) in items.iter().enumerate() {
                 let is_selected = pos == Some(CollectionPosition::Item(i));
-                let is_editing = is_selected && text_input.is_some();
-                let is_target = is_selected;
+                let is_expanded = is_selected && sub_pos.is_some();
+                // Scroll target is this line only if selected but NOT expanded
+                // (when expanded, the target is within the sub-list)
+                let is_target = is_selected && !is_expanded;
 
                 let cursor_char = if is_selected { "    > " } else { "      " };
-                let seps_display = if separators.is_empty() {
-                    "(no separators)".to_string()
-                } else {
-                    separators.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(", ")
-                };
 
-                let line = if is_editing {
-                    let input = text_input.unwrap();
-                    Line::from(vec![
-                        Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
-                        Span::styled(tag.as_str(), Style::default().fg(Color::White)),
-                        Span::styled(": ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(
-                            format!("{}\u{2588}", input.value),
-                            Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
-                        ),
-                    ])
+                if is_expanded {
+                    // Show tag header with colon, no separator summary
+                    let tag_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                    lines.push((
+                        Line::from(vec![
+                            Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                            Span::styled(tag.as_str(), tag_style),
+                            Span::styled(":", Style::default().fg(Color::DarkGray)),
+                        ]),
+                        false,
+                    ));
+
+                    // Render each separator as its own indented line
+                    for (si, sep) in separators.iter().enumerate() {
+                        let is_sub_selected = sub_pos == Some(CollectionPosition::Item(si));
+                        let is_sub_editing = is_sub_selected && text_input.is_some();
+                        let sub_cursor = if is_sub_selected { "        > " } else { "          " };
+
+                        let line = if is_sub_editing {
+                            let input = text_input.unwrap();
+                            Line::from(vec![
+                                Span::styled(sub_cursor, Style::default().fg(Color::Yellow)),
+                                Span::styled(
+                                    format!("{}\u{2588}", input.value),
+                                    Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                                ),
+                            ])
+                        } else {
+                            let style = if is_sub_selected {
+                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(Color::Cyan)
+                            };
+                            Line::from(vec![
+                                Span::styled(sub_cursor, Style::default().fg(Color::Yellow)),
+                                Span::styled(format!("\"{}\"", sep), style),
+                            ])
+                        };
+                        lines.push((line, is_sub_selected));
+                    }
+
+                    // Sub-collection add-new row
+                    let is_sub_add = sub_pos == Some(CollectionPosition::AddNew);
+                    let is_sub_editing = is_sub_add && text_input.is_some();
+                    let sub_cursor = if is_sub_add { "        > " } else { "          " };
+
+                    let line = if is_sub_editing {
+                        let input = text_input.unwrap();
+                        Line::from(vec![
+                            Span::styled(sub_cursor, Style::default().fg(Color::Yellow)),
+                            Span::styled(
+                                format!("{}\u{2588}", input.value),
+                                Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                            ),
+                        ])
+                    } else {
+                        let style = if is_sub_add {
+                            Style::default().fg(Color::Green)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        };
+                        Line::from(vec![
+                            Span::styled(sub_cursor, Style::default().fg(Color::Yellow)),
+                            Span::styled("[+] Add new...", style),
+                        ])
+                    };
+                    lines.push((line, is_sub_add));
                 } else {
+                    // Collapsed: show tag with separator summary on one line
+                    let seps_display = if separators.is_empty() {
+                        "(no separators)".to_string()
+                    } else {
+                        separators.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(", ")
+                    };
+
                     let tag_style = if is_selected {
                         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
                     };
-                    Line::from(vec![
-                        Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
-                        Span::styled(tag.as_str(), tag_style),
-                        Span::styled(": ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(seps_display, Style::default().fg(Color::Cyan)),
-                    ])
-                };
-                lines.push((line, is_target));
+                    lines.push((
+                        Line::from(vec![
+                            Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
+                            Span::styled(tag.as_str(), tag_style),
+                            Span::styled(": ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(seps_display, Style::default().fg(Color::Cyan)),
+                        ]),
+                        is_target,
+                    ));
+                }
             }
-            // Add new row
+            // Add new tag row
             let is_add_new = pos == Some(CollectionPosition::AddNew);
             let is_editing = is_add_new && text_input.is_some();
             let cursor_char = if is_add_new { "    > " } else { "      " };
@@ -436,6 +500,18 @@ fn render_hints(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
             control_colors::text(" switch  "),
             control_colors::confirm("Enter"),
             control_colors::text(" select  "),
+            control_colors::cancel("Esc"),
+            control_colors::text(" back"),
+        ])
+    } else if state.sub_collection_pos.is_some() {
+        // Sub-collection (separator) editing mode hints
+        Line::from(vec![
+            control_colors::nav("^v"),
+            control_colors::text(" nav  "),
+            control_colors::confirm("Enter"),
+            control_colors::text(" edit  "),
+            control_colors::cancel("x"),
+            control_colors::text(" delete  "),
             control_colors::cancel("Esc"),
             control_colors::text(" back"),
         ])

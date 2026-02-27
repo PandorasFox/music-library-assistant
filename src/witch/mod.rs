@@ -602,9 +602,8 @@ impl Witch {
         // Check if idle rescan should trigger
         self.maybe_start_idle_rescan();
 
-        // External fetch: drain results and maybe trigger refresh
+        // External fetch: drain results
         self.drain_external_fetch_results();
-        self.maybe_trigger_external_refresh();
 
         // Emit status update to UI
         let _ = self.notice_tx.send(WitchNotice::StatusUpdate(WorkStatus {
@@ -1096,83 +1095,9 @@ impl Witch {
         }
     }
 
-    /// Maybe trigger an external fetch refresh (idle-gated).
+    /// Trigger an external fetch (operator-initiated).
     ///
-    /// Same gate structure as `maybe_start_idle_rescan()` but with additional
-    /// requirement of a configured API key and no active batch.
-    fn maybe_trigger_external_refresh(&mut self) {
-        // Must be idle and fully awake
-        if !self.work_state.is_idle() || self.reasoning_level != ReasoningLevel::Full {
-            return;
-        }
-        if !self.idle_rescan_eligible {
-            return;
-        }
-        // Don't start fetch during idle rescan
-        if self.idle_rescan_active {
-            return;
-        }
-
-        let shared_config = match self.shared_config {
-            Some(ref sc) => sc.clone(),
-            None => return,
-        };
-
-        let (api_key, eligible_dirs) = {
-            let config = shared_config.read().expect("SharedConfig lock poisoned");
-            let key = config.opinions.external_matching.acoustid_api_key.clone();
-            let dirs: Vec<std::path::PathBuf> = config.source_dirs.iter()
-                .filter(|sd| sd.enable_acoustid)
-                .map(|sd| sd.path.clone())
-                .collect();
-            (key, dirs)
-        };
-
-        if api_key.is_empty() || eligible_dirs.is_empty() {
-            return;
-        }
-
-        // Lazy-spawn the fetch thread if needed
-        if self.external_fetch.is_none() {
-            self.external_fetch = Some(external_fetch::ExternalFetchHandle::spawn(shared_config));
-            crate::logging::log_general("[WITCH] Spawned external fetch thread");
-        }
-
-        let handle = self.external_fetch.as_mut().unwrap();
-
-        // Don't stack requests
-        if handle.is_batch_active() {
-            return;
-        }
-
-        // Check idle timer — reuse the idle_since timer with a minimum 30s cooldown
-        if let Some(idle_since) = self.idle_since {
-            if idle_since.elapsed() < Duration::from_secs(30) {
-                return;
-            }
-        } else {
-            return;
-        }
-
-        // Clear stale progress from last batch
-        self.fetch_progress = None;
-
-        crate::logging::log_general(format!(
-            "[WITCH] Triggering external fetch for {} eligible dirs",
-            eligible_dirs.len()
-        ));
-
-        handle.request_refresh(
-            crate::meta::external::ExternalSource::AcoustID,
-            eligible_dirs,
-        );
-    }
-
-    /// Manually trigger an external fetch (operator-initiated, bypasses idle gates).
-    ///
-    /// Unlike `maybe_trigger_external_refresh()`, this does not check idle timer
-    /// or `idle_rescan_eligible`. Still requires an API key, eligible dirs, and
-    /// no active batch.
+    /// Requires an API key, eligible dirs, and no active batch.
     pub fn request_external_fetch(&mut self) {
         let shared_config = match self.shared_config {
             Some(ref sc) => sc.clone(),

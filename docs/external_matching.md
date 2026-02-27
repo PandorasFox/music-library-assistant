@@ -1,99 +1,59 @@
-# External Metadata Matching — Staged Roadmap
+# External Metadata Matching
 
-Background pulling of potential match data from external APIs (MusicBrainz, Discogs, etc.) and syncing match data diffs similar to OOB tag syncs. New data source to diff against besides files on disk.
+Pulling potential match data from external APIs (AcoustID, and later MusicBrainz, Discogs, etc.) and syncing match data diffs similar to OOB tag syncs. New data source to diff against besides files on disk.
 
-## Stage 0: Path-Tag Schema (dir-config extension)
+## Current State
 
-**Why first:** Cross-cutting — benefits external matching *and* existing signals (path correction, tag correction). Extends `SourceDir` in `dirs.kdl` with a new concept that everything else can build on.
+Stages 0–3 are implemented and operational. The system is operator-initiated only — external fetches happen when the operator explicitly requests them from the External Matches lateral view.
+
+### Stage 1: AcoustID Lookup Infrastructure — DONE
+
+- `external/acoustid.rs` — HTTP client, POST to AcoustID v2 API, response parsing (`LookupOutcome`: Matches/NoMatch/RateLimited)
+- `meta/external/mod.rs` — `ExternalSource` enum (integer-keyed: `AcoustID = 1`), extensible for future sources
+- DB tables: `external_matches` (inode, fingerprint, source, recording_id, confidence, raw_response, fetched_at), `external_no_match` (fingerprint, source, queried_at), `external_retry` (inode, fingerprint, source, failed_at, error, retry_count)
+- `witch/external_fetch.rs` — autonomous fetch thread with rate limiting, sends results back via channel
+- Witch integration: `drain_external_fetch_results()` writes to DB on each tick, `request_external_fetch()` is operator-initiated
+- Config: `acoustid_api_key`, `requests_per_second` (default 3), per-dir `enable_acoustid` toggle on `SourceDir`
+- "No match" represented as `external_no_match` table entry — absence of a result is cached
+
+### Stage 2: Match Signals & Classification — DONE
+
+- `DeriveExternalMatches` computation: reads `external_matches` table, parses raw AcoustID JSON, compares against corpus tags, classifies, emits signals
+- Signal type: `ExternalMatchSignal` with `ExternalMatchData` (recording_id, confidence, classification, diffs, release_id, release_group_id)
+- Classification: `MatchClassification` — `ExactMatch` (hidden from UI), `ContentDiff` (tag values differ), `MetadataOnly` (external has tags corpus doesn't)
+- Per-tag diffs: `ExternalTagDiff` (tag_name, external_value, corpus_value)
+- View types: `ExternalMatchesData` with confidence buckets (`ConfidenceTier`: Perfect/VeryHigh/High/Medium/Low)
+- `release_id` and `release_group_id` stored in signal data for future bin-packing
+
+### Stage 3: UI Presentation — DONE
+
+- Lateral view: `ui/external_match_view/` — two-pane layout (65/35), actions section + confidence-bucketed match entries, detail pane with fetch progress (braille bar + counters)
+- Review modal: `ui/external_match_modal/` — file list with classification markers (!/?), tag diff display (recording ID, per-tag ext vs corpus values), Accept/Dismiss/Cancel buttons
+- Action handler: `ui/action_handlers/external_match.rs` — Accept stages `ApplyTagOpsMutation` via `operator_decisions::stage_decision()` with `ConfirmationGesture`, Dismiss skips entry
+- Cache thread: `CacheRequest::WantExternalMatches` / `CacheReady::ExternalMatches`
+- Fetch progress: `FetchProgress` struct with live counters (total/processed/matched/no_match/retries), piped from fetch thread → Witch → UI each frame
+
+### Stage 0: Path-Tag Schema (dir-config extension) — DONE
+
+- `config/path_schema.rs` — Parser for template DSL (`$TAG`, `${TAG}`, `$[optional $TAG]`), `PathTagSchema` type with `extract()` matcher
+- `SourceDir` extended with `path_schema: Option<PathTagSchema>`, parsed from `path-schema` field in `dirs.kdl`
+- `meta/computations/analysis/path_schema.rs` — `DetectPathTagMismatches` computation, compares path-extracted metadata against corpus tags
+- Signal type: `PathTagMismatchSignal` with `PathTagMismatchData` (source_dir, schema_template, mismatch_kind)
+
+## Remaining Work
+
+### Dismiss/Ignore Persistence — NOT STARTED
+
+Currently "Dismiss" in the review modal skips the entry for the current session but doesn't persist. Dismissed matches resurface on next derivation.
 
 **Scope:**
-- Extend `SourceDir` (in `config/types.rs`, `config/dirs.rs`) with an optional path-tag schema field — a pattern like `/$LABEL/$CATALOGNUMBER/$ARTIST - $ALBUM - $TITLE.flac` that maps path segments to tag semantics
-- Parser for the schema DSL (probably its own small module)
-- Extraction function: given a corpus path + schema → `HashMap<TagKey, String>` of inferred metadata
-- New signal type: `PathTagMismatch` — when extracted path metadata disagrees with actual tags (usable immediately by existing analysis computations)
-- Standalone feature with immediate value
+- New DB table for ignored match UUIDs (recording_id + inode pairs) so dismissed matches don't resurface
+- Integration with `DeriveExternalMatches` to filter out ignored matches before signal emission
+- UI affordance to view/clear ignored matches
 
-**Key decisions for detailed planning:**
-- DSL syntax for the schema patterns (glob-style vs template-style vs regex)
-- How to handle optional/variable segments
-- Whether schemas can be inherited (parent dir schema applies to children)
+### Stage 4 (future): Multi-Source, Release Bin-Packing & Discogs
 
-## Stage 1: AcoustID Lookup Infrastructure
-
-**Scope:** Get fingerprints matched against AcoustID's API, store raw results, no UI yet.
-
-**Architecture (following Witch patterns):**
-- New `ExternalLookup` computation type — runs in analysis phase, queries which inodes have fingerprints but no cached AcoustID result
-- Background HTTP client with rate limiting (AcoustID allows ~3 req/sec). I/O-bound work that fits naturally into rayon worker threads — the Witch spawns these, same as any computation
-- New DB table: `external_matches` — stores raw AcoustID responses keyed by fingerprint, with timestamps for staleness/retry logic
-- Dir-config extension: `external_matching: bool` on `SourceDir` (default true), so operators can opt directories out
-- Operator-level config: API keys for AcoustID (and later MusicBrainz/Discogs) in the main config
-
-**Key decisions for detailed planning:**
-- Table schema for `external_matches` — what granularity? Per-fingerprint? Per-inode?
-- Staleness policy — how often to re-query? Never re-query? Only on operator demand?
-- Error handling — rate limit hits, network failures, partial results
-- How to represent "no match found" (important — absence of a result is itself information)
-- Whether AcoustID lookup is a computation or a new task category (it's I/O-bound, not CPU-bound like most computations — but the Witch already handles I/O-bound indexing work fine)
-
-## Stage 2: Match Signals & Release Bin-Packing
-
-**Scope:** Process raw AcoustID results into typed signals. Classify matches. Group into release candidates.
-
-**Architecture:**
-- New derivation/analysis computation: `DeriveExternalMatches` — reads `external_matches` table, compares against existing tags
-- Match classification enum (new type in `meta/signals/data.rs`):
-  - `ExactMatch` — all tags agree
-  - `SimilarTags` — case/punctuation/whitespace differences only
-  - `ContentDiff` — substantive tag value differences (like OOB tag sync)
-  - `NoMatch` — fingerprint submitted but AcoustID returned nothing
-- New signal: `ExternalMatchSignal` — per-inode, carrying the classification + diff data (modeled after `OutOfBandTagSyncSignal` with `TagMismatchEntry` style diffs)
-- Release bin-packing: group inodes by MusicBrainz release ID (AcoustID returns recording IDs → release group lookups). This is where MusicBrainz API comes in as a second-tier lookup
-- Ignore/dismiss mechanism: `IgnoredExternalMatch` table or signal suppression (similar pattern to how `can_stash_dupes` suppresses duplicate signals)
-- Path-tag schema (from Stage 0) feeds into match quality — extracted path metadata supplements tag comparison
-
-**Key decisions for detailed planning:**
-- Signal granularity — per-inode or per-release-group?
-- How bin-packing interacts with existing `FingerprintOverlapSignal` (internal duplicates vs external matches are different concerns)
-- MusicBrainz rate limits (1 req/sec with user-agent) and whether to fold this into Stage 1's infrastructure or keep separate
-- Whether "ignore" is per-match, per-inode, or per-release
-
-## Stage 3: UI Presentation
-
-**Scope:** New lateral view tab, progress visibility, match review interface.
-
-**Architecture (following existing patterns):**
-- New `LateralView::ExternalMatches` variant in the titlebar ring
-- New `ActiveView::ExternalMatches(ExternalMatchesState)` with the standard `handle_key → Action → dispatch` pattern
-- View layout: probably `ThreePaneLayout` — left pane for match groups/releases, right pane for per-track diffs (similar to how OOB tag sync shows mismatches)
-- Progress indicator options:
-  - **Option A:** Badge/counter on the ExternalMatches tab (like `deploy_needs_action` highlighting)
-  - **Option B:** Dedicated status line showing fetch progress (e.g., "AcoustID: 142/500 queried")
-  - **Option C:** Both — badge for "matches need review", status line for fetch progress
-- Match review actions: Accept (apply external tags → mutation), Ignore (suppress signal), Skip
-- Cache thread integration: `CacheRequest::WantExternalMatches` for async loading of match data
-- Resolution mutations: new `ApplyExternalTagsMutation` — similar to `AssimilateDiskTagsToDb` but source is external API data instead of disk tags
-
-**Key decisions for detailed planning:**
-- Tab placement in the ring
-- Whether match review uses the existing transaction/decision system or has its own flow
-- How to show release-level grouping (a release might span tracks across different corpus directories)
-- Whether "accept" applies all tags from the match or lets the operator cherry-pick per-tag
-
-## Stage 4 (future): Multi-Source & Discogs
-
-**Scope:** Extend to Discogs, handle conflicting matches across sources, preference ordering.
-
-Far enough out that it doesn't need detailed planning yet, but Stage 1's `external_matches` schema should be designed with a `source` discriminant column from the start.
-
-## Dependencies
-
-```
-Stage 0 (Path-Tag Schema)  ──────────────────────────────┐
-    standalone, immediate value                           │
-                                                          ▼
-Stage 1 (AcoustID Infrastructure)  ──→  Stage 2 (Signals & Bin-Packing)  ──→  Stage 3 (UI)
-    DB + API + config                    classification + grouping              presentation + review
-```
-
-Stages 0 and 1 can proceed in parallel. Stage 2 depends on Stage 1's DB schema being settled. Stage 3 depends on Stage 2's signal types being defined.
+- Extend to MusicBrainz (tier-2 lookups from recording IDs → release metadata) and Discogs
+- Release bin-packing: group inodes by release ID for batch review (groundwork exists — `release_id`/`release_group_id` already stored in signal data)
+- Handle conflicting matches across sources, preference ordering
+- `ExternalSource` enum already has integer-keyed discriminant, `external_matches.source` column ready

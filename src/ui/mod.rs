@@ -114,7 +114,7 @@ pub(crate) struct App {
     pub(super) cached_history: Option<crate::meta::views::EditHistoryData>,
     pub(super) cached_external_matches: Option<crate::meta::views::ExternalMatchesData>,
 
-    // Filter popup overlay (Ctrl+F in resolution modals and corpus browser)
+    // Filter popup overlay (Ctrl+/ in resolution modals and corpus browser)
     pub(super) filter_overlay: Option<FilterOverlay>,
 
     // View stack for push/pop navigation (TransactionReview, ProgressiveWork, etc.)

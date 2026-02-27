@@ -28,7 +28,7 @@
 //! - Space: Toggle file selection (files pane only)
 //! - E: Edit part value (review mode only, parts pane)
 //! - Enter: Confirm split, stage decision, advance to next
-//! - Ctrl+F: Canonicalize (mark as single entity, don't split)
+//! - Ctrl+F: Flag as canonical (mark as single entity, don't split)
 //! - Tab/Shift-Tab: Navigate to next/prev signal (non-committal)
 //! - Ctrl+R: Stage current decision and jump to review screen
 //! - Ctrl+A: Stage ALL signals and jump to review (safe mode only)
@@ -86,7 +86,7 @@ impl CompoundSplitStateV2 {
         // Ctrl shortcuts (mapped to semantic actions by map_key)
         match action {
             InputAction::Shortcut('r') => return CompoundSplitActionV2::ShowReview,
-            InputAction::OpenFilter => {
+            InputAction::FlagValue => {
                 self.confirming_canonicalize = true;
                 return CompoundSplitActionV2::None;
             }
@@ -176,7 +176,7 @@ impl CompoundSplitStateV2 {
                 CompoundSplitActionV2::None
             }
             // Ctrl+F: flag canonical even while editing
-            InputAction::OpenFilter => {
+            InputAction::FlagValue => {
                 self.confirming_canonicalize = true;
                 CompoundSplitActionV2::None
             }

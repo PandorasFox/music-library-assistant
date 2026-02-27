@@ -304,7 +304,7 @@ pub(crate) struct ExitConfirmModalState {
 // FilterOverlay - bundles filter popup state + context
 // ============================================================================
 
-/// Overlay for the filter popup (Ctrl+F). Always paired: state + context.
+/// Overlay for the filter popup (Ctrl+/). Always paired: state + context.
 pub(crate) struct FilterOverlay {
     pub state: filter_popup::FilterPopupState,
     pub context: FilterPopupContext,

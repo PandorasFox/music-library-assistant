@@ -63,7 +63,7 @@ pub enum DirectoryClusterPreviewAction {
     NavigatePrev,
     /// Jump to transaction review (Ctrl+R).
     ShowReview,
-    /// Mark current cluster's source pair as expected overlap (Ctrl+F).
+    /// Mark current cluster's source pair as expected overlap (Ctrl+F flag).
     MarkExpected,
     /// Cancel and return to Insights view.
     Cancel,
@@ -258,7 +258,7 @@ impl DirectoryClusterPreviewState {
             InputAction::Shortcut('r') => DirectoryClusterPreviewAction::ShowReview,
 
             // Ctrl+F: mark expected overlap
-            InputAction::OpenFilter => DirectoryClusterPreviewAction::MarkExpected,
+            InputAction::FlagValue => DirectoryClusterPreviewAction::MarkExpected,
 
             // Navigate options (only when options focused)
             InputAction::NavUp if self.focus_pane == FocusPane::Options => {

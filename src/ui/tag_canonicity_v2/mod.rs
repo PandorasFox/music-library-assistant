@@ -68,7 +68,7 @@ impl TagCanonicalityStateV2 {
         // Ctrl shortcuts (mapped to semantic actions by map_key)
         match action {
             InputAction::Shortcut('r') => return TagCanonicalityActionV2::ShowReview,
-            InputAction::OpenFilter => {
+            InputAction::FlagValue => {
                 if self.is_album_artist_mode {
                     self.flag_confirmation_pending = true;
                     return TagCanonicalityActionV2::None;

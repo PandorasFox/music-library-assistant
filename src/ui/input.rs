@@ -50,7 +50,8 @@ pub enum InputAction {
     KillToEnd,   // Ctrl+K — delete from cursor to end
 
     // -- Modified shortcuts --
-    OpenFilter,    // Ctrl+F
+    OpenFilter,     // Ctrl+/ — open filter popup
+    FlagValue,      // Ctrl+F — context-specific flag/mark action
     Shortcut(char), // other Ctrl+letter, lowercase
 }
 
@@ -70,11 +71,12 @@ pub fn map_key(key: KeyEvent) -> InputAction {
         }
     }
 
-    // Ctrl+Arrow → word navigation (must be checked before Ctrl+letter)
+    // Ctrl+non-letter → word navigation, filter (before Ctrl+letter block)
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Left => return InputAction::WordLeft,
             KeyCode::Right => return InputAction::WordRight,
+            KeyCode::Char('/') => return InputAction::OpenFilter,
             _ => {}
         }
     }
@@ -86,7 +88,7 @@ pub fn map_key(key: KeyEvent) -> InputAction {
             KeyCode::Char('e') => InputAction::TextEnd,
             KeyCode::Char('u') => InputAction::KillToStart,
             KeyCode::Char('k') => InputAction::KillToEnd,
-            KeyCode::Char('f') => InputAction::OpenFilter,
+            KeyCode::Char('f') => InputAction::FlagValue,
             KeyCode::Char(c) => InputAction::Shortcut(c.to_ascii_lowercase()),
             _ => InputAction::Cancel,
         };

@@ -139,7 +139,7 @@ pub enum OobConflictAction {
     Acknowledge,
     /// Close inspector and return to Insights
     Cancel,
-    /// Open filter popup (Ctrl+F)
+    /// Open filter popup (Ctrl+/)
     OpenFilter,
 }
 
@@ -254,7 +254,7 @@ impl OobConflictState {
                 OobConflictAction::None
             }
 
-            // Ctrl+F: open filter popup
+            // Ctrl+/: open filter popup
             InputAction::OpenFilter => OobConflictAction::OpenFilter,
 
             // Space: toggle selection on current file in active bucket

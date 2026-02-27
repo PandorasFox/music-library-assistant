@@ -110,13 +110,13 @@ fn render_filter_bar(f: &mut Frame, area: Rect, nav: &TreeNavigator) {
         // Active filter - show count and hint to clear
         let count = nav.filtered_file_count().unwrap_or(0);
         (
-            format!("Filtered: {} files  (Ctrl+F to change, Esc to clear)", count),
+            format!("Filtered: {} files  (Ctrl+/ to change, Esc to clear)", count),
             Style::default().fg(Color::Green),
         )
     } else {
         // No filter - show hint
         (
-            "Press Ctrl+F to filter files".to_string(),
+            "Press Ctrl+/ to filter files".to_string(),
             Style::default().fg(Color::DarkGray),
         )
     };

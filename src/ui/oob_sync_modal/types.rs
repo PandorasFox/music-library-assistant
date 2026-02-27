@@ -49,7 +49,7 @@ pub enum OobSyncAction {
     AcceptDb,
     /// Cancel and return to Insights
     Cancel,
-    /// Open filter popup (Ctrl+F)
+    /// Open filter popup (Ctrl+/)
     OpenFilter,
 }
 
@@ -72,7 +72,7 @@ pub struct OobSyncState {
     pub button_rects: ButtonRects,
     /// Bulk selection state for multi-file operations
     pub selection: BulkSelectionState,
-    /// Active filter condition (from Ctrl+F popup)
+    /// Active filter condition (from Ctrl+/ popup)
     pub filter: Option<FilterCondition>,
     /// Filtered indices (cached, updated when filter changes)
     pub filtered_indices: Option<Vec<usize>>,
@@ -175,7 +175,7 @@ impl OobSyncState {
                 OobSyncAction::None
             }
 
-            // Ctrl+F: open filter popup
+            // Ctrl+/: open filter popup
             InputAction::OpenFilter => OobSyncAction::OpenFilter,
 
             // Space: toggle selection on current file

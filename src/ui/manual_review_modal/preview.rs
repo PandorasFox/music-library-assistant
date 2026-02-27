@@ -241,7 +241,7 @@ impl ManualReviewState {
             }
 
             // Mark expected duplicate
-            InputAction::OpenFilter => {
+            InputAction::FlagValue => {
                 ManualReviewAction::MarkExpectedDuplicate
             }
 

@@ -415,7 +415,7 @@ impl CorpusBrowserVariant {
             InputAction::Char('R') if self.has_pending_edits() => {
                 TreeBrowserAction::ReviewTransaction
             }
-            // Ctrl+F opens filter popup
+            // Ctrl+/ opens filter popup
             InputAction::OpenFilter => {
                 TreeBrowserAction::OpenFilter
             }

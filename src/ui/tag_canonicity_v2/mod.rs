@@ -55,7 +55,11 @@ impl TagCanonicalityStateV2 {
             return match action {
                 InputAction::Confirm => {
                     self.flag_confirmation_pending = false;
-                    TagCanonicalityActionV2::FlagNonCompilation
+                    if self.is_album_artist_mode {
+                        TagCanonicalityActionV2::FlagNonCompilation
+                    } else {
+                        TagCanonicalityActionV2::FlagCanonical
+                    }
                 }
                 InputAction::Cancel => {
                     self.flag_confirmation_pending = false;
@@ -69,12 +73,8 @@ impl TagCanonicalityStateV2 {
         match action {
             InputAction::Shortcut('r') => return TagCanonicalityActionV2::ShowReview,
             InputAction::FlagValue => {
-                if self.is_album_artist_mode {
-                    self.flag_confirmation_pending = true;
-                    return TagCanonicalityActionV2::None;
-                } else {
-                    return TagCanonicalityActionV2::FlagCanonical;
-                }
+                self.flag_confirmation_pending = true;
+                return TagCanonicalityActionV2::None;
             }
             _ => {}
         }

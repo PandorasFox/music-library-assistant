@@ -401,28 +401,53 @@ fn render_controls(f: &mut Frame, area: Rect, _state: &TagCanonicalityStateV2) {
     f.render_widget(hint, area);
 }
 
-/// Render the flag-as-non-compilation confirmation overlay.
+/// Render the flag confirmation overlay (non-compilation or canonical variants).
 fn render_flag_confirm(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
-    let track_count = state.data.inodes.len();
+    if state.is_album_artist_mode {
+        let track_count = state.data.inodes.len();
 
-    ConfirmationModal::new(" Flag as non-compilation? ")
-        .border_color(Color::Cyan)
-        .fixed_size(60, 9)
-        .message(vec![
-            Line::from(""),
-            Line::from(format!(
-                "Add COMPILATION=0 to all {} tracks in this set.",
-                track_count
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Future detection runs will skip this album group.",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ])
-        .buttons(vec![
-            ConfirmationButton::new("[Enter] Confirm", Color::Green).selected(true),
-            ConfirmationButton::new("[Esc] Cancel", Color::White),
-        ])
-        .render(f, area);
+        ConfirmationModal::new(" Flag as non-compilation? ")
+            .border_color(Color::Cyan)
+            .fixed_size(60, 9)
+            .message(vec![
+                Line::from(""),
+                Line::from(format!(
+                    "Add COMPILATION=0 to all {} tracks in this set.",
+                    track_count
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Future detection runs will skip this album group.",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ])
+            .buttons(vec![
+                ConfirmationButton::new("[Enter] Confirm", Color::Green).selected(true),
+                ConfirmationButton::new("[Esc] Cancel", Color::White),
+            ])
+            .render(f, area);
+    } else {
+        let variant_count = state.data.variants.len();
+
+        ConfirmationModal::new(" Flag variants as canonical? ")
+            .border_color(Color::Cyan)
+            .fixed_size(60, 9)
+            .message(vec![
+                Line::from(""),
+                Line::from(format!(
+                    "Mark all {} variants as intentionally distinct.",
+                    variant_count
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Future detection runs will skip this collision.",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ])
+            .buttons(vec![
+                ConfirmationButton::new("[Enter] Confirm", Color::Green).selected(true),
+                ConfirmationButton::new("[Esc] Cancel", Color::White),
+            ])
+            .render(f, area);
+    }
 }

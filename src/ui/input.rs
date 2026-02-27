@@ -44,6 +44,8 @@ pub enum InputAction {
     // -- Text editing (Emacs shortcuts lifted to first-class actions) --
     TextHome,    // Ctrl+A — cursor to start of text field
     TextEnd,     // Ctrl+E — cursor to end of text field
+    WordLeft,    // Ctrl+Left — cursor one word left
+    WordRight,   // Ctrl+Right — cursor one word right
     KillToStart, // Ctrl+U — delete from cursor to start
     KillToEnd,   // Ctrl+K — delete from cursor to end
 
@@ -64,6 +66,15 @@ pub fn map_key(key: KeyEvent) -> InputAction {
             KeyCode::Down => return InputAction::FocusDown,
             KeyCode::Left => return InputAction::FocusLeft,
             KeyCode::Right => return InputAction::FocusRight,
+            _ => {}
+        }
+    }
+
+    // Ctrl+Arrow → word navigation (must be checked before Ctrl+letter)
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Left => return InputAction::WordLeft,
+            KeyCode::Right => return InputAction::WordRight,
             _ => {}
         }
     }

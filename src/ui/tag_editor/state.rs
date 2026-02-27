@@ -8,6 +8,7 @@ use std::path::Path;
 
 use crate::db::types::AudioFile;
 use crate::meta::mutations::Mutation;
+use crate::ui::widgets::TextInputState;
 
 use super::mutations::{
     aggregate_tags_across_audio_files, audio_file_to_tag_fields, changes_to_mutations,
@@ -64,11 +65,11 @@ pub struct UnifiedTagEditorState {
     /// Current edit mode
     pub field_edit_state: FieldEditState,
 
-    /// Buffer for editing tag name (SingleFile only)
-    pub name_buffer: String,
+    /// Input state for editing tag name (SingleFile only)
+    pub name_input: TextInputState,
 
-    /// Buffer for editing tag value
-    pub value_buffer: String,
+    /// Input state for editing tag value
+    pub value_input: TextInputState,
 
     /// Whether focus is on value (true) or name (false) in SingleFile mode
     pub focus_on_value: bool,
@@ -204,8 +205,8 @@ impl UnifiedTagEditorState {
             field_scroll_offset: 0,
             field_visible_height: 10,
             field_edit_state: FieldEditState::NonEditable,
-            name_buffer: String::new(),
-            value_buffer: String::new(),
+            name_input: TextInputState::new(),
+            value_input: TextInputState::new(),
             focus_on_value: true,
             tag_fields,
             original_tag_fields,

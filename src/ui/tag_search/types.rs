@@ -5,6 +5,7 @@
 //! Supports both tag-based conditions and file metadata conditions.
 
 use crate::db::types::AudioFile;
+use crate::ui::widgets::TextInputState;
 
 // ============================================================================
 // Condition Type
@@ -281,20 +282,20 @@ pub struct SearchCondition {
     /// Logical operator connecting to previous condition (ignored for first).
     pub operator: LogicalOperator,
     /// Tag name to search (for Tag conditions).
-    pub tag_name: String,
+    pub tag_name: TextInputState,
     /// How to compare the tag value (for Tag conditions).
     pub comparison: ComparisonOperator,
     /// Value to search for (for Tag conditions).
-    pub value: String,
+    pub search_value: TextInputState,
     /// File type category (for FileType conditions).
     pub file_type_category: FileTypeCategory,
     /// Range minimum (for SampleRate, Bitrate, Duration conditions).
     /// For SampleRate: value in Hz (e.g., "44100")
     /// For Bitrate: value in kbps (e.g., "320")
     /// For Duration: value in seconds (e.g., "180")
-    pub range_min: String,
+    pub range_min: TextInputState,
     /// Range maximum (for SampleRate, Bitrate, Duration conditions).
-    pub range_max: String,
+    pub range_max: TextInputState,
 }
 
 impl SearchCondition {

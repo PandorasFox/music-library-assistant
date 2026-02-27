@@ -240,57 +240,37 @@ impl TagSearchState {
         }
     }
 
-    /// Insert a character at the current field.
-    pub fn insert_char(&mut self, c: char) {
-        if let Some(condition) = self.conditions.get_mut(self.focused_condition) {
-            match self.field_focus {
-                QueryFieldFocus::TagName => {
-                    condition.tag_name.push(c);
-                }
-                QueryFieldFocus::Value => {
-                    condition.value.push(c);
-                }
-                QueryFieldFocus::RangeMin => {
-                    // Only allow digits for range fields
-                    if c.is_ascii_digit() {
-                        condition.range_min.push(c);
-                    }
-                }
-                QueryFieldFocus::RangeMax => {
-                    if c.is_ascii_digit() {
-                        condition.range_max.push(c);
-                    }
-                }
-                _ => {}
-            }
+    /// Get a mutable reference to the focused text input, if any.
+    fn focused_input_mut(&mut self) -> Option<&mut crate::ui::widgets::TextInputState> {
+        let condition = self.conditions.get_mut(self.focused_condition)?;
+        match self.field_focus {
+            QueryFieldFocus::TagName => Some(&mut condition.tag_name),
+            QueryFieldFocus::Value => Some(&mut condition.search_value),
+            QueryFieldFocus::RangeMin => Some(&mut condition.range_min),
+            QueryFieldFocus::RangeMax => Some(&mut condition.range_max),
+            _ => None,
         }
     }
 
-    /// Backspace at the current field.
-    pub fn backspace(&mut self) {
-        if let Some(condition) = self.conditions.get_mut(self.focused_condition) {
-            match self.field_focus {
-                QueryFieldFocus::TagName => {
-                    condition.tag_name.pop();
+    /// Handle text input action on the focused field.
+    /// Returns true if the action was consumed.
+    pub fn handle_text_input(&mut self, action: &crate::ui::input::InputAction) -> bool {
+        use crate::ui::input::InputAction;
+
+        // Range fields: only allow digits for Char input
+        if matches!(self.field_focus, QueryFieldFocus::RangeMin | QueryFieldFocus::RangeMax) {
+            if let InputAction::Char(c) = action {
+                if !c.is_ascii_digit() {
+                    return true; // consume but don't insert
                 }
-                QueryFieldFocus::Value => {
-                    condition.value.pop();
-                }
-                QueryFieldFocus::RangeMin => {
-                    condition.range_min.pop();
-                }
-                QueryFieldFocus::RangeMax => {
-                    condition.range_max.pop();
-                }
-                _ => {}
             }
         }
-    }
 
-    /// Delete at the current field.
-    pub fn delete(&mut self) {
-        // For simplicity, same as backspace for now
-        self.backspace();
+        if let Some(input) = self.focused_input_mut() {
+            input.handle_input(action)
+        } else {
+            false
+        }
     }
 
     /// Add a new condition.
@@ -310,11 +290,11 @@ impl TagSearchState {
     /// Apply tag name suggestion (tab-completion).
     pub fn apply_tag_name_suggestion(&mut self) {
         if let Some(condition) = self.conditions.get_mut(self.focused_condition) {
-            let query = condition.tag_name.to_lowercase();
+            let query = condition.tag_name.value().to_lowercase();
             if !query.is_empty() {
                 // Find first matching tag name
                 if let Some(match_name) = SEARCHABLE_TAGS.iter().find(|t| t.starts_with(&query)) {
-                    condition.tag_name = (*match_name).to_string();
+                    condition.tag_name.set_value(*match_name);
                 }
             }
         }
@@ -392,12 +372,12 @@ impl TagSearchState {
     fn evaluate_tag_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
         use super::types::ComparisonOperator;
 
-        if condition.tag_name.is_empty() || condition.value.is_empty() {
+        if condition.tag_name.is_empty() || condition.search_value.is_empty() {
             return true; // Empty conditions match everything
         }
 
-        let query = condition.value.to_lowercase();
-        let tag_name = condition.tag_name.to_uppercase();
+        let query = condition.search_value.value().to_lowercase();
+        let tag_name = condition.tag_name.value().to_uppercase();
 
         let values = aft.tags.get(&tag_name);
 
@@ -439,20 +419,20 @@ impl TagSearchState {
     /// Evaluate a sample rate range condition.
     fn evaluate_sample_rate_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
         let sample_rate = aft.audio_file.audio.sample_rate.unwrap_or(0);
-        self.evaluate_range(sample_rate as i64, &condition.range_min, &condition.range_max)
+        self.evaluate_range(sample_rate as i64, condition.range_min.value(), condition.range_max.value())
     }
 
     /// Evaluate a bitrate range condition (kbps).
     fn evaluate_bitrate_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
         let bitrate = aft.audio_file.audio.bitrate_kbps.unwrap_or(0);
-        self.evaluate_range(bitrate as i64, &condition.range_min, &condition.range_max)
+        self.evaluate_range(bitrate as i64, condition.range_min.value(), condition.range_max.value())
     }
 
     /// Evaluate a duration range condition (seconds).
     fn evaluate_duration_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
         // duration_ms is in milliseconds, convert to seconds for user-friendly input
         let duration_secs = aft.audio_file.audio.duration_ms.unwrap_or(0) / 1000;
-        self.evaluate_range(duration_secs, &condition.range_min, &condition.range_max)
+        self.evaluate_range(duration_secs, condition.range_min.value(), condition.range_max.value())
     }
 
     /// Evaluate a range condition (min <= value <= max).

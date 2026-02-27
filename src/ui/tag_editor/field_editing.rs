@@ -13,32 +13,33 @@ impl UnifiedTagEditorState {
     // Buffer Operations
     // ========================================================================
 
-    /// Load the current field's values into the editing buffers.
+    /// Load the current field's values into the editing input states.
     pub(super) fn load_field_buffer(&mut self) {
         if self.is_aggregated_mode() {
             // Aggregated mode - load from aggregated_fields
             if let Some(ref agg_fields) = self.aggregated_fields {
                 if let Some(field) = agg_fields.get(self.current_field_idx) {
-                    self.name_buffer = field.name.clone();
-                    self.value_buffer = match &field.value {
-                        AggregatedValue::Consistent(v) => v.clone(),
-                        AggregatedValue::Edited(v) => v.clone(),
-                        AggregatedValue::Various | AggregatedValue::VariousConfirming => String::new(),
+                    self.name_input.set_value(&field.name);
+                    let val = match &field.value {
+                        AggregatedValue::Consistent(v) => v.as_str(),
+                        AggregatedValue::Edited(v) => v.as_str(),
+                        AggregatedValue::Various | AggregatedValue::VariousConfirming => "",
                     };
+                    self.value_input.set_value(val);
                 }
             }
         } else {
             // Individual mode - load from tag_fields
             if let Some(fields) = self.tag_fields.get(self.current_item_idx) {
                 if let Some(field) = fields.get(self.current_field_idx) {
-                    self.name_buffer = field.name.clone();
-                    self.value_buffer = field.value.clone();
+                    self.name_input.set_value(&field.name);
+                    self.value_input.set_value(&field.value);
                 }
             }
         }
     }
 
-    /// Commit the editing buffers back to the field data.
+    /// Commit the editing input states back to the field data.
     pub(super) fn commit_field_buffer(&mut self) {
         if self.is_aggregated_mode() {
             // Aggregated mode - update aggregated_fields
@@ -46,11 +47,11 @@ impl UnifiedTagEditorState {
                 if let Some(field) = agg_fields.get_mut(self.current_field_idx) {
                     match self.field_edit_state {
                         FieldEditState::EditingName => {
-                            field.name = self.name_buffer.clone();
+                            field.name = self.name_input.value().to_string();
                         }
                         FieldEditState::EditingValue => {
                             // Mark as Edited with new value
-                            field.value = AggregatedValue::Edited(self.value_buffer.clone());
+                            field.value = AggregatedValue::Edited(self.value_input.value().to_string());
                         }
                         FieldEditState::NonEditable => {}
                     }
@@ -67,7 +68,7 @@ impl UnifiedTagEditorState {
                             .map(|f| f.name.to_uppercase());
 
                         if let Some(old_norm) = old_normalized {
-                            let new_name = self.name_buffer.clone();
+                            let new_name = self.name_input.value().to_string();
                             // Rename all fields with the same normalized name
                             // (handles multi-value tags: renaming "genre" renames all genre entries)
                             for f in fields.iter_mut() {
@@ -79,7 +80,7 @@ impl UnifiedTagEditorState {
                     }
                     FieldEditState::EditingValue => {
                         if let Some(field) = fields.get_mut(self.current_field_idx) {
-                            field.value = self.value_buffer.clone();
+                            field.value = self.value_input.value().to_string();
                         }
                     }
                     FieldEditState::NonEditable => {}
@@ -212,8 +213,8 @@ impl UnifiedTagEditorState {
         }
 
         self.field_edit_state = FieldEditState::EditingName;
-        self.name_buffer = "new_tag".to_string();
-        self.value_buffer.clear();
+        self.name_input.set_value("new_tag");
+        self.value_input.clear();
         self.focus_on_value = false;
     }
 
@@ -221,40 +222,23 @@ impl UnifiedTagEditorState {
     // Character Manipulation
     // ========================================================================
 
-    /// Insert a character into the active buffer.
-    pub(super) fn insert_char(&mut self, c: char) {
+    /// Get a mutable reference to the active text input (name or value), if editing.
+    pub(super) fn active_input_mut(&mut self) -> Option<&mut crate::ui::widgets::TextInputState> {
         match self.field_edit_state {
-            FieldEditState::EditingName => {
-                self.name_buffer.push(c);
-            }
-            FieldEditState::EditingValue => {
-                self.value_buffer.push(c);
-            }
-            FieldEditState::NonEditable => {}
+            FieldEditState::EditingName => Some(&mut self.name_input),
+            FieldEditState::EditingValue => Some(&mut self.value_input),
+            FieldEditState::NonEditable => None,
         }
     }
 
-    /// Delete the last character from the active buffer.
-    pub(super) fn delete_char(&mut self) {
-        match self.field_edit_state {
-            FieldEditState::EditingName => {
-                self.name_buffer.pop();
-            }
-            FieldEditState::EditingValue => {
-                self.value_buffer.pop();
-            }
-            FieldEditState::NonEditable => {}
-        }
-    }
-
-    /// Clear the current field (buffer or actual field value).
+    /// Clear the current field (input state or actual field value).
     pub(super) fn clear_current_field(&mut self) {
         match self.field_edit_state {
             FieldEditState::EditingName => {
-                self.name_buffer.clear();
+                self.name_input.clear();
             }
             FieldEditState::EditingValue => {
-                self.value_buffer.clear();
+                self.value_input.clear();
             }
             FieldEditState::NonEditable => {
                 if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
@@ -324,7 +308,7 @@ impl UnifiedTagEditorState {
             values,
             current_value_idx: 0,
             editing: false,
-            edit_buffer: String::new(),
+            edit_input: crate::ui::widgets::TextInputState::new(),
         });
     }
 

@@ -127,17 +127,18 @@ impl TagSearchState {
                 }
             }
 
-            // Character input
-            InputAction::Char(c) => {
-                self.insert_char(*c);
-                TagSearchAction::None
-            }
-            InputAction::Backspace => {
-                self.backspace();
-                TagSearchAction::None
-            }
-            InputAction::Delete => {
-                self.delete();
+            // Text editing actions — delegate to focused TextInputState
+            InputAction::Char(_)
+            | InputAction::Paste(_)
+            | InputAction::Backspace
+            | InputAction::Delete
+            | InputAction::TextHome
+            | InputAction::TextEnd
+            | InputAction::WordLeft
+            | InputAction::WordRight
+            | InputAction::KillToStart
+            | InputAction::KillToEnd => {
+                self.handle_text_input(action);
                 TagSearchAction::None
             }
 
@@ -334,10 +335,11 @@ impl TagSearchState {
                 let name_display = if condition.tag_name.is_empty() {
                     "<tag>".to_string()
                 } else {
-                    condition.tag_name.clone()
+                    condition.tag_name.value().to_string()
                 };
                 let name_with_cursor = if name_focused {
-                    format!("{}_", name_display)
+                    let (before, cursor_ch, after) = condition.tag_name.cursor_splits();
+                    format!("{}{}{}", before, cursor_ch, after)
                 } else {
                     name_display
                 };
@@ -361,13 +363,14 @@ impl TagSearchState {
                 } else {
                     Style::default().fg(Color::White)
                 };
-                let value_display = if condition.value.is_empty() {
+                let value_display = if condition.search_value.is_empty() {
                     "<value>".to_string()
                 } else {
-                    condition.value.clone()
+                    condition.search_value.value().to_string()
                 };
                 let value_with_cursor = if value_focused {
-                    format!("{}_", value_display)
+                    let (before, cursor_ch, after) = condition.search_value.cursor_splits();
+                    format!("{}{}{}", before, cursor_ch, after)
                 } else {
                     value_display
                 };
@@ -394,10 +397,11 @@ impl TagSearchState {
                 let min_display = if condition.range_min.is_empty() {
                     "<min>".to_string()
                 } else {
-                    condition.range_min.clone()
+                    condition.range_min.value().to_string()
                 };
                 let min_with_cursor = if min_focused {
-                    format!("{}_", min_display)
+                    let (before, cursor_ch, after) = condition.range_min.cursor_splits();
+                    format!("{}{}{}", before, cursor_ch, after)
                 } else {
                     min_display
                 };
@@ -414,10 +418,11 @@ impl TagSearchState {
                 let max_display = if condition.range_max.is_empty() {
                     "<max>".to_string()
                 } else {
-                    condition.range_max.clone()
+                    condition.range_max.value().to_string()
                 };
                 let max_with_cursor = if max_focused {
-                    format!("{}_", max_display)
+                    let (before, cursor_ch, after) = condition.range_max.cursor_splits();
+                    format!("{}{}{}", before, cursor_ch, after)
                 } else {
                     max_display
                 };

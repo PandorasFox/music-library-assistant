@@ -5,6 +5,7 @@
 use crate::db::types::AudioFile;
 use crate::meta::decisions::DecisionKey;
 use crate::meta::mutations::Mutation;
+use crate::ui::widgets::TextInputState;
 
 // ============================================================================
 // Unified Types (New)
@@ -149,8 +150,8 @@ pub enum UnifiedTagEditorModal {
         current_value_idx: usize,
         /// Whether we're currently editing a value
         editing: bool,
-        /// Edit buffer for the current value
-        edit_buffer: String,
+        /// Text input state for the current value
+        edit_input: TextInputState,
     },
     /// Confirm staging changes before Tab/Shift-Tab navigation.
     ///

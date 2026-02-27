@@ -139,7 +139,7 @@ fn render_path_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     let value_display = if state.condition.path_substring.is_empty() {
         "type to filter...".to_string()
     } else {
-        state.condition.path_substring.clone()
+        state.condition.path_substring.value().to_string()
     };
 
     let value_style = if state.condition.path_substring.is_empty() {
@@ -193,7 +193,7 @@ fn render_tag_value_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     let value_display = if state.condition.tag_value.is_empty() {
         "type value...".to_string()
     } else {
-        state.condition.tag_value.clone()
+        state.condition.tag_value.value().to_string()
     };
 
     let actual_value_style = if state.condition.tag_value.is_empty() && !value_focused {
@@ -250,13 +250,13 @@ fn render_range_fields(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     let min_display = if state.condition.range_min.is_empty() {
         "_____".to_string()
     } else {
-        format!("{:>5}", state.condition.range_min)
+        format!("{:>5}", state.condition.range_min.value())
     };
 
     let max_display = if state.condition.range_max.is_empty() {
         "_____".to_string()
     } else {
-        format!("{:<5}", state.condition.range_max)
+        format!("{:<5}", state.condition.range_max.value())
     };
 
     let line = Line::from(vec![

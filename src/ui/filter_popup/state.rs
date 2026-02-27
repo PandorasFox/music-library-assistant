@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use crate::ui::input::InputAction;
-
 use crate::ui::tag_search::{ComparisonOperator, FileTypeCategory};
+use crate::ui::widgets::TextInputState;
 
 /// Direction for cycling through options.
 #[derive(Debug, Clone, Copy)]
@@ -118,17 +118,17 @@ pub struct FilterCondition {
     /// File type category (for FileType conditions).
     pub file_type_category: FileTypeCategory,
     /// Range minimum (for range conditions).
-    pub range_min: String,
+    pub range_min: TextInputState,
     /// Range maximum (for range conditions).
-    pub range_max: String,
+    pub range_max: TextInputState,
     /// Path substring (for Path conditions - case-insensitive).
-    pub path_substring: String,
-    /// Tag name (for Tag conditions).
+    pub path_substring: TextInputState,
+    /// Tag name (for Tag conditions — cycled, not free-form).
     pub tag_name: String,
     /// Tag comparison operator (for Tag conditions).
     pub tag_comparison: ComparisonOperator,
     /// Tag value (for Tag conditions).
-    pub tag_value: String,
+    pub tag_value: TextInputState,
     /// Index into FILTER_SEARCHABLE_TAGS for tag name cycling.
     tag_name_idx: usize,
 }
@@ -155,6 +155,20 @@ impl FilterCondition {
         }
     }
 
+    /// Get a mutable reference to the focused text input, if any.
+    pub(crate) fn focused_input_mut(
+        &mut self,
+        focus: FilterFieldFocus,
+    ) -> Option<&mut TextInputState> {
+        match focus {
+            FilterFieldFocus::RangeMin => Some(&mut self.range_min),
+            FilterFieldFocus::RangeMax => Some(&mut self.range_max),
+            FilterFieldFocus::PathSubstring => Some(&mut self.path_substring),
+            FilterFieldFocus::TagValue => Some(&mut self.tag_value),
+            _ => None,
+        }
+    }
+
     /// Check if a track matches this filter condition.
     pub fn matches(
         &self,
@@ -170,15 +184,15 @@ impl FilterCondition {
             FilterConditionType::FileType => self.file_type_category.matches(file_type),
             FilterConditionType::SampleRate => {
                 let value = sample_rate.unwrap_or(0) as i64;
-                Self::in_range(value, &self.range_min, &self.range_max)
+                Self::in_range(value, self.range_min.value(), self.range_max.value())
             }
             FilterConditionType::Bitrate => {
                 let value = bitrate_kbps.unwrap_or(0) as i64;
-                Self::in_range(value, &self.range_min, &self.range_max)
+                Self::in_range(value, self.range_min.value(), self.range_max.value())
             }
             FilterConditionType::Duration => {
                 let value = duration_ms.unwrap_or(0) / 1000; // Convert to seconds
-                Self::in_range(value, &self.range_min, &self.range_max)
+                Self::in_range(value, self.range_min.value(), self.range_max.value())
             }
             FilterConditionType::Tag => self.matches_tag(tags),
         }
@@ -189,7 +203,7 @@ impl FilterCondition {
         if self.path_substring.is_empty() {
             return true;
         }
-        path.to_lowercase().contains(&self.path_substring.to_lowercase())
+        path.to_lowercase().contains(&self.path_substring.value().to_lowercase())
     }
 
     /// Check if tags match the tag condition (checks all values for multi-value tags).
@@ -199,7 +213,7 @@ impl FilterCondition {
         }
 
         let values = tags.get(&self.tag_name.to_uppercase());
-        let query = self.tag_value.to_lowercase();
+        let query = self.tag_value.value().to_lowercase();
 
         match self.tag_comparison {
             ComparisonOperator::Is => {
@@ -350,13 +364,18 @@ impl FilterPopupState {
                 FilterPopupAction::None
             }
 
-            InputAction::Char(c) => {
-                self.handle_char(*c);
-                FilterPopupAction::None
-            }
-
-            InputAction::Backspace => {
-                self.handle_backspace();
+            // Text editing actions — delegate to focused TextInputState
+            InputAction::Char(_)
+            | InputAction::Paste(_)
+            | InputAction::Backspace
+            | InputAction::Delete
+            | InputAction::TextHome
+            | InputAction::TextEnd
+            | InputAction::WordLeft
+            | InputAction::WordRight
+            | InputAction::KillToStart
+            | InputAction::KillToEnd => {
+                self.handle_text_action(action);
                 FilterPopupAction::None
             }
 
@@ -445,45 +464,19 @@ impl FilterPopupState {
         }
     }
 
-    /// Handle character input.
-    fn handle_char(&mut self, c: char) {
-        match self.focus {
-            FilterFieldFocus::RangeMin => {
-                if c.is_ascii_digit() {
-                    self.condition.range_min.push(c);
+    /// Handle a text editing action on the focused field.
+    fn handle_text_action(&mut self, action: &InputAction) {
+        // Range fields: only allow digits for Char input
+        if matches!(self.focus, FilterFieldFocus::RangeMin | FilterFieldFocus::RangeMax) {
+            if let InputAction::Char(c) = action {
+                if !c.is_ascii_digit() {
+                    return; // reject non-digit
                 }
             }
-            FilterFieldFocus::RangeMax => {
-                if c.is_ascii_digit() {
-                    self.condition.range_max.push(c);
-                }
-            }
-            FilterFieldFocus::PathSubstring => {
-                self.condition.path_substring.push(c);
-            }
-            FilterFieldFocus::TagValue => {
-                self.condition.tag_value.push(c);
-            }
-            _ => {}
         }
-    }
 
-    /// Handle backspace.
-    fn handle_backspace(&mut self) {
-        match self.focus {
-            FilterFieldFocus::RangeMin => {
-                self.condition.range_min.pop();
-            }
-            FilterFieldFocus::RangeMax => {
-                self.condition.range_max.pop();
-            }
-            FilterFieldFocus::PathSubstring => {
-                self.condition.path_substring.pop();
-            }
-            FilterFieldFocus::TagValue => {
-                self.condition.tag_value.pop();
-            }
-            _ => {}
+        if let Some(input) = self.condition.focused_input_mut(self.focus) {
+            input.handle_input(action);
         }
     }
 

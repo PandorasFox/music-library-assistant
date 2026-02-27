@@ -102,6 +102,54 @@ impl TextInputState {
         self.cursor = self.value.chars().count();
     }
 
+    /// Move cursor one word to the left (Ctrl+Left).
+    ///
+    /// Skips whitespace backward, then skips word characters backward.
+    /// Word characters: alphanumeric or underscore.
+    pub fn move_word_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let chars: Vec<char> = self.value.chars().collect();
+        let mut pos = self.cursor;
+        // Skip whitespace/non-word chars backward
+        while pos > 0 && !Self::is_word_char(chars[pos - 1]) {
+            pos -= 1;
+        }
+        // Skip word chars backward
+        while pos > 0 && Self::is_word_char(chars[pos - 1]) {
+            pos -= 1;
+        }
+        self.cursor = pos;
+    }
+
+    /// Move cursor one word to the right (Ctrl+Right).
+    ///
+    /// Skips word characters forward, then skips whitespace forward.
+    /// Word characters: alphanumeric or underscore.
+    pub fn move_word_right(&mut self) {
+        let chars: Vec<char> = self.value.chars().collect();
+        let len = chars.len();
+        if self.cursor >= len {
+            return;
+        }
+        let mut pos = self.cursor;
+        // Skip word chars forward
+        while pos < len && Self::is_word_char(chars[pos]) {
+            pos += 1;
+        }
+        // Skip whitespace/non-word chars forward
+        while pos < len && !Self::is_word_char(chars[pos]) {
+            pos += 1;
+        }
+        self.cursor = pos;
+    }
+
+    /// Whether a character is a "word" character for word navigation.
+    fn is_word_char(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
     /// Delete from cursor to end of line (Ctrl+K)
     pub fn kill_to_end(&mut self) {
         let byte_idx = self.cursor_byte_index();
@@ -151,11 +199,16 @@ impl TextInputState {
     pub fn handle_input(&mut self, action: &InputAction) -> bool {
         match action {
             InputAction::Char(c) => { self.insert_char(*c); true }
+            // Space is mapped to Toggle globally for list selection, but in
+            // text fields it's a space character.
+            InputAction::Toggle => { self.insert_char(' '); true }
             InputAction::Paste(text) => { self.insert_str(text); true }
             InputAction::Backspace => { self.backspace(); true }
             InputAction::Delete => { self.delete(); true }
             InputAction::NavLeft => { self.move_left(); true }
             InputAction::NavRight => { self.move_right(); true }
+            InputAction::WordLeft => { self.move_word_left(); true }
+            InputAction::WordRight => { self.move_word_right(); true }
             InputAction::Home | InputAction::TextHome => { self.move_home(); true }
             InputAction::End | InputAction::TextEnd => { self.move_end(); true }
             InputAction::KillToStart => { self.kill_to_start(); true }
@@ -311,5 +364,71 @@ mod tests {
         assert_eq!(before, "HHSU ");
         assert_eq!(ch, '𓃚');
         assert_eq!(after, " 𝕮");
+    }
+
+    #[test]
+    fn test_word_navigation() {
+        let mut state = TextInputState::new();
+        state.set_value("hello world foo_bar");
+        assert_eq!(state.cursor, 19); // at end
+
+        // Word left from end: skip to start of "foo_bar"
+        state.move_word_left();
+        assert_eq!(state.cursor, 12);
+
+        // Word left again: skip to start of "world"
+        state.move_word_left();
+        assert_eq!(state.cursor, 6);
+
+        // Word left again: skip to start of "hello"
+        state.move_word_left();
+        assert_eq!(state.cursor, 0);
+
+        // Word left at start: stay at 0
+        state.move_word_left();
+        assert_eq!(state.cursor, 0);
+
+        // Word right from start: skip to start of "world"
+        state.move_word_right();
+        assert_eq!(state.cursor, 6);
+
+        // Word right: skip to start of "foo_bar"
+        state.move_word_right();
+        assert_eq!(state.cursor, 12);
+
+        // Word right: skip to end
+        state.move_word_right();
+        assert_eq!(state.cursor, 19);
+
+        // Word right at end: stay at end
+        state.move_word_right();
+        assert_eq!(state.cursor, 19);
+    }
+
+    #[test]
+    fn test_word_navigation_multiple_spaces() {
+        let mut state = TextInputState::new();
+        state.set_value("hello   world");
+        state.cursor = 13; // at end
+
+        state.move_word_left();
+        assert_eq!(state.cursor, 8); // start of "world"
+
+        state.move_word_left();
+        assert_eq!(state.cursor, 0); // start of "hello"
+    }
+
+    #[test]
+    fn test_handle_input_word_nav() {
+        let mut state = TextInputState::new();
+        state.set_value("one two three");
+
+        let consumed = state.handle_input(&InputAction::WordLeft);
+        assert!(consumed);
+        assert_eq!(state.cursor, 8); // start of "three"
+
+        let consumed = state.handle_input(&InputAction::WordRight);
+        assert!(consumed);
+        assert_eq!(state.cursor, 13); // end
     }
 }

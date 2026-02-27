@@ -73,7 +73,7 @@ impl UnifiedTagEditorState {
                 values,
                 current_value_idx,
                 editing,
-                edit_buffer,
+                edit_input,
             }) => {
                 let num_values = values.len();
                 let add_entry_idx = num_values; // "+ Add value" is at end
@@ -81,9 +81,9 @@ impl UnifiedTagEditorState {
                 match action {
                     InputAction::Cancel => {
                         if *editing {
-                            // Cancel edit, revert buffer
+                            // Cancel edit, revert input
                             *editing = false;
-                            edit_buffer.clear();
+                            edit_input.clear();
                         } else {
                             // Close modal, apply changes back to tag_fields
                             let field_idx_copy = *field_idx;
@@ -97,21 +97,21 @@ impl UnifiedTagEditorState {
                         if *editing {
                             // Commit edit
                             if *current_value_idx < num_values {
-                                values[*current_value_idx] = edit_buffer.clone();
-                            } else if *current_value_idx == add_entry_idx && !edit_buffer.is_empty() {
+                                values[*current_value_idx] = edit_input.value().to_string();
+                            } else if *current_value_idx == add_entry_idx && !edit_input.is_empty() {
                                 // Adding new value
-                                values.push(edit_buffer.clone());
+                                values.push(edit_input.value().to_string());
                             }
                             *editing = false;
-                            edit_buffer.clear();
+                            edit_input.clear();
                         } else if *current_value_idx < num_values {
                             // Start editing existing value
                             *editing = true;
-                            *edit_buffer = values[*current_value_idx].clone();
+                            edit_input.set_value(&values[*current_value_idx]);
                         } else if *current_value_idx == add_entry_idx {
                             // Start adding new value
                             *editing = true;
-                            edit_buffer.clear();
+                            edit_input.clear();
                         }
                         UnifiedTagEditorAction::None
                     }
@@ -137,12 +137,9 @@ impl UnifiedTagEditorState {
                         }
                         UnifiedTagEditorAction::None
                     }
-                    InputAction::Backspace if *editing => {
-                        edit_buffer.pop();
-                        UnifiedTagEditorAction::None
-                    }
-                    InputAction::Char(c) if *editing => {
-                        edit_buffer.push(*c);
+                    _ if *editing => {
+                        // Delegate all text editing to the TextInputState
+                        edit_input.handle_input(action);
                         UnifiedTagEditorAction::None
                     }
                     _ => UnifiedTagEditorAction::None,
@@ -317,7 +314,7 @@ impl UnifiedTagEditorState {
                     UnifiedTagEditorAction::RequestTransactionReview
                 }
             }
-            InputAction::KillToStart => {
+            InputAction::KillToStart if self.field_edit_state == FieldEditState::NonEditable => {
                 self.clear_current_field();
                 UnifiedTagEditorAction::None
             }
@@ -325,25 +322,20 @@ impl UnifiedTagEditorState {
                 self.create_new_tag();
                 UnifiedTagEditorAction::None
             }
-            InputAction::Char(c) => {
-                if self.field_edit_state != FieldEditState::NonEditable {
-                    self.insert_char(*c);
-                }
+            InputAction::Backspace if self.field_edit_state == FieldEditState::NonEditable => {
+                // In navigation mode, toggle deletion mark on current field
+                self.toggle_current_field_deleted();
                 UnifiedTagEditorAction::None
             }
-            InputAction::Backspace => {
-                if self.field_edit_state != FieldEditState::NonEditable {
-                    self.delete_char();
-                } else {
-                    // In navigation mode, toggle deletion mark on current field
-                    self.toggle_current_field_deleted();
-                }
+            InputAction::Delete if self.field_edit_state == FieldEditState::NonEditable => {
+                // In navigation mode, toggle deletion mark on current field
+                self.toggle_current_field_deleted();
                 UnifiedTagEditorAction::None
             }
-            InputAction::Delete => {
-                if self.field_edit_state == FieldEditState::NonEditable {
-                    // In navigation mode, toggle deletion mark on current field
-                    self.toggle_current_field_deleted();
+            // When editing, delegate all text actions to the active TextInputState
+            action if self.field_edit_state != FieldEditState::NonEditable => {
+                if let Some(input) = self.active_input_mut() {
+                    input.handle_input(action);
                 }
                 UnifiedTagEditorAction::None
             }

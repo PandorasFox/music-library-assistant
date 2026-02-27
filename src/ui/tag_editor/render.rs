@@ -287,7 +287,8 @@ impl UnifiedTagEditorState {
                     .unwrap_or(true);
 
                 let name_display = if is_current && matches!(self.field_edit_state, FieldEditState::EditingName) {
-                    format!("{}▌", self.name_buffer)
+                    let (before, cursor_ch, after) = self.name_input.cursor_splits();
+                    format!("{}{}{}", before, cursor_ch, after)
                 } else {
                     field.name.clone()
                 };
@@ -314,7 +315,8 @@ impl UnifiedTagEditorState {
                     .unwrap_or(true);
 
                 let value_display = if is_current && matches!(self.field_edit_state, FieldEditState::EditingValue) {
-                    format!("{}▌", self.value_buffer)
+                    let (before, cursor_ch, after) = self.value_input.cursor_splits();
+                    format!("{}{}{}", before, cursor_ch, after)
                 } else if value_count > 1 && is_first_of_group {
                     // First occurrence of a multi-value tag - show count
                     format!("[{} values]", value_count)
@@ -426,7 +428,8 @@ impl UnifiedTagEditorState {
                 let name_display = if is_current
                     && matches!(self.field_edit_state, FieldEditState::EditingName)
                 {
-                    format!("{}▌", self.name_buffer)
+                    let (before, cursor_ch, after) = self.name_input.cursor_splits();
+                    format!("{}{}{}", before, cursor_ch, after)
                 } else {
                     field.name.clone()
                 };
@@ -442,7 +445,8 @@ impl UnifiedTagEditorState {
                 let value_display = if is_current
                     && matches!(self.field_edit_state, FieldEditState::EditingValue)
                 {
-                    format!("{}▌", self.value_buffer)
+                    let (before, cursor_ch, after) = self.value_input.cursor_splits();
+                    format!("{}{}{}", before, cursor_ch, after)
                 } else {
                     match &field.value {
                         AggregatedValue::Consistent(v) => {
@@ -630,10 +634,10 @@ impl UnifiedTagEditorState {
                 values,
                 current_value_idx,
                 editing,
-                edit_buffer,
+                edit_input,
             } => {
                 self.render_multi_value_editor_modal(
-                    f, area, *field_idx, values, *current_value_idx, *editing, edit_buffer,
+                    f, area, *field_idx, values, *current_value_idx, *editing, edit_input,
                 );
             }
             UnifiedTagEditorModal::StageChangesConfirm { direction, selected_button } => {
@@ -676,7 +680,7 @@ impl UnifiedTagEditorState {
         values: &[String],
         current_value_idx: usize,
         editing: bool,
-        edit_buffer: &str,
+        edit_input: &crate::ui::widgets::TextInputState,
     ) {
         // Get the field name for the title
         let field_name = self
@@ -707,7 +711,8 @@ impl UnifiedTagEditorState {
         for (i, value) in values.iter().enumerate() {
             let is_current = i == current_value_idx;
             let display = if is_current && editing {
-                format!("  > {}▌", edit_buffer)
+                let (before, cursor_ch, after) = edit_input.cursor_splits();
+                format!("  > {}{}{}", before, cursor_ch, after)
             } else if is_current {
                 format!("  > {}", value)
             } else {
@@ -727,7 +732,8 @@ impl UnifiedTagEditorState {
         let add_idx = values.len();
         let is_add_current = current_value_idx == add_idx;
         let add_display = if is_add_current && editing {
-            format!("  > + {}▌", edit_buffer)
+            let (before, cursor_ch, after) = edit_input.cursor_splits();
+            format!("  > + {}{}{}", before, cursor_ch, after)
         } else if is_add_current {
             "  > + Add value".to_string()
         } else {

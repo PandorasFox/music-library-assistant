@@ -13,14 +13,146 @@ pub(crate) use crate::ui::action_handlers::witness::ConfirmationGesture;
 // Decision Key Types
 // ============================================================================
 
-/// Source workflow for a decision — which modal/resolution flow produced it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DecisionSource {
-    TagCanonicity,
-    CompoundSplit,
+/// Semantic key for a decision within a transaction.
+///
+/// Each variant carries its own typed keying data, ensuring decisions from
+/// different workflows can never collide. Singleton variants (no inner data)
+/// represent bulk operations where one decision handles the entire insight type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DecisionKey {
+    // === Zone-scoped file signal decisions ===
+
+    /// Tag canonicity resolution (cluster index within tag_name)
+    TagCanonicity { tag_name: String, cluster_index: usize },
+    /// Compound tag split — safe (all parts exist in corpus)
+    CompoundSplitSafe { tag_name: String, cluster_index: usize },
+    /// Compound tag split — review (some parts new to corpus)
+    CompoundSplitReview { tag_name: String, cluster_index: usize },
+    /// Compound tag split — inbox
+    CompoundSplitInbox { tag_name: String, cluster_index: usize },
+    /// Deploy operations (single decision per transaction)
     Deploy,
+    /// Tag edit (keyed by inode set + tag names for dedup)
+    TagEdit { key_item: String },
+    /// OOB tag sync (bulk, single decision)
+    OobSync,
+    /// OOB tag conflict (bulk, single decision)
+    OobConflict,
+    /// Mtime-only ack (bulk, single decision)
+    MtimeAck,
+    /// Moved file resolution (bulk, single decision)
+    MovedFile,
+    /// Missing file resolution (bulk, single decision)
+    MissingFile,
+    /// Missing directory resolution (bulk, single decision)
+    MissingDirectory,
+    /// Corrupt file resolution (bulk, single decision)
+    CorruptFile,
+    /// Shit format transcode (bulk, single decision)
+    ShitFormat,
+    /// Subpar duplicate stash (bulk, single decision)
+    SubparDuplicate,
+    /// Directory cluster overlap resolution (per cluster)
+    DirectoryCluster { cluster_index: usize },
+    /// Embed album art (bulk, single decision)
+    EmbedAlbumArt,
+    /// Inbox corpus match stash (bulk, single decision)
+    InboxCorpusMatch,
+    /// Inbox organize into corpus (bulk, single decision)
+    InboxOrganize,
+    /// Missing album single resolution (per group)
+    MissingAlbum { group_index: usize },
+    /// Manual review resolution (per group)
+    ManualReview { group_index: usize },
+    /// Intake/index unindexed files (bulk, single decision)
+    IntakeIndex,
+    /// External match tag acceptance (per inode)
+    ExternalMatch { inode: i64 },
+    /// Edit reversal from history (per session)
+    EditReversal { session_label: String },
+
+    // === Meta-level decisions (not file-scoped) ===
+
+    /// Config edit (app-level config change)
     ConfigEdit,
-    TagEdit,
+    /// Directory config edit (per source dir path)
+    DirConfigEdit { source_path: std::path::PathBuf },
+}
+
+impl DecisionKey {
+    /// If this key is a singleton (no per-item data), return its kind.
+    ///
+    /// Used by the insights view to determine which insight types are
+    /// fully handled by a single staged decision.
+    pub fn kind(&self) -> Option<DecisionKeyKind> {
+        match self {
+            DecisionKey::OobSync => Some(DecisionKeyKind::OobSync),
+            DecisionKey::OobConflict => Some(DecisionKeyKind::OobConflict),
+            DecisionKey::MtimeAck => Some(DecisionKeyKind::MtimeAck),
+            DecisionKey::MovedFile => Some(DecisionKeyKind::MovedFile),
+            DecisionKey::MissingFile => Some(DecisionKeyKind::MissingFile),
+            DecisionKey::MissingDirectory => Some(DecisionKeyKind::MissingDirectory),
+            DecisionKey::CorruptFile => Some(DecisionKeyKind::CorruptFile),
+            DecisionKey::ShitFormat => Some(DecisionKeyKind::ShitFormat),
+            DecisionKey::SubparDuplicate => Some(DecisionKeyKind::SubparDuplicate),
+            DecisionKey::EmbedAlbumArt => Some(DecisionKeyKind::EmbedAlbumArt),
+            DecisionKey::InboxCorpusMatch => Some(DecisionKeyKind::InboxCorpusMatch),
+            DecisionKey::IntakeIndex => Some(DecisionKeyKind::IntakeIndex),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for DecisionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecisionKey::TagCanonicity { tag_name, cluster_index } =>
+                write!(f, "Tag Canonicity:{}:{}", tag_name, cluster_index),
+            DecisionKey::CompoundSplitSafe { tag_name, cluster_index } =>
+                write!(f, "Compound Split Safe:{}:{}", tag_name, cluster_index),
+            DecisionKey::CompoundSplitReview { tag_name, cluster_index } =>
+                write!(f, "Compound Split Review:{}:{}", tag_name, cluster_index),
+            DecisionKey::CompoundSplitInbox { tag_name, cluster_index } =>
+                write!(f, "Compound Split Inbox:{}:{}", tag_name, cluster_index),
+            DecisionKey::Deploy => write!(f, "Deploy"),
+            DecisionKey::TagEdit { key_item } => write!(f, "Tag Edit:{}", key_item),
+            DecisionKey::OobSync => write!(f, "OOB Sync"),
+            DecisionKey::OobConflict => write!(f, "OOB Conflict"),
+            DecisionKey::MtimeAck => write!(f, "Mtime Ack"),
+            DecisionKey::MovedFile => write!(f, "Moved File"),
+            DecisionKey::MissingFile => write!(f, "Missing File"),
+            DecisionKey::MissingDirectory => write!(f, "Missing Directory"),
+            DecisionKey::CorruptFile => write!(f, "Corrupt File"),
+            DecisionKey::ShitFormat => write!(f, "Format Conversion"),
+            DecisionKey::SubparDuplicate => write!(f, "Subpar Duplicate"),
+            DecisionKey::DirectoryCluster { cluster_index } =>
+                write!(f, "Directory Cluster:{}", cluster_index),
+            DecisionKey::EmbedAlbumArt => write!(f, "Embed Album Art"),
+            DecisionKey::InboxCorpusMatch => write!(f, "Inbox Corpus Match"),
+            DecisionKey::InboxOrganize => write!(f, "Inbox Organize"),
+            DecisionKey::MissingAlbum { group_index } =>
+                write!(f, "Missing Album:{}", group_index),
+            DecisionKey::ManualReview { group_index } =>
+                write!(f, "Manual Review:{}", group_index),
+            DecisionKey::IntakeIndex => write!(f, "Intake Index"),
+            DecisionKey::ExternalMatch { inode } =>
+                write!(f, "External Match:{}", inode),
+            DecisionKey::EditReversal { session_label } =>
+                write!(f, "Edit Reversal:{}", session_label),
+            DecisionKey::ConfigEdit => write!(f, "Config Edit"),
+            DecisionKey::DirConfigEdit { source_path } =>
+                write!(f, "Dir Config Edit:{}", source_path.display()),
+        }
+    }
+}
+
+/// Fieldless mirror of DecisionKey for insight filtering.
+///
+/// Only singleton variants (no inner data) are represented. Used by the
+/// insights view to hide entries whose single-decision source is already
+/// staged in the active transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DecisionKeyKind {
     OobSync,
     OobConflict,
     MtimeAck,
@@ -30,81 +162,9 @@ pub enum DecisionSource {
     CorruptFile,
     ShitFormat,
     SubparDuplicate,
-    DirectoryCluster,
     EmbedAlbumArt,
     InboxCorpusMatch,
-    InboxOrganize,
-    MissingAlbum,
-    ManualReview,
     IntakeIndex,
-    DirConfigEdit,
-    EditReversal,
-    ExternalMatch,
-}
-
-impl std::fmt::Display for DecisionSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TagCanonicity => write!(f, "Tag Canonicity"),
-            Self::CompoundSplit => write!(f, "Compound Split"),
-            Self::Deploy => write!(f, "Deploy"),
-            Self::ConfigEdit => write!(f, "Config Edit"),
-            Self::TagEdit => write!(f, "Tag Edit"),
-            Self::OobSync => write!(f, "OOB Sync"),
-            Self::OobConflict => write!(f, "OOB Conflict"),
-            Self::MtimeAck => write!(f, "Mtime Ack"),
-            Self::MovedFile => write!(f, "Moved File"),
-            Self::MissingFile => write!(f, "Missing File"),
-            Self::MissingDirectory => write!(f, "Missing Directory"),
-            Self::CorruptFile => write!(f, "Corrupt File"),
-            Self::ShitFormat => write!(f, "Format Conversion"),
-            Self::SubparDuplicate => write!(f, "Subpar Duplicate"),
-            Self::DirectoryCluster => write!(f, "Directory Cluster"),
-            Self::EmbedAlbumArt => write!(f, "Embed Album Art"),
-            Self::InboxCorpusMatch => write!(f, "Inbox Corpus Match"),
-            Self::InboxOrganize => write!(f, "Inbox Organize"),
-            Self::MissingAlbum => write!(f, "Missing Album"),
-            Self::ManualReview => write!(f, "Manual Review"),
-            Self::IntakeIndex => write!(f, "Intake Index"),
-            Self::DirConfigEdit => write!(f, "Dir Config Edit"),
-            Self::EditReversal => write!(f, "Edit Reversal"),
-            Self::ExternalMatch => write!(f, "External Match"),
-        }
-    }
-}
-
-/// Semantic key for a decision within a transaction.
-///
-/// Replaces the old `usize` index. The `source` identifies which workflow
-/// produced the decision, and `item` provides per-source uniqueness (signal
-/// key, inode, cluster id, etc.). Single-decision flows use `"0"` for item.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DecisionKey {
-    pub source: DecisionSource,
-    /// Item identifier within source (signal key, inode, cluster id, etc.)
-    /// Single-decision flows use "0".
-    pub item: String,
-}
-
-impl DecisionKey {
-    pub fn new(source: DecisionSource, item: impl Into<String>) -> Self {
-        Self { source, item: item.into() }
-    }
-
-    /// Convenience constructor for single-decision flows.
-    pub fn single(source: DecisionSource) -> Self {
-        Self { source, item: "0".into() }
-    }
-}
-
-impl std::fmt::Display for DecisionKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.item == "0" {
-            write!(f, "{}", self.source)
-        } else {
-            write!(f, "{}:{}", self.source, self.item)
-        }
-    }
 }
 
 // ============================================================================

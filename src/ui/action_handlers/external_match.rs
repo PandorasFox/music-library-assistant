@@ -5,7 +5,7 @@
 //! - The External Match Review modal (accept/dismiss/cancel)
 
 use crate::db::types::Zone;
-use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::meta::decisions::DecisionKey;
 use crate::meta::mutations::Mutation;
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::meta::mutations::TagOp;
@@ -161,7 +161,7 @@ impl App {
             ops,
             zone: Zone::Corpus,
         });
-        let key = DecisionKey::new(DecisionSource::ExternalMatch, inode.to_string());
+        let key = DecisionKey::ExternalMatch { inode };
         let label = "Accept external match tags";
 
         let _ = super::super::operator_decisions::stage_decision(

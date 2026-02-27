@@ -33,7 +33,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use crate::meta::views::{InsightsData, CorpusFilesBucket, TagSquashBucket, OtherSignalsBucket};
-use crate::meta::decisions::DecisionSource;
+use crate::meta::decisions::DecisionKeyKind;
 use crate::ui::widgets::ListClickTargets;
 use crate::witch::WorkStatus;
 
@@ -149,22 +149,22 @@ pub enum InsightType {
 }
 
 impl InsightType {
-    /// For single-decision sources, returns the `DecisionSource` that fully
+    /// For single-decision kinds, returns the `DecisionKeyKind` that fully
     /// handles all items of this insight type. Returns `None` for informational
     /// entries and per-item sources whose modals already back-fill state.
-    pub fn single_decision_source(&self) -> Option<DecisionSource> {
+    pub fn single_decision_kind(&self) -> Option<DecisionKeyKind> {
         match self {
-            InsightType::CorpusMtimeOnly => Some(DecisionSource::MtimeAck),
-            InsightType::CorpusOobTagSync => Some(DecisionSource::OobSync),
-            InsightType::CorpusOobTagConflict => Some(DecisionSource::OobConflict),
-            InsightType::CorpusFilesUnindexed => Some(DecisionSource::IntakeIndex),
-            InsightType::CorpusFilesMissing => Some(DecisionSource::MissingFile),
-            InsightType::CorpusDirectoriesMissing => Some(DecisionSource::MissingDirectory),
-            InsightType::CorpusFilesRelocated => Some(DecisionSource::MovedFile),
-            InsightType::CorpusCorruptFiles => Some(DecisionSource::CorruptFile),
-            InsightType::CorpusShitFormatFiles => Some(DecisionSource::ShitFormat),
-            InsightType::SubparDuplicates => Some(DecisionSource::SubparDuplicate),
-            InsightType::EmbeddableAlbumArt => Some(DecisionSource::EmbedAlbumArt),
+            InsightType::CorpusMtimeOnly => Some(DecisionKeyKind::MtimeAck),
+            InsightType::CorpusOobTagSync => Some(DecisionKeyKind::OobSync),
+            InsightType::CorpusOobTagConflict => Some(DecisionKeyKind::OobConflict),
+            InsightType::CorpusFilesUnindexed => Some(DecisionKeyKind::IntakeIndex),
+            InsightType::CorpusFilesMissing => Some(DecisionKeyKind::MissingFile),
+            InsightType::CorpusDirectoriesMissing => Some(DecisionKeyKind::MissingDirectory),
+            InsightType::CorpusFilesRelocated => Some(DecisionKeyKind::MovedFile),
+            InsightType::CorpusCorruptFiles => Some(DecisionKeyKind::CorruptFile),
+            InsightType::CorpusShitFormatFiles => Some(DecisionKeyKind::ShitFormat),
+            InsightType::SubparDuplicates => Some(DecisionKeyKind::SubparDuplicate),
+            InsightType::EmbeddableAlbumArt => Some(DecisionKeyKind::EmbedAlbumArt),
             // Informational entries
             InsightType::CorpusFilesInCorpus
             | InsightType::CorpusFilesIndexed => None,
@@ -610,15 +610,15 @@ impl CachedBucketEntries {
             .collect()
     }
 
-    /// Remove entries whose single-decision source is in the handled set.
-    fn filter_handled(&mut self, handled: &HashSet<DecisionSource>) {
+    /// Remove entries whose single-decision kind is in the handled set.
+    fn filter_handled(&mut self, handled: &HashSet<DecisionKeyKind>) {
         if handled.is_empty() {
             return;
         }
         let dominated = |e: &BucketEntry| {
             e.insight_type
-                .single_decision_source()
-                .map_or(false, |s| handled.contains(&s))
+                .single_decision_kind()
+                .map_or(false, |k| handled.contains(&k))
         };
         self.corpus.retain(|e| !dominated(e));
         self.placeholder.retain(|e| !dominated(e));
@@ -723,8 +723,8 @@ pub struct InsightsViewState {
     pub cached_entries: CachedBucketEntries,
     /// Click targets for mouse selection (populated during render)
     pub click_targets: InsightsClickTargets,
-    /// Last handled-sources set, for change detection
-    last_handled_sources: HashSet<DecisionSource>,
+    /// Last handled-kinds set, for change detection
+    last_handled_sources: HashSet<DecisionKeyKind>,
 }
 
 impl Default for InsightsViewState {
@@ -749,8 +749,8 @@ impl InsightsViewState {
 
     /// Update state every tick - checks Witch status and caches insights data.
     ///
-    /// `handled_sources` is the set of `DecisionSource`s with staged decisions
-    /// in the active transaction. Entries whose single-decision source is in
+    /// `handled_kinds` is the set of `DecisionKeyKind`s with staged decisions
+    /// in the active transaction. Entries whose single-decision kind is in
     /// this set are filtered out so the operator sees only unhandled insights.
     ///
     /// `cache_stale` is true when `MutationsCompleted` has fired but fresh
@@ -760,7 +760,7 @@ impl InsightsViewState {
         &mut self,
         witch_status: Option<&WorkStatus>,
         insights_data: Option<InsightsData>,
-        handled_sources: &HashSet<DecisionSource>,
+        handled_sources: &HashSet<DecisionKeyKind>,
         cache_stale: bool,
     ) {
         let busy = cache_stale
@@ -1083,7 +1083,7 @@ mod tests {
 
         // Now mark MtimeAck as handled — CorpusMtimeOnly should disappear
         let mut handled = HashSet::new();
-        handled.insert(DecisionSource::MtimeAck);
+        handled.insert(DecisionKeyKind::MtimeAck);
         state.update(None, None, &handled, false);
 
         // Should have one fewer entry
@@ -1099,9 +1099,9 @@ mod tests {
 
         // Handle several sources
         let mut handled = HashSet::new();
-        handled.insert(DecisionSource::MtimeAck);
-        handled.insert(DecisionSource::OobSync);
-        handled.insert(DecisionSource::MissingFile);
+        handled.insert(DecisionKeyKind::MtimeAck);
+        handled.insert(DecisionKeyKind::OobSync);
+        handled.insert(DecisionKeyKind::MissingFile);
 
         state.update(None, Some(data), &handled, false);
 
@@ -1123,15 +1123,15 @@ mod tests {
 
         // Handle multiple sources to shrink the list
         let mut handled = HashSet::new();
-        handled.insert(DecisionSource::MtimeAck);
-        handled.insert(DecisionSource::OobSync);
-        handled.insert(DecisionSource::OobConflict);
-        handled.insert(DecisionSource::MissingFile);
-        handled.insert(DecisionSource::MissingDirectory);
-        handled.insert(DecisionSource::MovedFile);
-        handled.insert(DecisionSource::CorruptFile);
-        handled.insert(DecisionSource::ShitFormat);
-        handled.insert(DecisionSource::IntakeIndex);
+        handled.insert(DecisionKeyKind::MtimeAck);
+        handled.insert(DecisionKeyKind::OobSync);
+        handled.insert(DecisionKeyKind::OobConflict);
+        handled.insert(DecisionKeyKind::MissingFile);
+        handled.insert(DecisionKeyKind::MissingDirectory);
+        handled.insert(DecisionKeyKind::MovedFile);
+        handled.insert(DecisionKeyKind::CorruptFile);
+        handled.insert(DecisionKeyKind::ShitFormat);
+        handled.insert(DecisionKeyKind::IntakeIndex);
 
         state.update(None, None, &handled, false);
 
@@ -1153,7 +1153,7 @@ mod tests {
 
         // Change handled set without new InsightsData — should still rebuild
         let mut handled = HashSet::new();
-        handled.insert(DecisionSource::MtimeAck);
+        handled.insert(DecisionKeyKind::MtimeAck);
         state.update(None, None, &handled, false);
         assert_eq!(state.cached_entries.corpus.len(), count_before - 1);
 

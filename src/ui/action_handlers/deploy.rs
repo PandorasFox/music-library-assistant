@@ -4,7 +4,7 @@
 //! (leftovers, stale, new, conflicts), and the preview action handler.
 
 use crate::corpus::paths;
-use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::meta::decisions::DecisionKey;
 use crate::meta::mutations::file_ops::{HardLinkMutation, LibraryMoveMutation, StashLeftoversMutation};
 use crate::ui::{deploy_modal, ActiveView};
 use super::witness;
@@ -152,7 +152,7 @@ impl App {
         }
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
-            DecisionKey::single(DecisionSource::Deploy),
+            DecisionKey::Deploy,
             "Deploy operations",
             mutations,
             gesture,

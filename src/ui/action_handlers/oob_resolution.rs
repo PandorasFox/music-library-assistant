@@ -3,7 +3,7 @@
 //! Handles OOB sync, OOB conflict inspection, and moved file acknowledgement modals.
 
 use crate::corpus::paths;
-use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::meta::decisions::DecisionKey;
 use crate::ui::{filter_popup, moved_file_modal, oob_sync_modal, oob_conflict_modal, ActiveView, FilterOverlay, FilterPopupContext};
 use super::witness;
 use super::super::App;
@@ -119,7 +119,7 @@ impl App {
             ),
         };
 
-        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::single(DecisionSource::OobSync), label, mutations, gesture);
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::OobSync, label, mutations, gesture);
     }
 
     // ========================================================================
@@ -274,7 +274,7 @@ impl App {
             ),
         };
 
-        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::single(DecisionSource::OobConflict), label, mutations, gesture);
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::OobConflict, label, mutations, gesture);
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
         self.after_staging_decisions();
@@ -324,7 +324,7 @@ impl App {
 
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
-            DecisionKey::single(DecisionSource::MtimeAck),
+            DecisionKey::MtimeAck,
             "Acknowledge mtime changes",
             mutations,
             gesture,
@@ -408,6 +408,6 @@ impl App {
         };
 
         // Stage the UpdateFilePath mutations
-        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::single(DecisionSource::MovedFile), &label, mutations, gesture);
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::MovedFile, &label, mutations, gesture);
     }
 }

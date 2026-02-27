@@ -5,7 +5,7 @@
 //! - Enter on "Corpus matches" bucket: launch inbox corpus match resolution
 //! - Enter on "Organize" bucket: launch inbox organize workflow
 
-use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::meta::decisions::DecisionKey;
 use crate::meta::signals::data::InboxTagCanonicitySignal;
 use crate::ui::active_view::ActiveView;
 use crate::ui::inbox_corpus_match_modal;
@@ -115,7 +115,7 @@ impl App {
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Stash inbox corpus matches", DecisionKey::single(DecisionSource::InboxCorpusMatch), w);
+                    self.stage_mutations_with_transaction(mutations, "Stash inbox corpus matches", DecisionKey::InboxCorpusMatch, w);
                     self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to stash".to_string());
@@ -130,7 +130,7 @@ impl App {
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Stash all inbox duplicates", DecisionKey::single(DecisionSource::InboxCorpusMatch), w);
+                    self.stage_mutations_with_transaction(mutations, "Stash all inbox duplicates", DecisionKey::InboxCorpusMatch, w);
                     self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to stash".to_string());
@@ -165,7 +165,7 @@ impl App {
             inbox_organize::InboxOrganizeAction::Complete(mutations) => {
                 let Some(w) = witness else { return };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Organize inbox into corpus", DecisionKey::single(DecisionSource::InboxOrganize), w);
+                    self.stage_mutations_with_transaction(mutations, "Organize inbox into corpus", DecisionKey::InboxOrganize, w);
                     self.after_staging_decisions();
                 } else {
                     self.cancel_and_return_to_source("No mutations generated");

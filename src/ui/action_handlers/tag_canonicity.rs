@@ -4,7 +4,7 @@
 //! clusters, staging canonicalization decisions.
 
 use crate::db::types::Zone;
-use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::meta::decisions::DecisionKey;
 use crate::ui::{
     helpers, insights_view, tag_canonicity_v2, tag_editor, ActiveView,
     CanonicitySignalKind, TagCanonicityClusters,
@@ -129,7 +129,7 @@ impl App {
         let (inodes, decision_key, decision_label, file_cursor_inode, zone) =
             if let ActiveView::TagCanonicityResolution { ref state, ref clusters } = self.view {
                 let inodes: Vec<i64> = state.data.inodes.clone();
-                let decision_key = DecisionKey::new(DecisionSource::TagCanonicity, clusters.current_index.to_string());
+                let decision_key = DecisionKey::TagCanonicity { tag_name: state.data.tag_name.clone(), cluster_index: clusters.current_index };
                 let label = format!("Tag edit: {} canonicity", state.data.tag_name);
                 let cursor_inode = state.data.files.get(state.file_cursor)
                     .map(|f| f.inode);
@@ -254,7 +254,7 @@ impl App {
         let label = format!("Canonicalize {}", tag_name);
 
         // Add decision to existing transaction via sealed operator decision handler
-        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()), &label, mutations, gesture);
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::TagCanonicity { tag_name, cluster_index: cluster_idx }, &label, mutations, gesture);
     }
 
     /// Stage a "flag as non-compilation" decision for the current cluster.
@@ -262,7 +262,7 @@ impl App {
     /// Adds COMPILATION=0 to all tracks in the current group, which will
     /// suppress this group in future inconsistent album artist detection runs.
     fn stage_flag_non_compilation(&mut self, gesture: &witness::ConfirmationGesture) {
-        let (mutations, cluster_idx) = match &self.view {
+        let (mutations, cluster_idx, tag_name) = match &self.view {
             ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
                 use crate::meta::mutations::{Mutation, TagOp};
                 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
@@ -276,14 +276,14 @@ impl App {
                 }
 
                 let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: state.zone })];
-                (mutations, clusters.current_index)
+                (mutations, clusters.current_index, state.data.tag_name.clone())
             }
             _ => return,
         };
 
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
-            DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()),
+            DecisionKey::TagCanonicity { tag_name, cluster_index: cluster_idx },
             "Flag non-compilation",
             mutations,
             gesture,
@@ -295,7 +295,7 @@ impl App {
     /// Emits an EmitCanonicalTag mutation for each variant in the current group,
     /// which will suppress this collision in future DetectTagCanonicalizations runs.
     fn stage_flag_canonical(&mut self, gesture: &witness::ConfirmationGesture) {
-        let (mutations, cluster_idx) = match &self.view {
+        let (mutations, cluster_idx, tag_name) = match &self.view {
             ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
                 use crate::meta::mutations::Mutation;
                 use crate::meta::mutations::indexing::EmitCanonicalTagMutation;
@@ -311,14 +311,14 @@ impl App {
                     return;
                 }
 
-                (mutations, clusters.current_index)
+                (mutations, clusters.current_index, state.data.tag_name.clone())
             }
             _ => return,
         };
 
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
-            DecisionKey::new(DecisionSource::TagCanonicity, cluster_idx.to_string()),
+            DecisionKey::TagCanonicity { tag_name, cluster_index: cluster_idx },
             "Flag canonical",
             mutations,
             gesture,
@@ -409,15 +409,16 @@ impl App {
                 let pre_fill = clusters.pre_fill();
                 let is_album_artist = kind == CanonicitySignalKind::InconsistentAlbumArtist;
                 let zone = Self::zone_for_kind(kind);
+                let tag_name_for_key = data.tag_name.clone();
                 let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(
                     data, pre_fill, current_index, total, is_album_artist, zone,
                 );
 
                 // Back-fill UI state from staged decision if one exists for this cluster
-                if let Some(decision) = self.witch.get_decision(&DecisionKey::new(
-                    DecisionSource::TagCanonicity,
-                    current_index.to_string(),
-                )) {
+                if let Some(decision) = self.witch.get_decision(&DecisionKey::TagCanonicity {
+                    tag_name: tag_name_for_key,
+                    cluster_index: current_index,
+                }) {
                     state.restore_from_mutations(&decision.mutations);
                     state.pending_tag_edits =
                         Some(helpers::pending_edits_from_mutations(&decision.mutations));

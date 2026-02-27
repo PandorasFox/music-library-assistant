@@ -4,7 +4,7 @@
 //! tag editor launch, group navigation, and transaction management.
 
 use crate::db::types::Zone;
-use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::meta::decisions::DecisionKey;
 use crate::ui::{manual_review_modal, tag_editor, ActiveView};
 use crate::ui::manual_review_modal::types;
 use super::witness;
@@ -106,7 +106,7 @@ impl App {
         let label = format!("Stash {}", corpus_path);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
-            DecisionKey::new(DecisionSource::ManualReview, group_idx.to_string()),
+            DecisionKey::ManualReview { group_index: group_idx },
             &label,
             mutations,
             gesture,
@@ -137,7 +137,7 @@ impl App {
         let label = format!("Mark expected duplicate: {}", group_label);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
-            DecisionKey::new(DecisionSource::ManualReview, group_idx.to_string()),
+            DecisionKey::ManualReview { group_index: group_idx },
             &label,
             vec![mutation],
             gesture,
@@ -193,7 +193,7 @@ impl App {
                 .map(|g| g.label.clone())
                 .unwrap_or_else(|| "Manual review".to_string());
 
-            (inodes, DecisionKey::new(DecisionSource::ManualReview, state.current_group.to_string()), label)
+            (inodes, DecisionKey::ManualReview { group_index: state.current_group }, label)
         };
 
         // Load audio files from database

@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 use crossterm::event;
 
-use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::meta::decisions::DecisionKey;
 use crate::ui::{
     compound_split_v2,
     progress_screen::{ProgressPhase, ProgressScreen},
@@ -346,7 +346,13 @@ impl App {
             data.compound.split_parts.join(", ")
         );
 
-        let _ = super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::new(DecisionSource::CompoundSplit, idx.to_string()), &description, mutations, &worker.gesture);
+        let tag_name = data.compound.tag_name.clone();
+        let key = if is_safe_mode {
+            DecisionKey::CompoundSplitSafe { tag_name, cluster_index: idx }
+        } else {
+            DecisionKey::CompoundSplitReview { tag_name, cluster_index: idx }
+        };
+        let _ = super::operator_decisions::stage_decision(&mut self.witch, key, &description, mutations, &worker.gesture);
         worker.mutations_generated += 1;
     }
 

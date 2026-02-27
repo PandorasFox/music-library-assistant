@@ -4,7 +4,7 @@
 //! split candidates, staging split/canonicalize decisions, and bulk operations.
 
 use crate::db::types::Zone;
-use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::meta::decisions::DecisionKey;
 use crate::ui::{compound_split_v2, helpers, progressive_worker, tag_editor, ActiveView};
 use crate::ui::suspended_views::SuspendTarget;
 use super::witness;
@@ -125,9 +125,11 @@ impl App {
     fn launch_tag_editor_from_compound_split(&mut self, mode: tag_editor::TagEditorMode) {
         // Extract data from current view
         let (inodes, decision_key, decision_label, file_cursor_inode, zone) =
-            if let ActiveView::CompoundTagSplit { ref state, ref clusters, zone, .. } = self.view {
+            if let ActiveView::CompoundTagSplit { ref state, ref clusters, safe_mode, zone, .. } = self.view {
                 let inodes: Vec<i64> = state.data.files.iter().map(|f| f.inode).collect();
-                let decision_key = DecisionKey::new(DecisionSource::CompoundSplit, clusters.current_index().to_string());
+                let tag_name = state.data.compound.tag_name.clone();
+                let cluster_index = clusters.current_index();
+                let decision_key = compound_split_key(zone, safe_mode, tag_name, cluster_index);
                 let label = format!(
                     "Tag edit: {} \"{}\"",
                     state.data.compound.tag_name,
@@ -275,8 +277,8 @@ impl App {
 
     /// Stage the current compound split decision (v2).
     fn stage_compound_split_decision(&mut self, gesture: &witness::ConfirmationGesture) {
-        let (mutations, cluster_idx, description) = match &self.view {
-            ActiveView::CompoundTagSplit { ref state, ref clusters, .. } => {
+        let (mutations, key, description) = match &self.view {
+            ActiveView::CompoundTagSplit { ref state, ref clusters, safe_mode, zone, .. } => {
                 let mutations = state.mutations();
                 if mutations.is_empty() {
                     return;
@@ -287,32 +289,34 @@ impl App {
                     state.data.compound.tag_name,
                     state.edited_parts.join(", ")
                 );
-                (mutations, clusters.current_index(), desc)
+                let tag_name = state.data.compound.tag_name.clone();
+                let key = compound_split_key(*zone, *safe_mode, tag_name, clusters.current_index());
+                (mutations, key, desc)
             }
             _ => return,
         };
 
-        // Stage the decision via operator_decisions
-        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations, gesture);
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, key, &description, mutations, gesture);
     }
 
     /// Stage a canonicalize decision (mark compound value as canonical, don't split).
     fn stage_compound_canonicalize_decision(&mut self, gesture: &witness::ConfirmationGesture) {
-        let (mutations, cluster_idx, description) = match &self.view {
-            ActiveView::CompoundTagSplit { ref state, ref clusters, .. } => {
+        let (mutations, key, description) = match &self.view {
+            ActiveView::CompoundTagSplit { ref state, ref clusters, safe_mode, zone, .. } => {
                 let mutation = state.data.create_canonical_signal();
                 let desc = format!(
                     "Keep \"{}\" in {} as canonical",
                     state.data.compound.compound_value,
                     state.data.compound.tag_name,
                 );
-                (vec![mutation], clusters.current_index(), desc)
+                let tag_name = state.data.compound.tag_name.clone();
+                let key = compound_split_key(*zone, *safe_mode, tag_name, clusters.current_index());
+                (vec![mutation], key, desc)
             }
             _ => return,
         };
 
-        // Stage the decision via operator_decisions
-        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::new(DecisionSource::CompoundSplit, cluster_idx.to_string()), &description, mutations, gesture);
+        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, key, &description, mutations, gesture);
     }
 
     /// Start progressive worker to stage ALL compound splits.
@@ -378,7 +382,8 @@ impl App {
         );
 
         // Back-fill UI state from staged decision if one exists for this cluster
-        if let Some(decision) = self.witch.get_decision(&DecisionKey::new(DecisionSource::CompoundSplit, group_index.to_string())) {
+        let backfill_key = compound_split_key(zone, safe_mode, state.data.compound.tag_name.clone(), group_index);
+        if let Some(decision) = self.witch.get_decision(&backfill_key) {
             state.restore_from_mutations(&decision.mutations);
             state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
         }
@@ -426,12 +431,24 @@ impl App {
         );
 
         // Back-fill UI state from staged decision if one exists for this cluster
-        if let Some(decision) = self.witch.get_decision(&DecisionKey::new(DecisionSource::CompoundSplit, group_index.to_string())) {
+        let backfill_key = compound_split_key(zone, safe_mode, state.data.compound.tag_name.clone(), group_index);
+        if let Some(decision) = self.witch.get_decision(&backfill_key) {
             state.restore_from_mutations(&decision.mutations);
             state.pending_tag_edits = Some(helpers::pending_edits_from_mutations(&decision.mutations));
         }
 
         self.view = ActiveView::CompoundTagSplit { state, clusters, safe_mode, zone };
         true
+    }
+}
+
+/// Build the appropriate compound split DecisionKey from zone, safe_mode, tag_name, and cluster index.
+fn compound_split_key(zone: Zone, safe_mode: bool, tag_name: String, cluster_index: usize) -> DecisionKey {
+    if zone == Zone::Inbox {
+        DecisionKey::CompoundSplitInbox { tag_name, cluster_index }
+    } else if safe_mode {
+        DecisionKey::CompoundSplitSafe { tag_name, cluster_index }
+    } else {
+        DecisionKey::CompoundSplitReview { tag_name, cluster_index }
     }
 }

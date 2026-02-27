@@ -22,7 +22,7 @@ mod history;
 mod tag_canonicity;
 pub(crate) mod witness;
 
-use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::meta::decisions::DecisionKey;
 use crate::ui::{filter_popup, insights_view, oob_sync_modal, oob_conflict_modal, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
 use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext, ViewAction};
 use crate::ui::suspended_views::SuspendTarget;
@@ -257,7 +257,7 @@ impl App {
                         let _ = self.witch.start_transaction("Config update");
                     }
                     let _ = super::operator_decisions::stage_decision(
-                        &mut self.witch, DecisionKey::single(DecisionSource::ConfigEdit), "Apply config changes", vec![mutation], g,
+                        &mut self.witch, DecisionKey::ConfigEdit, "Apply config changes", vec![mutation], g,
                     );
 
                     self.after_staging_decisions();
@@ -523,7 +523,7 @@ impl App {
                         if !ops.is_empty() {
                             let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
                             let _ = super::operator_decisions::stage_decision(
-                                &mut self.witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag as singles", vec![mutation], g,
+                                &mut self.witch, DecisionKey::MissingAlbum { group_index: group_idx }, "Tag as singles", vec![mutation], g,
                             );
                         }
                     }
@@ -539,7 +539,7 @@ impl App {
                         if !ops.is_empty() {
                             let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
                             let _ = super::operator_decisions::stage_decision(
-                                &mut self.witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Tag all as Singles", vec![mutation], g,
+                                &mut self.witch, DecisionKey::MissingAlbum { group_index: group_idx }, "Tag all as Singles", vec![mutation], g,
                             );
                         }
                     }
@@ -552,7 +552,7 @@ impl App {
                         if !inodes.is_empty() {
                             let mutation = Mutation::EmitExpectedMissingTag(EmitExpectedMissingTagMutation { inodes });
                             let _ = super::operator_decisions::stage_decision(
-                                &mut self.witch, DecisionKey::new(DecisionSource::MissingAlbum, group_idx.to_string()), "Suppress missing album", vec![mutation], g,
+                                &mut self.witch, DecisionKey::MissingAlbum { group_index: group_idx }, "Suppress missing album", vec![mutation], g,
                             );
                         }
                     }
@@ -600,7 +600,7 @@ impl App {
                         None => return,
                     };
                     // Use a distinct key to avoid colliding with resolution decisions
-                    let key = DecisionKey::new(DecisionSource::TagEdit, format!("missing_album_{}", state.current_group));
+                    let key = DecisionKey::TagEdit { key_item: format!("missing_album_{}", state.current_group) };
                     let label = format!("Manual tag edits: {}", group.artist);
                     (state.current_group_inodes(), key, label)
                 };
@@ -630,7 +630,7 @@ impl App {
                         Some(g) => g,
                         None => return,
                     };
-                    let key = DecisionKey::new(DecisionSource::TagEdit, format!("missing_album_{}", state.current_group));
+                    let key = DecisionKey::TagEdit { key_item: format!("missing_album_{}", state.current_group) };
                     let label = format!("Manual tag edits: {}", group.artist);
                     (state.current_group_inodes(), key, label)
                 };
@@ -730,7 +730,7 @@ impl App {
                     }
                     let _ = operator_decisions::stage_decision(
                         &mut self.witch,
-                        DecisionKey::single(DecisionSource::IntakeIndex),
+                        DecisionKey::IntakeIndex,
                         "Index unindexed files",
                         mutations,
                         g,
@@ -931,10 +931,9 @@ impl App {
             },
         );
 
-        let key = DecisionKey::new(
-            DecisionSource::DirConfigEdit,
-            source_path.display().to_string(),
-        );
+        let key = DecisionKey::DirConfigEdit {
+            source_path: source_path.clone(),
+        };
         let label = format!("Dir config: {}", source_path.display());
 
         let open_txn = self.open_txn_mode();
@@ -966,8 +965,8 @@ impl App {
     fn sync_browser_pending_edits(&mut self) {
         let mut pending = std::collections::HashSet::new();
         for key in self.witch.decision_keys() {
-            if key.source == DecisionSource::DirConfigEdit {
-                pending.insert(std::path::PathBuf::from(&key.item));
+            if let DecisionKey::DirConfigEdit { source_path } = key {
+                pending.insert(source_path);
             }
         }
         if let super::active_view::ActiveView::CorpusBrowser(ref mut browser) = self.view {

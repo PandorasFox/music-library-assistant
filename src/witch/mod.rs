@@ -185,9 +185,9 @@ pub struct Witch {
     /// Channel for sending typed notices to the UI layer.
     notice_tx: std::sync::mpsc::Sender<WitchNotice>,
 
-    /// Decision sources with staged decisions in the active transaction.
+    /// Decision key kinds with staged decisions in the active transaction.
     /// Used by the insights view to hide entries already handled.
-    handled_sources: std::collections::HashSet<crate::meta::decisions::DecisionSource>,
+    handled_sources: std::collections::HashSet<crate::meta::decisions::DecisionKeyKind>,
 
     /// Corpus inodes observed on disk during the current observation cycle.
     /// Accumulated from ScanCorpusDirectory results in tick().
@@ -1600,10 +1600,10 @@ impl Witch {
         Some(stats)
     }
 
-    /// Get the decision sources that have been handled in the active transaction.
+    /// Get the decision key kinds that have been handled in the active transaction.
     ///
     /// Used by the insights view to hide entries already staged.
-    pub fn handled_decision_sources(&self) -> &std::collections::HashSet<crate::meta::decisions::DecisionSource> {
+    pub fn handled_decision_kinds(&self) -> &std::collections::HashSet<crate::meta::decisions::DecisionKeyKind> {
         &self.handled_sources
     }
 
@@ -1613,7 +1613,7 @@ impl Witch {
     pub(crate) fn sync_handled_sources(&mut self) {
         self.handled_sources = self.pending_transaction
             .as_ref()
-            .map(|txn| txn.decisions.keys().map(|k| k.source).collect())
+            .map(|txn| txn.decisions.keys().filter_map(|k| k.kind()).collect())
             .unwrap_or_default();
     }
 }

@@ -4,7 +4,7 @@
 //! subpar duplicate, and directory overlap resolution modals.
 //! These flows share a common pattern: load data, show preview, stage mutations.
 
-use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::meta::decisions::DecisionKey;
 use crate::ui::{corrupt_file_modal, embed_album_art_modal, missing_directory_modal, missing_file_modal, shit_format_modal, subpar_duplicate_modal, ActiveView};
 use super::witness;
 use super::super::App;
@@ -38,7 +38,7 @@ impl App {
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Restore missing files", DecisionKey::single(DecisionSource::MissingFile), w);
+                    self.stage_mutations_with_transaction(mutations, "Restore missing files", DecisionKey::MissingFile, w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.after_staging_decisions();
                 } else {
@@ -53,7 +53,7 @@ impl App {
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Drop missing files", DecisionKey::single(DecisionSource::MissingFile), w);
+                    self.stage_mutations_with_transaction(mutations, "Drop missing files", DecisionKey::MissingFile, w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.after_staging_decisions();
                 } else {
@@ -94,7 +94,7 @@ impl App {
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Drop missing directories", DecisionKey::single(DecisionSource::MissingDirectory), w);
+                    self.stage_mutations_with_transaction(mutations, "Drop missing directories", DecisionKey::MissingDirectory, w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.after_staging_decisions();
                 } else {
@@ -135,7 +135,7 @@ impl App {
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Stash corrupt files", DecisionKey::single(DecisionSource::CorruptFile), w);
+                    self.stage_mutations_with_transaction(mutations, "Stash corrupt files", DecisionKey::CorruptFile, w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.after_staging_decisions();
                 } else {
@@ -179,7 +179,7 @@ impl App {
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Remux to FLAC", DecisionKey::single(DecisionSource::ShitFormat), w);
+                    self.stage_mutations_with_transaction(mutations, "Remux to FLAC", DecisionKey::ShitFormat, w);
                     self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No lossless files to remux".to_string());
@@ -195,7 +195,7 @@ impl App {
                 };
                 if !mutations.is_empty() {
                     let label = if lossy_to_flac { "Capture lossy to FLAC" } else { "Transcode to Opus" };
-                    self.stage_mutations_with_transaction(mutations, label, DecisionKey::single(DecisionSource::ShitFormat), w);
+                    self.stage_mutations_with_transaction(mutations, label, DecisionKey::ShitFormat, w);
                     self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No lossy files to transcode".to_string());
@@ -211,7 +211,7 @@ impl App {
                 };
                 if !mutations.is_empty() {
                     let label = if lossy_to_flac { "Remux and capture all to FLAC" } else { "Convert all formats" };
-                    self.stage_mutations_with_transaction(mutations, label, DecisionKey::single(DecisionSource::ShitFormat), w);
+                    self.stage_mutations_with_transaction(mutations, label, DecisionKey::ShitFormat, w);
                     self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to convert".to_string());
@@ -251,7 +251,7 @@ impl App {
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Stash subpar duplicates", DecisionKey::single(DecisionSource::SubparDuplicate), w);
+                    self.stage_mutations_with_transaction(mutations, "Stash subpar duplicates", DecisionKey::SubparDuplicate, w);
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.after_staging_decisions();
                 } else {
@@ -429,7 +429,7 @@ impl App {
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Embed album art", DecisionKey::single(DecisionSource::EmbedAlbumArt), w);
+                    self.stage_mutations_with_transaction(mutations, "Embed album art", DecisionKey::EmbedAlbumArt, w);
                     self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No artless files to embed into".to_string());
@@ -449,7 +449,7 @@ impl App {
         }
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
-            DecisionKey::new(DecisionSource::DirectoryCluster, cluster_index.to_string()),
+            DecisionKey::DirectoryCluster { cluster_index },
             label,
             mutations,
             gesture,

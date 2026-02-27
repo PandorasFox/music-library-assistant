@@ -4,7 +4,7 @@
 //! Dispatches key events to appropriate handlers based on focus state.
 
 use super::state::UnifiedTagEditorState;
-use crate::meta::decisions::{DecisionKey, DecisionSource};
+use crate::meta::decisions::DecisionKey;
 use crate::ui::input::InputAction;
 use super::types::{
     FieldEditState, NavigationDirection, StageChangesButton, TagEditorButton,
@@ -156,7 +156,7 @@ impl UnifiedTagEditorState {
                                 let key_item = self.decision_key_item(&mutations);
                                 self.modal = None;
                                 UnifiedTagEditorAction::StageDecisionAndNavigate {
-                                    key: DecisionKey::new(DecisionSource::TagEdit, key_item),
+                                    key: DecisionKey::TagEdit { key_item },
                                     mutations,
                                     direction,
                                 }
@@ -391,7 +391,7 @@ impl UnifiedTagEditorState {
                                 let mutations = self.generate_mutations_for_current_item();
                                 let key_item = self.decision_key_item(&mutations);
                                 UnifiedTagEditorAction::StageDecisionAndReview {
-                                    key: DecisionKey::new(DecisionSource::TagEdit, key_item),
+                                    key: DecisionKey::TagEdit { key_item },
                                     mutations,
                                 }
                             } else if has_anything {

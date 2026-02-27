@@ -815,7 +815,7 @@ fn run_app<B: ratatui::backend::Backend>(
         // Update views with cached data
         if let ActiveView::Insights(ref mut view) = app.view {
             let insights_data = app.cached_insights.clone();
-            let handled = app.witch.handled_decision_sources();
+            let handled = app.witch.handled_decision_kinds();
             view.update(Some(&app.cached_status), insights_data, handled, app.cache_stale);
         }
         if let ActiveView::Inbox(ref mut view) = app.view {

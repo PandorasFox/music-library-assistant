@@ -175,6 +175,11 @@ impl CompoundSplitStateV2 {
                 self.cancel_edit();
                 CompoundSplitActionV2::None
             }
+            // Ctrl+F: flag canonical even while editing
+            InputAction::OpenFilter => {
+                self.confirming_canonicalize = true;
+                CompoundSplitActionV2::None
+            }
             _ => {
                 self.part_input.handle_input(action);
                 CompoundSplitActionV2::None

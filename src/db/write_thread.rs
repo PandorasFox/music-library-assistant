@@ -1028,7 +1028,7 @@ impl SignalWriteSender {
         &self,
         inodes: Vec<i64>,
         computation_type: &str,
-        _witness: &ComputationWitness,
+        _witness: &impl SignalWitness,
     ) {
         if inodes.is_empty() { return; }
         self.mark_enqueued();
@@ -1657,31 +1657,6 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
 // Index Operation Helpers (internal to db_thread)
 // ============================================================================
 
-/// Computation types that use per-inode spawning and need dirty tracking.
-/// Other computations use bulk SQL queries and don't need this optimization.
-const PER_INODE_COMPUTATIONS: &[&str] = &["compound_tag", "shit_format"];
-
-/// Mark an inode as dirty for all per-inode computations.
-/// Called whenever tags change for a corpus file.
-fn mark_inode_dirty(conn: &rusqlite::Connection, inode: i64) -> anyhow::Result<()> {
-    use rusqlite::params;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    for computation_type in PER_INODE_COMPUTATIONS {
-        conn.execute(
-            "INSERT OR REPLACE INTO dirty_inodes (inode, computation_type, dirtied_at) VALUES (?1, ?2, ?3)",
-            params![inode, *computation_type, now],
-        )?;
-    }
-
-    Ok(())
-}
-
 /// Increment the tags_version counter for an inode.
 /// Called whenever tags are modified (not on initial indexing).
 fn increment_tags_version(conn: &rusqlite::Connection, inode: i64) -> anyhow::Result<()> {
@@ -1916,15 +1891,10 @@ fn execute_index_audio_file(
     // Apply tags using the unified helper
     let result = apply_tagset_to_inode(&tx, file_data.inode, tags, tag_table)?;
 
-    // Write history for discovered/changed tags and mark dirty for recomputation
+    // Write history for discovered/changed tags
     if result.has_changes() {
         let changes = result.to_history_entries();
         write_tag_edit_history(&tx, file_data.inode, &changes, session_id)?;
-
-        // Mark inode dirty for tag-dependent computations (only for corpus files)
-        if file_data.zone == "corpus" {
-            mark_inode_dirty(&tx, file_data.inode)?;
-        }
     }
 
     tx.commit()?;
@@ -1997,9 +1967,6 @@ fn execute_set_index_track_tags(db: &Database, path: &str, tags: &TagSet, tag_ta
         // Write tag edit history using the caller-provided session identifier
         let changes = result.to_history_entries();
         write_tag_edit_history(&tx, inode, &changes, session_id)?;
-
-        // Mark inode dirty for tag-dependent computations
-        mark_inode_dirty(&tx, inode)?;
     }
 
     tx.commit()?;
@@ -2082,9 +2049,6 @@ fn execute_apply_index_tag_ops(
 
     // Increment tags_version using the helper
     increment_tags_version(&tx, inode)?;
-
-    // Mark inode dirty for tag-dependent computations
-    mark_inode_dirty(&tx, inode)?;
 
     tx.commit()?;
     Ok(())

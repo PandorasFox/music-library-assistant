@@ -13,11 +13,12 @@
 //!
 //! ## Post-Execution Pipeline
 //!
-//! After a mutation executes successfully, `apply_post_execution()` runs a 5-phase
+//! After a mutation executes successfully, `apply_post_execution()` runs a 6-phase
 //! pipeline. Each mutation struct implements `MutationExecutor` (in `meta/mutations/traits.rs`)
 //! which defines its post-execution behavior:
 //!
 //! 1. **Signal clearing** - Clear corpus signals by inode (scope from `signal_clear_scope()`)
+//! 1c. **Dirty inode marking** - Mark affected inodes dirty for per-inode computations (when scope includes TAGS)
 //! 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via pending_signals
 //! 3. **Signal update spawning** - Spawn UpdateFileSignals (from `paths_for_signal_updates()`)
 //! 4. **Additional computations** - Spawn extra computations (from `additional_computations()`)
@@ -292,7 +293,7 @@ pub(super) fn execute_maintenance(task: DbMaintenanceTask, label: String, queue_
 
 /// Apply post-execution hooks for a mutation.
 ///
-/// This is a structured 5-phase pipeline that replaces the ad-hoc conditionals
+/// This is a structured pipeline that replaces the ad-hoc conditionals
 /// that previously handled signal clearing, emission, and computation spawning.
 ///
 /// Each phase uses exhaustive match methods on `Mutation` to ensure compile-time
@@ -301,6 +302,7 @@ pub(super) fn execute_maintenance(task: DbMaintenanceTask, label: String, queue_
 /// ## Phases
 ///
 /// 1. **Inode signal clearing** - Clear corpus signals by inode based on `signal_clear_scope()`
+/// 1c. **Dirty inode marking** - Mark affected inodes dirty for per-inode computations (TAGS scope)
 /// 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via pending_signals
 /// 3. **Signal update spawning** - Spawn UpdateFileSignals for `paths_for_signal_updates()`
 /// 4. **Additional computations** - Spawn extra computations from `additional_computations()`
@@ -349,6 +351,30 @@ fn apply_post_execution(
                             }
                             SignalClearScope::None => unreachable!(),
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 1c: Mark affected inodes dirty for per-inode computations
+    // Uses the same inode collection as Phase 1 signal clearing. Only runs when
+    // the mutation's recomputation scope includes TAGS — dirty inodes exist for
+    // tag-dependent computations only.
+    {
+        let executor = mutation.as_executor();
+        let scope = executor.recomputation_scope();
+        if scope.contains(RecomputationScope::TAGS) {
+            let pre_known = executor.affected_inodes();
+            let all_inodes: Vec<i64> = pre_known
+                .into_iter()
+                .chain(discovered_inodes.iter().copied())
+                .collect();
+
+            if !all_inodes.is_empty() {
+                if let Some(sender) = write_thread::signal_sender() {
+                    for computation_type in crate::meta::computations::PER_INODE_COMPUTATIONS {
+                        sender.mark_dirty_inodes(all_inodes.clone(), computation_type, witness);
                     }
                 }
             }

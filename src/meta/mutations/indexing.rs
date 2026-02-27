@@ -215,7 +215,7 @@ impl MutationExecutor for UpdateFilePathMutation {
 
     fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
     fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
-    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::TAGS }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
         vec![DiffEntry::new(

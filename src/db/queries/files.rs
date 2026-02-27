@@ -879,21 +879,9 @@ impl Database {
             }
         }
 
-        // Mark inode dirty for all per-inode computations (shit_format, compound_tag, etc.)
-        // Zone changes mean the file is now corpus — needs format/tag recomputation.
-        {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            for computation_type in &["compound_tag", "shit_format"] {
-                self.conn.execute(
-                    "INSERT OR REPLACE INTO dirty_inodes (inode, computation_type, dirtied_at) VALUES (?1, ?2, ?3)",
-                    params![inode, *computation_type, now],
-                )?;
-            }
-        }
+        // Dirty inode marking for zone changes is handled by the post-execution
+        // pipeline in apply_post_execution() — UpdateFilePath now includes TAGS
+        // in its recomputation scope, triggering dirty marking for all affected inodes.
 
         Ok(())
     }

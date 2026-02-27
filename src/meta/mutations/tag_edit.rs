@@ -61,6 +61,18 @@ impl MutationExecutor for ApplyTagOpsMutation {
             Ok(()) => (true, None),
             Err(e) => (false, Some(format!("{:#}", e))),
         };
+
+        // Collect unique inodes from ops for post-execution dirty marking and signal clearing.
+        // Only corpus inodes need dirty marking; inbox tag edits don't trigger corpus computations.
+        let discovered_inodes = if self.zone == Zone::Corpus {
+            let mut inodes: Vec<i64> = self.ops.iter().map(|op| op.inode).collect();
+            inodes.sort_unstable();
+            inodes.dedup();
+            inodes
+        } else {
+            Vec::new()
+        };
+
         MutationResult {
             _mutation: Mutation::ApplyTagOps(self.clone()),
             success,
@@ -68,11 +80,16 @@ impl MutationExecutor for ApplyTagOpsMutation {
             _duration_ms: start.elapsed().as_millis() as u64,
             spawn_mutations,
             pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
+            discovered_inodes,
         }
     }
 
-    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
+    fn signal_clear_scope(&self) -> SignalClearScope {
+        match self.zone {
+            Zone::Corpus => SignalClearScope::MutableOnly,
+            _ => SignalClearScope::None,
+        }
+    }
     fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
 
     fn recomputation_scope(&self) -> RecomputationScope {

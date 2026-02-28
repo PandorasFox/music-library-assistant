@@ -203,7 +203,7 @@ pub fn execute_detect_release_overlaps(
             .to_string();
 
         let album_dir = deploy_album_directory(&deploy_path);
-        if album_dir.is_empty() {
+        if album_dir.is_empty() || album_dir.starts_with("[no album artist]") {
             continue;
         }
 

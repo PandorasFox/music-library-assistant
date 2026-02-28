@@ -30,6 +30,7 @@ pub mod config_editor;
 pub mod compound_split_v2;
 pub mod corrupt_file_modal;
 pub mod deploy_modal;
+pub mod disc_extraction_modal;
 pub mod directory_cluster_modal;
 pub mod embed_album_art_modal;
 pub mod external_match_modal;
@@ -349,6 +350,7 @@ impl App {
             ActiveView::TagCanonicityResolution { state, .. } => ViewAction::TagCanonicityResolution(state.handle_input(&action)),
             ActiveView::CompoundTagSplit { state, .. } => ViewAction::CompoundTagSplit(state.handle_input(&action)),
             ActiveView::MissingAlbumSingleResolution(s) => ViewAction::MissingAlbumSingleResolution(s.handle_input(&action)),
+            ActiveView::DiscExtractionResolution(s) => ViewAction::DiscExtractionResolution(s.handle_input(&action)),
             ActiveView::ManualReview(s) => ViewAction::ManualReview(s.handle_input(&action)),
             ActiveView::TransactionReview(review) => ViewAction::TransactionReview(review.handle_input(&action)),
         };

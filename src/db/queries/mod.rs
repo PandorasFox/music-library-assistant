@@ -328,6 +328,14 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_missing_album_single_signals()
     }
 
+    pub fn get_disc_extraction_signals(&self) -> Result<Vec<crate::meta::signals::data::DiscExtractionSignal>> {
+        self.db.get_disc_extraction_signals()
+    }
+
+    pub fn get_tracknumber_values_with_context(&self) -> Result<Vec<(i64, String, String, String)>> {
+        self.db.get_tracknumber_values_with_context()
+    }
+
     pub fn get_inbox_tag_canonicity_signal(&self, key: &str) -> Result<Option<crate::meta::signals::data::InboxTagCanonicitySignal>> {
         self.db.get_inbox_tag_canonicity_signal(key)
     }

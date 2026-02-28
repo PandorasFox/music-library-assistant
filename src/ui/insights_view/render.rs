@@ -720,23 +720,27 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
-        InsightType::EmbeddedDiscNumber => {
+        InsightType::DiscExtraction => {
             lines.push(Line::from(Span::styled(
-                "Embedded Disc Numbers",
+                "Disc Extractions",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Albums with disc number in the ALBUM",
+                "Disc values embedded in ALBUM or",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "tag (e.g., \"Album, Disc 2\").",
+                "TRACKNUMBER tags (e.g., \"Album, Disc 2\"",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "or track number \"A01\").",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Extract to DISCNUMBER + clean ALBUM.",
+                "Extract to DISCNUMBER + clean source tag.",
                 Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
             )));
         }

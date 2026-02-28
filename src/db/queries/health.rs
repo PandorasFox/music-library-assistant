@@ -55,7 +55,7 @@ impl Database {
         total += LibraryLeftoverSignal::count(&self.conn).unwrap_or(0);
         total += LibraryStaleSignal::count(&self.conn).unwrap_or(0);
         total += EmbeddableAlbumArtSignal::count(&self.conn).unwrap_or(0);
-        total += EmbeddedDiscNumberSignal::count(&self.conn).unwrap_or(0);
+        total += DiscExtractionSignal::count(&self.conn).unwrap_or(0);
         total += PathTagMismatchSignal::count(&self.conn).unwrap_or(0);
         total += ExternalMatchSignal::count(&self.conn).unwrap_or(0);
         total
@@ -118,6 +118,11 @@ impl Database {
     pub fn get_missing_album_single_signals(&self) -> Result<Vec<crate::meta::signals::data::MissingAlbumSingleSignal>> {
         crate::meta::signals::data::MissingAlbumSingleSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query missing album single signals: {}", e))
+    }
+
+    pub fn get_disc_extraction_signals(&self) -> Result<Vec<crate::meta::signals::data::DiscExtractionSignal>> {
+        crate::meta::signals::data::DiscExtractionSignal::query_all(&self.conn)
+            .map_err(|e| anyhow::anyhow!("Failed to query disc extraction signals: {}", e))
     }
 
     pub fn get_inbox_tag_canonicity_signal(&self, key: &str) -> Result<Option<crate::meta::signals::data::InboxTagCanonicitySignal>> {
@@ -590,7 +595,7 @@ impl Database {
 
         let missing_album_single_count = self.count_signal_type("missing_album_single")?;
 
-        let embedded_disc_number_count = self.count_signal_type("embedded_disc_number")?;
+        let disc_extraction_count = self.count_signal_type("disc_extraction")?;
 
         let path_tag_mismatch_count = self.count_signal_type("path_tag_mismatch")?;
 
@@ -604,7 +609,7 @@ impl Database {
             compound_tags,
             embeddable_album_art,
             missing_album_single_count,
-            embedded_disc_number_count,
+            disc_extraction_count,
             path_tag_mismatch_count,
         })
     }
@@ -846,7 +851,7 @@ impl Database {
             "inbox_tag_canonicity" => InboxTagCanonicitySignal::count(&self.conn)?,
             "inbox_missing_tag" => InboxMissingTagSignal::count(&self.conn)?,
             "inbox_compound_tag" => InboxCompoundTagSignal::count(&self.conn)?,
-            "embedded_disc_number" => EmbeddedDiscNumberSignal::count(&self.conn)?,
+            "disc_extraction" => DiscExtractionSignal::count(&self.conn)?,
             "path_tag_mismatch" => PathTagMismatchSignal::count(&self.conn)?,
             "external_match" => ExternalMatchSignal::count(&self.conn)?,
             _ => 0,

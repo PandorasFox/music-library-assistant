@@ -502,15 +502,20 @@ impl MigrationRegistry {
             },
         });
 
-        // v15→v16: Create signal_embedded_disc_number table
+        // v15→v16: Create signal_embedded_disc_number table (superseded by v23→v24)
         registry.register(Migration {
             from_version: 15,
             to_version: 16,
             description: "Create signal_embedded_disc_number table for embedded disc number detection",
             apply: |db| {
-                use crate::meta::signals::store::AggregateSignalStore;
-                use crate::meta::signals::data::EmbeddedDiscNumberSignal;
-                db.conn().execute_batch(EmbeddedDiscNumberSignal::TABLE_SQL)?;
+                db.conn().execute_batch(
+                    "CREATE TABLE IF NOT EXISTS signal_embedded_disc_number (
+                        key TEXT PRIMARY KEY,
+                        data BLOB NOT NULL,
+                        data_hash INTEGER NOT NULL DEFAULT 0,
+                        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )"
+                )?;
                 Ok(())
             },
         });
@@ -654,6 +659,20 @@ impl MigrationRegistry {
             description: "Create signal_release_overlap table",
             apply: |db| {
                 crate::meta::signals::store::create_all_signal_tables(db.conn())?;
+                Ok(())
+            },
+        });
+
+        // v23→v24: Replace signal_embedded_disc_number with signal_disc_extraction
+        registry.register(Migration {
+            from_version: 23,
+            to_version: 24,
+            description: "Replace signal_embedded_disc_number with signal_disc_extraction (unified disc extraction)",
+            apply: |db| {
+                db.conn().execute_batch("DROP TABLE IF EXISTS signal_embedded_disc_number")?;
+                use crate::meta::signals::store::AggregateSignalStore;
+                use crate::meta::signals::data::DiscExtractionSignal;
+                db.conn().execute_batch(DiscExtractionSignal::TABLE_SQL)?;
                 Ok(())
             },
         });

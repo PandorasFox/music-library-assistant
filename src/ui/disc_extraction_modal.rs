@@ -1,0 +1,513 @@
+//! Disc Extraction Resolution Modal
+//!
+//! Shows groups where a disc value can be extracted from ALBUM or TRACKNUMBER
+//! tags. For ALBUM: "Album, Disc 2" → ALBUM="Album" + DISCNUMBER="2".
+//! For TRACKNUMBER: "A01" → TRACKNUMBER="01" + DISCNUMBER="A".
+//!
+//! ## Controls
+//!
+//! - Shift+Up/Down: Cycle focus between file list and resolution buttons
+//! - Up/Down: Navigate file list (List focus)
+//! - Left/Right: Cycle resolution option (Buttons focus)
+//! - Enter: Confirm selected resolution (Buttons focus)
+//! - Tab/Shift-Tab: Navigate between groups
+//! - t: Edit selected track in tag editor
+//! - T (Shift+T): Bulk-edit all tracks in group in tag editor
+//! - Ctrl+R: Show transaction review
+//! - Escape: Cancel
+
+use crate::meta::signals::data::{DiscExtractionSignal, DiscExtractionSource};
+use crate::ui::helpers::render_pane;
+use crate::ui::input::InputAction;
+use crate::ui::widgets::{
+    control_colors as cc, render_file_path_list, ConfirmationButton, FocusPane, PathEntry,
+    ResolutionLayout,
+};
+use ratatui::{
+    layout::{Alignment, Rect},
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    Frame,
+};
+
+// ============================================================================
+// Resolution Option
+// ============================================================================
+
+/// Resolution option for a disc extraction group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscResolution {
+    /// Extract disc value and clean source tag.
+    Apply,
+    /// Leave tags as-is (skip this group).
+    Skip,
+}
+
+impl DiscResolution {
+    fn next(self) -> Self {
+        match self {
+            Self::Apply => Self::Skip,
+            Self::Skip => Self::Apply,
+        }
+    }
+
+    fn prev(self) -> Self {
+        self.next()
+    }
+}
+
+// ============================================================================
+// Action Enum
+// ============================================================================
+
+/// Actions returned from the disc extraction modal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiscExtractionAction {
+    /// No action needed.
+    None,
+    /// Cancel and return to Insights view.
+    Cancel,
+    /// Confirm the selected resolution for the current group.
+    Confirm(DiscResolution),
+    /// Navigate to next/prev group.
+    NavigateGroup(bool),
+    /// Show transaction review.
+    ShowReview,
+    /// Open tag editor for all tracks in group (individual mode).
+    EditTracks,
+    /// Open tag editor for all tracks in group (aggregated mode).
+    EditTracksAggregated,
+}
+
+// ============================================================================
+// Data Types
+// ============================================================================
+
+/// A single group for disc extraction resolution.
+#[derive(Debug, Clone)]
+pub struct DiscExtractionGroup {
+    /// Description of what's being extracted (for info bar).
+    pub description: String,
+    /// Disc value to write.
+    pub disc_value: String,
+    /// Per-file entries.
+    pub files: Vec<DiscFileEntry>,
+}
+
+/// Per-file entry within a group.
+#[derive(Debug, Clone)]
+pub struct DiscFileEntry {
+    pub inode: i64,
+    pub path: String,
+    /// What the source tag currently says (e.g., "Some Album, Disc 2" or "A01").
+    pub original_value: String,
+    /// What the source tag will become after extraction (e.g., "Some Album" or "01").
+    pub cleaned_value: String,
+    /// Source tag name ("ALBUM" or "TRACKNUMBER").
+    pub source_tag: String,
+}
+
+/// Loaded data for the modal.
+#[derive(Debug, Clone)]
+pub struct DiscExtractionData {
+    pub groups: Vec<DiscExtractionGroup>,
+}
+
+impl DiscExtractionData {
+    /// Build from loaded signals + file paths.
+    pub fn from_signals(
+        signals: Vec<DiscExtractionSignal>,
+        path_lookup: impl Fn(i64) -> String,
+        map_letters_to_numbers: bool,
+    ) -> Self {
+        let groups = signals
+            .into_iter()
+            .map(|s| {
+                match &s.data.source {
+                    DiscExtractionSource::Album {
+                        original_album,
+                        cleaned_album,
+                        disc_number,
+                    } => {
+                        let files: Vec<DiscFileEntry> = s
+                            .data
+                            .inodes
+                            .iter()
+                            .map(|&inode| DiscFileEntry {
+                                inode,
+                                path: path_lookup(inode),
+                                original_value: original_album.clone(),
+                                cleaned_value: cleaned_album.clone(),
+                                source_tag: "ALBUM".to_string(),
+                            })
+                            .collect();
+                        DiscExtractionGroup {
+                            description: format!("Album \"{}\" → Disc {}", original_album, disc_number),
+                            disc_value: disc_number.clone(),
+                            files,
+                        }
+                    }
+                    DiscExtractionSource::TrackNumber {
+                        disc_prefix,
+                        album,
+                        album_artist,
+                        per_file,
+                    } => {
+                        let disc_value = if map_letters_to_numbers {
+                            letter_to_number(&disc_prefix)
+                        } else {
+                            disc_prefix.clone()
+                        };
+                        let files: Vec<DiscFileEntry> = per_file
+                            .iter()
+                            .map(|tf| DiscFileEntry {
+                                inode: tf.inode,
+                                path: path_lookup(tf.inode),
+                                original_value: tf.original_value.clone(),
+                                cleaned_value: tf.cleaned_digits.clone(),
+                                source_tag: "TRACKNUMBER".to_string(),
+                            })
+                            .collect();
+                        let context = if album_artist.is_empty() {
+                            album.clone()
+                        } else {
+                            format!("{} — {}", album_artist, album)
+                        };
+                        DiscExtractionGroup {
+                            description: format!(
+                                "TrackNumber prefix \"{}\" in {}",
+                                disc_prefix, context
+                            ),
+                            disc_value,
+                            files,
+                        }
+                    }
+                }
+            })
+            .collect();
+        Self { groups }
+    }
+}
+
+/// Convert letter prefix to number: A→1, B→2, etc.
+fn letter_to_number(prefix: &str) -> String {
+    if prefix.len() == 1 {
+        let ch = prefix.chars().next().unwrap().to_ascii_uppercase();
+        if ch.is_ascii_uppercase() {
+            return ((ch as u32 - 'A' as u32) + 1).to_string();
+        }
+    }
+    // Multi-letter or non-alpha: return as-is
+    prefix.to_string()
+}
+
+// ============================================================================
+// State
+// ============================================================================
+
+/// State for the disc extraction resolution modal.
+#[derive(Debug)]
+pub struct DiscExtractionState {
+    /// Loaded data (immutable — groups are never removed).
+    pub data: DiscExtractionData,
+    /// Current group index.
+    pub current_group: usize,
+    /// File cursor within current group.
+    pub file_cursor: usize,
+    /// File scroll offset within current group.
+    pub file_scroll: usize,
+    /// Current focus pane (List or Buttons).
+    pub focus_pane: FocusPane,
+    /// Currently selected resolution option.
+    pub selected_resolution: DiscResolution,
+    /// Disc tag name from config (e.g., "DISCNUMBER").
+    pub disc_tag_name: String,
+}
+
+impl DiscExtractionState {
+    pub fn new(data: DiscExtractionData, disc_tag_name: String) -> Self {
+        Self {
+            data,
+            current_group: 0,
+            file_cursor: 0,
+            file_scroll: 0,
+            focus_pane: FocusPane::List,
+            selected_resolution: DiscResolution::Apply,
+            disc_tag_name,
+        }
+    }
+
+    /// Get the current group, if any.
+    pub fn current_group_data(&self) -> Option<&DiscExtractionGroup> {
+        self.data.groups.get(self.current_group)
+    }
+
+    /// Path of the currently selected file (for status bar).
+    pub fn selected_path(&self) -> Option<&str> {
+        self.current_group_data()
+            .and_then(|g| g.files.get(self.file_cursor))
+            .map(|f| f.path.as_str())
+    }
+
+    /// All inodes in the current group (for tag editor).
+    pub fn current_group_inodes(&self) -> Vec<i64> {
+        self.current_group_data()
+            .map(|g| g.files.iter().map(|f| f.inode).collect())
+            .unwrap_or_default()
+    }
+
+    /// Handle input action.
+    pub fn handle_input(&mut self, action: &InputAction) -> DiscExtractionAction {
+        // FocusUp/FocusDown: cycle focus pane
+        match action {
+            InputAction::FocusUp => {
+                self.focus_pane = self.focus_pane.prev();
+                return DiscExtractionAction::None;
+            }
+            InputAction::FocusDown => {
+                self.focus_pane = self.focus_pane.next();
+                return DiscExtractionAction::None;
+            }
+            _ => {}
+        }
+
+        // Ctrl+R: show transaction review
+        if matches!(action, InputAction::Shortcut('r')) {
+            return DiscExtractionAction::ShowReview;
+        }
+
+        match action {
+            InputAction::Cancel => DiscExtractionAction::Cancel,
+
+            // Group navigation
+            InputAction::CycleNext => DiscExtractionAction::NavigateGroup(true),
+            InputAction::CyclePrev => DiscExtractionAction::NavigateGroup(false),
+
+            // File list navigation (List focus)
+            InputAction::NavUp if self.focus_pane == FocusPane::List => {
+                if self.file_cursor > 0 {
+                    self.file_cursor -= 1;
+                }
+                DiscExtractionAction::None
+            }
+            InputAction::NavDown if self.focus_pane == FocusPane::List => {
+                if let Some(group) = self.current_group_data() {
+                    if self.file_cursor + 1 < group.files.len() {
+                        self.file_cursor += 1;
+                    }
+                }
+                DiscExtractionAction::None
+            }
+
+            // Resolution button cycling (Buttons focus)
+            InputAction::NavLeft if self.focus_pane == FocusPane::Buttons => {
+                self.selected_resolution = self.selected_resolution.prev();
+                DiscExtractionAction::None
+            }
+            InputAction::NavRight if self.focus_pane == FocusPane::Buttons => {
+                self.selected_resolution = self.selected_resolution.next();
+                DiscExtractionAction::None
+            }
+
+            // Confirm resolution (Buttons focus)
+            InputAction::Confirm if self.focus_pane == FocusPane::Buttons => {
+                if self.current_group_data().is_some() {
+                    DiscExtractionAction::Confirm(self.selected_resolution)
+                } else {
+                    DiscExtractionAction::None
+                }
+            }
+
+            // Tag editor shortcuts (available regardless of focus)
+            InputAction::Char('t') => DiscExtractionAction::EditTracks,
+            InputAction::Char('T') => DiscExtractionAction::EditTracksAggregated,
+
+            _ => DiscExtractionAction::None,
+        }
+    }
+
+    /// Render the modal.
+    pub fn render(&self, f: &mut Frame, area: Rect) {
+        let padded = ResolutionLayout::padded(area);
+        f.render_widget(Clear, padded);
+
+        let layout = ResolutionLayout::new(padded, 3, 3, 50);
+
+        let group = self.current_group_data();
+        let total_groups = self.data.groups.len();
+
+        // Info bar: description, group counter
+        let header_text = if let Some(g) = group {
+            format!(
+                " {} ({} files) [group {}/{}] ",
+                g.description,
+                g.files.len(),
+                self.current_group + 1,
+                total_groups,
+            )
+        } else {
+            " No disc extraction groups ".to_string()
+        };
+
+        let header_block = Block::default()
+            .borders(Borders::ALL)
+            .title(header_text)
+            .border_style(Style::default().fg(Color::Yellow));
+        render_pane(f, layout.info_bar, header_block);
+
+        // Content panes
+        if let Some(g) = group {
+            self.render_file_list(f, layout.list_pane, g);
+            self.render_preview(f, layout.details_pane, g);
+        } else {
+            let empty = Paragraph::new("All groups resolved.")
+                .block(Block::default().borders(Borders::ALL));
+            f.render_widget(empty, layout.list_pane);
+        }
+
+        // Buttons + hint bar
+        self.render_buttons(f, layout.buttons);
+    }
+
+    fn render_file_list(&self, f: &mut Frame, area: Rect, group: &DiscExtractionGroup) {
+        let is_focused = self.focus_pane == FocusPane::List;
+        let border_color = if is_focused {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Files ")
+            .border_style(Style::default().fg(border_color));
+        let inner = render_pane(f, area, block);
+
+        let entries: Vec<PathEntry> = group
+            .files
+            .iter()
+            .map(|file| PathEntry {
+                path: &file.path,
+                prefix: vec![Span::styled(
+                    format!("{}: {} — ", file.source_tag, file.original_value),
+                    Style::default().fg(Color::White),
+                )],
+                suffix: vec![],
+            })
+            .collect();
+
+        render_file_path_list(f, inner, &entries, self.file_cursor, self.file_scroll);
+    }
+
+    fn render_preview(&self, f: &mut Frame, area: Rect, group: &DiscExtractionGroup) {
+        let title = match self.selected_resolution {
+            DiscResolution::Apply => " Preview: Apply ",
+            DiscResolution::Skip => " Preview: Skip ",
+        };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let inner = render_pane(f, area, block);
+
+        let lines: Vec<ListItem> = match self.selected_resolution {
+            DiscResolution::Apply => group
+                .files
+                .iter()
+                .flat_map(|file| {
+                    vec![
+                        ListItem::new(Line::from(Span::styled(
+                            format!(
+                                " {} = \"{}\" → \"{}\"",
+                                file.source_tag, file.original_value, file.cleaned_value
+                            ),
+                            Style::default().fg(Color::Cyan),
+                        ))),
+                        ListItem::new(Line::from(Span::styled(
+                            format!(
+                                " + {} = \"{}\"",
+                                self.disc_tag_name, group.disc_value
+                            ),
+                            Style::default().fg(Color::Green),
+                        ))),
+                    ]
+                })
+                .collect(),
+            DiscResolution::Skip => {
+                vec![ListItem::new(Line::from(Span::styled(
+                    " No changes (skip this group)",
+                    Style::default().fg(Color::DarkGray),
+                )))]
+            }
+        };
+
+        let list = List::new(lines);
+        f.render_widget(list, inner);
+    }
+
+    fn render_buttons(&self, f: &mut Frame, area: Rect) {
+        let is_focused = self.focus_pane == FocusPane::Buttons;
+        let border_color = if is_focused {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
+
+        let block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(border_color));
+        let inner = render_pane(f, area, block);
+
+        if inner.height == 0 {
+            return;
+        }
+
+        // Resolution buttons (top line of inner area)
+        let button_area = Rect {
+            height: 1,
+            ..inner
+        };
+
+        let buttons = [
+            ConfirmationButton::new("Apply", Color::Cyan)
+                .selected(is_focused && self.selected_resolution == DiscResolution::Apply),
+            ConfirmationButton::new("Skip", Color::Yellow)
+                .selected(is_focused && self.selected_resolution == DiscResolution::Skip),
+        ];
+
+        crate::ui::widgets::render_button_row(f, button_area, &buttons);
+
+        // Hint line (bottom line of inner area)
+        if inner.height >= 2 {
+            let hint_area = Rect {
+                y: inner.y + inner.height - 1,
+                height: 1,
+                ..inner
+            };
+
+            let hints = Line::from(vec![
+                cc::nav("Shift+↑↓"),
+                cc::text(" focus  "),
+                cc::nav("←→"),
+                cc::text(" option  "),
+                cc::confirm("[Enter]"),
+                cc::text(" confirm  "),
+                cc::nav("[Tab]"),
+                cc::text(" group  "),
+                cc::edit("[t]"),
+                cc::text(" edit  "),
+                cc::edit("[T]"),
+                cc::text(" aggregate  "),
+                cc::review("[^R]"),
+                cc::text(" review  "),
+                cc::cancel("[Esc]"),
+                cc::text(" cancel"),
+            ]);
+
+            let hint_para = Paragraph::new(hints).alignment(Alignment::Center);
+            f.render_widget(hint_para, hint_area);
+        }
+    }
+}

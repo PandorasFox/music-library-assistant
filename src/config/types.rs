@@ -39,6 +39,8 @@ pub struct Opinions {
     pub leave_transactions_open: bool,
     /// External matching (AcoustID, etc.) configuration.
     pub external_matching: ExternalMatchingConfig,
+    /// Disc extraction configuration (tag name, letter mapping).
+    pub disc_extraction: DiscExtractionOpinions,
 }
 
 
@@ -304,6 +306,26 @@ pub struct ExternalMatchingConfig {
     pub requests_per_second: u32,
 }
 
+/// Opinions for disc extraction from ALBUM and TRACKNUMBER tags.
+///
+/// Controls how extracted disc identifiers are written (tag name, letter mapping).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscExtractionOpinions {
+    /// Tag name to write extracted disc identifier into. Default: "DISCNUMBER"
+    pub disc_tag_name: String,
+    /// Map letter prefixes to numbers (A→1, B→2, ...). Default: false
+    pub map_letters_to_numbers: bool,
+}
+
+impl Default for DiscExtractionOpinions {
+    fn default() -> Self {
+        Self {
+            disc_tag_name: "DISCNUMBER".to_string(),
+            map_letters_to_numbers: false,
+        }
+    }
+}
+
 impl Default for ExternalMatchingConfig {
     fn default() -> Self {
         Self {
@@ -329,6 +351,7 @@ impl Default for Opinions {
             idle_rescan_interval_secs: 180,
             leave_transactions_open: false,
             external_matching: ExternalMatchingConfig::default(),
+            disc_extraction: DiscExtractionOpinions::default(),
         }
     }
 }

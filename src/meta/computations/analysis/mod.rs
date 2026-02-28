@@ -202,12 +202,12 @@ pub enum Computation {
     /// matching_parts against corpus vocabulary.
     DetectInboxCompoundTags,
 
-    /// Detect album tags with embedded disc numbers.
+    /// Detect disc values extractable from ALBUM or TRACKNUMBER tags.
     ///
-    /// Scans ALBUM tags from corpus and inbox for patterns like
-    /// "Album Name, Disc 2", extracting disc number and cleaned album.
-    /// Emits EmbeddedDiscNumber aggregate signals.
-    DetectEmbeddedDiscNumbers,
+    /// Pass 1: Scans ALBUM tags for patterns like "Album Name, Disc 2".
+    /// Pass 2: Scans TRACKNUMBER tags for letter prefixes like "A01".
+    /// Emits DiscExtraction aggregate signals.
+    DetectDiscExtractions,
 
     /// Detect path-tag mismatches against configured schemas.
     ///
@@ -257,7 +257,7 @@ impl Computation {
             Computation::DetectInboxTagCanonicity => "Detecting inbox tag canonicity",
             Computation::DetectInboxMissingTags => "Detecting inbox missing tags",
             Computation::DetectInboxCompoundTags => "Detecting inbox compound tags",
-            Computation::DetectEmbeddedDiscNumbers => "Detecting embedded disc numbers",
+            Computation::DetectDiscExtractions => "Detecting disc extractions",
             Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
             Computation::DeriveExternalMatches => "Deriving external match signals",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
@@ -330,8 +330,8 @@ impl Computation {
             Computation::DetectInboxCompoundTags => {
                 execute_detect_inbox_compound_tags(ctx.read_db, ctx.witness, ctx.start)
             }
-            Computation::DetectEmbeddedDiscNumbers => {
-                execute_detect_embedded_disc_numbers(ctx.read_db, ctx.witness, ctx.start)
+            Computation::DetectDiscExtractions => {
+                execute_detect_disc_extractions(ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::DetectPathTagMismatches => {
                 execute_detect_path_tag_mismatches(ctx.read_db, ctx.witness, ctx.start)

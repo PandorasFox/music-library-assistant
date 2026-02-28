@@ -43,7 +43,7 @@ pub fn execute_schedule_content_analysis(
             Computation::DetectTagCanonicalizations,
             Computation::DetectInconsistentAlbumArtist,
             Computation::DetectCompoundTagValues,
-            Computation::DetectEmbeddedDiscNumbers,
+            Computation::DetectDiscExtractions,
         ]);
     }
 

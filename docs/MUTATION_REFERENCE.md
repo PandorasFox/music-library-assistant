@@ -195,6 +195,15 @@ This pattern is used in:
 
 Mutation generators (`TagCanonicalityState::mutations_with_paths()`, `CompoundSplitState::mutations_with_paths()`) also deduplicate tags via `TagSet` before creating mutations, preventing duplicate `(tag_name, tag_value)` pairs from reaching the DB layer.
 
+#### Disc Extraction TagOps
+
+DiscExtraction resolution generates TagOps per inode depending on the extraction source:
+
+- **Album source**: `TagOp::replace_tag(inode, "ALBUM", original, cleaned)` + `TagOp::add_tag(inode, disc_tag_name, disc_number)` — replaces the album tag with the cleaned version (disc suffix stripped) and adds a DISCNUMBER tag.
+- **TrackNumber source**: `TagOp::replace_tag(inode, "TRACKNUMBER", original, cleaned_digits)` + `TagOp::add_tag(inode, disc_tag_name, disc_value)` — replaces the track number with the numeric portion only and adds a disc tag for the prefix.
+
+The `disc_tag_name` is configurable via `DiscExtractionOpinions` (defaults to `"DISCNUMBER"`).
+
 ### Spawn Chaining
 
 Mutations can spawn follow-up mutations that execute automatically:

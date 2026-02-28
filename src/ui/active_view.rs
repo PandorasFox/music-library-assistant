@@ -12,6 +12,7 @@ use crate::ui::{
     config_editor,
     corrupt_file_modal,
     deploy_modal,
+    disc_extraction_modal,
     directory_cluster_modal,
     embed_album_art_modal,
     external_match_modal,
@@ -114,6 +115,9 @@ pub(crate) enum ActiveView {
     // Missing album singles resolution
     MissingAlbumSingleResolution(missing_album_modal::MissingAlbumState),
 
+    // Disc extraction resolution (ALBUM or TRACKNUMBER → DISCNUMBER)
+    DiscExtractionResolution(disc_extraction_modal::DiscExtractionState),
+
     // Manual review (iterate through groups, stash/edit files)
     ManualReview(manual_review_modal::ManualReviewState),
 
@@ -158,6 +162,7 @@ impl ActiveView {
             Self::TagCanonicityLoading { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
             Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),
+            Self::DiscExtractionResolution(_) => Some("Disc Extraction"),
             Self::ManualReview(s) => Some(s.header_suffix()),
             Self::TransactionReview(_) => Some("Transaction Review"),
         }
@@ -190,6 +195,7 @@ impl ActiveView {
             Self::Deploy(s) => s.selected_path(),
             Self::UnifiedTagEditor(s) => s.selected_path(),
             Self::MissingAlbumSingleResolution(s) => s.selected_path(),
+            Self::DiscExtractionResolution(s) => s.selected_path(),
             Self::ManualReview(s) => s.selected_path(),
             Self::Inbox(s) => s.selected_entry().map(|e| e.label.as_str()),
             _ => None,
@@ -271,6 +277,7 @@ pub(crate) enum ViewAction {
     TagCanonicityResolution(tag_canonicity_v2::TagCanonicalityActionV2),
     CompoundTagSplit(compound_split_v2::CompoundSplitActionV2),
     MissingAlbumSingleResolution(missing_album_modal::MissingAlbumAction),
+    DiscExtractionResolution(disc_extraction_modal::DiscExtractionAction),
     ManualReview(manual_review_modal::ManualReviewAction),
     TransactionReview(transaction_review::TransactionReviewAction),
 }

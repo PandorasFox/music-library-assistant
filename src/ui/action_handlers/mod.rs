@@ -76,6 +76,7 @@ impl App {
             ViewAction::TagCanonicityResolution(a) => self.handle_tag_canonicity_action(a, witness.as_ref()),
             ViewAction::CompoundTagSplit(a) => self.handle_compound_split_action(a, witness.as_ref()),
             ViewAction::MissingAlbumSingleResolution(a) => self.handle_missing_album_single_action(a, witness.as_ref()),
+            ViewAction::DiscExtractionResolution(a) => self.handle_disc_extraction_action(a, witness.as_ref()),
             ViewAction::ManualReview(a) => self.handle_manual_review_action(a, witness.as_ref()),
             ViewAction::ExternalMatchReview(a) => self.handle_external_match_review_action(a, witness.as_ref()),
             ViewAction::History(a) => self.handle_history_action(a, witness.as_ref()),
@@ -404,8 +405,8 @@ impl App {
                     Some(insights_view::InsightAction::LaunchMissingAlbumSingleResolution) => {
                         self.start_missing_album_single_resolution();
                     }
-                    Some(insights_view::InsightAction::LaunchEmbeddedDiscNumberResolution) => {
-                        self.status_message = Some("Not yet implemented".to_string());
+                    Some(insights_view::InsightAction::LaunchDiscExtractionResolution) => {
+                        self.start_disc_extraction_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchPathTagMismatchResolution) => {
                         self.status_message = Some("Not yet implemented".to_string());
@@ -635,6 +636,200 @@ impl App {
                     };
                     let key = DecisionKey::TagEdit { key_item: format!("missing_album_{}", state.current_group) };
                     let label = format!("Manual tag edits: {}", group.artist);
+                    (state.current_group_inodes(), key, label)
+                };
+                if inodes.is_empty() {
+                    return;
+                }
+                let audio_files = self.cache.query(move |db| {
+                    db.get_audio_files_by_inodes(
+                        &inodes,
+                        crate::db::types::Zone::Corpus,
+                    ).unwrap_or_default()
+                }).recv();
+                if !audio_files.is_empty() {
+                    self.open_embedded_tag_editor(
+                        tag_editor::TagEditorMode::Aggregated,
+                        audio_files,
+                        decision_key,
+                        label,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Start disc extraction resolution from Insights view.
+    ///
+    /// Loads DiscExtraction signals, resolves file paths, builds modal data,
+    /// starts a transaction, and switches to the DiscExtractionResolution view.
+    fn start_disc_extraction_resolution(&mut self) {
+        use crate::ui::disc_extraction_modal;
+
+        let config = self.config().opinions.disc_extraction.clone();
+
+        let (signals, path_map) = self.cache.query(|db| {
+            let sigs = db.get_disc_extraction_signals().unwrap_or_default();
+            // Collect all inodes for path lookup
+            let all_inodes: Vec<i64> = sigs.iter()
+                .flat_map(|s| s.data.inodes.iter().copied())
+                .collect();
+            let paths = db.get_file_paths_batch(crate::db::types::Zone::Corpus, &all_inodes)
+                .unwrap_or_default();
+            (sigs, paths)
+        }).recv();
+
+        if signals.is_empty() {
+            self.status_message = Some("No disc extraction signals found".to_string());
+            return;
+        }
+
+        let data = disc_extraction_modal::DiscExtractionData::from_signals(
+            signals,
+            |inode| path_map.get(&inode).cloned().unwrap_or_else(|| format!("<inode {}>", inode)),
+            config.map_letters_to_numbers,
+        );
+
+        // Start transaction for the resolution session
+        let _ = self.witch.start_transaction("Disc extraction");
+
+        let state = disc_extraction_modal::DiscExtractionState::new(data, config.disc_tag_name);
+        self.view = ActiveView::DiscExtractionResolution(state);
+    }
+
+    /// Handle disc extraction resolution actions.
+    fn handle_disc_extraction_action(
+        &mut self,
+        action: crate::ui::disc_extraction_modal::DiscExtractionAction,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
+        use crate::db::types::Zone;
+        use crate::meta::mutations::{Mutation, TagOp, tag_edit::ApplyTagOpsMutation};
+        use crate::ui::disc_extraction_modal::{DiscExtractionAction, DiscResolution};
+
+        match action {
+            DiscExtractionAction::None => {}
+
+            DiscExtractionAction::Cancel => {
+                self.cancel_and_return_to_source("Disc extraction resolution cancelled");
+            }
+
+            DiscExtractionAction::Confirm(resolution) => {
+                let Some(g) = witness else { return };
+
+                let group_idx = {
+                    let ActiveView::DiscExtractionResolution(ref state) = self.view else { return };
+                    state.current_group
+                };
+
+                match resolution {
+                    DiscResolution::Apply => {
+                        let ops: Vec<TagOp> = {
+                            let ActiveView::DiscExtractionResolution(ref state) = self.view else { return };
+                            let Some(group) = state.current_group_data() else { return };
+                            let mut ops = Vec::new();
+                            for file in &group.files {
+                                // Replace source tag value
+                                ops.push(TagOp::replace_tag(
+                                    file.inode,
+                                    &file.source_tag,
+                                    &file.original_value,
+                                    &file.cleaned_value,
+                                ));
+                                // Add disc number tag
+                                ops.push(TagOp::add_tag(
+                                    file.inode,
+                                    &state.disc_tag_name,
+                                    &group.disc_value,
+                                ));
+                            }
+                            ops
+                        };
+                        if !ops.is_empty() {
+                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
+                            let _ = super::operator_decisions::stage_decision(
+                                &mut self.witch, DecisionKey::DiscExtraction { group_index: group_idx },
+                                "Extract disc value", vec![mutation], g,
+                            );
+                        }
+                    }
+                    DiscResolution::Skip => {
+                        // No mutations for skip — just advance
+                    }
+                }
+
+                // Advance to next group, or show review if at end
+                if let ActiveView::DiscExtractionResolution(ref mut state) = self.view {
+                    state.file_cursor = 0;
+                    state.file_scroll = 0;
+                    if state.current_group + 1 < state.data.groups.len() {
+                        state.current_group += 1;
+                    } else {
+                        self.after_staging_decisions();
+                        return;
+                    }
+                }
+            }
+
+            DiscExtractionAction::NavigateGroup(forward) => {
+                if let ActiveView::DiscExtractionResolution(ref mut state) = self.view {
+                    if forward {
+                        if state.current_group + 1 < state.data.groups.len() {
+                            state.current_group += 1;
+                            state.file_cursor = 0;
+                            state.file_scroll = 0;
+                        }
+                    } else if state.current_group > 0 {
+                        state.current_group -= 1;
+                        state.file_cursor = 0;
+                        state.file_scroll = 0;
+                    }
+                }
+            }
+
+            DiscExtractionAction::ShowReview => {
+                self.after_staging_decisions();
+            }
+
+            DiscExtractionAction::EditTracks => {
+                let (inodes, decision_key, label) = {
+                    let ActiveView::DiscExtractionResolution(ref state) = self.view else { return };
+                    let group = match state.current_group_data() {
+                        Some(g) => g,
+                        None => return,
+                    };
+                    let key = DecisionKey::TagEdit { key_item: format!("disc_extraction_{}", state.current_group) };
+                    let label = format!("Manual tag edits: {}", group.description);
+                    (state.current_group_inodes(), key, label)
+                };
+                if inodes.is_empty() {
+                    return;
+                }
+                let audio_files = self.cache.query(move |db| {
+                    db.get_audio_files_by_inodes(
+                        &inodes,
+                        crate::db::types::Zone::Corpus,
+                    ).unwrap_or_default()
+                }).recv();
+                if !audio_files.is_empty() {
+                    self.open_embedded_tag_editor(
+                        tag_editor::TagEditorMode::Individual,
+                        audio_files,
+                        decision_key,
+                        label,
+                    );
+                }
+            }
+
+            DiscExtractionAction::EditTracksAggregated => {
+                let (inodes, decision_key, label) = {
+                    let ActiveView::DiscExtractionResolution(ref state) = self.view else { return };
+                    let group = match state.current_group_data() {
+                        Some(g) => g,
+                        None => return,
+                    };
+                    let key = DecisionKey::TagEdit { key_item: format!("disc_extraction_{}", state.current_group) };
+                    let label = format!("Manual tag edits: {}", group.description);
                     (state.current_group_inodes(), key, label)
                 };
                 if inodes.is_empty() {

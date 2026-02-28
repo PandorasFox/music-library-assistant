@@ -716,26 +716,48 @@ pub struct InboxTagCanonicityData {
     pub corpus_variants: Vec<(String, usize)>,
 }
 
-/// Album has disc number embedded in the ALBUM tag (e.g., "Album Name, Disc 2").
-/// Aggregate signal keyed by "{cleaned_album}|{disc_number}".
+/// Disc value extractable from an existing tag (ALBUM or TRACKNUMBER).
+/// Aggregate signal keyed by source-specific prefix + grouping key.
 #[derive(Debug, Clone)]
-pub struct EmbeddedDiscNumberSignal {
+pub struct DiscExtractionSignal {
     pub key: String,
     /// Serialized as bincode BLOB.
-    pub data: EmbeddedDiscNumberData,
+    pub data: DiscExtractionData,
 }
 
-/// Bincode-serialized payload for EmbeddedDiscNumber.
+/// Bincode-serialized payload for DiscExtraction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddedDiscNumberData {
-    /// Original album tag value (e.g., "Some Album, Disc 2")
-    pub original_album: String,
-    /// Cleaned album name (e.g., "Some Album")
-    pub cleaned_album: String,
-    /// Extracted disc number (e.g., "2")
-    pub disc_number: String,
-    /// Inodes of files with this embedded disc number
+pub struct DiscExtractionData {
+    pub source: DiscExtractionSource,
     pub inodes: Vec<i64>,
+}
+
+/// Where the disc value was found.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DiscExtractionSource {
+    /// From ALBUM tag: "Album, Disc 2". All files share same cleaned album.
+    Album {
+        original_album: String,
+        cleaned_album: String,
+        disc_number: String,
+    },
+    /// From TRACKNUMBER: "A01". Each file has different cleaned digits.
+    TrackNumber {
+        disc_prefix: String,
+        /// Release context for display (album name)
+        album: String,
+        /// Release context for display (album artist)
+        album_artist: String,
+        per_file: Vec<TrackNumberExtraction>,
+    },
+}
+
+/// Per-file data for track number disc extraction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackNumberExtraction {
+    pub inode: i64,
+    pub original_value: String,   // "A01"
+    pub cleaned_digits: String,   // "01"
 }
 
 /// A pair of tracks from different sources that share a fingerprint.
@@ -803,7 +825,7 @@ pub enum TypedSignalWrite {
     InboxTagCanonicity(InboxTagCanonicitySignal),
     InboxMissingTag(InboxMissingTagSignal),
     InboxCompoundTag(InboxCompoundTagSignal),
-    EmbeddedDiscNumber(EmbeddedDiscNumberSignal),
+    DiscExtraction(DiscExtractionSignal),
 }
 
 impl TypedSignalWrite {
@@ -853,7 +875,7 @@ impl TypedSignalWrite {
             Self::InboxTagCanonicity(s) => s.insert(conn),
             Self::InboxMissingTag(s) => s.insert(conn),
             Self::InboxCompoundTag(s) => s.insert(conn),
-            Self::EmbeddedDiscNumber(s) => s.insert(conn),
+            Self::DiscExtraction(s) => s.insert(conn),
         }
     }
 
@@ -903,7 +925,7 @@ impl TypedSignalWrite {
             Self::InboxTagCanonicity(s) => InboxTagCanonicitySignal::exists(conn, &s.key),
             Self::InboxMissingTag(s) => InboxMissingTagSignal::exists(conn, &s.key),
             Self::InboxCompoundTag(s) => InboxCompoundTagSignal::exists(conn, s.inode),
-            Self::EmbeddedDiscNumber(s) => EmbeddedDiscNumberSignal::exists(conn, &s.key),
+            Self::DiscExtraction(s) => DiscExtractionSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }
@@ -1030,7 +1052,7 @@ impl TypedSignalWrite {
                     bytes.hash(&mut hasher);
                 }
             }
-            Self::EmbeddedDiscNumber(s) => {
+            Self::DiscExtraction(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }

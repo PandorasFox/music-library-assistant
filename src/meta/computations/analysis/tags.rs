@@ -16,7 +16,7 @@ use crate::meta::signals::data::{
     MissingTagSignal, MissingTagData,
     MissingAlbumSingleSignal, MissingAlbumSingleData, SingleTrackInfo,
     CompoundTagSignal, CompoundTagEntry as TypedCompoundEntry,
-    EmbeddedDiscNumberSignal, EmbeddedDiscNumberData,
+    DiscExtractionSignal, DiscExtractionData, DiscExtractionSource, TrackNumberExtraction,
 };
 use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
@@ -690,23 +690,24 @@ pub fn execute_detect_inconsistent_album_artist(
 }
 
 // ============================================================================
-// Embedded Disc Number Detection
+// Disc Extraction Detection
 // ============================================================================
 
-/// Execute DetectEmbeddedDiscNumbers - detect album tags with embedded disc numbers.
+/// Execute DetectDiscExtractions - detect disc values in ALBUM and TRACKNUMBER tags.
 ///
-/// Scans ALBUM tag values from both corpus and inbox for patterns like
-/// "Album Name, Disc 2" or "Album Name Disc 1", extracting the disc number
-/// and cleaned album name. Emits EmbeddedDiscNumber aggregate signals keyed
-/// by "{cleaned_album}|{disc_number}".
-pub fn execute_detect_embedded_disc_numbers(
+/// Pass 1 (album): Scans ALBUM tag values from both corpus and inbox for patterns
+/// like "Album Name, Disc 2", extracting disc number and cleaned album name.
+/// Pass 2 (track number): Scans TRACKNUMBER tags for letter prefixes like "A01",
+/// grouping by release context (album + album_artist + prefix).
+/// Emits DiscExtraction aggregate signals.
+pub fn execute_detect_disc_extractions(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     use regex::Regex;
 
-    let computation = Computation::DetectEmbeddedDiscNumbers;
+    let computation = Computation::DetectDiscExtractions;
 
     let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
@@ -719,11 +720,12 @@ pub fn execute_detect_embedded_disc_numbers(
         }
     };
 
+    let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
+
+    // ── Pass 1: Album tag patterns ──────────────────────────────────────
     // Pattern: optional comma, optional whitespace, "disc" (case-insensitive), space(s), digits, end
     let disc_re = Regex::new(r"(?i),?\s*disc\s+(\d+)\s*$").unwrap();
 
-    // Query ALBUM tags from both corpus and inbox with their inodes.
-    // Each row: (inode, album_value)
     let album_entries = match read_only_db.get_album_values_with_inodes() {
         Ok(entries) => entries,
         Err(e) => {
@@ -735,12 +737,13 @@ pub fn execute_detect_embedded_disc_numbers(
         }
     };
 
-    // Group by key: "{cleaned_album}|{disc_number}" -> (original_album, cleaned_album, disc_number, inodes)
-    let mut groups: HashMap<String, (String, String, String, Vec<i64>)> = HashMap::new();
+    // Group by key: "album:{cleaned_album_lower}|{disc_number}"
+    let mut album_groups: HashMap<String, (String, String, String, Vec<i64>)> = HashMap::new();
 
     for (inode, album_value) in album_entries {
         if let Some(caps) = disc_re.captures(&album_value) {
-            let disc_number = caps[1].to_string();
+            let dn = caps[1].trim_start_matches('0');
+            let disc_number = if dn.is_empty() { "0" } else { dn }.to_string();
             let match_start = caps.get(0).unwrap().start();
             let cleaned_album = album_value[..match_start].trim().to_string();
 
@@ -748,8 +751,8 @@ pub fn execute_detect_embedded_disc_numbers(
                 continue;
             }
 
-            let key = format!("{}|{}", cleaned_album, disc_number);
-            let entry = groups.entry(key).or_insert_with(|| {
+            let key = format!("album:{}|{}", cleaned_album.to_lowercase(), disc_number);
+            let entry = album_groups.entry(key).or_insert_with(|| {
                 (album_value.clone(), cleaned_album.clone(), disc_number.clone(), Vec::new())
             });
             if !entry.3.contains(&inode) {
@@ -758,15 +761,95 @@ pub fn execute_detect_embedded_disc_numbers(
         }
     }
 
-    let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
-
-    for (key, (original_album, cleaned_album, disc_number, inodes)) in groups {
-        let signal = TypedSignalWrite::EmbeddedDiscNumber(EmbeddedDiscNumberSignal {
+    for (key, (original_album, cleaned_album, disc_number, inodes)) in album_groups {
+        let signal = TypedSignalWrite::DiscExtraction(DiscExtractionSignal {
             key: key.clone(),
-            data: EmbeddedDiscNumberData {
-                original_album,
-                cleaned_album,
-                disc_number,
+            data: DiscExtractionData {
+                source: DiscExtractionSource::Album {
+                    original_album,
+                    cleaned_album,
+                    disc_number,
+                },
+                inodes,
+            },
+        });
+        computed.push(ComputedAggregateSignal::new(key, signal));
+    }
+
+    // ── Pass 2: Track number letter prefixes ────────────────────────────
+    let tracknum_re = Regex::new(r"^([A-Za-z]+)(\d+)$").unwrap();
+
+    let tracknum_entries = match read_only_db.get_tracknumber_values_with_context() {
+        Ok(entries) => entries,
+        Err(e) => {
+            log_general(format!(
+                "[COMPUTE] DetectDiscExtractions: track number query failed: {}", e
+            ));
+            // Non-fatal: still emit album signals
+            let (cleared, new, updated, unchanged) =
+                reconcile_aggregate_signals::<DiscExtractionSignal>(read_only_db, &sender, computed, witness);
+            log_general(format!(
+                "[COMPUTE] DetectDiscExtractions: cleared={}, new={}, updated={}, unchanged={}",
+                cleared, new, updated, unchanged
+            ));
+            return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        }
+    };
+
+    // Group by "tracknum:{album_lower}|{album_artist_lower}|{prefix_lower}"
+    struct TrackNumGroup {
+        disc_prefix: String,
+        album: String,
+        album_artist: String,
+        files: Vec<TrackNumberExtraction>,
+    }
+
+    let mut tracknum_groups: HashMap<String, TrackNumGroup> = HashMap::new();
+
+    for (inode, tracknumber, album, album_artist) in tracknum_entries {
+        if let Some(caps) = tracknum_re.captures(&tracknumber) {
+            let prefix = caps[1].to_string();
+            let digits = caps[2].trim_start_matches('0');
+            let digits = if digits.is_empty() { "0" } else { digits }.to_string();
+
+            let key = format!(
+                "tracknum:{}|{}|{}",
+                album.to_lowercase(),
+                album_artist.to_lowercase(),
+                prefix.to_lowercase()
+            );
+            let group = tracknum_groups.entry(key).or_insert_with(|| TrackNumGroup {
+                disc_prefix: prefix.clone(),
+                album: album.clone(),
+                album_artist: album_artist.clone(),
+                files: Vec::new(),
+            });
+            // Avoid duplicate inodes
+            if !group.files.iter().any(|f| f.inode == inode) {
+                group.files.push(TrackNumberExtraction {
+                    inode,
+                    original_value: tracknumber,
+                    cleaned_digits: digits,
+                });
+            }
+        }
+    }
+
+    // Only emit if group has ≥2 files (single file with letter prefix is likely noise)
+    for (key, group) in tracknum_groups {
+        if group.files.len() < 2 {
+            continue;
+        }
+        let inodes: Vec<i64> = group.files.iter().map(|f| f.inode).collect();
+        let signal = TypedSignalWrite::DiscExtraction(DiscExtractionSignal {
+            key: key.clone(),
+            data: DiscExtractionData {
+                source: DiscExtractionSource::TrackNumber {
+                    disc_prefix: group.disc_prefix,
+                    album: group.album,
+                    album_artist: group.album_artist,
+                    per_file: group.files,
+                },
                 inodes,
             },
         });
@@ -774,10 +857,10 @@ pub fn execute_detect_embedded_disc_numbers(
     }
 
     let (cleared, new, updated, unchanged) =
-        reconcile_aggregate_signals::<EmbeddedDiscNumberSignal>(read_only_db, &sender, computed, witness);
+        reconcile_aggregate_signals::<DiscExtractionSignal>(read_only_db, &sender, computed, witness);
 
     log_general(format!(
-        "[COMPUTE] DetectEmbeddedDiscNumbers: cleared={}, new={}, updated={}, unchanged={}",
+        "[COMPUTE] DetectDiscExtractions: cleared={}, new={}, updated={}, unchanged={}",
         cleared, new, updated, unchanged
     ));
 

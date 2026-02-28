@@ -143,7 +143,7 @@ pub enum InsightType {
     CompoundTagValueReview { tag_name: String }, // Some/all parts are new to corpus
     EmbeddableAlbumArt,
     MissingAlbumSingle,
-    EmbeddedDiscNumber,
+    DiscExtraction,
     PathTagMismatch,
     // Other bucket - dynamic entries identified by index
     OtherSignal { index: usize },
@@ -178,7 +178,7 @@ impl InsightType {
             | InsightType::RedundantDuplicates
             | InsightType::InconsistentAlbumArtist
             | InsightType::MissingAlbumSingle
-            | InsightType::EmbeddedDiscNumber
+            | InsightType::DiscExtraction
             | InsightType::PathTagMismatch
             | InsightType::OtherSignal { .. } => None,
         }
@@ -225,7 +225,7 @@ pub enum InsightAction {
     /// Launch missing album single resolution modal
     LaunchMissingAlbumSingleResolution,
     /// Launch embedded disc number resolution
-    LaunchEmbeddedDiscNumberResolution,
+    LaunchDiscExtractionResolution,
     /// Launch path-tag schema mismatch resolution
     LaunchPathTagMismatchResolution,
     /// Not yet implemented
@@ -381,14 +381,14 @@ impl BucketEntry {
     }
 
     /// Create embedded disc number entry
-    fn embedded_disc_number(count: usize) -> Self {
+    fn disc_extraction(count: usize) -> Self {
         Self {
-            insight_type: InsightType::EmbeddedDiscNumber,
-            label: "Embedded disc numbers".to_string(),
+            insight_type: InsightType::DiscExtraction,
+            label: "Disc extractions".to_string(),
             count: Some(count),
             color: if count > 0 { Color::Yellow } else { Color::DarkGray },
             rank: 0,
-            action: InsightAction::LaunchEmbeddedDiscNumberResolution,
+            action: InsightAction::LaunchDiscExtractionResolution,
         }
     }
 
@@ -605,8 +605,8 @@ impl CachedBucketEntries {
         }
 
         // Embedded disc numbers
-        if bucket.embedded_disc_number_count > 0 {
-            entries.push(BucketEntry::embedded_disc_number(bucket.embedded_disc_number_count));
+        if bucket.disc_extraction_count > 0 {
+            entries.push(BucketEntry::disc_extraction(bucket.disc_extraction_count));
         }
 
         // Path-tag schema mismatches
@@ -1026,7 +1026,7 @@ mod tests {
                 compound_tags: vec![],
                 embeddable_album_art: 0,
                 missing_album_single_count: 0,
-                embedded_disc_number_count: 0,
+                disc_extraction_count: 0,
                 path_tag_mismatch_count: 0,
             },
             bucket_other: OtherSignalsBucket {

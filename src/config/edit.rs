@@ -242,6 +242,21 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         }
     }
 
+    // --- Disc Extraction ---
+    let old_de = &old_config.opinions.disc_extraction;
+    let new_de = &new_config.opinions.disc_extraction;
+    if new_de.disc_tag_name != old_de.disc_tag_name
+        || new_de.map_letters_to_numbers != old_de.map_letters_to_numbers
+    {
+        let block = ensure_child_block(opinions_doc, "disc-extraction");
+        if new_de.disc_tag_name != old_de.disc_tag_name {
+            set_or_create_string_node(block, "disc-tag-name", &new_de.disc_tag_name);
+        }
+        if new_de.map_letters_to_numbers != old_de.map_letters_to_numbers {
+            set_or_create_bool_node(block, "map-letters-to-numbers", new_de.map_letters_to_numbers);
+        }
+    }
+
     // --- Performance ---
     let old_p = &old_config.opinions.performance;
     let new_p = &new_config.opinions.performance;

@@ -365,6 +365,31 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
     }
 }
 
+/// Parse disc-extraction opinions from KDL node
+fn parse_disc_extraction_opinions(node: &kdl::KdlNode, opinions: &mut DiscExtractionOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "disc-tag-name" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_string() {
+                            opinions.disc_tag_name = val.to_string();
+                        }
+                    }
+                }
+                "map-letters-to-numbers" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.map_letters_to_numbers = val;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Parse inbox-organize opinions from KDL node
 fn parse_inbox_organize_opinions(node: &kdl::KdlNode, opinions: &mut InboxOrganizeOpinions) {
     if let Some(children) = node.children() {
@@ -475,6 +500,9 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                             }
                             "external-matching" => {
                                 parse_external_matching_opinions(child, &mut config.opinions.external_matching);
+                            }
+                            "disc-extraction" => {
+                                parse_disc_extraction_opinions(child, &mut config.opinions.disc_extraction);
                             }
                             _ => {}
                         }

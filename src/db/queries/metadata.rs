@@ -170,7 +170,7 @@ impl Database {
     /// Get ALBUM tag values with their inodes from both corpus and inbox.
     ///
     /// Returns Vec of (inode, album_value) covering both zones.
-    /// Used by DetectEmbeddedDiscNumbers to find embedded disc numbers.
+    /// Used by DetectDiscExtractions to find embedded disc numbers.
     pub fn get_album_values_with_inodes(&self) -> Result<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT ct.inode, ct.tag_value FROM corpus_tags ct
@@ -184,6 +184,48 @@ impl Database {
 
         let rows = stmt.query_map(params![], |row| {
             Ok((row.get(0)?, row.get(1)?))
+        })?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    /// Get TRACKNUMBER tag values with album/artist context from corpus and inbox.
+    ///
+    /// Returns Vec of (inode, tracknumber, album, album_artist).
+    /// Used by DetectDiscExtractions to find letter-prefixed track numbers.
+    pub fn get_tracknumber_values_with_context(&self) -> Result<Vec<(i64, String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT ct.inode, ct.tag_value,
+                      COALESCE((SELECT ct2.tag_value FROM corpus_tags ct2
+                                WHERE ct2.inode = ct.inode AND UPPER(ct2.tag_name) = 'ALBUM'
+                                LIMIT 1), ''),
+                      COALESCE((SELECT ct3.tag_value FROM corpus_tags ct3
+                                WHERE ct3.inode = ct.inode AND UPPER(ct3.tag_name) = 'ALBUM_ARTIST'
+                                LIMIT 1),
+                               (SELECT ct4.tag_value FROM corpus_tags ct4
+                                WHERE ct4.inode = ct.inode AND UPPER(ct4.tag_name) = 'ALBUMARTIST'
+                                LIMIT 1), '')
+               FROM corpus_tags ct
+               INNER JOIN files f ON ct.inode = f.inode AND f.zone = 'corpus'
+               WHERE UPPER(ct.tag_name) = 'TRACKNUMBER' AND ct.tag_value IS NOT NULL AND ct.tag_value != ''
+               UNION ALL
+               SELECT it.inode, it.tag_value,
+                      COALESCE((SELECT it2.tag_value FROM inbox_tags it2
+                                WHERE it2.inode = it.inode AND UPPER(it2.tag_name) = 'ALBUM'
+                                LIMIT 1), ''),
+                      COALESCE((SELECT it3.tag_value FROM inbox_tags it3
+                                WHERE it3.inode = it.inode AND UPPER(it3.tag_name) = 'ALBUM_ARTIST'
+                                LIMIT 1),
+                               (SELECT it4.tag_value FROM inbox_tags it4
+                                WHERE it4.inode = it.inode AND UPPER(it4.tag_name) = 'ALBUMARTIST'
+                                LIMIT 1), '')
+               FROM inbox_tags it
+               INNER JOIN files f ON it.inode = f.inode AND f.zone = 'inbox'
+               WHERE UPPER(it.tag_name) = 'TRACKNUMBER' AND it.tag_value IS NOT NULL AND it.tag_value != ''"#,
+        )?;
+
+        let rows = stmt.query_map(params![], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?;
 
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)

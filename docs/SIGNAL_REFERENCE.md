@@ -111,6 +111,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 | EmbeddableAlbumArt | DetectEmbeddableAlbumArt | DetectEmbeddableAlbumArt, EmbedAlbumArt | Directory with sidecar image and audio files lacking embedded art. Key: relative directory path. Metadata (bincode): `image_path`, `image_filename`, `artless_inodes[]`, `artless_paths[]` |
 | EmbeddedDiscNumber | DetectEmbeddedDiscNumbers | DetectEmbeddedDiscNumbers | Album tag contains embedded disc number (e.g., "Album, Disc 2"). Key: `{cleaned_album}\|{disc_number}`. Data (bincode BLOB): `original_album`, `cleaned_album`, `disc_number`, `inodes[]`. Covers both corpus and inbox files |
 | DeployConflict | DetectDeployConflicts | DetectDeployConflicts | Multiple tracks mapping to same library path |
+| ReleaseOverlap | DetectReleaseOverlaps | DetectReleaseOverlaps | Cross-source releases targeting the same album directory. Key: album directory (e.g., "Artist/Album"). Data (bincode BLOB): `releases[]` (each with `source_dir`, `release_dir`, `can_stash`, `inodes[]`, `corpus_paths[]`), `file_count`. Only emitted for cross-source overlaps (2+ configured sources). **UI Resolution:** Insights view → "Release overlaps" entry → DirectoryClusterModal with per-directory Stash/EditTags options |
 
 ---
 

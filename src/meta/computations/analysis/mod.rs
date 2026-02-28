@@ -147,6 +147,13 @@ pub enum Computation {
     /// Groups healthy tracks by deployment path, flags conflicts.
     DetectDeployConflicts,
 
+    /// Detect release overlaps at the album-directory level.
+    ///
+    /// Groups corpus files by their computed album directory (parent of deploy path),
+    /// then partitions by (source_dir, release_dir). Emits ReleaseOverlapSignal when
+    /// multiple releases target the same album directory.
+    DetectReleaseOverlaps,
+
     /// Derive deploy health signals from library scan data.
     ///
     /// Compares library files (source='library') against corpus to identify leftovers/stale.
@@ -242,6 +249,7 @@ impl Computation {
             Computation::AnalyzeFingerprintOverlaps => "Analyzing fingerprint overlaps",
             Computation::DetectCrossSourceOverlaps => "Detecting cross-source overlaps",
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
+            Computation::DetectReleaseOverlaps => "Detecting release overlaps",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",
             Computation::DetectEmbeddableAlbumArt => "Detecting embeddable album art",
@@ -297,6 +305,9 @@ impl Computation {
             }
             Computation::DetectDeployConflicts => {
                 execute_detect_deploy_conflicts(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::DetectReleaseOverlaps => {
+                execute_detect_release_overlaps(ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::DeriveDeployHealthSignals { library_name, library_root, corpus_path_prefixes } => {
                 execute_derive_deploy_health_signals(ctx.read_db, library_name, library_root, corpus_path_prefixes, ctx.witness, ctx.start)

@@ -520,6 +520,31 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
+        InsightType::ReleaseOverlaps => {
+            lines.push(Line::from(Span::styled(
+                "Release Overlaps",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Multiple releases deploy into the",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "same album directory. Stash the",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "inferior release or fix tags.",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press Enter to resolve.",
+                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
+            )));
+        }
+
         InsightType::SubparDuplicates => {
             lines.push(Line::from(Span::styled(
                 "Subpar Duplicates",

@@ -47,6 +47,8 @@ pub struct CorpusFilesBucket {
 pub struct TagSquashBucket {
     /// Directory overlap clusters (grouped fingerprint overlaps for bulk resolution)
     pub directory_overlap_cluster_count: usize,
+    /// Release overlaps (multiple releases → same album directory)
+    pub release_overlap_count: usize,
     /// Subpar duplicates (lower quality versions, easy stash candidates)
     pub subpar_duplicate_count: usize,
     /// Redundant duplicates (equal quality, requires operator choice)

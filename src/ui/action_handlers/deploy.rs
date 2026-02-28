@@ -114,7 +114,8 @@ impl App {
         }
 
         // 4. Conflicts: pick first alphabetical corpus path and deploy it
-        // Find matching new file's library_name for the deploy_path
+        // Look up library_name via config since conflict members are excluded from data.new
+        let config = crate::config::load_config().ok();
         for group in &data.conflicts {
             if let Some((corpus_path, _inode)) = group
                 .conflicting_files
@@ -123,18 +124,16 @@ impl App {
             {
                 let source = resolver.resolve(std::path::Path::new(corpus_path));
 
-                // Find library_name from a new file with matching corpus_path
-                let library_name = data.new.iter()
-                    .find(|f| f.corpus_path == *corpus_path)
-                    .map(|f| f.library_name.as_str())
-                    .unwrap_or("");
+                let library_name = config.as_ref()
+                    .and_then(|cfg| cfg.get_libraries_for_corpus_path(std::path::Path::new(corpus_path)).into_iter().next())
+                    .unwrap_or_default();
 
                 if library_name.is_empty() {
                     continue;
                 }
 
                 let dest_rel = std::path::Path::new("libraries")
-                    .join(library_name)
+                    .join(&library_name)
                     .join(&group.deploy_path);
                 let destination = resolver.resolve(&dest_rel);
                 mutations.push(Mutation::HardLink(HardLinkMutation { source, destination }));

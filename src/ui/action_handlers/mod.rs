@@ -357,6 +357,9 @@ impl App {
                     Some(insights_view::InsightAction::LaunchDirectoryOverlapResolution) => {
                         self.start_directory_overlap_resolution();
                     }
+                    Some(insights_view::InsightAction::LaunchReleaseOverlapResolution) => {
+                        self.start_release_overlap_resolution();
+                    }
                     Some(insights_view::InsightAction::LaunchSubparDuplicateResolution) => {
                         self.start_subpar_duplicate_resolution();
                     }

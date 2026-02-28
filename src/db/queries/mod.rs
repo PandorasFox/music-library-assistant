@@ -312,6 +312,10 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_cross_source_overlap_signals()
     }
 
+    pub fn get_release_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::ReleaseOverlapSignal>> {
+        self.db.get_release_overlap_signals()
+    }
+
     pub fn get_fingerprint_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::FingerprintOverlapSignal>> {
         self.db.get_fingerprint_overlap_signals()
     }

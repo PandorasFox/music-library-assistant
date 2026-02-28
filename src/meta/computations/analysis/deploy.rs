@@ -12,8 +12,9 @@ use crate::meta::computations::helpers::{ComputedAggregateSignal, ComputedCorpus
 use crate::meta::signals::data::{
     TypedSignalWrite, DeployConflictSignal, DeployReadySignal, DeployedHealthySignal,
     LibraryLeftoverSignal, LibraryStaleSignal,
+    ReleaseOverlapSignal, ReleaseOverlapData, ReleaseOverlapEntry,
 };
-use crate::corpus::deploy::compute_deployment_path_with_tags;
+use crate::corpus::deploy::{compute_deployment_path_with_tags, deploy_album_directory, extract_release_directory};
 use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
 
@@ -110,6 +111,196 @@ pub fn execute_detect_deploy_conflicts(
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+// ============================================================================
+// Release Overlap Detection
+// ============================================================================
+
+/// Execute DetectReleaseOverlaps - detect cross-source album-directory release overlaps.
+///
+/// Groups corpus files by their computed album directory (parent of deploy path),
+/// then partitions by (source_dir, release_dir). When multiple configured sources
+/// target the same album directory, emits a ReleaseOverlapSignal.
+/// Intra-source overlaps (same source, different release dirs) are skipped.
+pub fn execute_detect_release_overlaps(
+    read_only_db: &ReadOnlyDb<'_>,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = Computation::DetectReleaseOverlaps;
+
+    let sender = match write_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    let config = match crate::config::load_config() {
+        Ok(c) => c,
+        Err(_) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "Failed to load config".to_string(),
+            );
+        }
+    };
+
+    let healthy_signals = match read_only_db.get_healthy_file_signals() {
+        Ok(v) => v,
+        Err(e) => {
+            log_error(format!(
+                "[COMPUTE] DetectReleaseOverlaps: get_healthy_file_signals failed: {}", e
+            ));
+            return Result::failure(computation, start.elapsed().as_millis() as u64, format!("get_healthy_file_signals: {}", e));
+        }
+    };
+
+    // For each corpus file: compute deploy path → album directory, identify source+release.
+    // Key: (source_dir, release_dir), grouped by album directory.
+    struct FileInfo {
+        inode: i64,
+        corpus_path: String,
+        source_dir: String,
+        release_dir: String,
+        can_stash: bool,
+    }
+
+    // album_dir → Vec<FileInfo>
+    let mut album_dir_files: HashMap<String, Vec<FileInfo>> = HashMap::new();
+
+    for signal in &healthy_signals {
+        // Strip "corpus/" prefix for source directory lookup (signal paths are corpus-prefixed)
+        let relative_path = signal.path.strip_prefix("corpus/").unwrap_or(&signal.path);
+
+        let source = config.get_source_for_relative_path(Path::new(relative_path));
+        let source = match source {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let tags = match read_only_db.get_corpus_tags(signal.inode) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if tags.is_empty() {
+            continue;
+        }
+
+        let tag_map: HashMap<String, String> = tags
+            .into_iter()
+            .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
+            .collect();
+
+        let deploy_path = compute_deployment_path_with_tags(&signal.path, &tag_map)
+            .to_string_lossy()
+            .to_string();
+
+        let album_dir = deploy_album_directory(&deploy_path);
+        if album_dir.is_empty() {
+            continue;
+        }
+
+        let source_dir = source.path.to_string_lossy().to_string();
+        let release_dir = extract_release_directory(relative_path, &source.path);
+
+        album_dir_files.entry(album_dir).or_default().push(FileInfo {
+            inode: signal.inode,
+            corpus_path: signal.path.clone(),
+            source_dir,
+            release_dir,
+            can_stash: source.can_stash_dupes,
+        });
+    }
+
+    // Build signals: for each album directory with 2+ distinct (source, release) pairs.
+    let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
+
+    for (album_dir, files) in &album_dir_files {
+        // Group by (source_dir, release_dir)
+        let mut release_groups: HashMap<(&str, &str), Vec<&FileInfo>> = HashMap::new();
+        for f in files {
+            release_groups
+                .entry((&f.source_dir, &f.release_dir))
+                .or_default()
+                .push(f);
+        }
+
+        if release_groups.len() < 2 {
+            continue; // Single release — normal album, no overlap
+        }
+
+        // Only cross-source overlaps are actionable.
+        let distinct_sources: HashSet<&str> = release_groups.keys().map(|(s, _)| *s).collect();
+        if distinct_sources.len() < 2 {
+            continue;
+        }
+
+        let mut releases: Vec<ReleaseOverlapEntry> = Vec::new();
+        let mut total_files = 0usize;
+
+        for ((source_dir, release_dir), group_files) in &release_groups {
+            let inodes: Vec<i64> = group_files.iter().map(|f| f.inode).collect();
+            let corpus_paths: Vec<String> = group_files.iter().map(|f| f.corpus_path.clone()).collect();
+            let can_stash = group_files.first().map(|f| f.can_stash).unwrap_or(false);
+            total_files += inodes.len();
+
+            releases.push(ReleaseOverlapEntry {
+                source_dir: source_dir.to_string(),
+                release_dir: release_dir.to_string(),
+                can_stash,
+                inodes,
+                corpus_paths,
+            });
+        }
+
+        // Sort releases for deterministic ordering
+        releases.sort_by(|a, b| (&a.source_dir, &a.release_dir).cmp(&(&b.source_dir, &b.release_dir)));
+
+        let signal = TypedSignalWrite::ReleaseOverlap(ReleaseOverlapSignal {
+            key: album_dir.clone(),
+            data: ReleaseOverlapData {
+                releases,
+                file_count: total_files,
+            },
+        });
+        computed.push(ComputedAggregateSignal::new(album_dir.clone(), signal));
+    }
+
+    let overlap_count = computed.len();
+    let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<ReleaseOverlapSignal>(
+        read_only_db,
+        &sender,
+        computed,
+        witness,
+    );
+
+    log_general(format!(
+        "[COMPUTE] DetectReleaseOverlaps: {} overlapping album dirs among {} dirs ({} healthy files) (reconcile: {} cleared, {} new, {} updated, {} unchanged)",
+        overlap_count,
+        album_dir_files.len(),
+        healthy_signals.len(),
+        cleared,
+        new,
+        updated,
+        unchanged,
+    ));
+
+    // Wait for ReleaseOverlap signals to be written before spawning
+    // DeriveCorpusDeployStatus, which reads them to suppress DeployReady.
+    write_thread::wait_for_queue_drain();
+
+    Result::success(
+        computation,
+        start.elapsed().as_millis() as u64,
+        vec![Computation::DeriveCorpusDeployStatus],
+    )
 }
 
 // ============================================================================
@@ -405,56 +596,70 @@ pub fn execute_derive_corpus_deploy_status(
         }
     };
 
-    // Phase 1: Pre-compute deploy paths for all configured healthy files.
-    // We need to see ALL deploy paths before emitting signals, because files
-    // whose deploy path is shared by 2+ corpus files are conflict losers and
-    // should NOT be marked DeployReady.
+    // Phase 1: Compute deploy paths for ALL indexed corpus files to build
+    // the collision map.  A file cannot be DeployReady if ANY other corpus
+    // inode computes the same deploy path — regardless of health status.
+    // Only healthy, source-configured files go into `precomputed` for signal
+    // emission, but deploy_path_counts covers the entire corpus.
     struct PrecomputedFile {
         inode: i64,
         corpus_path: String,
         deploy_path: String,
     }
 
+    let all_corpus_inodes = match read_only_db.get_all_corpus_inodes() {
+        Ok(v) => v,
+        Err(e) => {
+            log_error(format!(
+                "[COMPUTE] DeriveCorpusDeployStatus: get_all_corpus_inodes failed: {}", e
+            ));
+            return Result::failure(computation, start.elapsed().as_millis() as u64, format!("get_all_corpus_inodes: {}", e));
+        }
+    };
+
+    let healthy_inodes: HashSet<i64> = healthy_signals.iter().map(|s| s.inode).collect();
+
     let mut precomputed: Vec<PrecomputedFile> = Vec::new();
     let mut deploy_path_counts: HashMap<String, usize> = HashMap::new();
     let mut skipped_not_configured = 0usize;
 
-    for signal in &healthy_signals {
-        let corpus_path_buf = Path::new(&signal.path);
-        let in_source = config.is_path_in_source(corpus_path_buf);
-
-        if !in_source {
-            skipped_not_configured += 1;
-        }
-
-        let tags = match read_only_db.get_corpus_tags(signal.inode) {
+    for (&inode, corpus_path) in &all_corpus_inodes {
+        let tags = match read_only_db.get_corpus_tags(inode) {
             Ok(v) => v,
             Err(e) => {
                 log_error(format!(
                     "[COMPUTE] DeriveCorpusDeployStatus: get_corpus_tags failed for inode {} (path={}): {}",
-                    signal.inode, signal.path, e
+                    inode, corpus_path, e
                 ));
                 Vec::new()
             }
         };
+        if tags.is_empty() {
+            continue;
+        }
+
         let tag_map: HashMap<String, String> = tags
             .into_iter()
             .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
             .collect();
-        let expected_relative = compute_deployment_path_with_tags(&signal.path, &tag_map);
+        let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
         let deploy_path = expected_relative.to_string_lossy().to_string();
 
-        // Count ALL healthy files' deploy paths for conflict detection,
-        // matching DetectDeployConflicts which has no source filter.
+        // Count ALL corpus files for conflict detection.
         *deploy_path_counts.entry(deploy_path.clone()).or_insert(0) += 1;
 
-        // Only emit signals for source-configured files.
-        if in_source {
-            precomputed.push(PrecomputedFile {
-                inode: signal.inode,
-                corpus_path: signal.path.clone(),
-                deploy_path,
-            });
+        // Only build precomputed entries for healthy, source-configured files.
+        if healthy_inodes.contains(&inode) {
+            let in_source = config.is_path_in_source(Path::new(corpus_path));
+            if in_source {
+                precomputed.push(PrecomputedFile {
+                    inode,
+                    corpus_path: corpus_path.clone(),
+                    deploy_path,
+                });
+            } else {
+                skipped_not_configured += 1;
+            }
         }
     }
 
@@ -465,11 +670,20 @@ pub fn execute_derive_corpus_deploy_status(
         .map(|(path, _)| path.as_str())
         .collect();
 
+    // Phase 2b: Build release overlap set — album directories with overlapping releases.
+    // Files targeting these album dirs should not be DeployReady.
+    let overlap_album_dirs: HashSet<String> = read_only_db
+        .aggregate_signal_keys::<ReleaseOverlapSignal>()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
     // Phase 3: Build computed signal sets for reconciliation.
     let mut computed_deploy_ready: Vec<ComputedCorpusSignal> = Vec::new();
     let mut computed_deployed_healthy: Vec<ComputedCorpusSignal> = Vec::new();
     let mut deployed_stale_count = 0usize;
     let mut conflict_skipped_count = 0usize;
+    let mut overlap_skipped_count = 0usize;
 
     for file in &precomputed {
         // Check if this inode is deployed in any library
@@ -501,8 +715,11 @@ pub fn execute_derive_corpus_deploy_status(
                 deployed_stale_count += 1;
             }
         } else if conflict_paths.contains(file.deploy_path.as_str()) {
-            // Not deployed, and target path is conflicted — skip
+            // Not deployed, and deploy path is claimed by 2+ corpus files — skip
             conflict_skipped_count += 1;
+        } else if overlap_album_dirs.contains(&deploy_album_directory(&file.deploy_path)) {
+            // Not deployed, and album directory has a release overlap — skip
+            overlap_skipped_count += 1;
         } else {
             // Not deployed at all — deploy-ready
             let signal = TypedSignalWrite::DeployReady(DeployReadySignal {
@@ -560,12 +777,17 @@ pub fn execute_derive_corpus_deploy_status(
     );
 
     log_general(format!(
-        "[COMPUTE] DeriveCorpusDeployStatus: {} healthy files, {} deploy-ready, {} deployed-healthy, {} deployed-stale, {} conflict-skipped, {} not configured",
+        "[COMPUTE] DeriveCorpusDeployStatus: {} total corpus inodes, {} healthy, {} precomputed, {} conflict paths, {} overlap dirs, {} deploy-ready, {} deployed-healthy, {} deployed-stale, {} conflict-skipped, {} overlap-skipped, {} not configured",
+        all_corpus_inodes.len(),
         healthy_signals.len(),
+        precomputed.len(),
+        conflict_paths.len(),
+        overlap_album_dirs.len(),
         deploy_ready_count,
         deployed_healthy_count,
         deployed_stale_count,
         conflict_skipped_count,
+        overlap_skipped_count,
         skipped_not_configured,
     ));
     log_general(format!(

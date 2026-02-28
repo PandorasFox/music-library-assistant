@@ -648,6 +648,16 @@ impl MigrationRegistry {
             },
         });
 
+        registry.register(Migration {
+            from_version: 22,
+            to_version: 23,
+            description: "Create signal_release_overlap table",
+            apply: |db| {
+                crate::meta::signals::store::create_all_signal_tables(db.conn())?;
+                Ok(())
+            },
+        });
+
         registry
     }
 

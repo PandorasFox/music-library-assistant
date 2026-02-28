@@ -311,6 +311,38 @@ impl App {
                     return;
                 }
 
+                // Check if selected option is EditTags — launch tag editor
+                let edit_tags_inodes = match &self.view {
+                    ActiveView::DirectoryClusterResolution(ref preview) => {
+                        match preview.selected_option() {
+                            Some(crate::ui::directory_cluster_modal::types::ClusterResolutionOption::EditTags { inodes, .. }) => {
+                                Some(inodes.clone())
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+
+                if let Some(inodes) = edit_tags_inodes {
+                    if !inodes.is_empty() {
+                        let audio_files = self.cache.query(move |db| {
+                            db.get_audio_files_by_inodes(
+                                &inodes,
+                                crate::db::types::Zone::Corpus,
+                            ).unwrap_or_default()
+                        }).recv();
+                        if !audio_files.is_empty() {
+                            self.open_unified_tag_editor_bulk(
+                                audio_files,
+                                super::super::tag_editor::TagEditorSource::HealthModal,
+                                None,
+                            );
+                        }
+                    }
+                    return;
+                }
+
                 // Stage mutations for current cluster's selected option and advance
                 let (cluster_index, mutations) = match &self.view {
                     ActiveView::DirectoryClusterResolution(ref preview) => {
@@ -398,6 +430,27 @@ impl App {
                 self.cancel_and_return_to_source("Directory overlap cluster resolution cancelled");
             }
         }
+    }
+
+    // =========================================================================
+    // Release Overlap Resolution
+    // =========================================================================
+
+    /// Start release overlap resolution modal from Insights view.
+    ///
+    /// Loads ReleaseOverlapSignal data into DirectoryClusterModalData and
+    /// reuses the DirectoryClusterResolution view.
+    pub(in crate::ui) fn start_release_overlap_resolution(&mut self) {
+        use super::super::directory_cluster_modal;
+
+        // Load release overlap data
+        let data = self.cache.query(|db| {
+            directory_cluster_modal::DirectoryClusterModalData::load_release_overlaps(&db).ok().unwrap_or_default()
+        }).recv();
+
+        // Create preview state with cached data
+        let preview = directory_cluster_modal::DirectoryClusterPreviewState::new(data);
+        self.view = ActiveView::DirectoryClusterResolution(preview);
     }
 
     // =========================================================================

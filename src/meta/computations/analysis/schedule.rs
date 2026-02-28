@@ -67,7 +67,9 @@ pub fn execute_schedule_content_analysis(
     // Deploy-sensitive: files OR deploy OR tags (deploy path depends on tags+files)
     if run_all || s.touches_any(&[RecomputationScope::FILES, RecomputationScope::DEPLOY, RecomputationScope::TAGS]) {
         spawn.push(Computation::DetectDeployConflicts);
-        spawn.push(Computation::DeriveCorpusDeployStatus);
+        // DetectReleaseOverlaps spawns DeriveCorpusDeployStatus after
+        // wait_for_queue_drain(), ensuring overlap signals are visible.
+        spawn.push(Computation::DetectReleaseOverlaps);
     }
 
     // Deploy health: tags OR deploy

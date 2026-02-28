@@ -590,6 +590,36 @@ pub struct CrossSourceOverlapData {
     pub track_pairs: Vec<CrossSourceTrackPair>,
 }
 
+/// Release overlap: multiple releases target the same album directory.
+///
+/// Keyed by album directory string (e.g., "Artist/Album").
+/// Detects when files from different releases (different source+release-dir
+/// combinations) would deploy into the same library directory.
+#[derive(Debug, Clone)]
+pub struct ReleaseOverlapSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: ReleaseOverlapData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseOverlapData {
+    /// All (source_dir, release_dir) pairs contributing to this album directory.
+    pub releases: Vec<ReleaseOverlapEntry>,
+    /// Total file count across all releases.
+    pub file_count: usize,
+}
+
+/// One release contributing files to an overlapping album directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseOverlapEntry {
+    pub source_dir: String,
+    pub release_dir: String,
+    pub can_stash: bool,
+    pub inodes: Vec<i64>,
+    pub corpus_paths: Vec<String>,
+}
+
 /// Directory contains sidecar album art embeddable into artless audio files.
 #[derive(Debug, Clone)]
 pub struct EmbeddableAlbumArtSignal {
@@ -763,6 +793,7 @@ pub enum TypedSignalWrite {
     TagCanonicity(TagCanonicitySignal),
     InconsistentAlbumArtist(InconsistentAlbumArtistSignal),
     CrossSourceOverlap(CrossSourceOverlapSignal),
+    ReleaseOverlap(ReleaseOverlapSignal),
     RedundantDuplicate(RedundantDuplicateSignal),
     EmbeddableAlbumArt(EmbeddableAlbumArtSignal),
     ExpectedOverlap(ExpectedOverlapSignal),
@@ -812,6 +843,7 @@ impl TypedSignalWrite {
             Self::TagCanonicity(s) => s.insert(conn),
             Self::InconsistentAlbumArtist(s) => s.insert(conn),
             Self::CrossSourceOverlap(s) => s.insert(conn),
+            Self::ReleaseOverlap(s) => s.insert(conn),
             Self::RedundantDuplicate(s) => s.insert(conn),
             Self::EmbeddableAlbumArt(s) => s.insert(conn),
             Self::ExpectedOverlap(s) => s.insert(conn),
@@ -861,6 +893,7 @@ impl TypedSignalWrite {
             Self::TagCanonicity(s) => TagCanonicitySignal::exists(conn, &s.key),
             Self::InconsistentAlbumArtist(s) => InconsistentAlbumArtistSignal::exists(conn, &s.key),
             Self::CrossSourceOverlap(s) => CrossSourceOverlapSignal::exists(conn, &s.key),
+            Self::ReleaseOverlap(s) => ReleaseOverlapSignal::exists(conn, &s.key),
             Self::RedundantDuplicate(s) => RedundantDuplicateSignal::exists(conn, &s.key),
             Self::EmbeddableAlbumArt(s) => EmbeddableAlbumArtSignal::exists(conn, &s.key),
             Self::ExpectedOverlap(s) => ExpectedOverlapSignal::exists(conn, &s.key),
@@ -963,6 +996,11 @@ impl TypedSignalWrite {
                 }
             }
             Self::CrossSourceOverlap(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::ReleaseOverlap(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }

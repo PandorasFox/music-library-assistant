@@ -172,13 +172,17 @@ impl DirectoryClusterPreviewState {
             }
         }
 
-        // Add per-directory options: "Stash X" is available when X allows stashing.
+        // Add per-directory options: "Stash X" and "Edit tags X"
         for dir in &cluster.directories {
             if dir.can_stash_dupes {
                 options.push(ClusterResolutionOption::StashDirectory {
                     stash_suffix: dir.path_suffix.clone(),
                 });
             }
+            options.push(ClusterResolutionOption::EditTags {
+                dir_suffix: dir.path_suffix.clone(),
+                inodes: dir.inodes.clone(),
+            });
         }
 
         // Always offer "Mark expected" as the last option

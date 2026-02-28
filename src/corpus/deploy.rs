@@ -127,6 +127,34 @@ pub fn compute_deployment_path_with_tags(file_path: &str, tags: &HashMap<String,
     }
 }
 
+/// Extract the album directory from a deploy path (parent of the file).
+///
+/// "Artist/Album/01. Track.flac" → "Artist/Album"
+/// "Artist/Track.flac" (single) → "Artist"
+pub fn deploy_album_directory(deploy_path: &str) -> String {
+    Path::new(deploy_path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// Extract the release directory from a corpus path relative to its source.
+///
+/// The release directory is the first path component after the source prefix,
+/// representing the top-level directory within a source that groups files
+/// from the same release.
+///
+/// `corpus_path="source/Artist - Album/disc1/01.flac"`, `source_path="source"`
+/// → `"Artist - Album"`
+pub fn extract_release_directory(corpus_path: &str, source_path: &Path) -> String {
+    Path::new(corpus_path)
+        .strip_prefix(source_path)
+        .ok()
+        .and_then(|r| r.components().next())
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

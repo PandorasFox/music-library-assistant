@@ -51,6 +51,8 @@ pub enum ClusterResolutionOption {
     StashDirectory { stash_suffix: String },
     /// Auto-select based on quality (stash the lower-quality format)
     AutoQuality { stash_format: String },
+    /// Edit tags for a specific directory (launch tag editor)
+    EditTags { dir_suffix: String, inodes: Vec<i64> },
     /// Mark this source pair overlap as expected (suppress future signals)
     MarkExpected,
 }
@@ -62,6 +64,7 @@ impl ClusterResolutionOption {
             Self::AutoQuality { stash_format } => {
                 format!("Stash {} (quality)", stash_format)
             }
+            Self::EditTags { dir_suffix, .. } => format!("Edit tags {}/", dir_suffix),
             Self::MarkExpected => "Mark expected".to_string(),
         }
     }
@@ -215,6 +218,128 @@ impl DirectoryClusterModalData {
         Ok(Self { clusters, file_meta_cache })
     }
 
+    /// Load release overlap clusters from the database.
+    ///
+    /// Converts `ReleaseOverlapSignal` entries into `DirectoryClusterEntry` +
+    /// `DirectoryGroupEntry`, reusing the exact same types as cross-source overlaps.
+    pub fn load_release_overlaps(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
+        let signals = read_db
+            .get_release_overlap_signals()
+            .unwrap_or_default();
+
+        if signals.is_empty() {
+            return Ok(Self::default());
+        }
+
+        let mut clusters = Vec::new();
+
+        for signal in signals {
+            let cluster_key = signal.key;
+            let data = signal.data;
+
+            let mut directories = Vec::new();
+
+            for entry in &data.releases {
+                // Use "source_dir/release_dir" as the path suffix
+                let path_suffix = if entry.release_dir.is_empty() {
+                    entry.source_dir.clone()
+                } else {
+                    format!("{}/{}", entry.source_dir, entry.release_dir)
+                };
+
+                // Deduplicate inodes
+                let unique_inodes: Vec<i64> = {
+                    let mut seen = std::collections::HashSet::new();
+                    entry.inodes.iter().copied().filter(|i| seen.insert(*i)).collect()
+                };
+
+                let mut paths = Vec::new();
+                let mut total_size: i64 = 0;
+                let mut format_counts: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+
+                for &inode in &unique_inodes {
+                    if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, Zone::Corpus) {
+                        paths.push(audio_file.path().to_string());
+                        total_size += audio_file.entry.file_size;
+                        *format_counts.entry(audio_file.audio.file_type.to_uppercase()).or_insert(0) += 1;
+                    }
+                }
+
+                let format_summary = if format_counts.len() == 1 {
+                    let (fmt, count) = format_counts.iter().next().unwrap();
+                    format!("{} ({})", fmt, count)
+                } else if format_counts.is_empty() {
+                    "unknown".to_string()
+                } else {
+                    let mut parts: Vec<String> = format_counts
+                        .iter()
+                        .map(|(fmt, count)| format!("{} ({})", fmt, count))
+                        .collect();
+                    parts.sort();
+                    parts.join(", ")
+                };
+
+                let total_size_mb = total_size as f64 / (1024.0 * 1024.0);
+
+                directories.push(DirectoryGroupEntry {
+                    path_suffix,
+                    inodes: unique_inodes,
+                    paths,
+                    format_summary,
+                    total_size_mb,
+                    can_stash_dupes: entry.can_stash,
+                });
+            }
+
+            if directories.len() < 2 {
+                continue;
+            }
+
+            clusters.push(DirectoryClusterEntry {
+                cluster_key,
+                directories,
+                overlap_count: data.file_count,
+            });
+        }
+
+        // Enrich with audio metadata
+        let mut file_meta_cache = HashMap::new();
+        for cluster in &clusters {
+            for dir in &cluster.directories {
+                for &inode in &dir.inodes {
+                    if file_meta_cache.contains_key(&inode) {
+                        continue;
+                    }
+                    let audio_info = read_db.get_audio_info(inode).ok().flatten();
+                    let tags = read_db.get_corpus_tags(inode).ok().unwrap_or_default();
+                    let has_pictures = read_db.get_has_pictures(inode).unwrap_or(false);
+
+                    if let Some(info) = audio_info {
+                        let file_size = read_db
+                            .get_audio_file_by_inode(inode, Zone::Corpus)
+                            .ok()
+                            .flatten()
+                            .map(|af| af.entry.file_size)
+                            .unwrap_or(0);
+
+                        file_meta_cache.insert(inode, FileMetaSummary {
+                            file_type: info.file_type,
+                            duration_ms: info.duration_ms,
+                            bitrate_kbps: info.bitrate_kbps,
+                            sample_rate: info.sample_rate,
+                            file_size,
+                            has_pictures,
+                            tags: tags.into_iter().map(|t| (t.tag_name, t.tag_value)).collect(),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(Self { clusters, file_meta_cache })
+    }
+
     /// Total number of clusters.
     pub fn total_count(&self) -> usize {
         self.clusters.len()
@@ -237,8 +362,8 @@ impl DirectoryClusterModalData {
             None => return mutations,
         };
 
-        // MarkExpected doesn't stash files — it emits an ExpectedOverlap signal
-        if matches!(option, ClusterResolutionOption::MarkExpected) {
+        // MarkExpected and EditTags don't stash files
+        if matches!(option, ClusterResolutionOption::MarkExpected | ClusterResolutionOption::EditTags { .. }) {
             return mutations;
         }
 
@@ -250,6 +375,7 @@ impl DirectoryClusterModalData {
                 ClusterResolutionOption::AutoQuality { stash_format } => {
                     dir.format_summary.starts_with(stash_format.as_str())
                 }
+                ClusterResolutionOption::EditTags { .. } => false,
                 ClusterResolutionOption::MarkExpected => false,
             };
 
@@ -292,8 +418,8 @@ impl DirectoryClusterModalData {
             None => return Vec::new(),
         };
 
-        // MarkExpected has no files to stash
-        if matches!(option, ClusterResolutionOption::MarkExpected) {
+        // MarkExpected and EditTags have no files to stash
+        if matches!(option, ClusterResolutionOption::MarkExpected | ClusterResolutionOption::EditTags { .. }) {
             return Vec::new();
         }
 
@@ -306,6 +432,7 @@ impl DirectoryClusterModalData {
                 ClusterResolutionOption::AutoQuality { stash_format } => {
                     dir.format_summary.starts_with(stash_format.as_str())
                 }
+                ClusterResolutionOption::EditTags { .. } => false,
                 ClusterResolutionOption::MarkExpected => false,
             };
 

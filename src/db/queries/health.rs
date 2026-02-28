@@ -49,6 +49,7 @@ impl Database {
         total += TagCanonicitySignal::count(&self.conn).unwrap_or(0);
         total += InconsistentAlbumArtistSignal::count(&self.conn).unwrap_or(0);
         total += CrossSourceOverlapSignal::count(&self.conn).unwrap_or(0);
+        total += ReleaseOverlapSignal::count(&self.conn).unwrap_or(0);
         total += RedundantDuplicateSignal::count(&self.conn).unwrap_or(0);
         total += CanonicalTagSignal::count(&self.conn).unwrap_or(0);
         total += LibraryLeftoverSignal::count(&self.conn).unwrap_or(0);
@@ -97,6 +98,11 @@ impl Database {
     pub fn get_cross_source_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::CrossSourceOverlapSignal>> {
         crate::meta::signals::data::CrossSourceOverlapSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query cross source overlap signals: {}", e))
+    }
+
+    pub fn get_release_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::ReleaseOverlapSignal>> {
+        crate::meta::signals::data::ReleaseOverlapSignal::query_all(&self.conn)
+            .map_err(|e| anyhow::anyhow!("Failed to query release overlap signals: {}", e))
     }
 
     pub fn get_fingerprint_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::FingerprintOverlapSignal>> {
@@ -533,6 +539,9 @@ impl Database {
         // These are derived from fingerprint overlaps, clustered by source directory
         let directory_overlap_cluster_count = self.count_signal_type("cross_source_overlap")?;
 
+        // Release overlaps (multiple releases → same album directory)
+        let release_overlap_count = self.count_signal_type("release_overlap")?;
+
         // Subpar duplicates (lower quality versions identified by fingerprint analysis)
         let subpar_duplicate_count = self.count_signal_type("subpar_duplicate")?;
 
@@ -587,6 +596,7 @@ impl Database {
 
         Ok(TagSquashBucket {
             directory_overlap_cluster_count,
+            release_overlap_count,
             subpar_duplicate_count,
             redundant_duplicate_count,
             tag_canonicity,
@@ -821,6 +831,7 @@ impl Database {
             "tag_canonicity" => TagCanonicitySignal::count(&self.conn)?,
             "inconsistent_album_artist" => InconsistentAlbumArtistSignal::count(&self.conn)?,
             "cross_source_overlap" => CrossSourceOverlapSignal::count(&self.conn)?,
+            "release_overlap" => ReleaseOverlapSignal::count(&self.conn)?,
             "redundant_duplicate" => RedundantDuplicateSignal::count(&self.conn)?,
             "canonical_tag" => CanonicalTagSignal::count(&self.conn)?,
             "library_leftover" => LibraryLeftoverSignal::count(&self.conn)?,

@@ -1554,6 +1554,61 @@ impl AggregateSignalStore for CrossSourceOverlapSignal {
     }
 }
 
+impl AggregateSignalStore for ReleaseOverlapSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_release_overlap (
+        key TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_release_overlap";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_release_overlap (key, data, data_hash) VALUES (?1, ?2, ?3)",
+            rusqlite::params![self.key, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn query_key_hashes(conn: &Connection) -> Result<HashMap<String, i64>> {
+        let mut stmt = conn.prepare("SELECT key, data_hash FROM signal_release_overlap")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_release_overlap WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_release_overlap WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
+impl ReleaseOverlapSignal {
+    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT key, data FROM signal_release_overlap ORDER BY key"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(1)?;
+            let data: ReleaseOverlapData = bincode::deserialize(&blob)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            Ok(Self { key: row.get(0)?, data })
+        })?;
+        rows.collect()
+    }
+}
+
 impl AggregateSignalStore for RedundantDuplicateSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_redundant_duplicate (
         key TEXT PRIMARY KEY,
@@ -1907,6 +1962,7 @@ pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(TagCanonicitySignal::TABLE_SQL)?;
     conn.execute_batch(InconsistentAlbumArtistSignal::TABLE_SQL)?;
     conn.execute_batch(CrossSourceOverlapSignal::TABLE_SQL)?;
+    conn.execute_batch(ReleaseOverlapSignal::TABLE_SQL)?;
     conn.execute_batch(RedundantDuplicateSignal::TABLE_SQL)?;
     conn.execute_batch(EmbeddableAlbumArtSignal::TABLE_SQL)?;
     conn.execute_batch(MissingAlbumSingleSignal::TABLE_SQL)?;

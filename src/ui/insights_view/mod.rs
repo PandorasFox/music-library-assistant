@@ -134,6 +134,7 @@ pub enum InsightType {
     CorpusShitFormatFiles,
     // Tag resolution bucket entries (duplicates at top for easy resolution)
     CrossSourceOverlaps,
+    ReleaseOverlaps,
     SubparDuplicates,
     RedundantDuplicates,
     InconsistentAlbumArtist,
@@ -173,6 +174,7 @@ impl InsightType {
             | InsightType::CompoundTagValueSafe { .. }
             | InsightType::CompoundTagValueReview { .. }
             | InsightType::CrossSourceOverlaps
+            | InsightType::ReleaseOverlaps
             | InsightType::RedundantDuplicates
             | InsightType::InconsistentAlbumArtist
             | InsightType::MissingAlbumSingle
@@ -210,6 +212,8 @@ pub enum InsightAction {
     LaunchIntakeConfirmation,
     /// Launch fingerprint duplicate resolution modal
     LaunchDirectoryOverlapResolution,
+    /// Launch release overlap resolution modal
+    LaunchReleaseOverlapResolution,
     /// Launch subpar duplicate stash
     LaunchSubparDuplicateResolution,
     /// Launch embed album art modal
@@ -277,6 +281,18 @@ impl BucketEntry {
             color: if count > 0 { Color::Cyan } else { Color::Green },
             rank: 0,
             action: InsightAction::LaunchDirectoryOverlapResolution,
+        }
+    }
+
+    /// Create release overlaps entry
+    fn release_overlaps(count: usize) -> Self {
+        Self {
+            insight_type: InsightType::ReleaseOverlaps,
+            label: "Release overlaps".to_string(),
+            count: Some(count),
+            color: if count > 0 { Color::Cyan } else { Color::Green },
+            rank: 0,
+            action: InsightAction::LaunchReleaseOverlapResolution,
         }
     }
 
@@ -546,6 +562,11 @@ impl CachedBucketEntries {
         // Cross-source overlaps at top - easy resolutions
         if bucket.directory_overlap_cluster_count > 0 {
             entries.push(BucketEntry::cross_source_overlaps(bucket.directory_overlap_cluster_count));
+        }
+
+        // Release overlaps - multiple releases → same album directory
+        if bucket.release_overlap_count > 0 {
+            entries.push(BucketEntry::release_overlaps(bucket.release_overlap_count));
         }
 
         // Subpar duplicates - identified low-quality copies ready to stash
@@ -997,6 +1018,7 @@ mod tests {
             },
             bucket_placeholder: TagSquashBucket {
                 directory_overlap_cluster_count: 0,
+                release_overlap_count: 0,
                 subpar_duplicate_count: 0,
                 redundant_duplicate_count: 0,
                 tag_canonicity: vec![],

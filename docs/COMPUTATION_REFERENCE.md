@@ -77,6 +77,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality tier partitioning |
 | DetectCrossSourceOverlaps | Cluster FingerprintOverlap signals by source directory (from config `dir` stanzas). Within-source overlaps ignored. |
 | DetectDeployConflicts | Detect path collisions in deployment |
+| DetectReleaseOverlaps | Detect cross-source album-directory-level release overlaps |
 | DeriveDeployHealthSignals | Derive library health signals (per library) |
 | DeriveCorpusDeployStatus | Derive corpus deploy status |
 
@@ -133,8 +134,9 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DeriveExternalMatches | — | ExternalMatch | ExternalMatch (via hash-based corpus reconciliation). For each corpus inode with AcoustID matches, parses stored raw response JSON, compares recording title/artist/album against corpus tags (raw string equality), classifies as ExactMatch/ContentDiff/MetadataOnly. Triggered by EXTERNAL, TAGS, or FILES scope |
 | DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (via hash-based aggregate reconciliation). Skips source pairs with an ExpectedOverlap signal (operator whitelist) |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (via hash-based aggregate reconciliation). Uses inode-based signal lookup (signal.inode + metadata path). |
+| DetectReleaseOverlaps | — | ReleaseOverlap | ReleaseOverlap (via hash-based aggregate reconciliation). Groups healthy corpus files by album directory (parent of deploy path), partitions by (source_dir, release_dir). Only emits for cross-source overlaps (2+ configured sources targeting the same album directory). Intra-source overlaps are skipped. |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale. Masks stale-conflicts: if a stale file's expected path is already occupied by a different inode, no stale signal is emitted (the LibraryMove would always fail). |
-| DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy (via corpus reconciliation — scalar inode existence check, no hash). DeployedHealthy metadata includes `library_path`. Files deployed at the wrong path (stale) are skipped — DeriveDeployHealthSignals handles those via LibraryStale. Skips conflict losers: files whose computed deploy path is claimed by 2+ corpus files are excluded from DeployReady. |
+| DeriveCorpusDeployStatus | — | DeployReady, DeployedHealthy | DeployReady, DeployedHealthy (via corpus reconciliation — scalar inode existence check, no hash). DeployedHealthy metadata includes `library_path`. Files deployed at the wrong path (stale) are skipped — DeriveDeployHealthSignals handles those via LibraryStale. Skips conflict losers: files whose computed deploy path is claimed by 2+ corpus files are excluded from DeployReady. Also skips files whose album directory has a ReleaseOverlap signal (release overlap suppression). |
 
 ### Fingerprinting Limitations
 

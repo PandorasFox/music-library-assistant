@@ -393,7 +393,7 @@ impl MutationExecutor for FlushTagsToDiskMutation {
 
 impl MutationExecutor for AssimilateDiskTagsToDbMutation {
     fn label(&self) -> &'static str { "Tag sync (disk→DB)" }
-    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::ChainEmitted }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();

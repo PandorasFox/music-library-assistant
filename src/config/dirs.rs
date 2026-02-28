@@ -94,9 +94,13 @@ pub fn parse_dirs_kdl(content: &str) -> Result<Vec<SourceDir>> {
 }
 
 /// Serialize source dirs to KDL text.
+///
+/// Default entries (no libraries, all bools at defaults, no schema) are elided —
+/// an empty config blob carries no information and needn't be persisted.
 fn serialize_dirs_kdl(dirs: &[SourceDir]) -> String {
     let mut out = String::new();
-    for (i, dir) in dirs.iter().enumerate() {
+    let non_default: Vec<_> = dirs.iter().filter(|d| !d.is_default()).collect();
+    for (i, dir) in non_default.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
@@ -207,5 +211,50 @@ dir "web/releases/indie" {
         assert!(serialized.contains("path-schema"));
         let reparsed = parse_dirs_kdl(&serialized).unwrap();
         assert_eq!(dirs, reparsed);
+    }
+
+    #[test]
+    fn test_default_entries_elided_on_serialize() {
+        let dirs = vec![
+            // Non-default: has libraries
+            SourceDir {
+                path: PathBuf::from("web/releases/bandcamp"),
+                libraries: vec!["music".to_string()],
+                can_stash_dupes: true,
+                interior_dupes: true,
+                path_schema: None,
+                enable_acoustid: true,
+            },
+            // Default: all-defaults, carries no information
+            SourceDir {
+                path: PathBuf::from("web/releases/empty"),
+                libraries: vec![],
+                can_stash_dupes: true,
+                interior_dupes: true,
+                path_schema: None,
+                enable_acoustid: true,
+            },
+            // Non-default: has a non-default bool
+            SourceDir {
+                path: PathBuf::from("web/releases/nodupe"),
+                libraries: vec![],
+                can_stash_dupes: false,
+                interior_dupes: true,
+                path_schema: None,
+                enable_acoustid: true,
+            },
+        ];
+
+        assert!(dirs[1].is_default());
+        assert!(!dirs[0].is_default());
+        assert!(!dirs[2].is_default());
+
+        let serialized = serialize_dirs_kdl(&dirs);
+        assert!(serialized.contains("bandcamp"));
+        assert!(!serialized.contains("empty"), "default entry should be elided");
+        assert!(serialized.contains("nodupe"));
+
+        let reparsed = parse_dirs_kdl(&serialized).unwrap();
+        assert_eq!(reparsed.len(), 2);
     }
 }

@@ -115,6 +115,8 @@ fn coalesce_dir_config_edits(mutations: Vec<Mutation>) -> Vec<Mutation> {
             merged_config.source_dirs.push(edit.new_dir.clone());
         }
     }
+    // Elide default entries — they carry no information
+    merged_config.source_dirs.retain(|sd| !sd.is_default());
 
     // Build batch entries
     let entries: Vec<DirConfigEditEntry> = dir_edits

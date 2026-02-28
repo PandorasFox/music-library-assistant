@@ -357,6 +357,21 @@ pub struct SourceDir {
     pub enable_acoustid: bool,
 }
 
+impl SourceDir {
+    /// Whether this source dir has all-default settings and carries no information.
+    ///
+    /// A default entry (no libraries, all bools at default, no schema) is semantically
+    /// empty — it configures nothing beyond what the absence of config already implies.
+    /// Such entries are elided from dirs.kdl on write.
+    pub fn is_default(&self) -> bool {
+        self.libraries.is_empty()
+            && self.can_stash_dupes
+            && self.interior_dupes
+            && self.path_schema.is_none()
+            && self.enable_acoustid
+    }
+}
+
 /// Shared config wrapped in `Arc<RwLock<Config>>` for thread-safe read/write access.
 ///
 /// The write lock is only held briefly during config updates (in Witch::tick()),

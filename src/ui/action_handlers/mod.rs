@@ -909,6 +909,8 @@ impl App {
 
         // Construct the full new Config with the dir edit applied,
         // so the Witch can update SharedConfig in-memory after execution.
+        // Default entries (all-defaults, no meaningful config) are elided —
+        // they carry no information and will be dropped from dirs.kdl on write.
         let new_config = {
             let mut cfg = self.config().clone();
             let mut found = false;
@@ -922,6 +924,7 @@ impl App {
             if !found {
                 cfg.source_dirs.push(new_dir.clone());
             }
+            cfg.source_dirs.retain(|sd| !sd.is_default());
             cfg
         };
 

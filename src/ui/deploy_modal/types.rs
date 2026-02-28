@@ -76,8 +76,8 @@ impl DeployModalData {
         // Assign library_name to deploy-ready files via config lookup
         if let Some(cfg) = config {
             for file in &mut new {
-                let corpus_path = std::path::Path::new(&file.corpus_path);
-                if let Some(lib) = cfg.get_libraries_for_corpus_path(corpus_path).into_iter().next() {
+                if let Some(lib) = cfg.resolve_source_config_for_db_path(&file.corpus_path)
+                    .and_then(|r| r.libraries.into_iter().next()) {
                     file.library_name = lib;
                 }
             }

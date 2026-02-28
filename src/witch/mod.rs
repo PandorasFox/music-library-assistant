@@ -1111,7 +1111,7 @@ impl Witch {
             let config = shared_config.read().expect("SharedConfig lock poisoned");
             let key = config.opinions.external_matching.acoustid_api_key.clone();
             let dirs: Vec<std::path::PathBuf> = config.source_dirs.iter()
-                .filter(|sd| sd.enable_acoustid)
+                .filter(|sd| sd.enable_acoustid.unwrap_or(true))
                 .map(|sd| sd.path.clone())
                 .collect();
             (key, dirs)

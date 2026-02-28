@@ -892,19 +892,19 @@ pub fn execute_analyze_fingerprint_overlaps(
             for group in true_duplicate_groups {
                 // Check if all files in this group are interior to a single source
                 // that has interior_dupes disabled
-                let group_sources: HashSet<Option<&PathBuf>> = group.iter()
+                let group_sources: HashSet<Option<PathBuf>> = group.iter()
                     .map(|&idx| {
                         let path = cluster[idx].path();
                         let relative = path.strip_prefix("corpus/").unwrap_or(path);
-                        config.get_source_for_relative_path(Path::new(relative))
-                            .map(|sd| &sd.path)
+                        config.resolve_source_config(Path::new(relative))
+                            .map(|r| r.source_path)
                     })
                     .collect();
 
                 if group_sources.len() == 1 {
                     if let Some(Some(source_path)) = group_sources.iter().next() {
-                        if let Some(sd) = config.get_source_for_relative_path(source_path) {
-                            if !sd.interior_dupes {
+                        if let Some(resolved) = config.resolve_source_config(source_path) {
+                            if !resolved.interior_dupes {
                                 interior_skipped += 1;
                                 continue;
                             }
@@ -1171,8 +1171,8 @@ pub fn execute_detect_cross_source_overlaps(
 
             // Look up source directory from config
             let source_key = config
-                .get_source_for_relative_path(Path::new(relative_path))
-                .map(|sd| sd.path.to_string_lossy().to_string())
+                .resolve_source_config(Path::new(relative_path))
+                .map(|r| r.source_path.to_string_lossy().to_string())
                 .unwrap_or_else(|| "undeployed".to_string());
 
             files_by_source
@@ -1269,8 +1269,8 @@ pub fn execute_detect_cross_source_overlaps(
         }
 
         // Look up source configs for can_stash info
-        let source_a_config = config.get_source_for_relative_path(Path::new(&overlap.source_a));
-        let source_b_config = config.get_source_for_relative_path(Path::new(&overlap.source_b));
+        let source_a_resolved = config.resolve_source_config(Path::new(&overlap.source_a));
+        let source_b_resolved = config.resolve_source_config(Path::new(&overlap.source_b));
 
         computed.push(ComputedAggregateSignal::new(
             pair_key.clone(),
@@ -1279,8 +1279,8 @@ pub fn execute_detect_cross_source_overlaps(
                 data: CrossSourceOverlapData {
                     source_a: overlap.source_a,
                     source_b: overlap.source_b,
-                    source_a_can_stash: source_a_config.map(|s| s.can_stash_dupes).unwrap_or(true),
-                    source_b_can_stash: source_b_config.map(|s| s.can_stash_dupes).unwrap_or(true),
+                    source_a_can_stash: source_a_resolved.as_ref().map(|r| r.can_stash_dupes).unwrap_or(true),
+                    source_b_can_stash: source_b_resolved.as_ref().map(|r| r.can_stash_dupes).unwrap_or(true),
                     overlap_count: overlap.track_pairs.len(),
                     fingerprint_count: overlap.fingerprint_keys.len(),
                     fingerprint_keys: overlap.fingerprint_keys,

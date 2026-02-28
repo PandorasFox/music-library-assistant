@@ -35,10 +35,10 @@ pub fn parse_dirs_kdl(content: &str) -> Result<Vec<SourceDir>> {
             let mut source = SourceDir {
                 path,
                 libraries: Vec::new(),
-                can_stash_dupes: true,
-                interior_dupes: true,
+                can_stash_dupes: None,
+                interior_dupes: None,
                 path_schema: None,
-                enable_acoustid: true,
+                enable_acoustid: None,
             };
 
             if let Some(children) = node.children() {
@@ -53,17 +53,17 @@ pub fn parse_dirs_kdl(content: &str) -> Result<Vec<SourceDir>> {
                         }
                         "can-stash-dupes" => {
                             if let Some(entry) = child.entries().first() {
-                                source.can_stash_dupes = entry.value().as_bool().unwrap_or(true);
+                                source.can_stash_dupes = entry.value().as_bool();
                             }
                         }
                         "interior-dupes" => {
                             if let Some(entry) = child.entries().first() {
-                                source.interior_dupes = entry.value().as_bool().unwrap_or(true);
+                                source.interior_dupes = entry.value().as_bool();
                             }
                         }
                         "enable-acoustid" => {
                             if let Some(entry) = child.entries().first() {
-                                source.enable_acoustid = entry.value().as_bool().unwrap_or(true);
+                                source.enable_acoustid = entry.value().as_bool();
                             }
                         }
                         "path-schema" => {
@@ -109,14 +109,14 @@ fn serialize_dirs_kdl(dirs: &[SourceDir]) -> String {
             let libs: Vec<String> = dir.libraries.iter().map(|l| format!("\"{}\"", l)).collect();
             out.push_str(&format!("    library {}\n", libs.join(" ")));
         }
-        if !dir.can_stash_dupes {
-            out.push_str("    can-stash-dupes false\n");
+        if let Some(v) = dir.can_stash_dupes {
+            out.push_str(&format!("    can-stash-dupes {}\n", v));
         }
-        if !dir.interior_dupes {
-            out.push_str("    interior-dupes false\n");
+        if let Some(v) = dir.interior_dupes {
+            out.push_str(&format!("    interior-dupes {}\n", v));
         }
-        if !dir.enable_acoustid {
-            out.push_str("    enable-acoustid false\n");
+        if let Some(v) = dir.enable_acoustid {
+            out.push_str(&format!("    enable-acoustid {}\n", v));
         }
         if let Some(ref schema) = dir.path_schema {
             out.push_str(&format!("    path-schema \"{}\"\n", schema.template));
@@ -160,12 +160,12 @@ dir "web/releases/indie" {
         assert_eq!(dirs.len(), 2);
         assert_eq!(dirs[0].path, PathBuf::from("web/releases/bandcamp"));
         assert_eq!(dirs[0].libraries, vec!["music".to_string()]);
-        assert!(!dirs[0].can_stash_dupes); // explicitly false
-        assert!(!dirs[0].interior_dupes); // explicitly false
+        assert_eq!(dirs[0].can_stash_dupes, Some(false)); // explicitly false
+        assert_eq!(dirs[0].interior_dupes, Some(false)); // explicitly false
         assert_eq!(dirs[1].path, PathBuf::from("web/releases/indie"));
         assert_eq!(dirs[1].libraries, vec!["music".to_string(), "soundtracks".to_string()]);
-        assert!(dirs[1].can_stash_dupes); // default true
-        assert!(dirs[1].interior_dupes); // default true
+        assert_eq!(dirs[1].can_stash_dupes, None); // not set = inherit
+        assert_eq!(dirs[1].interior_dupes, None); // not set = inherit
     }
 
     #[test]
@@ -174,22 +174,44 @@ dir "web/releases/indie" {
             SourceDir {
                 path: PathBuf::from("web/releases/bandcamp"),
                 libraries: vec!["music".to_string()],
-                can_stash_dupes: false,
-                interior_dupes: false,
+                can_stash_dupes: Some(false),
+                interior_dupes: Some(false),
                 path_schema: None,
-                enable_acoustid: true,
+                enable_acoustid: None,
             },
             SourceDir {
                 path: PathBuf::from("web/releases/indie"),
                 libraries: vec!["music".to_string(), "soundtracks".to_string()],
-                can_stash_dupes: true,
-                interior_dupes: true,
+                can_stash_dupes: None,
+                interior_dupes: None,
                 path_schema: None,
-                enable_acoustid: true,
+                enable_acoustid: None,
             },
         ];
 
         let serialized = serialize_dirs_kdl(&dirs);
+        let reparsed = parse_dirs_kdl(&serialized).unwrap();
+        assert_eq!(dirs, reparsed);
+    }
+
+    #[test]
+    fn test_dirs_kdl_round_trip_explicit_true() {
+        // Explicitly-set true must survive round-trip (not collapse to None)
+        let dirs = vec![
+            SourceDir {
+                path: PathBuf::from("web/releases/bandcamp"),
+                libraries: vec!["music".to_string()],
+                can_stash_dupes: Some(true),
+                interior_dupes: Some(true),
+                path_schema: None,
+                enable_acoustid: Some(true),
+            },
+        ];
+
+        let serialized = serialize_dirs_kdl(&dirs);
+        assert!(serialized.contains("can-stash-dupes true"));
+        assert!(serialized.contains("interior-dupes true"));
+        assert!(serialized.contains("enable-acoustid true"));
         let reparsed = parse_dirs_kdl(&serialized).unwrap();
         assert_eq!(dirs, reparsed);
     }
@@ -200,10 +222,10 @@ dir "web/releases/indie" {
             SourceDir {
                 path: PathBuf::from("web/releases/bandcamp"),
                 libraries: vec!["music".to_string()],
-                can_stash_dupes: true,
-                interior_dupes: true,
+                can_stash_dupes: None,
+                interior_dupes: None,
                 path_schema: Some(parse_path_schema("$LABEL/$CATALOGNUMBER/$ARTIST - $TITLE").unwrap()),
-                enable_acoustid: true,
+                enable_acoustid: None,
             },
         ];
 
@@ -220,28 +242,28 @@ dir "web/releases/indie" {
             SourceDir {
                 path: PathBuf::from("web/releases/bandcamp"),
                 libraries: vec!["music".to_string()],
-                can_stash_dupes: true,
-                interior_dupes: true,
+                can_stash_dupes: None,
+                interior_dupes: None,
                 path_schema: None,
-                enable_acoustid: true,
+                enable_acoustid: None,
             },
-            // Default: all-defaults, carries no information
+            // Default: all None, carries no information
             SourceDir {
                 path: PathBuf::from("web/releases/empty"),
                 libraries: vec![],
-                can_stash_dupes: true,
-                interior_dupes: true,
+                can_stash_dupes: None,
+                interior_dupes: None,
                 path_schema: None,
-                enable_acoustid: true,
+                enable_acoustid: None,
             },
-            // Non-default: has a non-default bool
+            // Non-default: has an explicit bool
             SourceDir {
                 path: PathBuf::from("web/releases/nodupe"),
                 libraries: vec![],
-                can_stash_dupes: false,
-                interior_dupes: true,
+                can_stash_dupes: Some(false),
+                interior_dupes: None,
                 path_schema: None,
-                enable_acoustid: true,
+                enable_acoustid: None,
             },
         ];
 
@@ -256,5 +278,138 @@ dir "web/releases/indie" {
 
         let reparsed = parse_dirs_kdl(&serialized).unwrap();
         assert_eq!(reparsed.len(), 2);
+    }
+
+    /// Helper: build a minimal Config with the given source_dirs for testing resolution.
+    fn config_with_dirs(dirs: Vec<SourceDir>) -> crate::config::Config {
+        crate::config::Config {
+            root: PathBuf::from("/test"),
+            legacy_enabled: false,
+            source_dirs: dirs,
+            opinions: crate::config::Opinions::default(),
+        }
+    }
+
+    #[test]
+    fn test_resolve_inherits_bool_from_parent() {
+        // Parent sets can_stash_dupes = false.
+        // Child only sets interior_dupes = false, doesn't set can_stash_dupes.
+        // Resolution for child should inherit can_stash_dupes = false from parent.
+        let config = config_with_dirs(vec![
+            SourceDir {
+                path: PathBuf::from("incoming"),
+                libraries: vec!["music".into()],
+                can_stash_dupes: Some(false),
+                interior_dupes: None,
+                path_schema: None,
+                enable_acoustid: None,
+            },
+            SourceDir {
+                path: PathBuf::from("incoming/subdir"),
+                libraries: vec![],
+                can_stash_dupes: None,
+                interior_dupes: Some(false),
+                path_schema: None,
+                enable_acoustid: None,
+            },
+        ]);
+
+        let resolved = config.resolve_source_config(
+            std::path::Path::new("incoming/subdir/album/track.flac")
+        ).unwrap();
+
+        assert_eq!(resolved.source_path, PathBuf::from("incoming/subdir"));
+        assert_eq!(resolved.can_stash_dupes, false, "should inherit parent's false");
+        assert_eq!(resolved.interior_dupes, false, "explicitly set on child");
+        assert_eq!(resolved.libraries, vec!["music".to_string()], "should inherit parent's libraries");
+    }
+
+    #[test]
+    fn test_resolve_child_overrides_parent() {
+        // Parent sets can_stash_dupes = false.
+        // Child explicitly sets can_stash_dupes = true.
+        // Resolution should use child's explicit true.
+        let config = config_with_dirs(vec![
+            SourceDir {
+                path: PathBuf::from("incoming"),
+                libraries: vec!["music".into()],
+                can_stash_dupes: Some(false),
+                interior_dupes: None,
+                path_schema: None,
+                enable_acoustid: None,
+            },
+            SourceDir {
+                path: PathBuf::from("incoming/override"),
+                libraries: vec![],
+                can_stash_dupes: Some(true),
+                interior_dupes: None,
+                path_schema: None,
+                enable_acoustid: None,
+            },
+        ]);
+
+        let resolved = config.resolve_source_config(
+            std::path::Path::new("incoming/override/album/track.flac")
+        ).unwrap();
+
+        assert_eq!(resolved.can_stash_dupes, true, "child's explicit true overrides parent's false");
+    }
+
+    #[test]
+    fn test_resolve_defaults_when_no_explicit_value() {
+        // Single dir with no explicit bools — should get system defaults (true).
+        let config = config_with_dirs(vec![
+            SourceDir {
+                path: PathBuf::from("web"),
+                libraries: vec![],
+                can_stash_dupes: None,
+                interior_dupes: None,
+                path_schema: None,
+                enable_acoustid: None,
+            },
+        ]);
+
+        let resolved = config.resolve_source_config(
+            std::path::Path::new("web/releases/track.flac")
+        ).unwrap();
+
+        assert_eq!(resolved.can_stash_dupes, true, "system default");
+        assert_eq!(resolved.interior_dupes, true, "system default");
+    }
+
+    #[test]
+    fn test_resolve_no_match() {
+        let config = config_with_dirs(vec![
+            SourceDir {
+                path: PathBuf::from("web"),
+                libraries: vec![],
+                can_stash_dupes: None,
+                interior_dupes: None,
+                path_schema: None,
+                enable_acoustid: None,
+            },
+        ]);
+
+        assert!(config.resolve_source_config(
+            std::path::Path::new("other/track.flac")
+        ).is_none());
+    }
+
+    #[test]
+    fn test_resolve_db_path_strips_prefix() {
+        let config = config_with_dirs(vec![
+            SourceDir {
+                path: PathBuf::from("web"),
+                libraries: vec!["music".into()],
+                can_stash_dupes: None,
+                interior_dupes: None,
+                path_schema: None,
+                enable_acoustid: None,
+            },
+        ]);
+
+        let resolved = config.resolve_source_config_for_db_path("corpus/web/track.flac").unwrap();
+        assert_eq!(resolved.source_path, PathBuf::from("web"));
+        assert_eq!(resolved.libraries, vec!["music".to_string()]);
     }
 }

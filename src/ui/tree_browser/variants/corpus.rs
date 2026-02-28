@@ -66,18 +66,18 @@ impl SearchState {
 pub struct DirConfigPanelState {
     /// Which source directory we're editing (relative path).
     pub source_path: PathBuf,
-    // Editable copies:
+    // Editable copies (None = inherit from parent):
     pub libraries: Vec<String>,
-    pub can_stash_dupes: bool,
-    pub interior_dupes: bool,
+    pub can_stash_dupes: Option<bool>,
+    pub interior_dupes: Option<bool>,
     pub path_schema: Option<String>,
-    pub enable_acoustid: bool,
+    pub enable_acoustid: Option<bool>,
     // Originals for dirty checking:
     pub orig_libraries: Vec<String>,
-    pub orig_can_stash_dupes: bool,
-    pub orig_interior_dupes: bool,
+    pub orig_can_stash_dupes: Option<bool>,
+    pub orig_interior_dupes: Option<bool>,
     pub orig_path_schema: Option<String>,
-    pub orig_enable_acoustid: bool,
+    pub orig_enable_acoustid: Option<bool>,
     // UI state:
     /// 0=libraries, 1=can_stash_dupes, 2=interior_dupes, 3=path_schema, 4=enable_acoustid
     pub field_cursor: usize,
@@ -158,11 +158,11 @@ impl DirConfigPanelState {
             },
             DetailField {
                 label: "Can stash dupes",
-                widget: DetailWidget::Bool { value: self.can_stash_dupes, edited: stash_edited },
+                widget: DetailWidget::OptBool { value: self.can_stash_dupes, edited: stash_edited },
             },
             DetailField {
                 label: "Interior dupes",
-                widget: DetailWidget::Bool { value: self.interior_dupes, edited: interior_edited },
+                widget: DetailWidget::OptBool { value: self.interior_dupes, edited: interior_edited },
             },
             DetailField {
                 label: "Path schema",
@@ -173,7 +173,7 @@ impl DirConfigPanelState {
             },
             DetailField {
                 label: "AcoustID lookup",
-                widget: DetailWidget::Bool { value: self.enable_acoustid, edited: acoustid_edited },
+                widget: DetailWidget::OptBool { value: self.enable_acoustid, edited: acoustid_edited },
             },
         ];
 
@@ -561,10 +561,10 @@ impl CorpusBrowserVariant {
                         }
                     }
                     1 => {
-                        panel.can_stash_dupes = !panel.can_stash_dupes;
+                        panel.can_stash_dupes = cycle_opt_bool(panel.can_stash_dupes);
                     }
                     2 => {
-                        panel.interior_dupes = !panel.interior_dupes;
+                        panel.interior_dupes = cycle_opt_bool(panel.interior_dupes);
                     }
                     3 => {
                         // Path schema: edit as text
@@ -575,7 +575,7 @@ impl CorpusBrowserVariant {
                         panel.text_input = Some(input);
                     }
                     4 => {
-                        panel.enable_acoustid = !panel.enable_acoustid;
+                        panel.enable_acoustid = cycle_opt_bool(panel.enable_acoustid);
                     }
                     _ => {}
                 }
@@ -934,5 +934,14 @@ impl CorpusBrowserVariant {
 
         f.render_widget(Clear, modal_area);
         f.render_widget(Paragraph::new(all_lines).block(block), modal_area);
+    }
+}
+
+/// Cycle an Option<bool> through None → Some(true) → Some(false) → None.
+fn cycle_opt_bool(v: Option<bool>) -> Option<bool> {
+    match v {
+        None => Some(true),
+        Some(true) => Some(false),
+        Some(false) => None,
     }
 }

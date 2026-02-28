@@ -92,20 +92,20 @@ pub fn execute_detect_path_tag_mismatches(
         let corpus_path = audio_file.path();
         let relative_path = Path::new(corpus_path);
 
+        // Resolve config for this path (includes schema via inheritance).
+        let resolved = match config.resolve_source_config(relative_path) {
+            Some(r) => r,
+            None => continue,
+        };
+
         // Find applicable schema.
-        let schema = match config.get_schema_for_relative_path(relative_path) {
+        let schema = match resolved.path_schema.as_ref() {
             Some(s) => s,
             None => continue, // No schema for this path.
         };
 
-        // Find the source dir to compute the sub-path relative to source dir.
-        let source_dir = match config.get_source_for_relative_path(relative_path) {
-            Some(sd) => sd,
-            None => continue,
-        };
-
         // Strip source dir prefix from the relative path.
-        let sub_path = match relative_path.strip_prefix(&source_dir.path) {
+        let sub_path = match relative_path.strip_prefix(&resolved.source_path) {
             Ok(p) => p.to_string_lossy().to_string(),
             Err(_) => continue,
         };
@@ -126,7 +126,7 @@ pub fn execute_detect_path_tag_mismatches(
                         inode: audio_file.inode(),
                         path: corpus_path.to_string(),
                         data: PathTagMismatchData {
-                            source_dir: source_dir.path.display().to_string(),
+                            source_dir: resolved.source_path.display().to_string(),
                             schema_template: schema.template.clone(),
                             mismatch_kind: PathMismatchKind::ValueMismatch { mismatches },
                         },
@@ -143,7 +143,7 @@ pub fn execute_detect_path_tag_mismatches(
                     inode: audio_file.inode(),
                     path: corpus_path.to_string(),
                     data: PathTagMismatchData {
-                        source_dir: source_dir.path.display().to_string(),
+                        source_dir: resolved.source_path.display().to_string(),
                         schema_template: schema.template.clone(),
                         mismatch_kind: PathMismatchKind::StructureMismatch { description },
                     },

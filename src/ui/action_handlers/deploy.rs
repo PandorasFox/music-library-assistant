@@ -100,8 +100,10 @@ impl App {
         // 3. New files: create hard links
         // library_name is already assigned during DeployModalData::load() via config lookup
         // deploy_path is "Artist/Album/..." (relative to library root)
+        let mut skipped_no_library = 0usize;
         for file in &data.new {
             if file.deploy_path.is_empty() || file.library_name.is_empty() {
+                skipped_no_library += 1;
                 continue;
             }
 
@@ -125,7 +127,8 @@ impl App {
                 let source = resolver.resolve(std::path::Path::new(corpus_path));
 
                 let library_name = config.as_ref()
-                    .and_then(|cfg| cfg.get_libraries_for_corpus_path(std::path::Path::new(corpus_path)).into_iter().next())
+                    .and_then(|cfg| cfg.resolve_source_config_for_db_path(corpus_path))
+                    .and_then(|r| r.libraries.into_iter().next())
                     .unwrap_or_default();
 
                 if library_name.is_empty() {
@@ -138,6 +141,13 @@ impl App {
                 let destination = resolver.resolve(&dest_rel);
                 mutations.push(Mutation::HardLink(HardLinkMutation { source, destination }));
             }
+        }
+
+        if skipped_no_library > 0 {
+            crate::logging::log_error(format!(
+                "[DEPLOY] {} new files skipped: no library_name (source dir without libraries?)",
+                skipped_no_library,
+            ));
         }
 
         let count = mutations.len();

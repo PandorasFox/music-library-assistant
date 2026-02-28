@@ -361,38 +361,68 @@ impl Default for Opinions {
 /// Source directories are the logical "collections" that files belong to.
 /// They define where files deploy to and how duplicates between sources
 /// should be resolved.
+///
+/// Boolean fields are `Option<bool>` — `None` means "inherit from parent
+/// source directory" (or fall back to system default if no parent sets it).
+/// This enables child dirs to override only specific settings without
+/// shadowing the parent's other explicit values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceDir {
     /// Path relative to corpus root (e.g., "web/releases/bandcamp")
     pub path: PathBuf,
     /// Target library names for deployment (e.g., ["music", "soundtracks"])
     /// A single source can deploy to multiple libraries.
+    /// Empty vec = inherit from parent source directory.
     pub libraries: Vec<String>,
-    /// Whether duplicates from this source can be stashed when another source wins (default: true)
-    pub can_stash_dupes: bool,
-    /// Whether intra-source duplicates should be flagged (default: true).
-    /// When false, duplicate groups entirely within this source are suppressed.
-    pub interior_dupes: bool,
+    /// Whether duplicates from this source can be stashed when another source wins.
+    /// None = inherit from parent (system default: true).
+    pub can_stash_dupes: Option<bool>,
+    /// Whether intra-source duplicates should be flagged.
+    /// None = inherit from parent (system default: true).
+    /// When resolved to false, duplicate groups entirely within this source are suppressed.
+    pub interior_dupes: Option<bool>,
     /// Optional path-tag schema: expected file path structure expressed as tag placeholders.
     /// When set, files under this source dir are checked for path-tag agreement.
+    /// None = inherit from parent.
     pub path_schema: Option<PathTagSchema>,
-    /// Whether AcoustID lookups are enabled for this source directory (default: true).
-    pub enable_acoustid: bool,
+    /// Whether AcoustID lookups are enabled for this source directory.
+    /// None = inherit from parent (system default: true).
+    pub enable_acoustid: Option<bool>,
 }
 
 impl SourceDir {
-    /// Whether this source dir has all-default settings and carries no information.
+    /// Whether this source dir has all-default/inherit settings and carries no information.
     ///
-    /// A default entry (no libraries, all bools at default, no schema) is semantically
+    /// A default entry (no libraries, all options None, no schema) is semantically
     /// empty — it configures nothing beyond what the absence of config already implies.
     /// Such entries are elided from dirs.kdl on write.
     pub fn is_default(&self) -> bool {
         self.libraries.is_empty()
-            && self.can_stash_dupes
-            && self.interior_dupes
+            && self.can_stash_dupes.is_none()
+            && self.interior_dupes.is_none()
             && self.path_schema.is_none()
-            && self.enable_acoustid
+            && self.enable_acoustid.is_none()
     }
+}
+
+/// Fully resolved source configuration for a specific path.
+///
+/// All fields have concrete values — inheritance has been flattened by walking
+/// from most-specific to least-specific matching SourceDir and taking the first
+/// explicitly-set value for each field. System defaults apply when nothing in
+/// the chain sets a field.
+#[derive(Debug, Clone)]
+pub struct ResolvedSourceConfig {
+    /// The most specific matching SourceDir's path (for prefix stripping).
+    pub source_path: PathBuf,
+    /// Resolved library names (first non-empty in chain, or empty).
+    pub libraries: Vec<String>,
+    /// Resolved can_stash_dupes (first Some in chain, or true).
+    pub can_stash_dupes: bool,
+    /// Resolved interior_dupes (first Some in chain, or true).
+    pub interior_dupes: bool,
+    /// Resolved path schema (first Some in chain, or None).
+    pub path_schema: Option<PathTagSchema>,
 }
 
 /// Shared config wrapped in `Arc<RwLock<Config>>` for thread-safe read/write access.
@@ -464,61 +494,75 @@ impl Config {
         })
     }
 
-    /// Get the source directory for a corpus path.
+    /// Resolve the full source config for a corpus-relative path, with inheritance.
     ///
-    /// Given a corpus path (relative, e.g., `corpus/web/releases/bandcamp/...`),
-    /// returns the matching SourceDir. Returns None if not under any source.
-    pub fn get_source_for_path(&self, corpus_path: &Path) -> Option<&SourceDir> {
-        // Find the most specific (longest) matching source
-        self.source_dirs
-            .iter()
-            .filter(|sd| {
-                let prefix = Path::new("corpus").join(&sd.path);
-                corpus_path.starts_with(&prefix)
-            })
-            .max_by_key(|sd| sd.path.as_os_str().len())
-    }
-
-    /// Get the target library names for a corpus path.
+    /// Takes a path relative to corpus root (WITHOUT "corpus/" prefix),
+    /// e.g., `web/releases/bandcamp/Artist/Album/track.flac`.
+    /// Returns None if not under any configured source directory.
     ///
-    /// Given a corpus path (relative, e.g., `corpus/web/releases/...`), returns
-    /// the library names from the matching source directory.
-    /// Returns empty vec if no source matches or source has no libraries configured.
-    pub fn get_libraries_for_corpus_path(&self, corpus_path: &Path) -> Vec<String> {
-        self.get_source_for_path(corpus_path)
-            .map(|sd| sd.libraries.clone())
-            .unwrap_or_default()
-    }
-
-    /// Get the source directory config for a relative corpus path.
+    /// For each field, walks from most-specific to least-specific source dir
+    /// and returns the first explicitly-set value. Falls back to system defaults
+    /// (true for bools, None for schema, empty for libraries) if nothing in the
+    /// chain sets the field.
     ///
-    /// Given a path relative to corpus root (WITHOUT the "corpus/" prefix),
-    /// e.g., `web/releases/bandcamp/Artist/Album/track.flac`, returns the
-    /// matching SourceDir. Returns None if not under any configured source.
-    ///
-    /// This is used by cross-source overlap detection to classify files by source.
-    pub fn get_source_for_relative_path(&self, relative_path: &Path) -> Option<&SourceDir> {
-        // Find the most specific (longest) matching source
-        self.source_dirs
-            .iter()
-            .filter(|sd| relative_path.starts_with(&sd.path))
-            .max_by_key(|sd| sd.path.as_os_str().len())
-    }
-
-    /// Get the path-tag schema for a relative corpus path.
-    ///
-    /// Walks matching SourceDirs from most specific to least specific.
-    /// Returns the first schema found (child overrides parent).
-    pub fn get_schema_for_relative_path(&self, relative_path: &Path) -> Option<&PathTagSchema> {
-        // Collect all matching source dirs, sorted longest path first.
+    /// `source_path` is always the most-specific matching SourceDir's path,
+    /// used for prefix stripping and source identity.
+    pub fn resolve_source_config(&self, relative_path: &Path) -> Option<ResolvedSourceConfig> {
+        // Collect all matching sources, sorted most specific (longest path) first.
         let mut matching: Vec<&SourceDir> = self.source_dirs
             .iter()
             .filter(|sd| relative_path.starts_with(&sd.path))
             .collect();
+
+        if matching.is_empty() {
+            return None;
+        }
+
         matching.sort_by(|a, b| b.path.as_os_str().len().cmp(&a.path.as_os_str().len()));
 
-        // Return first schema found (most specific wins).
-        matching.iter().find_map(|sd| sd.path_schema.as_ref())
+        let source_path = matching[0].path.clone();
+
+        // Walk chain for each field: first explicit value wins, else system default.
+        let libraries = matching.iter()
+            .find(|sd| !sd.libraries.is_empty())
+            .map(|sd| sd.libraries.clone())
+            .unwrap_or_default();
+
+        let can_stash_dupes = matching.iter()
+            .find_map(|sd| sd.can_stash_dupes)
+            .unwrap_or(true);
+
+        let interior_dupes = matching.iter()
+            .find_map(|sd| sd.interior_dupes)
+            .unwrap_or(true);
+
+        let path_schema = matching.iter()
+            .find_map(|sd| sd.path_schema.clone());
+
+        Some(ResolvedSourceConfig {
+            source_path,
+            libraries,
+            can_stash_dupes,
+            interior_dupes,
+            path_schema,
+        })
+    }
+
+    /// Resolve source config for a DB path (with "corpus/" prefix).
+    ///
+    /// Strips the "corpus/" prefix and delegates to `resolve_source_config`.
+    pub fn resolve_source_config_for_db_path(&self, db_path: &str) -> Option<ResolvedSourceConfig> {
+        let relative = db_path.strip_prefix("corpus/").unwrap_or(db_path);
+        self.resolve_source_config(Path::new(relative))
+    }
+
+    /// Get the raw SourceDir for an exact path match (for config editing).
+    ///
+    /// Unlike `resolve_source_config`, this returns the raw SourceDir with
+    /// `Option<bool>` fields intact — used by the dir config editor to show
+    /// what THIS directory explicitly sets vs. inherits.
+    pub fn get_raw_source_dir(&self, relative_path: &Path) -> Option<&SourceDir> {
+        self.source_dirs.iter().find(|sd| sd.path == relative_path)
     }
 
     // =========================================================================

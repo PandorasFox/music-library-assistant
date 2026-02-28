@@ -179,9 +179,8 @@ pub fn execute_detect_release_overlaps(
         // Strip "corpus/" prefix for source directory lookup (signal paths are corpus-prefixed)
         let relative_path = signal.path.strip_prefix("corpus/").unwrap_or(&signal.path);
 
-        let source = config.get_source_for_relative_path(Path::new(relative_path));
-        let source = match source {
-            Some(s) => s,
+        let resolved = match config.resolve_source_config(Path::new(relative_path)) {
+            Some(r) => r,
             None => continue,
         };
 
@@ -207,15 +206,15 @@ pub fn execute_detect_release_overlaps(
             continue;
         }
 
-        let source_dir = source.path.to_string_lossy().to_string();
-        let release_dir = extract_release_directory(relative_path, &source.path);
+        let source_dir = resolved.source_path.to_string_lossy().to_string();
+        let release_dir = extract_release_directory(relative_path, &resolved.source_path);
 
         album_dir_files.entry(album_dir).or_default().push(FileInfo {
             inode: signal.inode,
             corpus_path: signal.path.clone(),
             source_dir,
             release_dir,
-            can_stash: source.can_stash_dupes,
+            can_stash: resolved.can_stash_dupes,
         });
     }
 

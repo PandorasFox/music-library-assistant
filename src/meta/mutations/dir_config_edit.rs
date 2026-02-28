@@ -146,15 +146,15 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
         if old.can_stash_dupes != new.can_stash_dupes {
             diffs.push(DiffEntry::new(
                 "Can stash dupes",
-                old.can_stash_dupes,
-                new.can_stash_dupes,
+                format_opt_bool(old.can_stash_dupes),
+                format_opt_bool(new.can_stash_dupes),
             ));
         }
         if old.interior_dupes != new.interior_dupes {
             diffs.push(DiffEntry::new(
                 "Interior dupes",
-                old.interior_dupes,
-                new.interior_dupes,
+                format_opt_bool(old.interior_dupes),
+                format_opt_bool(new.interior_dupes),
             ));
         }
         let old_schema = old.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or("(none)");
@@ -169,12 +169,21 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
         if old.enable_acoustid != new.enable_acoustid {
             diffs.push(DiffEntry::new(
                 "Enable AcoustID",
-                old.enable_acoustid,
-                new.enable_acoustid,
+                format_opt_bool(old.enable_acoustid),
+                format_opt_bool(new.enable_acoustid),
             ));
         }
 
         diffs
+    }
+}
+
+/// Format an Option<bool> for diff display.
+fn format_opt_bool(v: Option<bool>) -> &'static str {
+    match v {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "(inherit)",
     }
 }
 
@@ -328,15 +337,15 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
             if old.can_stash_dupes != new.can_stash_dupes {
                 diffs.push(DiffEntry::new(
                     format!("{}: Can stash dupes", prefix),
-                    old.can_stash_dupes,
-                    new.can_stash_dupes,
+                    format_opt_bool(old.can_stash_dupes),
+                    format_opt_bool(new.can_stash_dupes),
                 ));
             }
             if old.interior_dupes != new.interior_dupes {
                 diffs.push(DiffEntry::new(
                     format!("{}: Interior dupes", prefix),
-                    old.interior_dupes,
-                    new.interior_dupes,
+                    format_opt_bool(old.interior_dupes),
+                    format_opt_bool(new.interior_dupes),
                 ));
             }
             let old_schema = old.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or("(none)");
@@ -351,8 +360,8 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
             if old.enable_acoustid != new.enable_acoustid {
                 diffs.push(DiffEntry::new(
                     format!("{}: Enable AcoustID", prefix),
-                    old.enable_acoustid,
-                    new.enable_acoustid,
+                    format_opt_bool(old.enable_acoustid),
+                    format_opt_bool(new.enable_acoustid),
                 ));
             }
         }

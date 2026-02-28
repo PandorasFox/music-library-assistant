@@ -20,8 +20,9 @@ pub struct DetailField<'a> {
 
 /// Widget type for a detail field.
 pub enum DetailWidget<'a> {
-    /// Boolean shown as "true"/"false", toggled with Enter/Space.
-    Bool { value: bool, edited: bool },
+    /// Optional boolean: None = "(inherit)", Some(v) = "true"/"false".
+    /// Cycles None → Some(true) → Some(false) → None on toggle.
+    OptBool { value: Option<bool>, edited: bool },
     /// Vertical list of strings with cursor, add/edit/delete.
     StringItems {
         items: &'a [String],
@@ -90,12 +91,18 @@ pub fn render_detail_panel(
         };
 
         match &field.widget {
-            DetailWidget::Bool { value, edited } => {
-                let val_str = if *value { "true" } else { "false" };
+            DetailWidget::OptBool { value, edited } => {
+                let val_str = match value {
+                    Some(true) => "true",
+                    Some(false) => "false",
+                    None => "(inherit)",
+                };
                 let val_style = if is_focused {
                     CURSOR_STYLE
                 } else if *edited {
                     Style::default().fg(Color::Green)
+                } else if value.is_none() {
+                    Style::default().fg(Color::DarkGray)
                 } else {
                     Style::default().fg(Color::White)
                 };

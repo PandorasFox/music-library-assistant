@@ -296,6 +296,13 @@ impl ReconciliationPlan {
     }
 }
 
+/// Check if any data migrations are pending.
+pub fn has_pending_data_migrations(db: &Database) -> bool {
+    data_migrations::all_data_migrations()
+        .iter()
+        .any(|m| !data_migrations::is_migration_applied(db, m.id))
+}
+
 /// Check if the schema fingerprint matches (fast-path for startup).
 pub fn fingerprint_matches(db: &Database) -> bool {
     let expected = table_schema::schema_fingerprint().to_string();

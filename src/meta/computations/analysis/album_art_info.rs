@@ -7,6 +7,7 @@
 use std::path::Path;
 use std::time::Instant;
 
+use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
 use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
@@ -54,16 +55,24 @@ pub fn execute_backfill_album_art_info(
 
     if dirty_inodes.is_empty() {
         log_general("[COMPUTE] BackfillAlbumArtInfo: no dirty inodes, skipping");
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        // Still spawn DetectEmbeddableAlbumArt — embed detection for artless files
+        // doesn't depend on backfill, only upgrade detection does.
+        return Result::success(
+            computation,
+            start.elapsed().as_millis() as u64,
+            vec![Computation::DetectEmbeddableAlbumArt],
+        );
     }
 
+    let resolver = paths::get_resolver();
     let mut updated = 0;
     let mut skipped = 0;
 
     for inode in &dirty_inodes {
         match read_only_db.get_corpus_path_for_inode(*inode) {
-            Ok(Some(path)) => {
-                let pic_info = TagSet::extract_picture_info(Path::new(&path));
+            Ok(Some(rel_path)) => {
+                let abs_path = resolver.resolve(Path::new(&rel_path));
+                let pic_info = TagSet::extract_picture_info(&abs_path);
 
                 if let Some(info) = pic_info {
                     sender.update_picture_metadata(
@@ -102,5 +111,15 @@ pub fn execute_backfill_album_art_info(
         dirty_inodes.len(), updated, skipped
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    // Wait for picture metadata writes to land, then spawn album art detection
+    // which depends on pic_format/pic_width/pic_height being populated.
+    write_thread::wait_for_queue_drain();
+
+    let follow_ups = if updated > 0 {
+        vec![Computation::DetectEmbeddableAlbumArt]
+    } else {
+        Vec::new()
+    };
+
+    Result::success(computation, start.elapsed().as_millis() as u64, follow_ups)
 }

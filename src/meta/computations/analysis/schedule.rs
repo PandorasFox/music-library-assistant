@@ -53,7 +53,9 @@ pub fn execute_schedule_content_analysis(
             Computation::DetectFingerprintOverlaps,
             Computation::DetectDuplicateInodes,
             Computation::DetectShitFormats,
-            Computation::DetectEmbeddableAlbumArt,
+            // DetectEmbeddableAlbumArt is NOT spawned here — it depends on
+            // pic_format/pic_width/pic_height populated by BackfillAlbumArtInfo,
+            // so BackfillAlbumArtInfo spawns it after wait_for_queue_drain().
             Computation::BackfillAlbumArtInfo,
             Computation::DetectCrossSourceOverlaps,
         ]);

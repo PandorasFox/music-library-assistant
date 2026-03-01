@@ -27,11 +27,32 @@ pub struct DataMigrationEntry {
 }
 
 /// Returns all registered data migrations.
-///
-/// Initially empty — all historical data migrations from the old migration
-/// system are already baked into the current schema state.
 pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
-    vec![]
+    vec![
+        DataMigrationEntry {
+            id: "2026-02-reseed-album-art-info",
+            description: "Re-seed album_art_info dirty inodes (fix: backfill was using unresolved relative paths)",
+            apply: |db| {
+                use rusqlite::params;
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                db.conn().execute(
+                    r#"
+                    INSERT OR IGNORE INTO dirty_inodes (inode, computation_type, dirtied_at)
+                    SELECT a.inode, 'album_art_info', ?1
+                    FROM audio_info a
+                    JOIN files f ON a.inode = f.inode
+                    WHERE f.zone = 'corpus' AND a.has_pictures = 1
+                    "#,
+                    params![now],
+                )?;
+                Ok(())
+            },
+        },
+    ]
 }
 
 /// Check whether a data migration has already been applied.

@@ -30,16 +30,25 @@ impl InitialUiState {
             Err(_) => return InitialUiState::FirstTimeSetup,
         };
 
-        // Fast path: fingerprint match means schema is up-to-date
-        if reconciler::fingerprint_matches(&db) {
+        // Check schema changes + data migrations together
+        let schema_dirty = !reconciler::fingerprint_matches(&db);
+        let has_data_migrations = reconciler::has_pending_data_migrations(&db);
+
+        if !schema_dirty && !has_data_migrations {
             return InitialUiState::ProgressScreen;
         }
 
-        // Fingerprint mismatch — compute the actual plan to check
-        match reconciler::ReconciliationPlan::compute(db.conn()) {
-            Ok(plan) if plan.is_empty() => InitialUiState::ProgressScreen,
-            Ok(_) => InitialUiState::SchemaUpdateRequired,
-            Err(_) => InitialUiState::SchemaUpdateRequired,
+        if schema_dirty {
+            // Schema fingerprint mismatch — compute actual plan to verify
+            match reconciler::ReconciliationPlan::compute(db.conn()) {
+                Ok(plan) if plan.is_empty() && !has_data_migrations => {
+                    InitialUiState::ProgressScreen
+                }
+                _ => InitialUiState::SchemaUpdateRequired,
+            }
+        } else {
+            // Schema is fine but data migrations are pending
+            InitialUiState::SchemaUpdateRequired
         }
     }
 }

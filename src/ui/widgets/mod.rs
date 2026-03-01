@@ -54,7 +54,7 @@ pub use path_display::PathField;
 // Album art preview
 pub use album_art_preview::{
     AlbumArtCache, AlbumArtPicker, ArtCacheKey,
-    render_album_art_preview, render_no_art_placeholder,
+    render_album_art_preview, render_no_art_placeholder, square_height,
 };
 
 // File path list + selection styles

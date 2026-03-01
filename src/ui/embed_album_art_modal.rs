@@ -3,7 +3,8 @@
 //! Per-directory review of album art work: embedding sidecar images into artless
 //! audio files and upgrading lower-quality embedded art with better sidecars.
 //!
-//! - Up/Down: Scroll file list within current directory
+//! - Up/Down: Navigate file selection within current directory
+//! - Tab/Shift-Tab: Cycle between directories
 //! - Left/Right: Switch between Confirm/Skip buttons
 //! - Enter: Confirm or skip current directory, advance to next
 //! - Escape: Cancel entire review
@@ -29,8 +30,9 @@ use crate::meta::signals::data::SidecarImage;
 use crate::ui::helpers::render_pane;
 use crate::ui::widgets::control_colors as cc;
 use crate::ui::widgets::{
-    AlbumArtCache, AlbumArtPicker, ConfirmationButton,
+    AlbumArtCache, AlbumArtPicker, ArtCacheKey, ConfirmationButton,
     render_album_art_preview, render_button_row, render_no_art_placeholder,
+    square_height,
 };
 
 // ============================================================================
@@ -53,6 +55,21 @@ pub enum AlbumArtReviewAction {
 // ============================================================================
 // Data Types
 // ============================================================================
+
+/// Whether a file entry is an embed (artless) or upgrade operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtOperation {
+    /// File has no embedded art — will embed sidecar.
+    Embed,
+    /// File has lower-quality art — will upgrade with sidecar.
+    Upgrade,
+}
+
+/// A file entry in the flat file list, with its operation type.
+pub struct FlatFileEntry<'a> {
+    pub file: &'a ArtReviewFile,
+    pub operation: ArtOperation,
+}
 
 /// A file that needs album art work within a directory.
 #[derive(Debug, Clone)]
@@ -118,6 +135,18 @@ impl ArtReviewDirectory {
         }
 
         mutations
+    }
+
+    /// Return a flat list of all files (embed first, then upgrade) with operation tags.
+    fn flat_files(&self) -> Vec<FlatFileEntry<'_>> {
+        let mut entries = Vec::with_capacity(self.embed_entries.len() + self.upgrade_entries.len());
+        for file in &self.embed_entries {
+            entries.push(FlatFileEntry { file, operation: ArtOperation::Embed });
+        }
+        for file in &self.upgrade_entries {
+            entries.push(FlatFileEntry { file, operation: ArtOperation::Upgrade });
+        }
+        entries
     }
 }
 
@@ -218,8 +247,8 @@ pub struct AlbumArtReviewState {
     pub directories: Vec<ArtReviewDirectory>,
     /// Index of current directory being reviewed.
     pub current_dir: usize,
-    /// File list scroll offset within current directory.
-    pub file_scroll: usize,
+    /// Selected file index within the flat file list for the current directory.
+    pub selected_file: usize,
     /// Which button is selected.
     pub selected_button: AlbumArtReviewButton,
     /// Accumulated mutations from confirmed directories.
@@ -234,7 +263,7 @@ impl AlbumArtReviewState {
         Self {
             directories,
             current_dir: 0,
-            file_scroll: 0,
+            selected_file: 0,
             selected_button: AlbumArtReviewButton::Confirm,
             staged_mutations: Vec::new(),
             confirmed_count: 0,
@@ -251,24 +280,17 @@ impl AlbumArtReviewState {
         self.directories.get(self.current_dir)
     }
 
-    /// Total line count for file list in current directory.
-    fn file_list_len(&self) -> usize {
-        self.current().map(|d| {
-            let mut count = 0;
-            if !d.embed_entries.is_empty() {
-                count += 1 + d.embed_entries.len(); // header + files
-            }
-            if !d.upgrade_entries.is_empty() {
-                count += 1 + d.upgrade_entries.len() * 2; // header + (file + desc) pairs
-            }
-            count
-        }).unwrap_or(0)
+    /// Total file count in current directory's flat list.
+    fn flat_file_count(&self) -> usize {
+        self.current()
+            .map(|d| d.embed_entries.len() + d.upgrade_entries.len())
+            .unwrap_or(0)
     }
 
-    /// Advance to next directory, resetting scroll.
+    /// Advance to next directory, resetting selection.
     pub fn advance(&mut self) {
         self.current_dir += 1;
-        self.file_scroll = 0;
+        self.selected_file = 0;
         self.selected_button = AlbumArtReviewButton::Confirm;
     }
 
@@ -300,27 +322,49 @@ impl AlbumArtReviewState {
             }
 
             InputAction::NavUp => {
-                if self.file_scroll > 0 {
-                    self.file_scroll -= 1;
+                if self.selected_file > 0 {
+                    self.selected_file -= 1;
                 }
                 AlbumArtReviewAction::None
             }
 
             InputAction::NavDown => {
-                let max = self.file_list_len().saturating_sub(1);
-                if self.file_scroll < max {
-                    self.file_scroll += 1;
+                let max = self.flat_file_count().saturating_sub(1);
+                if self.selected_file < max {
+                    self.selected_file += 1;
                 }
                 AlbumArtReviewAction::None
             }
 
             InputAction::Home => {
-                self.file_scroll = 0;
+                self.selected_file = 0;
                 AlbumArtReviewAction::None
             }
 
             InputAction::End => {
-                self.file_scroll = self.file_list_len().saturating_sub(1);
+                self.selected_file = self.flat_file_count().saturating_sub(1);
+                AlbumArtReviewAction::None
+            }
+
+            // Tab: advance to next directory
+            InputAction::CycleNext => {
+                if self.directories.len() > 1 {
+                    self.current_dir = (self.current_dir + 1) % self.directories.len();
+                    self.selected_file = 0;
+                }
+                AlbumArtReviewAction::None
+            }
+
+            // Shift-Tab: go to previous directory
+            InputAction::CyclePrev => {
+                if self.directories.len() > 1 {
+                    self.current_dir = if self.current_dir == 0 {
+                        self.directories.len() - 1
+                    } else {
+                        self.current_dir - 1
+                    };
+                    self.selected_file = 0;
+                }
                 AlbumArtReviewAction::None
             }
 
@@ -348,11 +392,15 @@ impl AlbumArtReviewState {
             ])
             .split(area);
 
-        // Title
+        // Title — includes directory path
+        let dir_path = self.current()
+            .map(|d| d.directory.as_str())
+            .unwrap_or("");
         let title_text = format!(
-            " Album Art Review [{}/{}] ",
+            " Album Art Review [{}/{}]  {} ",
             self.current_dir + 1,
             self.directories.len(),
+            dir_path,
         );
         let title_block = Block::default()
             .borders(Borders::ALL)
@@ -360,7 +408,7 @@ impl AlbumArtReviewState {
             .border_style(Style::default().fg(Color::Cyan));
         render_pane(f, chunks[0], title_block);
 
-        // Content: directory file list (left) + art preview (right)
+        // Content: track list (left) + dual art preview (right)
         let content_area = chunks[1];
         let has_preview = art_picker.is_available() && content_area.width > 40;
 
@@ -368,13 +416,13 @@ impl AlbumArtReviewState {
             let content_chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Percentage(60),
                     Constraint::Percentage(40),
+                    Constraint::Percentage(60),
                 ])
                 .split(content_area);
 
             self.render_file_list(f, content_chunks[0]);
-            self.render_art_preview(f, content_chunks[1], art_picker, art_cache);
+            self.render_dual_art_preview(f, content_chunks[1], art_picker, art_cache);
         } else {
             self.render_file_list(f, content_area);
         }
@@ -390,7 +438,9 @@ impl AlbumArtReviewState {
         // Hints
         let hints = Paragraph::new(Line::from(vec![
             cc::nav("[↑↓]"),
-            cc::text(" scroll  "),
+            cc::text(" files  "),
+            cc::nav("[Tab/S-Tab]"),
+            cc::text(" dir  "),
             cc::nav("[←→]"),
             cc::text(" buttons  "),
             cc::confirm("[Enter]"),
@@ -402,7 +452,7 @@ impl AlbumArtReviewState {
         f.render_widget(hints, chunks[3]);
     }
 
-    /// Render the file list for the current directory (left pane).
+    /// Render the flat track list for the current directory (left pane).
     fn render_file_list(&self, f: &mut Frame, area: Rect) {
         let Some(dir) = self.current() else {
             let block = Block::default().borders(Borders::ALL).title(" No directories ");
@@ -410,103 +460,56 @@ impl AlbumArtReviewState {
             return;
         };
 
-        let mut items: Vec<ListItem> = Vec::new();
-        let mut line_idx: usize = 0;
+        let flat = dir.flat_files();
+        let mut items: Vec<ListItem> = Vec::with_capacity(flat.len());
 
-        // Directory path as header
-        let dir_title = format!(" {} ", dir.directory);
+        for (i, entry) in flat.iter().enumerate() {
+            let filename = Path::new(&entry.file.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| entry.file.path.clone());
 
-        // Embed section
-        if !dir.embed_entries.is_empty() {
-            let header_style = if line_idx == self.file_scroll {
-                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            let is_selected = i == self.selected_file;
+            let (note_color, cursor_bg) = match entry.operation {
+                ArtOperation::Embed => (Color::Cyan, Color::Cyan),
+                ArtOperation::Upgrade => (Color::Yellow, Color::Yellow),
             };
-            items.push(ListItem::new(Line::from(Span::styled(
-                format!("  Embed ({} files):", dir.embed_entries.len()),
-                header_style,
-            ))));
-            line_idx += 1;
 
-            for entry in &dir.embed_entries {
-                let filename = Path::new(&entry.path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| entry.path.clone());
-                let style = if line_idx == self.file_scroll {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                items.push(ListItem::new(Line::from(Span::styled(
-                    format!("    ♪ {}", filename),
-                    style,
-                ))));
-                line_idx += 1;
-            }
+            let style = if is_selected {
+                Style::default().fg(Color::Black).bg(cursor_bg)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let note_style = if is_selected {
+                Style::default().fg(Color::Black).bg(cursor_bg)
+            } else {
+                Style::default().fg(note_color)
+            };
+
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled("  ", style),
+                Span::styled("♪", note_style),
+                Span::styled(format!(" {}", filename), style),
+            ])));
         }
 
-        // Upgrade section
-        if !dir.upgrade_entries.is_empty() {
-            let header_style = if line_idx == self.file_scroll {
-                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            };
-            items.push(ListItem::new(Line::from(Span::styled(
-                format!("  Upgrade ({} files):", dir.upgrade_entries.len()),
-                header_style,
-            ))));
-            line_idx += 1;
-
-            for entry in &dir.upgrade_entries {
-                let filename = Path::new(&entry.path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| entry.path.clone());
-                let style = if line_idx == self.file_scroll {
-                    Style::default().fg(Color::Black).bg(Color::Yellow)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                items.push(ListItem::new(Line::from(Span::styled(
-                    format!("    ♪ {}", filename),
-                    style,
-                ))));
-                line_idx += 1;
-
-                // Show current art description below
-                let desc = entry.current_art_desc.as_deref().unwrap_or("unknown");
-                let desc_style = if line_idx == self.file_scroll {
-                    Style::default().fg(Color::Black).bg(Color::Yellow)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-                items.push(ListItem::new(Line::from(Span::styled(
-                    format!("      ({} →)", desc),
-                    desc_style,
-                ))));
-                line_idx += 1;
-            }
-        }
-
-        // Apply scroll offset
+        // Viewport scrolling based on selected_file
         let visible_height = area.height.saturating_sub(2) as usize; // borders
-        let skip = if self.file_scroll >= visible_height {
-            self.file_scroll - visible_height + 1
+        let skip = if visible_height > 0 && self.selected_file >= visible_height {
+            self.selected_file - visible_height + 1
         } else {
             0
         };
         let visible_items: Vec<ListItem> = items.into_iter().skip(skip).collect();
 
         let list = List::new(visible_items)
-            .block(Block::default().borders(Borders::ALL).title(dir_title));
+            .block(Block::default().borders(Borders::ALL).title(" Tracks "));
         f.render_widget(list, area);
     }
 
-    /// Render the album art preview (right pane).
-    fn render_art_preview(
+    /// Render dual art preview: current (top) + new/sidecar (bottom).
+    fn render_dual_art_preview(
         &self,
         f: &mut Frame,
         area: Rect,
@@ -515,61 +518,133 @@ impl AlbumArtReviewState {
     ) {
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Sidecar Preview ")
             .border_style(Style::default().fg(Color::DarkGray));
         let inner = block.inner(area);
         f.render_widget(block, area);
 
-        if inner.width < 2 || inner.height < 2 {
+        if inner.width < 4 || inner.height < 4 {
             return;
         }
 
-        if let Some(dir) = self.current() {
-            let image_path = Path::new(&dir.sidecar.path);
+        let Some(dir) = self.current() else {
+            render_no_art_placeholder(f, inner);
+            return;
+        };
 
-            art_cache.retain_only(&[image_path]);
-            let cached = art_cache.get_or_load(image_path, art_picker);
+        let flat = dir.flat_files();
+        let selected = flat.get(self.selected_file);
 
-            let (preview_area, info_area) = if inner.height > 4 {
-                let split = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Min(3),
-                        Constraint::Length(1),
-                    ])
-                    .split(inner);
-                (split[0], Some(split[1]))
-            } else {
-                (inner, None)
-            };
+        // Determine cache keys to retain
+        let sidecar_path = Path::new(&dir.sidecar.path);
+        let sidecar_key = ArtCacheKey::Sidecar(sidecar_path.to_path_buf());
 
-            render_album_art_preview(f, preview_area, cached);
+        let mut retain_keys = vec![sidecar_key];
+        if let Some(entry) = &selected {
+            if entry.operation == ArtOperation::Upgrade {
+                let resolver = paths::get_resolver();
+                let audio_path = resolver.resolve(Path::new(&entry.file.path));
+                retain_keys.push(ArtCacheKey::Embedded(audio_path));
+            }
+        }
+        art_cache.retain_only_keys(&retain_keys);
 
-            if let Some(info_area) = info_area {
-                let info_text = if cached.width > 0 {
-                    format!(
-                        "{} {}x{} {}",
-                        cached.path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
-                        cached.width,
-                        cached.height,
-                        cached.format.to_uppercase(),
-                    )
-                } else {
-                    cached.path.file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default()
-                };
-                let info_line = Line::from(Span::styled(
-                    info_text,
-                    Style::default().fg(Color::DarkGray),
-                ));
-                f.render_widget(
-                    Paragraph::new(info_line).alignment(Alignment::Center),
-                    info_area,
-                );
+        let font_size = art_picker.font_size();
+
+        // Each art section: 1 line label + square art area
+        // We have two sections: "Current" and "New"
+        // Compute ideal square height for the available width
+        let ideal_sq = square_height(inner.width, font_size);
+
+        // Available height: inner.height, split between two label+art pairs
+        // Each pair needs 1 (label) + art_height
+        // Total: 2 labels + 2 art areas = 2 + 2*art_h <= inner.height
+        let available_for_art = inner.height.saturating_sub(2); // 2 label lines
+        let art_h = if ideal_sq * 2 <= available_for_art {
+            ideal_sq
+        } else {
+            available_for_art / 2
+        };
+
+        if art_h < 1 {
+            return;
+        }
+
+        // Layout: current_label, current_art, new_label, new_art
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),    // "Current" label
+                Constraint::Length(art_h), // current art
+                Constraint::Length(1),    // "New" label
+                Constraint::Length(art_h), // new art
+                Constraint::Min(0),       // any remaining space
+            ])
+            .split(inner);
+
+        // === Current art (top) ===
+        if let Some(entry) = &selected {
+            match entry.operation {
+                ArtOperation::Embed => {
+                    // Artless file — show "Current" label + placeholder
+                    let label = Line::from(Span::styled(
+                        " Current",
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                    ));
+                    f.render_widget(Paragraph::new(label), sections[0]);
+                    render_no_art_placeholder(f, sections[1]);
+                }
+                ArtOperation::Upgrade => {
+                    // Has embedded art — load and show it
+                    let resolver = paths::get_resolver();
+                    let audio_path = resolver.resolve(Path::new(&entry.file.path));
+                    let cached = art_cache.get_or_load_embedded(&audio_path, art_picker);
+
+                    let label_text = if cached.width > 0 {
+                        format!(
+                            " Current ({}x{} {})",
+                            cached.width,
+                            cached.height,
+                            cached.format.to_uppercase(),
+                        )
+                    } else {
+                        " Current".to_string()
+                    };
+                    let label = Line::from(Span::styled(
+                        label_text,
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                    ));
+                    f.render_widget(Paragraph::new(label), sections[0]);
+                    render_album_art_preview(f, sections[1], cached);
+                }
             }
         } else {
-            render_no_art_placeholder(f, inner);
+            let label = Line::from(Span::styled(
+                " Current",
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            ));
+            f.render_widget(Paragraph::new(label), sections[0]);
+            render_no_art_placeholder(f, sections[1]);
+        }
+
+        // === New art (bottom) ===
+        {
+            let cached = art_cache.get_or_load(sidecar_path, art_picker);
+            let label_text = if cached.width > 0 {
+                format!(
+                    " New ({}x{} {})",
+                    cached.width,
+                    cached.height,
+                    cached.format.to_uppercase(),
+                )
+            } else {
+                " New".to_string()
+            };
+            let label = Line::from(Span::styled(
+                label_text,
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ));
+            f.render_widget(Paragraph::new(label), sections[2]);
+            render_album_art_preview(f, sections[3], cached);
         }
     }
 }

@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -27,6 +27,20 @@ use ratatui_image::StatefulImage;
 /// Created once at app startup, used to create image protocols for rendering.
 pub struct AlbumArtPicker {
     picker: Option<Picker>,
+    /// Terminal font size in pixels: (width, height) per cell.
+    font_size: (u16, u16),
+}
+
+/// Compute the cell height needed to make a square in pixels, given a cell width.
+///
+/// Uses ceiling division: `(width_cells * font_w + font_h - 1) / font_h`.
+pub fn square_height(width_cells: u16, font_size: (u16, u16)) -> u16 {
+    let (font_w, font_h) = font_size;
+    if font_h == 0 {
+        return width_cells;
+    }
+    let px_width = width_cells as u32 * font_w as u32;
+    ((px_width + font_h as u32 - 1) / font_h as u32) as u16
 }
 
 impl AlbumArtPicker {
@@ -35,13 +49,30 @@ impl AlbumArtPicker {
     /// Must be called after entering alternate screen but before reading events.
     /// Returns a picker with halfblock fallback if protocol detection fails.
     pub fn init() -> Self {
+        // Query font size from terminal before creating the picker.
+        let font_size = crossterm::terminal::window_size()
+            .ok()
+            .and_then(|ws| {
+                if ws.columns > 0 && ws.rows > 0 && ws.width > 0 && ws.height > 0 {
+                    Some((ws.width / ws.columns, ws.height / ws.rows))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or((10, 20)); // Standard 1:2 cell ratio fallback
+
         let picker = Picker::from_query_stdio().ok();
-        Self { picker }
+        Self { picker, font_size }
     }
 
     /// Whether terminal image rendering is available.
     pub fn is_available(&self) -> bool {
         self.picker.is_some()
+    }
+
+    /// Terminal font size in pixels: (width, height) per cell.
+    pub fn font_size(&self) -> (u16, u16) {
+        self.font_size
     }
 
     /// Create a new stateful protocol for rendering an image.
@@ -124,14 +155,6 @@ impl AlbumArtCache {
         self.entries.retain(|k, _| keys.contains(k));
     }
 
-    /// Evict entries not matching the given sidecar paths.
-    /// Convenience wrapper for the existing embed modal pattern.
-    pub fn retain_only(&mut self, paths: &[&Path]) {
-        self.entries.retain(|k, _| match k {
-            ArtCacheKey::Sidecar(p) => paths.iter().any(|pp| *pp == p),
-            ArtCacheKey::Embedded(_) => false,
-        });
-    }
 }
 
 /// Load a sidecar image from disk and create a protocol for it.
@@ -287,7 +310,7 @@ fn render_text_fallback(f: &mut Frame, area: Rect, cached: &CachedArtProtocol) {
     f.render_widget(Paragraph::new(line), area);
 }
 
-/// Render a "no album art" placeholder.
+/// Render a "no album art" placeholder, centered both horizontally and vertically.
 pub fn render_no_art_placeholder(f: &mut Frame, area: Rect) {
     if area.width < 2 || area.height < 1 {
         return;
@@ -296,5 +319,16 @@ pub fn render_no_art_placeholder(f: &mut Frame, area: Rect) {
         "[no album art]",
         Style::default().fg(Color::DarkGray),
     ));
-    f.render_widget(Paragraph::new(line), area);
+    // Center vertically by offsetting into the area
+    let y_offset = area.height / 2;
+    let centered_area = Rect {
+        x: area.x,
+        y: area.y + y_offset,
+        width: area.width,
+        height: 1,
+    };
+    f.render_widget(
+        Paragraph::new(line).alignment(Alignment::Center),
+        centered_area,
+    );
 }

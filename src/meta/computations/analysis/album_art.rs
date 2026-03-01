@@ -169,6 +169,17 @@ pub fn execute_detect_embeddable_album_art(
 
     let resolver = paths::get_resolver();
 
+    let min_res = match crate::config::load_config() {
+        Ok(c) => c.opinions.album_art.min_acceptable_resolution,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to load config: {}", e),
+            );
+        }
+    };
+
     // Load artless corpus files from DB (has_pictures = 0, healthy, corpus)
     let artless_files = match read_only_db.get_artless_corpus_files() {
         Ok(f) => f,
@@ -290,6 +301,11 @@ pub fn execute_detect_embeddable_album_art(
             let mut representative_embedded: Option<(String, u32, u32)> = None;
 
             for (inode, abs_path_str, pic_format, pic_width, pic_height) in files {
+                // Skip files whose embedded art already meets minimum resolution
+                if min_res > 0 && *pic_width >= min_res && *pic_height >= min_res {
+                    continue;
+                }
+
                 let embedded = PictureInfo {
                     format: pic_format.clone(),
                     width: *pic_width,

@@ -337,6 +337,10 @@ pub struct AlbumArtOpinions {
     /// When replacing art, preserve existing non-CoverFront pictures.
     /// Default: false
     pub preserve_other_pictures_on_upgrade: bool,
+    /// Minimum resolution (both dimensions) below which embedded art is considered
+    /// upgradeable. Art at or above this threshold in both dimensions is "good enough."
+    /// Default: 700. Set to 0 to disable (all upgradeable art is reported).
+    pub min_acceptable_resolution: u32,
 }
 
 impl Default for AlbumArtOpinions {
@@ -344,6 +348,7 @@ impl Default for AlbumArtOpinions {
         Self {
             tag_padding_bytes: 4096,
             preserve_other_pictures_on_upgrade: false,
+            min_acceptable_resolution: 700,
         }
     }
 }

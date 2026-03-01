@@ -181,6 +181,9 @@ fn config_diff_entries(old: &Config, new: &Config) -> Vec<DiffEntry> {
     cmp!("AcoustID API key", &o.external_matching.acoustid_api_key, &n.external_matching.acoustid_api_key);
     cmp!("AcoustID requests/sec", o.external_matching.requests_per_second, n.external_matching.requests_per_second);
 
+    // Album Art
+    cmp!("Album art: min acceptable resolution", o.album_art.min_acceptable_resolution, n.album_art.min_acceptable_resolution);
+
     // Performance
     cmp!(opt "Worker threads", o.performance.worker_threads, n.performance.worker_threads);
     cmp!("DB cache (MB)", o.performance.db_cache_mb, n.performance.db_cache_mb);
@@ -233,6 +236,7 @@ fn config_recomputation_scope(old: &Config, new: &Config) -> RecomputationScope 
     if o.fingerprint_matching != n.fingerprint_matching
         || o.duplicate_analysis != n.duplicate_analysis
         || o.lossy_shit_formats_to_flac != n.lossy_shit_formats_to_flac
+        || o.album_art.min_acceptable_resolution != n.album_art.min_acceptable_resolution
     {
         scope |= RecomputationScope::FILES;
     }

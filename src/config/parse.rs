@@ -386,6 +386,15 @@ fn parse_album_art_opinions(node: &kdl::KdlNode, opinions: &mut AlbumArtOpinions
                         }
                     }
                 }
+                "min-acceptable-resolution" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.min_acceptable_resolution = val as u32;
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }

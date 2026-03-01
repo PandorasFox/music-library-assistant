@@ -13,7 +13,7 @@ All mutation code lives in `src/meta/mutations/`:
 - **File operations**: `file_ops.rs` (Move, Copy, StashFromZone, StashLeftovers, HardLink, LibraryMove, etc.)
 - **Transcoding**: `transcode.rs` (Transcode executor)
 - **Config editing**: `config_edit.rs` (ApplyConfigEdits executor)
-- **Migrations**: `migration.rs` (MigrationRegistry)
+- **Schema reconciliation**: `db/reconciler.rs` (auto-detects and applies schema changes at startup)
 
 ## Overview
 

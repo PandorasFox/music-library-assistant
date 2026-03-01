@@ -17,6 +17,9 @@
 
 pub mod queries;
 mod schema;
+pub mod table_schema;
+pub mod reconciler;
+pub mod data_migrations;
 pub mod types;
 pub mod write_thread;
 

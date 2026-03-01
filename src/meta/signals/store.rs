@@ -1993,60 +1993,6 @@ impl InboxTagCanonicitySignal {
 
 }
 
-// ============================================================================
-// Table Creation Helper
-// ============================================================================
-
-/// Create all per-signal tables. Idempotent (uses IF NOT EXISTS).
-pub fn create_all_signal_tables(conn: &Connection) -> Result<()> {
-    // Corpus file signals
-    conn.execute_batch(FileInCorpusSignal::TABLE_SQL)?;
-    conn.execute_batch(UnindexedFileSignal::TABLE_SQL)?;
-    conn.execute_batch(HealthyFileSignal::TABLE_SQL)?;
-    conn.execute_batch(CorruptFileSignal::TABLE_SQL)?;
-    conn.execute_batch(MtimeOnlyMismatchSignal::TABLE_SQL)?;
-    conn.execute_batch(MissingDirectorySignal::TABLE_SQL)?;
-    conn.execute_batch(MissingFileSignal::TABLE_SQL)?;
-    conn.execute_batch(MovedFileSignal::TABLE_SQL)?;
-    conn.execute_batch(ShitFormatSignal::TABLE_SQL)?;
-    conn.execute_batch(DeployReadySignal::TABLE_SQL)?;
-    conn.execute_batch(DeployedHealthySignal::TABLE_SQL)?;
-    conn.execute_batch(OutOfBandTagSyncSignal::TABLE_SQL)?;
-    conn.execute_batch(OutOfBandTagConflictSignal::TABLE_SQL)?;
-    conn.execute_batch(SubparDuplicateSignal::TABLE_SQL)?;
-    conn.execute_batch(CompoundTagSignal::TABLE_SQL)?;
-    conn.execute_batch(ExpectedMissingTagSignal::TABLE_SQL)?;
-    conn.execute_batch(PathTagMismatchSignal::TABLE_SQL)?;
-    conn.execute_batch(ExternalMatchSignal::TABLE_SQL)?;
-
-    // Inbox file signals
-    conn.execute_batch(FileInInboxSignal::TABLE_SQL)?;
-    conn.execute_batch(InboxUnindexedSignal::TABLE_SQL)?;
-    conn.execute_batch(InboxHealthySignal::TABLE_SQL)?;
-
-    // Aggregate signals
-    conn.execute_batch(CanonicalTagSignal::TABLE_SQL)?;
-    conn.execute_batch(ExpectedOverlapSignal::TABLE_SQL)?;
-    conn.execute_batch(ExpectedDuplicateSignal::TABLE_SQL)?;
-    conn.execute_batch(LibraryLeftoverSignal::TABLE_SQL)?;
-    conn.execute_batch(LibraryStaleSignal::TABLE_SQL)?;
-    conn.execute_batch(FingerprintOverlapSignal::TABLE_SQL)?;
-    conn.execute_batch(MetadataDuplicateSignal::TABLE_SQL)?;
-    conn.execute_batch(DuplicateInodeSignal::TABLE_SQL)?;
-    conn.execute_batch(MissingTagSignal::TABLE_SQL)?;
-    conn.execute_batch(DeployConflictSignal::TABLE_SQL)?;
-    conn.execute_batch(TagCanonicitySignal::TABLE_SQL)?;
-    conn.execute_batch(InconsistentAlbumArtistSignal::TABLE_SQL)?;
-    conn.execute_batch(CrossSourceOverlapSignal::TABLE_SQL)?;
-    conn.execute_batch(ReleaseOverlapSignal::TABLE_SQL)?;
-    conn.execute_batch(RedundantDuplicateSignal::TABLE_SQL)?;
-    conn.execute_batch(EmbeddableAlbumArtSignal::TABLE_SQL)?;
-    conn.execute_batch(UpgradeableAlbumArtSignal::TABLE_SQL)?;
-    conn.execute_batch(MissingAlbumSingleSignal::TABLE_SQL)?;
-    conn.execute_batch(InboxTagCanonicitySignal::TABLE_SQL)?;
-    conn.execute_batch(InboxMissingTagSignal::TABLE_SQL)?;
-    conn.execute_batch(InboxCompoundTagSignal::TABLE_SQL)?;
-    conn.execute_batch(DiscExtractionSignal::TABLE_SQL)?;
-
-    Ok(())
-}
+// Table creation is now handled by `db::table_schema::schema_inventory()`.
+// Signal TABLE_SQL consts on each type remain as the source of truth,
+// referenced by the inventory entries.

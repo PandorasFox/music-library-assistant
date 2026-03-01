@@ -17,16 +17,12 @@
 /// Each variant carries its own execution parameters.
 #[derive(Debug, Clone)]
 pub enum DbMaintenanceTask {
-    /// Schema migration: ALTER TABLE, CREATE TABLE, etc.
+    /// Schema reconciliation: CREATE TABLE, ALTER TABLE ADD COLUMN,
+    /// DROP+CREATE for computed signal tables, data migrations.
     ///
-    /// Opens its own write-capable DB connection because schema changes cannot
-    /// be routed through `write_thread::signal_sender()`.
-    Migration {
-        /// Target schema version (the version *after* this migration).
-        migration_id: u32,
-        /// Human-readable description for logging.
-        description: String,
-    },
+    /// Executed via `write_thread::execute_reconciliation()` which uses the
+    /// db_thread's own write connection.
+    SchemaReconciliation,
 
     /// VACUUM: reclaim unused pages, defragment the database file.
     ///
@@ -39,9 +35,7 @@ impl DbMaintenanceTask {
     /// Human-readable label for status display and logging.
     pub fn label(&self) -> String {
         match self {
-            DbMaintenanceTask::Migration { migration_id, description } => {
-                format!("Migration v{}: {}", migration_id, description)
-            }
+            DbMaintenanceTask::SchemaReconciliation => "Schema reconciliation".to_string(),
             DbMaintenanceTask::Vacuum => "Database VACUUM".to_string(),
         }
     }

@@ -5,16 +5,15 @@
 
 use std::path::Path;
 
-use crate::db::{Database, ReadOnlyDb};
-use crate::meta::mutations::MigrationRegistry;
+use crate::db::{Database, reconciler};
 
 /// Initial state the Witch determines at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitialUiState {
     /// First-time setup - no database exists.
     FirstTimeSetup,
-    /// Migrations are pending and require user approval.
-    MigrationRequired,
+    /// Schema update required — reconciliation plan is non-empty.
+    SchemaUpdateRequired,
     /// Normal startup - proceed directly to progress screen.
     ProgressScreen,
 }
@@ -30,13 +29,17 @@ impl InitialUiState {
             Ok(db) => db,
             Err(_) => return InitialUiState::FirstTimeSetup,
         };
-        let read_db = ReadOnlyDb::new(&db);
 
-        let registry = MigrationRegistry::new();
-        if registry.needs_migration(&read_db) {
-            return InitialUiState::MigrationRequired;
+        // Fast path: fingerprint match means schema is up-to-date
+        if reconciler::fingerprint_matches(&db) {
+            return InitialUiState::ProgressScreen;
         }
 
-        InitialUiState::ProgressScreen
+        // Fingerprint mismatch — compute the actual plan to check
+        match reconciler::ReconciliationPlan::compute(db.conn()) {
+            Ok(plan) if plan.is_empty() => InitialUiState::ProgressScreen,
+            Ok(_) => InitialUiState::SchemaUpdateRequired,
+            Err(_) => InitialUiState::SchemaUpdateRequired,
+        }
     }
 }

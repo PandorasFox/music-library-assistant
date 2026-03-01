@@ -14,44 +14,44 @@ use crate::ui::{
     startup,
     transaction_review,
     ActiveView,
-    MigrationPhase, VacuumPhase,
+    SchemaUpdatePhase, VacuumPhase,
 };
 use super::App;
 use super::eye::Eye;
 use super::insights_view;
 
 impl App {
-    /// Tick the migration approval view.
+    /// Tick the schema update view.
     ///
-    /// When phase is Running: check if all migrations have completed.
+    /// When phase is Running: check if reconciliation has completed.
     /// When complete: show completion briefly, then advance.
-    pub(super) fn tick_migration_approval(&mut self) {
+    pub(super) fn tick_schema_update(&mut self) {
         let phase = match self.view {
-            ActiveView::MigrationApproval(ref state) => state.phase,
+            ActiveView::SchemaUpdate(ref state) => state.phase,
             _ => return,
         };
 
         match phase {
-            MigrationPhase::Running => {
-                // Tick the Witch to process migration tasks
+            SchemaUpdatePhase::Running => {
+                // Tick the Witch to process reconciliation task
                 self.witch.tick();
                 if !self.witch.has_pending() {
-                    // All migrations complete
-                    if let ActiveView::MigrationApproval(ref mut state) = self.view {
-                        state.phase = MigrationPhase::Complete;
+                    // Reconciliation complete
+                    if let ActiveView::SchemaUpdate(ref mut state) = self.view {
+                        state.phase = SchemaUpdatePhase::Complete;
                     }
                 }
             }
-            MigrationPhase::Complete => {
+            SchemaUpdatePhase::Complete => {
                 // Reconnect cache thread's DB so it picks up new schema
                 self.cache.reconnect_db();
 
-                // Advance past migrations
+                // Advance past schema update
                 let db_path = self.db_path.clone();
                 let threshold = self.vacuum_threshold;
                 self.advance_past_migrations(&db_path, threshold);
             }
-            MigrationPhase::Approval => {
+            SchemaUpdatePhase::Approval => {
                 // Waiting for user input, nothing to tick
             }
         }

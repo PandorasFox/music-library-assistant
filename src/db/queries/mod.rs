@@ -810,12 +810,4 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_deploy_status()
     }
 
-    // =========================================================================
-    // Schema / Migration Queries
-    // =========================================================================
-
-    /// Get the current database schema version.
-    pub fn get_schema_version(&self) -> Result<u32> {
-        self.db.get_schema_version()
-    }
 }

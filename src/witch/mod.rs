@@ -1441,26 +1441,25 @@ impl Witch {
     // Migration-Aware Startup Methods
     // -------------------------------------------------------------------------
 
-    /// Check if migrations are needed.
+    /// Check if schema reconciliation is needed.
     ///
-    /// Returns true if the database exists and has pending schema migrations.
-    pub fn needs_migrations(&self) -> bool {
+    /// Returns true if the database exists and has pending schema changes.
+    pub fn needs_schema_update(&self) -> bool {
         let db_path = match config::get_db_path() {
             Ok(p) => p,
             Err(_) => return false,
         };
         matches!(
             InitialUiState::determine(&db_path),
-            InitialUiState::MigrationRequired
+            InitialUiState::SchemaUpdateRequired
         )
     }
 
-    /// Get pending migration descriptions for UI display.
+    /// Get pending schema update descriptions for UI display.
     ///
-    /// Returns a list of human-readable descriptions of pending migrations.
-    pub fn pending_migration_descriptions(&self) -> Vec<String> {
-        use crate::db::ReadOnlyDb;
-        use crate::meta::mutations::MigrationRegistry;
+    /// Returns a list of human-readable descriptions of planned changes.
+    pub fn pending_schema_descriptions(&self) -> Vec<String> {
+        use crate::db::reconciler::ReconciliationPlan;
 
         let db_path = match config::get_db_path() {
             Ok(p) => p,
@@ -1470,62 +1469,24 @@ impl Witch {
             Ok(d) => d,
             Err(_) => return Vec::new(),
         };
-        let read_db = ReadOnlyDb::new(&db);
-        MigrationRegistry::new().pending_descriptions(&read_db)
+
+        match ReconciliationPlan::compute(db.conn()) {
+            Ok(plan) => plan.descriptions(),
+            Err(_) => vec!["Schema update needed (could not compute details)".to_string()],
+        }
     }
 
-    /// Queue all pending migrations for async execution.
+    /// Queue schema reconciliation for async execution.
     ///
-    /// Requires a `ConfirmationGesture` from the MigrationApproval view.
-    pub fn queue_pending_migrations(
+    /// Requires a `ConfirmationGesture` from the SchemaUpdate approval view.
+    pub fn queue_schema_reconciliation(
         &mut self,
         _gesture: &crate::meta::decisions::ConfirmationGesture,
     ) {
         use crate::meta::maintenance::DbMaintenanceTask;
-        use crate::meta::mutations::MigrationRegistry;
 
-        let db_path = match config::get_db_path() {
-            Ok(p) => p,
-            Err(e) => {
-                crate::logging::log_error(format!(
-                    "[WITCH] queue_pending_migrations: no db path: {}",
-                    e
-                ));
-                return;
-            }
-        };
-        let db = match Database::open_read_only(&db_path) {
-            Ok(d) => d,
-            Err(e) => {
-                crate::logging::log_error(format!(
-                    "[WITCH] queue_pending_migrations: failed to open db: {}",
-                    e
-                ));
-                return;
-            }
-        };
-        let read_db = crate::db::ReadOnlyDb::new(&db);
-
-        let registry = MigrationRegistry::new();
-        let current_version = read_db.get_schema_version().unwrap_or(1);
-        let pending = registry.pending_migrations(current_version);
-
-        if pending.is_empty() {
-            crate::logging::log_general("[WITCH] No migrations to queue");
-            return;
-        }
-
-        crate::logging::log_general(format!(
-            "[WITCH] Queueing {} migrations (operator approved)",
-            pending.len()
-        ));
-
-        for m in pending {
-            self.queue_maintenance(DbMaintenanceTask::Migration {
-                migration_id: m.to_version,
-                description: m.description.to_string(),
-            });
-        }
+        crate::logging::log_general("[WITCH] Queueing schema reconciliation (operator approved)");
+        self.queue_maintenance(DbMaintenanceTask::SchemaReconciliation);
     }
 
     /// Queue a VACUUM for async execution.

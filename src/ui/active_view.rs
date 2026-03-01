@@ -52,7 +52,7 @@ use crate::ui::{
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ActiveView {
     // Startup views (before observing)
-    MigrationApproval(MigrationApprovalState),
+    SchemaUpdate(SchemaUpdateState),
     VacuumPrompt(VacuumPromptState),
 
     // Lateral view ring
@@ -129,7 +129,7 @@ impl ActiveView {
     /// Get a header suffix for the title bar, if applicable.
     pub(crate) fn header_suffix(&self) -> Option<&'static str> {
         match self {
-            Self::MigrationApproval(_) => Some("Database Migration"),
+            Self::SchemaUpdate(_) => Some("Schema Update"),
             Self::VacuumPrompt(_) => Some("Database Compaction"),
             Self::ConfigEditor(_) => Some("Config Editor"),
             Self::Insights(_) => Some("Corpus Insights"),
@@ -174,7 +174,7 @@ impl ActiveView {
     /// Views without file listings return None.
     pub(crate) fn selected_path(&self) -> Option<&str> {
         match self {
-            Self::MigrationApproval(_) | Self::VacuumPrompt(_) => None,
+            Self::SchemaUpdate(_) | Self::VacuumPrompt(_) => None,
             Self::CorpusBrowser(browser) => browser.selected_path()
                 .and_then(|p| p.to_str()),
             Self::TagCanonicityResolution { state, .. } => state.selected_path(),
@@ -247,7 +247,7 @@ pub(crate) enum SuspendedView {
 /// consumed by Phase 2 (dispatch on &mut self).
 pub(crate) enum ViewAction {
     None,
-    MigrationApproval(MigrationAction),
+    SchemaUpdate(SchemaUpdateAction),
     VacuumPrompt(VacuumAction),
     ConfigEditor(config_editor::ConfigEditorAction),
     Insights(insights_view::InsightsAction),
@@ -397,7 +397,7 @@ impl TagCanonicityClusters {
 
 /// Phase of the migration approval flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MigrationPhase {
+pub(crate) enum SchemaUpdatePhase {
     /// Showing approval dialog, waiting for user input.
     Approval,
     /// Migrations are running via Witch.
@@ -407,15 +407,15 @@ pub(crate) enum MigrationPhase {
 }
 
 /// State for the migration approval startup view.
-pub(crate) struct MigrationApprovalState {
+pub(crate) struct SchemaUpdateState {
     /// Human-readable descriptions of pending migrations.
     pub descriptions: Vec<String>,
     /// Current phase of the flow.
-    pub phase: MigrationPhase,
+    pub phase: SchemaUpdatePhase,
 }
 
 /// Action from the migration approval view.
-pub(crate) enum MigrationAction {
+pub(crate) enum SchemaUpdateAction {
     None,
     Approve,
     Cancel,

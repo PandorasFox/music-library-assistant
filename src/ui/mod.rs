@@ -66,7 +66,7 @@ pub mod progressive_worker;
 // Re-export for convenience
 pub(crate) use active_view::{
     ActiveView, CanonicitySignalKind, ExitConfirmModalState, ExitConfirmAction, FilterOverlay,
-    FilterPopupContext, MigrationAction, MigrationApprovalState, MigrationPhase,
+    FilterPopupContext, SchemaUpdateAction, SchemaUpdateState, SchemaUpdatePhase,
     SuspendedView, TagCanonicityClusters, VacuumAction, VacuumPhase, VacuumPromptState,
     ViewAction,
 };
@@ -287,13 +287,13 @@ impl App {
 
         // Phase 1: borrow view, produce view action
         let view_action = match &mut self.view {
-            ActiveView::MigrationApproval(s) => {
+            ActiveView::SchemaUpdate(s) => {
                 let a = match (s.phase, &action) {
-                    (MigrationPhase::Approval, InputAction::Confirm) => MigrationAction::Approve,
-                    (MigrationPhase::Approval, InputAction::Cancel) => MigrationAction::Cancel,
-                    _ => MigrationAction::None,
+                    (SchemaUpdatePhase::Approval, InputAction::Confirm) => SchemaUpdateAction::Approve,
+                    (SchemaUpdatePhase::Approval, InputAction::Cancel) => SchemaUpdateAction::Cancel,
+                    _ => SchemaUpdateAction::None,
                 };
-                ViewAction::MigrationApproval(a)
+                ViewAction::SchemaUpdate(a)
             }
             ActiveView::VacuumPrompt(s) => {
                 let a = match (s.phase, &action) {
@@ -679,11 +679,11 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     app.db_path = db_path.clone();
 
     // Determine initial view based on startup state
-    if app.witch.needs_migrations() {
-        let descriptions = app.witch.pending_migration_descriptions();
-        app.view = ActiveView::MigrationApproval(MigrationApprovalState {
+    if app.witch.needs_schema_update() {
+        let descriptions = app.witch.pending_schema_descriptions();
+        app.view = ActiveView::SchemaUpdate(SchemaUpdateState {
             descriptions,
-            phase: MigrationPhase::Approval,
+            phase: SchemaUpdatePhase::Approval,
         });
     } else {
         app.advance_past_migrations(&db_path, vacuum_threshold);
@@ -728,11 +728,11 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         // Tick startup views first (they have their own Witch tick calls)
-        if matches!(app.view, ActiveView::MigrationApproval(_)) {
-            app.tick_migration_approval();
-            // If tick changed the view away from MigrationApproval, skip the rest of
+        if matches!(app.view, ActiveView::SchemaUpdate(_)) {
+            app.tick_schema_update();
+            // If tick changed the view away from SchemaUpdate, skip the rest of
             // this frame to let the new view render first.
-            if !matches!(app.view, ActiveView::MigrationApproval(_)) {
+            if !matches!(app.view, ActiveView::SchemaUpdate(_)) {
                 terminal.draw(|f| render(f, app))?;
                 continue;
             }
@@ -746,7 +746,7 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         // Startup views don't interact with the normal Witch tick / idle rescan
-        let is_startup_view = matches!(app.view, ActiveView::MigrationApproval(_) | ActiveView::VacuumPrompt(_));
+        let is_startup_view = matches!(app.view, ActiveView::SchemaUpdate(_) | ActiveView::VacuumPrompt(_));
 
         // Set idle rescan eligibility based on current view (lateral views only)
         let idle_eligible = matches!(app.view,

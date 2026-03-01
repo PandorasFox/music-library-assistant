@@ -25,7 +25,6 @@ use ratatui::Terminal;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::meta::mutations::MigrationRegistry;
 use crate::ui::tree_browser::{EntryFilter, TreeEntry, TreeNavigator};
 
 /// Proof that code is executing in the first-time setup path.
@@ -85,8 +84,6 @@ fn run_setup_flow<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
     }
     let token = FirstTimeSetupToken(());
     let db = crate::db::create_database(&db_path, &token)?;
-    let registry = MigrationRegistry::new();
-    db.set_schema_version(registry.latest_version())?;
     drop(db);
 
     // Step 2: Show completion + hint
@@ -640,11 +637,10 @@ pub fn handle_first_time_setup<B: Backend>(
     std::fs::create_dir_all(config.stash_dir())?;
     std::fs::create_dir_all(config.inbox_dir())?;
 
-    // Create database and set to latest schema version
+    // Create database (initialize_schema stores the schema fingerprint)
     let token = FirstTimeSetupToken(());
     let db = crate::db::create_database(db_path, &token)?;
-    let registry = MigrationRegistry::new();
-    db.set_schema_version(registry.latest_version())?;
+    drop(db);
 
     // Show completion message
     terminal.draw(|f| {

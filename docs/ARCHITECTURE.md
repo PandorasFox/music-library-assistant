@@ -25,7 +25,7 @@ src/
 │   │   ├── indexing.rs             # Indexing executors
 │   │   ├── file_ops.rs             # File operation executors
 │   │   ├── transcode.rs            # Transcoding executor
-│   │   └── migration.rs            # MigrationRegistry
+│   │   └── dir_config_edit.rs       # Directory config editing
 │   └── computations/
 │       ├── mod.rs                  # Computation enum, execute_single()
 │       ├── types.rs                # ComputationWitness sealed module
@@ -61,8 +61,8 @@ The types of tasks are:
   - Downstream computations. These emit "signals" to the health database, which can be altered while the corpus/index are in read-only states, because signals' only inputs are corpus state, index state, and other signals themselves.
   - mutations can emit computations as side effects. computations can emit other computations as side effects.
   - can be scheduled and executed at any time (and without user decision) as they are purely observational computations (that we record the results of). Ideally, whenever we start up, we basically just confirm that our corpus state on disk has not changed since our last run, and if it has, we generate some signals indicating that the user needs to acknowledge or resolve.
-- Migrations
-  - Special tasks that can only be executed in the very very initial stage of the Witch's lifecycle, before we have even scheduled our first computation to start observing the corpus. They are purely and explicitly for kicking off startup DB migrations, and require a DecisionWitnessed Decision, as they might take some time & the user needs to approve that the timely migration might take place.
+- Schema Reconciliation
+  - Runs in the very initial stage of the Witch's lifecycle, before any computation is scheduled. Compares the expected schema (from `db/table_schema.rs` inventory) against the actual database using SQLite introspection. Detects missing tables, missing columns, and signal table drift. Requires operator approval. Core/Decision tables get ADD COLUMN; Computed signal tables get DROP+CREATE with dirty inode re-seeding.
 
 ## Signals
 

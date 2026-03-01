@@ -48,7 +48,7 @@ impl App {
 
         match action {
             ViewAction::None => {}
-            ViewAction::MigrationApproval(a) => self.handle_migration_approval_action(a, witness.as_ref()),
+            ViewAction::SchemaUpdate(a) => self.handle_schema_update_action(a, witness.as_ref()),
             ViewAction::VacuumPrompt(a) => self.handle_vacuum_prompt_action(a, witness.as_ref()),
             ViewAction::ConfigEditor(a) => self.handle_config_editor_action(a, witness.as_ref()),
             ViewAction::Insights(a) => self.handle_health_action(a),
@@ -173,24 +173,24 @@ impl App {
     // Startup Action Handlers
     // =========================================================================
 
-    /// Handle migration approval actions.
-    fn handle_migration_approval_action(
+    /// Handle schema update approval actions.
+    fn handle_schema_update_action(
         &mut self,
-        action: super::MigrationAction,
+        action: super::SchemaUpdateAction,
         witness: Option<&witness::ConfirmationGesture>,
     ) {
-        use super::MigrationPhase;
+        use super::SchemaUpdatePhase;
         match action {
-            super::MigrationAction::None => {}
-            super::MigrationAction::Approve => {
-                if let (super::ActiveView::MigrationApproval(ref mut state), Some(gesture)) = (&mut self.view, witness) {
-                    if state.phase == MigrationPhase::Approval {
-                        self.witch.queue_pending_migrations(gesture);
-                        state.phase = MigrationPhase::Running;
+            super::SchemaUpdateAction::None => {}
+            super::SchemaUpdateAction::Approve => {
+                if let (super::ActiveView::SchemaUpdate(ref mut state), Some(gesture)) = (&mut self.view, witness) {
+                    if state.phase == SchemaUpdatePhase::Approval {
+                        self.witch.queue_schema_reconciliation(gesture);
+                        state.phase = SchemaUpdatePhase::Running;
                     }
                 }
             }
-            super::MigrationAction::Cancel => {
+            super::SchemaUpdateAction::Cancel => {
                 self.should_quit = true;
             }
         }

@@ -162,9 +162,9 @@ fn render_content(
     let vname: &str;
 
     match app.view {
-        ActiveView::MigrationApproval(ref state) => {
-            vname = "migration_approval";
-            startup::migrations::render_migration_view(f, area, state);
+        ActiveView::SchemaUpdate(ref state) => {
+            vname = "schema_update";
+            startup::migrations::render_schema_update_view(f, area, state);
         }
         ActiveView::VacuumPrompt(ref state) => {
             vname = "vacuum_prompt";
@@ -443,7 +443,7 @@ fn render_status_bar(
 /// Get a short name for the active view (for perf logging).
 fn view_name(view: &ActiveView) -> &'static str {
     match view {
-        ActiveView::MigrationApproval(_) => "migration_approval",
+        ActiveView::SchemaUpdate(_) => "schema_update",
         ActiveView::VacuumPrompt(_) => "vacuum_prompt",
         ActiveView::ConfigEditor(_) => "config_editor",
         ActiveView::Insights(_) => "health",

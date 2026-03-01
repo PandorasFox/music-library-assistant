@@ -153,18 +153,17 @@ pub fn execute_vacuum() -> Result<(), String> {
     rx.recv().map_err(|_| "db_thread disconnected during VACUUM".to_string())?
 }
 
-/// Apply a schema migration on the db_thread's write connection.
+/// Apply schema reconciliation on the db_thread's write connection.
 ///
-/// Blocks the caller until the migration completes. The migration runs on the
-/// db_thread which owns the write connection, eliminating the need for a
-/// separate write connection opened from the rayon thread pool.
-pub fn execute_migration(migration_id: u32) -> Result<(), String> {
+/// Blocks the caller until reconciliation completes. Runs on the db_thread
+/// which owns the write connection.
+pub fn execute_reconciliation() -> Result<(), String> {
     let sender = SIGNAL_SENDER.get()
         .ok_or_else(|| "db_thread not initialized".to_string())?;
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     sender.mark_enqueued();
-    let _ = sender.tx.send(DbWriteOp::ApplyMigration { migration_id, result_tx: tx });
-    rx.recv().map_err(|_| "db_thread disconnected during migration".to_string())?
+    let _ = sender.tx.send(DbWriteOp::ApplyReconciliation { result_tx: tx });
+    rx.recv().map_err(|_| "db_thread disconnected during reconciliation".to_string())?
 }
 
 /// Signal the DB thread to close its connection and exit.
@@ -464,9 +463,8 @@ enum DbWriteOp {
         result_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
 
-    /// Apply a schema migration on the write connection. Handled in main loop (like Shutdown).
-    ApplyMigration {
-        migration_id: u32,
+    /// Apply schema reconciliation on the write connection. Handled in main loop (like Shutdown).
+    ApplyReconciliation {
         result_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
 
@@ -1264,18 +1262,14 @@ fn run_db_thread(
                     stats.queue_empty.store(true, Ordering::Release);
                 }
             }
-            Ok(DbWriteOp::ApplyMigration { migration_id, result_tx }) => {
-                crate::logging::log_general(format!(
-                    "[DB_THREAD] Applying migration v{}", migration_id
-                ));
+            Ok(DbWriteOp::ApplyReconciliation { result_tx }) => {
+                crate::logging::log_general("[DB_THREAD] Applying schema reconciliation");
                 let witness = crate::witch::MaintenanceWitness::new_for_db_thread();
-                let registry = crate::meta::mutations::MigrationRegistry::new();
-                let result = registry.apply_migration(&db, migration_id, &witness)
+                let result = crate::db::reconciler::ReconciliationPlan::compute_full(&db)
+                    .and_then(|plan| plan.execute(&db, &witness))
                     .map_err(|e| format!("{:#}", e));
                 if result.is_ok() {
-                    crate::logging::log_general(format!(
-                        "[DB_THREAD] Migration v{} completed", migration_id
-                    ));
+                    crate::logging::log_general("[DB_THREAD] Schema reconciliation completed");
                 }
                 let _ = result_tx.send(result);
                 stats.queue_depth.fetch_sub(1, Ordering::Relaxed);
@@ -1708,9 +1702,9 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
-        // ExecuteVacuum, ApplyMigration, and Shutdown are handled in the run_db_thread loop, never reach here
+        // ExecuteVacuum, ApplyReconciliation, and Shutdown are handled in the run_db_thread loop, never reach here
         DbWriteOp::ExecuteVacuum { .. } => unreachable!("ExecuteVacuum handled in run_db_thread loop"),
-        DbWriteOp::ApplyMigration { .. } => unreachable!("ApplyMigration handled in run_db_thread loop"),
+        DbWriteOp::ApplyReconciliation { .. } => unreachable!("ApplyReconciliation handled in run_db_thread loop"),
         DbWriteOp::Shutdown => unreachable!("Shutdown handled in run_db_thread loop"),
     }
 }

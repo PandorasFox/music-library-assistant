@@ -237,14 +237,14 @@ pub(super) fn execute_maintenance(task: DbMaintenanceTask, label: String, queue_
     let start = Instant::now();
 
     let (success, error) = match task {
-        DbMaintenanceTask::Migration { migration_id, ref description } => {
+        DbMaintenanceTask::SchemaReconciliation => {
             crate::logging::log_mutation(format!(
-                "[EXECUTION] execute_maintenance Migration START: v{} - {} (label={:?})",
-                migration_id, description, label
+                "[EXECUTION] execute_maintenance SchemaReconciliation START (label={:?})",
+                label
             ));
 
-            // Route migration through db_thread which owns the write connection
-            match write_thread::execute_migration(migration_id) {
+            // Route reconciliation through db_thread which owns the write connection
+            match write_thread::execute_reconciliation() {
                 Ok(()) => (true, None),
                 Err(e) => (false, Some(e)),
             }

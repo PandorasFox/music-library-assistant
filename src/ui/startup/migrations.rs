@@ -1,43 +1,43 @@
-//! Database Migration UI
+//! Schema Update UI
 //!
-//! Render helpers for the MigrationApproval startup view.
+//! Render helpers for the SchemaUpdate startup view.
 //!
 //! ## Architecture
 //!
-//! Migrations are orchestrated by the Witch, which:
-//! 1. Checks if migrations are needed via `needs_migrations()`
-//! 2. Gets pending migration descriptions for UI display
-//! 3. Queues migrations as `Task::Maintenance(DbMaintenanceTask::Migration)` tasks via rayon
-//! 4. Migrations execute via `execute_maintenance()` in execution.rs
+//! Schema reconciliation is orchestrated by the Witch, which:
+//! 1. Checks if schema update is needed via `needs_schema_update()`
+//! 2. Gets pending schema descriptions for UI display
+//! 3. Queues reconciliation as `Task::Maintenance(DbMaintenanceTask::SchemaReconciliation)` via rayon
+//! 4. Reconciliation executes via `execute_maintenance()` in execution.rs
 //!
-//! The migration view is an ActiveView variant driven by the main event loop.
+//! The schema update view is an ActiveView variant driven by the main event loop.
 //! Key handling goes through dispatch_action; phase transitions happen in tick.
 
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::ui::active_view::{MigrationApprovalState, MigrationPhase};
+use crate::ui::active_view::{SchemaUpdateState, SchemaUpdatePhase};
 
-/// Render the migration approval view based on current phase.
-pub fn render_migration_view(
+/// Render the schema update view based on current phase.
+pub fn render_schema_update_view(
     f: &mut ratatui::Frame,
     area: Rect,
-    state: &MigrationApprovalState,
+    state: &SchemaUpdateState,
 ) {
     match state.phase {
-        MigrationPhase::Approval => render_migration_approval(f, area, &state.descriptions),
-        MigrationPhase::Running => render_migration_progress(f, area, &state.descriptions),
-        MigrationPhase::Complete => render_migration_complete(f, area, state.descriptions.len()),
+        SchemaUpdatePhase::Approval => render_approval(f, area, &state.descriptions),
+        SchemaUpdatePhase::Running => render_progress(f, area, &state.descriptions),
+        SchemaUpdatePhase::Complete => render_complete(f, area, state.descriptions.len()),
     }
 }
 
-/// Render the migration approval dialog.
-fn render_migration_approval(f: &mut ratatui::Frame, area: Rect, pending: &[String]) {
-    let migration_count = pending.len();
+/// Render the schema update approval dialog.
+fn render_approval(f: &mut ratatui::Frame, area: Rect, pending: &[String]) {
+    let change_count = pending.len();
 
     let dialog_width = 60.min(area.width.saturating_sub(4));
-    let dialog_height = (migration_count as u16 + 12).min(area.height.saturating_sub(4));
+    let dialog_height = (change_count as u16 + 12).min(area.height.saturating_sub(4));
 
     let dialog_area = Rect {
         x: (area.width.saturating_sub(dialog_width)) / 2,
@@ -50,22 +50,22 @@ fn render_migration_approval(f: &mut ratatui::Frame, area: Rect, pending: &[Stri
 
     let mut lines = vec![
         ratatui::text::Line::from(""),
-        ratatui::text::Line::from("MM needs to upgrade your database.").style(
+        ratatui::text::Line::from("MM needs to update your database schema.").style(
             Style::default().fg(Color::White),
         ),
         ratatui::text::Line::from(""),
-        ratatui::text::Line::from("Pending migrations:").style(
+        ratatui::text::Line::from("Pending changes:").style(
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         ),
     ];
 
     for desc in pending {
-        lines.push(ratatui::text::Line::from(format!("  • {}", desc)));
+        lines.push(ratatui::text::Line::from(format!("  {}", desc)));
     }
 
     lines.push(ratatui::text::Line::from(""));
     lines.push(
-        ratatui::text::Line::from("⚠ This cannot be interrupted once started.")
+        ratatui::text::Line::from("This cannot be interrupted once started.")
             .style(Style::default().fg(Color::Yellow)),
     );
     lines.push(ratatui::text::Line::from(""));
@@ -77,7 +77,7 @@ fn render_migration_approval(f: &mut ratatui::Frame, area: Rect, pending: &[Stri
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
-                .title(" Database Migration Required ")
+                .title(" Schema Update Required ")
                 .title_alignment(Alignment::Center)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow)),
@@ -87,12 +87,12 @@ fn render_migration_approval(f: &mut ratatui::Frame, area: Rect, pending: &[Stri
     f.render_widget(paragraph, dialog_area);
 }
 
-/// Render the migration progress dialog.
-fn render_migration_progress(f: &mut ratatui::Frame, area: Rect, pending: &[String]) {
-    let migration_count = pending.len();
+/// Render the schema update progress dialog.
+fn render_progress(f: &mut ratatui::Frame, area: Rect, pending: &[String]) {
+    let change_count = pending.len();
 
     let dialog_width = 60.min(area.width.saturating_sub(4));
-    let dialog_height = (migration_count as u16 + 10).min(area.height.saturating_sub(4));
+    let dialog_height = (change_count as u16 + 10).min(area.height.saturating_sub(4));
 
     let dialog_area = Rect {
         x: (area.width.saturating_sub(dialog_width)) / 2,
@@ -105,26 +105,26 @@ fn render_migration_progress(f: &mut ratatui::Frame, area: Rect, pending: &[Stri
 
     let mut lines = vec![
         ratatui::text::Line::from(""),
-        ratatui::text::Line::from("Running migrations:").style(
+        ratatui::text::Line::from("Applying schema changes:").style(
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         ),
         ratatui::text::Line::from(""),
     ];
 
     for desc in pending {
-        lines.push(ratatui::text::Line::from(format!("  • {}", desc)));
+        lines.push(ratatui::text::Line::from(format!("  {}", desc)));
     }
 
     lines.push(ratatui::text::Line::from(""));
     lines.push(
-        ratatui::text::Line::from("Migrating...")
+        ratatui::text::Line::from("Reconciling...")
             .style(Style::default().fg(Color::Cyan)),
     );
 
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
-                .title(" Database Migration ")
+                .title(" Schema Update ")
                 .title_alignment(Alignment::Center)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow)),
@@ -134,8 +134,8 @@ fn render_migration_progress(f: &mut ratatui::Frame, area: Rect, pending: &[Stri
     f.render_widget(paragraph, dialog_area);
 }
 
-/// Render the migration complete dialog.
-fn render_migration_complete(f: &mut ratatui::Frame, area: Rect, migration_count: usize) {
+/// Render the schema update complete dialog.
+fn render_complete(f: &mut ratatui::Frame, area: Rect, change_count: usize) {
     let dialog_width = 50.min(area.width.saturating_sub(4));
     let dialog_height = 7;
 
@@ -150,7 +150,7 @@ fn render_migration_complete(f: &mut ratatui::Frame, area: Rect, migration_count
 
     let paragraph = Paragraph::new(vec![
         ratatui::text::Line::from(""),
-        ratatui::text::Line::from(format!("✓ {} migration(s) completed successfully", migration_count))
+        ratatui::text::Line::from(format!("{} schema change(s) applied successfully", change_count))
             .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
         ratatui::text::Line::from(""),
         ratatui::text::Line::from("Starting application...")
@@ -158,7 +158,7 @@ fn render_migration_complete(f: &mut ratatui::Frame, area: Rect, migration_count
     ])
     .block(
         Block::default()
-            .title(" Migration Complete ")
+            .title(" Schema Update Complete ")
             .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Green)),

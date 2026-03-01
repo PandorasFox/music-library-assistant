@@ -62,6 +62,14 @@ pub struct AudioData {
     pub sample_rate: Option<i32>,
     pub fingerprint: Option<Vec<u32>>,
     pub has_pictures: bool,
+    /// Picture metadata: format string ("jpeg", "png", etc.), or None if no pictures.
+    pub pic_format: Option<String>,
+    /// Picture width in pixels, or None if no pictures or unknown.
+    pub pic_width: Option<u32>,
+    /// Picture height in pixels, or None if no pictures or unknown.
+    pub pic_height: Option<u32>,
+    /// Total number of embedded pictures.
+    pub pic_count: u32,
 }
 
 /// File entry data for files table operations.
@@ -351,6 +359,10 @@ enum DbWriteOp {
         mtime_secs: i64,
         mtime_nanos: i64,
         file_size: i64,
+        pic_format: Option<String>,
+        pic_width: Option<u32>,
+        pic_height: Option<u32>,
+        pic_count: u32,
     },
 
     // TODO: Refactor signal clearing into a unified system with signal categories.
@@ -373,6 +385,15 @@ enum DbWriteOp {
     // =========================================================================
     // Dirty Inode Operations (for incremental computations)
     // =========================================================================
+
+    /// Update picture metadata columns in audio_info (used by album_art_info backfill).
+    UpdatePictureMetadata {
+        inode: i64,
+        pic_format: Option<String>,
+        pic_width: Option<u32>,
+        pic_height: Option<u32>,
+        pic_count: u32,
+    },
 
     /// Clear dirty flag for an inode after successful computation.
     ClearDirtyInode {
@@ -970,6 +991,10 @@ impl SignalWriteSender {
         mtime_secs: i64,
         mtime_nanos: i64,
         file_size: i64,
+        pic_format: Option<String>,
+        pic_width: Option<u32>,
+        pic_height: Option<u32>,
+        pic_count: u32,
         _witness: &MutationExecutionWitness,
     ) {
         self.mark_enqueued();
@@ -978,6 +1003,10 @@ impl SignalWriteSender {
             mtime_secs,
             mtime_nanos,
             file_size,
+            pic_format,
+            pic_width,
+            pic_height,
+            pic_count,
         });
     }
 
@@ -1002,6 +1031,33 @@ impl SignalWriteSender {
     // =========================================================================
     // Dirty Inode Operations (for incremental computations)
     // =========================================================================
+
+    /// Clear dirty flag for an inode after successful computation.
+    ///
+    /// Called by per-inode computations after successfully processing an inode.
+    /// This prevents the inode from being reprocessed in the next cycle.
+    /// Update picture metadata columns in audio_info.
+    ///
+    /// Called by album_art_info backfill computation after extracting picture
+    /// metadata from existing files.
+    pub fn update_picture_metadata(
+        &self,
+        inode: i64,
+        pic_format: Option<String>,
+        pic_width: Option<u32>,
+        pic_height: Option<u32>,
+        pic_count: u32,
+        _witness: &ComputationWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::UpdatePictureMetadata {
+            inode,
+            pic_format,
+            pic_width,
+            pic_height,
+            pic_count,
+        });
+    }
 
     /// Clear dirty flag for an inode after successful computation.
     ///
@@ -1577,15 +1633,21 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
-        DbWriteOp::SetHasPictures { inode, mtime_secs, mtime_nanos, file_size } => {
+        DbWriteOp::SetHasPictures { inode, mtime_secs, mtime_nanos, file_size, ref pic_format, pic_width, pic_height, pic_count } => {
             with_retry("set_has_pictures", &inode.to_string(), || {
-                execute_set_has_pictures(db, *inode, *mtime_secs, *mtime_nanos, *file_size)
+                execute_set_has_pictures(db, *inode, *mtime_secs, *mtime_nanos, *file_size, pic_format.as_deref(), *pic_width, *pic_height, *pic_count)
             });
         }
 
         DbWriteOp::DropInboxFileState { inode } => {
             with_retry("drop_inbox_file_state", &inode.to_string(), || {
                 execute_drop_inbox_file_state(db, *inode)
+            });
+        }
+
+        DbWriteOp::UpdatePictureMetadata { inode, ref pic_format, pic_width, pic_height, pic_count } => {
+            with_retry("update_picture_metadata", &inode.to_string(), || {
+                execute_update_picture_metadata(db, *inode, pic_format.as_deref(), *pic_width, *pic_height, *pic_count)
             });
         }
 
@@ -1867,15 +1929,20 @@ fn execute_index_audio_file(
     tx.execute(
         r#"
         INSERT INTO audio_info
-        (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures, needs_tag_flush)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)
+        (inode, file_type, duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures,
+         pic_format, pic_width, pic_height, pic_count, needs_tag_flush)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)
         ON CONFLICT(inode) DO UPDATE SET
             file_type = excluded.file_type,
             duration_ms = excluded.duration_ms,
             bitrate_kbps = excluded.bitrate_kbps,
             sample_rate = excluded.sample_rate,
             fingerprint = excluded.fingerprint,
-            has_pictures = excluded.has_pictures
+            has_pictures = excluded.has_pictures,
+            pic_format = excluded.pic_format,
+            pic_width = excluded.pic_width,
+            pic_height = excluded.pic_height,
+            pic_count = excluded.pic_count
         "#,
         params![
             file_data.inode,
@@ -1885,6 +1952,10 @@ fn execute_index_audio_file(
             audio_data.sample_rate,
             &fp_blob,
             audio_data.has_pictures as i32,
+            &audio_data.pic_format,
+            audio_data.pic_width,
+            audio_data.pic_height,
+            audio_data.pic_count,
         ],
     )?;
 
@@ -2258,19 +2329,23 @@ fn execute_set_needs_disk_flush(db: &Database, path: &str, value: bool) -> anyho
     Ok(())
 }
 
-/// Execute SetHasPictures: mark audio_info.has_pictures = 1 and update file mtime/size.
+/// Execute SetHasPictures: mark audio_info.has_pictures = 1, update picture metadata, and update file mtime/size.
 fn execute_set_has_pictures(
     db: &Database,
     inode: i64,
     mtime_secs: i64,
     mtime_nanos: i64,
     file_size: i64,
+    pic_format: Option<&str>,
+    pic_width: Option<u32>,
+    pic_height: Option<u32>,
+    pic_count: u32,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
 
     let rows = db.conn().execute(
-        "UPDATE audio_info SET has_pictures = 1 WHERE inode = ?1",
-        params![inode],
+        "UPDATE audio_info SET has_pictures = 1, pic_format = ?2, pic_width = ?3, pic_height = ?4, pic_count = ?5 WHERE inode = ?1",
+        params![inode, pic_format, pic_width, pic_height, pic_count],
     )?;
     if rows == 0 {
         crate::logging::log_error(format!(
@@ -2282,6 +2357,25 @@ fn execute_set_has_pictures(
         "UPDATE files SET mtime_secs = ?1, mtime_nanos = ?2, file_size = ?3 \
          WHERE inode = ?4 AND zone = 'corpus'",
         params![mtime_secs, mtime_nanos, file_size, inode],
+    )?;
+
+    Ok(())
+}
+
+/// Execute UpdatePictureMetadata: update picture metadata columns in audio_info.
+fn execute_update_picture_metadata(
+    db: &Database,
+    inode: i64,
+    pic_format: Option<&str>,
+    pic_width: Option<u32>,
+    pic_height: Option<u32>,
+    pic_count: u32,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        "UPDATE audio_info SET pic_format = ?2, pic_width = ?3, pic_height = ?4, pic_count = ?5 WHERE inode = ?1",
+        params![inode, pic_format, pic_width, pic_height, pic_count],
     )?;
 
     Ok(())

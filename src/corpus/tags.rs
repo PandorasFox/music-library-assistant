@@ -34,6 +34,26 @@ use crate::db::write_thread;
 use crate::witch::MutationExecutionWitness;
 
 // =============================================================================
+// PictureInfo - Embedded picture metadata
+// =============================================================================
+
+/// Metadata about an embedded picture (album art) in an audio file.
+///
+/// Extracted from the first CoverFront picture found (or first picture if
+/// no CoverFront). Resolution is available for PNG and JPEG; zeroed for others.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PictureInfo {
+    /// Format: "jpeg", "png", "gif", "bmp", or "unknown"
+    pub format: String,
+    /// Width in pixels (0 if unknown/unsupported format)
+    pub width: u32,
+    /// Height in pixels (0 if unknown/unsupported format)
+    pub height: u32,
+    /// Total number of embedded pictures
+    pub count: u32,
+}
+
+// =============================================================================
 // TagSet - The canonical representation of tags
 // =============================================================================
 
@@ -175,6 +195,142 @@ impl TagSet {
 
                 let Ok(tagged_file) = Probe::open(path).and_then(|p| p.read()) else { return false };
                 tagged_file.tags().iter().any(|tag| tag.picture_count() > 0)
+            }
+        }
+    }
+
+    /// Extract metadata about embedded pictures from an audio file.
+    ///
+    /// Returns info for the first CoverFront picture found (or first picture if
+    /// no CoverFront). Resolution is extracted via `PictureInformation` (PNG/JPEG
+    /// only; zeroed for other formats).
+    ///
+    /// Non-fatal — returns None on read errors.
+    pub fn extract_picture_info(path: &Path) -> Option<PictureInfo> {
+        let ext = path.extension().and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase()).unwrap_or_default();
+
+        match ext.as_str() {
+            "flac" => {
+                use lofty::config::ParseOptions;
+                use lofty::file::AudioFile;
+                use lofty::ogg::OggPictureStorage;
+
+                let file = std::fs::File::open(path).ok()?;
+                let mut reader = std::io::BufReader::new(file);
+                let flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+
+                // Collect pictures from both standalone PICTURE blocks and VorbisComments
+                let mut all_pics: Vec<&(lofty::picture::Picture, lofty::picture::PictureInformation)> =
+                    flac.pictures().iter().collect();
+                if let Some(vc) = flac.vorbis_comments() {
+                    all_pics.extend(vc.pictures().iter());
+                }
+
+                if all_pics.is_empty() {
+                    return None;
+                }
+
+                let count = all_pics.len() as u32;
+                // Find CoverFront, or fall back to first picture
+                let (pic, info) = all_pics.iter()
+                    .find(|(p, _)| p.pic_type() == lofty::picture::PictureType::CoverFront)
+                    .or_else(|| all_pics.first())
+                    .unwrap();
+
+                Some(PictureInfo {
+                    format: mime_type_to_format(pic.mime_type()),
+                    width: info.width,
+                    height: info.height,
+                    count,
+                })
+            }
+            "opus" => {
+                use lofty::config::ParseOptions;
+                use lofty::file::AudioFile;
+                use lofty::ogg::OggPictureStorage;
+
+                let file = std::fs::File::open(path).ok()?;
+                let mut reader = std::io::BufReader::new(file);
+                let opus = lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+
+                let pics = opus.vorbis_comments().pictures();
+                if pics.is_empty() {
+                    return None;
+                }
+
+                let count = pics.len() as u32;
+                let (pic, info) = pics.iter()
+                    .find(|(p, _)| p.pic_type() == lofty::picture::PictureType::CoverFront)
+                    .or_else(|| pics.first())
+                    .unwrap();
+
+                Some(PictureInfo {
+                    format: mime_type_to_format(pic.mime_type()),
+                    width: info.width,
+                    height: info.height,
+                    count,
+                })
+            }
+            "ogg" => {
+                use lofty::config::ParseOptions;
+                use lofty::file::AudioFile;
+                use lofty::ogg::OggPictureStorage;
+
+                let file = std::fs::File::open(path).ok()?;
+                let mut reader = std::io::BufReader::new(file);
+                let vorbis = lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+
+                let pics = vorbis.vorbis_comments().pictures();
+                if pics.is_empty() {
+                    return None;
+                }
+
+                let count = pics.len() as u32;
+                let (pic, info) = pics.iter()
+                    .find(|(p, _)| p.pic_type() == lofty::picture::PictureType::CoverFront)
+                    .or_else(|| pics.first())
+                    .unwrap();
+
+                Some(PictureInfo {
+                    format: mime_type_to_format(pic.mime_type()),
+                    width: info.width,
+                    height: info.height,
+                    count,
+                })
+            }
+            _ => {
+                use lofty::file::TaggedFileExt;
+                use lofty::picture::PictureInformation;
+                use lofty::probe::Probe;
+
+                let tagged_file = Probe::open(path).ok().and_then(|p| p.read().ok())?;
+
+                let mut all_pictures: Vec<&lofty::picture::Picture> = Vec::new();
+                for tag in tagged_file.tags() {
+                    for pic in tag.pictures() {
+                        all_pictures.push(pic);
+                    }
+                }
+
+                if all_pictures.is_empty() {
+                    return None;
+                }
+
+                let count = all_pictures.len() as u32;
+                let pic = all_pictures.iter()
+                    .find(|p| p.pic_type() == lofty::picture::PictureType::CoverFront)
+                    .or_else(|| all_pictures.first())
+                    .unwrap();
+
+                let info = PictureInformation::from_picture(pic).unwrap_or_default();
+
+                Some(PictureInfo {
+                    format: mime_type_to_format(pic.mime_type()),
+                    width: info.width,
+                    height: info.height,
+                    count,
+                })
             }
         }
     }
@@ -504,6 +660,92 @@ pub fn write_file_tags(
 // =============================================================================
 // Internal Helpers - Binary tag filtering and format-specific writers
 // =============================================================================
+
+/// Convert a lofty MimeType to a short format string for DB storage.
+fn mime_type_to_format(mime: Option<&lofty::picture::MimeType>) -> String {
+    match mime {
+        Some(lofty::picture::MimeType::Jpeg) => "jpeg".to_string(),
+        Some(lofty::picture::MimeType::Png) => "png".to_string(),
+        Some(lofty::picture::MimeType::Gif) => "gif".to_string(),
+        Some(lofty::picture::MimeType::Bmp) => "bmp".to_string(),
+        Some(lofty::picture::MimeType::Tiff) => "tiff".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Check if a sidecar image is better than existing embedded art.
+///
+/// Rules:
+/// 1. Higher pixel count (width * height) wins if difference > 10%
+/// 2. At similar resolution (within 10%): lossless (png/bmp) beats lossy (jpeg)
+/// 3. Same format + same resolution = not better
+pub fn is_sidecar_better(
+    sidecar_format: &str,
+    sidecar_width: u32,
+    sidecar_height: u32,
+    embedded: &PictureInfo,
+) -> bool {
+    let sidecar_pixels = (sidecar_width as u64) * (sidecar_height as u64);
+    let embedded_pixels = (embedded.width as u64) * (embedded.height as u64);
+
+    // If either has zero resolution info, can't reliably compare
+    if sidecar_pixels == 0 || embedded_pixels == 0 {
+        return false;
+    }
+
+    // Higher pixel count wins if difference > 10%
+    let ratio = sidecar_pixels as f64 / embedded_pixels as f64;
+    if ratio > 1.10 {
+        return true;
+    }
+    if ratio < 0.91 {
+        return false; // embedded is significantly larger
+    }
+
+    // Similar resolution: lossless beats lossy
+    let sidecar_lossless = matches!(sidecar_format, "png" | "bmp" | "tiff");
+    let embedded_lossless = matches!(embedded.format.as_str(), "png" | "bmp" | "tiff");
+
+    sidecar_lossless && !embedded_lossless
+}
+
+/// Extract image dimensions from an image file on disk.
+///
+/// Uses lofty's `PictureInformation::from_picture` for PNG/JPEG.
+/// Returns (width, height, format_string). Returns (0, 0, format) if dimensions
+/// can't be determined.
+pub fn image_dimensions(path: &Path) -> (u32, u32, String) {
+    let ext = path.extension().and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase()).unwrap_or_default();
+
+    let format = match ext.as_str() {
+        "jpg" | "jpeg" => "jpeg",
+        "png" => "png",
+        "gif" => "gif",
+        "bmp" => "bmp",
+        "webp" => "webp",
+        "tiff" | "tif" => "tiff",
+        _ => "unknown",
+    }.to_string();
+
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return (0, 0, format),
+    };
+
+    let picture = lofty::picture::Picture::unchecked(data)
+        .mime_type(match ext.as_str() {
+            "jpg" | "jpeg" => lofty::picture::MimeType::Jpeg,
+            "png" => lofty::picture::MimeType::Png,
+            "gif" => lofty::picture::MimeType::Gif,
+            "bmp" => lofty::picture::MimeType::Bmp,
+            _ => lofty::picture::MimeType::Jpeg,
+        })
+        .build();
+
+    let info = lofty::picture::PictureInformation::from_picture(&picture).unwrap_or_default();
+    (info.width, info.height, format)
+}
 
 /// Binary/embedded tag keys to skip (album art, lyrics, etc.)
 const BINARY_TAG_PATTERNS: &[&str] = &[

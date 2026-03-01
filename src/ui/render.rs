@@ -192,7 +192,7 @@ fn render_content(
         }
         ActiveView::CorpusBrowser(ref mut browser) => {
             vname = "corpus_browser";
-            browser.render(f, area);
+            browser.render(f, area, &mut app.art_picker, &mut app.art_cache);
         }
         ActiveView::Insights(ref mut view) => {
             vname = "health";
@@ -225,7 +225,7 @@ fn render_content(
         }
         ActiveView::UnifiedTagEditor(ref mut editor) => {
             vname = "unified_tag_editor";
-            editor.render(f, area);
+            editor.render(f, area, &mut app.art_picker, &mut app.art_cache);
         }
         ActiveView::MissingFileResolution(ref preview) => {
             vname = "missing_file_resolution";
@@ -277,7 +277,7 @@ fn render_content(
         }
         ActiveView::EmbedAlbumArtResolution(ref preview) => {
             vname = "embed_album_art_resolution";
-            preview.render(f, area);
+            preview.render(f, area, &mut app.art_picker, &mut app.art_cache);
         }
         ActiveView::SubparDuplicateResolution(ref preview) => {
             vname = "subpar_duplicate_resolution";

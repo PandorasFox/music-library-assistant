@@ -612,6 +612,10 @@ fn index_track_from_metadata(
         sample_rate: metadata.sample_rate,
         fingerprint: metadata.fingerprint.clone(),
         has_pictures: metadata.has_pictures,
+        pic_format: metadata.pic_info.as_ref().map(|p| p.format.clone()),
+        pic_width: metadata.pic_info.as_ref().map(|p| p.width),
+        pic_height: metadata.pic_info.as_ref().map(|p| p.height),
+        pic_count: metadata.pic_info.as_ref().map(|p| p.count).unwrap_or(0),
     };
 
     // Route write through signal_sender (fire-and-forget)
@@ -1428,6 +1432,7 @@ mod tests {
             sample_rate: Some(44100),
             fingerprint: Some(vec![0xabc123]),
             has_pictures: false,
+            pic_info: None,
             tags: TagSet::new(vec![
                 ("artist".to_string(), "Test Artist".to_string()),
                 ("album".to_string(), "Test Album".to_string()),

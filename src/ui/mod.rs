@@ -140,6 +140,10 @@ pub(crate) struct App {
     /// fresh `CacheReady` results arrive. Views stay greyed-out while true so
     /// the operator never sees stale counts with an interactive overlay.
     cache_stale: bool,
+
+    /// Terminal image rendering: picker for protocol detection + image cache.
+    pub(super) art_picker: widgets::AlbumArtPicker,
+    pub(super) art_cache: widgets::AlbumArtCache,
 }
 
 impl App {
@@ -170,6 +174,8 @@ impl App {
             notice_rx,
             cached_status: Default::default(),
             cache_stale: false,
+            art_picker: widgets::AlbumArtPicker::init(),
+            art_cache: widgets::AlbumArtCache::new(),
         }
     }
 

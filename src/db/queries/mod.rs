@@ -480,6 +480,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_artless_corpus_files()
     }
 
+    /// Get corpus audio files with embedded pictures and known metadata.
+    pub fn get_corpus_files_with_picture_info(&self) -> Result<Vec<(i64, String, String, u32, u32)>> {
+        self.db.get_corpus_files_with_picture_info()
+    }
+
     // =========================================================================
     // Library File Queries
     // =========================================================================

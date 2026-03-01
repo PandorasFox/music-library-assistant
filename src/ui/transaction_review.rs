@@ -278,6 +278,9 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             Mutation::EmbedAlbumArt(ref m) => {
                 inodes.insert(m.inode);
             }
+            Mutation::UpgradeAlbumArt(ref m) => {
+                inodes.insert(m.inode);
+            }
 
             Mutation::InboxToCorpus(ref m) => {
                 inodes.insert(m.inode);

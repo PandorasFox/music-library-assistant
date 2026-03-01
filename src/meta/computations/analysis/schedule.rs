@@ -54,6 +54,7 @@ pub fn execute_schedule_content_analysis(
             Computation::DetectDuplicateInodes,
             Computation::DetectShitFormats,
             Computation::DetectEmbeddableAlbumArt,
+            Computation::BackfillAlbumArtInfo,
             Computation::DetectCrossSourceOverlaps,
         ]);
     }

@@ -41,6 +41,8 @@ pub struct Opinions {
     pub external_matching: ExternalMatchingConfig,
     /// Disc extraction configuration (tag name, letter mapping).
     pub disc_extraction: DiscExtractionOpinions,
+    /// Album art embedding/upgrade configuration.
+    pub album_art: AlbumArtOpinions,
 }
 
 
@@ -326,6 +328,26 @@ impl Default for DiscExtractionOpinions {
     }
 }
 
+/// Album art embedding and upgrade configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumArtOpinions {
+    /// Preferred padding size in bytes for tag writes (for block-aligned dedup).
+    /// Default: 4096 (matching common filesystem block size).
+    pub tag_padding_bytes: u32,
+    /// When replacing art, preserve existing non-CoverFront pictures.
+    /// Default: false
+    pub preserve_other_pictures_on_upgrade: bool,
+}
+
+impl Default for AlbumArtOpinions {
+    fn default() -> Self {
+        Self {
+            tag_padding_bytes: 4096,
+            preserve_other_pictures_on_upgrade: false,
+        }
+    }
+}
+
 impl Default for ExternalMatchingConfig {
     fn default() -> Self {
         Self {
@@ -352,6 +374,7 @@ impl Default for Opinions {
             leave_transactions_open: false,
             external_matching: ExternalMatchingConfig::default(),
             disc_extraction: DiscExtractionOpinions::default(),
+            album_art: AlbumArtOpinions::default(),
         }
     }
 }

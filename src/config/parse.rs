@@ -365,6 +365,33 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
     }
 }
 
+/// Parse album-art opinions from KDL node
+fn parse_album_art_opinions(node: &kdl::KdlNode, opinions: &mut AlbumArtOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                "tag-padding-bytes" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.tag_padding_bytes = val as u32;
+                            }
+                        }
+                    }
+                }
+                "preserve-other-pictures-on-upgrade" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.preserve_other_pictures_on_upgrade = val;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Parse disc-extraction opinions from KDL node
 fn parse_disc_extraction_opinions(node: &kdl::KdlNode, opinions: &mut DiscExtractionOpinions) {
     if let Some(children) = node.children() {
@@ -503,6 +530,9 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                             }
                             "disc-extraction" => {
                                 parse_disc_extraction_opinions(child, &mut config.opinions.disc_extraction);
+                            }
+                            "album-art" => {
+                                parse_album_art_opinions(child, &mut config.opinions.album_art);
                             }
                             _ => {}
                         }

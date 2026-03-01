@@ -24,6 +24,7 @@ use ratatui::layout::Rect;
 use ratatui::Frame;
 
 use crate::ui::input::InputAction;
+use crate::ui::widgets::{AlbumArtCache, AlbumArtPicker};
 
 pub use actions::TreeBrowserAction;
 pub use config::CorpusBrowserConfig;
@@ -86,8 +87,14 @@ impl TreeBrowserState {
     }
 
     /// Render the browser.
-    pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        render::render(f, area, &mut self.navigator, &mut self.variant);
+    pub fn render(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        art_picker: &mut AlbumArtPicker,
+        art_cache: &mut AlbumArtCache,
+    ) {
+        render::render(f, area, &mut self.navigator, &mut self.variant, art_picker, art_cache);
     }
 
     // =========================================================================

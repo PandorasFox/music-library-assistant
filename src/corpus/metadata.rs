@@ -69,7 +69,8 @@ pub fn extract_metadata(path: &Path, _source: &str) -> Result<ExtractedMetadata>
     };
 
     // Check for embedded pictures (album art) — uses lofty, format-aware
-    let has_pictures = TagSet::has_embedded_pictures(path);
+    let pic_info = TagSet::extract_picture_info(path);
+    let has_pictures = pic_info.is_some();
 
     // Note: Tags are returned empty - caller should use TagSet::from_file() to populate
     Ok(ExtractedMetadata {
@@ -81,6 +82,7 @@ pub fn extract_metadata(path: &Path, _source: &str) -> Result<ExtractedMetadata>
         sample_rate: audio_meta.sample_rate,
         fingerprint,
         has_pictures,
+        pic_info,
         tags: TagSet::empty(), // Empty - caller fills in via TagSet::from_file()
     })
 }

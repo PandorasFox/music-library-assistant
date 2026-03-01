@@ -1292,6 +1292,33 @@ impl Database {
             .map_err(|e| anyhow::anyhow!("Failed to query artless corpus files: {}", e))
     }
 
+    /// Get corpus audio files that have embedded pictures with known metadata.
+    ///
+    /// Returns (inode, path, pic_format, pic_width, pic_height) for healthy corpus
+    /// files where `has_pictures = 1` and picture metadata columns are populated.
+    /// Used by DetectEmbeddableAlbumArt for upgradeable art detection.
+    pub fn get_corpus_files_with_picture_info(&self) -> Result<Vec<(i64, String, String, u32, u32)>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT a.inode, f.path, a.pic_format, a.pic_width, a.pic_height
+               FROM audio_info a
+               JOIN files f ON a.inode = f.inode
+               JOIN signal_healthy_file h ON a.inode = h.inode
+               WHERE f.zone = 'corpus' AND a.has_pictures = 1
+                 AND a.pic_format IS NOT NULL AND a.pic_width IS NOT NULL AND a.pic_height IS NOT NULL"#
+        )?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, u32>(3)?,
+                row.get::<_, u32>(4)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| anyhow::anyhow!("Failed to query corpus files with picture info: {}", e))
+    }
+
     /// Get all inodes that have a CompoundTag signal containing a specific compound value.
     ///
     /// Used by EmitCanonicalTag mutation to find and clear stale CompoundTag signals

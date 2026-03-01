@@ -11,6 +11,7 @@
 //! - **Consistent**: Uniform styling and behavior across the app
 //! - **Focus-aware**: Widgets know when they're focused and style accordingly
 
+pub mod album_art_preview;
 pub mod control_colors;
 pub mod detail_panel;
 pub mod file_path_list;
@@ -49,6 +50,12 @@ pub use tabbed_signal_list::{DeployTab, TabbedSignalList};
 
 // Path display
 pub use path_display::PathField;
+
+// Album art preview
+pub use album_art_preview::{
+    AlbumArtCache, AlbumArtPicker, ArtCacheKey,
+    render_album_art_preview, render_no_art_placeholder,
+};
 
 // File path list + selection styles
 pub use file_path_list::{render_file_path_list, PathEntry};

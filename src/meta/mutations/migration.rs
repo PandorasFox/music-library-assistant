@@ -677,6 +677,26 @@ impl MigrationRegistry {
             },
         });
 
+        // v24→v25: Add picture metadata columns to audio_info for album art quality tracking
+        registry.register(Migration {
+            from_version: 24,
+            to_version: 25,
+            description: "Add pic_format/pic_width/pic_height/pic_count columns to audio_info for album art metadata",
+            apply: |db| {
+                let conn = db.conn();
+                add_column_if_missing(conn, "audio_info", "pic_format", "TEXT")?;
+                add_column_if_missing(conn, "audio_info", "pic_width", "INTEGER")?;
+                add_column_if_missing(conn, "audio_info", "pic_height", "INTEGER")?;
+                add_column_if_missing(conn, "audio_info", "pic_count", "INTEGER NOT NULL DEFAULT 0")?;
+
+                // Seed dirty inodes for album_art_info backfill computation so existing
+                // files with embedded art get their picture metadata extracted
+                seed_dirty_inodes_for(db, "album_art_info")?;
+
+                Ok(())
+            },
+        });
+
         registry
     }
 

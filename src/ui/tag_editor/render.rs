@@ -10,7 +10,11 @@ use ratatui::{
     Frame,
 };
 
-use crate::ui::widgets::{ConfirmationButton, ConfirmationModal, PaneConfig, PathField, ThreePaneLayout};
+use crate::ui::widgets::{
+    AlbumArtCache, AlbumArtPicker, ArtCacheKey,
+    ConfirmationButton, ConfirmationModal, PaneConfig, PathField, ThreePaneLayout,
+    render_album_art_preview, render_no_art_placeholder,
+};
 
 use super::mutations::compute_changes;
 use super::state::UnifiedTagEditorState;
@@ -22,7 +26,13 @@ use super::types::{
 
 impl UnifiedTagEditorState {
     /// Render the unified tag editor.
-    pub fn render(&mut self, f: &mut Frame, area: Rect) {
+    pub fn render(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        art_picker: &mut AlbumArtPicker,
+        art_cache: &mut AlbumArtCache,
+    ) {
         // Layout: info pane | 3-column | status box
         let editor_layout = Layout::default()
             .direction(Direction::Vertical)
@@ -33,7 +43,7 @@ impl UnifiedTagEditorState {
             .split(area);
 
         self.render_info_pane(f, editor_layout[0]);
-        self.render_three_column(f, editor_layout[1]);
+        self.render_three_column(f, editor_layout[1], art_picker, art_cache);
 
         // Render modal overlay if active
         if let Some(modal) = &self.modal {
@@ -125,7 +135,13 @@ impl UnifiedTagEditorState {
         f.render_widget(info_para, area);
     }
 
-    fn render_three_column(&mut self, f: &mut Frame, area: Rect) {
+    fn render_three_column(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        art_picker: &mut AlbumArtPicker,
+        art_cache: &mut AlbumArtCache,
+    ) {
         let layout = ThreePaneLayout::horizontal()
             .left(PaneConfig::new("", 30))
             .middle(PaneConfig::new("", 55))
@@ -134,7 +150,19 @@ impl UnifiedTagEditorState {
 
         self.render_context_list(f, layout.left.area);
         self.render_tag_fields_pane(f, layout.middle.area);
-        self.render_action_panel(f, layout.right.area);
+
+        // Split right pane: art preview (top) + action buttons (bottom)
+        let right_area = layout.right.area;
+        let right_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(right_area.width.saturating_sub(2)), // square-ish art preview
+                Constraint::Min(8), // action buttons
+            ])
+            .split(right_area);
+
+        self.render_art_preview_pane(f, right_chunks[0], art_picker, art_cache);
+        self.render_action_panel(f, right_chunks[1]);
     }
 
     fn render_context_list(&mut self, f: &mut Frame, area: Rect) {
@@ -530,6 +558,75 @@ impl UnifiedTagEditorState {
                 .border_style(border_style),
         );
         f.render_widget(tag_para, area);
+    }
+
+    /// Render the album art preview in the top portion of the right pane.
+    fn render_art_preview_pane(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        art_picker: &mut AlbumArtPicker,
+        art_cache: &mut AlbumArtCache,
+    ) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Art")
+            .border_style(Style::default().fg(Color::DarkGray));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        if inner.width < 2 || inner.height < 2 {
+            return;
+        }
+
+        // Resolve the current audio file to an absolute path
+        let rel_path = match self.selected_path() {
+            Some(p) => p.to_string(),
+            None => {
+                render_no_art_placeholder(f, inner);
+                return;
+            }
+        };
+        let abs_path = crate::corpus::paths::get_resolver()
+            .resolve(std::path::Path::new(&rel_path));
+
+        // Evict stale cache entries (keep only the current file)
+        let key = ArtCacheKey::Embedded(abs_path.clone());
+        art_cache.retain_only_keys(&[key]);
+
+        let cached = art_cache.get_or_load_embedded(&abs_path, art_picker);
+
+        if cached.width == 0 {
+            render_no_art_placeholder(f, inner);
+        } else {
+            // Split inner into image area + metadata line
+            if inner.height > 3 {
+                let split = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Min(2),
+                        Constraint::Length(1),
+                    ])
+                    .split(inner);
+
+                render_album_art_preview(f, split[0], cached);
+
+                let info = format!(
+                    "{}x{} {}",
+                    cached.width, cached.height, cached.format.to_uppercase()
+                );
+                let info_line = Line::from(Span::styled(
+                    info,
+                    Style::default().fg(Color::DarkGray),
+                ));
+                f.render_widget(
+                    Paragraph::new(info_line).alignment(Alignment::Center),
+                    split[1],
+                );
+            } else {
+                render_album_art_preview(f, inner, cached);
+            }
+        }
     }
 
     fn render_action_panel(&self, f: &mut Frame, area: Rect) {

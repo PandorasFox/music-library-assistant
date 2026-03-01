@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::meta::computations::Computation;
 use crate::meta::signals::data::TypedSignalWrite;
-use crate::corpus::tags::TagSet;
+use crate::corpus::tags::{TagSet, PictureInfo};
 
 use super::file_ops::{MoveMutation, StashFromZoneMutation, StashLeftoversMutation, HardLinkMutation, LibraryMoveMutation, InboxToCorpusMutation, InboxDirToCorpusMutation};
 use super::indexing::{
@@ -24,7 +24,7 @@ use super::indexing::{
 };
 use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
-use super::album_art::EmbedAlbumArtMutation;
+use super::album_art::{EmbedAlbumArtMutation, UpgradeAlbumArtMutation};
 use super::config_edit::ApplyConfigEditsMutation;
 use super::dir_config_edit::{ApplyDirConfigEditMutation, ApplyBatchDirConfigEditsMutation};
 
@@ -206,6 +206,8 @@ pub struct ExtractedMetadata {
     pub fingerprint: Option<Vec<u32>>,
     /// Whether the file has embedded pictures (album art).
     pub has_pictures: bool,
+    /// Detailed picture metadata (format, resolution, count). None if no pictures.
+    pub pic_info: Option<PictureInfo>,
     /// All tags extracted from the file.
     pub tags: TagSet,
 }
@@ -319,6 +321,9 @@ pub enum Mutation {
     /// Embed a sidecar image into an audio file.
     EmbedAlbumArt(EmbedAlbumArtMutation),
 
+    /// Replace existing embedded art with a better sidecar image.
+    UpgradeAlbumArt(UpgradeAlbumArtMutation),
+
     // ========================================================================
     // Config Operations (struct-backed — see config_edit.rs for trait impl)
     // ========================================================================
@@ -361,6 +366,7 @@ impl Mutation {
             Mutation::EmitExpectedDuplicate(m) => m,
             Mutation::EmitExpectedMissingTag(m) => m,
             Mutation::EmbedAlbumArt(m) => m,
+            Mutation::UpgradeAlbumArt(m) => m,
             Mutation::ApplyConfigEdits(m) => m,
             Mutation::ApplyDirConfigEdit(m) => m,
             Mutation::ApplyBatchDirConfigEdits(m) => m,
@@ -404,6 +410,7 @@ impl Mutation {
             Mutation::FlushTagsToDisk(ref m) => Some(m.inode),
             Mutation::AssimilateDiskTagsToDb(ref m) => Some(m.inode),
             Mutation::EmbedAlbumArt(ref m) => Some(m.inode),
+            Mutation::UpgradeAlbumArt(ref m) => Some(m.inode),
 
             // These don't have a single inode directly (batch operations or no inode)
             Mutation::ApplyTagOps(_)
@@ -538,8 +545,13 @@ impl Mutation {
             Mutation::EmitExpectedDuplicate(_) => {}
             Mutation::EmitExpectedMissingTag(_) => {}
 
-            // Album art embedding: affects the audio file's directory
+            // Album art embedding/upgrade: affects the audio file's directory
             Mutation::EmbedAlbumArt(m) => {
+                if let Some(parent) = m.audio_path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+            Mutation::UpgradeAlbumArt(m) => {
                 if let Some(parent) = m.audio_path.parent() {
                     dirs.push(parent.to_path_buf());
                 }

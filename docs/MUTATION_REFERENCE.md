@@ -36,7 +36,7 @@ deployment operations.
 |-------|-------|-----------|
 | Config | 0 | ApplyConfigEdits, ApplyDirConfigEdit, ApplyBatchDirConfigEdits |
 | DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, InboxToCorpus, InboxDirToCorpus, ApplyDbTagsToDisk |
-| DiskFlush | 2 | Transcode, EmbedAlbumArt, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex |
+| DiskFlush | 2 | Transcode, EmbedAlbumArt, UpgradeAlbumArt, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex |
 | DiskDeploy | 3 | HardLink, LibraryMove |
 | *(ChainEmitted)* | — | FlushTagsToDisk, AssimilateDiskTagsToDb *(spawned during execution, never in transactions)* |
 
@@ -140,7 +140,8 @@ Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutation
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
-| EmbedAlbumArt | UpdateCorpusFileSignals | — | EmbeddableAlbumArt (exact key), MutableOnly scope signals for inode | Read sidecar image from disk, embed into audio file via lofty (FLAC: OggPictureStorage, Opus/OGG: VorbisComments) |
+| EmbedAlbumArt | UpdateCorpusFileSignals | — | EmbeddableAlbumArt (exact key), MutableOnly scope signals for inode | Read sidecar image from disk, embed into audio file via lofty (FLAC: OggPictureStorage, Opus/OGG: VorbisComments, MP3: Id3v2). Supports FLAC, Opus, OGG, and MP3 formats |
+| UpgradeAlbumArt | UpdateCorpusFileSignals | — | UpgradeableAlbumArt (exact key), MutableOnly scope signals for inode | Replace existing embedded art with higher-quality sidecar image. Strips existing CoverFront picture(s) then embeds new art. Supports FLAC, Opus, OGG, and MP3 formats. Uses `preserve_other_pictures_on_upgrade` config opinion |
 
 ### Signal Emission Operations
 

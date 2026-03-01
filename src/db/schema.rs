@@ -54,6 +54,10 @@ impl Database {
                 sample_rate INTEGER,
                 fingerprint BLOB,
                 has_pictures INTEGER NOT NULL DEFAULT 0,
+                pic_format TEXT,                -- 'jpeg', 'png', etc. NULL if no pictures
+                pic_width INTEGER,              -- pixels, NULL if no pictures or unknown
+                pic_height INTEGER,             -- pixels, NULL if no pictures or unknown
+                pic_count INTEGER NOT NULL DEFAULT 0,  -- number of embedded pictures
                 needs_tag_flush INTEGER NOT NULL DEFAULT 0,
                 tags_version INTEGER NOT NULL DEFAULT 0  -- monotonic counter for tag changes
             );

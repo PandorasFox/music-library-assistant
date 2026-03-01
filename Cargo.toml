@@ -22,6 +22,10 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 ratatui = "0.29"
 crossterm = "0.28"
 
+# Terminal image rendering
+ratatui-image = { version = "4.2", default-features = false, features = ["crossterm"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+
 # Audio metadata
 symphonia = { version = "0.5", features = ["all"] }
 symphonia-core = "0.5"  # For custom codec registry

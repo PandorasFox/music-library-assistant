@@ -39,6 +39,7 @@ mod tags;
 mod deploy;
 mod formats;
 mod album_art;
+mod album_art_info;
 mod inbox_matches;
 mod inbox_tags;
 mod path_schema;
@@ -55,6 +56,7 @@ pub use tags::*;
 pub use deploy::*;
 pub use formats::*;
 pub use album_art::*;
+pub use album_art_info::*;
 pub use inbox_matches::*;
 pub use inbox_tags::*;
 pub use path_schema::*;
@@ -222,6 +224,12 @@ pub enum Computation {
     /// MetadataOnly) and per-tag diffs.
     DeriveExternalMatches,
 
+    /// Backfill picture metadata (format, resolution, count) for existing files.
+    ///
+    /// Single-pass dirty-inode computation: extracts picture info via lofty and
+    /// writes pic_format/pic_width/pic_height/pic_count to audio_info.
+    BackfillAlbumArtInfo,
+
     /// Seed dirty inodes for compound tag recomputation after config change.
     ///
     /// Carries the new (tag_name, separator) pairs from a tag_splitting config
@@ -260,6 +268,7 @@ impl Computation {
             Computation::DetectDiscExtractions => "Detecting disc extractions",
             Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
             Computation::DeriveExternalMatches => "Deriving external match signals",
+            Computation::BackfillAlbumArtInfo => "Backfilling album art metadata",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
         }
     }
@@ -338,6 +347,9 @@ impl Computation {
             }
             Computation::DeriveExternalMatches => {
                 execute_derive_external_matches(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::BackfillAlbumArtInfo => {
+                execute_backfill_album_art_info(ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::SeedCompoundTagDirtyInodes { ref new_separators } => {
                 execute_seed_compound_tag_dirty_inodes(ctx.read_db, new_separators, ctx.witness, ctx.start)

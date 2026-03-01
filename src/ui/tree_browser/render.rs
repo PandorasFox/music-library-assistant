@@ -14,6 +14,10 @@ use ratatui::Frame;
 
 use crate::ui::widgets::control_colors;
 use crate::ui::widgets::CURSOR_STYLE;
+use crate::ui::widgets::{
+    AlbumArtCache, AlbumArtPicker, ArtCacheKey,
+    render_album_art_preview, render_no_art_placeholder,
+};
 
 use super::entry::{DeployMarker, TreeEntry};
 use super::navigator::TreeNavigator;
@@ -25,8 +29,10 @@ pub fn render(
     area: Rect,
     nav: &mut TreeNavigator,
     variant: &mut BrowserVariant,
+    art_picker: &mut AlbumArtPicker,
+    art_cache: &mut AlbumArtCache,
 ) {
-    render_corpus_browser(f, area, nav, variant);
+    render_corpus_browser(f, area, nav, variant, art_picker, art_cache);
 }
 
 /// Render corpus browser layout: content + hint line.
@@ -35,6 +41,8 @@ fn render_corpus_browser(
     area: Rect,
     nav: &mut TreeNavigator,
     variant: &mut BrowserVariant,
+    art_picker: &mut AlbumArtPicker,
+    art_cache: &mut AlbumArtCache,
 ) {
     // Carve out 1 line at the bottom for control hints
     let outer = Layout::default()
@@ -53,6 +61,12 @@ fn render_corpus_browser(
     let pending_edit_paths = v.pending_edit_paths().clone();
     let corpus_dir = v.corpus_dir().to_path_buf();
 
+    // Determine if we should show art preview:
+    // - Config panel NOT open
+    // - Selected entry is a file (not directory)
+    let show_art = v.config_panel.is_none()
+        && nav.current_entry().is_some_and(|e| !e.is_directory);
+
     // Check if config panel is open for horizontal split
     if v.config_panel.is_some() {
         // Horizontal split: tree (65%) | config panel (35%)
@@ -68,12 +82,91 @@ fn render_corpus_browser(
         if let Some(ref panel) = v.config_panel {
             panel.render_config_panel(f, h_chunks[1]);
         }
+    } else if show_art {
+        // Horizontal split: tree (80%) | art preview (20%)
+        let h_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
+            .split(content_area);
+
+        render_corpus_tree(f, h_chunks[0], nav, variant, &pending_edit_paths, &corpus_dir);
+
+        // Render art preview for selected file
+        let selected_path = nav.current_entry().map(|e| e.path.clone());
+        render_file_art_preview(f, h_chunks[1], selected_path.as_deref(), art_picker, art_cache);
     } else {
         render_corpus_tree(f, content_area, nav, variant, &pending_edit_paths, &corpus_dir);
     }
 
     // Render control hints
     render_hints(f, hints_area, nav, variant);
+}
+
+/// Render a file art preview panel in the corpus browser.
+fn render_file_art_preview(
+    f: &mut Frame,
+    area: Rect,
+    file_path: Option<&Path>,
+    art_picker: &mut AlbumArtPicker,
+    art_cache: &mut AlbumArtCache,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Art")
+        .border_style(Style::default().fg(Color::DarkGray));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.width < 2 || inner.height < 2 {
+        return;
+    }
+
+    let path = match file_path {
+        Some(p) => p,
+        None => {
+            render_no_art_placeholder(f, inner);
+            return;
+        }
+    };
+
+    // Evict stale cache entries
+    let key = ArtCacheKey::Embedded(path.to_path_buf());
+    art_cache.retain_only_keys(&[key]);
+
+    let cached = art_cache.get_or_load_embedded(path, art_picker);
+
+    if cached.width == 0 {
+        render_no_art_placeholder(f, inner);
+    } else {
+        // Split into image + metadata
+        if inner.height > 3 {
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(2),
+                    Constraint::Length(2), // filename + dimensions
+                ])
+                .split(inner);
+
+            render_album_art_preview(f, split[0], cached);
+
+            // Metadata lines: filename and dimensions
+            let filename = cached.path.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let dim_info = format!(
+                "{}x{} {}",
+                cached.width, cached.height, cached.format.to_uppercase()
+            );
+            let lines = vec![
+                Line::from(Span::styled(filename, Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled(dim_info, Style::default().fg(Color::DarkGray))),
+            ];
+            f.render_widget(Paragraph::new(lines), split[1]);
+        } else {
+            render_album_art_preview(f, inner, cached);
+        }
+    }
 }
 
 /// Render the corpus tree area (filter bar + tree pane + overlays).

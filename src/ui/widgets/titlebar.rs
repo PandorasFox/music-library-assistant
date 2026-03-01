@@ -22,8 +22,11 @@ use ratatui::{
     Frame,
 };
 
-/// Width of the title pane (right side)
-const TITLE_PANE_WIDTH: u16 = 16;
+/// App title text displayed in the right pane
+const TITLE_TEXT: &str = "mm beta 8";
+
+/// Width of the title pane: text + 1 padding each side + 2 border
+const TITLE_PANE_WIDTH: u16 = TITLE_TEXT.len() as u16 + 4;
 
 /// Views available in the lateral view ring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +115,7 @@ impl LateralView {
 ///
 /// Two bordered panes side by side:
 /// - Left: Tab switcher showing all views with current highlighted
-/// - Right: App title "mm beta 8" (16 chars wide)
+/// - Right: App title (auto-sized to fit text)
 pub struct UnifiedTitleBar {
     current_view: LateralView,
     /// When true and Deploy tab is not active, render Deploy label in Magenta.
@@ -212,7 +215,7 @@ impl UnifiedTitleBar {
     }
 
     fn render_title(&self, f: &mut Frame, area: Rect) {
-        let paragraph = Paragraph::new("mm beta 8")
+        let paragraph = Paragraph::new(TITLE_TEXT)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));

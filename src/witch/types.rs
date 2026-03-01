@@ -185,6 +185,25 @@ pub enum Task {
     Maintenance(DbMaintenanceTask),
 }
 
+/// Fieldless discriminant for completed task type.
+/// Mirror of `Task` — exhaustive match on `Task` enforces sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TaskKind {
+    Mutation,
+    Computation,
+    Maintenance,
+}
+
+impl TaskKind {
+    pub fn from_task(task: &Task) -> Self {
+        match task {
+            Task::Mutation(_) => TaskKind::Mutation,
+            Task::Computation(_) => TaskKind::Computation,
+            Task::Maintenance(_) => TaskKind::Maintenance,
+        }
+    }
+}
+
 // ============================================================================
 // Execution Witnesses (Sealed Access Control)
 // ============================================================================
@@ -371,6 +390,7 @@ pub(super) struct TaskResult {
     pub success: bool,
     pub error: Option<String>,
     pub label: String,
+    pub kind: TaskKind,
     /// Follow-up computations to queue (from computation chaining)
     pub spawn: Vec<Computation>,
     /// Follow-up mutations to queue (from mutation spawn chaining)

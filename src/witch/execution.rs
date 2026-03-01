@@ -38,7 +38,7 @@ use crate::db::write_thread;
 
 use crate::meta::maintenance::DbMaintenanceTask;
 
-use super::types::{MutationExecutionWitness, Task, TaskResult};
+use super::types::{MutationExecutionWitness, Task, TaskKind, TaskResult};
 
 // ============================================================================
 // Task Execution
@@ -47,12 +47,15 @@ use super::types::{MutationExecutionWitness, Task, TaskResult};
 /// Execute a single task (mutation, computation, or maintenance). Opens DB connection as needed.
 pub(super) fn execute_task(task: Task, label: String, queue_time: Instant) -> TaskResult {
     let queue_wait_ms = queue_time.elapsed().as_millis() as u64;
+    let kind = TaskKind::from_task(&task);
 
-    match task {
+    let mut result = match task {
         Task::Mutation(mutation) => execute_mutation(mutation, label, queue_wait_ms),
         Task::Computation(computation) => execute_computation(computation, label, queue_wait_ms),
         Task::Maintenance(task) => execute_maintenance(task, label, queue_wait_ms),
-    }
+    };
+    result.kind = kind;
+    result
 }
 
 /// Execute a single mutation using thread-local read-only DB connection.
@@ -104,6 +107,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                 success: false,
                 error: Some(format!("DB access failed: {}", db_err)),
                 label,
+                kind: TaskKind::Mutation,
                 spawn: Vec::new(),
                 spawn_mutations: Vec::new(),
                 duration_ms: start.elapsed().as_millis() as u64,
@@ -190,6 +194,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         success,
         error,
         label,
+        kind: TaskKind::Mutation,
         spawn,
         spawn_mutations,
         duration_ms,
@@ -219,6 +224,7 @@ pub(super) fn execute_computation(computation: Computation, label: String, queue
         success: result.success,
         error: result.error,
         label,
+        kind: TaskKind::Computation,
         spawn,
         spawn_mutations: Vec::new(), // Computations don't spawn mutations
         duration_ms: result.duration_ms,
@@ -274,6 +280,7 @@ pub(super) fn execute_maintenance(task: DbMaintenanceTask, label: String, queue_
         success,
         error,
         label,
+        kind: TaskKind::Maintenance,
         spawn: Vec::new(),
         spawn_mutations: Vec::new(),
         duration_ms,

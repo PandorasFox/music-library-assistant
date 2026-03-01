@@ -157,6 +157,7 @@ pub struct Witch {
     // Status tracking (survives across sessions)
     recent_errors: VecDeque<String>,
     task_counts: HashMap<String, usize>,
+    kind_counts: HashMap<types::TaskKind, usize>,
 
     // Transaction state
     pending_transaction: Option<PendingTransaction>,
@@ -292,6 +293,7 @@ impl Witch {
             force_check_all_files_at_startup: false, // Set via with_opinions()
             recent_errors: VecDeque::with_capacity(5),
             task_counts: HashMap::new(),
+            kind_counts: HashMap::new(),
             pending_transaction: None,
             pending_mutation_phases: VecDeque::new(),
             db_thread_handle: write_thread::spawn(),
@@ -517,6 +519,7 @@ impl Witch {
 
             // Track by task type
             *self.task_counts.entry(result.label.clone()).or_insert(0) += 1;
+            *self.kind_counts.entry(result.kind).or_insert(0) += 1;
 
             // Decrement pending count for this label
             self.work_state.dec_label(&result.label);
@@ -798,19 +801,19 @@ impl Witch {
                 // If no mutations and not idle rescan, stay Full (normal work completion)
             }
 
-            // Migrations can complete while None - this is valid, just NOP
+            // Maintenance can complete while None - this is valid, just NOP
             (false, ReasoningLevel::None) => {
-                let had_migrations = self.task_counts.keys().any(|k| k.starts_with("Migration"));
-                if had_migrations {
+                let only_maintenance = self.kind_counts.keys().all(|k| *k == types::TaskKind::Maintenance);
+                if only_maintenance {
                     crate::logging::log_general(format!(
-                        "[STATE] Migrations complete while None. Staying None. \
+                        "[STATE] Maintenance complete while None. Staying None. \
                          Processed {} tasks.",
                         session_processed
                     ));
                 } else {
                     panic!(
-                        "Invalid state: non-observing, non-migration work completed while reasoning is None. \
-                         The only work while None should be observing or migrations."
+                        "Invalid state: non-observing, non-maintenance work completed while reasoning is None. \
+                         The only work while None should be observing or maintenance."
                     );
                 }
             }
@@ -822,6 +825,7 @@ impl Witch {
             total_processed: session_processed,
         };
         self.task_counts.clear();
+        self.kind_counts.clear();
         self.recent_errors.clear();
         self.session_recomputation_scope = crate::meta::recomputation::RecomputationScope::EMPTY;
 
@@ -1277,6 +1281,7 @@ impl Witch {
     fn spawn_task(&self, task: Task, label: String, queue_time: Instant) {
         let tx = self.result_tx.clone();
         let label_for_panic = label.clone();
+        let kind_for_panic = types::TaskKind::from_task(&task);
         rayon::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 execute_task(task, label, queue_time)
@@ -1295,6 +1300,7 @@ impl Witch {
                         success: false,
                         error: Some(format!("Task panicked: {}", panic_msg)),
                         label: label_for_panic,
+                        kind: kind_for_panic,
                         spawn: Vec::new(),
                         spawn_mutations: Vec::new(),
                         duration_ms: queue_time.elapsed().as_millis() as u64,
@@ -1470,7 +1476,7 @@ impl Witch {
             Err(_) => return Vec::new(),
         };
 
-        match ReconciliationPlan::compute(db.conn()) {
+        match ReconciliationPlan::compute_full(&db) {
             Ok(plan) => plan.descriptions(),
             Err(_) => vec!["Schema update needed (could not compute details)".to_string()],
         }

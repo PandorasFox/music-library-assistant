@@ -670,9 +670,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
-        InsightType::EmbeddableAlbumArt => {
+        InsightType::AlbumArtWork => {
             lines.push(Line::from(Span::styled(
-                "Embeddable Album Art",
+                "Album Art Review",
                 Style::default().fg(header_color).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
@@ -681,20 +681,20 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "(cover.jpg, folder.png, etc.)",
+                "that can be embedded into artless",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "alongside audio files without",
+                "files or upgrade lower-quality",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
-                "embedded pictures.",
+                "embedded art.",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Press Enter to embed.",
+                "Press Enter to review.",
                 Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
             )));
         }

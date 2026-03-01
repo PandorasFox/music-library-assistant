@@ -141,7 +141,7 @@ pub enum InsightType {
     TagCanonicity { tag_name: String },
     CompoundTagValueSafe { tag_name: String },   // All split parts exist in corpus
     CompoundTagValueReview { tag_name: String }, // Some/all parts are new to corpus
-    EmbeddableAlbumArt,
+    AlbumArtWork,
     MissingAlbumSingle,
     DiscExtraction,
     PathTagMismatch,
@@ -165,7 +165,7 @@ impl InsightType {
             InsightType::CorpusCorruptFiles => Some(DecisionKeyKind::CorruptFile),
             InsightType::CorpusShitFormatFiles => Some(DecisionKeyKind::ShitFormat),
             InsightType::SubparDuplicates => Some(DecisionKeyKind::SubparDuplicate),
-            InsightType::EmbeddableAlbumArt => Some(DecisionKeyKind::EmbedAlbumArt),
+            InsightType::AlbumArtWork => Some(DecisionKeyKind::AlbumArt),
             // Informational entries
             InsightType::CorpusFilesInCorpus
             | InsightType::CorpusFilesIndexed => None,
@@ -216,8 +216,8 @@ pub enum InsightAction {
     LaunchReleaseOverlapResolution,
     /// Launch subpar duplicate stash
     LaunchSubparDuplicateResolution,
-    /// Launch embed album art modal
-    LaunchEmbedAlbumArt,
+    /// Launch album art review modal (embed + upgrade)
+    LaunchAlbumArtReview,
     /// Launch manual review modal (redundant dups, deploy conflicts, metadata dups)
     LaunchManualReview,
     /// Launch missing tag resolution (opens tag editor with all affected files)
@@ -405,14 +405,21 @@ impl BucketEntry {
     }
 
     /// Create embeddable album art entry
-    fn embeddable_album_art(count: usize) -> Self {
+    fn album_art_work(embed_count: usize, upgrade_count: usize) -> Self {
+        let total = embed_count + upgrade_count;
+        let label = match (embed_count > 0, upgrade_count > 0) {
+            (true, true) => format!("Album art: {} to embed, {} to upgrade", embed_count, upgrade_count),
+            (true, false) => format!("Album art: {} to embed", embed_count),
+            (false, true) => format!("Album art: {} to upgrade", upgrade_count),
+            (false, false) => "Album art".to_string(),
+        };
         Self {
-            insight_type: InsightType::EmbeddableAlbumArt,
-            label: "Embeddable album art".to_string(),
-            count: Some(count),
-            color: if count > 0 { Color::Cyan } else { Color::DarkGray },
+            insight_type: InsightType::AlbumArtWork,
+            label,
+            count: Some(total),
+            color: if total > 0 { Color::Cyan } else { Color::DarkGray },
             rank: 0,
-            action: InsightAction::LaunchEmbedAlbumArt,
+            action: InsightAction::LaunchAlbumArtReview,
         }
     }
 
@@ -614,9 +621,9 @@ impl CachedBucketEntries {
             entries.push(BucketEntry::path_tag_mismatch(bucket.path_tag_mismatch_count));
         }
 
-        // Embeddable album art at bottom
-        if bucket.embeddable_album_art > 0 {
-            entries.push(BucketEntry::embeddable_album_art(bucket.embeddable_album_art));
+        // Album art work at bottom (embed + upgrade combined)
+        if bucket.embeddable_album_art > 0 || bucket.upgradeable_album_art > 0 {
+            entries.push(BucketEntry::album_art_work(bucket.embeddable_album_art, bucket.upgradeable_album_art));
         }
 
         entries
@@ -1025,6 +1032,7 @@ mod tests {
                 inconsistent_album_artist_count: 0,
                 compound_tags: vec![],
                 embeddable_album_art: 0,
+                upgradeable_album_art: 0,
                 missing_album_single_count: 0,
                 disc_extraction_count: 0,
                 path_tag_mismatch_count: 0,

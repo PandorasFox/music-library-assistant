@@ -592,6 +592,7 @@ impl Database {
         tag_canonicity.sort_by(|a, b| b._total_tracks.cmp(&a._total_tracks));
 
         let embeddable_album_art = self.count_signal_type("embeddable_album_art")?;
+        let upgradeable_album_art = self.count_signal_type("upgradeable_album_art")?;
 
         let missing_album_single_count = self.count_signal_type("missing_album_single")?;
 
@@ -608,6 +609,7 @@ impl Database {
             inconsistent_album_artist_count,
             compound_tags,
             embeddable_album_art,
+            upgradeable_album_art,
             missing_album_single_count,
             disc_extraction_count,
             path_tag_mismatch_count,
@@ -842,6 +844,7 @@ impl Database {
             "library_leftover" => LibraryLeftoverSignal::count(&self.conn)?,
             "library_stale" => LibraryStaleSignal::count(&self.conn)?,
             "embeddable_album_art" => EmbeddableAlbumArtSignal::count(&self.conn)?,
+            "upgradeable_album_art" => UpgradeableAlbumArtSignal::count(&self.conn)?,
             "missing_album_single" => MissingAlbumSingleSignal::count(&self.conn)?,
             "expected_missing_tag" => ExpectedMissingTagSignal::count(&self.conn)?,
             "inbox_unindexed" => InboxUnindexedSignal::count(&self.conn)?,
@@ -1271,6 +1274,12 @@ impl Database {
     pub fn get_embeddable_album_art_signals(&self) -> Result<Vec<crate::meta::signals::data::EmbeddableAlbumArtSignal>> {
         crate::meta::signals::data::EmbeddableAlbumArtSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query embeddable album art signals: {}", e))
+    }
+
+    /// Get all upgradeable album art signals with deserialized data.
+    pub fn get_upgradeable_album_art_signals(&self) -> Result<Vec<crate::meta::signals::data::UpgradeableAlbumArtSignal>> {
+        crate::meta::signals::data::UpgradeableAlbumArtSignal::query_all(&self.conn)
+            .map_err(|e| anyhow::anyhow!("Failed to query upgradeable album art signals: {}", e))
     }
 
     /// Get corpus audio files that have no embedded pictures (has_pictures = 0).

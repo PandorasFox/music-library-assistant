@@ -475,6 +475,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_embeddable_album_art_signals()
     }
 
+    /// Get upgradeable album art signals with deserialized data.
+    pub fn get_upgradeable_album_art_signals(&self) -> Result<Vec<crate::meta::signals::data::UpgradeableAlbumArtSignal>> {
+        self.db.get_upgradeable_album_art_signals()
+    }
+
     /// Get corpus audio files without embedded pictures.
     pub fn get_artless_corpus_files(&self) -> Result<Vec<(i64, String)>> {
         self.db.get_artless_corpus_files()

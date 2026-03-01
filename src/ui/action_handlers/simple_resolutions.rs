@@ -454,42 +454,67 @@ impl App {
     }
 
     // =========================================================================
-    // Embed Album Art Resolution
+    // Album Art Review
     // =========================================================================
 
-    /// Start embed album art resolution modal from Insights view.
-    pub(in crate::ui) fn start_embed_album_art_resolution(&mut self) {
-        let data = self.cache.query(|db| {
-            embed_album_art_modal::EmbedAlbumArtModalData::load(&db).ok().unwrap_or_default()
+    /// Start per-directory album art review modal from Insights view.
+    pub(in crate::ui) fn start_album_art_review(&mut self) {
+        let directories = self.cache.query(|db| {
+            embed_album_art_modal::load_review_directories(&db).unwrap_or_default()
         }).recv();
 
-        let preview = embed_album_art_modal::EmbedAlbumArtPreviewState::new(data);
-        self.view = ActiveView::EmbedAlbumArtResolution(preview);
+        let state = embed_album_art_modal::AlbumArtReviewState::new(directories);
+        self.view = ActiveView::EmbedAlbumArtResolution(state);
     }
 
-    /// Handle embed album art preview actions.
-    pub(super) fn handle_embed_album_art_preview_action(
+    /// Handle album art review actions (per-directory confirm/skip/cancel).
+    pub(super) fn handle_album_art_review_action(
         &mut self,
-        action: embed_album_art_modal::EmbedAlbumArtPreviewAction,
+        action: embed_album_art_modal::AlbumArtReviewAction,
         witness: Option<&witness::ConfirmationGesture>,
     ) {
         match action {
-            embed_album_art_modal::EmbedAlbumArtPreviewAction::None => {}
-            embed_album_art_modal::EmbedAlbumArtPreviewAction::ConfirmEmbedAll => {
+            embed_album_art_modal::AlbumArtReviewAction::None => {}
+            embed_album_art_modal::AlbumArtReviewAction::ConfirmDirectory => {
                 let Some(w) = witness else { return };
-                let mutations = match &self.view {
-                    ActiveView::EmbedAlbumArtResolution(ref preview) => preview.cached_data.embed_mutations(),
-                    _ => Vec::new(),
-                };
-                if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Embed album art", DecisionKey::EmbedAlbumArt, w);
-                    self.after_staging_decisions();
-                } else {
-                    self.status_message = Some("No artless files to embed into".to_string());
+                // Collect mutations for current directory, then advance
+                if let ActiveView::EmbedAlbumArtResolution(ref mut state) = self.view {
+                    if let Some(dir) = state.directories.get(state.current_dir) {
+                        let mutations = dir.mutations();
+                        state.staged_mutations.extend(mutations);
+                        state.confirmed_count += 1;
+                    }
+                    state.advance();
+                    if state.is_complete() {
+                        // All directories reviewed — stage accumulated mutations
+                        let mutations = std::mem::take(&mut state.staged_mutations);
+                        if !mutations.is_empty() {
+                            self.stage_mutations_with_transaction(mutations, "Album art", DecisionKey::AlbumArt, w);
+                            self.after_staging_decisions();
+                        } else {
+                            self.cancel_and_return_to_source("No album art changes staged");
+                        }
+                    }
                 }
             }
-            embed_album_art_modal::EmbedAlbumArtPreviewAction::Cancel => {
-                self.cancel_and_return_to_source("Embed album art cancelled");
+            embed_album_art_modal::AlbumArtReviewAction::SkipDirectory => {
+                // Skip is triggered by Enter on the Skip button, so witness is available
+                let Some(w) = witness else { return };
+                if let ActiveView::EmbedAlbumArtResolution(ref mut state) = self.view {
+                    state.advance();
+                    if state.is_complete() {
+                        let mutations = std::mem::take(&mut state.staged_mutations);
+                        if !mutations.is_empty() {
+                            self.stage_mutations_with_transaction(mutations, "Album art", DecisionKey::AlbumArt, w);
+                            self.after_staging_decisions();
+                        } else {
+                            self.cancel_and_return_to_source("All directories skipped");
+                        }
+                    }
+                }
+            }
+            embed_album_art_modal::AlbumArtReviewAction::Cancel => {
+                self.cancel_and_return_to_source("Album art review cancelled");
             }
         }
     }

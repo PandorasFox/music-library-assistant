@@ -61,6 +61,8 @@ pub struct TagSquashBucket {
     pub compound_tags: Vec<CompoundTagEntry>,
     /// Directories with sidecar album art embeddable into artless audio files
     pub embeddable_album_art: usize,
+    /// Directories with sidecar art better than existing embedded art
+    pub upgradeable_album_art: usize,
     /// Missing album singles (tracks without ALBUM but with ARTIST+TITLE)
     pub missing_album_single_count: usize,
     /// Disc values extractable from ALBUM or TRACKNUMBER tags

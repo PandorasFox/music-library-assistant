@@ -163,7 +163,7 @@ pub fn load_review_directories(read_db: &ReadOnlyDb<'_>) -> Result<Vec<ArtReview
     }
 
     for signal in upgrade_signals {
-        let dir_key = signal.key.clone();
+        let dir_key = signal.key.strip_prefix("upgrade:").unwrap_or(&signal.key).to_string();
         let art_desc = format!(
             "{}x{} {}",
             signal.data.embedded_width,

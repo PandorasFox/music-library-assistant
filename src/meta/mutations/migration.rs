@@ -697,6 +697,20 @@ impl MigrationRegistry {
             },
         });
 
+        // v25→v26: Create signal_upgradeable_album_art table
+        registry.register(Migration {
+            from_version: 25,
+            to_version: 26,
+            description: "Create signal_upgradeable_album_art table for album art upgrade detection",
+            apply: |db| {
+                use crate::meta::signals::data::UpgradeableAlbumArtSignal;
+                use crate::meta::signals::store::AggregateSignalStore;
+                db.conn().execute_batch(UpgradeableAlbumArtSignal::TABLE_SQL)?;
+                seed_dirty_inodes_for(db, "album_art_info")?;
+                Ok(())
+            },
+        });
+
         registry
     }
 

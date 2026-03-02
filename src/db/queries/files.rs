@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use rusqlite::params;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::Database;
 use crate::db::types::{AudioFile, AudioInfo, AudioTag, FileEntry, Zone};
@@ -963,6 +963,42 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    // =========================================================================
+    // Image Info Queries
+    // =========================================================================
+
+    /// Check which inodes already have image_info rows (batch query).
+    ///
+    /// Used by ScanCorpusDirectory's mtime freshness gate: if an image inode
+    /// already has image_info AND its mtime hasn't changed, skip dirty marking.
+    pub fn get_image_info_exists_batch(&self, inodes: &[i64]) -> Result<HashSet<i64>> {
+        if inodes.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        let placeholders = (0..inodes.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!(
+            "SELECT inode FROM image_info WHERE inode IN ({})",
+            placeholders
+        );
+
+        let mut stmt = self.conn.prepare(&query)?;
+
+        let params_vec: Vec<&dyn rusqlite::ToSql> = inodes
+            .iter()
+            .map(|i| i as &dyn rusqlite::ToSql)
+            .collect();
+
+        let rows = stmt.query_map(&params_vec[..], |row| row.get::<_, i64>(0))?;
+
+        let mut result = HashSet::new();
+        for row in rows {
+            result.insert(row?);
+        }
+
+        Ok(result)
     }
 
     // =========================================================================

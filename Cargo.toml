@@ -24,7 +24,7 @@ crossterm = "0.28"
 
 # Terminal image rendering
 ratatui-image = { version = "4.2", default-features = false, features = ["crossterm"] }
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
 
 # Audio metadata
 symphonia = { version = "0.5", features = ["all"] }

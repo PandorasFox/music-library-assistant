@@ -828,6 +828,11 @@ impl<'a> ReadOnlyDb<'a> {
     // Image File Queries
     // =========================================================================
 
+    /// Check which inodes already have image_info rows (batch query).
+    pub fn get_image_info_exists_batch(&self, inodes: &[i64]) -> Result<std::collections::HashSet<i64>> {
+        self.db.get_image_info_exists_batch(inodes)
+    }
+
     /// Get all corpus image files with inodes (batch query for sidecar deploy).
     pub fn get_all_corpus_images(&self) -> Result<Vec<files::CorpusImageEntry>> {
         self.db.get_all_corpus_images()

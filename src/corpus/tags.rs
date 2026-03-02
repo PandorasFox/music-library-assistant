@@ -711,7 +711,8 @@ pub fn is_sidecar_better(
 
 /// Extract image dimensions from an image file on disk.
 ///
-/// Uses lofty's `PictureInformation::from_picture` for PNG/JPEG.
+/// Uses the `image` crate's header-only reader — reads only enough bytes
+/// to determine dimensions without decoding the full image.
 /// Returns (width, height, format_string). Returns (0, 0, format) if dimensions
 /// can't be determined.
 pub fn image_dimensions(path: &Path) -> (u32, u32, String) {
@@ -728,23 +729,15 @@ pub fn image_dimensions(path: &Path) -> (u32, u32, String) {
         _ => "unknown",
     }.to_string();
 
-    let data = match std::fs::read(path) {
-        Ok(d) => d,
-        Err(_) => return (0, 0, format),
-    };
-
-    let picture = lofty::picture::Picture::unchecked(data)
-        .mime_type(match ext.as_str() {
-            "jpg" | "jpeg" => lofty::picture::MimeType::Jpeg,
-            "png" => lofty::picture::MimeType::Png,
-            "gif" => lofty::picture::MimeType::Gif,
-            "bmp" => lofty::picture::MimeType::Bmp,
-            _ => lofty::picture::MimeType::Jpeg,
-        })
-        .build();
-
-    let info = lofty::picture::PictureInformation::from_picture(&picture).unwrap_or_default();
-    (info.width, info.height, format)
+    match image::ImageReader::open(path)
+        .and_then(|r| r.with_guessed_format())
+    {
+        Ok(reader) => match reader.into_dimensions() {
+            Ok((w, h)) => (w, h, format),
+            Err(_) => (0, 0, format),
+        },
+        Err(_) => (0, 0, format),
+    }
 }
 
 /// Binary/embedded tag keys to skip (album art, lyrics, etc.)

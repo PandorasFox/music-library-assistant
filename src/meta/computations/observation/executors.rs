@@ -309,40 +309,57 @@ pub fn execute_scan_corpus_directory(
     // contaminate the audio indexing pipeline.
     if file_zone == Zone::Corpus {
         let image_state = collect_directory_image_files(directory);
-        for (img_inode, img_path, img_mtime_s, img_mtime_ns, img_file_size) in &image_state {
-            let img_relative = match resolver.to_relative(img_path) {
-                Some(rel) => rel,
-                None => continue,
-            };
-            let img_relative_str = img_relative.to_string_lossy().to_string();
 
-            // Track as observed so MissingFileSignal is not emitted for it
-            observed_corpus_inodes.insert(*img_inode, img_relative_str.clone());
+        if !image_state.is_empty() {
+            // Build mtime + image_info existence lookups for freshness gating
+            let img_inodes: Vec<i64> = image_state.iter().map(|(inode, _, _, _, _)| *inode).collect();
+            let img_mtimes = read_only_db.get_file_mtime_batch(file_zone, &img_inodes).unwrap_or_default();
+            let img_info_exists = read_only_db.get_image_info_exists_batch(&img_inodes).unwrap_or_default();
 
-            // Register in files table (zone='corpus', is_dir=0)
-            sender.index_image_file(
-                &img_relative_str,
-                zone,
-                *img_inode,
-                *img_mtime_s,
-                *img_mtime_ns,
-                *img_file_size,
-                witness,
-            );
+            for (img_inode, img_path, img_mtime_s, img_mtime_ns, img_file_size) in &image_state {
+                let img_relative = match resolver.to_relative(img_path) {
+                    Some(rel) => rel,
+                    None => continue,
+                };
+                let img_relative_str = img_relative.to_string_lossy().to_string();
 
-            // Mark dirty for IndexImageFile computation
-            sender.mark_dirty_inodes(
-                vec![*img_inode],
-                "index_image_file",
-                witness,
-            );
+                // Track as observed so MissingFileSignal is not emitted for it
+                observed_corpus_inodes.insert(*img_inode, img_relative_str.clone());
 
-            // Mark dirty for sidecar deploy recomputation
-            sender.mark_dirty_inodes(
-                vec![*img_inode],
-                "sidecar_deploy",
-                witness,
-            );
+                // Register in files table (zone='corpus', is_dir=0) — always, keeps path/mtime fresh
+                sender.index_image_file(
+                    &img_relative_str,
+                    zone,
+                    *img_inode,
+                    *img_mtime_s,
+                    *img_mtime_ns,
+                    *img_file_size,
+                    witness,
+                );
+
+                // Freshness gate: skip dirty marking if mtime matches AND image_info exists
+                let mtime_matches = img_mtimes.get(img_inode)
+                    .is_some_and(|(db_s, db_ns)| *db_s == *img_mtime_s && *db_ns == *img_mtime_ns);
+                let has_image_info = img_info_exists.contains(img_inode);
+
+                if mtime_matches && has_image_info {
+                    continue;
+                }
+
+                // Mark dirty for IndexImageFile computation
+                sender.mark_dirty_inodes(
+                    vec![*img_inode],
+                    "index_image_file",
+                    witness,
+                );
+
+                // Mark dirty for sidecar deploy recomputation
+                sender.mark_dirty_inodes(
+                    vec![*img_inode],
+                    "sidecar_deploy",
+                    witness,
+                );
+            }
         }
     }
 

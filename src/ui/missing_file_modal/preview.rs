@@ -9,6 +9,7 @@
 //! - Enter: Execute selected button action
 //! - Escape: Cancel
 
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -20,7 +21,7 @@ use ratatui::{
 
 use super::types::{MissingFileModalData, SelectedButton};
 use crate::ui::helpers::render_pane;
-use crate::ui::widgets::{render_file_path_list, PathEntry};
+use crate::ui::widgets::{render_file_path_list, ButtonRects, ListClickTargets, PathEntry};
 
 /// Actions returned from the missing file preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +47,12 @@ pub struct MissingFilePreviewState {
     pub scroll: [usize; 2],
     /// Which button is selected.
     pub selected_button: SelectedButton,
+    /// Click targets for restorable list (set during render).
+    pub click_targets_restorable: ListClickTargets,
+    /// Click targets for non-restorable list (set during render).
+    pub click_targets_non_restorable: ListClickTargets,
+    /// Click targets for buttons (set during render).
+    pub button_rects: ButtonRects,
 }
 
 impl MissingFilePreviewState {
@@ -75,7 +82,56 @@ impl MissingFilePreviewState {
             focused_list,
             scroll: [0, 0],
             selected_button: SelectedButton::Cancel,
+            click_targets_restorable: ListClickTargets::new(),
+            click_targets_non_restorable: ListClickTargets::new(),
+            button_rects: ButtonRects::new(),
         }
+    }
+
+    /// Handle a mouse click at (x, y).
+    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<MissingFilePreviewAction> {
+        let has_restorable = self.cached_data.has_restorable();
+
+        // Check buttons first
+        if let Some(button_name) = self.button_rects.hit_test(x, y) {
+            match button_name {
+                "restore_all" => {
+                    self.selected_button = SelectedButton::RestoreAll;
+                    if has_restorable {
+                        return Some(MissingFilePreviewAction::ConfirmRestore);
+                    }
+                }
+                "drop_lost" => {
+                    self.selected_button = SelectedButton::DropLost;
+                    return Some(MissingFilePreviewAction::ConfirmDrop);
+                }
+                "cancel" => {
+                    self.selected_button = SelectedButton::Cancel;
+                    return Some(MissingFilePreviewAction::Cancel);
+                }
+                _ => {}
+            }
+        }
+        // Check restorable list
+        if let Some(id) = self.click_targets_restorable.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.cached_data.restorable.len() {
+                    self.focused_list = 0;
+                    self.scroll[0] = idx;
+                }
+            }
+            return None;
+        }
+        // Check non-restorable list
+        if let Some(id) = self.click_targets_non_restorable.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.cached_data.non_restorable.len() {
+                    self.focused_list = 1;
+                    self.scroll[1] = idx;
+                }
+            }
+        }
+        None
     }
 
     /// Handle input action.
@@ -151,7 +207,7 @@ impl MissingFilePreviewState {
     }
 
     /// Render the missing file resolution modal.
-    pub fn render(&self, f: &mut Frame, area: Rect) {
+    pub fn render(&mut self, f: &mut Frame, area: Rect) {
         // Clear background
         f.render_widget(Clear, area);
 
@@ -192,7 +248,7 @@ impl MissingFilePreviewState {
         f.render_widget(title, area);
     }
 
-    fn render_content(&self, f: &mut Frame, area: Rect) {
+    fn render_content(&mut self, f: &mut Frame, area: Rect) {
         // Split into two panes for the two lists
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -203,7 +259,7 @@ impl MissingFilePreviewState {
         self.render_non_restorable_list(f, chunks[1]);
     }
 
-    fn render_restorable_list(&self, f: &mut Frame, area: Rect) {
+    fn render_restorable_list(&mut self, f: &mut Frame, area: Rect) {
         let focused = self.focused_list == 0;
         let count = self.cached_data.restorable.len();
 
@@ -222,6 +278,15 @@ impl MissingFilePreviewState {
 
         let inner = render_pane(f, area, block);
 
+        // Populate click targets for restorable list
+        self.click_targets_restorable.clear();
+        self.click_targets_restorable.set_list_area(inner);
+        let visible_height = inner.height as usize;
+        for (vis_idx, entry_idx) in (self.scroll[0]..).take(visible_height).enumerate() {
+            if entry_idx >= self.cached_data.restorable.len() { break; }
+            self.click_targets_restorable.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        }
+
         if self.cached_data.restorable.is_empty() {
             let empty = Paragraph::new("No restorable files")
                 .style(Style::default().fg(Color::DarkGray));
@@ -239,7 +304,7 @@ impl MissingFilePreviewState {
         render_file_path_list(f, inner, &entries, self.scroll[0], self.scroll[0]);
     }
 
-    fn render_non_restorable_list(&self, f: &mut Frame, area: Rect) {
+    fn render_non_restorable_list(&mut self, f: &mut Frame, area: Rect) {
         let focused = self.focused_list == 1;
         let count = self.cached_data.non_restorable.len();
 
@@ -258,6 +323,15 @@ impl MissingFilePreviewState {
 
         let inner = render_pane(f, area, block);
 
+        // Populate click targets for non-restorable list
+        self.click_targets_non_restorable.clear();
+        self.click_targets_non_restorable.set_list_area(inner);
+        let visible_height = inner.height as usize;
+        for (vis_idx, entry_idx) in (self.scroll[1]..).take(visible_height).enumerate() {
+            if entry_idx >= self.cached_data.non_restorable.len() { break; }
+            self.click_targets_non_restorable.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        }
+
         if self.cached_data.non_restorable.is_empty() {
             let empty = Paragraph::new("No non-restorable files")
                 .style(Style::default().fg(Color::DarkGray));
@@ -275,11 +349,26 @@ impl MissingFilePreviewState {
         render_file_path_list(f, inner, &entries, self.scroll[1], self.scroll[1]);
     }
 
-    fn render_controls(&self, f: &mut Frame, area: Rect) {
+    fn render_controls(&mut self, f: &mut Frame, area: Rect) {
         let has_restorable = self.cached_data.has_restorable();
 
-        // Build button line
-        let mut buttons = Vec::new();
+        let block = Block::default().borders(Borders::TOP);
+        let inner = render_pane(f, area, block);
+
+        let button_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(33),
+                Constraint::Percentage(34),
+                Constraint::Percentage(33),
+            ])
+            .split(inner);
+
+        // Track button rects for click detection
+        self.button_rects.clear();
+        self.button_rects.set("restore_all", button_chunks[0]);
+        self.button_rects.set("drop_lost", button_chunks[1]);
+        self.button_rects.set("cancel", button_chunks[2]);
 
         // Restore All button
         let restore_style = if !has_restorable {
@@ -289,17 +378,21 @@ impl MissingFilePreviewState {
         } else {
             Style::default().fg(Color::Green)
         };
-        buttons.push(Span::styled(" Restore All ", restore_style));
-        buttons.push(Span::raw("  "));
+        let restore_text = Paragraph::new(" Restore All ")
+            .style(restore_style)
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(restore_text, button_chunks[0]);
 
-        // Drop Missing button (always available - operator may prefer drop over restore)
+        // Drop Missing button
         let drop_style = if self.selected_button == SelectedButton::DropLost {
             Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Red)
         };
-        buttons.push(Span::styled(" Drop Missing ", drop_style));
-        buttons.push(Span::raw("  "));
+        let drop_text = Paragraph::new(" Drop Missing ")
+            .style(drop_style)
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(drop_text, button_chunks[1]);
 
         // Cancel button
         let cancel_style = if self.selected_button == SelectedButton::Cancel {
@@ -307,11 +400,9 @@ impl MissingFilePreviewState {
         } else {
             Style::default().fg(Color::White)
         };
-        buttons.push(Span::styled(" Cancel ", cancel_style));
-
-        let controls = Paragraph::new(Line::from(buttons))
-            .block(Block::default().borders(Borders::TOP));
-
-        f.render_widget(controls, area);
+        let cancel_text = Paragraph::new(" Cancel ")
+            .style(cancel_style)
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(cancel_text, button_chunks[2]);
     }
 }

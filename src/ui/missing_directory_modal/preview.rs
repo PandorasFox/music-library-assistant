@@ -7,6 +7,7 @@
 //! - Enter: Execute selected button action
 //! - Escape: Cancel
 
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -18,6 +19,7 @@ use ratatui::{
 
 use super::MissingDirectoryModalData;
 use crate::ui::helpers::{render_pane, truncate_left};
+use crate::ui::widgets::{ButtonRects, ListClickTargets};
 
 /// Actions returned from the missing directory preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +60,10 @@ pub struct MissingDirectoryPreviewState {
     pub scroll: usize,
     /// Which button is selected.
     pub selected_button: SelectedButton,
+    /// Click targets for directory list items (set during render).
+    pub click_targets: ListClickTargets,
+    /// Click targets for buttons (set during render).
+    pub button_rects: ButtonRects,
 }
 
 impl MissingDirectoryPreviewState {
@@ -78,7 +84,36 @@ impl MissingDirectoryPreviewState {
             cached_data,
             scroll: 0,
             selected_button,
+            click_targets: ListClickTargets::new(),
+            button_rects: ButtonRects::new(),
         }
+    }
+
+    /// Handle a mouse click at (x, y).
+    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<MissingDirectoryPreviewAction> {
+        if let Some(button_name) = self.button_rects.hit_test(x, y) {
+            match button_name {
+                "drop" => {
+                    self.selected_button = SelectedButton::Drop;
+                    if self.cached_data.count() > 0 {
+                        return Some(MissingDirectoryPreviewAction::ConfirmDrop);
+                    }
+                }
+                "cancel" => {
+                    self.selected_button = SelectedButton::Cancel;
+                    return Some(MissingDirectoryPreviewAction::Cancel);
+                }
+                _ => {}
+            }
+        }
+        if let Some(id) = self.click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.cached_data.count() {
+                    self.scroll = idx;
+                }
+            }
+        }
+        None
     }
 
     /// Handle input action.
@@ -135,7 +170,7 @@ impl MissingDirectoryPreviewState {
     }
 
     /// Render the missing directory resolution modal.
-    pub fn render(&self, f: &mut Frame, area: Rect) {
+    pub fn render(&mut self, f: &mut Frame, area: Rect) {
         // Clear background
         f.render_widget(Clear, area);
 
@@ -174,7 +209,7 @@ impl MissingDirectoryPreviewState {
         f.render_widget(title, area);
     }
 
-    fn render_content(&self, f: &mut Frame, area: Rect) {
+    fn render_content(&mut self, f: &mut Frame, area: Rect) {
         let count = self.cached_data.count();
 
         let border_style = Style::default().fg(Color::Yellow);
@@ -216,7 +251,14 @@ impl MissingDirectoryPreviewState {
             height: inner.height.saturating_sub(3),
         };
 
+        // Populate click targets for list items
+        self.click_targets.clear();
+        self.click_targets.set_list_area(list_area);
         let visible_lines = list_area.height as usize;
+        for (vis_idx, entry_idx) in (self.scroll..).take(visible_lines).enumerate() {
+            if entry_idx >= self.cached_data.count() { break; }
+            self.click_targets.add_row(entry_idx.to_string(), list_area.y + vis_idx as u16);
+        }
 
         let items: Vec<ListItem> = self
             .cached_data
@@ -234,11 +276,21 @@ impl MissingDirectoryPreviewState {
         f.render_widget(list, list_area);
     }
 
-    fn render_controls(&self, f: &mut Frame, area: Rect) {
+    fn render_controls(&mut self, f: &mut Frame, area: Rect) {
         let has_directories = self.cached_data.count() > 0;
 
-        // Build button line
-        let mut buttons = Vec::new();
+        let block = Block::default().borders(Borders::TOP);
+        let inner = render_pane(f, area, block);
+
+        let button_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(inner);
+
+        // Track button rects for click detection
+        self.button_rects.clear();
+        self.button_rects.set("drop", button_chunks[0]);
+        self.button_rects.set("cancel", button_chunks[1]);
 
         // Drop button
         let drop_style = if !has_directories {
@@ -248,8 +300,10 @@ impl MissingDirectoryPreviewState {
         } else {
             Style::default().fg(Color::Yellow)
         };
-        buttons.push(Span::styled(" Drop All ", drop_style));
-        buttons.push(Span::raw("  "));
+        let drop_text = Paragraph::new(" Drop All ")
+            .style(drop_style)
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(drop_text, button_chunks[0]);
 
         // Cancel button
         let cancel_style = if self.selected_button == SelectedButton::Cancel {
@@ -257,11 +311,9 @@ impl MissingDirectoryPreviewState {
         } else {
             Style::default().fg(Color::White)
         };
-        buttons.push(Span::styled(" Cancel ", cancel_style));
-
-        let controls = Paragraph::new(Line::from(buttons))
-            .block(Block::default().borders(Borders::TOP));
-
-        f.render_widget(controls, area);
+        let cancel_text = Paragraph::new(" Cancel ")
+            .style(cancel_style)
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(cancel_text, button_chunks[1]);
     }
 }

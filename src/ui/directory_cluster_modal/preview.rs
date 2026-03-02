@@ -12,6 +12,7 @@
 //! - Ctrl+R: Jump to transaction review
 //! - Escape: Cancel
 
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -24,7 +25,7 @@ use ratatui::{
 use super::types::{ClusterResolutionOption, DirectoryClusterModalData, StashFileEntry};
 use crate::ui::helpers::{render_pane, truncate_left, truncate_right};
 use crate::ui::widgets::file_path_list::{render_file_path_list, PathEntry};
-use crate::ui::widgets::{PathField, CURSOR_STYLE};
+use crate::ui::widgets::{rect_contains, ListClickTargets, PathField, CURSOR_STYLE};
 
 /// Which pane has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -88,6 +89,14 @@ pub struct DirectoryClusterPreviewState {
     pub file_cursor: usize,
     /// Scroll offset for the stash file list.
     pub file_scroll: usize,
+    /// Click targets for option items (set during render).
+    pub option_click_targets: ListClickTargets,
+    /// Click targets for stash file list items (set during render).
+    pub file_click_targets: ListClickTargets,
+    /// Stored options pane Rect for pane-level focus detection.
+    pub options_pane_rect: Option<Rect>,
+    /// Stored file list pane Rect for pane-level focus detection.
+    pub file_list_pane_rect: Option<Rect>,
 }
 
 impl DirectoryClusterPreviewState {
@@ -122,7 +131,50 @@ impl DirectoryClusterPreviewState {
             stash_files,
             file_cursor: 0,
             file_scroll: 0,
+            option_click_targets: ListClickTargets::new(),
+            file_click_targets: ListClickTargets::new(),
+            options_pane_rect: None,
+            file_list_pane_rect: None,
         }
+    }
+
+    /// Handle a mouse click at (x, y).
+    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<DirectoryClusterPreviewAction> {
+        // Check option items
+        if let Some(id) = self.option_click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.current_options.len() {
+                    self.focus_pane = FocusPane::Options;
+                    self.selected_option_index = idx;
+                    self.recompute_stash_files();
+                }
+            }
+            return None;
+        }
+        // Check file list items
+        if let Some(id) = self.file_click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.stash_files.len() {
+                    self.focus_pane = FocusPane::FileList;
+                    self.file_cursor = idx;
+                }
+            }
+            return None;
+        }
+        // Pane-level focus detection
+        if let Some(rect) = self.options_pane_rect {
+            if rect_contains(rect, x, y) {
+                self.focus_pane = FocusPane::Options;
+                return None;
+            }
+        }
+        if let Some(rect) = self.file_list_pane_rect {
+            if rect_contains(rect, x, y) {
+                self.focus_pane = FocusPane::FileList;
+                return None;
+            }
+        }
+        None
     }
 
     /// Build resolution options for a cluster.
@@ -307,7 +359,7 @@ impl DirectoryClusterPreviewState {
     }
 
     /// Render the directory cluster resolution modal.
-    pub fn render(&self, f: &mut Frame, area: Rect) {
+    pub fn render(&mut self, f: &mut Frame, area: Rect) {
         // Clear background
         f.render_widget(Clear, area);
 
@@ -349,7 +401,7 @@ impl DirectoryClusterPreviewState {
         f.render_widget(title, area);
     }
 
-    fn render_top_panes(&self, f: &mut Frame, area: Rect) {
+    fn render_top_panes(&mut self, f: &mut Frame, area: Rect) {
         let options_focused = self.focus_pane == FocusPane::Options;
 
         // Split into directories pane (left) and options pane (right)
@@ -424,7 +476,7 @@ impl DirectoryClusterPreviewState {
         f.render_widget(list, inner);
     }
 
-    fn render_options_pane(&self, f: &mut Frame, area: Rect, focused: bool) {
+    fn render_options_pane(&mut self, f: &mut Frame, area: Rect, focused: bool) {
         let block = Block::default()
             .title(" Resolution ")
             .title_style(Style::default().fg(if focused { Color::Cyan } else { Color::DarkGray }))
@@ -432,6 +484,15 @@ impl DirectoryClusterPreviewState {
             .border_style(Style::default().fg(if focused { Color::Cyan } else { Color::DarkGray }));
 
         let inner = render_pane(f, area, block);
+
+        // Store pane rect for focus detection + populate click targets
+        self.options_pane_rect = Some(area);
+        self.option_click_targets.clear();
+        self.option_click_targets.set_list_area(inner);
+        for (vis_idx, idx) in (0..self.current_options.len()).enumerate() {
+            if vis_idx >= inner.height as usize { break; }
+            self.option_click_targets.add_row(idx.to_string(), inner.y + vis_idx as u16);
+        }
 
         if self.current_options.is_empty() {
             let empty = Paragraph::new("No options available")
@@ -466,7 +527,7 @@ impl DirectoryClusterPreviewState {
         f.render_widget(list, inner);
     }
 
-    fn render_stash_preview(&self, f: &mut Frame, area: Rect) {
+    fn render_stash_preview(&mut self, f: &mut Frame, area: Rect) {
         let file_list_focused = self.focus_pane == FocusPane::FileList;
         let count = self.stash_files.len();
         let title = format!(" Files to Stash ({}) ", count);
@@ -506,7 +567,17 @@ impl DirectoryClusterPreviewState {
         }
     }
 
-    fn render_file_list(&self, f: &mut Frame, area: Rect) {
+    fn render_file_list(&mut self, f: &mut Frame, area: Rect) {
+        // Store pane rect for focus detection + populate click targets
+        self.file_list_pane_rect = Some(area);
+        self.file_click_targets.clear();
+        self.file_click_targets.set_list_area(area);
+        let visible_height = area.height as usize;
+        for (vis_idx, entry_idx) in (self.file_scroll..).take(visible_height).enumerate() {
+            if entry_idx >= self.stash_files.len() { break; }
+            self.file_click_targets.add_row(entry_idx.to_string(), area.y + vis_idx as u16);
+        }
+
         if self.stash_files.is_empty() {
             let empty = Paragraph::new("No files to stash")
                 .style(Style::default().fg(Color::DarkGray));

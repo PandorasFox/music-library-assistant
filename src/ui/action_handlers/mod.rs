@@ -1560,6 +1560,21 @@ impl App {
             ActiveView::DiscExtractionResolution(state) => {
                 state.handle_click(x, y, &gesture).map(ViewAction::DiscExtractionResolution)
             }
+            ActiveView::CorruptFileResolution(state) => {
+                state.handle_click(x, y, &gesture).map(ViewAction::CorruptFileResolution)
+            }
+            ActiveView::MissingDirectoryResolution(state) => {
+                state.handle_click(x, y, &gesture).map(ViewAction::MissingDirectoryResolution)
+            }
+            ActiveView::MissingFileResolution(state) => {
+                state.handle_click(x, y, &gesture).map(ViewAction::MissingFileResolution)
+            }
+            ActiveView::ShitFormatResolution(state) => {
+                state.handle_click(x, y, &gesture).map(ViewAction::ShitFormatResolution)
+            }
+            ActiveView::DirectoryClusterResolution(state) => {
+                state.handle_click(x, y, &gesture).map(ViewAction::DirectoryClusterResolution)
+            }
             ActiveView::Insights(state) => {
                 state.handle_click(x, y);
                 None

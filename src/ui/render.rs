@@ -227,11 +227,11 @@ fn render_content(
             vname = "unified_tag_editor";
             editor.render(f, area, &mut app.art_picker, &mut app.art_cache);
         }
-        ActiveView::MissingFileResolution(ref preview) => {
+        ActiveView::MissingFileResolution(ref mut preview) => {
             vname = "missing_file_resolution";
             preview.render(f, area);
         }
-        ActiveView::MissingDirectoryResolution(ref preview) => {
+        ActiveView::MissingDirectoryResolution(ref mut preview) => {
             vname = "missing_directory_resolution";
             preview.render(f, area);
         }
@@ -267,11 +267,11 @@ fn render_content(
             vname = "transaction_review";
             transaction_review::render(f, area, review, transaction_review_decisions);
         }
-        ActiveView::CorruptFileResolution(ref preview) => {
+        ActiveView::CorruptFileResolution(ref mut preview) => {
             vname = "corrupt_file_resolution";
             preview.render(f, area);
         }
-        ActiveView::ShitFormatResolution(ref preview) => {
+        ActiveView::ShitFormatResolution(ref mut preview) => {
             vname = "shit_format_resolution";
             preview.render(f, area);
         }
@@ -294,7 +294,7 @@ fn render_content(
             vname = "inbox_organize";
             super::inbox_organize::render::render(f, area, state);
         }
-        ActiveView::DirectoryClusterResolution(ref preview) => {
+        ActiveView::DirectoryClusterResolution(ref mut preview) => {
             vname = "directory_cluster_resolution";
             preview.render(f, area);
         }

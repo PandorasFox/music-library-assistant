@@ -316,7 +316,7 @@ impl App {
                     ActiveView::DirectoryClusterResolution(ref preview) => {
                         match preview.selected_option() {
                             Some(crate::ui::directory_cluster_modal::types::ClusterResolutionOption::EditTags { inodes, .. }) => {
-                                Some(inodes.clone())
+                                Some(inodes)
                             }
                             _ => None,
                         }
@@ -349,7 +349,7 @@ impl App {
                         if let Some(option) = preview.selected_option() {
                             let mutations = preview.cached_data.mutations_for_resolution(
                                 preview.current_cluster_index,
-                                option,
+                                &option,
                             );
                             (preview.current_cluster_index, mutations)
                         } else {

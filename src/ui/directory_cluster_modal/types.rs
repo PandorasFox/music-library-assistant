@@ -27,8 +27,6 @@ pub struct DirectoryGroupEntry {
     pub paths: Vec<String>,
     /// Format summary (e.g., "FLAC (3)" or "MP3 (2)")
     pub format_summary: String,
-    /// Total file size in MB
-    pub total_size_mb: f64,
     /// Whether this source can have duplicates stashed (from config, default: true).
     pub can_stash_dupes: bool,
 }
@@ -55,19 +53,6 @@ pub enum ClusterResolutionOption {
     EditTags { dir_suffix: String, inodes: Vec<i64> },
     /// Mark this source pair overlap as expected (suppress future signals)
     MarkExpected,
-}
-
-impl ClusterResolutionOption {
-    pub fn label(&self) -> String {
-        match self {
-            Self::StashDirectory { stash_suffix } => format!("Stash {}/", stash_suffix),
-            Self::AutoQuality { stash_format } => {
-                format!("Stash {} (quality)", stash_format)
-            }
-            Self::EditTags { dir_suffix, .. } => format!("Edit tags {}/", dir_suffix),
-            Self::MarkExpected => "Mark expected".to_string(),
-        }
-    }
 }
 
 /// A file that would be stashed by a resolution option.
@@ -130,14 +115,12 @@ impl DirectoryClusterModalData {
                 };
 
                 let mut paths = Vec::new();
-                let mut total_size: i64 = 0;
                 let mut format_counts: std::collections::HashMap<String, usize> =
                     std::collections::HashMap::new();
 
                 for &inode in &unique_inodes {
                     if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, Zone::Corpus) {
                         paths.push(audio_file.path().to_string());
-                        total_size += audio_file.entry.file_size;
                         *format_counts.entry(audio_file.audio.file_type.to_uppercase()).or_insert(0) += 1;
                     }
                 }
@@ -157,14 +140,11 @@ impl DirectoryClusterModalData {
                     parts.join(", ")
                 };
 
-                let total_size_mb = total_size as f64 / (1024.0 * 1024.0);
-
                 directories.push(DirectoryGroupEntry {
                     path_suffix: source_path.clone(),
                     inodes: unique_inodes,
                     paths,
                     format_summary,
-                    total_size_mb,
                     can_stash_dupes: can_stash,
                 });
             }
@@ -254,14 +234,12 @@ impl DirectoryClusterModalData {
                 };
 
                 let mut paths = Vec::new();
-                let mut total_size: i64 = 0;
                 let mut format_counts: std::collections::HashMap<String, usize> =
                     std::collections::HashMap::new();
 
                 for &inode in &unique_inodes {
                     if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, Zone::Corpus) {
                         paths.push(audio_file.path().to_string());
-                        total_size += audio_file.entry.file_size;
                         *format_counts.entry(audio_file.audio.file_type.to_uppercase()).or_insert(0) += 1;
                     }
                 }
@@ -280,14 +258,11 @@ impl DirectoryClusterModalData {
                     parts.join(", ")
                 };
 
-                let total_size_mb = total_size as f64 / (1024.0 * 1024.0);
-
                 directories.push(DirectoryGroupEntry {
                     path_suffix,
                     inodes: unique_inodes,
                     paths,
                     format_summary,
-                    total_size_mb,
                     can_stash_dupes: entry.can_stash,
                 });
             }

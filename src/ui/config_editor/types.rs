@@ -119,6 +119,9 @@ pub struct ConfigField {
     /// Source when the editor was opened (restored on NOP or reset).
     pub original_source: FieldSource,
     pub restart_required: bool,
+    /// Writes this field's value back into a Config struct.
+    /// Stored at build time so build and apply logic are co-located.
+    pub applier: fn(&ConfigValue, &mut crate::config::Config),
 }
 
 /// A group of related config fields (maps to a KDL block).

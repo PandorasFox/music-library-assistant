@@ -144,6 +144,10 @@ pub(crate) struct App {
     /// Terminal image rendering: picker for protocol detection + image cache.
     pub(super) art_picker: widgets::AlbumArtPicker,
     pub(super) art_cache: widgets::AlbumArtCache,
+
+    /// When true, drain the input buffer before the next event poll.
+    /// Set by render code after expensive image loads to prevent stacked events.
+    pub(super) drain_input_next: bool,
 }
 
 impl App {
@@ -176,6 +180,7 @@ impl App {
             cache_stale: false,
             art_picker: widgets::AlbumArtPicker::init(),
             art_cache: widgets::AlbumArtCache::new(),
+            drain_input_next: false,
         }
     }
 
@@ -898,6 +903,15 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Tick tag search for pending bulk edit (after modal has rendered)
         app.tick_tag_search();
+
+        // Drain buffered input events after expensive operations (e.g., image loading)
+        // to prevent stacked Tab/arrow presses from firing on next frames.
+        if app.drain_input_next {
+            app.drain_input_next = false;
+            while event::poll(std::time::Duration::ZERO)? {
+                let _ = event::read();
+            }
+        }
 
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {

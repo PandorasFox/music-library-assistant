@@ -83,6 +83,75 @@ impl MutationExecutor for EmbedAlbumArtMutation {
     }
 }
 
+/// Append a sidecar image to an audio file without removing existing art.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppendAlbumArtMutation {
+    pub inode: i64,
+    pub audio_path: PathBuf,
+    pub image_path: PathBuf,
+    /// Signal key for clearing after batch.
+    pub signal_key: String,
+    /// Description of current embedded art for diff display.
+    pub current_art_desc: String,
+}
+
+impl MutationExecutor for AppendAlbumArtMutation {
+    fn label(&self) -> &'static str {
+        "Append album art"
+    }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+
+        let result = append_picture(&self.audio_path, &self.image_path, ctx.witness);
+
+        let (success, error) = match result {
+            Ok(()) => {
+                update_db_picture_state(self.inode, &self.audio_path, ctx.witness);
+                (true, None)
+            }
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+
+        MutationResult {
+            _mutation: Mutation::AppendAlbumArt(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope {
+        SignalClearScope::MutableOnly
+    }
+
+    fn affected_inodes(&self) -> Vec<i64> {
+        vec![self.inode]
+    }
+
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES }
+
+    fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
+        vec![SignalToClear::exact::<UpgradeableAlbumArtSignal>(self.signal_key.clone())]
+    }
+
+    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
+        vec![self.audio_path.clone()]
+    }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            path_filename(&self.audio_path),
+            format!("{} (kept)", self.current_art_desc),
+            format!("+ {}", path_filename(&self.image_path)),
+        )]
+    }
+}
+
 /// Replace existing embedded art with a better sidecar image.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpgradeAlbumArtMutation {
@@ -470,4 +539,33 @@ fn replace_picture_mp3(
         .with_context(|| format!("Failed to save replaced picture to MP3: {}", path.display()))?;
 
     Ok(())
+}
+
+// =============================================================================
+// Append functions (add art alongside existing pictures)
+// =============================================================================
+
+/// Read an image from disk and append it to an audio file's existing pictures.
+/// Unlike `embed_picture`, this does NOT guard against existing art — it always adds.
+/// Unlike `replace_picture`, this does NOT strip existing art — it keeps everything.
+fn append_picture(
+    audio_path: &std::path::Path,
+    image_path: &std::path::Path,
+    _witness: &MutationExecutionWitness,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let picture = read_image_as_picture(image_path)?;
+    let audio_ext = audio_ext(audio_path);
+
+    match audio_ext.as_str() {
+        "flac" => embed_picture_flac(audio_path, picture),
+        "opus" | "ogg" => embed_picture_vorbis(audio_path, picture),
+        "mp3" => embed_picture_mp3(audio_path, picture),
+        other => Err(anyhow::anyhow!(
+            "Unsupported format for picture append: {}",
+            other
+        )),
+    }
+    .with_context(|| format!("Failed to append picture to {}", audio_path.display()))
 }

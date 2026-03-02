@@ -4,10 +4,10 @@
 //! audio files and upgrading lower-quality embedded art with better sidecars.
 //!
 //! - Up/Down: Navigate file selection within current directory
-//! - Tab/Shift-Tab: Cycle between directories
-//! - Left/Right: Switch between Confirm/Skip buttons
-//! - Enter: Confirm or skip current directory, advance to next
-//! - Escape: Cancel entire review
+//! - Tab/Shift-Tab: Cycle between directories (browse freely)
+//! - Left/Right: Switch between Replace/Append/Skip buttons
+//! - Enter: Replace, append, or skip current directory
+//! - Escape: Cancel (with confirmation if directories have been confirmed)
 
 use crate::ui::input::InputAction;
 use ratatui::{
@@ -25,12 +25,12 @@ use std::path::{Path, PathBuf};
 use crate::corpus::paths;
 use crate::db::ReadOnlyDb;
 use crate::meta::mutations::Mutation;
-use crate::meta::mutations::album_art::{EmbedAlbumArtMutation, UpgradeAlbumArtMutation};
+use crate::meta::mutations::album_art::{AppendAlbumArtMutation, EmbedAlbumArtMutation, UpgradeAlbumArtMutation};
 use crate::meta::signals::data::SidecarImage;
 use crate::ui::helpers::render_pane;
 use crate::ui::widgets::control_colors as cc;
 use crate::ui::widgets::{
-    AlbumArtCache, AlbumArtPicker, ArtCacheKey, ConfirmationButton,
+    AlbumArtCache, AlbumArtPicker, ArtCacheKey, ConfirmationButton, ConfirmationModal,
     render_album_art_preview, render_button_row, render_no_art_placeholder,
     square_height,
 };
@@ -44,8 +44,10 @@ use crate::ui::widgets::{
 pub enum AlbumArtReviewAction {
     /// No action needed.
     None,
-    /// Confirm current directory (embed + upgrade its files).
-    ConfirmDirectory,
+    /// Replace current directory's upgrade entries (strip + re-embed).
+    ReplaceDirectory,
+    /// Append to current directory's upgrade entries (keep existing + add).
+    AppendDirectory,
     /// Skip current directory without staging.
     SkipDirectory,
     /// Cancel entire review.
@@ -101,13 +103,16 @@ pub struct ArtReviewDirectory {
 }
 
 impl ArtReviewDirectory {
-    /// Generate mutations for this directory.
-    pub fn mutations(&self) -> Vec<Mutation> {
+    /// Generate mutations for this directory with the given button mode.
+    ///
+    /// Embed entries always produce `EmbedAlbumArt` regardless of mode.
+    /// Upgrade entries produce `UpgradeAlbumArt` for Replace, `AppendAlbumArt` for Append.
+    pub fn mutations_with_mode(&self, button: AlbumArtReviewButton) -> Vec<Mutation> {
         let resolver = paths::get_resolver();
         let image_path = PathBuf::from(&self.sidecar.path);
         let mut mutations = Vec::new();
 
-        // Embed mutations
+        // Embed mutations — always the same regardless of mode
         if let Some(ref signal_key) = self.embed_signal_key {
             for entry in &self.embed_entries {
                 let audio_path = resolver.resolve(Path::new(&entry.path));
@@ -120,17 +125,32 @@ impl ArtReviewDirectory {
             }
         }
 
-        // Upgrade mutations
+        // Upgrade mutations — mode-dependent
         if let Some(ref signal_key) = self.upgrade_signal_key {
             for entry in &self.upgrade_entries {
                 let audio_path = resolver.resolve(Path::new(&entry.path));
-                mutations.push(Mutation::UpgradeAlbumArt(UpgradeAlbumArtMutation {
-                    inode: entry.inode,
-                    audio_path,
-                    image_path: image_path.clone(),
-                    signal_key: signal_key.clone(),
-                    current_art_desc: entry.current_art_desc.clone().unwrap_or_default(),
-                }));
+                let current_art_desc = entry.current_art_desc.clone().unwrap_or_default();
+                match button {
+                    AlbumArtReviewButton::Replace => {
+                        mutations.push(Mutation::UpgradeAlbumArt(UpgradeAlbumArtMutation {
+                            inode: entry.inode,
+                            audio_path,
+                            image_path: image_path.clone(),
+                            signal_key: signal_key.clone(),
+                            current_art_desc,
+                        }));
+                    }
+                    AlbumArtReviewButton::Append => {
+                        mutations.push(Mutation::AppendAlbumArt(AppendAlbumArtMutation {
+                            inode: entry.inode,
+                            audio_path,
+                            image_path: image_path.clone(),
+                            signal_key: signal_key.clone(),
+                            current_art_desc,
+                        }));
+                    }
+                    AlbumArtReviewButton::Skip => {} // unreachable in practice
+                }
             }
         }
 
@@ -236,7 +256,8 @@ pub fn load_review_directories(read_db: &ReadOnlyDb<'_>) -> Result<Vec<ArtReview
 /// Which button is focused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlbumArtReviewButton {
-    Confirm,
+    Replace,
+    Append,
     Skip,
 }
 
@@ -245,34 +266,49 @@ pub enum AlbumArtReviewButton {
 pub struct AlbumArtReviewState {
     /// All directories to review.
     pub directories: Vec<ArtReviewDirectory>,
-    /// Index of current directory being reviewed.
+    /// Index of current directory being viewed (browsable via Tab).
     pub current_dir: usize,
+    /// Per-directory processed state (same length as `directories`).
+    pub processed: Vec<bool>,
     /// Selected file index within the flat file list for the current directory.
     pub selected_file: usize,
     /// Which button is selected.
     pub selected_button: AlbumArtReviewButton,
     /// Accumulated mutations from confirmed directories.
     pub staged_mutations: Vec<Mutation>,
-    /// Number of directories confirmed so far.
+    /// Number of directories confirmed so far (not skipped).
     pub confirmed_count: usize,
+    /// Whether the cancel confirmation popup is showing.
+    pub show_cancel_confirm: bool,
+    /// Which button is selected in the cancel confirmation popup.
+    pub cancel_confirm_yes: bool,
 }
 
 impl AlbumArtReviewState {
     /// Create a new review state.
     pub fn new(directories: Vec<ArtReviewDirectory>) -> Self {
+        let len = directories.len();
         Self {
             directories,
             current_dir: 0,
+            processed: vec![false; len],
             selected_file: 0,
-            selected_button: AlbumArtReviewButton::Confirm,
+            selected_button: AlbumArtReviewButton::Replace,
             staged_mutations: Vec::new(),
             confirmed_count: 0,
+            show_cancel_confirm: false,
+            cancel_confirm_yes: false,
         }
     }
 
-    /// Whether all directories have been reviewed.
+    /// Whether all directories have been processed (confirmed or skipped).
     pub fn is_complete(&self) -> bool {
-        self.current_dir >= self.directories.len()
+        self.processed.iter().all(|&p| p)
+    }
+
+    /// Count of processed directories.
+    fn processed_count(&self) -> usize {
+        self.processed.iter().filter(|&&p| p).count()
     }
 
     /// Get the current directory, if any.
@@ -287,11 +323,34 @@ impl AlbumArtReviewState {
             .unwrap_or(0)
     }
 
-    /// Advance to next directory, resetting selection.
-    pub fn advance(&mut self) {
-        self.current_dir += 1;
-        self.selected_file = 0;
-        self.selected_button = AlbumArtReviewButton::Confirm;
+    /// Mark current directory as processed and navigate to the next unprocessed one.
+    /// Returns true if all directories are now processed.
+    pub fn mark_processed_and_advance(&mut self) -> bool {
+        if self.current_dir < self.processed.len() {
+            self.processed[self.current_dir] = true;
+        }
+
+        // Find next unprocessed directory
+        if let Some(next) = self.next_unprocessed() {
+            self.current_dir = next;
+            self.selected_file = 0;
+            self.selected_button = AlbumArtReviewButton::Replace;
+        }
+
+        self.is_complete()
+    }
+
+    /// Find the index of the next unprocessed directory (wrapping around).
+    fn next_unprocessed(&self) -> Option<usize> {
+        let len = self.directories.len();
+        // Search forward from current_dir+1, wrapping
+        for offset in 1..=len {
+            let idx = (self.current_dir + offset) % len;
+            if !self.processed[idx] {
+                return Some(idx);
+            }
+        }
+        None
     }
 
     /// Path of the currently selected directory (for status bar).
@@ -301,23 +360,46 @@ impl AlbumArtReviewState {
 
     /// Handle input action.
     pub fn handle_input(&mut self, action: &InputAction) -> AlbumArtReviewAction {
+        // Cancel confirmation popup intercepts input
+        if self.show_cancel_confirm {
+            return self.handle_cancel_confirm_input(action);
+        }
+
         match action {
-            InputAction::Cancel => AlbumArtReviewAction::Cancel,
+            InputAction::Cancel => {
+                if self.confirmed_count > 0 {
+                    // Work would be lost — show confirmation popup
+                    self.show_cancel_confirm = true;
+                    self.cancel_confirm_yes = false;
+                    AlbumArtReviewAction::None
+                } else {
+                    AlbumArtReviewAction::Cancel
+                }
+            }
 
             InputAction::Confirm => {
                 match self.selected_button {
-                    AlbumArtReviewButton::Confirm => AlbumArtReviewAction::ConfirmDirectory,
+                    AlbumArtReviewButton::Replace => AlbumArtReviewAction::ReplaceDirectory,
+                    AlbumArtReviewButton::Append => AlbumArtReviewAction::AppendDirectory,
                     AlbumArtReviewButton::Skip => AlbumArtReviewAction::SkipDirectory,
                 }
             }
 
             InputAction::NavLeft => {
-                self.selected_button = AlbumArtReviewButton::Confirm;
+                self.selected_button = match self.selected_button {
+                    AlbumArtReviewButton::Replace => AlbumArtReviewButton::Replace, // clamp
+                    AlbumArtReviewButton::Append => AlbumArtReviewButton::Replace,
+                    AlbumArtReviewButton::Skip => AlbumArtReviewButton::Append,
+                };
                 AlbumArtReviewAction::None
             }
 
             InputAction::NavRight => {
-                self.selected_button = AlbumArtReviewButton::Skip;
+                self.selected_button = match self.selected_button {
+                    AlbumArtReviewButton::Replace => AlbumArtReviewButton::Append,
+                    AlbumArtReviewButton::Append => AlbumArtReviewButton::Skip,
+                    AlbumArtReviewButton::Skip => AlbumArtReviewButton::Skip, // clamp
+                };
                 AlbumArtReviewAction::None
             }
 
@@ -346,7 +428,7 @@ impl AlbumArtReviewState {
                 AlbumArtReviewAction::None
             }
 
-            // Tab: advance to next directory
+            // Tab: browse to next directory (does NOT affect processed state)
             InputAction::CycleNext => {
                 if self.directories.len() > 1 {
                     self.current_dir = (self.current_dir + 1) % self.directories.len();
@@ -355,7 +437,7 @@ impl AlbumArtReviewState {
                 AlbumArtReviewAction::None
             }
 
-            // Shift-Tab: go to previous directory
+            // Shift-Tab: browse to previous directory
             InputAction::CyclePrev => {
                 if self.directories.len() > 1 {
                     self.current_dir = if self.current_dir == 0 {
@@ -372,14 +454,42 @@ impl AlbumArtReviewState {
         }
     }
 
+    /// Handle input when the cancel confirmation popup is showing.
+    fn handle_cancel_confirm_input(&mut self, action: &InputAction) -> AlbumArtReviewAction {
+        match action {
+            InputAction::Confirm => {
+                if self.cancel_confirm_yes {
+                    AlbumArtReviewAction::Cancel
+                } else {
+                    self.show_cancel_confirm = false;
+                    AlbumArtReviewAction::None
+                }
+            }
+            InputAction::Cancel => {
+                self.show_cancel_confirm = false;
+                AlbumArtReviewAction::None
+            }
+            InputAction::NavLeft | InputAction::NavRight => {
+                self.cancel_confirm_yes = !self.cancel_confirm_yes;
+                AlbumArtReviewAction::None
+            }
+            _ => AlbumArtReviewAction::None,
+        }
+    }
+
     /// Render the per-directory review modal.
+    ///
+    /// Returns `true` if a cache miss occurred during rendering (images were loaded
+    /// from disk), signaling that the input buffer should be drained.
     pub fn render(
         &self,
         f: &mut Frame,
         area: Rect,
         art_picker: &mut AlbumArtPicker,
         art_cache: &mut AlbumArtCache,
-    ) {
+    ) -> bool {
+        let mut had_cache_miss = false;
+
         f.render_widget(Clear, area);
 
         let chunks = Layout::default()
@@ -392,15 +502,18 @@ impl AlbumArtReviewState {
             ])
             .split(area);
 
-        // Title — includes directory path
+        // Title — includes directory path and processed counter
         let dir_path = self.current()
             .map(|d| d.directory.as_str())
             .unwrap_or("");
+        let is_current_processed = self.processed.get(self.current_dir).copied().unwrap_or(false);
+        let processed_marker = if is_current_processed { " [done]" } else { "" };
         let title_text = format!(
-            " Album Art Review [{}/{}]  {} ",
-            self.current_dir + 1,
+            " Album Art Review [{}/{}]  {}{} ",
+            self.processed_count(),
             self.directories.len(),
             dir_path,
+            processed_marker,
         );
         let title_block = Block::default()
             .borders(Borders::ALL)
@@ -422,16 +535,19 @@ impl AlbumArtReviewState {
                 .split(content_area);
 
             self.render_file_list(f, content_chunks[0]);
-            self.render_dual_art_preview(f, content_chunks[1], art_picker, art_cache);
+            had_cache_miss = self.render_dual_art_preview(f, content_chunks[1], art_picker, art_cache);
         } else {
             self.render_file_list(f, content_area);
         }
 
         // Buttons
-        let is_confirm = self.selected_button == AlbumArtReviewButton::Confirm;
         let buttons = [
-            ConfirmationButton::new("Confirm", Color::Green).selected(is_confirm),
-            ConfirmationButton::new("Skip", Color::Yellow).selected(!is_confirm),
+            ConfirmationButton::new("Replace", Color::Green)
+                .selected(self.selected_button == AlbumArtReviewButton::Replace),
+            ConfirmationButton::new("Append", Color::Cyan)
+                .selected(self.selected_button == AlbumArtReviewButton::Append),
+            ConfirmationButton::new("Skip", Color::Yellow)
+                .selected(self.selected_button == AlbumArtReviewButton::Skip),
         ];
         render_button_row(f, chunks[2], &buttons);
 
@@ -450,6 +566,33 @@ impl AlbumArtReviewState {
         ]))
         .alignment(Alignment::Center);
         f.render_widget(hints, chunks[3]);
+
+        // Cancel confirmation overlay
+        if self.show_cancel_confirm {
+            ConfirmationModal::new(" Discard Work? ")
+                .border_color(Color::Yellow)
+                .fixed_size(48, 8)
+                .message(vec![
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        format!("Discard {} confirmed director{}?",
+                            self.confirmed_count,
+                            if self.confirmed_count == 1 { "y" } else { "ies" },
+                        ),
+                        Style::default().fg(Color::Yellow),
+                    )),
+                ])
+                .buttons(vec![
+                    ConfirmationButton::new("No", Color::Green)
+                        .selected(!self.cancel_confirm_yes),
+                    ConfirmationButton::new("Yes, discard", Color::Red)
+                        .selected(self.cancel_confirm_yes),
+                ])
+                .hint("←/→ switch  Enter confirm  Esc dismiss")
+                .render(f, area);
+        }
+
+        had_cache_miss
     }
 
     /// Render the flat track list for the current directory (left pane).
@@ -509,13 +652,17 @@ impl AlbumArtReviewState {
     }
 
     /// Render dual art preview: current (top) + new/sidecar (bottom).
+    ///
+    /// Returns `true` if a cache miss occurred (image loaded from disk).
     fn render_dual_art_preview(
         &self,
         f: &mut Frame,
         area: Rect,
         art_picker: &mut AlbumArtPicker,
         art_cache: &mut AlbumArtCache,
-    ) {
+    ) -> bool {
+        let mut had_cache_miss = false;
+
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
@@ -523,12 +670,12 @@ impl AlbumArtReviewState {
         f.render_widget(block, area);
 
         if inner.width < 4 || inner.height < 4 {
-            return;
+            return false;
         }
 
         let Some(dir) = self.current() else {
             render_no_art_placeholder(f, inner);
-            return;
+            return false;
         };
 
         let flat = dir.flat_files();
@@ -538,7 +685,7 @@ impl AlbumArtReviewState {
         let sidecar_path = Path::new(&dir.sidecar.path);
         let sidecar_key = ArtCacheKey::Sidecar(sidecar_path.to_path_buf());
 
-        let mut retain_keys = vec![sidecar_key];
+        let mut retain_keys = vec![sidecar_key.clone()];
         if let Some(entry) = &selected {
             if entry.operation == ArtOperation::Upgrade {
                 let resolver = paths::get_resolver();
@@ -566,7 +713,7 @@ impl AlbumArtReviewState {
         };
 
         if art_h < 1 {
-            return;
+            return false;
         }
 
         // Layout: current_label, current_art, new_label, new_art
@@ -597,6 +744,13 @@ impl AlbumArtReviewState {
                     // Has embedded art — load and show it
                     let resolver = paths::get_resolver();
                     let audio_path = resolver.resolve(Path::new(&entry.file.path));
+
+                    // Detect cache miss before loading
+                    let key = ArtCacheKey::Embedded(audio_path.clone());
+                    if !art_cache.has_key(&key) {
+                        had_cache_miss = true;
+                    }
+
                     let cached = art_cache.get_or_load_embedded(&audio_path, art_picker);
 
                     let label_text = if cached.width > 0 {
@@ -628,6 +782,11 @@ impl AlbumArtReviewState {
 
         // === New art (bottom) ===
         {
+            // Detect cache miss before loading
+            if !art_cache.has_key(&sidecar_key) {
+                had_cache_miss = true;
+            }
+
             let cached = art_cache.get_or_load(sidecar_path, art_picker);
             let label_text = if cached.width > 0 {
                 format!(
@@ -646,5 +805,7 @@ impl AlbumArtReviewState {
             f.render_widget(Paragraph::new(label), sections[2]);
             render_album_art_preview(f, sections[3], cached);
         }
+
+        had_cache_miss
     }
 }

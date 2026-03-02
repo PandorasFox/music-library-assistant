@@ -149,6 +149,11 @@ impl AlbumArtCache {
         self.entries.get_mut(&key).unwrap()
     }
 
+    /// Check if a key is already cached (no loading).
+    pub fn has_key(&self, key: &ArtCacheKey) -> bool {
+        self.entries.contains_key(key)
+    }
+
     /// Evict all entries whose key is not in the given set.
     /// Call this when selection changes to avoid unbounded growth.
     pub fn retain_only_keys(&mut self, keys: &[ArtCacheKey]) {

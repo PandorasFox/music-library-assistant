@@ -24,7 +24,7 @@ use super::indexing::{
 };
 use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
-use super::album_art::{EmbedAlbumArtMutation, UpgradeAlbumArtMutation};
+use super::album_art::{AppendAlbumArtMutation, EmbedAlbumArtMutation, UpgradeAlbumArtMutation};
 use super::config_edit::ApplyConfigEditsMutation;
 use super::dir_config_edit::{ApplyDirConfigEditMutation, ApplyBatchDirConfigEditsMutation};
 
@@ -324,6 +324,9 @@ pub enum Mutation {
     /// Replace existing embedded art with a better sidecar image.
     UpgradeAlbumArt(UpgradeAlbumArtMutation),
 
+    /// Append a sidecar image alongside existing embedded art.
+    AppendAlbumArt(AppendAlbumArtMutation),
+
     // ========================================================================
     // Config Operations (struct-backed — see config_edit.rs for trait impl)
     // ========================================================================
@@ -367,6 +370,7 @@ impl Mutation {
             Mutation::EmitExpectedMissingTag(m) => m,
             Mutation::EmbedAlbumArt(m) => m,
             Mutation::UpgradeAlbumArt(m) => m,
+            Mutation::AppendAlbumArt(m) => m,
             Mutation::ApplyConfigEdits(m) => m,
             Mutation::ApplyDirConfigEdit(m) => m,
             Mutation::ApplyBatchDirConfigEdits(m) => m,
@@ -411,6 +415,7 @@ impl Mutation {
             Mutation::AssimilateDiskTagsToDb(ref m) => Some(m.inode),
             Mutation::EmbedAlbumArt(ref m) => Some(m.inode),
             Mutation::UpgradeAlbumArt(ref m) => Some(m.inode),
+            Mutation::AppendAlbumArt(ref m) => Some(m.inode),
 
             // These don't have a single inode directly (batch operations or no inode)
             Mutation::ApplyTagOps(_)
@@ -545,13 +550,18 @@ impl Mutation {
             Mutation::EmitExpectedDuplicate(_) => {}
             Mutation::EmitExpectedMissingTag(_) => {}
 
-            // Album art embedding/upgrade: affects the audio file's directory
+            // Album art embedding/upgrade/append: affects the audio file's directory
             Mutation::EmbedAlbumArt(m) => {
                 if let Some(parent) = m.audio_path.parent() {
                     dirs.push(parent.to_path_buf());
                 }
             }
             Mutation::UpgradeAlbumArt(m) => {
+                if let Some(parent) = m.audio_path.parent() {
+                    dirs.push(parent.to_path_buf());
+                }
+            }
+            Mutation::AppendAlbumArt(m) => {
                 if let Some(parent) = m.audio_path.parent() {
                     dirs.push(parent.to_path_buf());
                 }

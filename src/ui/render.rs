@@ -277,7 +277,10 @@ fn render_content(
         }
         ActiveView::EmbedAlbumArtResolution(ref preview) => {
             vname = "embed_album_art_resolution";
-            preview.render(f, area, &mut app.art_picker, &mut app.art_cache);
+            let cache_miss = preview.render(f, area, &mut app.art_picker, &mut app.art_cache);
+            if cache_miss {
+                app.drain_input_next = true;
+            }
         }
         ActiveView::SubparDuplicateResolution(ref preview) => {
             vname = "subpar_duplicate_resolution";

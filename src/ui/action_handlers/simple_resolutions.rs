@@ -467,7 +467,7 @@ impl App {
         self.view = ActiveView::EmbedAlbumArtResolution(state);
     }
 
-    /// Handle album art review actions (per-directory confirm/skip/cancel).
+    /// Handle album art review actions (per-directory replace/append/skip/cancel).
     pub(super) fn handle_album_art_review_action(
         &mut self,
         action: embed_album_art_modal::AlbumArtReviewAction,
@@ -475,46 +475,57 @@ impl App {
     ) {
         match action {
             embed_album_art_modal::AlbumArtReviewAction::None => {}
-            embed_album_art_modal::AlbumArtReviewAction::ConfirmDirectory => {
+            embed_album_art_modal::AlbumArtReviewAction::ReplaceDirectory => {
                 let Some(w) = witness else { return };
-                // Collect mutations for current directory, then advance
-                if let ActiveView::EmbedAlbumArtResolution(ref mut state) = self.view {
-                    if let Some(dir) = state.directories.get(state.current_dir) {
-                        let mutations = dir.mutations();
-                        state.staged_mutations.extend(mutations);
-                        state.confirmed_count += 1;
-                    }
-                    state.advance();
-                    if state.is_complete() {
-                        // All directories reviewed — stage accumulated mutations
-                        let mutations = std::mem::take(&mut state.staged_mutations);
-                        if !mutations.is_empty() {
-                            self.stage_mutations_with_transaction(mutations, "Album art", DecisionKey::AlbumArt, w);
-                            self.after_staging_decisions();
-                        } else {
-                            self.cancel_and_return_to_source("No album art changes staged");
-                        }
-                    }
-                }
+                self.confirm_album_art_directory(embed_album_art_modal::AlbumArtReviewButton::Replace, w);
+            }
+            embed_album_art_modal::AlbumArtReviewAction::AppendDirectory => {
+                let Some(w) = witness else { return };
+                self.confirm_album_art_directory(embed_album_art_modal::AlbumArtReviewButton::Append, w);
             }
             embed_album_art_modal::AlbumArtReviewAction::SkipDirectory => {
-                // Skip is triggered by Enter on the Skip button, so witness is available
                 let Some(w) = witness else { return };
                 if let ActiveView::EmbedAlbumArtResolution(ref mut state) = self.view {
-                    state.advance();
-                    if state.is_complete() {
-                        let mutations = std::mem::take(&mut state.staged_mutations);
-                        if !mutations.is_empty() {
-                            self.stage_mutations_with_transaction(mutations, "Album art", DecisionKey::AlbumArt, w);
-                            self.after_staging_decisions();
-                        } else {
-                            self.cancel_and_return_to_source("All directories skipped");
-                        }
+                    let all_done = state.mark_processed_and_advance();
+                    if all_done {
+                        self.finalize_album_art_review(w);
                     }
                 }
             }
             embed_album_art_modal::AlbumArtReviewAction::Cancel => {
                 self.cancel_and_return_to_source("Album art review cancelled");
+            }
+        }
+    }
+
+    /// Confirm current directory with the given button mode (Replace or Append).
+    fn confirm_album_art_directory(
+        &mut self,
+        button: embed_album_art_modal::AlbumArtReviewButton,
+        w: &witness::ConfirmationGesture,
+    ) {
+        if let ActiveView::EmbedAlbumArtResolution(ref mut state) = self.view {
+            if let Some(dir) = state.directories.get(state.current_dir) {
+                let mutations = dir.mutations_with_mode(button);
+                state.staged_mutations.extend(mutations);
+                state.confirmed_count += 1;
+            }
+            let all_done = state.mark_processed_and_advance();
+            if all_done {
+                self.finalize_album_art_review(w);
+            }
+        }
+    }
+
+    /// All directories processed — stage accumulated mutations for review.
+    fn finalize_album_art_review(&mut self, w: &witness::ConfirmationGesture) {
+        if let ActiveView::EmbedAlbumArtResolution(ref mut state) = self.view {
+            let mutations = std::mem::take(&mut state.staged_mutations);
+            if !mutations.is_empty() {
+                self.stage_mutations_with_transaction(mutations, "Album art", DecisionKey::AlbumArt, w);
+                self.after_staging_decisions();
+            } else {
+                self.cancel_and_return_to_source("No album art changes staged");
             }
         }
     }

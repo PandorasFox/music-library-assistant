@@ -274,7 +274,59 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         }
                     }
                 }
+                "auto-enrich-on-match" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.auto_enrich_on_match = val;
+                        }
+                    }
+                }
+                "mb-cache-ttl-days" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.mb_cache_ttl_days = val as u32;
+                            }
+                        }
+                    }
+                }
+                "mb-max-candidates" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.mb_max_candidates = val as u32;
+                            }
+                        }
+                    }
+                }
+                "preferred-locales" => {
+                    // Multi-value node: preferred-locales "en" "ja"
+                    let locales: Vec<String> = child.entries()
+                        .iter()
+                        .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
+                        .collect();
+                    if !locales.is_empty() {
+                        opinions.preferred_locales = locales;
+                    }
+                }
+                "tag-templates" => {
+                    parse_tag_templates(child, &mut opinions.tag_templates);
+                }
                 _ => {}
+            }
+        }
+    }
+}
+
+/// Parse tag-templates block: each child node is `tag-name "template string"`.
+fn parse_tag_templates(node: &kdl::KdlNode, templates: &mut Vec<(String, String)>) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            let tag_name = child.name().value().to_uppercase().replace('-', "_");
+            if let Some(entry) = child.entries().first() {
+                if let Some(val) = entry.value().as_string() {
+                    templates.push((tag_name, val.to_string()));
+                }
             }
         }
     }

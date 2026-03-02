@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 #[repr(u8)]
 pub enum ExternalSource {
     AcoustID = 1,
-    // Future: MusicBrainz = 2, Discogs = 3
+    MusicBrainz = 2,
 }
 
 impl ExternalSource {
@@ -26,6 +26,7 @@ impl ExternalSource {
     pub fn name(self) -> &'static str {
         match self {
             ExternalSource::AcoustID => "AcoustID",
+            ExternalSource::MusicBrainz => "MusicBrainz",
         }
     }
 }

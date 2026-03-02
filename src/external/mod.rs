@@ -4,3 +4,4 @@
 //! used by the fetch thread for background metadata enrichment.
 
 pub mod acoustid;
+pub mod musicbrainz;

@@ -241,6 +241,28 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
+        name: "mb_recording_cache",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS mb_recording_cache (
+            recording_id TEXT PRIMARY KEY,
+            raw_json BLOB NOT NULL,
+            fetched_at INTEGER NOT NULL
+        )",
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
+        name: "mb_artist_cache",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS mb_artist_cache (
+            artist_id TEXT PRIMARY KEY,
+            raw_json BLOB NOT NULL,
+            fetched_at INTEGER NOT NULL
+        )",
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
         name: "external_retry",
         kind: TableKind::Core,
         create_sql: "CREATE TABLE IF NOT EXISTS external_retry (

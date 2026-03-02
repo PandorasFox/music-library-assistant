@@ -162,6 +162,88 @@ impl Database {
         Ok(candidates)
     }
 
+    /// Get cached MusicBrainz recording JSON by recording ID.
+    ///
+    /// Returns (raw_json, fetched_at) if cached.
+    pub fn get_mb_recording_cache(&self, recording_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT raw_json, fetched_at FROM mb_recording_cache WHERE recording_id = ?1",
+        )?;
+
+        let result = stmt.query_row(params![recording_id], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
+        });
+
+        match result {
+            Ok(r) => Ok(Some(r)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get cached MusicBrainz artist JSON by artist ID.
+    ///
+    /// Returns (raw_json, fetched_at) if cached.
+    pub fn get_mb_artist_cache(&self, artist_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT raw_json, fetched_at FROM mb_artist_cache WHERE artist_id = ?1",
+        )?;
+
+        let result = stmt.query_row(params![artist_id], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
+        });
+
+        match result {
+            Ok(r) => Ok(Some(r)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get recording IDs that need MB cache fetch.
+    ///
+    /// For each inode, returns up to `max_candidates` recording IDs by confidence
+    /// that either have no MB cache entry or a stale one.
+    pub fn get_recording_ids_needing_mb_fetch(
+        &self,
+        ttl_secs: i64,
+        max_candidates: u32,
+    ) -> Result<Vec<String>> {
+        let stale_threshold = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            - ttl_secs;
+
+        let sql = r#"
+            WITH ranked AS (
+                SELECT em.recording_id, em.inode, em.confidence,
+                       ROW_NUMBER() OVER (PARTITION BY em.inode ORDER BY em.confidence DESC) as rn
+                FROM external_matches em
+                JOIN files f ON em.inode = f.inode
+                WHERE f.zone = 'corpus' AND em.source = 1
+            )
+            SELECT DISTINCT r.recording_id
+            FROM ranked r
+            LEFT JOIN mb_recording_cache mrc ON r.recording_id = mrc.recording_id
+            WHERE r.rn <= ?1
+              AND (mrc.recording_id IS NULL OR mrc.fetched_at < ?2)
+        "#;
+
+        let mut stmt = self.conn().prepare(sql)?;
+        let rows = stmt.query_map(params![max_candidates, stale_threshold], |row| {
+            row.get::<_, String>(0)
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            if let Ok(id) = row {
+                results.push(id);
+            }
+        }
+        Ok(results)
+    }
+
     /// Get retry candidates for a given source.
     ///
     /// Returns inodes that previously failed lookup and need retry.

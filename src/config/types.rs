@@ -250,13 +250,25 @@ impl Default for InboxOrganizeOpinions {
     }
 }
 
-/// Configuration for external metadata matching (AcoustID, etc.).
+/// Configuration for external metadata matching (AcoustID, MusicBrainz).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternalMatchingConfig {
     /// AcoustID API key. Empty string = disabled.
     pub acoustid_api_key: String,
-    /// Rate limit: requests per second (default 3).
+    /// Rate limit: requests per second for AcoustID (default 3).
     pub requests_per_second: u32,
+    /// Auto-trigger MB enrichment when AcoustID matches arrive (default true).
+    pub auto_enrich_on_match: bool,
+    /// How many days before re-fetching MB cache entries (default 30).
+    pub mb_cache_ttl_days: u32,
+    /// Max MB recording candidates to enrich per inode (default 3).
+    pub mb_max_candidates: u32,
+    /// Locale preference order for artist names (BCP 47, e.g. ["en", "ja"]).
+    /// Native script is always the final fallback.
+    pub preferred_locales: Vec<String>,
+    /// Tag templates: (UPPERCASE tag name, template string).
+    /// Templates use `{var}` syntax for MB field substitution.
+    pub tag_templates: Vec<(String, String)>,
 }
 
 /// Opinions for disc extraction from ALBUM and TRACKNUMBER tags.
@@ -312,6 +324,11 @@ impl Default for ExternalMatchingConfig {
         Self {
             acoustid_api_key: String::new(),
             requests_per_second: 3,
+            auto_enrich_on_match: true,
+            mb_cache_ttl_days: 30,
+            mb_max_candidates: 3,
+            preferred_locales: Vec::new(),
+            tag_templates: Vec::new(),
         }
     }
 }

@@ -444,6 +444,24 @@ enum DbWriteOp {
     },
 
     // =========================================================================
+    // MusicBrainz Cache Operations (MB fetch thread results — no witness needed)
+    // =========================================================================
+
+    /// Upsert a MusicBrainz recording cache entry.
+    UpsertMbRecordingCache {
+        recording_id: String,
+        raw_json: Vec<u8>,
+        fetched_at: i64,
+    },
+
+    /// Upsert a MusicBrainz artist cache entry.
+    UpsertMbArtistCache {
+        artist_id: String,
+        raw_json: Vec<u8>,
+        fetched_at: i64,
+    },
+
+    // =========================================================================
     // Edit History Purge Operations (operator-confirmed UI action)
     // =========================================================================
 
@@ -1170,6 +1188,40 @@ impl SignalWriteSender {
     }
 
     // =========================================================================
+    // MusicBrainz Cache Operations (MB fetch thread results — no witness needed)
+    // =========================================================================
+
+    /// Upsert a MusicBrainz recording cache entry.
+    pub fn upsert_mb_recording_cache(
+        &self,
+        recording_id: &str,
+        raw_json: Vec<u8>,
+        fetched_at: i64,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::UpsertMbRecordingCache {
+            recording_id: recording_id.to_string(),
+            raw_json,
+            fetched_at,
+        });
+    }
+
+    /// Upsert a MusicBrainz artist cache entry.
+    pub fn upsert_mb_artist_cache(
+        &self,
+        artist_id: &str,
+        raw_json: Vec<u8>,
+        fetched_at: i64,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::UpsertMbArtistCache {
+            artist_id: artist_id.to_string(),
+            raw_json,
+            fetched_at,
+        });
+    }
+
+    // =========================================================================
     // Edit History Purge Operations (operator-confirmed UI action)
     // =========================================================================
 
@@ -1701,6 +1753,18 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::DropExternalMatch { inode } => {
             with_retry("drop_external_match", &inode.to_string(), || {
                 execute_drop_external_match(db, *inode)
+            });
+        }
+
+        DbWriteOp::UpsertMbRecordingCache { recording_id, raw_json, fetched_at } => {
+            with_retry("upsert_mb_recording_cache", recording_id, || {
+                execute_upsert_mb_recording_cache(db, recording_id, raw_json, *fetched_at)
+            });
+        }
+
+        DbWriteOp::UpsertMbArtistCache { artist_id, raw_json, fetched_at } => {
+            with_retry("upsert_mb_artist_cache", artist_id, || {
+                execute_upsert_mb_artist_cache(db, artist_id, raw_json, *fetched_at)
             });
         }
 
@@ -2601,6 +2665,44 @@ fn execute_drop_external_match(
     db.conn().execute(
         "DELETE FROM external_matches WHERE inode = ?1",
         params![inode],
+    )?;
+
+    Ok(())
+}
+
+/// Execute UpsertMbRecordingCache: cache raw MB recording JSON.
+fn execute_upsert_mb_recording_cache(
+    db: &Database,
+    recording_id: &str,
+    raw_json: &[u8],
+    fetched_at: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        r#"INSERT OR REPLACE INTO mb_recording_cache
+           (recording_id, raw_json, fetched_at)
+           VALUES (?1, ?2, ?3)"#,
+        params![recording_id, raw_json, fetched_at],
+    )?;
+
+    Ok(())
+}
+
+/// Execute UpsertMbArtistCache: cache raw MB artist JSON.
+fn execute_upsert_mb_artist_cache(
+    db: &Database,
+    artist_id: &str,
+    raw_json: &[u8],
+    fetched_at: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        r#"INSERT OR REPLACE INTO mb_artist_cache
+           (artist_id, raw_json, fetched_at)
+           VALUES (?1, ?2, ?3)"#,
+        params![artist_id, raw_json, fetched_at],
     )?;
 
     Ok(())

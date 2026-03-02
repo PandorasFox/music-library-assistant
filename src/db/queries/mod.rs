@@ -440,6 +440,10 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_deploy_conflict_groups()
     }
 
+    pub fn get_sidecar_conflict_groups(&self) -> Result<Vec<crate::meta::views::SidecarConflictGroup>> {
+        self.db.get_sidecar_conflict_groups()
+    }
+
     /// Get precomputed sidecar images ready for deployment.
     pub fn get_sidecar_deploy_ready_signals(&self) -> Result<Vec<crate::meta::signals::data::SidecarDeployReadySignal>> {
         self.db.get_sidecar_deploy_ready_signals()

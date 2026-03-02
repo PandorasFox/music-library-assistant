@@ -1438,6 +1438,48 @@ impl AggregateSignalStore for DeployConflictSignal {
     }
 }
 
+impl AggregateSignalStore for SidecarDeployConflictSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_sidecar_deploy_conflict (
+        key TEXT PRIMARY KEY,
+        deploy_path TEXT NOT NULL,
+        library_name TEXT NOT NULL,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_sidecar_deploy_conflict";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.inodes)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_sidecar_deploy_conflict (key, deploy_path, library_name, data, data_hash) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![self.key, self.deploy_path, self.library_name, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn query_key_hashes(conn: &Connection) -> Result<HashMap<String, i64>> {
+        let mut stmt = conn.prepare("SELECT key, data_hash FROM signal_sidecar_deploy_conflict")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_sidecar_deploy_conflict WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_sidecar_deploy_conflict WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
 impl AggregateSignalStore for TagCanonicitySignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_tag_canonicity (
         key TEXT PRIMARY KEY,

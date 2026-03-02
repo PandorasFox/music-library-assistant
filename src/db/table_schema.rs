@@ -505,6 +505,13 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
+        name: "signal_sidecar_deploy_conflict",
+        kind: TableKind::Computed,
+        create_sql: <SidecarDeployConflictSignal as store::AggregateSignalStore>::TABLE_SQL,
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
         name: "signal_tag_canonicity",
         kind: TableKind::Computed,
         create_sql: <TagCanonicitySignal as store::AggregateSignalStore>::TABLE_SQL,

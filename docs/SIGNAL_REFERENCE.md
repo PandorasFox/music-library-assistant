@@ -86,7 +86,7 @@ For each track, re-queue an `ApplyDbTagsToDisk` mutation. Since `ApplyDbTagsToDi
 | LibraryStale | DeriveDeployHealthSignals | UpdateDeploySignals, LibraryMove | Library file at wrong path |
 | DeployReady | DeriveCorpusDeployStatus | UpdateDeploySignals, HardLink | Healthy corpus file not deployed. Metadata: `{ "deploy_path": "..." }` |
 | DeployedHealthy | DeriveCorpusDeployStatus, UpdateDeploySignals | DeriveCorpusDeployStatus | Healthy corpus file correctly deployed. Metadata: `{ "library_path": "{library_name}/..." }` |
-| SidecarDeployReady | DeriveCorpusDeployStatus | HardLink (deploy action) | Corpus sidecar image not yet deployed to library. Keyed by image inode. BLOB data: role, format, width, height |
+| SidecarDeployReady | DeriveCorpusDeployStatus | DeriveCorpusDeployStatus (reconcile) | Corpus sidecar image not yet deployed to library. Tiebreak winner if conflicting. Keyed by image inode. BLOB data: role, format, width, height |
 
 ---
 
@@ -96,6 +96,7 @@ Aggregate signals group multiple tracks by a shared characteristic. They use set
 
 | Signal | Emitted By | Cleared By | Meaning |
 |--------|------------|------------|---------|
+| SidecarDeployConflict | DeriveCorpusDeployStatus | DeriveCorpusDeployStatus (reconcile) | Multiple corpus images target the same library sidecar path. Key: "library_name/deploy_path". Data (BLOB): Vec of conflicting corpus image inodes. Tiebreak winner (alphabetically first corpus path) still gets SidecarDeployReady |
 | FingerprintOverlap | DetectFingerprintOverlaps | DetectFingerprintOverlaps | Tracks with identical fingerprints (internal signal) |
 | CrossSourceOverlap | DetectCrossSourceOverlaps | DetectCrossSourceOverlaps | Fingerprint overlaps spanning different source directories (from config `dir` stanzas). Key: sorted source pair, e.g., "web/releases/bandcamp\|web/releases/indie". Within-source overlaps are ignored. Metadata: `source_a`, `source_b`, `*_priority`, `*_can_stash`, `overlap_count`, `fingerprint_keys[]`, `track_pairs[]` |
 | DuplicateInode | DetectDuplicateInodes | DetectDuplicateInodes | Tracks sharing same inode |

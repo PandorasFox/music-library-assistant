@@ -836,6 +836,7 @@ impl Database {
             "duplicate_inode" => DuplicateInodeSignal::count(&self.conn)?,
             "missing_tag" => MissingTagSignal::count(&self.conn)?,
             "deploy_conflict" => DeployConflictSignal::count(&self.conn)?,
+            "sidecar_deploy_conflict" => SidecarDeployConflictSignal::count(&self.conn)?,
             "tag_canonicity" => TagCanonicitySignal::count(&self.conn)?,
             "inconsistent_album_artist" => InconsistentAlbumArtistSignal::count(&self.conn)?,
             "cross_source_overlap" => CrossSourceOverlapSignal::count(&self.conn)?,
@@ -872,6 +873,7 @@ impl Database {
             "duplicate_inode" => "signal_duplicate_inode",
             "missing_tag" => "signal_missing_tag",
             "deploy_conflict" => "signal_deploy_conflict",
+            "sidecar_deploy_conflict" => "signal_sidecar_deploy_conflict",
             _ => return Ok(0),
         };
         // These tables store inodes in a bincode BLOB 'data' column.
@@ -1118,6 +1120,45 @@ impl Database {
 
             results.push(ConflictGroup {
                 deploy_path,
+                conflicting_files,
+            });
+        }
+
+        Ok(results)
+    }
+
+    /// Get all sidecar deploy conflict groups (multiple corpus images → same library path).
+    ///
+    /// Sorted by library_name/deploy_path for consistent display.
+    pub fn get_sidecar_conflict_groups(&self) -> Result<Vec<crate::meta::views::SidecarConflictGroup>> {
+        use crate::meta::views::SidecarConflictGroup;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT deploy_path, library_name, data FROM signal_sidecar_deploy_conflict ORDER BY library_name, deploy_path"
+        )?;
+
+        let mut results = Vec::new();
+        let rows = stmt.query_map(params![], |row| {
+            let deploy_path: String = row.get(0)?;
+            let library_name: String = row.get(1)?;
+            let blob: Vec<u8> = row.get(2)?;
+            Ok((deploy_path, library_name, blob))
+        })?;
+
+        for row in rows {
+            let (deploy_path, library_name, blob) = row?;
+            let inodes: Vec<i64> = bincode::deserialize(&blob).unwrap_or_default();
+
+            let mut conflicting_files = Vec::new();
+            for inode in inodes {
+                if let Ok(Some(path)) = self.get_corpus_path_for_inode(inode) {
+                    conflicting_files.push((path, inode));
+                }
+            }
+
+            results.push(SidecarConflictGroup {
+                deploy_path,
+                library_name,
                 conflicting_files,
             });
         }

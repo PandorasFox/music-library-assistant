@@ -346,6 +346,17 @@ pub struct ConflictGroup {
     pub conflicting_files: Vec<(String, i64)>,
 }
 
+/// A sidecar deploy conflict group (multiple corpus images → same library sidecar path).
+#[derive(Debug, Clone)]
+pub struct SidecarConflictGroup {
+    /// The library-relative deploy path they all target (e.g. "Artist/Album/cover.jpg")
+    pub deploy_path: String,
+    /// Target library name
+    pub library_name: String,
+    /// List of conflicting corpus image files: (corpus_path, inode)
+    pub conflicting_files: Vec<(String, i64)>,
+}
+
 // ============================================================================
 // Subpar Duplicate Resolution Types
 // ============================================================================

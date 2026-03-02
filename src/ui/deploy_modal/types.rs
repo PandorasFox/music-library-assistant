@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::meta::views::{ConflictGroup, DeploySignalFile, LeftoverSignalFile, StaleSignalFile};
+use crate::meta::views::{ConflictGroup, SidecarConflictGroup, DeploySignalFile, LeftoverSignalFile, StaleSignalFile};
 use crate::db::ReadOnlyDb;
 use anyhow::Result;
 
@@ -106,6 +106,8 @@ pub struct DeployModalData {
     pub replaced_count: usize,
     /// Sidecar images to deploy alongside audio files
     pub sidecars: Vec<SidecarDeployEntry>,
+    /// Sidecar image conflicts (multiple corpus images → same library path)
+    pub sidecar_conflicts: Vec<SidecarConflictGroup>,
 }
 
 impl DeployModalData {
@@ -135,10 +137,11 @@ impl DeployModalData {
 
         // Read precomputed sidecar deploy signals (computed by DeriveCorpusDeployStatus)
         let sidecars = Self::load_sidecars(read_db);
+        let sidecar_conflicts = read_db.get_sidecar_conflict_groups().unwrap_or_default();
 
         crate::logging::log_general(format!(
-            "[UI] DeployModalData::load: healthy={}, new={}, conflicts={}, leftover={}, stale={}, sidecars={}",
-            healthy.len(), new.len(), conflicts.len(), leftover.len(), stale.len(), sidecars.len(),
+            "[UI] DeployModalData::load: healthy={}, new={}, conflicts={}, leftover={}, stale={}, sidecars={}, sidecar_conflicts={}",
+            healthy.len(), new.len(), conflicts.len(), leftover.len(), stale.len(), sidecars.len(), sidecar_conflicts.len(),
         ));
 
         // Aggregate new files by directory (using corpus_path), then merge sidecar counts
@@ -179,6 +182,7 @@ impl DeployModalData {
             per_library,
             replaced_count,
             sidecars,
+            sidecar_conflicts,
         })
     }
 
@@ -337,7 +341,7 @@ impl DeployModalData {
         [
             self.healthy.len(),
             self.new.len() + self.sidecars.len(),
-            self.conflicts.len(),
+            self.conflicts.len() + self.sidecar_conflicts.len(),
             self.leftover.len(),
             self.stale.len(),
         ]

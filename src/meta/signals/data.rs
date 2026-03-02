@@ -562,6 +562,19 @@ pub struct DeployConflictSignal {
     pub inodes: Vec<i64>,
 }
 
+/// Multiple corpus image files deploy to the same sidecar library path.
+#[derive(Debug, Clone)]
+pub struct SidecarDeployConflictSignal {
+    /// Key: "library_name/deploy_path" (e.g. "music/Artist/Album/cover.jpg")
+    pub key: String,
+    /// The library-relative deploy path (e.g. "Artist/Album/cover.jpg")
+    pub deploy_path: String,
+    /// Target library name
+    pub library_name: String,
+    /// All corpus image inodes that would deploy to this path
+    pub inodes: Vec<i64>,
+}
+
 /// Tag value collision needing canonicalization.
 #[derive(Debug, Clone)]
 pub struct TagCanonicitySignal {
@@ -892,6 +905,7 @@ pub enum TypedSignalWrite {
     DuplicateInode(DuplicateInodeSignal),
     MissingTag(MissingTagSignal),
     DeployConflict(DeployConflictSignal),
+    SidecarDeployConflict(SidecarDeployConflictSignal),
     TagCanonicity(TagCanonicitySignal),
     InconsistentAlbumArtist(InconsistentAlbumArtistSignal),
     CrossSourceOverlap(CrossSourceOverlapSignal),
@@ -944,6 +958,7 @@ impl TypedSignalWrite {
             Self::DuplicateInode(s) => s.insert(conn),
             Self::MissingTag(s) => s.insert(conn),
             Self::DeployConflict(s) => s.insert(conn),
+            Self::SidecarDeployConflict(s) => s.insert(conn),
             Self::TagCanonicity(s) => s.insert(conn),
             Self::InconsistentAlbumArtist(s) => s.insert(conn),
             Self::CrossSourceOverlap(s) => s.insert(conn),
@@ -996,6 +1011,7 @@ impl TypedSignalWrite {
             Self::DuplicateInode(s) => DuplicateInodeSignal::exists(conn, &s.key),
             Self::MissingTag(s) => MissingTagSignal::exists(conn, &s.key),
             Self::DeployConflict(s) => DeployConflictSignal::exists(conn, &s.key),
+            Self::SidecarDeployConflict(s) => SidecarDeployConflictSignal::exists(conn, &s.key),
             Self::TagCanonicity(s) => TagCanonicitySignal::exists(conn, &s.key),
             Self::InconsistentAlbumArtist(s) => InconsistentAlbumArtistSignal::exists(conn, &s.key),
             Self::CrossSourceOverlap(s) => CrossSourceOverlapSignal::exists(conn, &s.key),
@@ -1088,6 +1104,11 @@ impl TypedSignalWrite {
                 }
             }
             Self::DeployConflict(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.inodes) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::SidecarDeployConflict(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.inodes) {
                     bytes.hash(&mut hasher);
                 }

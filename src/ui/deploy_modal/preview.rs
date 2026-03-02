@@ -128,8 +128,9 @@ impl DeploymentPreviewState {
         if !data.stale.is_empty() {
             summary_parts.push(format!("{} stale", data.stale.len()));
         }
-        if !data.conflicts.is_empty() {
-            summary_parts.push(format!("{} conflicts", data.conflicts.len()));
+        let total_conflicts = data.conflicts.len() + data.sidecar_conflicts.len();
+        if total_conflicts > 0 {
+            summary_parts.push(format!("{} conflicts", total_conflicts));
         }
 
         let summary_str = if summary_parts.is_empty() {
@@ -220,12 +221,14 @@ impl DeploymentPreviewState {
                     }
                 })
                 .collect(),
-            DeployTab::Conflicts => self
-                .cached_data
-                .conflicts
-                .iter()
-                .map(|g| g.deploy_path.clone())
-                .collect(),
+            DeployTab::Conflicts => {
+                let mut items: Vec<String> = self.cached_data.conflicts.iter()
+                    .map(|g| g.deploy_path.clone())
+                    .collect();
+                items.extend(self.cached_data.sidecar_conflicts.iter()
+                    .map(|g| format!("[img] {}/{}", g.library_name, g.deploy_path)));
+                items
+            }
             DeployTab::Leftover => self
                 .cached_data
                 .leftover_by_dir
@@ -288,14 +291,26 @@ impl DeploymentPreviewState {
                 })
             }
             DeployTab::Conflicts => {
-                self.cached_data.conflicts.get(scroll).map(|group| SignalInfo::Conflict {
-                    deploy_path: group.deploy_path.clone(),
-                    conflicting_files: group
-                        .conflicting_files
-                        .iter()
-                        .map(|(path, _)| path.clone())
-                        .collect(),
-                })
+                let audio_len = self.cached_data.conflicts.len();
+                if scroll < audio_len {
+                    self.cached_data.conflicts.get(scroll).map(|group| SignalInfo::Conflict {
+                        deploy_path: group.deploy_path.clone(),
+                        conflicting_files: group
+                            .conflicting_files
+                            .iter()
+                            .map(|(path, _)| path.clone())
+                            .collect(),
+                    })
+                } else {
+                    self.cached_data.sidecar_conflicts.get(scroll - audio_len).map(|group| SignalInfo::Conflict {
+                        deploy_path: format!("{}/{}", group.library_name, group.deploy_path),
+                        conflicting_files: group
+                            .conflicting_files
+                            .iter()
+                            .map(|(path, _)| path.clone())
+                            .collect(),
+                    })
+                }
             }
             DeployTab::Leftover => {
                 self.cached_data.leftover_by_dir.get(scroll).map(|dir| SignalInfo::LeftoverDirectory {

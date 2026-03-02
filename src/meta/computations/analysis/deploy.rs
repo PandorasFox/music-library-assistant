@@ -14,6 +14,7 @@ use crate::meta::signals::data::{
     LibraryLeftoverSignal, LibraryStaleSignal,
     ReleaseOverlapSignal, ReleaseOverlapData, ReleaseOverlapEntry,
     SidecarDeployReadySignal, SidecarDeployReadyData,
+    SidecarDeployConflictSignal,
 };
 use crate::corpus::deploy::{compute_deployment_path_with_tags, deploy_album_directory, extract_release_directory};
 use crate::db::ReadOnlyDb;
@@ -932,7 +933,7 @@ fn derive_sidecar_deploy_signals(
         }
     }
 
-    // --- Dirty-inode check: skip or run incrementally ---
+    // --- Dirty-inode gate: skip entirely if nothing changed ---
     let dirty_inodes = read_only_db
         .get_dirty_inodes(SIDECAR_DEPLOY_COMPUTATION)
         .unwrap_or_default();
@@ -940,151 +941,147 @@ fn derive_sidecar_deploy_signals(
     let existing_signal_count = read_only_db
         .corpus_signal_count::<SidecarDeployReadySignal>();
 
-    let full_mode = if dirty_inodes.is_empty() {
-        if existing_signal_count > 0 {
-            // Nothing changed, existing signals are fresh — skip entirely
-            log_general(format!(
-                "[COMPUTE] DeriveCorpusDeployStatus sidecar: no dirty inodes, {} existing signals fresh, skipping",
-                existing_signal_count,
-            ));
-            return existing_signal_count;
-        }
-        // First run (no existing signals) — full mode
-        true
-    } else if dirty_inodes.len() >= dir_targets.len() / 2 {
-        // Too many dirty inodes — full recompute is cheaper
-        true
-    } else {
-        false
-    };
+    if dirty_inodes.is_empty() && existing_signal_count > 0 {
+        // Nothing changed, existing signals are fresh — skip entirely
+        log_general(format!(
+            "[COMPUTE] DeriveCorpusDeployStatus sidecar: no dirty inodes, {} existing signals fresh, skipping",
+            existing_signal_count,
+        ));
+        return existing_signal_count;
+    }
 
     // Build set of inodes already present in the library. Image files
     // deployed via hard-link share their inode with the corpus source,
     // so an inode appearing in library_inode_to_paths means it's deployed.
     let library_inodes: HashSet<i64> = library_inode_to_paths.keys().copied().collect();
 
-    if full_mode {
-        // --- Full mode: process all directories, reconcile globally ---
-        let mut computed_sidecars: Vec<ComputedCorpusSignal> = Vec::new();
-        let mut seen: HashSet<(String, String, String)> = HashSet::new();
+    // Also build a set of all occupied library paths. The inode check alone
+    // misses cases where a DIFFERENT corpus image (different inode) was
+    // previously deployed to the same destination path — e.g., when two
+    // corpus directories share the same album directory in the library.
+    let library_paths: HashSet<PathBuf> = library_inode_to_paths
+        .values()
+        .flat_map(|paths| paths.iter().cloned())
+        .collect();
 
-        for (corpus_dir, (library_name, album_dir)) in &dir_targets {
-            let images = images_by_dir.get(corpus_dir.as_str()).map(|v| v.as_slice()).unwrap_or(&[]);
+    // --- Phase 1: Collect all candidate images per deploy key ---
+    // Group candidates by (library_name, deploy_path) to detect conflicts.
+    // An image is a candidate if it passes mode filter and isn't already deployed.
+    type DeployKey = (String, String); // (library_name, deploy_path)
+    let mut candidates_by_deploy: HashMap<DeployKey, Vec<&CorpusImageEntry>> = HashMap::new();
 
-            for img in images {
-                if let Some(signal) = build_sidecar_signal(img, mode, library_name, album_dir, &library_inodes, &mut seen) {
-                    computed_sidecars.push(signal);
-                }
+    for (_corpus_dir, (library_name, album_dir)) in &dir_targets {
+        let images = images_by_dir.get(_corpus_dir.as_str()).map(|v| v.as_slice()).unwrap_or(&[]);
+
+        for img in images {
+            if let Some((key, _filename)) = sidecar_candidate_key(img, mode, library_name, album_dir) {
+                candidates_by_deploy.entry(key).or_default().push(img);
             }
         }
-
-        let sidecar_count = computed_sidecars.len();
-
-        let (sc_cleared, sc_new, sc_updated, sc_unchanged) = reconcile_corpus_signals::<SidecarDeployReadySignal>(
-            read_only_db,
-            sender,
-            computed_sidecars,
-            witness,
-        );
-        log_general(format!(
-            "[COMPUTE] DeriveCorpusDeployStatus sidecar full reconcile: {} dirs, {} images, SidecarDeployReady({} cleared, {} new, {} updated, {} unchanged)",
-            dir_targets.len(), all_images.len(), sc_cleared, sc_new, sc_updated, sc_unchanged,
-        ));
-
-        // Clear all dirty inodes after full recompute
-        for inode in &dirty_inodes {
-            sender.clear_dirty_inode(*inode, SIDECAR_DEPLOY_COMPUTATION, witness);
-        }
-
-        sidecar_count
-    } else {
-        // --- Incremental mode: process only directories with dirty inodes ---
-        // Resolve dirty inodes to their parent directories
-        let mut dirty_dirs: HashSet<String> = HashSet::new();
-        for inode in &dirty_inodes {
-            if let Ok(Some(path)) = read_only_db.get_corpus_path_for_inode(*inode) {
-                if let Some(parent) = Path::new(&path).parent() {
-                    dirty_dirs.insert(parent.to_string_lossy().to_string());
-                }
-            }
-        }
-
-        let mut written = 0usize;
-        let mut cleared = 0usize;
-        let mut seen: HashSet<(String, String, String)> = HashSet::new();
-
-        // Collect inodes we expect to have signals in dirty directories
-        let mut expected_inodes: HashSet<i64> = HashSet::new();
-
-        for dirty_dir in &dirty_dirs {
-            let (library_name, album_dir) = match dir_targets.get(dirty_dir.as_str()) {
-                Some(t) => t,
-                None => continue,
-            };
-
-            let images = images_by_dir.get(dirty_dir.as_str()).map(|v| v.as_slice()).unwrap_or(&[]);
-
-            for img in images {
-                if let Some(computed) = build_sidecar_signal(img, mode, library_name, album_dir, &library_inodes, &mut seen) {
-                    expected_inodes.insert(computed.inode);
-                    sender.write_typed_signal(computed.typed_data, witness);
-                    written += 1;
-                }
-            }
-        }
-
-        // Clear signals for dirty-dir inodes that no longer have signals
-        // (image was deployed or removed from directory)
-        for dirty_dir in &dirty_dirs {
-            let images = images_by_dir.get(dirty_dir.as_str()).map(|v| v.as_slice()).unwrap_or(&[]);
-            for img in images {
-                if !expected_inodes.contains(&img.inode) {
-                    if read_only_db.corpus_signal_exists::<SidecarDeployReadySignal>(img.inode) {
-                        sender.clear_corpus_signal::<SidecarDeployReadySignal>(img.inode, witness);
-                        cleared += 1;
-                    }
-                }
-            }
-        }
-
-        // Also clear signals for dirty inodes themselves if they no longer qualify
-        for inode in &dirty_inodes {
-            if !expected_inodes.contains(inode) {
-                if read_only_db.corpus_signal_exists::<SidecarDeployReadySignal>(*inode) {
-                    sender.clear_corpus_signal::<SidecarDeployReadySignal>(*inode, witness);
-                    cleared += 1;
-                }
-            }
-        }
-
-        // Clear dirty flags for processed inodes
-        for inode in &dirty_inodes {
-            sender.clear_dirty_inode(*inode, SIDECAR_DEPLOY_COMPUTATION, witness);
-        }
-
-        log_general(format!(
-            "[COMPUTE] DeriveCorpusDeployStatus sidecar incremental: {} dirty inodes, {} dirty dirs, {} written, {} cleared",
-            dirty_inodes.len(), dirty_dirs.len(), written, cleared,
-        ));
-
-        // Return current total: existing signals + net change
-        let net = existing_signal_count + written - cleared;
-        net
     }
+
+    // --- Phase 2: Classify — deployed, single candidate, or conflict ---
+    let mut computed_sidecars: Vec<ComputedCorpusSignal> = Vec::new();
+    let mut computed_conflicts: Vec<ComputedAggregateSignal> = Vec::new();
+
+    for ((library_name, deploy_path), group) in &candidates_by_deploy {
+        // If any image in this group is already deployed, the path is satisfied.
+        // No SidecarDeployReady needed (would fail with "Destination already exists").
+        // Also check if the destination path is already occupied by a different file
+        // (e.g., an image from another corpus directory deployed to the same album dir).
+        let any_deployed = group.iter().any(|img| library_inodes.contains(&img.inode));
+        let path_occupied = library_paths.contains(Path::new(library_name).join(deploy_path).as_path());
+        if any_deployed || path_occupied {
+            // Still emit conflict signal if 2+ non-deployed images also target this path,
+            // so the operator knows about the duplicate corpus images.
+            let non_deployed: Vec<&&CorpusImageEntry> = group.iter()
+                .filter(|img| !library_inodes.contains(&img.inode))
+                .collect();
+            if non_deployed.len() >= 2 {
+                let conflict_key = format!("{}/{}", library_name, deploy_path);
+                let inodes: Vec<i64> = group.iter().map(|img| img.inode).collect();
+                let signal = TypedSignalWrite::SidecarDeployConflict(SidecarDeployConflictSignal {
+                    key: conflict_key.clone(),
+                    deploy_path: deploy_path.clone(),
+                    library_name: library_name.clone(),
+                    inodes,
+                });
+                computed_conflicts.push(ComputedAggregateSignal::new(conflict_key, signal));
+            }
+            continue;
+        }
+
+        // No image deployed yet
+        if group.len() == 1 {
+            // Single candidate: emit SidecarDeployReady
+            let img = group[0];
+            computed_sidecars.push(make_sidecar_ready_signal(img, &deploy_path, library_name));
+        } else {
+            // Conflict: tiebreak winner (alphabetically first corpus path) gets DeployReady,
+            // all inodes go into the conflict signal.
+            let winner = group.iter().min_by_key(|img| &img.path).unwrap();
+            computed_sidecars.push(make_sidecar_ready_signal(winner, &deploy_path, library_name));
+
+            let conflict_key = format!("{}/{}", library_name, deploy_path);
+            let inodes: Vec<i64> = group.iter().map(|img| img.inode).collect();
+            let signal = TypedSignalWrite::SidecarDeployConflict(SidecarDeployConflictSignal {
+                key: conflict_key.clone(),
+                deploy_path: deploy_path.clone(),
+                library_name: library_name.clone(),
+                inodes,
+            });
+            computed_conflicts.push(ComputedAggregateSignal::new(conflict_key, signal));
+        }
+    }
+
+    // --- Phase 3: Reconcile globally ---
+    // Conflict detection requires cross-directory awareness (images from different
+    // corpus directories can target the same deploy path), so we always do full
+    // reconciliation. The dirty-inode gate at the top already skips this entirely
+    // when nothing has changed.
+    let sidecar_count = computed_sidecars.len();
+
+    let (sc_cleared, sc_new, sc_updated, sc_unchanged) = reconcile_corpus_signals::<SidecarDeployReadySignal>(
+        read_only_db,
+        sender,
+        computed_sidecars,
+        witness,
+    );
+
+    let (cc_cleared, cc_new, cc_updated, cc_unchanged) = reconcile_aggregate_signals::<SidecarDeployConflictSignal>(
+        read_only_db,
+        sender,
+        computed_conflicts,
+        witness,
+    );
+
+    log_general(format!(
+        "[COMPUTE] DeriveCorpusDeployStatus sidecar reconcile: {} dirs, {} images, \
+         SidecarDeployReady({} cleared, {} new, {} updated, {} unchanged), \
+         SidecarDeployConflict({} cleared, {} new, {} updated, {} unchanged)",
+        dir_targets.len(), all_images.len(),
+        sc_cleared, sc_new, sc_updated, sc_unchanged,
+        cc_cleared, cc_new, cc_updated, cc_unchanged,
+    ));
+
+    // Clear all dirty inodes after recompute
+    for inode in &dirty_inodes {
+        sender.clear_dirty_inode(*inode, SIDECAR_DEPLOY_COMPUTATION, witness);
+    }
+
+    sidecar_count
 }
 
-/// Build a SidecarDeployReady signal for a single image, applying mode filter,
-/// library deployment check, and deduplication.
+/// Check if a corpus image is a deployment candidate and return its deploy key.
 ///
-/// Returns `None` if the image should be skipped.
-fn build_sidecar_signal(
+/// Returns `Some((deploy_key, filename))` if the image passes the mode filter
+/// and is not already deployed (inode not in library). Returns `None` otherwise.
+fn sidecar_candidate_key(
     img: &crate::db::queries::files::CorpusImageEntry,
     mode: crate::config::SidecarDeployMode,
     library_name: &str,
     album_dir: &str,
-    library_inodes: &HashSet<i64>,
-    seen: &mut HashSet<(String, String, String)>,
-) -> Option<ComputedCorpusSignal> {
+) -> Option<((String, String), String)> {
     use crate::config::SidecarDeployMode;
 
     // Apply mode filter
@@ -1107,22 +1104,21 @@ fn build_sidecar_signal(
         return None;
     }
 
-    // Skip if this image's inode is already in any library
-    if library_inodes.contains(&img.inode) {
-        return None;
-    }
-
-    // Deduplicate by (library, album_dir, filename)
-    let key = (library_name.to_string(), album_dir.to_string(), filename.clone());
-    if !seen.insert(key) {
-        return None;
-    }
-
     let deploy_path = format!("{}/{}", album_dir, filename);
+    let key = (library_name.to_string(), deploy_path);
+    Some((key, filename))
+}
+
+/// Build a SidecarDeployReady corpus signal for the given image.
+fn make_sidecar_ready_signal(
+    img: &crate::db::queries::files::CorpusImageEntry,
+    deploy_path: &str,
+    library_name: &str,
+) -> ComputedCorpusSignal {
     let signal = TypedSignalWrite::SidecarDeployReady(SidecarDeployReadySignal {
         inode: img.inode,
         path: img.path.clone(),
-        deploy_path,
+        deploy_path: deploy_path.to_string(),
         library_name: library_name.to_string(),
         data: SidecarDeployReadyData {
             role: img.role.clone(),
@@ -1131,5 +1127,5 @@ fn build_sidecar_signal(
             height: img.height,
         },
     });
-    Some(ComputedCorpusSignal::new(img.inode, signal))
+    ComputedCorpusSignal::new(img.inode, signal)
 }

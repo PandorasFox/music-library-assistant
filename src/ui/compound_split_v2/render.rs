@@ -20,7 +20,7 @@ use crate::ui::widgets::{ConfirmationButton, ConfirmationModal};
 use super::types::{CompoundSplitStateV2, FocusPaneV2};
 
 /// Render the three-pane compound split resolution interface.
-pub fn render(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
+pub fn render(f: &mut Frame, area: Rect, state: &mut CompoundSplitStateV2) {
     // Clear background
     f.render_widget(Clear, area);
 
@@ -87,7 +87,7 @@ fn render_title(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
 }
 
 /// Render the three content panes.
-fn render_three_panes(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
+fn render_three_panes(f: &mut Frame, area: Rect, state: &mut CompoundSplitStateV2) {
     let panes = Layout::horizontal([
         Constraint::Percentage(25), // Parts
         Constraint::Percentage(35), // Files
@@ -101,7 +101,7 @@ fn render_three_panes(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
 }
 
 /// Render the split parts pane (left).
-fn render_parts_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
+fn render_parts_pane(f: &mut Frame, area: Rect, state: &mut CompoundSplitStateV2) {
     let is_focused = state.focus_pane == FocusPaneV2::Parts && !state.is_editing();
     let border_color = if is_focused {
         Color::Yellow
@@ -118,6 +118,11 @@ fn render_parts_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
 
     let inner = render_pane(f, area, block);
 
+    // Store pane rect and populate click targets
+    state.parts_pane_rect = Some(area);
+    state.part_click_targets.clear();
+    state.part_click_targets.set_list_area(inner);
+
     let visible_height = inner.height as usize;
     let max_width = inner.width.saturating_sub(1) as usize;
 
@@ -129,6 +134,12 @@ fn render_parts_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
     } else {
         state.part_scroll
     };
+
+    // Register click target rows
+    for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
+        if entry_idx >= state.edited_parts.len() { break; }
+        state.part_click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+    }
 
     let items: Vec<ListItem> = state
         .edited_parts
@@ -174,7 +185,7 @@ fn render_parts_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
 }
 
 /// Render the files pane (middle) with selection checkboxes.
-fn render_files_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
+fn render_files_pane(f: &mut Frame, area: Rect, state: &mut CompoundSplitStateV2) {
     let is_focused = state.focus_pane == FocusPaneV2::Files && !state.is_editing();
     let border_color = if is_focused {
         Color::Yellow
@@ -193,6 +204,11 @@ fn render_files_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
 
     let inner = render_pane(f, area, block);
 
+    // Store pane rect and populate click targets
+    state.files_pane_rect = Some(area);
+    state.file_click_targets.clear();
+    state.file_click_targets.set_list_area(inner);
+
     let visible_height = inner.height as usize;
     let max_width = inner.width.saturating_sub(1) as usize;
 
@@ -204,6 +220,12 @@ fn render_files_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
     } else {
         state.file_scroll
     };
+
+    // Register click target rows
+    for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
+        if entry_idx >= state.data.files.len() { break; }
+        state.file_click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+    }
 
     let items: Vec<ListItem> = state
         .data

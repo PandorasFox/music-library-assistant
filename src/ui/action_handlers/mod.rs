@@ -1579,6 +1579,18 @@ impl App {
                 state.handle_click(x, y);
                 None
             }
+            ActiveView::TagCanonicityResolution { ref mut state, .. } => {
+                state.handle_click(x, y);
+                None
+            }
+            ActiveView::CompoundTagSplit { ref mut state, .. } => {
+                state.handle_click(x, y);
+                None
+            }
+            ActiveView::UnifiedTagEditor(ref mut state) => {
+                state.handle_click(x, y);
+                None
+            }
             _ => None,
         };
 

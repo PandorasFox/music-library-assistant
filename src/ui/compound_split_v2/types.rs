@@ -212,6 +212,13 @@ pub struct CompoundSplitStateV2 {
 
     /// Pending tag edits from an embedded tag editor decision (inode → [(tag, old, new)])
     pub pending_tag_edits: Option<HashMap<i64, Vec<(String, String, String)>>>,
+    /// Click targets for parts list items (set during render).
+    pub part_click_targets: crate::ui::widgets::ListClickTargets,
+    /// Click targets for file list items (set during render).
+    pub file_click_targets: crate::ui::widgets::ListClickTargets,
+    /// Stored pane Rects for click focus detection (set during render).
+    pub parts_pane_rect: Option<ratatui::layout::Rect>,
+    pub files_pane_rect: Option<ratatui::layout::Rect>,
 }
 
 impl CompoundSplitStateV2 {
@@ -249,6 +256,46 @@ impl CompoundSplitStateV2 {
             confirming_canonicalize: false,
             confirming_bulk_stage: false,
             pending_tag_edits: None,
+            part_click_targets: Default::default(),
+            file_click_targets: Default::default(),
+            parts_pane_rect: None,
+            files_pane_rect: None,
+        }
+    }
+
+    /// Handle a mouse click at (x, y).
+    pub fn handle_click(&mut self, x: u16, y: u16) {
+        // Check parts list items
+        if let Some(id) = self.part_click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.edited_parts.len() {
+                    self.focus_pane = FocusPaneV2::Parts;
+                    self.part_cursor = idx;
+                }
+            }
+            return;
+        }
+        // Check file list items
+        if let Some(id) = self.file_click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.data.files.len() {
+                    self.focus_pane = FocusPaneV2::Files;
+                    self.file_cursor = idx;
+                }
+            }
+            return;
+        }
+        // Pane-level focus detection
+        if let Some(rect) = self.parts_pane_rect {
+            if crate::ui::widgets::rect_contains(rect, x, y) {
+                self.focus_pane = FocusPaneV2::Parts;
+                return;
+            }
+        }
+        if let Some(rect) = self.files_pane_rect {
+            if crate::ui::widgets::rect_contains(rect, x, y) {
+                self.focus_pane = FocusPaneV2::Files;
+            }
         }
     }
 

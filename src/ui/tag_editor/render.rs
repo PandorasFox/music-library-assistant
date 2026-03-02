@@ -278,6 +278,9 @@ impl UnifiedTagEditorState {
     fn render_tag_fields_pane(&mut self, f: &mut Frame, area: Rect) {
         let is_focused = matches!(self.focus, UnifiedTagEditorFocus::TagFields);
 
+        // Store pane rect for click focus detection
+        self.fields_pane_rect = Some(area);
+
         // Check if we should render aggregated fields (directory edit mode)
         if let Some(ref agg_fields) = self.aggregated_fields {
             self.render_aggregated_fields_pane(f, area, is_focused, agg_fields.clone());
@@ -294,6 +297,20 @@ impl UnifiedTagEditorState {
         // Calculate visible height
         let visible_height = area.height.saturating_sub(2) as usize;
         self.field_visible_height = visible_height;
+
+        // Populate field click targets
+        self.field_click_targets.clear();
+        let inner_area = Rect {
+            x: area.x + 1,
+            y: area.y + 1,
+            width: area.width.saturating_sub(2),
+            height: area.height.saturating_sub(2),
+        };
+        self.field_click_targets.set_list_area(inner_area);
+        for (vis_idx, entry_idx) in (self.field_scroll_offset..).take(visible_height).enumerate() {
+            if entry_idx >= fields.len() { break; }
+            self.field_click_targets.add_row(entry_idx.to_string(), inner_area.y + vis_idx as u16);
+        }
 
         // Build field lines
         let field_lines: Vec<Line> = fields
@@ -443,6 +460,20 @@ impl UnifiedTagEditorState {
     ) {
         let visible_height = area.height.saturating_sub(2) as usize;
         self.field_visible_height = visible_height;
+
+        // Populate field click targets for aggregated mode
+        self.field_click_targets.clear();
+        let inner_area = Rect {
+            x: area.x + 1,
+            y: area.y + 1,
+            width: area.width.saturating_sub(2),
+            height: area.height.saturating_sub(2),
+        };
+        self.field_click_targets.set_list_area(inner_area);
+        for (vis_idx, entry_idx) in (self.field_scroll_offset..).take(visible_height).enumerate() {
+            if entry_idx >= agg_fields.len() { break; }
+            self.field_click_targets.add_row(entry_idx.to_string(), inner_area.y + vis_idx as u16);
+        }
 
         let field_lines: Vec<Line> = agg_fields
             .iter()
@@ -629,11 +660,29 @@ impl UnifiedTagEditorState {
         }
     }
 
-    fn render_action_panel(&self, f: &mut Frame, area: Rect) {
+    fn render_action_panel(&mut self, f: &mut Frame, area: Rect) {
         let is_focused = matches!(self.focus, UnifiedTagEditorFocus::Actions);
         let buttons = self.available_buttons();
         let has_current_changes = self.has_changes_for_current_item();
         let has_anything = self.staged_decision_count > 0 || has_current_changes;
+
+        // Store pane rect and populate action click targets
+        self.actions_pane_rect = Some(area);
+        self.action_click_targets.clear();
+        let inner_area = Rect {
+            x: area.x + 1,
+            y: area.y + 1,
+            width: area.width.saturating_sub(2),
+            height: area.height.saturating_sub(2),
+        };
+        self.action_click_targets.set_list_area(inner_area);
+        // Buttons start at row 1 (after the blank line), one per row
+        for (idx, _) in buttons.iter().enumerate() {
+            let row_y = inner_area.y + 1 + idx as u16; // +1 for blank line
+            if row_y < inner_area.y + inner_area.height {
+                self.action_click_targets.add_row(idx.to_string(), row_y);
+            }
+        }
 
         let mut lines = vec![Line::from("")];
 

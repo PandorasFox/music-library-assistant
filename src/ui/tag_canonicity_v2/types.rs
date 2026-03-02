@@ -283,6 +283,13 @@ pub struct TagCanonicalityStateV2 {
     pub flag_confirmation_pending: bool,
     /// Zone for mutations (Corpus for normal canonicity, Inbox for inbox canonicity)
     pub zone: Zone,
+    /// Click targets for variant list items (set during render).
+    pub variant_click_targets: crate::ui::widgets::ListClickTargets,
+    /// Click targets for file list items (set during render).
+    pub file_click_targets: crate::ui::widgets::ListClickTargets,
+    /// Stored pane Rects for click focus detection (set during render).
+    pub variants_pane_rect: Option<ratatui::layout::Rect>,
+    pub files_pane_rect: Option<ratatui::layout::Rect>,
 }
 
 impl TagCanonicalityStateV2 {
@@ -335,6 +342,46 @@ impl TagCanonicalityStateV2 {
             is_album_artist_mode,
             flag_confirmation_pending: false,
             zone,
+            variant_click_targets: Default::default(),
+            file_click_targets: Default::default(),
+            variants_pane_rect: None,
+            files_pane_rect: None,
+        }
+    }
+
+    /// Handle a mouse click at (x, y).
+    pub fn handle_click(&mut self, x: u16, y: u16) {
+        // Check variant list items
+        if let Some(id) = self.variant_click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.data.variants.len() {
+                    self.focus_pane = FocusPaneV2::Variants;
+                    self.variant_cursor = idx as i32;
+                }
+            }
+            return;
+        }
+        // Check file list items
+        if let Some(id) = self.file_click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.data.files.len() {
+                    self.focus_pane = FocusPaneV2::Files;
+                    self.file_cursor = idx;
+                }
+            }
+            return;
+        }
+        // Pane-level focus detection
+        if let Some(rect) = self.variants_pane_rect {
+            if crate::ui::widgets::rect_contains(rect, x, y) {
+                self.focus_pane = FocusPaneV2::Variants;
+                return;
+            }
+        }
+        if let Some(rect) = self.files_pane_rect {
+            if crate::ui::widgets::rect_contains(rect, x, y) {
+                self.focus_pane = FocusPaneV2::Files;
+            }
         }
     }
 

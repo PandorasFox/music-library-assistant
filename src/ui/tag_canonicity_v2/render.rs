@@ -20,7 +20,7 @@ use crate::ui::widgets::{ConfirmationButton, ConfirmationModal};
 use super::types::{FocusPaneV2, TagCanonicalityStateV2};
 
 /// Render the three-pane tag canonicity resolution interface.
-pub fn render(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
+pub fn render(f: &mut Frame, area: Rect, state: &mut TagCanonicalityStateV2) {
     // Clear background
     f.render_widget(Clear, area);
 
@@ -71,7 +71,7 @@ fn render_title(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
 }
 
 /// Render the three content panes.
-fn render_three_panes(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
+fn render_three_panes(f: &mut Frame, area: Rect, state: &mut TagCanonicalityStateV2) {
     let panes = Layout::horizontal([
         Constraint::Percentage(25), // Variants
         Constraint::Percentage(35), // Files
@@ -85,7 +85,7 @@ fn render_three_panes(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2)
 }
 
 /// Render the variants pane (left).
-fn render_variants_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
+fn render_variants_pane(f: &mut Frame, area: Rect, state: &mut TagCanonicalityStateV2) {
     let is_focused = state.focus_pane == FocusPaneV2::Variants;
     let border_color = if is_focused {
         Color::Yellow
@@ -104,6 +104,11 @@ fn render_variants_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV
 
     let inner = render_pane(f, area, block);
 
+    // Store pane rect and populate click targets
+    state.variants_pane_rect = Some(area);
+    state.variant_click_targets.clear();
+    state.variant_click_targets.set_list_area(inner);
+
     let visible_height = inner.height as usize;
     let max_width = inner.width.saturating_sub(1) as usize; // Leave space for cursor
 
@@ -116,6 +121,12 @@ fn render_variants_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV
     } else {
         state.variant_scroll
     };
+
+    // Register click target rows
+    for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
+        if entry_idx >= state.data.variants.len() { break; }
+        state.variant_click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+    }
 
     let items: Vec<ListItem> = state
         .data
@@ -155,7 +166,7 @@ fn render_variants_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV
 }
 
 /// Render the files pane (middle).
-fn render_files_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
+fn render_files_pane(f: &mut Frame, area: Rect, state: &mut TagCanonicalityStateV2) {
     let is_focused = state.focus_pane == FocusPaneV2::Files;
     let border_color = if is_focused {
         Color::Yellow
@@ -172,6 +183,11 @@ fn render_files_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) 
 
     let inner = render_pane(f, area, block);
 
+    // Store pane rect and populate click targets
+    state.files_pane_rect = Some(area);
+    state.file_click_targets.clear();
+    state.file_click_targets.set_list_area(inner);
+
     let visible_height = inner.height as usize;
     let max_width = inner.width.saturating_sub(2) as usize;
 
@@ -183,6 +199,12 @@ fn render_files_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) 
     } else {
         state.file_scroll
     };
+
+    // Register click target rows
+    for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
+        if entry_idx >= state.data.files.len() { break; }
+        state.file_click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+    }
 
     let items: Vec<ListItem> = state
         .data

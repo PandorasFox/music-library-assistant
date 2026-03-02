@@ -235,7 +235,7 @@ fn render_content(
             vname = "missing_directory_resolution";
             preview.render(f, area);
         }
-        ActiveView::TagCanonicityResolution { ref state, .. } => {
+        ActiveView::TagCanonicityResolution { ref mut state, .. } => {
             vname = "tag_canonicity_resolution";
             tag_canonicity_v2::render(f, area, state);
         }
@@ -243,7 +243,7 @@ fn render_content(
             vname = "tag_canonicity_loading";
             render_canonicity_loading(f, area, clusters);
         }
-        ActiveView::CompoundTagSplit { ref state, .. } => {
+        ActiveView::CompoundTagSplit { ref mut state, .. } => {
             vname = "compound_tag_split";
             compound_split_v2::render(f, area, state);
         }

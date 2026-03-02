@@ -133,6 +133,18 @@ pub struct UnifiedTagEditorState {
 
     /// Whether this editor is standalone (owns transaction) or embedded (parent owns transaction).
     pub launch_mode: TagEditorLaunchMode,
+
+    // ========================================================================
+    // Click Targets (set during render)
+    // ========================================================================
+
+    /// Click targets for tag field list items.
+    pub field_click_targets: crate::ui::widgets::ListClickTargets,
+    /// Click targets for action buttons.
+    pub action_click_targets: crate::ui::widgets::ListClickTargets,
+    /// Stored pane Rects for click focus detection.
+    pub fields_pane_rect: Option<ratatui::layout::Rect>,
+    pub actions_pane_rect: Option<ratatui::layout::Rect>,
 }
 
 impl UnifiedTagEditorState {
@@ -220,6 +232,10 @@ impl UnifiedTagEditorState {
             staged_decision_count: 0,
             staged_mutations_for_current: None,
             launch_mode: TagEditorLaunchMode::Standalone,
+            field_click_targets: Default::default(),
+            action_click_targets: Default::default(),
+            fields_pane_rect: None,
+            actions_pane_rect: None,
         }
     }
 
@@ -569,6 +585,55 @@ impl UnifiedTagEditorState {
 
         // Clear OOB signal since we've resolved it
         self.has_oob_signal = false;
+    }
+
+    /// Handle mouse click for focus and cursor changes.
+    ///
+    /// Checks action button click targets, then field click targets,
+    /// then falls back to pane-level focus detection via rect_contains.
+    pub fn handle_click(&mut self, x: u16, y: u16) {
+        use crate::ui::widgets::rect_contains;
+
+        // Check action button click targets first
+        if let Some(id) = self.action_click_targets.hit_test(x, y) {
+            self.focus = UnifiedTagEditorFocus::Actions;
+            let buttons = self.available_buttons();
+            if let Ok(idx) = id.parse::<usize>() {
+                if let Some(button) = buttons.get(idx) {
+                    self.selected_button = *button;
+                }
+            }
+            return;
+        }
+
+        // Check field click targets
+        if let Some(id) = self.field_click_targets.hit_test(x, y) {
+            self.focus = UnifiedTagEditorFocus::TagFields;
+            if let Ok(idx) = id.parse::<usize>() {
+                let total = if let Some(ref agg) = self.aggregated_fields {
+                    agg.len()
+                } else {
+                    self.tag_fields.get(self.current_item_idx).map(|f| f.len()).unwrap_or(0)
+                };
+                if idx < total {
+                    self.current_field_idx = idx;
+                }
+            }
+            return;
+        }
+
+        // Pane-level focus detection
+        if let Some(rect) = self.actions_pane_rect {
+            if rect_contains(rect, x, y) {
+                self.focus = UnifiedTagEditorFocus::Actions;
+                return;
+            }
+        }
+        if let Some(rect) = self.fields_pane_rect {
+            if rect_contains(rect, x, y) {
+                self.focus = UnifiedTagEditorFocus::TagFields;
+            }
+        }
     }
 
     /// Update tags from database result (called by UI layer after DB query)

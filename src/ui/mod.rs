@@ -851,6 +851,10 @@ fn run_app<B: ratatui::backend::Backend>(
             }
             view.fetch_active = app.witch.is_external_fetch_active();
             view.fetch_progress = app.witch.external_fetch_progress().cloned();
+            view.requests_per_second = app.witch.acoustid_requests_per_second();
+            if view.fetch_active {
+                view.tick_count = view.tick_count.wrapping_add(1);
+            }
         }
         if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate { ref mut library_file_counts }) = app.view {
             if let Some(ref status) = app.cached_deploy {

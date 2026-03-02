@@ -1167,6 +1167,14 @@ impl Witch {
         self.fetch_progress.as_ref()
     }
 
+    /// Configured AcoustID requests-per-second rate limit.
+    pub fn acoustid_requests_per_second(&self) -> u32 {
+        self.shared_config.as_ref().map_or(3, |sc| {
+            let config = sc.read().expect("SharedConfig lock poisoned");
+            config.opinions.external_matching.requests_per_second
+        })
+    }
+
     /// Whether an AcoustID API key is configured.
     pub fn has_acoustid_api_key(&self) -> bool {
         self.shared_config.as_ref().map_or(false, |sc| {

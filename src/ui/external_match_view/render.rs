@@ -290,8 +290,24 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
                 Span::styled(format!("{:>5}", p.retries), Style::default().fg(Color::Yellow)),
             ]));
             lines.push(Line::from(Span::raw("")));
-            // Braille progress bar
-            lines.push(Line::from(render_braille_bar(p.processed, p.total)));
+            // Braille progress bar with ETA
+            lines.push(Line::from(render_braille_bar(p.processed, p.total, state.tick_count)));
+            let remaining = p.total.saturating_sub(p.processed);
+            let rps = state.requests_per_second.max(1);
+            if remaining > 0 {
+                let secs = remaining as u64 / rps as u64;
+                let eta = if secs >= 3600 {
+                    format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60)
+                } else if secs >= 60 {
+                    format!("{}m {:02}s", secs / 60, secs % 60)
+                } else {
+                    format!("{}s", secs)
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("  ETA: ~{}", eta),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
         } else {
             lines.push(Line::from(vec![
                 Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
@@ -340,9 +356,12 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
 /// Render a braille progress bar as a vector of Spans.
 ///
 /// Uses the same braille style as the startup progress screen:
-/// ⠸ (left bracket), ⠿ (filled), ⠁ (spinner), spaces (empty), ⠇ (right bracket).
-fn render_braille_bar(processed: usize, total: usize) -> Vec<Span<'static>> {
+/// ⠸ (left bracket), ⠿ (filled), animated spinner, spaces (empty), ⠇ (right bracket).
+fn render_braille_bar(processed: usize, total: usize, tick_count: u32) -> Vec<Span<'static>> {
     const BAR_WIDTH: usize = 20;
+    // Bouncing dot animation — same pattern as progress_screen.rs
+    const BOUNCE_LEFT: &[char] = &['⠁', '⠂', '⠄', '⠂'];
+    const BOUNCE_RIGHT: &[char] = &['⠏', '⠗', '⠧', '⠗'];
 
     if total == 0 {
         return vec![Span::styled(
@@ -353,14 +372,29 @@ fn render_braille_bar(processed: usize, total: usize) -> Vec<Span<'static>> {
 
     let ratio = (processed as f32 / total as f32).min(1.0);
     let pct = (ratio * 100.0).round() as u32;
-    let filled = ((ratio * BAR_WIDTH as f32) as usize).min(BAR_WIDTH.saturating_sub(1));
-    let empty = BAR_WIDTH.saturating_sub(filled + 1);
 
-    let spinner = if processed < total { '⠁' } else { '⠿' };
+    // Half-cell granularity: each cell has a left and right column
+    let half_cells = ((ratio * (BAR_WIDTH * 2) as f32) as usize).min(BAR_WIDTH * 2);
+    let full_cells = half_cells / 2;
+    let has_half = half_cells % 2 == 1;
+
+    let spinner = if processed >= total {
+        '⠿'
+    } else {
+        let anim_idx = ((tick_count / 2) as usize) % BOUNCE_LEFT.len();
+        if has_half {
+            BOUNCE_RIGHT[anim_idx]
+        } else {
+            BOUNCE_LEFT[anim_idx]
+        }
+    };
+
+    let spinner_cells = if processed < total { 1 } else { 0 };
+    let empty = BAR_WIDTH.saturating_sub(full_cells + spinner_cells);
 
     let bar = format!(
         "  ⠸{}{}{}⠇  {}%",
-        "⠿".repeat(filled),
+        "⠿".repeat(full_cells),
         spinner,
         " ".repeat(empty),
         pct,

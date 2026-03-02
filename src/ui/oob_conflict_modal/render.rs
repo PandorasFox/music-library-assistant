@@ -13,7 +13,10 @@ use ratatui::Frame;
 
 use crate::meta::views::ConflictBucket;
 use crate::ui::helpers::render_pane;
-use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout};
+use crate::ui::widgets::{
+    render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout,
+    ThreeColTable, StyledCell,
+};
 
 use super::types::{OobConflictState, ResolutionButton};
 
@@ -173,55 +176,37 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &OobConflictState) {
         return;
     }
 
-    let mut lines = Vec::new();
-
     if state.current_diff.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "No tag differences found",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        let col_width = inner.width as usize;
-        let field_w = 18.min(col_width / 3);
-
-        // Column headers
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{:<width$}", "Field", width = field_w),
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "DB Value",
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                "Disk Value",
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-            ),
-        ]));
-
-        for mismatch in &state.current_diff {
-            let db_display = mismatch.db_value.as_deref().unwrap_or("\u{2014}");
-            let disk_display = mismatch.disk_value.as_deref().unwrap_or("\u{2014}");
-
-            let db_color = if mismatch.db_value.is_some() { Color::Green } else { Color::DarkGray };
-            let disk_color = if mismatch.disk_value.is_some() { Color::Cyan } else { Color::DarkGray };
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{:<width$}", mismatch.field, width = field_w),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(db_display.to_string(), Style::default().fg(db_color)),
-                Span::raw("  "),
-                Span::styled(disk_display.to_string(), Style::default().fg(disk_color)),
-            ]));
-        }
+        let empty = Paragraph::new("No tag differences found")
+            .style(Style::default().fg(Color::DarkGray));
+        f.render_widget(empty, inner);
+        return;
     }
 
-    let para = Paragraph::new(lines);
-    f.render_widget(para, inner);
+    let bold = Modifier::BOLD;
+    let table = ThreeColTable {
+        headers: [
+            ("Field".into(), Style::default().fg(Color::DarkGray).add_modifier(bold)),
+            ("DB Value".into(), Style::default().fg(Color::Green).add_modifier(bold)),
+            ("Disk Value".into(), Style::default().fg(Color::Cyan).add_modifier(bold)),
+        ],
+        rows: state.current_diff.iter().map(|m| {
+            let db_text = m.db_value.as_deref().unwrap_or("\u{2014}");
+            let disk_text = m.disk_value.as_deref().unwrap_or("\u{2014}");
+            let db_color = if m.db_value.is_some() { Color::Green } else { Color::DarkGray };
+            let disk_color = if m.disk_value.is_some() { Color::Cyan } else { Color::DarkGray };
+            [
+                StyledCell::new(&m.field, Style::default().fg(Color::White)),
+                StyledCell::new(db_text, Style::default().fg(db_color)),
+                StyledCell::new(disk_text, Style::default().fg(disk_color)),
+            ]
+        }).collect(),
+        col_ratio: [20, 40, 40],
+        scroll: 0,
+        separator_style: Style::default().fg(Color::DarkGray),
+        alternate_rows: true,
+    };
+    table.render(f, inner);
 }
 
 fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {

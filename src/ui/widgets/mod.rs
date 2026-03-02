@@ -25,6 +25,7 @@ pub mod signal_info_pane;
 pub mod status_bar;
 pub mod tabbed_signal_list;
 mod text_input;
+pub mod three_col_table;
 mod titlebar;
 
 // Layout widgets
@@ -60,3 +61,6 @@ pub use album_art_preview::{
 // File path list + selection styles
 pub use file_path_list::{render_file_path_list, PathEntry};
 pub use selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
+
+// Three-column table
+pub use three_col_table::{ThreeColTable, StyledCell};

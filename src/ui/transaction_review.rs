@@ -15,7 +15,7 @@ use ratatui::Frame;
 
 use crate::meta::decisions::DecisionKey;
 use crate::meta::mutations::{DiffEntry, Mutation};
-use crate::ui::widgets::{centered_rect_fixed, ConfirmationButton, render_button_row};
+use crate::ui::widgets::{centered_rect_fixed, ConfirmationButton, render_button_row, ThreeColTable, StyledCell};
 use crate::witch::Witch;
 
 /// Focus pane for transaction review (3-pane: Decisions, Mutations, Buttons).
@@ -473,48 +473,6 @@ pub(crate) fn render_removal_popup(f: &mut Frame, area: Rect, state: &Transactio
 }
 
 /// Wrap text into lines that fit within `width` characters, breaking at char boundaries.
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return vec![String::new()];
-    }
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-
-    let mut lines = Vec::new();
-    let chars: Vec<char> = text.chars().collect();
-    let mut start = 0;
-
-    while start < chars.len() {
-        let end = (start + width).min(chars.len());
-        lines.push(chars[start..end].iter().collect());
-        start = end;
-    }
-
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-    lines
-}
-
-/// Pre-compute wrapped rows for all diff entries, returning (row_lines, total_height).
-/// Each element in row_lines is (wrapped_label, wrapped_old, wrapped_new, row_height).
-fn compute_wrapped_rows(
-    entries: &[DiffEntry],
-    col_widths: [usize; 3],
-) -> Vec<(Vec<String>, Vec<String>, Vec<String>, usize)> {
-    entries
-        .iter()
-        .map(|entry| {
-            let label_lines = wrap_text(&entry.label, col_widths[0]);
-            let old_lines = wrap_text(&entry.old_value, col_widths[1]);
-            let new_lines = wrap_text(&entry.new_value, col_widths[2]);
-            let row_height = label_lines.len().max(old_lines.len()).max(new_lines.len());
-            (label_lines, old_lines, new_lines, row_height)
-        })
-        .collect()
-}
-
 /// Render diff entries as a 3-column wrapped table (20/40/40: mutation/before/after).
 pub(crate) fn render_diff_entries(f: &mut Frame, area: Rect, entries: &[DiffEntry], scroll: usize) {
     if entries.is_empty() {
@@ -525,147 +483,27 @@ pub(crate) fn render_diff_entries(f: &mut Frame, area: Rect, entries: &[DiffEntr
         return;
     }
 
-    let total_width = area.width as usize;
-    if total_width < 6 {
-        return;
-    }
-
-    // 20/40/40 column split, with 1-char separator between columns
-    let col0_w = total_width * 20 / 100;
-    let remaining = total_width.saturating_sub(col0_w + 2); // 2 separator chars
-    let col1_w = remaining / 2;
-    let col2_w = remaining.saturating_sub(col1_w);
-    let col_widths = [col0_w.max(1), col1_w.max(1), col2_w.max(1)];
-
-    let wrapped_rows = compute_wrapped_rows(entries, col_widths);
-
-    // Compute cumulative heights for scroll
-    let total_lines: usize = wrapped_rows.iter().map(|(_, _, _, h)| *h).sum();
-    let visible_height = area.height as usize;
-
-    // Clamp scroll to valid range
-    let max_scroll = total_lines.saturating_sub(visible_height);
-    let scroll = scroll.min(max_scroll);
-
-    // Render header
-    let header_line = Line::from(vec![
-        Span::styled(
-            format!("{:<width$}", "Mutation", width = col_widths[0]),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!("{:<width$}", "Before", width = col_widths[1]),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!("{:<width$}", "After", width = col_widths[2]),
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-        ),
-    ]);
-
-    let header_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
-    f.render_widget(Paragraph::new(header_line), header_area);
-
-    // Body area below header
-    let body_y = area.y + 1;
-    let body_height = (area.height.saturating_sub(1)) as usize;
-    if body_height == 0 {
-        return;
-    }
-
-    // Recalculate scroll against body height
-    let max_scroll = total_lines.saturating_sub(body_height);
-    let scroll = scroll.min(max_scroll);
-
-    // Find which row/line the scroll offset lands in
-    let mut lines_skipped = 0usize;
-    let mut start_row = 0usize;
-    let mut start_line_in_row = 0usize;
-
-    for (i, (_, _, _, row_h)) in wrapped_rows.iter().enumerate() {
-        if lines_skipped + row_h > scroll {
-            start_row = i;
-            start_line_in_row = scroll - lines_skipped;
-            break;
-        }
-        lines_skipped += row_h;
-        if i == wrapped_rows.len() - 1 {
-            start_row = wrapped_rows.len();
-        }
-    }
-
-    let mut y_offset = 0usize;
-    let separator_style = Style::default().fg(Color::DarkGray);
-    let label_style = Style::default().fg(Color::White);
-    let old_style = Style::default().fg(Color::Red);
-    let new_style = Style::default().fg(Color::Green);
-    let alt_label_style = Style::default().fg(Color::Gray);
-    let alt_old_style = Style::default().fg(Color::Red);
-    let alt_new_style = Style::default().fg(Color::Green);
-
-    for (row_idx, (label_lines, old_lines, new_lines, row_height)) in
-        wrapped_rows.iter().enumerate().skip(start_row)
-    {
-        if y_offset >= body_height {
-            break;
-        }
-
-        let is_alt = row_idx % 2 == 1;
-        let ls = if is_alt { alt_label_style } else { label_style };
-        let os = if is_alt { alt_old_style } else { old_style };
-        let ns = if is_alt { alt_new_style } else { new_style };
-
-        let first_line = if row_idx == start_row { start_line_in_row } else { 0 };
-
-        for line_idx in first_line..*row_height {
-            if y_offset >= body_height {
-                break;
-            }
-
-            let label_text = label_lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
-            let old_text = old_lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
-            let new_text = new_lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
-
-            let line = Line::from(vec![
-                Span::styled(format!("{:<width$}", label_text, width = col_widths[0]), ls),
-                Span::styled("\u{2502}", separator_style),
-                Span::styled(format!("{:<width$}", old_text, width = col_widths[1]), os),
-                Span::styled("\u{2502}", separator_style),
-                Span::styled(format!("{:<width$}", new_text, width = col_widths[2]), ns),
-            ]);
-
-            let line_area = Rect {
-                x: area.x,
-                y: body_y + y_offset as u16,
-                width: area.width,
-                height: 1,
-            };
-            f.render_widget(Paragraph::new(line), line_area);
-            y_offset += 1;
-        }
-    }
-
-    // Scroll indicators
-    if total_lines > body_height {
-        let indicator = if scroll > 0 && scroll < max_scroll {
-            "^v"
-        } else if scroll > 0 {
-            "^"
-        } else {
-            "v"
-        };
-        let indicator_area = Rect {
-            x: area.x + area.width.saturating_sub(3),
-            y: body_y as u16,
-            width: 2,
-            height: 1,
-        };
-        let indicator_widget =
-            Paragraph::new(indicator).style(Style::default().fg(Color::DarkGray));
-        f.render_widget(indicator_widget, indicator_area);
-    }
+    let bold = Modifier::BOLD;
+    let table = ThreeColTable {
+        headers: [
+            ("Mutation".into(), Style::default().fg(Color::Cyan).add_modifier(bold)),
+            ("Before".into(), Style::default().fg(Color::Red).add_modifier(bold)),
+            ("After".into(), Style::default().fg(Color::Green).add_modifier(bold)),
+        ],
+        rows: entries
+            .iter()
+            .map(|e| [
+                StyledCell::new(&e.label, Style::default().fg(Color::White)),
+                StyledCell::new(&e.old_value, Style::default().fg(Color::Red)),
+                StyledCell::new(&e.new_value, Style::default().fg(Color::Green)),
+            ])
+            .collect(),
+        col_ratio: [20, 40, 40],
+        scroll,
+        separator_style: Style::default().fg(Color::DarkGray),
+        alternate_rows: true,
+    };
+    table.render(f, area);
 }
 
 fn render_buttons_and_hints(f: &mut Frame, button_area: Rect, hint_area: Rect, state: &TransactionReviewState) {

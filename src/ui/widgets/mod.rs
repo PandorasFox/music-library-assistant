@@ -30,7 +30,7 @@ mod titlebar;
 // Layout widgets
 pub use layout::{PaneConfig, ThreePaneLayout};
 pub use list_click_targets::ListClickTargets;
-pub use resolution_layout::{ButtonRects, FocusPane, ResolutionLayout};
+pub use resolution_layout::{ButtonRects, FocusPane, ResolutionLayout, rect_contains};
 
 // Modal widgets
 pub use modal::{

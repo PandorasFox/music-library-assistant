@@ -139,17 +139,21 @@ impl ButtonRects {
     /// Returns the name of the clicked button if hit.
     pub fn hit_test(&self, x: u16, y: u16) -> Option<&str> {
         for (name, rect) in &self.rects {
-            if x >= rect.x
-                && x < rect.x.saturating_add(rect.width)
-                && y >= rect.y
-                && y < rect.y.saturating_add(rect.height)
-            {
+            if rect_contains(*rect, x, y) {
                 return Some(name.as_str());
             }
         }
         None
     }
 
+}
+
+/// Check if a point (x, y) falls within a Rect's bounds.
+pub fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
+    x >= rect.x
+        && x < rect.x.saturating_add(rect.width)
+        && y >= rect.y
+        && y < rect.y.saturating_add(rect.height)
 }
 
 #[cfg(test)]

@@ -57,6 +57,7 @@ pub fn execute_schedule_content_analysis(
             // pic_format/pic_width/pic_height populated by BackfillAlbumArtInfo,
             // so BackfillAlbumArtInfo spawns it after wait_for_queue_drain().
             Computation::BackfillAlbumArtInfo,
+            Computation::IndexImageFile,
             Computation::DetectCrossSourceOverlaps,
         ]);
     }

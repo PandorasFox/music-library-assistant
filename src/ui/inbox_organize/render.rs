@@ -141,7 +141,7 @@ fn render_corpus_entry(entry: &crate::ui::tree_browser::TreeEntry, is_cursor: bo
         ]);
     }
 
-    let expand_indicator = if entry.is_directory {
+    let expand_indicator = if entry.is_directory() {
         if entry.has_children {
             if entry.is_expanded { "▼ " } else { "▶ " }
         } else {
@@ -153,7 +153,7 @@ fn render_corpus_entry(entry: &crate::ui::tree_browser::TreeEntry, is_cursor: bo
 
     let base_style = if is_cursor {
         CURSOR_STYLE
-    } else if entry.is_directory {
+    } else if entry.is_directory() {
         Style::default().fg(Color::Blue)
     } else {
         Style::default().fg(Color::White)

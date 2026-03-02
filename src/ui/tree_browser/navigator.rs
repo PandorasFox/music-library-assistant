@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::AUDIO_EXTENSIONS;
+use crate::meta::computations::helpers::IMAGE_EXTENSIONS;
 
 use super::entry::{DeployMarker, TreeEntry};
 
@@ -16,6 +17,8 @@ use super::entry::{DeployMarker, TreeEntry};
 pub struct EntryFilter {
     /// Include audio files in tree (false = directories only)
     pub include_files: bool,
+    /// Include image files in tree
+    pub include_images: bool,
     /// Include hidden files/directories (starting with '.')
     pub include_hidden: bool,
 }
@@ -26,14 +29,16 @@ impl EntryFilter {
     pub fn directories_only() -> Self {
         Self {
             include_files: false,
+            include_images: false,
             include_hidden: false,
         }
     }
 
-    /// Filter that shows directories and audio files.
+    /// Filter that shows directories and files (audio + images).
     pub fn with_files() -> Self {
         Self {
             include_files: true,
+            include_images: true,
             include_hidden: false,
         }
     }
@@ -157,6 +162,9 @@ impl TreeNavigator {
                 has_children,
                 item_count,
             );
+            if self.filter.include_images {
+                root_entry.image_count = self.count_image_files(&self.root_path);
+            }
             root_entry.deploy_marker = root_marker;
             root_entry.is_expanded = true;
             self.entries.push(root_entry);
@@ -193,7 +201,7 @@ impl TreeNavigator {
     /// Expand current directory if collapsed.
     pub fn expand_current(&mut self) {
         if let Some(entry) = self.entries.get(self.cursor_idx).cloned() {
-            if entry.is_directory && entry.has_children && !entry.is_expanded {
+            if entry.is_directory() && entry.has_children && !entry.is_expanded {
                 // Mark as expanded
                 if let Some(e) = self.entries.get_mut(self.cursor_idx) {
                     e.is_expanded = true;
@@ -207,7 +215,7 @@ impl TreeNavigator {
     /// Collapse current directory if expanded, otherwise jump to parent.
     pub fn collapse_or_parent(&mut self) {
         if let Some(entry) = self.entries.get(self.cursor_idx).cloned() {
-            if entry.is_directory && entry.is_expanded {
+            if entry.is_directory() && entry.is_expanded {
                 // Collapse: remove all descendants
                 self.collapse_at(self.cursor_idx);
             } else if entry.depth > 0 || (!self.show_root && entry.depth == 0) {
@@ -247,7 +255,7 @@ impl TreeNavigator {
             if current_depth > 0 {
                 // Search backwards for entry with depth = current_depth - 1
                 for i in (0..self.cursor_idx).rev() {
-                    if self.entries[i].depth == current_depth - 1 && self.entries[i].is_directory {
+                    if self.entries[i].depth == current_depth - 1 && self.entries[i].is_directory() {
                         self.cursor_idx = i;
                         self.ensure_visible();
                         break;
@@ -296,7 +304,7 @@ impl TreeNavigator {
         // Expand each ancestor in order
         for ancestor in &ancestors {
             if let Some(idx) = self.entries.iter().position(|e| &e.path == ancestor) {
-                if self.entries[idx].is_directory && !self.entries[idx].is_expanded {
+                if self.entries[idx].is_directory() && !self.entries[idx].is_expanded {
                     self.entries[idx].is_expanded = true;
                     self.load_children_at(idx);
                 }
@@ -316,7 +324,7 @@ impl TreeNavigator {
     pub fn focus_and_expand(&mut self, target: &Path) {
         if let Some(idx) = self.entries.iter().position(|e| e.path == *target) {
             self.cursor_idx = idx;
-            if self.entries[idx].is_directory && !self.entries[idx].is_expanded {
+            if self.entries[idx].is_directory() && !self.entries[idx].is_expanded {
                 self.entries[idx].is_expanded = true;
                 self.load_children_at(idx);
             }
@@ -331,7 +339,7 @@ impl TreeNavigator {
     /// Load children of the entry at the given index.
     fn load_children_at(&mut self, parent_idx: usize) {
         let parent = &self.entries[parent_idx];
-        if !parent.is_directory || !parent.is_expanded {
+        if !parent.is_directory() || !parent.is_expanded {
             return;
         }
 
@@ -382,6 +390,9 @@ impl TreeNavigator {
                     let has_children = self.path_has_children(&path) || self.show_new_dir_entry;
                     let item_count = self.count_audio_files(&path);
                     let mut entry = TreeEntry::directory(path.clone(), name, depth, has_children, item_count);
+                    if self.filter.include_images {
+                        entry.image_count = self.count_image_files(&path);
+                    }
                     entry.deploy_marker = self.deploy_marker_for(&path);
                     if is_root_parent && !self.primary_zone_paths.is_empty()
                         && !self.primary_zone_paths.iter().any(|z| z == &path)
@@ -390,7 +401,9 @@ impl TreeNavigator {
                     }
                     dirs.push(entry);
                 } else if self.filter.include_files && self.is_audio_file(&path) {
-                    files.push(TreeEntry::file(path, name, depth));
+                    files.push(TreeEntry::audio_file(path, name, depth));
+                } else if self.filter.include_images && self.is_image_file(&path) {
+                    files.push(TreeEntry::image_file(path, name, depth));
                 }
             }
         }
@@ -452,6 +465,9 @@ impl TreeNavigator {
                 if self.filter.include_files && self.is_audio_file(&entry_path) {
                     return true;
                 }
+                if self.filter.include_images && self.is_image_file(&entry_path) {
+                    return true;
+                }
             }
         }
         false
@@ -469,18 +485,23 @@ impl TreeNavigator {
             .unwrap_or(0)
     }
 
+    /// Count image files in a directory (non-recursive).
+    fn count_image_files(&self, path: &Path) -> usize {
+        fs::read_dir(path)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| self.is_image_file(&e.path()))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     /// Check if a path is an audio file.
     ///
     /// Excludes macOS resource fork files (`._*`) which appear on NFS/SMB mounts.
     fn is_audio_file(&self, path: &Path) -> bool {
-        // Skip macOS resource fork (AppleDouble) files
-        let is_resource_fork = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.starts_with("._"))
-            .unwrap_or(false);
-
-        if is_resource_fork {
+        if Self::is_resource_fork(path) {
             return false;
         }
 
@@ -490,6 +511,30 @@ impl TreeNavigator {
                 .and_then(|e| e.to_str())
                 .map(|e| AUDIO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
                 .unwrap_or(false)
+    }
+
+    /// Check if a path is an image file.
+    ///
+    /// Excludes macOS resource fork files (`._*`) which appear on NFS/SMB mounts.
+    fn is_image_file(&self, path: &Path) -> bool {
+        if Self::is_resource_fork(path) {
+            return false;
+        }
+
+        path.is_file()
+            && path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| IMAGE_EXTENSIONS.contains(&e.to_lowercase().as_str()))
+                .unwrap_or(false)
+    }
+
+    /// Check if a path is a macOS resource fork (AppleDouble) file.
+    fn is_resource_fork(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with("._"))
+            .unwrap_or(false)
     }
 
     // =========================================================================

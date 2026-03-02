@@ -810,4 +810,12 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_deploy_status()
     }
 
+    // =========================================================================
+    // Image File Queries
+    // =========================================================================
+
+    /// Get corpus image files in a directory.
+    pub fn get_corpus_images_in_directory(&self, dir_path: &str) -> Result<Vec<files::ImageFileInfo>> {
+        self.db.get_corpus_images_in_directory(dir_path)
+    }
 }

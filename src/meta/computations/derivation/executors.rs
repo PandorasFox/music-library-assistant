@@ -10,7 +10,7 @@ use std::time::Instant;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
     drop_stale_corpus_signal, ensure_typed_signal,
-    enumerate_all_directories, get_configured_library_names, is_audio_file,
+    enumerate_all_directories, get_configured_library_names, is_audio_file, is_image_file,
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::*;
@@ -920,7 +920,7 @@ pub fn execute_scan_library_directory(
     if let Ok(entries) = std::fs::read_dir(directory) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && is_audio_file(&path) {
+            if path.is_file() && (is_audio_file(&path) || is_image_file(&path)) {
                 if let Ok(metadata) = std::fs::metadata(&path) {
                     let mtime = metadata.modified().ok().and_then(|t| {
                         t.duration_since(std::time::UNIX_EPOCH).ok()
@@ -948,7 +948,7 @@ pub fn execute_scan_library_directory(
     // Log per-directory scan results (only non-empty directories to avoid noise)
     if !observed_files.is_empty() {
         log_general(format!(
-            "[COMPUTE] ScanLibraryDirectory '{}': {} audio files in {:?}",
+            "[COMPUTE] ScanLibraryDirectory '{}': {} files in {:?}",
             library_name, observed_files.len(), directory,
         ));
     }

@@ -16,6 +16,16 @@ use crate::ui::helpers::render_pane;
 use super::path_display::{path_lines, PathField};
 use super::tabbed_signal_list::DeployTab;
 
+/// Summary of a sidecar image for the info pane.
+#[derive(Debug, Clone)]
+pub struct SidecarSummary {
+    pub filename: String,
+    pub format: String,
+    pub width: u32,
+    pub height: u32,
+    pub role: String,
+}
+
 /// Information about a deploy signal for display in the info pane.
 #[derive(Debug, Clone, Default)]
 pub enum SignalInfo {
@@ -28,6 +38,7 @@ pub enum SignalInfo {
     NewDirectory {
         directory: String,
         file_count: usize,
+        sidecars: Vec<SidecarSummary>,
     },
     /// Deploy conflict: multiple corpus files map to same library path.
     Conflict {
@@ -96,7 +107,8 @@ impl<'a> SignalInfoPane<'a> {
             SignalInfo::NewDirectory {
                 directory,
                 file_count,
-            } => self.new_directory_content(directory, *file_count, width),
+                sidecars,
+            } => self.new_directory_content(directory, *file_count, sidecars, width),
             SignalInfo::Conflict {
                 deploy_path,
                 conflicting_files,
@@ -159,7 +171,7 @@ impl<'a> SignalInfoPane<'a> {
         lines
     }
 
-    fn new_directory_content(&self, directory: &str, file_count: usize, width: u16) -> Vec<Line<'a>> {
+    fn new_directory_content(&self, directory: &str, file_count: usize, sidecars: &[SidecarSummary], width: u16) -> Vec<Line<'a>> {
         let mut lines = vec![
             Line::from(""),
             Line::from(vec![
@@ -194,6 +206,31 @@ impl<'a> SignalInfoPane<'a> {
             ),
             Span::styled(" ready to deploy", Style::default().fg(Color::DarkGray)),
         ]));
+
+        if !sidecars.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("Sidecar Images ({}):", sidecars.len()),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for sc in sidecars {
+                let role_suffix = if sc.role == "cover_front" {
+                    " [front]"
+                } else if sc.role == "cover_back" {
+                    " [back]"
+                } else {
+                    ""
+                };
+                let desc = format!(
+                    "  {} {}x{} {}{}",
+                    sc.filename, sc.width, sc.height, sc.format.to_uppercase(), role_suffix
+                );
+                lines.push(Line::from(Span::styled(desc, Style::default().fg(Color::DarkGray))));
+            }
+        }
+
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Hard links will be created from corpus to library.",

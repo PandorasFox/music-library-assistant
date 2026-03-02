@@ -12,7 +12,7 @@ All computation code lives in `src/meta/computations/`:
 - **Stats**: `stats.rs` (thread-local stats + read-only DB connections)
 - **Observation phase**: `observation/mod.rs`, `observation/executors.rs`
 - **Derivation phase**: `derivation/mod.rs`, `derivation/executors.rs`
-- **Analysis phase**: `analysis/mod.rs`, `analysis/schedule.rs`, `analysis/duplicates.rs`, `analysis/tags.rs`, `analysis/deploy.rs`, `analysis/formats.rs`, `analysis/album_art.rs`, `analysis/album_art_info.rs`, `analysis/inbox_matches.rs`, `analysis/external_matches.rs`
+- **Analysis phase**: `analysis/mod.rs`, `analysis/schedule.rs`, `analysis/duplicates.rs`, `analysis/tags.rs`, `analysis/deploy.rs`, `analysis/formats.rs`, `analysis/album_art.rs`, `analysis/album_art_info.rs`, `analysis/image_files.rs`, `analysis/inbox_matches.rs`, `analysis/external_matches.rs`
 
 ## Phase Overview
 
@@ -77,6 +77,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectDiscExtractions | Detect extractable disc numbers from ALBUM and TRACKNUMBER tags. Pass 1 (album): scans ALBUM tags for `,?\s*disc\s+(\d+)\s*$` pattern. Pass 2 (track number): scans TRACKNUMBER for `^([A-Za-z]+)(\d+)$`, groups by release context (album+album_artist), only emits if group has ≥2 files. Scans both corpus and inbox. Emits DiscExtraction aggregate signals |
 | AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality tier partitioning |
 | DetectCrossSourceOverlaps | Cluster FingerprintOverlap signals by source directory (from config `dir` stanzas). Within-source overlaps ignored. |
+| IndexImageFile | Index corpus image file metadata (format, dimensions, role) into image_info table. Dirty-inode computation |
 | DetectDeployConflicts | Detect path collisions in deployment |
 | DetectReleaseOverlaps | Detect cross-source album-directory-level release overlaps |
 | DeriveDeployHealthSignals | Derive library health signals (per library) |
@@ -114,7 +115,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
-| ScheduleContentAnalysis | All detection computations (except fingerprint-dependent) | — | — |
+| ScheduleContentAnalysis | All detection computations (except fingerprint-dependent), IndexImageFile (FILES scope) | — | — |
 | DetectFingerprintOverlaps | AnalyzeFingerprintOverlaps, DetectCrossSourceOverlaps (after wait_for_queue_drain) | FingerprintOverlap | FingerprintOverlap (stale) |
 | DetectDuplicateInodes | — | DuplicateInode | DuplicateInode (stale) |
 | DetectMissingTags | — | MissingTag, MissingAlbumSingleSignal | MissingTag (via hash-based reconciliation), MissingAlbumSingleSignal (via hash-based reconciliation). Files with ALBUM missing but ARTIST+TITLE present are routed to MissingAlbumSingleSignal (keyed by lowercased artist) instead of MissingTag. Checks ExpectedMissingTag to suppress known-acceptable missing-album inodes |
@@ -135,6 +136,7 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectDiscExtractions | — | DiscExtraction | DiscExtraction (via hash-based aggregate reconciliation). Pass 1: scans ALBUM tags from corpus_tags and inbox_tags for `,?\s*disc\s+(\d+)\s*$` pattern. Pass 2: scans TRACKNUMBER tags for `^([A-Za-z]+)(\d+)$` prefix pattern, groups by release context (album+album_artist), only emits if group has ≥2 files |
 | DeriveExternalMatches | — | ExternalMatch | ExternalMatch (via hash-based corpus reconciliation). For each corpus inode with AcoustID matches, parses stored raw response JSON, compares recording title/artist/album against corpus tags (raw string equality), classifies as ExactMatch/ContentDiff/MetadataOnly. Triggered by EXTERNAL, TAGS, or FILES scope |
 | DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (via hash-based aggregate reconciliation). Skips source pairs with an ExpectedOverlap signal (operator whitelist) |
+| IndexImageFile | — | — | — | Dirty-inode computation spawned by ScheduleContentAnalysis (FILES scope). For each dirty inode in "index_image_file": determines image format from file extension, infers role from filename (cover_front/cover_back/other using COVER_FRONT_NAMES/COVER_BACK_NAMES constants), reads dimensions via image_dimensions(), writes to image_info table via UpsertImageInfo DbWriteOp. Clears dirty inodes after processing |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (via hash-based aggregate reconciliation). Uses inode-based signal lookup (signal.inode + metadata path). |
 | DetectReleaseOverlaps | — | ReleaseOverlap | ReleaseOverlap (via hash-based aggregate reconciliation). Groups healthy corpus files by album directory (parent of deploy path), partitions by (source_dir, release_dir). Only emits for cross-source overlaps (2+ configured sources targeting the same album directory). Intra-source overlaps are skipped. |
 | DeriveDeployHealthSignals | — | LibraryLeftover, LibraryStale | LibraryLeftover, LibraryStale. Masks stale-conflicts: if a stale file's expected path is already occupied by a different inode, no stale signal is emitted (the LibraryMove would always fail). |

@@ -21,6 +21,9 @@ use super::types::ComputationWitness;
 // File Type Detection
 // ============================================================================
 
+/// Image file extensions we recognise.
+pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp"];
+
 /// Check if a filename is a macOS resource fork (AppleDouble) file.
 ///
 /// These are metadata files created by macOS on non-HFS+ filesystems (NFS, SMB, etc.)
@@ -44,6 +47,20 @@ pub(super) fn is_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+/// Check if path has an image file extension.
+///
+/// Filters out macOS resource fork files (`._*`).
+pub(super) fn is_image_file(path: &Path) -> bool {
+    if is_macos_resource_fork(path) {
+        return false;
+    }
+
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
         .unwrap_or(false)
 }
 

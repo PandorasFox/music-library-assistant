@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
-    enumerate_all_directories, extract_mtime, is_audio_file,
+    enumerate_all_directories, extract_mtime, is_audio_file, is_image_file,
     ensure_typed_signal,
     drop_stale_corpus_signal,
 };
@@ -301,6 +301,44 @@ pub fn execute_scan_corpus_directory(
         }
     }
 
+    // =====================================================================
+    // Image file discovery (corpus zone only)
+    // =====================================================================
+    // Register sidecar image files in the files table and mark them dirty
+    // for IndexImageFile. Do NOT emit FileInCorpusSignal — that would
+    // contaminate the audio indexing pipeline.
+    if file_zone == Zone::Corpus {
+        let image_state = collect_directory_image_files(directory);
+        for (img_inode, img_path, img_mtime_s, img_mtime_ns, img_file_size) in &image_state {
+            let img_relative = match resolver.to_relative(img_path) {
+                Some(rel) => rel,
+                None => continue,
+            };
+            let img_relative_str = img_relative.to_string_lossy().to_string();
+
+            // Track as observed so MissingFileSignal is not emitted for it
+            observed_corpus_inodes.insert(*img_inode, img_relative_str.clone());
+
+            // Register in files table (zone='corpus', is_dir=0)
+            sender.index_image_file(
+                &img_relative_str,
+                zone,
+                *img_inode,
+                *img_mtime_s,
+                *img_mtime_ns,
+                *img_file_size,
+                witness,
+            );
+
+            // Mark dirty for IndexImageFile computation
+            sender.mark_dirty_inodes(
+                vec![*img_inode],
+                "index_image_file",
+                witness,
+            );
+        }
+    }
+
     Result::success_with_observations(
         computation,
         start.elapsed().as_millis() as u64,
@@ -333,6 +371,38 @@ pub fn collect_directory_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64)> {
                 let mtime = extract_mtime(&metadata);
 
                 disk_state.push((inode, path, mtime.0, mtime.1));
+            }
+        }
+    }
+
+    disk_state
+}
+
+/// Collect image files directly in a directory (non-recursive).
+///
+/// Parallel to `collect_directory_files` but for image files.
+pub fn collect_directory_image_files(dir: &Path) -> Vec<(i64, PathBuf, i64, i64, i64)> {
+    let mut disk_state = Vec::new();
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return disk_state,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        if path.is_dir() || path.is_symlink() {
+            continue;
+        }
+
+        if is_image_file(&path) {
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                let inode = metadata.ino() as i64;
+                let mtime = extract_mtime(&metadata);
+                let file_size = metadata.len() as i64;
+
+                disk_state.push((inode, path, mtime.0, mtime.1, file_size));
             }
         }
     }

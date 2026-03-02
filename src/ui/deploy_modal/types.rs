@@ -6,6 +6,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::config::SidecarDeployMode;
+use crate::corpus::deploy::deploy_album_directory;
 use crate::meta::views::{ConflictGroup, DeploySignalFile, LeftoverSignalFile, StaleSignalFile};
 use crate::db::ReadOnlyDb;
 use anyhow::Result;
@@ -32,6 +34,27 @@ pub struct LibrarySummary {
     pub replaced_count: usize,
 }
 
+/// A sidecar image file to deploy alongside audio files.
+#[derive(Debug, Clone)]
+pub struct SidecarDeployEntry {
+    /// Relative corpus path to the image file
+    pub corpus_image_path: String,
+    /// Target library name
+    pub library_name: String,
+    /// Album directory within the library (e.g. "Artist/Album")
+    pub library_album_dir: String,
+    /// Original filename (e.g. "cover.jpg")
+    pub filename: String,
+    /// Image format (e.g. "jpeg", "png")
+    pub format: String,
+    /// Image width in pixels
+    pub width: u32,
+    /// Image height in pixels
+    pub height: u32,
+    /// Image role (e.g. "cover_front", "cover_back", "other")
+    pub role: String,
+}
+
 /// Cached data for the deploy modal.
 ///
 /// Loaded once when the modal opens, contains all signal lists.
@@ -56,6 +79,8 @@ pub struct DeployModalData {
     pub per_library: Vec<LibrarySummary>,
     /// Total leftovers that will be replaced by new deployments
     pub replaced_count: usize,
+    /// Sidecar images to deploy alongside audio files
+    pub sidecars: Vec<SidecarDeployEntry>,
 }
 
 impl DeployModalData {
@@ -83,9 +108,12 @@ impl DeployModalData {
             }
         }
 
+        // Compute sidecar images to deploy alongside new audio files
+        let sidecars = Self::compute_sidecars(&new, read_db, config);
+
         crate::logging::log_general(format!(
-            "[UI] DeployModalData::load: healthy={}, new={}, conflicts={}, leftover={}, stale={}",
-            healthy.len(), new.len(), conflicts.len(), leftover.len(), stale.len(),
+            "[UI] DeployModalData::load: healthy={}, new={}, conflicts={}, leftover={}, stale={}, sidecars={}",
+            healthy.len(), new.len(), conflicts.len(), leftover.len(), stale.len(), sidecars.len(),
         ));
 
         // Aggregate new files by directory (using corpus_path)
@@ -124,6 +152,7 @@ impl DeployModalData {
             stale,
             per_library,
             replaced_count,
+            sidecars,
         })
     }
 
@@ -179,6 +208,94 @@ impl DeployModalData {
         let mut result: Vec<_> = libs.into_values().collect();
         result.sort_by(|a, b| a.library_name.cmp(&b.library_name));
         result
+    }
+
+    /// Compute sidecar images to deploy alongside new audio files.
+    ///
+    /// Groups new files by corpus directory, queries image_info for each,
+    /// applies SidecarDeployMode filter, and deduplicates by target path.
+    fn compute_sidecars(
+        new_files: &[DeploySignalFile],
+        read_db: &ReadOnlyDb<'_>,
+        config: Option<&crate::config::Config>,
+    ) -> Vec<SidecarDeployEntry> {
+        let cfg = match config {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+
+        let mode = cfg.opinions.album_art.sidecar_deploy_mode;
+        if mode == SidecarDeployMode::Disabled {
+            return Vec::new();
+        }
+
+        // Group new files by (corpus_parent_dir, library_name, library_album_dir)
+        // We need the library album dir from the deploy path
+        let mut dir_targets: HashMap<String, (String, String)> = HashMap::new();
+        for file in new_files {
+            if file.library_name.is_empty() || file.deploy_path.is_empty() {
+                continue;
+            }
+            let corpus_dir = Path::new(&file.corpus_path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let album_dir = deploy_album_directory(&file.deploy_path);
+            dir_targets.entry(corpus_dir)
+                .or_insert_with(|| (file.library_name.clone(), album_dir));
+        }
+
+        // For each corpus directory, query image files and build sidecar entries
+        let mut seen: HashSet<(String, String, String)> = HashSet::new(); // (library, album_dir, filename)
+        let mut sidecars = Vec::new();
+
+        for (corpus_dir, (library_name, album_dir)) in &dir_targets {
+            let images = match read_db.get_corpus_images_in_directory(corpus_dir) {
+                Ok(imgs) => imgs,
+                Err(_) => continue,
+            };
+
+            for img in &images {
+                // Apply mode filter
+                match mode {
+                    SidecarDeployMode::PrimaryCover => {
+                        if img.role != "cover_front" {
+                            continue;
+                        }
+                    }
+                    SidecarDeployMode::All => {} // accept all
+                    SidecarDeployMode::Disabled => unreachable!(),
+                }
+
+                let filename = Path::new(&img.path)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                if filename.is_empty() {
+                    continue;
+                }
+
+                // Deduplicate by (library, album_dir, filename)
+                let key = (library_name.clone(), album_dir.clone(), filename.clone());
+                if !seen.insert(key) {
+                    continue;
+                }
+
+                sidecars.push(SidecarDeployEntry {
+                    corpus_image_path: img.path.clone(),
+                    library_name: library_name.clone(),
+                    library_album_dir: album_dir.clone(),
+                    filename,
+                    format: img.format.clone(),
+                    width: img.width,
+                    height: img.height,
+                    role: img.role.clone(),
+                });
+            }
+        }
+
+        sidecars
     }
 
     /// Aggregate paths by their parent directory, sorted by count descending.

@@ -463,6 +463,25 @@ impl App {
             embed_album_art_modal::load_review_directories(&db).unwrap_or_default()
         }).recv();
 
+        // Preload all art images upfront to avoid per-frame jank during navigation
+        {
+            use crate::corpus::paths;
+            use crate::ui::widgets::PreloadEntry;
+
+            let resolver = paths::get_resolver();
+            let mut preload = Vec::new();
+            for dir in &directories {
+                preload.push(PreloadEntry::Sidecar(
+                    std::path::PathBuf::from(&dir.sidecar.path),
+                ));
+                for entry in &dir.upgrade_entries {
+                    let audio_path = resolver.resolve(std::path::Path::new(&entry.path));
+                    preload.push(PreloadEntry::Embedded(audio_path));
+                }
+            }
+            self.art_cache.preload_set(preload, &mut self.art_picker);
+        }
+
         let state = embed_album_art_modal::AlbumArtReviewState::new(directories);
         self.view = ActiveView::EmbedAlbumArtResolution(state);
     }

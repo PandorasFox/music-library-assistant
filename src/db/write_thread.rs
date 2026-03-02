@@ -336,6 +336,26 @@ enum DbWriteOp {
         mtime_nanos: i64,
     },
 
+    /// Index an image file entry in the files table during scanning.
+    /// Like IndexDirectory but for image files (is_dir=0).
+    IndexImageFile {
+        path: String,
+        zone: String,
+        inode: i64,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        file_size: i64,
+    },
+
+    /// Upsert image metadata into the image_info table.
+    UpsertImageInfo {
+        inode: i64,
+        format: String,
+        width: u32,
+        height: u32,
+        role: String,
+    },
+
     /// Clear tag mismatches for a track (after resolution).
     ClearTagMismatchesForTrack {
         path: String,
@@ -943,6 +963,50 @@ impl SignalWriteSender {
             inode,
             mtime_secs,
             mtime_nanos,
+        });
+    }
+
+    /// Index an image file entry in the files table.
+    ///
+    /// Used during corpus scanning to register sidecar image files.
+    pub fn index_image_file(
+        &self,
+        path: &str,
+        zone: &str,
+        inode: i64,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        file_size: i64,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::IndexImageFile {
+            path: path.to_string(),
+            zone: zone.to_string(),
+            inode,
+            mtime_secs,
+            mtime_nanos,
+            file_size,
+        });
+    }
+
+    /// Upsert image metadata into the image_info table.
+    pub fn upsert_image_info(
+        &self,
+        inode: i64,
+        format: &str,
+        width: u32,
+        height: u32,
+        role: &str,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::UpsertImageInfo {
+            inode,
+            format: format.to_string(),
+            width,
+            height,
+            role: role.to_string(),
         });
     }
 
@@ -1612,6 +1676,31 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         } => {
             with_retry("index_directory", path, || {
                 execute_index_directory(db, path, zone, *inode, *mtime_secs, *mtime_nanos)
+            });
+        }
+
+        DbWriteOp::IndexImageFile {
+            path,
+            zone,
+            inode,
+            mtime_secs,
+            mtime_nanos,
+            file_size,
+        } => {
+            with_retry("index_image_file", path, || {
+                execute_index_image_file(db, path, zone, *inode, *mtime_secs, *mtime_nanos, *file_size)
+            });
+        }
+
+        DbWriteOp::UpsertImageInfo {
+            inode,
+            format,
+            width,
+            height,
+            role,
+        } => {
+            with_retry("upsert_image_info", format, || {
+                execute_upsert_image_info(db, *inode, format, *width, *height, role)
             });
         }
 
@@ -2287,6 +2376,60 @@ fn execute_index_directory(
             mtime_nanos,
             scanned_at,
         ],
+    )?;
+
+    Ok(())
+}
+
+/// Execute IndexImageFile: insert image file entry in files table.
+fn execute_index_image_file(
+    db: &Database,
+    path: &str,
+    zone: &str,
+    inode: i64,
+    mtime_secs: i64,
+    mtime_nanos: i64,
+    file_size: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let scanned_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    db.conn().execute(
+        r#"
+        INSERT INTO files (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
+        VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)
+        ON CONFLICT(inode, zone, path) DO UPDATE SET
+            mtime_secs = excluded.mtime_secs,
+            mtime_nanos = excluded.mtime_nanos,
+            file_size = excluded.file_size,
+            scanned_at = excluded.scanned_at
+        "#,
+        params![inode, zone, path, mtime_secs, mtime_nanos, file_size, scanned_at],
+    )?;
+
+    Ok(())
+}
+
+/// Execute UpsertImageInfo: insert or update image metadata.
+fn execute_upsert_image_info(
+    db: &Database,
+    inode: i64,
+    format: &str,
+    width: u32,
+    height: u32,
+    role: &str,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        "INSERT OR REPLACE INTO image_info (inode, format, width, height, role)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![inode, format, width, height, role],
     )?;
 
     Ok(())

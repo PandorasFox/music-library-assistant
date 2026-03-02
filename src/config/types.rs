@@ -328,6 +328,18 @@ impl Default for DiscExtractionOpinions {
     }
 }
 
+/// Controls whether sidecar images are deployed alongside audio files.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum SidecarDeployMode {
+    /// Do not deploy sidecar images.
+    Disabled,
+    /// Deploy only the primary cover image (cover_front role) per album directory.
+    #[default]
+    PrimaryCover,
+    /// Deploy all sidecar images found alongside audio files.
+    All,
+}
+
 /// Album art embedding and upgrade configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlbumArtOpinions {
@@ -341,6 +353,9 @@ pub struct AlbumArtOpinions {
     /// upgradeable. Art at or above this threshold in both dimensions is "good enough."
     /// Default: 700. Set to 0 to disable (all upgradeable art is reported).
     pub min_acceptable_resolution: u32,
+    /// Whether to deploy sidecar cover images alongside audio files to libraries.
+    /// Default: PrimaryCover (deploy only the primary cover image).
+    pub sidecar_deploy_mode: SidecarDeployMode,
 }
 
 impl Default for AlbumArtOpinions {
@@ -349,6 +364,7 @@ impl Default for AlbumArtOpinions {
             tag_padding_bytes: 4096,
             preserve_other_pictures_on_upgrade: false,
             min_acceptable_resolution: 700,
+            sidecar_deploy_mode: SidecarDeployMode::default(),
         }
     }
 }

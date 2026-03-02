@@ -393,7 +393,7 @@ impl CorpusBrowserVariant {
         match action {
             InputAction::Confirm => {
                 if let Some(entry) = nav.current_entry() {
-                    if entry.is_directory {
+                    if entry.is_directory() {
                         TreeBrowserAction::EditDirectory(entry.path.clone())
                     } else {
                         TreeBrowserAction::EditFile(entry.path.clone())
@@ -405,7 +405,7 @@ impl CorpusBrowserVariant {
             // C opens dir config panel on any corpus directory
             InputAction::Char('C') => {
                 if let Some(entry) = nav.current_entry() {
-                    if entry.is_directory && entry.path.starts_with(&self.corpus_dir) {
+                    if entry.is_directory() && entry.path.starts_with(&self.corpus_dir) {
                         return TreeBrowserAction::OpenDirConfig(entry.path.clone());
                     }
                 }

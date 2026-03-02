@@ -239,7 +239,7 @@ impl InboxOrganizeState {
                         // The synthetic entry's path is the parent directory
                         self.selected_dest = entry.path.clone();
                         self.phase = OrganizePhase::NewDirectoryInput;
-                    } else if entry.is_directory {
+                    } else if entry.is_directory() {
                         // Select this directory as destination
                         self.selected_dest = entry.path.clone();
                         self.popup_selection = EmplaceOption::EmplaceDirectory;

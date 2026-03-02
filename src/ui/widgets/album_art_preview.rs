@@ -12,6 +12,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::meta::computations::analysis::album_art::{COVER_FRONT_NAMES, COVER_BACK_NAMES};
+
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -94,6 +96,8 @@ pub struct CachedArtProtocol {
     pub height: u32,
     /// Format string (e.g., "png", "jpeg").
     pub format: String,
+    /// Role of this image (e.g., "cover_front", "cover_back", "other").
+    pub role: String,
 }
 
 /// Cache key distinguishing sidecar image files from embedded audio art.
@@ -102,6 +106,14 @@ pub enum ArtCacheKey {
     /// Sidecar image file on disk (e.g., cover.jpg).
     Sidecar(PathBuf),
     /// Embedded art extracted from an audio file.
+    Embedded(PathBuf),
+}
+
+/// Entry type for batch preloading into the art cache.
+pub enum PreloadEntry {
+    /// Sidecar image file on disk.
+    Sidecar(PathBuf),
+    /// Embedded art from an audio file.
     Embedded(PathBuf),
 }
 
@@ -160,6 +172,26 @@ impl AlbumArtCache {
         self.entries.retain(|k, _| keys.contains(k));
     }
 
+    /// Pre-populate the cache with a set of images.
+    /// Call at modal init time to avoid per-frame jank during navigation.
+    pub fn preload_set(&mut self, entries: Vec<PreloadEntry>, picker: &mut AlbumArtPicker) {
+        for entry in entries {
+            match entry {
+                PreloadEntry::Sidecar(path) => {
+                    let key = ArtCacheKey::Sidecar(path.clone());
+                    self.entries
+                        .entry(key)
+                        .or_insert_with(|| load_sidecar_image(&path, picker));
+                }
+                PreloadEntry::Embedded(path) => {
+                    let key = ArtCacheKey::Embedded(path.clone());
+                    self.entries
+                        .entry(key)
+                        .or_insert_with(|| load_embedded_art(&path, picker));
+                }
+            }
+        }
+    }
 }
 
 /// Load a sidecar image from disk and create a protocol for it.
@@ -176,6 +208,19 @@ fn load_sidecar_image(path: &Path, picker: &mut AlbumArtPicker) -> CachedArtProt
             })
         });
 
+    // Derive role from filename stem
+    let stem = path.file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    let role = if COVER_FRONT_NAMES.iter().any(|&n| stem == n) {
+        "cover_front"
+    } else if COVER_BACK_NAMES.iter().any(|&n| stem == n) {
+        "cover_back"
+    } else {
+        "other"
+    }.to_string();
+
     match result {
         Ok((img, format)) => {
             let width = img.width();
@@ -187,6 +232,7 @@ fn load_sidecar_image(path: &Path, picker: &mut AlbumArtPicker) -> CachedArtProt
                 width,
                 height,
                 format,
+                role,
             }
         }
         Err(_) => CachedArtProtocol {
@@ -195,6 +241,7 @@ fn load_sidecar_image(path: &Path, picker: &mut AlbumArtPicker) -> CachedArtProt
             width: 0,
             height: 0,
             format: String::new(),
+            role,
         },
     }
 }
@@ -210,6 +257,7 @@ fn load_embedded_art(audio_path: &Path, picker: &mut AlbumArtPicker) -> CachedAr
         width: 0,
         height: 0,
         format: String::new(),
+        role: String::new(),
     };
 
     // Open and read the audio file's tags
@@ -250,7 +298,7 @@ fn load_embedded_art(audio_path: &Path, picker: &mut AlbumArtPicker) -> CachedAr
         Err(_) => return empty,
     };
 
-    // Extract dimensions and format
+    // Extract dimensions, format, and role
     let width = img.width();
     let height = img.height();
     let format = match picture.mime_type() {
@@ -261,6 +309,11 @@ fn load_embedded_art(audio_path: &Path, picker: &mut AlbumArtPicker) -> CachedAr
         Some(lofty::picture::MimeType::Tiff) => "tiff".to_string(),
         _ => "unknown".to_string(),
     };
+    let role = match picture.pic_type() {
+        lofty::picture::PictureType::CoverFront => "cover_front",
+        lofty::picture::PictureType::CoverBack => "cover_back",
+        _ => "other",
+    }.to_string();
 
     let protocol = picker.new_protocol(img);
 
@@ -270,6 +323,7 @@ fn load_embedded_art(audio_path: &Path, picker: &mut AlbumArtPicker) -> CachedAr
         width,
         height,
         format,
+        role,
     }
 }
 

@@ -19,7 +19,7 @@ use crate::ui::widgets::{
     render_album_art_preview, render_no_art_placeholder,
 };
 
-use super::entry::{DeployMarker, TreeEntry};
+use super::entry::{DeployMarker, EntryKind, TreeEntry};
 use super::navigator::TreeNavigator;
 use super::variants::BrowserVariant;
 
@@ -65,7 +65,7 @@ fn render_corpus_browser(
     // - Config panel NOT open
     // - Selected entry is a file (not directory)
     let show_art = v.config_panel.is_none()
-        && nav.current_entry().is_some_and(|e| !e.is_directory);
+        && nav.current_entry().is_some_and(|e| e.is_file());
 
     // Check if config panel is open for horizontal split
     if v.config_panel.is_some() {
@@ -92,8 +92,10 @@ fn render_corpus_browser(
         render_corpus_tree(f, h_chunks[0], nav, variant, &pending_edit_paths, &corpus_dir);
 
         // Render art preview for selected file
-        let selected_path = nav.current_entry().map(|e| e.path.clone());
-        render_file_art_preview(f, h_chunks[1], selected_path.as_deref(), art_picker, art_cache);
+        let selected_entry = nav.current_entry();
+        let selected_path = selected_entry.map(|e| e.path.clone());
+        let is_image = selected_entry.is_some_and(|e| e.kind == EntryKind::ImageFile);
+        render_file_art_preview(f, h_chunks[1], selected_path.as_deref(), is_image, art_picker, art_cache);
     } else {
         render_corpus_tree(f, content_area, nav, variant, &pending_edit_paths, &corpus_dir);
     }
@@ -107,6 +109,7 @@ fn render_file_art_preview(
     f: &mut Frame,
     area: Rect,
     file_path: Option<&Path>,
+    is_image: bool,
     art_picker: &mut AlbumArtPicker,
     art_cache: &mut AlbumArtCache,
 ) {
@@ -129,35 +132,46 @@ fn render_file_art_preview(
         }
     };
 
-    // Evict stale cache entries
-    let key = ArtCacheKey::Embedded(path.to_path_buf());
+    // Evict stale cache entries — use appropriate key type
+    let key = if is_image {
+        ArtCacheKey::Sidecar(path.to_path_buf())
+    } else {
+        ArtCacheKey::Embedded(path.to_path_buf())
+    };
     art_cache.retain_only_keys(&[key]);
 
-    let cached = art_cache.get_or_load_embedded(path, art_picker);
+    let cached = if is_image {
+        art_cache.get_or_load(path, art_picker)
+    } else {
+        art_cache.get_or_load_embedded(path, art_picker)
+    };
 
     if cached.width == 0 {
         render_no_art_placeholder(f, inner);
     } else {
         // Split into image + metadata
         if inner.height > 3 {
+            let meta_height = if !cached.role.is_empty() && cached.role != "other" { 3 } else { 2 };
             let split = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(2),
-                    Constraint::Length(2), // filename + dimensions
+                    Constraint::Length(meta_height),
                 ])
                 .split(inner);
 
             render_album_art_preview(f, split[0], cached);
 
-            // Metadata lines: filename and dimensions
+            // Metadata lines: filename, dimensions, and optional role
             let filename = cached.path.file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            let dim_info = format!(
-                "{}x{} {}",
-                cached.width, cached.height, cached.format.to_uppercase()
-            );
+            let dim_info = if !cached.role.is_empty() && cached.role != "other" {
+                let role_label = if cached.role == "cover_front" { "front" } else { "back" };
+                format!("{}x{} {} [{}]", cached.width, cached.height, cached.format.to_uppercase(), role_label)
+            } else {
+                format!("{}x{} {}", cached.width, cached.height, cached.format.to_uppercase())
+            };
             let lines = vec![
                 Line::from(Span::styled(filename, Style::default().fg(Color::DarkGray))),
                 Line::from(Span::styled(dim_info, Style::default().fg(Color::DarkGray))),
@@ -244,7 +258,7 @@ fn render_tree_pane(
         .skip(scroll)
         .take(inner_height)
         .map(|(idx, entry)| {
-            let is_pending = if entry.is_directory && !pending_edit_paths.is_empty() {
+            let is_pending = if entry.is_directory() && !pending_edit_paths.is_empty() {
                 // Compute relative path from corpus dir to check against pending edits
                 entry.path.strip_prefix(corpus_dir)
                     .ok()
@@ -282,9 +296,9 @@ fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &Browse
         // Standard tree browser hints
         let cursor_entry = nav.current_entry();
         let on_corpus_dir = cursor_entry
-            .map(|e| e.is_directory && e.path.starts_with(v.corpus_dir()))
+            .map(|e| e.is_directory() && e.path.starts_with(v.corpus_dir()))
             .unwrap_or(false);
-        let on_dir = cursor_entry.map(|e| e.is_directory).unwrap_or(false);
+        let on_dir = cursor_entry.map(|e| e.is_directory()).unwrap_or(false);
 
         let mut spans = vec![
             control_colors::nav("^v"),
@@ -319,7 +333,7 @@ fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &Browse
 fn render_entry_line(entry: &TreeEntry, is_cursor: bool, is_pending_edit: bool) -> Line<'static> {
     let indent = "  ".repeat(entry.depth);
 
-    let expand_indicator = if entry.is_directory {
+    let expand_indicator = if entry.is_directory() {
         if entry.is_expanded {
             "▼ "
         } else if entry.has_children {
@@ -331,10 +345,19 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool, is_pending_edit: bool) 
         "  "
     };
 
-    let icon = if entry.is_directory { "" } else { "♪ " };
+    let icon = match entry.kind {
+        EntryKind::Directory => "",
+        EntryKind::AudioFile => "♪ ",
+        EntryKind::ImageFile => "\u{1f5bc}\u{fe0e} ", // 🖼︎ with text presentation selector
+    };
 
-    let count_suffix = if entry.is_directory && entry.item_count > 0 {
-        format!("  ({} tracks)", entry.item_count)
+    let count_suffix = if entry.is_directory() {
+        match (entry.item_count, entry.image_count) {
+            (0, 0) => String::new(),
+            (t, 0) => format!("  ({} tracks)", t),
+            (0, i) => format!("  ({} images)", i),
+            (t, i) => format!("  ({} tracks, {} images)", t, i),
+        }
     } else {
         String::new()
     };
@@ -349,7 +372,7 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool, is_pending_edit: bool) 
         CURSOR_STYLE
     } else if entry.is_dimmed {
         Style::default().fg(Color::DarkGray)
-    } else if entry.is_directory {
+    } else if entry.is_directory() {
         Style::default().fg(Color::Blue)
     } else {
         Style::default().fg(Color::White)

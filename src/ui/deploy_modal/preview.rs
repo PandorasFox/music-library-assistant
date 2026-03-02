@@ -15,8 +15,10 @@ use ratatui::{
     Frame,
 };
 
+use std::path::Path;
+
 use super::types::DeployModalData;
-use crate::ui::widgets::{DeployTab, SignalInfo, SignalInfoPane, TabbedSignalList};
+use crate::ui::widgets::{DeployTab, SidecarSummary, SignalInfo, SignalInfoPane, TabbedSignalList};
 
 /// State for the deployment preview modal.
 #[derive(Debug)]
@@ -109,7 +111,11 @@ impl DeploymentPreviewState {
         // Build summary line
         let mut summary_parts: Vec<String> = Vec::new();
         if !data.new.is_empty() {
-            summary_parts.push(format!("{} new", data.new.len()));
+            if data.sidecars.is_empty() {
+                summary_parts.push(format!("{} new", data.new.len()));
+            } else {
+                summary_parts.push(format!("{} new + {} covers", data.new.len(), data.sidecars.len()));
+            }
         }
         if !data.leftover.is_empty() {
             if data.replaced_count > 0 {
@@ -248,9 +254,29 @@ impl DeploymentPreviewState {
                 })
             }
             DeployTab::New => {
-                self.cached_data.new_by_dir.get(scroll).map(|dir| SignalInfo::NewDirectory {
-                    directory: dir.directory.clone(),
-                    file_count: dir.count,
+                self.cached_data.new_by_dir.get(scroll).map(|dir| {
+                    // Find sidecars matching this directory
+                    let sidecars: Vec<SidecarSummary> = self.cached_data.sidecars.iter()
+                        .filter(|s| {
+                            Path::new(&s.corpus_image_path)
+                                .parent()
+                                .map(|p| p.to_string_lossy())
+                                .is_some_and(|p| p == dir.directory)
+                        })
+                        .map(|s| SidecarSummary {
+                            filename: s.filename.clone(),
+                            format: s.format.clone(),
+                            width: s.width,
+                            height: s.height,
+                            role: s.role.clone(),
+                        })
+                        .collect();
+
+                    SignalInfo::NewDirectory {
+                        directory: dir.directory.clone(),
+                        file_count: dir.count,
+                        sidecars,
+                    }
                 })
             }
             DeployTab::Conflicts => {

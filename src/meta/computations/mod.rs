@@ -39,7 +39,7 @@
 mod types;
 pub mod traits;
 mod stats;
-mod helpers;
+pub(crate) mod helpers;
 pub mod observation;
 pub mod derivation;
 pub mod analysis;

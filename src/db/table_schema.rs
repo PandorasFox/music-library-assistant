@@ -169,6 +169,21 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
+        name: "image_info",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS image_info (
+            inode INTEGER PRIMARY KEY,
+            format TEXT NOT NULL,
+            width INTEGER NOT NULL DEFAULT 0,
+            height INTEGER NOT NULL DEFAULT 0,
+            role TEXT NOT NULL DEFAULT 'other'
+        )",
+        index_sql: &[
+            "CREATE INDEX IF NOT EXISTS idx_image_info_role ON image_info(role)",
+        ],
+    });
+
+    tables.push(TableEntry {
         name: "dirty_inodes",
         kind: TableKind::Core,
         create_sql: "CREATE TABLE IF NOT EXISTS dirty_inodes (

@@ -143,6 +143,17 @@ impl App {
             }
         }
 
+        // 5. Sidecar images: hard link alongside audio deploys
+        for sidecar in &data.sidecars {
+            let source = resolver.resolve(std::path::Path::new(&sidecar.corpus_image_path));
+            let dest_rel = std::path::Path::new("libraries")
+                .join(&sidecar.library_name)
+                .join(&sidecar.library_album_dir)
+                .join(&sidecar.filename);
+            let destination = resolver.resolve(&dest_rel);
+            mutations.push(Mutation::HardLink(HardLinkMutation { source, destination }));
+        }
+
         if skipped_no_library > 0 {
             crate::logging::log_error(format!(
                 "[DEPLOY] {} new files skipped: no library_name (source dir without libraries?)",

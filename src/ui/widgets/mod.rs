@@ -45,7 +45,7 @@ pub use titlebar::{LateralView, UnifiedTitleBar};
 pub use text_input::TextInputState;
 
 // Deploy signal widgets
-pub use signal_info_pane::{SignalInfo, SignalInfoPane};
+pub use signal_info_pane::{SidecarSummary, SignalInfo, SignalInfoPane};
 pub use tabbed_signal_list::{DeployTab, TabbedSignalList};
 
 // Path display
@@ -53,7 +53,7 @@ pub use path_display::PathField;
 
 // Album art preview
 pub use album_art_preview::{
-    AlbumArtCache, AlbumArtPicker, ArtCacheKey,
+    AlbumArtCache, AlbumArtPicker, ArtCacheKey, PreloadEntry,
     render_album_art_preview, render_no_art_placeholder, square_height,
 };
 

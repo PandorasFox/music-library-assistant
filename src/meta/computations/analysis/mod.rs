@@ -38,8 +38,9 @@ mod duplicates;
 mod tags;
 mod deploy;
 mod formats;
-mod album_art;
+pub(crate) mod album_art;
 mod album_art_info;
+mod image_index;
 mod inbox_matches;
 mod inbox_tags;
 mod path_schema;
@@ -57,6 +58,7 @@ pub use deploy::*;
 pub use formats::*;
 pub use album_art::*;
 pub use album_art_info::*;
+pub use image_index::*;
 pub use inbox_matches::*;
 pub use inbox_tags::*;
 pub use path_schema::*;
@@ -238,6 +240,12 @@ pub enum Computation {
     SeedCompoundTagDirtyInodes {
         new_separators: Vec<(String, String)>,
     },
+
+    /// Index image files discovered by the scanner.
+    ///
+    /// Dirty-inode computation: reads image dimensions and determines role
+    /// from filename, writing metadata to the `image_info` table.
+    IndexImageFile,
 }
 
 impl Computation {
@@ -270,6 +278,7 @@ impl Computation {
             Computation::DeriveExternalMatches => "Deriving external match signals",
             Computation::BackfillAlbumArtInfo => "Backfilling album art metadata",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
+            Computation::IndexImageFile => "Indexing image files",
         }
     }
 
@@ -353,6 +362,9 @@ impl Computation {
             }
             Computation::SeedCompoundTagDirtyInodes { ref new_separators } => {
                 execute_seed_compound_tag_dirty_inodes(ctx.read_db, new_separators, ctx.witness, ctx.start)
+            }
+            Computation::IndexImageFile => {
+                execute_index_image_file(ctx.read_db, ctx.witness, ctx.start)
             }
         }
     }

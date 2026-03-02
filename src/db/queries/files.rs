@@ -937,4 +937,50 @@ impl Database {
 
         Ok(inodes)
     }
+
+    // =========================================================================
+    // Image File Queries
+    // =========================================================================
+
+    /// Get corpus image files in a directory (joins files + image_info).
+    ///
+    /// Returns (path, format, width, height, role) for image files
+    /// in the given directory prefix.
+    pub fn get_corpus_images_in_directory(&self, dir_path: &str) -> Result<Vec<ImageFileInfo>> {
+        let pattern = super::dir_like_pattern_str(dir_path);
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT f.path, i.format, i.width, i.height, i.role
+             FROM files f
+             JOIN image_info i ON f.inode = i.inode
+             WHERE f.zone = 'corpus' AND f.is_dir = 0
+             AND f.path LIKE ?1 ESCAPE '\\'",
+        )?;
+
+        let rows = stmt.query_map(params![pattern], |row| {
+            Ok(ImageFileInfo {
+                path: row.get(0)?,
+                format: row.get(1)?,
+                width: row.get(2)?,
+                height: row.get(3)?,
+                role: row.get(4)?,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+}
+
+/// Metadata for an image file in the corpus.
+#[derive(Debug, Clone)]
+pub struct ImageFileInfo {
+    pub path: String,
+    pub format: String,
+    pub width: u32,
+    pub height: u32,
+    pub role: String,
 }

@@ -4,6 +4,14 @@
 
 use std::path::PathBuf;
 
+/// The kind of entry in the tree browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    Directory,
+    AudioFile,
+    ImageFile,
+}
+
 /// Deploy marker for a tree entry, distinguishing source roots from inherited dirs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeployMarker {
@@ -27,14 +35,16 @@ pub struct TreeEntry {
     pub name: String,
     /// Depth in tree (0 = root level, 1 = first child, etc.)
     pub depth: usize,
-    /// Whether this is a directory (false = audio file)
-    pub is_directory: bool,
+    /// What kind of entry this is.
+    pub kind: EntryKind,
     /// Whether children are currently visible (directories only)
     pub is_expanded: bool,
     /// Whether this entry has expandable children
     pub has_children: bool,
     /// Count of audio files in this directory (non-recursive, directories only)
     pub item_count: usize,
+    /// Count of image files in this directory (non-recursive, directories only)
+    pub image_count: usize,
     /// Deploy marker: None, SourceRoot, or Inherited
     pub deploy_marker: DeployMarker,
     /// Whether this is a synthetic UI-only entry (e.g., "[+ new directory]")
@@ -56,26 +66,45 @@ impl TreeEntry {
             path,
             name,
             depth,
-            is_directory: true,
+            kind: EntryKind::Directory,
             is_expanded: false,
             has_children,
             item_count,
+            image_count: 0,
             deploy_marker: DeployMarker::None,
             is_synthetic: false,
             is_dimmed: false,
         }
     }
 
-    /// Create a new file entry.
-    pub fn file(path: PathBuf, name: String, depth: usize) -> Self {
+    /// Create a new audio file entry.
+    pub fn audio_file(path: PathBuf, name: String, depth: usize) -> Self {
         Self {
             path,
             name,
             depth,
-            is_directory: false,
+            kind: EntryKind::AudioFile,
             is_expanded: false,
             has_children: false,
             item_count: 0,
+            image_count: 0,
+            deploy_marker: DeployMarker::None,
+            is_synthetic: false,
+            is_dimmed: false,
+        }
+    }
+
+    /// Create a new image file entry.
+    pub fn image_file(path: PathBuf, name: String, depth: usize) -> Self {
+        Self {
+            path,
+            name,
+            depth,
+            kind: EntryKind::ImageFile,
+            is_expanded: false,
+            has_children: false,
+            item_count: 0,
+            image_count: 0,
             deploy_marker: DeployMarker::None,
             is_synthetic: false,
             is_dimmed: false,
@@ -88,13 +117,25 @@ impl TreeEntry {
             path: parent_path,
             name: "[+ new directory]".to_string(),
             depth,
-            is_directory: true,
+            kind: EntryKind::Directory,
             is_expanded: false,
             has_children: false,
             item_count: 0,
+            image_count: 0,
             deploy_marker: DeployMarker::None,
             is_synthetic: true,
             is_dimmed: false,
         }
     }
+
+    /// Whether this entry is a directory.
+    pub fn is_directory(&self) -> bool {
+        self.kind == EntryKind::Directory
+    }
+
+    /// Whether this entry is a file (audio or image).
+    pub fn is_file(&self) -> bool {
+        matches!(self.kind, EntryKind::AudioFile | EntryKind::ImageFile)
+    }
+
 }

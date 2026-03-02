@@ -199,7 +199,7 @@ fn run_directory_picker<B: Backend>(terminal: &mut Terminal<B>) -> Result<PathBu
                                     parent_path: entry.path.clone(),
                                     input: TextInputState::new(),
                                 });
-                            } else if entry.is_directory {
+                            } else if entry.is_directory() {
                                 // Select this directory as archive root
                                 return Ok(entry.path);
                             }
@@ -208,7 +208,7 @@ fn run_directory_picker<B: Backend>(terminal: &mut Terminal<B>) -> Result<PathBu
                     KeyCode::Char('n') | KeyCode::Char('N') => {
                         // Create new directory inside the currently selected directory
                         if let Some(entry) = state.navigator.current_entry().cloned() {
-                            if entry.is_directory && !entry.is_synthetic {
+                            if entry.is_directory() && !entry.is_synthetic {
                                 let parent = entry.path.clone();
                                 // Expand directory if collapsed
                                 if !entry.is_expanded {
@@ -374,7 +374,7 @@ fn render_tree(f: &mut ratatui::Frame, area: Rect, state: &mut DirectoryPickerSt
 fn render_picker_entry(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
     let indent = "  ".repeat(entry.depth);
 
-    let expand_indicator = if entry.is_directory && !entry.is_synthetic {
+    let expand_indicator = if entry.is_directory() && !entry.is_synthetic {
         if entry.has_children {
             if entry.is_expanded {
                 "\u{25bc} "

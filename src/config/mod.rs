@@ -22,7 +22,7 @@ pub use mm_utils::{
 // Re-export from submodules
 pub use types::{
     Config, Opinions, StartupView, InboxOrganizeGranularity,
-    SourceDir, SharedConfig, read_shared_config,
+    SourceDir, SharedConfig, read_shared_config, SidecarDeployMode,
 };
 pub use performance::{init_performance_config, get_worker_thread_count, get_db_cache_kb, is_timing_enabled};
 pub use dirs::{parse_dirs_kdl, write_dirs_to_disk};

@@ -16,7 +16,7 @@ use std::time::Instant;
 use crate::corpus::paths;
 use crate::corpus::tags::{self, PictureInfo};
 use crate::logging::log_general;
-use crate::meta::computations::helpers::{reconcile_aggregate_signals, ComputedAggregateSignal};
+use crate::meta::computations::helpers::{reconcile_aggregate_signals, ComputedAggregateSignal, IMAGE_EXTENSIONS};
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
     EmbeddableAlbumArtData, EmbeddableAlbumArtSignal, PictureRole, SidecarImage,
@@ -28,13 +28,10 @@ use crate::db::write_thread;
 use super::{Computation, Result};
 
 /// Sidecar image filenames that map to CoverFront, in priority order.
-const COVER_FRONT_NAMES: &[&str] = &["cover", "folder", "albumart", "album", "front"];
+pub(crate) const COVER_FRONT_NAMES: &[&str] = &["cover", "folder", "albumart", "album", "front"];
 
 /// Sidecar image filenames that map to CoverBack.
-const COVER_BACK_NAMES: &[&str] = &["back"];
-
-/// Image file extensions we recognise.
-const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp"];
+pub(crate) const COVER_BACK_NAMES: &[&str] = &["back"];
 
 /// Find all sidecar image files in a directory, ordered by priority.
 ///

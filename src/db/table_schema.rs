@@ -370,6 +370,13 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
+        name: "signal_sidecar_deploy_ready",
+        kind: TableKind::Computed,
+        create_sql: <SidecarDeployReadySignal as store::CorpusSignalStore>::TABLE_SQL,
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
         name: "signal_oob_tag_sync",
         kind: TableKind::Computed,
         create_sql: <OutOfBandTagSyncSignal as store::CorpusSignalStore>::TABLE_SQL,

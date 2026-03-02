@@ -942,63 +942,6 @@ impl Database {
     // Image File Queries
     // =========================================================================
 
-    /// Get all image files in a zone (extension-based, no image_info JOIN).
-    ///
-    /// Returns `(inode, path)` for files matching common image extensions.
-    /// Used to enumerate library images for the "already deployed" check
-    /// without requiring `image_info` metadata.
-    pub fn get_images_in_zone(&self, zone: Zone) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path FROM files
-             WHERE zone = ?1 AND is_dir = 0
-             AND (LOWER(path) LIKE '%.jpg'
-               OR LOWER(path) LIKE '%.jpeg'
-               OR LOWER(path) LIKE '%.png'
-               OR LOWER(path) LIKE '%.webp'
-               OR LOWER(path) LIKE '%.gif'
-               OR LOWER(path) LIKE '%.bmp')",
-        )?;
-
-        let rows = stmt.query_map(params![zone.as_str()], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
-    }
-
-    /// Get image files in a specific directory within a zone (extension-based, no image_info JOIN).
-    ///
-    /// Returns `(inode, path)` for files matching common image extensions
-    /// under the given directory prefix.
-    pub fn get_images_in_directory(&self, zone: Zone, dir_path: &str) -> Result<Vec<(i64, String)>> {
-        let pattern = super::dir_like_pattern_str(dir_path);
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path FROM files
-             WHERE zone = ?1 AND is_dir = 0
-             AND path LIKE ?2 ESCAPE '\\'
-             AND (LOWER(path) LIKE '%.jpg'
-               OR LOWER(path) LIKE '%.jpeg'
-               OR LOWER(path) LIKE '%.png'
-               OR LOWER(path) LIKE '%.webp'
-               OR LOWER(path) LIKE '%.gif'
-               OR LOWER(path) LIKE '%.bmp')",
-        )?;
-
-        let rows = stmt.query_map(params![zone.as_str(), pattern], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
-    }
-
     /// Get corpus image files in a directory (joins files + image_info).
     ///
     /// Returns (path, format, width, height, role) for image files

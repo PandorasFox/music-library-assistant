@@ -208,6 +208,33 @@ pub struct DeployedHealthySignal {
     pub library_path: String,
 }
 
+/// Corpus sidecar image file ready for deployment to a library.
+///
+/// Emitted by `DeriveCorpusDeployStatus` for image files in corpus directories
+/// that have deployed or deploy-ready audio, where the corresponding library
+/// directory does not yet contain the image.
+#[derive(Debug, Clone)]
+pub struct SidecarDeployReadySignal {
+    pub inode: i64,
+    /// Corpus image path
+    pub path: String,
+    /// Target deploy path (relative, no library prefix): "Artist/Album/cover.jpg"
+    pub deploy_path: String,
+    /// Target library name
+    pub library_name: String,
+    /// Image metadata stored as BLOB
+    pub data: SidecarDeployReadyData,
+}
+
+/// Serializable metadata for a sidecar deploy-ready signal.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SidecarDeployReadyData {
+    pub role: String,
+    pub format: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 // --- Signals with bincode BLOB data ---
 
 /// Tags on disk have extras in one direction only (syncable without conflict).
@@ -849,6 +876,7 @@ pub enum TypedSignalWrite {
     ShitFormat(ShitFormatSignal),
     DeployReady(DeployReadySignal),
     DeployedHealthy(DeployedHealthySignal),
+    SidecarDeployReady(SidecarDeployReadySignal),
     OutOfBandTagSync(OutOfBandTagSyncSignal),
     OutOfBandTagConflict(OutOfBandTagConflictSignal),
     SubparDuplicate(SubparDuplicateSignal),
@@ -901,6 +929,7 @@ impl TypedSignalWrite {
             Self::ShitFormat(s) => s.insert(conn),
             Self::DeployReady(s) => s.insert(conn),
             Self::DeployedHealthy(s) => s.insert(conn),
+            Self::SidecarDeployReady(s) => s.insert(conn),
             Self::OutOfBandTagSync(s) => s.insert(conn),
             Self::OutOfBandTagConflict(s) => s.insert(conn),
             Self::SubparDuplicate(s) => s.insert(conn),
@@ -952,6 +981,7 @@ impl TypedSignalWrite {
             Self::ShitFormat(s) => ShitFormatSignal::exists(conn, s.inode),
             Self::DeployReady(s) => DeployReadySignal::exists(conn, s.inode),
             Self::DeployedHealthy(s) => DeployedHealthySignal::exists(conn, s.inode),
+            Self::SidecarDeployReady(s) => SidecarDeployReadySignal::exists(conn, s.inode),
             Self::OutOfBandTagSync(s) => OutOfBandTagSyncSignal::exists(conn, s.inode),
             Self::OutOfBandTagConflict(s) => OutOfBandTagConflictSignal::exists(conn, s.inode),
             Self::SubparDuplicate(s) => SubparDuplicateSignal::exists(conn, s.inode),
@@ -1148,6 +1178,14 @@ impl TypedSignalWrite {
             Self::DeployedHealthy(s) => {
                 s.path.hash(&mut hasher);
                 s.library_path.hash(&mut hasher);
+            }
+            Self::SidecarDeployReady(s) => {
+                s.path.hash(&mut hasher);
+                s.deploy_path.hash(&mut hasher);
+                s.library_name.hash(&mut hasher);
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
             }
             Self::ExpectedMissingTag(_) => {} // inode-only, no extra fields
             // Scalar aggregate signals — hash non-PK fields

@@ -435,6 +435,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_deploy_conflict_groups()
     }
 
+    /// Get precomputed sidecar images ready for deployment.
+    pub fn get_sidecar_deploy_ready_signals(&self) -> Result<Vec<crate::meta::signals::data::SidecarDeployReadySignal>> {
+        self.db.get_sidecar_deploy_ready_signals()
+    }
+
     /// Get paths of missing files.
     pub fn get_missing_file_paths(&self) -> Result<Vec<String>> {
         self.db.get_missing_file_paths()
@@ -819,13 +824,4 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_corpus_images_in_directory(dir_path)
     }
 
-    /// Get all image files in a zone (extension-based, no image_info JOIN).
-    pub fn get_images_in_zone(&self, zone: super::types::Zone) -> Result<Vec<(i64, String)>> {
-        self.db.get_images_in_zone(zone)
-    }
-
-    /// Get image files in a directory within a zone (extension-based, no image_info JOIN).
-    pub fn get_images_in_directory(&self, zone: super::types::Zone, dir_path: &str) -> Result<Vec<(i64, String)>> {
-        self.db.get_images_in_directory(zone, dir_path)
-    }
 }

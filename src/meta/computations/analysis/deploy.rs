@@ -13,12 +13,23 @@ use crate::meta::signals::data::{
     TypedSignalWrite, DeployConflictSignal, DeployReadySignal, DeployedHealthySignal,
     LibraryLeftoverSignal, LibraryStaleSignal,
     ReleaseOverlapSignal, ReleaseOverlapData, ReleaseOverlapEntry,
+    SidecarDeployReadySignal, SidecarDeployReadyData,
 };
 use crate::corpus::deploy::{compute_deployment_path_with_tags, deploy_album_directory, extract_release_directory};
 use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
 
 use super::{Computation, Result};
+
+/// A corpus file with its precomputed deploy path and library association.
+///
+/// Used by `DeriveCorpusDeployStatus` to batch-process deploy status, and by
+/// `derive_sidecar_deploy_signals` to discover directories needing sidecars.
+struct PrecomputedFile {
+    inode: i64,
+    corpus_path: String,
+    deploy_path: String,
+}
 
 // ============================================================================
 // Deploy Conflict Detection
@@ -600,11 +611,6 @@ pub fn execute_derive_corpus_deploy_status(
     // inode computes the same deploy path — regardless of health status.
     // Only healthy, source-configured files go into `precomputed` for signal
     // emission, but deploy_path_counts covers the entire corpus.
-    struct PrecomputedFile {
-        inode: i64,
-        corpus_path: String,
-        deploy_path: String,
-    }
 
     let all_corpus_inodes = match read_only_db.get_all_corpus_inodes() {
         Ok(v) => v,
@@ -775,8 +781,25 @@ pub fn execute_derive_corpus_deploy_status(
         witness,
     );
 
+    // ====================================================================
+    // Phase 4: Sidecar image deployment discovery
+    // ====================================================================
+    //
+    // For every corpus directory that has deployed or deploy-ready audio,
+    // check if its sidecar images are present in the library. Emit
+    // SidecarDeployReady signals for missing images.
+
+    let sidecar_count = derive_sidecar_deploy_signals(
+        &precomputed,
+        &library_inode_to_paths,
+        &config,
+        read_only_db,
+        &sender,
+        witness,
+    );
+
     log_general(format!(
-        "[COMPUTE] DeriveCorpusDeployStatus: {} total corpus inodes, {} healthy, {} precomputed, {} conflict paths, {} overlap dirs, {} deploy-ready, {} deployed-healthy, {} deployed-stale, {} conflict-skipped, {} overlap-skipped, {} not configured",
+        "[COMPUTE] DeriveCorpusDeployStatus: {} total corpus inodes, {} healthy, {} precomputed, {} conflict paths, {} overlap dirs, {} deploy-ready, {} deployed-healthy, {} deployed-stale, {} conflict-skipped, {} overlap-skipped, {} not configured, {} sidecars",
         all_corpus_inodes.len(),
         healthy_signals.len(),
         precomputed.len(),
@@ -788,6 +811,7 @@ pub fn execute_derive_corpus_deploy_status(
         conflict_skipped_count,
         overlap_skipped_count,
         skipped_not_configured,
+        sidecar_count,
     ));
     log_general(format!(
         "[COMPUTE] DeriveCorpusDeployStatus reconcile: DeployReady({} cleared, {} new, {} updated, {} unchanged) DeployedHealthy({} cleared, {} new, {} updated, {} unchanged)",
@@ -796,4 +820,155 @@ pub fn execute_derive_corpus_deploy_status(
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+// ============================================================================
+// Sidecar Image Deploy Discovery
+// ============================================================================
+
+/// Discover sidecar images that should be deployed alongside audio files.
+///
+/// For each corpus directory with deploy-ready or deployed-healthy audio,
+/// queries image_info for sidecar images, checks whether they already exist
+/// in the library, and emits SidecarDeployReady signals for missing ones.
+///
+/// Returns the total number of sidecar signals emitted.
+fn derive_sidecar_deploy_signals(
+    precomputed: &[PrecomputedFile],
+    library_inode_to_paths: &HashMap<i64, Vec<PathBuf>>,
+    config: &crate::config::Config,
+    read_only_db: &ReadOnlyDb<'_>,
+    sender: &write_thread::SignalWriteSender,
+    witness: &ComputationWitness,
+) -> usize {
+    use crate::config::SidecarDeployMode;
+
+    let mode = config.opinions.album_art.sidecar_deploy_mode;
+    if mode == SidecarDeployMode::Disabled {
+        // Clear any existing sidecar signals and return
+        let (cleared, _, _, _) = reconcile_corpus_signals::<SidecarDeployReadySignal>(
+            read_only_db,
+            sender,
+            Vec::new(),
+            witness,
+        );
+        if cleared > 0 {
+            log_general(format!(
+                "[COMPUTE] Sidecar deploy disabled, cleared {} stale signals", cleared,
+            ));
+        }
+        return 0;
+    }
+
+    // Collect unique corpus directories from precomputed files, with their
+    // library_name and album_dir (deploy path parent).
+    // dir_targets: corpus_dir → (library_name, album_dir)
+    let mut dir_targets: HashMap<String, (String, String)> = HashMap::new();
+
+    for file in precomputed {
+        let corpus_dir = Path::new(&file.corpus_path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        if dir_targets.contains_key(&corpus_dir) {
+            continue;
+        }
+
+        // Resolve library name for this file's source directory
+        let library_name = config
+            .resolve_source_config_for_db_path(&file.corpus_path)
+            .and_then(|r| r.libraries.into_iter().next());
+
+        if let Some(lib) = library_name {
+            let album_dir = deploy_album_directory(&file.deploy_path);
+            dir_targets.insert(corpus_dir, (lib, album_dir));
+        }
+    }
+
+    // Build set of inodes already present in the library. Image files
+    // deployed via hard-link share their inode with the corpus source,
+    // so an inode appearing in library_inode_to_paths means it's deployed.
+    let library_inodes: HashSet<i64> = library_inode_to_paths.keys().copied().collect();
+
+    let mut computed_sidecars: Vec<ComputedCorpusSignal> = Vec::new();
+    let mut seen: HashSet<(String, String, String)> = HashSet::new(); // (library, album_dir, filename)
+
+    for (corpus_dir, (library_name, album_dir)) in &dir_targets {
+        let images = match read_only_db.get_corpus_images_in_directory(corpus_dir) {
+            Ok(imgs) => imgs,
+            Err(_) => continue,
+        };
+
+        for img in &images {
+            // Apply mode filter
+            match mode {
+                SidecarDeployMode::PrimaryCover => {
+                    if img.role != "cover_front" {
+                        continue;
+                    }
+                }
+                SidecarDeployMode::All => {}
+                SidecarDeployMode::Disabled => unreachable!(),
+            }
+
+            let filename = Path::new(&img.path)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            if filename.is_empty() {
+                continue;
+            }
+
+            // Look up the image file's inode to check library deployment
+            let image_inode = match read_only_db
+                .get_file_entry_by_path(&img.path, "corpus")
+            {
+                Ok(Some(entry)) => entry.inode,
+                _ => continue,
+            };
+
+            // Skip if this image's inode is already in any library
+            if library_inodes.contains(&image_inode) {
+                continue;
+            }
+
+            // Deduplicate by (library, album_dir, filename)
+            let key = (library_name.clone(), album_dir.clone(), filename.clone());
+            if !seen.insert(key) {
+                continue;
+            }
+
+            let deploy_path = format!("{}/{}", album_dir, filename);
+            let signal = TypedSignalWrite::SidecarDeployReady(SidecarDeployReadySignal {
+                inode: image_inode,
+                path: img.path.clone(),
+                deploy_path,
+                library_name: library_name.clone(),
+                data: SidecarDeployReadyData {
+                    role: img.role.clone(),
+                    format: img.format.clone(),
+                    width: img.width,
+                    height: img.height,
+                },
+            });
+            computed_sidecars.push(ComputedCorpusSignal::new(image_inode, signal));
+        }
+    }
+
+    let sidecar_count = computed_sidecars.len();
+
+    let (sc_cleared, sc_new, sc_updated, sc_unchanged) = reconcile_corpus_signals::<SidecarDeployReadySignal>(
+        read_only_db,
+        sender,
+        computed_sidecars,
+        witness,
+    );
+    log_general(format!(
+        "[COMPUTE] DeriveCorpusDeployStatus sidecar reconcile: {} dirs checked, SidecarDeployReady({} cleared, {} new, {} updated, {} unchanged)",
+        dir_targets.len(), sc_cleared, sc_new, sc_updated, sc_unchanged,
+    ));
+
+    sidecar_count
 }

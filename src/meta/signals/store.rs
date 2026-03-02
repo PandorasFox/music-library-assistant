@@ -649,6 +649,43 @@ impl CorpusSignalStore for DeployedHealthySignal {
     }
 }
 
+impl CorpusSignalStore for SidecarDeployReadySignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_sidecar_deploy_ready (
+        inode INTEGER PRIMARY KEY,
+        path TEXT NOT NULL,
+        deploy_path TEXT NOT NULL,
+        library_name TEXT NOT NULL,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_sidecar_deploy_ready";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_sidecar_deploy_ready (inode, path, deploy_path, library_name, data, data_hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![self.inode, self.path, self.deploy_path, self.library_name, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
+        conn.execute("DELETE FROM signal_sidecar_deploy_ready WHERE inode = ?1", [inode])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, inode: i64) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_sidecar_deploy_ready WHERE inode = ?1)",
+            [inode],
+            |row| row.get(0),
+        )
+    }
+}
+
 // --- Signals with bincode BLOB data ---
 
 impl CorpusSignalStore for OutOfBandTagSyncSignal {

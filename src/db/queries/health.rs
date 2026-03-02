@@ -36,6 +36,7 @@ impl Database {
         total += ShitFormatSignal::count(&self.conn).unwrap_or(0);
         total += DeployReadySignal::count(&self.conn).unwrap_or(0);
         total += DeployedHealthySignal::count(&self.conn).unwrap_or(0);
+        total += SidecarDeployReadySignal::count(&self.conn).unwrap_or(0);
         total += OutOfBandTagSyncSignal::count(&self.conn).unwrap_or(0);
         total += OutOfBandTagConflictSignal::count(&self.conn).unwrap_or(0);
         total += SubparDuplicateSignal::count(&self.conn).unwrap_or(0);
@@ -1004,6 +1005,33 @@ impl Database {
                 library_name,
                 corpus_path: row.get(0)?,
                 deploy_path: library_path,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(results)
+    }
+
+    /// Get all sidecar images ready for deployment.
+    ///
+    /// Reads precomputed signals emitted by DeriveCorpusDeployStatus.
+    pub fn get_sidecar_deploy_ready_signals(&self) -> Result<Vec<crate::meta::signals::data::SidecarDeployReadySignal>> {
+        use crate::meta::signals::data::{SidecarDeployReadySignal, SidecarDeployReadyData};
+
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path, deploy_path, library_name, data FROM signal_sidecar_deploy_ready ORDER BY path"
+        )?;
+
+        let results = stmt.query_map(params![], |row| {
+            let blob: Vec<u8> = row.get(4)?;
+            let data: SidecarDeployReadyData = bincode::deserialize(&blob)
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Blob, Box::new(e)))?;
+            Ok(SidecarDeployReadySignal {
+                inode: row.get(0)?,
+                path: row.get(1)?,
+                deploy_path: row.get(2)?,
+                library_name: row.get(3)?,
+                data,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

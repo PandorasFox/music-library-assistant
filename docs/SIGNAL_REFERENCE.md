@@ -86,6 +86,7 @@ For each track, re-queue an `ApplyDbTagsToDisk` mutation. Since `ApplyDbTagsToDi
 | LibraryStale | DeriveDeployHealthSignals | UpdateDeploySignals, LibraryMove | Library file at wrong path |
 | DeployReady | DeriveCorpusDeployStatus | UpdateDeploySignals, HardLink | Healthy corpus file not deployed. Metadata: `{ "deploy_path": "..." }` |
 | DeployedHealthy | DeriveCorpusDeployStatus, UpdateDeploySignals | DeriveCorpusDeployStatus | Healthy corpus file correctly deployed. Metadata: `{ "library_path": "{library_name}/..." }` |
+| SidecarDeployReady | DeriveCorpusDeployStatus | HardLink (deploy action) | Corpus sidecar image not yet deployed to library. Keyed by image inode. BLOB data: role, format, width, height |
 
 ---
 
@@ -159,7 +160,7 @@ From `CLAUDE.md`:
 
 `DeriveCorpusSignals` includes a GC pass that clears orphaned corpus signals. After computing the known inode universe (disk inodes ∪ indexed inodes), it scans each corpus signal table for inodes outside that universe and deletes them. This catches signals that persist due to mutations that previously failed to return their affected inodes, or any future bugs in the post-mutation signal clearing pipeline.
 
-Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, CorruptFile, ShitFormat, MtimeOnlyMismatch, OutOfBandTagSync, OutOfBandTagConflict, SubparDuplicate, CompoundTag, DeployReady, DeployedHealthy, MissingDirectory, ExternalMatch, ExpectedMissingTag, PathTagMismatch. FileInCorpus is excluded (it IS the disk observation).
+Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, CorruptFile, ShitFormat, MtimeOnlyMismatch, OutOfBandTagSync, OutOfBandTagConflict, SubparDuplicate, CompoundTag, DeployReady, DeployedHealthy, SidecarDeployReady, MissingDirectory, ExternalMatch, ExpectedMissingTag, PathTagMismatch. FileInCorpus is excluded (it IS the disk observation).
 
 ### Good Signals
 - `UnindexedFile` for path X (one file)

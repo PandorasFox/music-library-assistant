@@ -1,9 +1,10 @@
 //! State and input handling for the external match review modal.
 
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 
 use crate::meta::views::ExternalMatchReviewEntry;
-use crate::ui::widgets::{ButtonRects, FocusPane};
+use crate::ui::widgets::{ButtonRects, FocusPane, ListClickTargets};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExternalMatchButton {
@@ -48,6 +49,7 @@ pub struct ExternalMatchReviewState {
     pub selected_button: ExternalMatchButton,
     pub focus_pane: FocusPane,
     pub button_rects: ButtonRects,
+    pub click_targets: ListClickTargets,
 }
 
 impl ExternalMatchReviewState {
@@ -59,6 +61,7 @@ impl ExternalMatchReviewState {
             selected_button: ExternalMatchButton::Accept,
             focus_pane: FocusPane::List,
             button_rects: ButtonRects::new(),
+            click_targets: ListClickTargets::new(),
         }
     }
 
@@ -78,6 +81,39 @@ impl ExternalMatchReviewState {
         } else {
             false
         }
+    }
+
+    /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
+    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<ExternalMatchReviewAction> {
+        // Check buttons first (highest priority, triggers action)
+        if let Some(button_name) = self.button_rects.hit_test(x, y) {
+            self.focus_pane = FocusPane::Buttons;
+            return match button_name {
+                "accept" => {
+                    self.selected_button = ExternalMatchButton::Accept;
+                    Some(ExternalMatchReviewAction::Accept)
+                }
+                "dismiss" => {
+                    self.selected_button = ExternalMatchButton::Dismiss;
+                    Some(ExternalMatchReviewAction::Dismiss)
+                }
+                "cancel" => {
+                    self.selected_button = ExternalMatchButton::Cancel;
+                    Some(ExternalMatchReviewAction::Cancel)
+                }
+                _ => None,
+            };
+        }
+        // Check list items (focus + cursor change, no action)
+        if let Some(id) = self.click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.entries.len() {
+                    self.focus_pane = FocusPane::List;
+                    self.cursor = idx;
+                }
+            }
+        }
+        None
     }
 
     pub fn handle_input(&mut self, action: &InputAction) -> ExternalMatchReviewAction {

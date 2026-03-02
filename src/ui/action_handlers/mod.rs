@@ -1542,6 +1542,9 @@ impl App {
             ActiveView::OobConflictInspection(state) => {
                 state.handle_click(x, y, &gesture).map(ViewAction::OobConflictInspection)
             }
+            ActiveView::ExternalMatchReview(state) => {
+                state.handle_click(x, y, &gesture).map(ViewAction::ExternalMatchReview)
+            }
             ActiveView::Insights(state) => {
                 state.handle_click(x, y);
                 None

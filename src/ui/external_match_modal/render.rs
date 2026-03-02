@@ -56,7 +56,7 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &ExternalMatchReviewState) 
     }
 }
 
-fn render_file_list(f: &mut Frame, area: Rect, state: &ExternalMatchReviewState) {
+fn render_file_list(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
     let is_focused = state.focus_pane == FocusPane::List;
     let border_color = if is_focused { Color::Yellow } else { Color::DarkGray };
 
@@ -65,6 +65,16 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &ExternalMatchReviewState)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
     let inner = render_pane(f, area, block);
+
+    // Populate click targets for list items
+    state.click_targets.clear();
+    state.click_targets.set_list_area(inner);
+    let visible_height = inner.height as usize;
+    let scroll = state.scroll;
+    for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
+        if entry_idx >= state.entries.len() { break; }
+        state.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+    }
 
     let entries: Vec<PathEntry> = state.entries
         .iter()

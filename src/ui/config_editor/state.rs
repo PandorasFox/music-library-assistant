@@ -65,8 +65,6 @@ pub struct ConfigEditorState {
     pub collection_pos: Option<CollectionPosition>,
     /// Position within a StringListMap item's separator sub-list (None = not in sub-list).
     pub sub_collection_pos: Option<CollectionPosition>,
-    /// For StringPairMap: which field is focused (0=key, 1=value).
-    pub pair_field_focus: usize,
     /// Focus: Fields vs Buttons.
     pub focus: EditorFocus,
     pub selected_button: EditorButton,
@@ -88,7 +86,6 @@ impl ConfigEditorState {
             text_input: None,
             collection_pos: None,
             sub_collection_pos: None,
-            pair_field_focus: 0,
             focus: EditorFocus::Fields,
             selected_button: EditorButton::Save,
             pending_cycle: None,
@@ -131,7 +128,6 @@ impl ConfigEditorState {
         let Some((gi, fi)) = self.cursor_to_group_field() else { return 0 };
         match &self.groups[gi].fields[fi].value {
             ConfigValue::StringSet(v) => v.len(),
-            ConfigValue::StringPairMap(v) => v.len(),
             ConfigValue::StringListMap(v) => v.len(),
             _ => 0,
         }
@@ -207,13 +203,6 @@ impl ConfigEditorState {
                 ConfigEditorAction::None
             }
             InputAction::NavLeft | InputAction::NavRight => {
-                // For StringPairMap, switch between key and value
-                let Some((gi, fi)) = self.cursor_to_group_field() else {
-                    return ConfigEditorAction::None;
-                };
-                if matches!(self.groups[gi].fields[fi].value, ConfigValue::StringPairMap(_)) {
-                    self.pair_field_focus = if self.pair_field_focus == 0 { 1 } else { 0 };
-                }
                 ConfigEditorAction::None
             }
             InputAction::Confirm => {
@@ -375,25 +364,6 @@ impl ConfigEditorState {
                 input.focused = true;
                 self.text_input = Some(input);
             }
-            (ConfigValue::StringPairMap(items), Some(CollectionPosition::Item(idx))) => {
-                if idx < items.len() {
-                    let mut input = TextInputState::new();
-                    let value = if self.pair_field_focus == 0 {
-                        &items[idx].0
-                    } else {
-                        &items[idx].1
-                    };
-                    input.set_value(value);
-                    input.focused = true;
-                    self.text_input = Some(input);
-                }
-            }
-            (ConfigValue::StringPairMap(_), Some(CollectionPosition::AddNew)) => {
-                let mut input = TextInputState::new();
-                input.focused = true;
-                self.pair_field_focus = 0; // Start with key
-                self.text_input = Some(input);
-            }
             (ConfigValue::StringListMap(items), Some(CollectionPosition::Item(idx))) => {
                 if idx < items.len() {
                     // Enter sub-collection mode to edit individual separators
@@ -424,19 +394,6 @@ impl ConfigEditorState {
                 if idx < items.len() {
                     items.remove(idx);
                     // Adjust cursor
-                    if idx >= items.len() && !items.is_empty() {
-                        self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
-                    } else if items.is_empty() {
-                        self.collection_pos = Some(CollectionPosition::AddNew);
-                    }
-                    true
-                } else {
-                    false
-                }
-            }
-            (ConfigValue::StringPairMap(ref mut items), Some(CollectionPosition::Item(idx))) => {
-                if idx < items.len() {
-                    items.remove(idx);
                     if idx >= items.len() && !items.is_empty() {
                         self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
                     } else if items.is_empty() {
@@ -632,7 +589,7 @@ impl ConfigEditorState {
                     Self::recompute_source(field);
                 }
             }
-            ConfigValue::Float(_) | ConfigValue::Uint(_) | ConfigValue::UintU32(_)
+            ConfigValue::Float(_) | ConfigValue::UintU32(_)
             | ConfigValue::SignedInt(_) | ConfigValue::OptionalUint(_) | ConfigValue::String(_)
             | ConfigValue::Duration(_) => {
                 let mut input = TextInputState::new();
@@ -648,14 +605,6 @@ impl ConfigEditorState {
             }
             // Collection types: enter inline editing mode
             ConfigValue::StringSet(items) => {
-                if items.is_empty() {
-                    self.collection_pos = Some(CollectionPosition::AddNew);
-                } else {
-                    self.collection_pos = Some(CollectionPosition::Item(0));
-                }
-            }
-            ConfigValue::StringPairMap(items) => {
-                self.pair_field_focus = 0;
                 if items.is_empty() {
                     self.collection_pos = Some(CollectionPosition::AddNew);
                 } else {
@@ -701,14 +650,6 @@ impl ConfigEditorState {
         let ok = match &mut field.value {
             ConfigValue::Float(ref mut v) => {
                 if let Ok(parsed) = text.parse::<f64>() {
-                    *v = parsed;
-                    true
-                } else {
-                    false
-                }
-            }
-            ConfigValue::Uint(ref mut v) => {
-                if let Ok(parsed) = text.parse::<usize>() {
                     *v = parsed;
                     true
                 } else {
@@ -764,7 +705,7 @@ impl ConfigEditorState {
             }
             // Collection types handled above
             ConfigValue::Bool(_) | ConfigValue::Enum { .. } |
-            ConfigValue::StringSet(_) | ConfigValue::StringPairMap(_) | ConfigValue::StringListMap(_) => false,
+            ConfigValue::StringSet(_) | ConfigValue::StringListMap(_) => false,
         };
 
         if ok {
@@ -791,32 +732,6 @@ impl ConfigEditorState {
                     items.push(text.to_string());
                     // Move cursor to the new item
                     self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
-                    true
-                } else {
-                    false
-                }
-            }
-            (ConfigValue::StringPairMap(ref mut items), CollectionPosition::Item(idx)) => {
-                if idx < items.len() {
-                    if self.pair_field_focus == 0 {
-                        if !text.is_empty() {
-                            items[idx].0 = text.to_string();
-                        }
-                    } else {
-                        items[idx].1 = text.to_string();
-                    }
-                    true
-                } else {
-                    false
-                }
-            }
-            (ConfigValue::StringPairMap(ref mut items), CollectionPosition::AddNew) => {
-                if !text.is_empty() {
-                    // Adding new pair - this is the key
-                    items.push((text.to_string(), String::new()));
-                    // Move to the new item's value field
-                    self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
-                    self.pair_field_focus = 1;
                     true
                 } else {
                     false

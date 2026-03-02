@@ -18,7 +18,6 @@ pub enum FieldSource {
 pub enum ConfigValue {
     Bool(bool),
     Float(f64),
-    Uint(usize),
     UintU32(u32),
     SignedInt(i64),
     OptionalUint(Option<usize>),
@@ -32,8 +31,6 @@ pub enum ConfigValue {
     Duration(u64),
     /// Set of strings (opens StringSetEditor popup).
     StringSet(Vec<String>),
-    /// Map of string pairs (opens StringPairMapEditor popup).
-    StringPairMap(Vec<(String, String)>),
     /// Map of string to list of strings (opens StringListMapEditor popup).
     StringListMap(Vec<(String, Vec<String>)>),
 }
@@ -44,7 +41,6 @@ impl ConfigValue {
         match self {
             ConfigValue::Bool(b) => if *b { "true" } else { "false" }.to_string(),
             ConfigValue::Float(f) => format!("{}", f),
-            ConfigValue::Uint(n) => format!("{}", n),
             ConfigValue::UintU32(n) => format!("{}", n),
             ConfigValue::SignedInt(n) => format!("{}", n),
             ConfigValue::OptionalUint(None) => "auto".to_string(),
@@ -70,13 +66,6 @@ impl ConfigValue {
                     format!("{} items", v.len())
                 }
             }
-            ConfigValue::StringPairMap(v) => {
-                if v.is_empty() {
-                    "(empty)".to_string()
-                } else {
-                    format!("{} pairs", v.len())
-                }
-            }
             ConfigValue::StringListMap(v) => {
                 if v.is_empty() {
                     "(empty)".to_string()
@@ -92,7 +81,6 @@ impl ConfigValue {
         match (self, other) {
             (ConfigValue::Bool(a), ConfigValue::Bool(b)) => a == b,
             (ConfigValue::Float(a), ConfigValue::Float(b)) => (a - b).abs() < f64::EPSILON,
-            (ConfigValue::Uint(a), ConfigValue::Uint(b)) => a == b,
             (ConfigValue::UintU32(a), ConfigValue::UintU32(b)) => a == b,
             (ConfigValue::SignedInt(a), ConfigValue::SignedInt(b)) => a == b,
             (ConfigValue::OptionalUint(a), ConfigValue::OptionalUint(b)) => a == b,
@@ -101,7 +89,6 @@ impl ConfigValue {
             (ConfigValue::StringList(a), ConfigValue::StringList(b)) => a == b,
             (ConfigValue::Enum { selected: a, .. }, ConfigValue::Enum { selected: b, .. }) => a == b,
             (ConfigValue::StringSet(a), ConfigValue::StringSet(b)) => a == b,
-            (ConfigValue::StringPairMap(a), ConfigValue::StringPairMap(b)) => a == b,
             (ConfigValue::StringListMap(a), ConfigValue::StringListMap(b)) => a == b,
             _ => false,
         }

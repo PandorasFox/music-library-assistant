@@ -426,7 +426,7 @@ pub fn execute_derive_deploy_health_signals(
     let mut stale_count: usize = 0;
     let mut sidecar_stale_count: usize = 0;
     let mut leftover_count: usize = 0;
-    let mut stale_conflict_count: usize = 0;
+    let stale_conflict_count: usize = 0;
     let mut debug_logged = 0usize;
 
     for (library_path, library_inode) in &library_files {
@@ -442,69 +442,73 @@ pub fn execute_derive_deploy_health_signals(
 
         let library_path_display = library_path.display().to_string();
 
-        if let Some(corpus_path) = corpus_inodes.get(library_inode) {
-            // Has corpus backing — classify lifecycle phase
-            let phase = classify_library_file(
-                read_only_db,
-                library_name,
-                library_path,
-                *library_inode,
-                corpus_path,
-                &library_path_to_inode,
-                &mut dir_to_album_dir,
-            );
+        // Classify lifecycle phase — Leftover if no corpus backing, else delegate
+        let (phase, corpus_path) = match corpus_inodes.get(library_inode) {
+            Some(corpus_path) => {
+                let phase = classify_library_file(
+                    read_only_db,
+                    library_name,
+                    library_path,
+                    *library_inode,
+                    corpus_path,
+                    &library_path_to_inode,
+                    &mut dir_to_album_dir,
+                );
+                (phase, Some(corpus_path))
+            }
+            None => (DeployLifecyclePhase::Leftover, None),
+        };
 
-            match phase {
-                DeployLifecyclePhase::Stale => {
-                    // Emit stale signal — compute the expected path for this file
-                    let expected_with_prefix = compute_expected_library_path(
-                        read_only_db,
-                        library_name,
-                        *library_inode,
-                        corpus_path,
-                        &mut dir_to_album_dir,
+        match phase {
+            DeployLifecyclePhase::Healthy => {
+                healthy_count += 1;
+            }
+            DeployLifecyclePhase::Stale => {
+                let corpus_path = corpus_path.expect("Stale implies corpus backing");
+                let expected_with_prefix = compute_expected_library_path(
+                    read_only_db,
+                    library_name,
+                    *library_inode,
+                    corpus_path,
+                    &mut dir_to_album_dir,
+                );
+                if let Some(expected_path) = expected_with_prefix {
+                    let is_image = is_image_file(Path::new(corpus_path));
+                    let stale_key = LibraryStaleSignal::make_key(library_name, &library_path_display);
+                    sender.write_typed_signal(
+                        TypedSignalWrite::LibraryStale(LibraryStaleSignal {
+                            key: stale_key,
+                            library_path: library_path_display,
+                            expected_path,
+                            corpus_path: corpus_path.clone(),
+                            inode: *library_inode,
+                        }),
+                        witness,
                     );
-                    if let Some(expected_path) = expected_with_prefix {
-                        let is_image = is_image_file(Path::new(corpus_path));
-                        let stale_key = LibraryStaleSignal::make_key(library_name, &library_path_display);
-                        sender.write_typed_signal(
-                            TypedSignalWrite::LibraryStale(LibraryStaleSignal {
-                                key: stale_key,
-                                library_path: library_path_display,
-                                expected_path,
-                                corpus_path: corpus_path.clone(),
-                                inode: *library_inode,
-                            }),
-                            witness,
-                        );
-                        if is_image {
-                            sidecar_stale_count += 1;
-                        } else {
-                            stale_count += 1;
-                        }
+                    if is_image {
+                        sidecar_stale_count += 1;
                     } else {
-                        // Couldn't determine expected path (shouldn't happen if classify said Stale)
-                        healthy_count += 1;
+                        stale_count += 1;
                     }
-                }
-                DeployLifecyclePhase::Healthy | DeployLifecyclePhase::Ready => {
+                } else {
                     healthy_count += 1;
                 }
-                DeployLifecyclePhase::Leftover => {
-                    // Shouldn't happen here (corpus backing exists), but handle gracefully
-                    stale_conflict_count += 1;
-                }
             }
-        } else {
-            // No corpus backing — leftover
-            leftover_count += 1;
-            let leftover_key = LibraryLeftoverSignal::make_key(library_name, &library_path_display);
-            sender.write_typed_signal(
-                TypedSignalWrite::LibraryLeftover(LibraryLeftoverSignal {
-                    key: leftover_key,
-                }),
-                witness,
-            );
+            DeployLifecyclePhase::Leftover => {
+                leftover_count += 1;
+                let leftover_key = LibraryLeftoverSignal::make_key(library_name, &library_path_display);
+                sender.write_typed_signal(
+                    TypedSignalWrite::LibraryLeftover(LibraryLeftoverSignal {
+                        key: leftover_key,
+                    }),
+                    witness,
+                );
+            }
+            DeployLifecyclePhase::Ready => {
+                // Library files are already deployed — Ready is a corpus-side phase.
+                // If we ever reach this, the classification logic has a bug.
+                unreachable!("Library file cannot be in Ready phase");
+            }
         }
     }
 
@@ -526,6 +530,38 @@ pub fn execute_derive_deploy_health_signals(
 // ============================================================================
 // Library File Classification Helpers
 // ============================================================================
+
+/// Classify a corpus file's deploy lifecycle phase.
+///
+/// Checks whether the file's inode exists in any library and whether the
+/// library path matches the expected deploy path.
+/// Returns Ready (not deployed), Healthy (correctly deployed), or Stale
+/// (deployed at wrong path). Never returns Leftover (that's library-side).
+fn classify_corpus_file(
+    file: &PrecomputedFile,
+    library_inode_to_paths: &HashMap<i64, Vec<PathBuf>>,
+) -> DeployLifecyclePhase {
+    let Some(library_paths) = library_inode_to_paths.get(&file.inode) else {
+        return DeployLifecyclePhase::Ready;
+    };
+
+    // File is in library — check if any library path matches expected
+    let has_match = library_paths.iter().any(|lp| {
+        let components: Vec<_> = lp.components().collect();
+        if components.len() > 1 {
+            let suffix: PathBuf = components[1..].iter().collect();
+            suffix == Path::new(&file.deploy_path)
+        } else {
+            false
+        }
+    });
+
+    if has_match {
+        DeployLifecyclePhase::Healthy
+    } else {
+        DeployLifecyclePhase::Stale
+    }
+}
 
 /// Classify a library file's deploy lifecycle phase.
 ///
@@ -931,58 +967,62 @@ pub fn execute_derive_corpus_deploy_status(
     let mut overlap_skipped_count = 0usize;
 
     for file in &precomputed {
-        // Check if this inode is deployed in any library
-        if let Some(library_paths) = library_inode_to_paths.get(&file.inode) {
-            // File is deployed — check if any library path matches expected
-            let matching_path = library_paths.iter().find(|lp| {
-                // Library paths are "{library_name}/{relative_path}"
-                // Strip library name prefix for comparison with expected deploy path
-                let components: Vec<_> = lp.components().collect();
-                if components.len() > 1 {
-                    let suffix: PathBuf = components[1..].iter().collect();
-                    suffix == Path::new(&file.deploy_path)
-                } else {
-                    false
-                }
-            });
+        let phase = classify_corpus_file(file, &library_inode_to_paths);
 
-            if let Some(lib_path) = matching_path {
-                // Correctly deployed
+        match phase {
+            DeployLifecyclePhase::Healthy => {
+                // Correctly deployed — find the matching library path for the signal
+                let lib_path = library_inode_to_paths.get(&file.inode)
+                    .and_then(|paths| paths.iter().find(|lp| {
+                        let components: Vec<_> = lp.components().collect();
+                        if components.len() > 1 {
+                            let suffix: PathBuf = components[1..].iter().collect();
+                            suffix == Path::new(&file.deploy_path)
+                        } else {
+                            false
+                        }
+                    }))
+                    .expect("Healthy implies matching library path");
                 let signal = TypedSignalWrite::DeployedHealthy(DeployedHealthySignal {
                     inode: file.inode,
                     path: file.corpus_path.clone(),
                     library_path: lib_path.to_string_lossy().to_string(),
                 });
                 computed_deployed_healthy.push(ComputedCorpusSignal::new(file.inode, signal));
-            } else {
-                // Deployed but at wrong path — stale. DeriveDeployHealthSignals
-                // already emits LibraryStale for these; don't also emit DeployReady.
+            }
+            DeployLifecyclePhase::Stale => {
+                // Deployed but at wrong path — DeriveDeployHealthSignals handles
+                // the library-side LibraryStale signal; don't also emit DeployReady.
                 deployed_stale_count += 1;
             }
-        } else if conflict_paths.contains(file.deploy_path.as_str()) {
-            if conflict_winners.contains(&file.inode) {
-                // Tiebreak winner — deploy normally
-                let signal = TypedSignalWrite::DeployReady(DeployReadySignal {
-                    inode: file.inode,
-                    path: file.corpus_path.clone(),
-                    deploy_path: file.deploy_path.clone(),
-                });
-                computed_deploy_ready.push(ComputedCorpusSignal::new(file.inode, signal));
-            } else {
-                // Tiebreak loser — blocked, DeployConflict signal surfaces this
-                conflict_skipped_count += 1;
+            DeployLifecyclePhase::Ready => {
+                // Not deployed — apply conflict/overlap filters before emitting
+                if conflict_paths.contains(file.deploy_path.as_str()) {
+                    if conflict_winners.contains(&file.inode) {
+                        let signal = TypedSignalWrite::DeployReady(DeployReadySignal {
+                            inode: file.inode,
+                            path: file.corpus_path.clone(),
+                            deploy_path: file.deploy_path.clone(),
+                        });
+                        computed_deploy_ready.push(ComputedCorpusSignal::new(file.inode, signal));
+                    } else {
+                        conflict_skipped_count += 1;
+                    }
+                } else if overlap_album_dirs.contains(&deploy_album_directory(&file.deploy_path)) {
+                    overlap_skipped_count += 1;
+                } else {
+                    let signal = TypedSignalWrite::DeployReady(DeployReadySignal {
+                        inode: file.inode,
+                        path: file.corpus_path.clone(),
+                        deploy_path: file.deploy_path.clone(),
+                    });
+                    computed_deploy_ready.push(ComputedCorpusSignal::new(file.inode, signal));
+                }
             }
-        } else if overlap_album_dirs.contains(&deploy_album_directory(&file.deploy_path)) {
-            // Not deployed, and album directory has a release overlap — skip
-            overlap_skipped_count += 1;
-        } else {
-            // Not deployed at all — deploy-ready
-            let signal = TypedSignalWrite::DeployReady(DeployReadySignal {
-                inode: file.inode,
-                path: file.corpus_path.clone(),
-                deploy_path: file.deploy_path.clone(),
-            });
-            computed_deploy_ready.push(ComputedCorpusSignal::new(file.inode, signal));
+            DeployLifecyclePhase::Leftover => {
+                // Corpus files can't be leftovers — that's a library-side phase.
+                unreachable!("Corpus file cannot be in Leftover phase");
+            }
         }
     }
 

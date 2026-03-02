@@ -193,19 +193,21 @@ impl<'a> SignalInfoPane<'a> {
         ];
         lines.extend(path_lines(directory, Style::default(), width));
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{}", file_count),
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                if file_count == 1 { " file" } else { " files" },
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(" ready to deploy", Style::default().fg(Color::DarkGray)),
-        ]));
+        if file_count > 0 {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{}", file_count),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    if file_count == 1 { " file" } else { " files" },
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(" ready to deploy", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
 
         if !sidecars.is_empty() {
             lines.push(Line::from(""));

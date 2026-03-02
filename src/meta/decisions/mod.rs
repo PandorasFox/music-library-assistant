@@ -32,6 +32,8 @@ pub enum DecisionKey {
     CompoundSplitInbox { tag_name: String, cluster_index: usize },
     /// Deploy operations (single decision per transaction)
     Deploy,
+    /// Deploy sidecar images (cover art alongside audio)
+    DeploySidecars,
     /// Tag edit (keyed by inode set + tag names for dedup)
     TagEdit { key_item: String },
     /// OOB tag sync (bulk, single decision)
@@ -117,6 +119,7 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::CompoundSplitInbox { tag_name, cluster_index } =>
                 write!(f, "Compound Split Inbox:{}:{}", tag_name, cluster_index),
             DecisionKey::Deploy => write!(f, "Deploy"),
+            DecisionKey::DeploySidecars => write!(f, "Deploy Sidecars"),
             DecisionKey::TagEdit { key_item } => write!(f, "Tag Edit:{}", key_item),
             DecisionKey::OobSync => write!(f, "OOB Sync"),
             DecisionKey::OobConflict => write!(f, "OOB Conflict"),

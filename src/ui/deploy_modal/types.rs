@@ -16,8 +16,10 @@ use anyhow::Result;
 pub struct DirectoryAggregate {
     /// Directory path
     pub directory: String,
-    /// Number of files in this directory
+    /// Number of audio files in this directory
     pub count: usize,
+    /// Number of sidecar images in this directory
+    pub sidecar_count: usize,
 }
 
 /// Per-library breakdown of deploy operations.
@@ -114,10 +116,11 @@ impl DeployModalData {
             healthy.len(), new.len(), conflicts.len(), leftover.len(), stale.len(), sidecars.len(),
         ));
 
-        // Aggregate new files by directory (using corpus_path)
-        let new_by_dir = Self::aggregate_by_directory(
+        // Aggregate new files by directory (using corpus_path), then merge sidecar counts
+        let mut new_by_dir = Self::aggregate_by_directory(
             new.iter().map(|f| f.corpus_path.as_str())
         );
+        Self::merge_sidecar_counts(&mut new_by_dir, &sidecars);
 
         // Aggregate leftover files by directory (using library_path)
         let leftover_by_dir = Self::aggregate_by_directory(
@@ -241,6 +244,48 @@ impl DeployModalData {
         }).collect()
     }
 
+    /// Merge sidecar image counts into directory aggregates.
+    ///
+    /// For directories that already have audio files, increments sidecar_count.
+    /// For directories with only sidecars (no audio), creates new entries.
+    /// Re-sorts by total count (audio + sidecar) descending.
+    fn merge_sidecar_counts(new_by_dir: &mut Vec<DirectoryAggregate>, sidecars: &[SidecarDeployEntry]) {
+        if sidecars.is_empty() {
+            return;
+        }
+
+        // Count sidecars per corpus directory
+        let mut sidecar_dir_counts: HashMap<String, usize> = HashMap::new();
+        for s in sidecars {
+            let dir = Path::new(&s.corpus_image_path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "/".to_string());
+            *sidecar_dir_counts.entry(dir).or_insert(0) += 1;
+        }
+
+        // Merge into existing entries or create new ones
+        for entry in new_by_dir.iter_mut() {
+            if let Some(sc_count) = sidecar_dir_counts.remove(&entry.directory) {
+                entry.sidecar_count = sc_count;
+            }
+        }
+
+        // Remaining are sidecar-only directories
+        for (directory, sc_count) in sidecar_dir_counts {
+            new_by_dir.push(DirectoryAggregate {
+                directory,
+                count: 0,
+                sidecar_count: sc_count,
+            });
+        }
+
+        // Re-sort by total count descending
+        new_by_dir.sort_by(|a, b| {
+            (b.count + b.sidecar_count).cmp(&(a.count + a.sidecar_count))
+        });
+    }
+
     /// Aggregate paths by their parent directory, sorted by count descending.
     fn aggregate_by_directory<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<DirectoryAggregate> {
         let mut counts: HashMap<String, usize> = HashMap::new();
@@ -254,7 +299,7 @@ impl DeployModalData {
 
         let mut aggregates: Vec<_> = counts
             .into_iter()
-            .map(|(directory, count)| DirectoryAggregate { directory, count })
+            .map(|(directory, count)| DirectoryAggregate { directory, count, sidecar_count: 0 })
             .collect();
 
         // Sort by count descending
@@ -266,7 +311,7 @@ impl DeployModalData {
     pub fn tab_counts(&self) -> [usize; 5] {
         [
             self.healthy.len(),
-            self.new.len(),
+            self.new.len() + self.sidecars.len(),
             self.conflicts.len(),
             self.leftover.len(),
             self.stale.len(),
@@ -276,6 +321,6 @@ impl DeployModalData {
     /// Total operations that will be performed (excluding healthy).
     /// Conflicts are auto-resolved by picking first alphabetical path.
     pub fn total_operations(&self) -> usize {
-        self.new.len() + self.stale.len() + self.leftover.len() + self.conflicts.len()
+        self.new.len() + self.stale.len() + self.leftover.len() + self.conflicts.len() + self.sidecars.len()
     }
 }

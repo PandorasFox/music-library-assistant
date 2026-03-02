@@ -1563,7 +1563,8 @@ impl Database {
             "SELECT
                 EXISTS(SELECT 1 FROM signal_deploy_ready)
                 OR EXISTS(SELECT 1 FROM signal_library_stale)
-                OR EXISTS(SELECT 1 FROM signal_library_leftover)",
+                OR EXISTS(SELECT 1 FROM signal_library_leftover)
+                OR EXISTS(SELECT 1 FROM signal_sidecar_deploy_ready)",
             [],
             |row| row.get(0),
         )?;

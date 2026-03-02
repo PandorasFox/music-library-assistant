@@ -111,11 +111,10 @@ impl DeploymentPreviewState {
         // Build summary line
         let mut summary_parts: Vec<String> = Vec::new();
         if !data.new.is_empty() {
-            if data.sidecars.is_empty() {
-                summary_parts.push(format!("{} new", data.new.len()));
-            } else {
-                summary_parts.push(format!("{} new + {} covers", data.new.len(), data.sidecars.len()));
-            }
+            summary_parts.push(format!("{} new", data.new.len()));
+        }
+        if !data.sidecars.is_empty() {
+            summary_parts.push(format!("{} covers", data.sidecars.len()));
         }
         if !data.leftover.is_empty() {
             if data.replaced_count > 0 {
@@ -210,7 +209,16 @@ impl DeploymentPreviewState {
                 .cached_data
                 .new_by_dir
                 .iter()
-                .map(|d| format!("{} ({})", d.directory, d.count))
+                .map(|d| {
+                    if d.count == 0 {
+                        // Sidecar-only directory
+                        format!("{} ({} covers)", d.directory, d.sidecar_count)
+                    } else if d.sidecar_count > 0 {
+                        format!("{} ({} + {} covers)", d.directory, d.count, d.sidecar_count)
+                    } else {
+                        format!("{} ({})", d.directory, d.count)
+                    }
+                })
                 .collect(),
             DeployTab::Conflicts => self
                 .cached_data

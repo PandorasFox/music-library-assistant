@@ -143,7 +143,8 @@ impl App {
             }
         }
 
-        // 5. Sidecar images: hard link alongside audio deploys
+        // 5. Sidecar images: staged as separate decision for visibility
+        let mut sidecar_mutations = Vec::new();
         for sidecar in &data.sidecars {
             let source = resolver.resolve(std::path::Path::new(&sidecar.corpus_image_path));
             let dest_rel = std::path::Path::new("libraries")
@@ -151,7 +152,7 @@ impl App {
                 .join(&sidecar.library_album_dir)
                 .join(&sidecar.filename);
             let destination = resolver.resolve(&dest_rel);
-            mutations.push(Mutation::HardLink(HardLinkMutation { source, destination }));
+            sidecar_mutations.push(Mutation::HardLink(HardLinkMutation { source, destination }));
         }
 
         if skipped_no_library > 0 {
@@ -161,22 +162,33 @@ impl App {
             ));
         }
 
-        let count = mutations.len();
+        let count = mutations.len() + sidecar_mutations.len();
         if count == 0 {
             return 0;
         }
 
-        // Start transaction and stage the decision
+        // Start transaction and stage decisions
         if !open_txn {
             let _ = self.witch.start_transaction("Deploy");
         }
-        let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
-            DecisionKey::Deploy,
-            "Deploy operations",
-            mutations,
-            gesture,
-        );
+        if !mutations.is_empty() {
+            let _ = super::super::operator_decisions::stage_decision(
+                &mut self.witch,
+                DecisionKey::Deploy,
+                "Deploy operations",
+                mutations,
+                gesture,
+            );
+        }
+        if !sidecar_mutations.is_empty() {
+            let _ = super::super::operator_decisions::stage_decision(
+                &mut self.witch,
+                DecisionKey::DeploySidecars,
+                &format!("Deploy cover art ({} images)", sidecar_mutations.len()),
+                sidecar_mutations,
+                gesture,
+            );
+        }
 
         count
     }

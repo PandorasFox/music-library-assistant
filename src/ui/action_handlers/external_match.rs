@@ -7,6 +7,7 @@
 use crate::db::types::Zone;
 use crate::meta::decisions::DecisionKey;
 use crate::meta::mutations::Mutation;
+use crate::meta::mutations::indexing::DropExternalMatchMutation;
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::meta::mutations::TagOp;
 use crate::meta::views::ExternalMatchReviewEntry;
@@ -74,14 +75,30 @@ impl App {
     }
 
     /// Start external match review with pre-filtered entries (from the lateral view).
+    ///
+    /// Filters out entries whose inodes already have staged decisions (accept or drop).
     fn start_external_match_review_with(&mut self, entries: Vec<ExternalMatchReviewEntry>) {
-        if entries.is_empty() {
+        // Collect inodes that already have staged decisions
+        let staged_inodes: std::collections::HashSet<i64> = self.witch.decision_keys()
+            .into_iter()
+            .filter_map(|key| match key {
+                DecisionKey::ExternalMatch { inode } => Some(inode),
+                DecisionKey::DropExternalMatch { inode } => Some(inode),
+                _ => None,
+            })
+            .collect();
+
+        let filtered: Vec<_> = entries.into_iter()
+            .filter(|e| !staged_inodes.contains(&e.inode))
+            .collect();
+
+        if filtered.is_empty() {
             self.status_message = Some("No external matches to review".to_string());
             return;
         }
 
         let _ = self.witch.start_transaction("External match review");
-        let state = external_match_modal::ExternalMatchReviewState::new(entries);
+        let state = external_match_modal::ExternalMatchReviewState::new(filtered);
         self.view = ActiveView::ExternalMatchReview(state);
     }
 
@@ -100,6 +117,10 @@ impl App {
             external_match_modal::ExternalMatchReviewAction::Accept => {
                 let Some(w) = witness else { return };
                 self.stage_external_match_accept(w);
+            }
+            external_match_modal::ExternalMatchReviewAction::DropSelected => {
+                let Some(w) = witness else { return };
+                self.stage_external_match_drops(w);
             }
             external_match_modal::ExternalMatchReviewAction::Dismiss => {
                 // Skip to next entry without staging a mutation.
@@ -122,6 +143,46 @@ impl App {
                     .spawn();
             }
         }
+    }
+
+    /// Stage drop mutations for all selected entries.
+    fn stage_external_match_drops(&mut self, gesture: &witness::ConfirmationGesture) {
+        let inodes: Vec<i64> = {
+            let state = match self.view {
+                ActiveView::ExternalMatchReview(ref state) => state,
+                _ => return,
+            };
+
+            if state.selection.selection_count() == 0 {
+                self.status_message = Some("No files selected".to_string());
+                return;
+            }
+
+            state.selection.selected_indices()
+                .iter()
+                .filter_map(|&idx| state.entries.get(idx).map(|e| e.inode))
+                .collect()
+        };
+
+        for inode in &inodes {
+            let mutation = Mutation::DropExternalMatch(DropExternalMatchMutation { inode: *inode });
+            let key = DecisionKey::DropExternalMatch { inode: *inode };
+            let label = "Drop external match";
+
+            let _ = super::super::operator_decisions::stage_decision(
+                &mut self.witch,
+                key,
+                label,
+                vec![mutation],
+                gesture,
+            );
+        }
+
+        // Clear selection and show review
+        if let ActiveView::ExternalMatchReview(ref mut state) = self.view {
+            state.selection = crate::ui::bulk_selection::BulkSelectionState::new();
+        }
+        self.after_staging_decisions();
     }
 
     /// Stage tag edit mutations from the current entry's external match diffs.

@@ -3,6 +3,7 @@
 use ratatui::layout::Rect;
 
 use crate::ui::action_handlers::witness::ConfirmationGesture;
+use crate::ui::bulk_selection::BulkSelectionState;
 use crate::ui::input::InputAction;
 
 use crate::meta::views::ExternalMatchReviewEntry;
@@ -11,6 +12,7 @@ use crate::ui::widgets::{ButtonRects, FocusPane, ListClickTargets, rect_contains
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExternalMatchButton {
     Accept,
+    DropSelected,
     Dismiss,
     Cancel,
 }
@@ -19,14 +21,16 @@ impl ExternalMatchButton {
     pub fn left(self) -> Self {
         match self {
             Self::Accept => Self::Accept,
-            Self::Dismiss => Self::Accept,
+            Self::DropSelected => Self::Accept,
+            Self::Dismiss => Self::DropSelected,
             Self::Cancel => Self::Dismiss,
         }
     }
 
     pub fn right(self) -> Self {
         match self {
-            Self::Accept => Self::Dismiss,
+            Self::Accept => Self::DropSelected,
+            Self::DropSelected => Self::Dismiss,
             Self::Dismiss => Self::Cancel,
             Self::Cancel => Self::Cancel,
         }
@@ -38,6 +42,8 @@ pub enum ExternalMatchReviewAction {
     None,
     /// Apply external tag values for the selected file.
     Accept,
+    /// Drop external match data for all selected files.
+    DropSelected,
     /// Skip this file without mutation.
     Dismiss,
     /// Discard transaction and return to Insights.
@@ -56,6 +62,8 @@ pub struct ExternalMatchReviewState {
     pub click_targets: ListClickTargets,
     /// Click rect for the MusicBrainz recording link (set during render).
     pub recording_link_rect: Option<Rect>,
+    /// Multi-selection state for bulk drop operations.
+    pub selection: BulkSelectionState,
 }
 
 impl ExternalMatchReviewState {
@@ -69,6 +77,7 @@ impl ExternalMatchReviewState {
             button_rects: ButtonRects::new(),
             click_targets: ListClickTargets::new(),
             recording_link_rect: None,
+            selection: BulkSelectionState::new(),
         }
     }
 
@@ -106,6 +115,10 @@ impl ExternalMatchReviewState {
                 "accept" => {
                     self.selected_button = ExternalMatchButton::Accept;
                     Some(ExternalMatchReviewAction::Accept)
+                }
+                "drop_selected" => {
+                    self.selected_button = ExternalMatchButton::DropSelected;
+                    Some(ExternalMatchReviewAction::DropSelected)
                 }
                 "dismiss" => {
                     self.selected_button = ExternalMatchButton::Dismiss;
@@ -181,11 +194,18 @@ impl ExternalMatchReviewState {
                 ExternalMatchReviewAction::None
             }
 
+            // Space: toggle selection on current entry
+            InputAction::Toggle => {
+                self.selection.toggle(self.cursor);
+                ExternalMatchReviewAction::None
+            }
+
             // Enter: confirm selected button
             InputAction::Confirm => {
                 if self.focus_pane == FocusPane::Buttons {
                     match self.selected_button {
                         ExternalMatchButton::Accept => ExternalMatchReviewAction::Accept,
+                        ExternalMatchButton::DropSelected => ExternalMatchReviewAction::DropSelected,
                         ExternalMatchButton::Dismiss => ExternalMatchReviewAction::Dismiss,
                         ExternalMatchButton::Cancel => ExternalMatchReviewAction::Cancel,
                     }

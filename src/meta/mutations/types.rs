@@ -20,7 +20,7 @@ use super::indexing::{
     DropDirectoryFromIndexMutation, AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation,
     FlushTagsToDiskMutation, AssimilateDiskTagsToDbMutation, EmitCanonicalTagMutation,
     EmitExpectedOverlapMutation, EmitExpectedDuplicateMutation,
-    EmitExpectedMissingTagMutation,
+    EmitExpectedMissingTagMutation, DropExternalMatchMutation,
 };
 use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
@@ -314,6 +314,9 @@ pub enum Mutation {
     /// Mark inodes as expected-missing-tag (suppress future MissingAlbumSingle signals).
     EmitExpectedMissingTag(EmitExpectedMissingTagMutation),
 
+    /// Drop external match data for an inode.
+    DropExternalMatch(DropExternalMatchMutation),
+
     // ========================================================================
     // Config Operations (struct-backed — see config_edit.rs for trait impl)
     // ========================================================================
@@ -355,6 +358,7 @@ impl Mutation {
             Mutation::EmitExpectedOverlap(m) => m,
             Mutation::EmitExpectedDuplicate(m) => m,
             Mutation::EmitExpectedMissingTag(m) => m,
+            Mutation::DropExternalMatch(m) => m,
             Mutation::ApplyConfigEdits(m) => m,
             Mutation::ApplyDirConfigEdit(m) => m,
             Mutation::ApplyBatchDirConfigEdits(m) => m,
@@ -380,6 +384,7 @@ impl Mutation {
                 | Mutation::EmitExpectedOverlap(_)
                 | Mutation::EmitExpectedDuplicate(_)
                 | Mutation::EmitExpectedMissingTag(_)
+                | Mutation::DropExternalMatch(_)
             // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
             // Note: InboxToCorpus moves files + updates DB, so NOT db-only
             // Note: ApplyBatchDirConfigEdits writes to disk, so NOT db-only

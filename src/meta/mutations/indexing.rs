@@ -148,6 +148,12 @@ pub struct EmitExpectedMissingTagMutation {
     pub inodes: Vec<i64>,
 }
 
+/// Drop external match data for an inode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DropExternalMatchMutation {
+    pub inode: i64,
+}
+
 // ============================================================================
 // MutationExecutor Implementations
 // ============================================================================
@@ -514,6 +520,41 @@ impl MutationExecutor for EmitExpectedDuplicateMutation {
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
         vec![DiffEntry::new("Expected duplicate", "[flagged]", &self.fingerprint_key)]
+    }
+}
+
+impl MutationExecutor for DropExternalMatchMutation {
+    fn label(&self) -> &'static str { "Drop external match" }
+    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
+
+    fn execute(&self, ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
+        let result = execute_drop_external_match(self.inode, ctx.witness);
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        MutationResult {
+            _mutation: Mutation::DropExternalMatch(self.clone()),
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+
+    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::None }
+    fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
+    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::EMPTY }
+
+    fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            format!("inode {}", self.inode),
+            "[external match]",
+            "[dropped]",
+        )]
     }
 }
 
@@ -1412,6 +1453,28 @@ pub fn execute_emit_expected_missing_tag(
     crate::logging::log_general(format!(
         "[MUTATION] EmitExpectedMissingTag: suppressed {} inodes",
         inodes.len()
+    ));
+
+    Ok(())
+}
+
+/// Execute DropExternalMatch mutation - delete external match data for an inode.
+///
+/// Routes write through signal_sender (fire-and-forget).
+pub fn execute_drop_external_match(
+    inode: i64,
+    witness: &MutationExecutionWitness,
+) -> Result<()> {
+    use crate::db::write_thread;
+
+    let sender = write_thread::signal_sender()
+        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+
+    sender.drop_external_match(inode, witness);
+
+    crate::logging::log_general(format!(
+        "[MUTATION] DropExternalMatch: inode {}",
+        inode
     ));
 
     Ok(())

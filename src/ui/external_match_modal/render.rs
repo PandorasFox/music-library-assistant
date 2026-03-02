@@ -30,11 +30,21 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
 }
 
 fn render_info_bar(f: &mut Frame, area: Rect, state: &ExternalMatchReviewState) {
-    let title = format!(
-        " External Match Review \u{2014} {} file{} ",
-        state.entries.len(),
-        if state.entries.len() == 1 { "" } else { "s" },
-    );
+    let sel_count = state.selection.selection_count();
+    let title = if sel_count > 0 {
+        format!(
+            " External Match Review \u{2014} {} file{} ({} selected) ",
+            state.entries.len(),
+            if state.entries.len() == 1 { "" } else { "s" },
+            sel_count,
+        )
+    } else {
+        format!(
+            " External Match Review \u{2014} {} file{} ",
+            state.entries.len(),
+            if state.entries.len() == 1 { "" } else { "s" },
+        )
+    };
 
     let block = Block::default()
         .title(title)
@@ -76,9 +86,11 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewSt
         state.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
     }
 
+    let selection_active = state.selection.is_active();
     let entries: Vec<PathEntry> = state.entries
         .iter()
-        .map(|entry| {
+        .enumerate()
+        .map(|(idx, entry)| {
             let marker = match entry.classification {
                 ExternalMatchClassificationView::ContentDiff => "!",
                 ExternalMatchClassificationView::MetadataOnly => "?",
@@ -88,14 +100,23 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewSt
                 ExternalMatchClassificationView::MetadataOnly => Color::Cyan,
             };
 
+            let mut prefix = Vec::new();
+            if selection_active {
+                let sel_marker = state.selection.marker(idx);
+                let sel_color = if state.selection.is_selected(idx) { Color::Green } else { Color::DarkGray };
+                prefix.push(Span::styled(
+                    format!("{} ", sel_marker),
+                    Style::default().fg(sel_color),
+                ));
+            }
+            prefix.push(Span::styled(
+                format!("{} ", marker),
+                Style::default().fg(marker_color),
+            ));
+
             PathEntry {
                 path: &entry.path,
-                prefix: vec![
-                    Span::styled(
-                        format!("{} ", marker),
-                        Style::default().fg(marker_color),
-                    ),
-                ],
+                prefix,
                 suffix: vec![
                     Span::styled(
                         format!(" {:.0}%", entry.confidence * 100.0),
@@ -215,10 +236,11 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewStat
     state.button_rects.clear();
 
     let accept_label = " Accept Tags ";
+    let drop_label = " Drop Selected ";
     let dismiss_label = " Dismiss ";
     let cancel_label = " Cancel ";
 
-    let total_width = accept_label.len() + 2 + dismiss_label.len() + 2 + cancel_label.len();
+    let total_width = accept_label.len() + 2 + drop_label.len() + 2 + dismiss_label.len() + 2 + cancel_label.len();
     let start_x = inner.x + (inner.width.saturating_sub(total_width as u16)) / 2;
 
     let mut x = start_x;
@@ -226,6 +248,10 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewStat
     let accept_rect = Rect::new(x, inner.y, accept_label.len() as u16, 1);
     state.button_rects.set("accept", accept_rect);
     x += accept_label.len() as u16 + 2;
+
+    let drop_rect = Rect::new(x, inner.y, drop_label.len() as u16, 1);
+    state.button_rects.set("drop_selected", drop_rect);
+    x += drop_label.len() as u16 + 2;
 
     let dismiss_rect = Rect::new(x, inner.y, dismiss_label.len() as u16, 1);
     state.button_rects.set("dismiss", dismiss_rect);
@@ -238,6 +264,12 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewStat
         Style::default().fg(Color::Black).bg(Color::Green)
     } else {
         Style::default().fg(Color::Green)
+    };
+
+    let drop_style = if state.selected_button == ExternalMatchButton::DropSelected && is_focused {
+        Style::default().fg(Color::Black).bg(Color::Red)
+    } else {
+        Style::default().fg(Color::Red)
     };
 
     let dismiss_style = if state.selected_button == ExternalMatchButton::Dismiss && is_focused {
@@ -256,14 +288,20 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewStat
         Span::raw("  "),
         Span::styled(accept_label, accept_style),
         Span::raw("  "),
+        Span::styled(drop_label, drop_style),
+        Span::raw("  "),
         Span::styled(dismiss_label, dismiss_style),
         Span::raw("  "),
         Span::styled(cancel_label, cancel_style),
         Span::raw("  "),
     ]);
 
+    let sel_count = state.selection.selection_count();
     let hint_style = Style::default().fg(Color::DarkGray);
-    let hint_line = Line::from(vec![
+    let mut hint_spans = vec![
+        Span::styled("Space", hint_style),
+        Span::styled(" select", hint_style),
+        Span::styled("  \u{00b7}  ", hint_style),
         Span::styled("Shift+\u{2191}\u{2193}", hint_style),
         Span::styled(" focus", hint_style),
         Span::styled("  \u{00b7}  ", hint_style),
@@ -272,7 +310,14 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewStat
         Span::styled("  \u{00b7}  ", hint_style),
         Span::styled("Enter", hint_style),
         Span::styled(" confirm", hint_style),
-    ]);
+    ];
+    if sel_count > 0 {
+        hint_spans.push(Span::styled(
+            format!("  \u{00b7}  {} selected", sel_count),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    let hint_line = Line::from(hint_spans);
 
     let para = Paragraph::new(vec![buttons_line, hint_line]).alignment(Alignment::Center);
     f.render_widget(para, inner);

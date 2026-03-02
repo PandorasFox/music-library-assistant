@@ -68,6 +68,8 @@ pub enum DecisionKey {
     IntakeIndex,
     /// External match tag acceptance (per inode)
     ExternalMatch { inode: i64 },
+    /// Drop external match data (per inode)
+    DropExternalMatch { inode: i64 },
     /// Disc extraction resolution (per group)
     DiscExtraction { group_index: usize },
     /// Edit reversal from history (per session)
@@ -138,6 +140,8 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::IntakeIndex => write!(f, "Intake Index"),
             DecisionKey::ExternalMatch { inode } =>
                 write!(f, "External Match:{}", inode),
+            DecisionKey::DropExternalMatch { inode } =>
+                write!(f, "Drop External Match:{}", inode),
             DecisionKey::DiscExtraction { group_index } =>
                 write!(f, "Disc Extraction:{}", group_index),
             DecisionKey::EditReversal { session_label } =>

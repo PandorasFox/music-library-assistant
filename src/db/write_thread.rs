@@ -438,6 +438,11 @@ enum DbWriteOp {
         source: i64,
     },
 
+    /// Drop all external match data for an inode.
+    DropExternalMatch {
+        inode: i64,
+    },
+
     // =========================================================================
     // Edit History Purge Operations (operator-confirmed UI action)
     // =========================================================================
@@ -1154,6 +1159,16 @@ impl SignalWriteSender {
         });
     }
 
+    /// Drop all external match data for an inode.
+    pub fn drop_external_match(
+        &self,
+        inode: i64,
+        _witness: &MutationExecutionWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::DropExternalMatch { inode });
+    }
+
     // =========================================================================
     // Edit History Purge Operations (operator-confirmed UI action)
     // =========================================================================
@@ -1680,6 +1695,12 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::DeleteExternalRetry { inode, source } => {
             with_retry("delete_external_retry", &inode.to_string(), || {
                 execute_delete_external_retry(db, *inode, *source)
+            });
+        }
+
+        DbWriteOp::DropExternalMatch { inode } => {
+            with_retry("drop_external_match", &inode.to_string(), || {
+                execute_drop_external_match(db, *inode)
             });
         }
 
@@ -2566,6 +2587,20 @@ fn execute_delete_external_retry(
     db.conn().execute(
         "DELETE FROM external_retry WHERE inode = ?1 AND source = ?2",
         params![inode, source],
+    )?;
+
+    Ok(())
+}
+
+fn execute_drop_external_match(
+    db: &Database,
+    inode: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        "DELETE FROM external_matches WHERE inode = ?1",
+        params![inode],
     )?;
 
     Ok(())

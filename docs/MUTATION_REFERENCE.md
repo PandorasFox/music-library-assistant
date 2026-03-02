@@ -136,6 +136,12 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 
 Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutations documented in Tag Operations above. They clear OutOfBandTagSync, OutOfBandTagConflict, and tag_mismatch signals.
 
+### External Match Operations
+
+| Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
+|----------|---------------------|-----------------|-----------------|-------|
+| DropExternalMatch | — | — | — | Delete external match data for an inode. `is_db_only: true`, `signal_clear_scope: None`, `affected_inodes: [inode]`. Triggers dirty inode marking for recomputation. |
+
 ### Signal Emission Operations
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |

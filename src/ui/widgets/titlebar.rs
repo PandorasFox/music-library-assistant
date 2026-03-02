@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! ┌──────────────────────────────────────────────┐┌──────────────┐
-//! │ Search | Files | Health | ... | Deploy        ││  mm beta 8  │
+//! │ Search | Files | Health | ... | History | ...  ││  mm beta 8  │
 //! └──────────────────────────────────────────────┘└──────────────┘
 //! ```
 
@@ -64,13 +64,13 @@ impl LateralView {
             LateralView::Config => LateralView::Search,
             LateralView::Search => LateralView::Files,
             LateralView::Files => LateralView::Health,
-            LateralView::Health => LateralView::History,
-            LateralView::History => {
+            LateralView::Health => {
                 if transactions_open { LateralView::Transaction } else { LateralView::Inbox }
             }
             LateralView::Transaction => LateralView::Inbox,
             LateralView::Inbox => LateralView::Deploy,
-            LateralView::Deploy => LateralView::ExternalMatches,
+            LateralView::Deploy => LateralView::History,
+            LateralView::History => LateralView::ExternalMatches,
             LateralView::ExternalMatches => LateralView::Config,
         }
     }
@@ -82,13 +82,13 @@ impl LateralView {
             LateralView::Search => LateralView::Config,
             LateralView::Files => LateralView::Search,
             LateralView::Health => LateralView::Files,
-            LateralView::History => LateralView::Health,
-            LateralView::Transaction => LateralView::History,
+            LateralView::Transaction => LateralView::Health,
             LateralView::Inbox => {
-                if transactions_open { LateralView::Transaction } else { LateralView::History }
+                if transactions_open { LateralView::Transaction } else { LateralView::Health }
             }
             LateralView::Deploy => LateralView::Inbox,
-            LateralView::ExternalMatches => LateralView::Deploy,
+            LateralView::History => LateralView::Deploy,
+            LateralView::ExternalMatches => LateralView::History,
         }
     }
 
@@ -99,13 +99,13 @@ impl LateralView {
             LateralView::Search,
             LateralView::Files,
             LateralView::Health,
-            LateralView::History,
         ];
         if transactions_open {
             views.push(LateralView::Transaction);
         }
         views.push(LateralView::Inbox);
         views.push(LateralView::Deploy);
+        views.push(LateralView::History);
         views.push(LateralView::ExternalMatches);
         views
     }
@@ -230,14 +230,14 @@ mod tests {
 
     #[test]
     fn test_lateral_view_cycling() {
-        // Test forward cycling without transactions: Config → Search → Files → Health → History → Inbox → Deploy → ExternalMatches → Config
+        // Test forward cycling without transactions: Config → Search → Files → Health → Inbox → Deploy → History → ExternalMatches → Config
         let view = LateralView::Config;
         assert_eq!(view.next(false), LateralView::Search);
         assert_eq!(view.next(false).next(false), LateralView::Files);
         assert_eq!(view.next(false).next(false).next(false), LateralView::Health);
-        assert_eq!(view.next(false).next(false).next(false).next(false), LateralView::History);
-        assert_eq!(view.next(false).next(false).next(false).next(false).next(false), LateralView::Inbox);
-        assert_eq!(view.next(false).next(false).next(false).next(false).next(false).next(false), LateralView::Deploy);
+        assert_eq!(view.next(false).next(false).next(false).next(false), LateralView::Inbox);
+        assert_eq!(view.next(false).next(false).next(false).next(false).next(false), LateralView::Deploy);
+        assert_eq!(view.next(false).next(false).next(false).next(false).next(false).next(false), LateralView::History);
         assert_eq!(view.next(false).next(false).next(false).next(false).next(false).next(false).next(false), LateralView::ExternalMatches);
         assert_eq!(view.next(false).next(false).next(false).next(false).next(false).next(false).next(false).next(false), LateralView::Config);
 
@@ -245,15 +245,15 @@ mod tests {
         let view = LateralView::Search;
         assert_eq!(view.prev(false), LateralView::Config);
         assert_eq!(view.prev(false).prev(false), LateralView::ExternalMatches);
-        assert_eq!(view.prev(false).prev(false).prev(false), LateralView::Deploy);
+        assert_eq!(view.prev(false).prev(false).prev(false), LateralView::History);
 
-        // Test forward cycling with transactions: History → Transaction → Inbox
-        assert_eq!(LateralView::History.next(true), LateralView::Transaction);
+        // Test forward cycling with transactions: Health → Transaction → Inbox
+        assert_eq!(LateralView::Health.next(true), LateralView::Transaction);
         assert_eq!(LateralView::Transaction.next(true), LateralView::Inbox);
 
-        // Test backward cycling with transactions: Inbox → Transaction → History
+        // Test backward cycling with transactions: Inbox → Transaction → Health
         assert_eq!(LateralView::Inbox.prev(true), LateralView::Transaction);
-        assert_eq!(LateralView::Transaction.prev(true), LateralView::History);
+        assert_eq!(LateralView::Transaction.prev(true), LateralView::Health);
     }
 
     #[test]

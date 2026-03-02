@@ -1591,6 +1591,26 @@ impl App {
                 state.handle_click(x, y);
                 None
             }
+            ActiveView::CorpusBrowser(ref mut state) => {
+                state.handle_click(x, y);
+                None
+            }
+            ActiveView::History(ref mut state) => {
+                state.handle_click(x, y);
+                None
+            }
+            ActiveView::ExternalMatches(ref mut state) => {
+                state.handle_click(x, y);
+                None
+            }
+            ActiveView::Inbox(ref mut state) => {
+                state.handle_click(x, y);
+                None
+            }
+            ActiveView::TagSearch(ref mut state) => {
+                state.handle_click(x, y);
+                None
+            }
             _ => None,
         };
 

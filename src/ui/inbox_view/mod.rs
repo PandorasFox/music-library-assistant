@@ -82,6 +82,8 @@ pub struct InboxViewState {
     pub selected: usize,
     /// True when the Witch has pending work (dims UI, blocks actions).
     pub busy: bool,
+    /// Click targets for list items (set during render).
+    pub click_targets: crate::ui::widgets::ListClickTargets,
 }
 
 impl InboxViewState {
@@ -90,6 +92,18 @@ impl InboxViewState {
             entries: Vec::new(),
             selected: 0,
             busy: false,
+            click_targets: Default::default(),
+        }
+    }
+
+    /// Handle mouse click for cursor selection.
+    pub fn handle_click(&mut self, x: u16, y: u16) {
+        if let Some(id) = self.click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.entries.len() {
+                    self.selected = idx;
+                }
+            }
         }
     }
 

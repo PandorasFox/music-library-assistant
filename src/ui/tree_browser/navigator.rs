@@ -190,6 +190,14 @@ impl TreeNavigator {
         }
     }
 
+    /// Set cursor to a specific index (clamped to valid range).
+    pub fn set_cursor(&mut self, idx: usize) {
+        if idx < self.entries.len() {
+            self.cursor_idx = idx;
+            self.ensure_visible();
+        }
+    }
+
     /// Move cursor down.
     pub fn move_down(&mut self) {
         if self.cursor_idx + 1 < self.entries.len() {

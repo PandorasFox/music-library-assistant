@@ -198,15 +198,15 @@ fn render_content(
             vname = "health";
             insights_view::render_insights_view(f, area, view);
         }
-        ActiveView::History(ref state) => {
+        ActiveView::History(ref mut state) => {
             vname = "history";
             super::history_view::render::render(f, area, state);
         }
-        ActiveView::ExternalMatches(ref state) => {
+        ActiveView::ExternalMatches(ref mut state) => {
             vname = "external_matches";
             super::external_match_view::render::render(f, area, state);
         }
-        ActiveView::Inbox(ref state) => {
+        ActiveView::Inbox(ref mut state) => {
             vname = "inbox";
             inbox_view::render_inbox_view(f, area, state);
         }
@@ -215,7 +215,7 @@ fn render_content(
             let decisions = transaction_review::fetch_decision_summaries(&app.witch);
             tabbed_transaction_review::render(f, area, state, &decisions);
         }
-        ActiveView::TagSearch(ref state) => {
+        ActiveView::TagSearch(ref mut state) => {
             vname = "tag_search";
             state.render(f, area);
         }

@@ -65,6 +65,8 @@ pub(crate) struct ExternalMatchesViewState {
     pub has_api_key: bool,
     /// Latest fetch progress snapshot from the Witch
     pub fetch_progress: Option<crate::witch::external_fetch::FetchProgress>,
+    /// Click targets for navigable entries (set during render).
+    pub click_targets: crate::ui::widgets::ListClickTargets,
 }
 
 // ============================================================================
@@ -80,6 +82,19 @@ impl ExternalMatchesViewState {
             fetch_active,
             has_api_key,
             fetch_progress: None,
+            click_targets: Default::default(),
+        }
+    }
+
+    /// Handle mouse click for cursor selection.
+    pub fn handle_click(&mut self, x: u16, y: u16) {
+        if let Some(id) = self.click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                let total = self.navigable_entries().len();
+                if idx < total {
+                    self.cursor = idx;
+                }
+            }
         }
     }
 

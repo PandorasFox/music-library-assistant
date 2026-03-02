@@ -96,6 +96,8 @@ pub(crate) struct HistoryViewState {
     pub detail: Option<SessionDetail>,
     /// Phase of the view
     pub phase: HistoryPhase,
+    /// Click targets for the currently visible list (set during render).
+    pub click_targets: crate::ui::widgets::ListClickTargets,
 }
 
 /// Expanded detail of a single session.
@@ -154,6 +156,35 @@ impl HistoryViewState {
             scroll: 0,
             detail: None,
             phase: HistoryPhase::SessionList,
+            click_targets: Default::default(),
+        }
+    }
+
+    /// Handle mouse click for cursor selection.
+    pub fn handle_click(&mut self, x: u16, y: u16) {
+        if let Some(id) = self.click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                match &mut self.phase {
+                    HistoryPhase::SessionList => {
+                        if idx < self.sessions.len() {
+                            self.cursor = idx;
+                        }
+                    }
+                    HistoryPhase::SessionDetail => {
+                        if let Some(ref mut detail) = self.detail {
+                            if idx < detail.edits.len() {
+                                detail.detail_cursor = idx;
+                            }
+                        }
+                    }
+                    HistoryPhase::ConflictResolution(ref mut cr) => {
+                        if idx < cr.conflicts.len() {
+                            cr.conflict_cursor = idx;
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 

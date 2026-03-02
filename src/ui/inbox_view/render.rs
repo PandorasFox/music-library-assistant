@@ -16,11 +16,11 @@ use ratatui::{
 use super::{InboxInsightAction, InboxViewState};
 
 /// Render the full inbox view (titlebar is rendered by render_app).
-pub fn render_inbox_view(f: &mut Frame, area: Rect, state: &InboxViewState) {
+pub fn render_inbox_view(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
     render_inbox_content(f, area, state);
 }
 
-fn render_inbox_content(f: &mut Frame, area: Rect, state: &InboxViewState) {
+fn render_inbox_content(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
     let busy = state.busy;
     let border_color = if busy { Color::DarkGray } else { Color::Gray };
 
@@ -30,6 +30,14 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &InboxViewState) {
         .border_style(Style::default().fg(border_color));
     let inner = block.inner(area);
     f.render_widget(block, area);
+
+    // Populate click targets
+    state.click_targets.clear();
+    state.click_targets.set_list_area(inner);
+    for (i, _) in state.entries.iter().enumerate() {
+        if i >= inner.height as usize { break; }
+        state.click_targets.add_row(i.to_string(), inner.y + i as u16);
+    }
 
     if state.entries.is_empty() {
         let empty = Paragraph::new("No files in inbox")

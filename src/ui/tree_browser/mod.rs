@@ -41,6 +41,8 @@ pub struct TreeBrowserState {
     navigator: TreeNavigator,
     /// Variant-specific state and behavior
     variant: BrowserVariant,
+    /// Click targets for tree entries (set during render).
+    pub click_targets: crate::ui::widgets::ListClickTargets,
 }
 
 impl TreeBrowserState {
@@ -78,7 +80,7 @@ impl TreeBrowserState {
         navigator.focus_and_expand(&corpus_dir);
         let variant = BrowserVariant::CorpusBrowser(CorpusBrowserVariant::new(variant_config, corpus_dir));
 
-        Self { navigator, variant }
+        Self { navigator, variant, click_targets: Default::default() }
     }
 
     /// Handle a semantic input action.
@@ -94,7 +96,7 @@ impl TreeBrowserState {
         art_picker: &mut AlbumArtPicker,
         art_cache: &mut AlbumArtCache,
     ) {
-        render::render(f, area, &mut self.navigator, &mut self.variant, art_picker, art_cache);
+        render::render(f, area, &mut self.navigator, &mut self.variant, art_picker, art_cache, &mut self.click_targets);
     }
 
     // =========================================================================
@@ -168,6 +170,15 @@ impl TreeBrowserState {
     pub fn config_panel(&self) -> Option<&variants::corpus::DirConfigPanelState> {
         let BrowserVariant::CorpusBrowser(ref v) = self.variant;
         v.config_panel.as_ref()
+    }
+
+    /// Handle mouse click for cursor selection.
+    pub fn handle_click(&mut self, x: u16, y: u16) {
+        if let Some(id) = self.click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                self.navigator.set_cursor(idx);
+            }
+        }
     }
 
     /// Set pending edit paths for visual markers.

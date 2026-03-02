@@ -19,6 +19,8 @@ use crate::ui::widgets::{
     render_album_art_preview, render_no_art_placeholder,
 };
 
+use crate::ui::widgets::ListClickTargets;
+
 use super::entry::{DeployMarker, EntryKind, TreeEntry};
 use super::navigator::TreeNavigator;
 use super::variants::BrowserVariant;
@@ -31,8 +33,9 @@ pub fn render(
     variant: &mut BrowserVariant,
     art_picker: &mut AlbumArtPicker,
     art_cache: &mut AlbumArtCache,
+    click_targets: &mut ListClickTargets,
 ) {
-    render_corpus_browser(f, area, nav, variant, art_picker, art_cache);
+    render_corpus_browser(f, area, nav, variant, art_picker, art_cache, click_targets);
 }
 
 /// Render corpus browser layout: content + hint line.
@@ -43,6 +46,7 @@ fn render_corpus_browser(
     variant: &mut BrowserVariant,
     art_picker: &mut AlbumArtPicker,
     art_cache: &mut AlbumArtCache,
+    click_targets: &mut ListClickTargets,
 ) {
     // Carve out 1 line at the bottom for control hints
     let outer = Layout::default()
@@ -75,7 +79,7 @@ fn render_corpus_browser(
             .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
             .split(content_area);
 
-        render_corpus_tree(f, h_chunks[0], nav, variant, &pending_edit_paths, &corpus_dir);
+        render_corpus_tree(f, h_chunks[0], nav, variant, &pending_edit_paths, &corpus_dir, click_targets);
 
         // Render config panel
         let BrowserVariant::CorpusBrowser(ref v) = variant;
@@ -89,7 +93,7 @@ fn render_corpus_browser(
             .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
             .split(content_area);
 
-        render_corpus_tree(f, h_chunks[0], nav, variant, &pending_edit_paths, &corpus_dir);
+        render_corpus_tree(f, h_chunks[0], nav, variant, &pending_edit_paths, &corpus_dir, click_targets);
 
         // Render art preview for selected file
         let selected_entry = nav.current_entry();
@@ -97,7 +101,7 @@ fn render_corpus_browser(
         let is_image = selected_entry.is_some_and(|e| e.kind == EntryKind::ImageFile);
         render_file_art_preview(f, h_chunks[1], selected_path.as_deref(), is_image, art_picker, art_cache);
     } else {
-        render_corpus_tree(f, content_area, nav, variant, &pending_edit_paths, &corpus_dir);
+        render_corpus_tree(f, content_area, nav, variant, &pending_edit_paths, &corpus_dir, click_targets);
     }
 
     // Render control hints
@@ -191,6 +195,7 @@ fn render_corpus_tree(
     variant: &mut BrowserVariant,
     pending_edit_paths: &HashSet<PathBuf>,
     corpus_dir: &Path,
+    click_targets: &mut ListClickTargets,
 ) {
     // Layout: Filter bar | Tree (full width)
     let main_chunks = Layout::default()
@@ -205,7 +210,7 @@ fn render_corpus_tree(
     render_filter_bar(f, main_chunks[0], nav);
 
     // Tree pane at full width
-    render_tree_pane(f, main_chunks[1], nav, pending_edit_paths, corpus_dir);
+    render_tree_pane(f, main_chunks[1], nav, pending_edit_paths, corpus_dir, click_targets);
 
     // Overlays (match selection modal)
     variant.render_overlays(f, area);
@@ -244,6 +249,7 @@ fn render_tree_pane(
     nav: &mut TreeNavigator,
     pending_edit_paths: &HashSet<PathBuf>,
     corpus_dir: &Path,
+    click_targets: &mut ListClickTargets,
 ) {
     let inner_height = area.height.saturating_sub(2) as usize;
     nav.set_visible_height(inner_height);
@@ -251,6 +257,20 @@ fn render_tree_pane(
     let entries = nav.entries();
     let cursor_idx = nav.cursor_idx();
     let scroll = nav.scroll_offset();
+
+    // Populate click targets
+    let inner_area = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    click_targets.clear();
+    click_targets.set_list_area(inner_area);
+    for (vis_idx, entry_idx) in (scroll..).take(inner_height).enumerate() {
+        if entry_idx >= entries.len() { break; }
+        click_targets.add_row(entry_idx.to_string(), inner_area.y + vis_idx as u16);
+    }
 
     let lines: Vec<Line> = entries
         .iter()

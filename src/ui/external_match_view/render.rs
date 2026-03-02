@@ -17,7 +17,7 @@ use crate::meta::views::ConfidenceTier;
 // Hint text color for "Press Enter to..." prompts
 const HINT_COLOR: Color = Color::DarkGray;
 
-pub fn render(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState) {
+pub fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewState) {
     // Two-pane horizontal split: 65% left, 35% right
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -35,7 +35,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState) {
 // Left Pane: Entry List
 // ============================================================================
 
-fn render_left_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState) {
+fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewState) {
     let block = Block::default()
         .title(" Ext. Matches ")
         .borders(Borders::ALL)
@@ -49,6 +49,10 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState)
     }
 
     let mut lines: Vec<Line> = Vec::new();
+
+    // Populate click targets: track line → nav_index mapping
+    state.click_targets.clear();
+    state.click_targets.set_list_area(inner);
 
     // Section header: Actions
     lines.push(Line::from(Span::styled(
@@ -83,11 +87,13 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState)
             Style::default().fg(Color::White)
         };
 
+        let line_idx = lines.len();
         lines.push(Line::from(vec![
             Span::styled(marker, label_style),
             Span::styled("Fetch AcoustID Data  ", label_style),
             Span::styled(format!("{:<12}", status_label), Style::default().fg(status_color)),
         ]));
+        state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
         nav_index += 1;
     }
 
@@ -107,6 +113,7 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState)
                 let selected = state.cursor == nav_index;
                 let marker_char = "?";
                 let marker_color = Color::Cyan;
+                let line_idx = lines.len();
                 lines.push(render_bucket_line(
                     selected,
                     marker_char,
@@ -114,6 +121,7 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState)
                     "Untagged files",
                     count,
                 ));
+                state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
                 nav_index += 1;
             }
 
@@ -129,6 +137,7 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState)
                 };
 
                 let label = format!("{} confidence", bucket.tier.label());
+                let line_idx = lines.len();
                 lines.push(render_bucket_line_styled(
                     selected,
                     "!",
@@ -137,6 +146,7 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState)
                     bucket.total,
                     label_dim,
                 ));
+                state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
                 nav_index += 1;
             }
         }

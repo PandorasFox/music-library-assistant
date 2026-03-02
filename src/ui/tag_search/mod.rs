@@ -195,7 +195,7 @@ impl TagSearchState {
     }
 
     /// Render the tag search view (titlebar is rendered by render_app).
-    pub fn render(&self, f: &mut Frame, area: Rect) {
+    pub fn render(&mut self, f: &mut Frame, area: Rect) {
         // Content based on mode
         match self.mode {
             TagSearchMode::QueryBuilder => self.render_query_builder(f, area),
@@ -442,7 +442,7 @@ impl TagSearchState {
         f.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 
-    fn render_results(&self, f: &mut Frame, area: Rect) {
+    fn render_results(&mut self, f: &mut Frame, area: Rect) {
         // Two-pane layout: Results (60%) | Info (40%)
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -453,7 +453,7 @@ impl TagSearchState {
         self.render_results_info(f, chunks[1]);
     }
 
-    fn render_results_list(&self, f: &mut Frame, area: Rect) {
+    fn render_results_list(&mut self, f: &mut Frame, area: Rect) {
         let title = format!("Results ({} tracks)", self.results.len());
         let block = Block::default().borders(Borders::ALL).title(title);
         let inner = render_pane(f, area, block);
@@ -462,6 +462,14 @@ impl TagSearchState {
         // TODO: Re-enable deployment path display when corpus::deploy is available
         let visible_height = inner.height as usize;
         let scroll = self.results_scroll;
+
+        // Populate click targets
+        self.click_targets.clear();
+        self.click_targets.set_list_area(inner);
+        for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
+            if entry_idx >= self.results.len() { break; }
+            self.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        }
 
         let lines: Vec<Line> = self.results
             .iter()

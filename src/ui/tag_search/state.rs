@@ -55,6 +55,9 @@ pub struct TagSearchState {
 
     /// Pending bulk edit audio files (set when showing "gathering" modal).
     pub pending_bulk_edit: Option<Vec<AudioFile>>,
+
+    /// Click targets for results list items (set during render).
+    pub click_targets: crate::ui::widgets::ListClickTargets,
 }
 
 impl Default for TagSearchState {
@@ -76,6 +79,21 @@ impl TagSearchState {
             results_scroll: 0,
             modal: None,
             pending_bulk_edit: None,
+            click_targets: Default::default(),
+        }
+    }
+
+    /// Handle mouse click for cursor selection (results mode only).
+    pub fn handle_click(&mut self, x: u16, y: u16) {
+        if self.mode != TagSearchMode::Results {
+            return;
+        }
+        if let Some(id) = self.click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.results.len() {
+                    self.results_selected = idx;
+                }
+            }
         }
     }
 

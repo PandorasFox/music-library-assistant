@@ -13,23 +13,23 @@ use crate::ui::helpers::truncate_right;
 use crate::ui::widgets::control_colors as cc;
 use crate::ui::widgets::{ConfirmationButton, ConfirmationModal};
 
-pub fn render(f: &mut Frame, area: Rect, state: &HistoryViewState) {
+pub fn render(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
     match state.phase {
-        HistoryPhase::SessionList => render_session_list(f, area, state),
+        HistoryPhase::SessionList
+        | HistoryPhase::ConfirmJettisonSession(_)
+        | HistoryPhase::ConfirmJettisonAll(_)
+        | HistoryPhase::ConfirmJettisonAllFinal(_) => {
+            render_session_list(f, area, state);
+            // Overlays
+            match &state.phase {
+                HistoryPhase::ConfirmJettisonSession(js) => render_confirm_jettison_session(f, area, js),
+                HistoryPhase::ConfirmJettisonAll(ja) => render_confirm_jettison_all(f, area, ja),
+                HistoryPhase::ConfirmJettisonAllFinal(ja) => render_confirm_jettison_all_final(f, area, ja),
+                _ => {}
+            }
+        }
         HistoryPhase::SessionDetail => render_session_detail(f, area, state),
-        HistoryPhase::ConflictResolution(ref cr) => render_conflict_resolution(f, area, cr),
-        HistoryPhase::ConfirmJettisonSession(ref js) => {
-            render_session_list(f, area, state);
-            render_confirm_jettison_session(f, area, js);
-        }
-        HistoryPhase::ConfirmJettisonAll(ref ja) => {
-            render_session_list(f, area, state);
-            render_confirm_jettison_all(f, area, ja);
-        }
-        HistoryPhase::ConfirmJettisonAllFinal(ref ja) => {
-            render_session_list(f, area, state);
-            render_confirm_jettison_all_final(f, area, ja);
-        }
+        HistoryPhase::ConflictResolution(ref mut cr) => render_conflict_resolution(f, area, &mut state.click_targets, cr),
     }
 }
 
@@ -37,7 +37,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &HistoryViewState) {
 // Session List
 // ============================================================================
 
-fn render_session_list(f: &mut Frame, area: Rect, state: &HistoryViewState) {
+fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -55,6 +55,7 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &HistoryViewState) {
     f.render_widget(block, chunks[0]);
 
     if state.sessions.is_empty() {
+        state.click_targets.clear();
         let empty = Paragraph::new(Line::from(Span::styled(
             "No edit history recorded.",
             Style::default().fg(Color::DarkGray),
@@ -63,6 +64,14 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &HistoryViewState) {
     } else {
         let visible_height = inner.height as usize;
         let scroll = compute_scroll(state.cursor, state.scroll, visible_height);
+
+        // Populate click targets
+        state.click_targets.clear();
+        state.click_targets.set_list_area(inner);
+        for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
+            if entry_idx >= state.sessions.len() { break; }
+            state.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        }
 
         let mut lines = Vec::new();
         for (i, session) in state.sessions.iter().enumerate().skip(scroll).take(visible_height) {
@@ -129,7 +138,7 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &HistoryViewState) {
 // Session Detail
 // ============================================================================
 
-fn render_session_detail(f: &mut Frame, area: Rect, state: &HistoryViewState) {
+fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
     let detail = match state.detail {
         Some(ref d) => d,
         None => return,
@@ -162,6 +171,14 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &HistoryViewState) {
 
     let visible_height = inner.height as usize;
     let scroll = compute_scroll(detail.detail_cursor, detail.detail_scroll, visible_height);
+
+    // Populate click targets
+    state.click_targets.clear();
+    state.click_targets.set_list_area(inner);
+    for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
+        if entry_idx >= detail.edits.len() { break; }
+        state.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+    }
 
     let mut lines = Vec::new();
     for (i, edit) in detail.edits.iter().enumerate().skip(scroll).take(visible_height) {
@@ -231,7 +248,7 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &HistoryViewState) {
 // Conflict Resolution
 // ============================================================================
 
-fn render_conflict_resolution(f: &mut Frame, area: Rect, state: &super::ConflictResolutionState) {
+fn render_conflict_resolution(f: &mut Frame, area: Rect, click_targets: &mut crate::ui::widgets::ListClickTargets, state: &super::ConflictResolutionState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -265,6 +282,7 @@ fn render_conflict_resolution(f: &mut Frame, area: Rect, state: &super::Conflict
     f.render_widget(block, chunks[1]);
 
     if state.conflicts.is_empty() {
+        click_targets.clear();
         let msg = Paragraph::new(Line::from(Span::styled(
             "No conflicts — all reversals are clean. Press Enter to confirm.",
             Style::default().fg(Color::Green),
@@ -273,6 +291,14 @@ fn render_conflict_resolution(f: &mut Frame, area: Rect, state: &super::Conflict
     } else {
         let visible_height = inner.height as usize;
         let scroll = compute_scroll(state.conflict_cursor, state.conflict_scroll, visible_height);
+
+        // Populate click targets
+        click_targets.clear();
+        click_targets.set_list_area(inner);
+        for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
+            if entry_idx >= state.conflicts.len() { break; }
+            click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        }
 
         let mut lines = Vec::new();
         for (i, conflict) in state.conflicts.iter().enumerate().skip(scroll).take(visible_height) {

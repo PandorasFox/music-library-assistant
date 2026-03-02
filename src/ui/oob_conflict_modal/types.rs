@@ -1,5 +1,6 @@
 //! Types for OOB tag bucketed resolution modal.
 
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 
 use crate::meta::views::{BucketedOobFile, ConflictBucket, TagMismatchEntry};
@@ -232,6 +233,28 @@ impl OobConflictState {
     /// Clear the filter from the active bucket.
     pub fn clear_filter(&mut self) {
         self.active_bucket_state_mut().clear_filter();
+    }
+
+    /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
+    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<OobConflictAction> {
+        if let Some(button_name) = self.button_rects.hit_test(x, y) {
+            self.focus_pane = FocusPane::Buttons;
+            match button_name {
+                "apply_db" => {
+                    self.selected_button = ResolutionButton::ApplyDb;
+                    Some(OobConflictAction::Resolve)
+                }
+                "assimilate_disk" => {
+                    self.selected_button = ResolutionButton::AssimilateDisk;
+                    Some(OobConflictAction::Resolve)
+                }
+                "acknowledge" => Some(OobConflictAction::Acknowledge),
+                "cancel" => Some(OobConflictAction::Cancel),
+                _ => None,
+            }
+        } else {
+            None
+        }
     }
 
     pub fn handle_input(&mut self, action: &InputAction) -> OobConflictAction {

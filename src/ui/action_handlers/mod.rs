@@ -23,7 +23,7 @@ mod tag_canonicity;
 pub(crate) mod witness;
 
 use crate::meta::decisions::DecisionKey;
-use crate::ui::{filter_popup, insights_view, oob_sync_modal, oob_conflict_modal, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
+use crate::ui::{filter_popup, insights_view, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
 use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext, ViewAction};
 use crate::ui::suspended_views::SuspendTarget;
 use crate::ui::eye::Eye;
@@ -1529,55 +1529,28 @@ impl App {
 
     /// Handle mouse click at the given position.
     ///
-    /// This dispatches to the current view's click handler to check for
-    /// button hits. Mouse clicks on decision buttons are equivalent to
-    /// Enter key presses for decision witnessing - clicks always have authority.
+    /// Delegates to per-view `handle_click` methods. The ConfirmationGesture is
+    /// minted once here and threaded to views that need it for button witnessing.
+    /// Views return an optional action; if present, it's dispatched as a confirmation.
     pub(super) fn handle_click(&mut self, x: u16, y: u16) {
-        let click_witness = witness::ConfirmationGesture::new();
+        let gesture = witness::ConfirmationGesture::new();
 
-        match &self.view {
+        let action = match &mut self.view {
             ActiveView::OobSyncResolution(state) => {
-                if let Some(button_name) = state.button_rects.hit_test(x, y) {
-                    // Simulate the button press action
-                    let action = match button_name {
-                        "accept_disk" => oob_sync_modal::OobSyncAction::AcceptDisk,
-                        "accept_db" => oob_sync_modal::OobSyncAction::AcceptDb,
-                        "cancel" => oob_sync_modal::OobSyncAction::Cancel,
-                        _ => oob_sync_modal::OobSyncAction::None,
-                    };
-                    self.handle_oob_sync_action(action, Some(&click_witness));
-                }
+                state.handle_click(x, y, &gesture).map(ViewAction::OobSyncResolution)
             }
             ActiveView::OobConflictInspection(state) => {
-                if let Some(button_name) = state.button_rects.hit_test(x, y) {
-                    // Determine action and button state from button name
-                    let action = match button_name {
-                        "apply_db" => oob_conflict_modal::OobConflictAction::Resolve,
-                        "assimilate_disk" => oob_conflict_modal::OobConflictAction::Resolve,
-                        "acknowledge" => oob_conflict_modal::OobConflictAction::Acknowledge,
-                        "cancel" => oob_conflict_modal::OobConflictAction::Cancel,
-                        _ => oob_conflict_modal::OobConflictAction::None,
-                    };
-                    // Set button before handling (need mutable access)
-                    if button_name == "apply_db" {
-                        if let ActiveView::OobConflictInspection(ref mut state) = self.view {
-                            state.selected_button = oob_conflict_modal::types::ResolutionButton::ApplyDb;
-                        }
-                    } else if button_name == "assimilate_disk" {
-                        if let ActiveView::OobConflictInspection(ref mut state) = self.view {
-                            state.selected_button = oob_conflict_modal::types::ResolutionButton::AssimilateDisk;
-                        }
-                    }
-                    self.handle_oob_conflict_action(action, Some(&click_witness));
-                }
+                state.handle_click(x, y, &gesture).map(ViewAction::OobConflictInspection)
             }
-            ActiveView::Insights(_) => {
-                if let ActiveView::Insights(ref mut view) = self.view {
-                    view.handle_click(x, y);
-                }
+            ActiveView::Insights(state) => {
+                state.handle_click(x, y);
+                None
             }
-            // Other views don't handle clicks
-            _ => {}
+            _ => None,
+        };
+
+        if let Some(action) = action {
+            self.dispatch_action(action, true);
         }
     }
 }

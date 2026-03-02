@@ -1,5 +1,6 @@
 //! Types for OOB tag sync resolution modal.
 
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 
 use crate::meta::views::{OobSyncDirection, OobSyncFile};
@@ -154,6 +155,30 @@ impl OobSyncState {
 
     pub fn index_to_disk_count(&self) -> usize {
         self.files.iter().filter(|f| f.direction == OobSyncDirection::IndexToDisk).count()
+    }
+
+    /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
+    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<OobSyncAction> {
+        if let Some(button_name) = self.button_rects.hit_test(x, y) {
+            self.focus_pane = FocusPane::Buttons;
+            match button_name {
+                "accept_disk" => {
+                    self.selected_button = OobSyncButton::AcceptDisk;
+                    Some(OobSyncAction::AcceptDisk)
+                }
+                "accept_db" => {
+                    self.selected_button = OobSyncButton::AcceptDb;
+                    Some(OobSyncAction::AcceptDb)
+                }
+                "cancel" => {
+                    self.selected_button = OobSyncButton::Cancel;
+                    Some(OobSyncAction::Cancel)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
     }
 
     pub fn handle_input(&mut self, action: &InputAction) -> OobSyncAction {

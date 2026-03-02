@@ -64,6 +64,8 @@ pub struct ExternalMatchReviewState {
     pub recording_link_rect: Option<Rect>,
     /// Multi-selection state for bulk drop operations.
     pub selection: BulkSelectionState,
+    /// Scroll offset for the tag diff table in the details pane.
+    pub diff_scroll: usize,
 }
 
 impl ExternalMatchReviewState {
@@ -78,6 +80,7 @@ impl ExternalMatchReviewState {
             click_targets: ListClickTargets::new(),
             recording_link_rect: None,
             selection: BulkSelectionState::new(),
+            diff_scroll: 0,
         }
     }
 
@@ -93,6 +96,7 @@ impl ExternalMatchReviewState {
     pub fn advance(&mut self) -> bool {
         if self.cursor + 1 < self.entries.len() {
             self.cursor += 1;
+            self.diff_scroll = 0;
             true
         } else {
             false
@@ -145,6 +149,7 @@ impl ExternalMatchReviewState {
                 if idx < self.entries.len() {
                     self.focus_pane = FocusPane::List;
                     self.cursor = idx;
+                    self.diff_scroll = 0;
                 }
             }
         }
@@ -170,12 +175,14 @@ impl ExternalMatchReviewState {
             InputAction::NavUp => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
+                    self.diff_scroll = 0;
                 }
                 ExternalMatchReviewAction::None
             }
             InputAction::NavDown => {
                 if self.cursor + 1 < self.entries.len() {
                     self.cursor += 1;
+                    self.diff_scroll = 0;
                 }
                 ExternalMatchReviewAction::None
             }

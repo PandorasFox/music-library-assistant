@@ -9,6 +9,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// A single cell in the table with text and a style.
 pub struct StyledCell {
@@ -55,17 +56,17 @@ impl ThreeColTable {
         // Header
         let header_line = Line::from(vec![
             Span::styled(
-                format!("{:<width$}", self.headers[0].0, width = col_widths[0]),
+                pad_to_width(&self.headers[0].0, col_widths[0]),
                 self.headers[0].1,
             ),
             Span::styled("\u{2502}", self.separator_style),
             Span::styled(
-                format!("{:<width$}", self.headers[1].0, width = col_widths[1]),
+                pad_to_width(&self.headers[1].0, col_widths[1]),
                 self.headers[1].1,
             ),
             Span::styled("\u{2502}", self.separator_style),
             Span::styled(
-                format!("{:<width$}", self.headers[2].0, width = col_widths[2]),
+                pad_to_width(&self.headers[2].0, col_widths[2]),
                 self.headers[2].1,
             ),
         ]);
@@ -137,11 +138,11 @@ impl ThreeColTable {
                 };
 
                 let line = Line::from(vec![
-                    Span::styled(format!("{:<width$}", label_text, width = col_widths[0]), ls),
+                    Span::styled(pad_to_width(label_text, col_widths[0]), ls),
                     Span::styled("\u{2502}", self.separator_style),
-                    Span::styled(format!("{:<width$}", c1_text, width = col_widths[1]), c1s),
+                    Span::styled(pad_to_width(c1_text, col_widths[1]), c1s),
                     Span::styled("\u{2502}", self.separator_style),
-                    Span::styled(format!("{:<width$}", c2_text, width = col_widths[2]), c2s),
+                    Span::styled(pad_to_width(c2_text, col_widths[2]), c2s),
                 ]);
 
                 let line_area = Rect {
@@ -203,7 +204,7 @@ impl ThreeColTable {
     }
 }
 
-/// Wrap text to fit within `width` characters, breaking at character boundaries.
+/// Wrap text to fit within `width` display columns, respecting wide (CJK) characters.
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![String::new()];
@@ -213,19 +214,36 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
 
     let mut lines = Vec::new();
-    let chars: Vec<char> = text.chars().collect();
-    let mut start = 0;
+    let mut current = String::new();
+    let mut current_width = 0;
 
-    while start < chars.len() {
-        let end = (start + width).min(chars.len());
-        lines.push(chars[start..end].iter().collect());
-        start = end;
+    for ch in text.chars() {
+        let ch_width = ch.width().unwrap_or(0);
+        if current_width + ch_width > width {
+            lines.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += ch_width;
     }
 
-    if lines.is_empty() {
-        lines.push(String::new());
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
     }
     lines
+}
+
+/// Pad `text` with trailing spaces so its display width reaches `target_width`.
+fn pad_to_width(text: &str, target_width: usize) -> String {
+    let text_width = UnicodeWidthStr::width(text);
+    let padding = target_width.saturating_sub(text_width);
+    let mut s = String::with_capacity(text.len() + padding);
+    s.push_str(text);
+    for _ in 0..padding {
+        s.push(' ');
+    }
+    s
 }
 
 /// Produce a dimmed variant of a style for alternating rows.

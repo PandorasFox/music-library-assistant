@@ -12,8 +12,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::meta::views::ExternalMatchClassificationView;
-use crate::ui::helpers::{render_pane, truncate_right};
-use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout};
+use crate::ui::helpers::render_pane;
+use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout, StyledCell, ThreeColTable};
 
 use super::types::{ExternalMatchButton, ExternalMatchReviewState};
 
@@ -170,58 +170,50 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &mut ExternalMatchRevie
             "No tag differences",
             Style::default().fg(Color::Green),
         )));
+        let para = Paragraph::new(lines);
+        f.render_widget(para, inner);
     } else {
-        // Dynamic column widths based on available space:
-        //   2 (indent) + tag_col + 1 (gap) + disk_col + 1 (gap) + ext_col
-        let usable = inner.width.saturating_sub(4) as usize; // 2 indent + 2 gaps
-        let tag_col = 14.min(usable / 4);
-        let remaining = usable.saturating_sub(tag_col);
-        let disk_col = remaining / 2;
-        let ext_col = remaining.saturating_sub(disk_col);
+        let header_lines = lines.len() as u16;
+        let para = Paragraph::new(lines);
+        let header_area = Rect { height: header_lines, ..inner };
+        f.render_widget(para, header_area);
 
-        // Column headers
-        let header_style = Style::default().fg(Color::DarkGray);
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {:<tag_col$}", "TAG"), header_style),
-            Span::styled(format!(" {:<disk_col$}", "DISK"), header_style),
-            Span::styled(" EXTERNAL", header_style),
-        ]));
-        let rule_len = (tag_col + disk_col + ext_col + 2).min(inner.width.saturating_sub(2) as usize);
-        lines.push(Line::from(Span::styled(
-            format!("  {}", "\u{2500}".repeat(rule_len)),
-            header_style,
-        )));
+        let table_area = Rect {
+            y: inner.y + header_lines,
+            height: inner.height.saturating_sub(header_lines),
+            ..inner
+        };
 
-        for diff in &entry.diffs {
-            let disk_text = match &diff.corpus_value {
-                Some(cv) => format!("\"{}\"", cv),
-                None => "\u{2014}".to_string(),
-            };
-            let disk_color = match &diff.corpus_value {
-                Some(_) => Color::Red,
-                None => Color::DarkGray,
-            };
-            let ext_text = format!("\"{}\"", diff.external_value);
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {:<tag_col$}", truncate_right(&diff.tag_name, tag_col)),
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::styled(
-                    format!(" {:<disk_col$}", truncate_right(&disk_text, disk_col)),
-                    Style::default().fg(disk_color),
-                ),
-                Span::styled(
-                    format!(" {}", truncate_right(&ext_text, ext_col.saturating_sub(1))),
-                    Style::default().fg(Color::Green),
-                ),
-            ]));
-        }
+        let bold = Modifier::BOLD;
+        let table = ThreeColTable {
+            headers: [
+                ("TAG".into(), Style::default().fg(Color::DarkGray).add_modifier(bold)),
+                ("DISK".into(), Style::default().fg(Color::DarkGray).add_modifier(bold)),
+                ("EXTERNAL".into(), Style::default().fg(Color::DarkGray).add_modifier(bold)),
+            ],
+            rows: entry.diffs.iter().map(|diff| {
+                let disk_text = match &diff.corpus_value {
+                    Some(cv) => format!("\"{}\"", cv),
+                    None => "\u{2014}".to_string(),
+                };
+                let disk_color = match &diff.corpus_value {
+                    Some(_) => Color::Red,
+                    None => Color::DarkGray,
+                };
+                let ext_text = format!("\"{}\"", diff.external_value);
+                [
+                    StyledCell::new(&diff.tag_name, Style::default().fg(Color::Cyan)),
+                    StyledCell::new(disk_text, Style::default().fg(disk_color)),
+                    StyledCell::new(ext_text, Style::default().fg(Color::Green)),
+                ]
+            }).collect(),
+            col_ratio: [20, 40, 40],
+            scroll: state.diff_scroll,
+            separator_style: Style::default().fg(Color::DarkGray),
+            alternate_rows: true,
+        };
+        table.render(f, table_area);
     }
-
-    let para = Paragraph::new(lines);
-    f.render_widget(para, inner);
 }
 
 fn render_buttons(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {

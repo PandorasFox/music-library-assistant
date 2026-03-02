@@ -2,17 +2,17 @@
 //!
 //! Uses full-area layout with:
 //! - Info bar showing full untruncated path and confidence
-//! - 33% list pane / 67% details pane
+//! - 40% list pane / 60% details pane
 //! - Decision buttons bar (focusable via Shift+Up/Down)
 
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::meta::views::ExternalMatchClassificationView;
-use crate::ui::helpers::render_pane;
+use crate::ui::helpers::{render_pane, truncate_right};
 use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout};
 
 use super::types::{ExternalMatchButton, ExternalMatchReviewState};
@@ -109,7 +109,7 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewSt
     render_file_path_list(f, inner, &entries, state.cursor, state.scroll);
 }
 
-fn render_diff_details(f: &mut Frame, area: Rect, state: &ExternalMatchReviewState) {
+fn render_diff_details(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
     let block = Block::default()
         .title("Tag Differences")
         .borders(Borders::ALL)
@@ -117,15 +117,34 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &ExternalMatchReviewSta
     let inner = render_pane(f, area, block);
 
     let Some(entry) = state.entries.get(state.cursor) else {
+        state.recording_link_rect = None;
         return;
     };
 
     let mut lines = Vec::new();
 
-    // Confidence + recording ID header
+    // MusicBrainz recording link + confidence
+    let mb_url = format!("https://musicbrainz.org/recording/{}", entry.recording_id);
+    let link_style = Style::default()
+        .fg(Color::Blue)
+        .add_modifier(Modifier::UNDERLINED);
+
+    let link_text = if state.show_musicbrainz_url {
+        mb_url.clone()
+    } else {
+        "MusicBrainz Recording".to_string()
+    };
+    let link_len = link_text.chars().count() as u16;
+
+    // "Recording: " prefix is 12 chars; link starts after that
+    let link_x = inner.x + 12;
+    // Recording line is the first line (y offset 0 within inner)
+    let link_y = inner.y;
+    state.recording_link_rect = Some(Rect::new(link_x, link_y, link_len, 1));
+
     lines.push(Line::from(vec![
         Span::styled("Recording: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(&entry.recording_id, Style::default().fg(Color::White)),
+        Span::styled(link_text, link_style),
         Span::raw("  "),
         Span::styled(
             format!("({:.0}% confidence)", entry.confidence * 100.0),
@@ -140,38 +159,49 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &ExternalMatchReviewSta
             Style::default().fg(Color::Green),
         )));
     } else {
+        // Dynamic column widths based on available space:
+        //   2 (indent) + tag_col + 1 (gap) + disk_col + 1 (gap) + ext_col
+        let usable = inner.width.saturating_sub(4) as usize; // 2 indent + 2 gaps
+        let tag_col = 14.min(usable / 4);
+        let remaining = usable.saturating_sub(tag_col);
+        let disk_col = remaining / 2;
+        let ext_col = remaining.saturating_sub(disk_col);
+
         // Column headers
         let header_style = Style::default().fg(Color::DarkGray);
         lines.push(Line::from(vec![
-            Span::styled(format!("  {:<14}", "TAG"), header_style),
-            Span::styled(format!("{:<30}", "DISK"), header_style),
-            Span::styled("EXTERNAL", header_style),
+            Span::styled(format!("  {:<tag_col$}", "TAG"), header_style),
+            Span::styled(format!(" {:<disk_col$}", "DISK"), header_style),
+            Span::styled(" EXTERNAL", header_style),
         ]));
+        let rule_len = (tag_col + disk_col + ext_col + 2).min(inner.width.saturating_sub(2) as usize);
         lines.push(Line::from(Span::styled(
-            format!("  {}", "\u{2500}".repeat(60)),
+            format!("  {}", "\u{2500}".repeat(rule_len)),
             header_style,
         )));
 
         for diff in &entry.diffs {
-            let disk_span = match &diff.corpus_value {
-                Some(cv) => Span::styled(
-                    format!("{:<30}", format!("\"{}\"", cv)),
-                    Style::default().fg(Color::Red),
-                ),
-                None => Span::styled(
-                    format!("{:<30}", "\u{2014}"),
-                    Style::default().fg(Color::DarkGray),
-                ),
+            let disk_text = match &diff.corpus_value {
+                Some(cv) => format!("\"{}\"", cv),
+                None => "\u{2014}".to_string(),
             };
+            let disk_color = match &diff.corpus_value {
+                Some(_) => Color::Red,
+                None => Color::DarkGray,
+            };
+            let ext_text = format!("\"{}\"", diff.external_value);
 
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("  {:<14}", diff.tag_name),
+                    format!("  {:<tag_col$}", truncate_right(&diff.tag_name, tag_col)),
                     Style::default().fg(Color::Cyan),
                 ),
-                disk_span,
                 Span::styled(
-                    format!("\"{}\"", diff.external_value),
+                    format!(" {:<disk_col$}", truncate_right(&disk_text, disk_col)),
+                    Style::default().fg(disk_color),
+                ),
+                Span::styled(
+                    format!(" {}", truncate_right(&ext_text, ext_col.saturating_sub(1))),
                     Style::default().fg(Color::Green),
                 ),
             ]));

@@ -55,6 +55,31 @@ pub struct SidecarDeployEntry {
     pub role: String,
 }
 
+impl SidecarDeployEntry {
+    /// Produce a HardLink mutation to deploy this sidecar image.
+    pub fn to_mutation(&self, resolver: &crate::corpus::paths::PathResolver) -> crate::meta::mutations::Mutation {
+        let source = resolver.resolve(std::path::Path::new(&self.corpus_image_path));
+        let dest_rel = std::path::Path::new("libraries")
+            .join(&self.library_name)
+            .join(&self.library_album_dir)
+            .join(&self.filename);
+        let destination = resolver.resolve(&dest_rel);
+        crate::meta::mutations::Mutation::HardLink(
+            crate::meta::mutations::file_ops::HardLinkMutation { source, destination },
+        )
+    }
+}
+
+/// Result of converting deploy modal data into staged mutations.
+pub struct DeployMutationSet {
+    /// Mutations for DecisionKey::Deploy (leftovers → stale → new, in execution order)
+    pub deploy: Vec<crate::meta::mutations::Mutation>,
+    /// Mutations for DecisionKey::DeploySidecars
+    pub sidecars: Vec<crate::meta::mutations::Mutation>,
+    /// Files skipped due to missing library_name (config gap)
+    pub skipped: usize,
+}
+
 /// Cached data for the deploy modal.
 ///
 /// Loaded once when the modal opens, contains all signal lists.
@@ -319,8 +344,42 @@ impl DeployModalData {
     }
 
     /// Total operations that will be performed (excluding healthy).
-    /// Conflicts are auto-resolved by picking first alphabetical path.
+    /// Conflict winners now appear in `new` via the computation layer.
     pub fn total_operations(&self) -> usize {
-        self.new.len() + self.stale.len() + self.leftover.len() + self.conflicts.len() + self.sidecars.len()
+        self.new.len() + self.stale.len() + self.leftover.len() + self.sidecars.len()
+    }
+
+    /// Convert all deploy modal data into staged mutations.
+    ///
+    /// Ordering within `deploy`: leftovers first → stale → new
+    /// (stash orphans before moving/linking into those paths).
+    pub fn to_mutations(&self, resolver: &crate::corpus::paths::PathResolver) -> DeployMutationSet {
+        let mut deploy = Vec::new();
+        let mut skipped = 0usize;
+
+        // 1. Leftovers: stash orphan files to clear destination paths
+        for file in &self.leftover {
+            deploy.push(file.to_mutation(resolver));
+        }
+
+        // 2. Stale: move existing deployments to correct paths
+        for file in &self.stale {
+            deploy.push(file.to_mutation(resolver));
+        }
+
+        // 3. New: deploy hard links (destinations now clear)
+        for file in &self.new {
+            match file.to_mutation(resolver) {
+                Some(m) => deploy.push(m),
+                None => skipped += 1,
+            }
+        }
+
+        // 4. Sidecars: separate decision
+        let sidecars: Vec<_> = self.sidecars.iter()
+            .map(|s| s.to_mutation(resolver))
+            .collect();
+
+        DeployMutationSet { deploy, sidecars, skipped }
     }
 }

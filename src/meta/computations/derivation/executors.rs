@@ -1143,6 +1143,14 @@ pub fn execute_update_deploy_signals(
         witness,
     );
 
+    // Clear SidecarDeployReady for this inode (no-op if inode is audio, clears if sidecar)
+    drop_stale_corpus_signal::<SidecarDeployReadySignal>(
+        read_only_db,
+        &sender,
+        corpus_inode,
+        witness,
+    );
+
     // Ensure DeployedHealthy with library_path (inode-keyed)
     let had_deployed_healthy = read_only_db.corpus_signal_exists::<DeployedHealthySignal>(corpus_inode);
     if !had_deployed_healthy {

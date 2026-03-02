@@ -675,6 +675,21 @@ pub fn execute_derive_corpus_deploy_status(
         .map(|(path, _)| path.as_str())
         .collect();
 
+    // Phase 2c: For each conflict path, pick the tiebreak winner (first alphabetical corpus_path).
+    // Winners get DeployReady; losers are blocked by the DeployConflict signal.
+    let conflict_winners: HashSet<i64> = {
+        let mut path_groups: HashMap<&str, Vec<&PrecomputedFile>> = HashMap::new();
+        for file in &precomputed {
+            if conflict_paths.contains(file.deploy_path.as_str()) {
+                path_groups.entry(file.deploy_path.as_str()).or_default().push(file);
+            }
+        }
+        path_groups.values()
+            .filter_map(|group| group.iter().min_by_key(|f| &f.corpus_path))
+            .map(|winner| winner.inode)
+            .collect()
+    };
+
     // Phase 2b: Build release overlap set — album directories with overlapping releases.
     // Files targeting these album dirs should not be DeployReady.
     let overlap_album_dirs: HashSet<String> = read_only_db
@@ -720,8 +735,18 @@ pub fn execute_derive_corpus_deploy_status(
                 deployed_stale_count += 1;
             }
         } else if conflict_paths.contains(file.deploy_path.as_str()) {
-            // Not deployed, and deploy path is claimed by 2+ corpus files — skip
-            conflict_skipped_count += 1;
+            if conflict_winners.contains(&file.inode) {
+                // Tiebreak winner — deploy normally
+                let signal = TypedSignalWrite::DeployReady(DeployReadySignal {
+                    inode: file.inode,
+                    path: file.corpus_path.clone(),
+                    deploy_path: file.deploy_path.clone(),
+                });
+                computed_deploy_ready.push(ComputedCorpusSignal::new(file.inode, signal));
+            } else {
+                // Tiebreak loser — blocked, DeployConflict signal surfaces this
+                conflict_skipped_count += 1;
+            }
         } else if overlap_album_dirs.contains(&deploy_album_directory(&file.deploy_path)) {
             // Not deployed, and album directory has a release overlap — skip
             overlap_skipped_count += 1;

@@ -1,10 +1,12 @@
 //! State and input handling for the external match review modal.
 
+use ratatui::layout::Rect;
+
 use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 
 use crate::meta::views::ExternalMatchReviewEntry;
-use crate::ui::widgets::{ButtonRects, FocusPane, ListClickTargets};
+use crate::ui::widgets::{ButtonRects, FocusPane, ListClickTargets, rect_contains};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExternalMatchButton {
@@ -31,7 +33,7 @@ impl ExternalMatchButton {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExternalMatchReviewAction {
     None,
     /// Apply external tag values for the selected file.
@@ -40,6 +42,8 @@ pub enum ExternalMatchReviewAction {
     Dismiss,
     /// Discard transaction and return to Insights.
     Cancel,
+    /// Open MusicBrainz recording URL in browser.
+    OpenRecordingUrl(String),
 }
 
 pub struct ExternalMatchReviewState {
@@ -50,10 +54,14 @@ pub struct ExternalMatchReviewState {
     pub focus_pane: FocusPane,
     pub button_rects: ButtonRects,
     pub click_targets: ListClickTargets,
+    /// Cached config: show raw URL instead of short label.
+    pub show_musicbrainz_url: bool,
+    /// Click rect for the MusicBrainz recording link (set during render).
+    pub recording_link_rect: Option<Rect>,
 }
 
 impl ExternalMatchReviewState {
-    pub fn new(entries: Vec<ExternalMatchReviewEntry>) -> Self {
+    pub fn new(entries: Vec<ExternalMatchReviewEntry>, show_musicbrainz_url: bool) -> Self {
         Self {
             entries,
             cursor: 0,
@@ -62,6 +70,8 @@ impl ExternalMatchReviewState {
             focus_pane: FocusPane::List,
             button_rects: ButtonRects::new(),
             click_targets: ListClickTargets::new(),
+            show_musicbrainz_url,
+            recording_link_rect: None,
         }
     }
 
@@ -81,6 +91,13 @@ impl ExternalMatchReviewState {
         } else {
             false
         }
+    }
+
+    /// MusicBrainz recording URL for the current entry.
+    pub fn current_recording_url(&self) -> Option<String> {
+        self.entries.get(self.cursor).map(|e| {
+            format!("https://musicbrainz.org/recording/{}", e.recording_id)
+        })
     }
 
     /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
@@ -103,6 +120,14 @@ impl ExternalMatchReviewState {
                 }
                 _ => None,
             };
+        }
+        // Check MusicBrainz recording link
+        if let Some(rect) = self.recording_link_rect {
+            if rect_contains(rect, x, y) {
+                if let Some(url) = self.current_recording_url() {
+                    return Some(ExternalMatchReviewAction::OpenRecordingUrl(url));
+                }
+            }
         }
         // Check list items (focus + cursor change, no action)
         if let Some(id) = self.click_targets.hit_test(x, y) {

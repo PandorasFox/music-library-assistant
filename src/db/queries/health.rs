@@ -55,7 +55,6 @@ impl Database {
         total += CanonicalTagSignal::count(&self.conn).unwrap_or(0);
         total += LibraryLeftoverSignal::count(&self.conn).unwrap_or(0);
         total += LibraryStaleSignal::count(&self.conn).unwrap_or(0);
-        total += EmbeddableAlbumArtSignal::count(&self.conn).unwrap_or(0);
         total += DiscExtractionSignal::count(&self.conn).unwrap_or(0);
         total += PathTagMismatchSignal::count(&self.conn).unwrap_or(0);
         total += ExternalMatchSignal::count(&self.conn).unwrap_or(0);
@@ -596,9 +595,6 @@ impl Database {
             .collect();
         tag_canonicity.sort_by(|a, b| b._total_tracks.cmp(&a._total_tracks));
 
-        let embeddable_album_art = self.count_signal_type("embeddable_album_art")?;
-        let upgradeable_album_art = self.count_signal_type("upgradeable_album_art")?;
-
         let missing_album_single_count = self.count_signal_type("missing_album_single")?;
 
         let disc_extraction_count = self.count_signal_type("disc_extraction")?;
@@ -613,8 +609,6 @@ impl Database {
             tag_canonicity,
             inconsistent_album_artist_count,
             compound_tags,
-            embeddable_album_art,
-            upgradeable_album_art,
             missing_album_single_count,
             disc_extraction_count,
             path_tag_mismatch_count,
@@ -849,8 +843,6 @@ impl Database {
             "canonical_tag" => CanonicalTagSignal::count(&self.conn)?,
             "library_leftover" => LibraryLeftoverSignal::count(&self.conn)?,
             "library_stale" => LibraryStaleSignal::count(&self.conn)?,
-            "embeddable_album_art" => EmbeddableAlbumArtSignal::count(&self.conn)?,
-            "upgradeable_album_art" => UpgradeableAlbumArtSignal::count(&self.conn)?,
             "missing_album_single" => MissingAlbumSingleSignal::count(&self.conn)?,
             "expected_missing_tag" => ExpectedMissingTagSignal::count(&self.conn)?,
             "inbox_unindexed" => InboxUnindexedSignal::count(&self.conn)?,
@@ -1340,67 +1332,6 @@ impl Database {
     }
 
     // ========================================================================
-    // Embeddable Album Art Resolution Queries
-    // ========================================================================
-
-    /// Get all embeddable album art signals with deserialized data.
-    pub fn get_embeddable_album_art_signals(&self) -> Result<Vec<crate::meta::signals::data::EmbeddableAlbumArtSignal>> {
-        crate::meta::signals::data::EmbeddableAlbumArtSignal::query_all(&self.conn)
-            .map_err(|e| anyhow::anyhow!("Failed to query embeddable album art signals: {}", e))
-    }
-
-    /// Get all upgradeable album art signals with deserialized data.
-    pub fn get_upgradeable_album_art_signals(&self) -> Result<Vec<crate::meta::signals::data::UpgradeableAlbumArtSignal>> {
-        crate::meta::signals::data::UpgradeableAlbumArtSignal::query_all(&self.conn)
-            .map_err(|e| anyhow::anyhow!("Failed to query upgradeable album art signals: {}", e))
-    }
-
-    /// Get corpus audio files that have no embedded pictures (has_pictures = 0).
-    ///
-    /// Returns (inode, absolute_path) for healthy corpus files without album art.
-    /// Used by DetectEmbeddableAlbumArt to avoid lofty probing at Awake phase.
-    pub fn get_artless_corpus_files(&self) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT a.inode, f.path
-               FROM audio_info a
-               JOIN files f ON a.inode = f.inode
-               JOIN signal_healthy_file h ON a.inode = h.inode
-               WHERE f.zone = 'corpus' AND a.has_pictures = 0"#
-        )?;
-        let rows = stmt.query_map(params![], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| anyhow::anyhow!("Failed to query artless corpus files: {}", e))
-    }
-
-    /// Get corpus audio files that have embedded pictures with known metadata.
-    ///
-    /// Returns (inode, path, pic_format, pic_width, pic_height) for healthy corpus
-    /// files where `has_pictures = 1` and picture metadata columns are populated.
-    /// Used by DetectEmbeddableAlbumArt for upgradeable art detection.
-    pub fn get_corpus_files_with_picture_info(&self) -> Result<Vec<(i64, String, String, u32, u32)>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT a.inode, f.path, a.pic_format, a.pic_width, a.pic_height
-               FROM audio_info a
-               JOIN files f ON a.inode = f.inode
-               JOIN signal_healthy_file h ON a.inode = h.inode
-               WHERE f.zone = 'corpus' AND a.has_pictures = 1
-                 AND a.pic_format IS NOT NULL AND a.pic_width IS NOT NULL AND a.pic_height IS NOT NULL"#
-        )?;
-        let rows = stmt.query_map(params![], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, u32>(3)?,
-                row.get::<_, u32>(4)?,
-            ))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| anyhow::anyhow!("Failed to query corpus files with picture info: {}", e))
-    }
-
     /// Get all inodes that have a CompoundTag signal containing a specific compound value.
     ///
     /// Used by EmitCanonicalTag mutation to find and clear stale CompoundTag signals

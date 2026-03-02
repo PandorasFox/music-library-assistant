@@ -65,7 +65,6 @@ impl App {
             ViewAction::MissingDirectoryResolution(a) => self.handle_missing_directory_preview_action(a, witness.as_ref()),
             ViewAction::CorruptFileResolution(a) => self.handle_corrupt_file_preview_action(a, witness.as_ref()),
             ViewAction::ShitFormatResolution(a) => self.handle_shit_format_preview_action(a, witness.as_ref()),
-            ViewAction::EmbedAlbumArtResolution(a) => self.handle_album_art_review_action(a, witness.as_ref()),
             ViewAction::SubparDuplicateResolution(a) => self.handle_subpar_duplicate_preview_action(a, witness.as_ref()),
             ViewAction::InboxCorpusMatchResolution(a) => self.handle_inbox_corpus_match_preview_action(a, witness.as_ref()),
             ViewAction::InboxOrganize(a) => self.handle_inbox_organize_action(a, witness.as_ref()),
@@ -363,9 +362,6 @@ impl App {
                     }
                     Some(insights_view::InsightAction::LaunchSubparDuplicateResolution) => {
                         self.start_subpar_duplicate_resolution();
-                    }
-                    Some(insights_view::InsightAction::LaunchAlbumArtReview) => {
-                        self.start_album_art_review();
                     }
                     Some(insights_view::InsightAction::LaunchMissingDirectoryResolution) => {
                         self.start_missing_directory_resolution();

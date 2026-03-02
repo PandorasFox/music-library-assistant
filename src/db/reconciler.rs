@@ -431,7 +431,6 @@ fn seed_dirty_inodes_all(conn: &Connection) -> Result<()> {
         "deploy_ready",
         "oob_tag_sync",
         "external_match",
-        "album_art_info",
         "sidecar_deploy",
     ];
 

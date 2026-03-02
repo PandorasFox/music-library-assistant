@@ -276,13 +276,6 @@ fn render_content(
             vname = "shit_format_resolution";
             preview.render(f, area);
         }
-        ActiveView::EmbedAlbumArtResolution(ref preview) => {
-            vname = "embed_album_art_resolution";
-            let cache_miss = preview.render(f, area, &mut app.art_picker, &mut app.art_cache);
-            if cache_miss {
-                app.drain_input_next = true;
-            }
-        }
         ActiveView::SubparDuplicateResolution(ref mut preview) => {
             vname = "subpar_duplicate_resolution";
             preview.render(f, area);
@@ -489,7 +482,6 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::MissingDirectoryResolution(_) => "missing_directory_resolution",
         ActiveView::CorruptFileResolution(_) => "corrupt_file_resolution",
         ActiveView::ShitFormatResolution(_) => "shit_format_resolution",
-        ActiveView::EmbedAlbumArtResolution(_) => "embed_album_art_resolution",
         ActiveView::SubparDuplicateResolution(_) => "subpar_duplicate_resolution",
         ActiveView::InboxCorpusMatchResolution(_) => "inbox_corpus_match_resolution",
         ActiveView::InboxOrganize(_) => "inbox_organize",

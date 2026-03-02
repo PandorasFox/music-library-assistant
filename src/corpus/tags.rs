@@ -146,59 +146,6 @@ impl TagSet {
         }
     }
 
-    /// Check whether an audio file has any embedded pictures.
-    ///
-    /// Format-aware: uses concrete lofty types for Vorbis containers,
-    /// generic Probe for others. Non-fatal — returns false on read errors.
-    pub fn has_embedded_pictures(path: &Path) -> bool {
-        let ext = path.extension().and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase()).unwrap_or_default();
-
-        match ext.as_str() {
-            "flac" => {
-                use lofty::config::ParseOptions;
-                use lofty::file::AudioFile;
-                use lofty::ogg::OggPictureStorage;
-
-                let Ok(file) = std::fs::File::open(path) else { return false };
-                let mut reader = std::io::BufReader::new(file);
-                let Ok(flac) = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default()) else { return false };
-                // Check both standalone PICTURE blocks and pictures in VorbisComments
-                // (METADATA_BLOCK_PICTURE). Bandcamp FLACs store art in VorbisComments.
-                !flac.pictures().is_empty()
-                    || flac.vorbis_comments()
-                        .map_or(false, |vc| !vc.pictures().is_empty())
-            }
-            "opus" => {
-                use lofty::config::ParseOptions;
-                use lofty::file::AudioFile;
-                use lofty::ogg::OggPictureStorage;
-
-                let Ok(file) = std::fs::File::open(path) else { return false };
-                let mut reader = std::io::BufReader::new(file);
-                let Ok(opus) = lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default()) else { return false };
-                !opus.vorbis_comments().pictures().is_empty()
-            }
-            "ogg" => {
-                use lofty::config::ParseOptions;
-                use lofty::file::AudioFile;
-                use lofty::ogg::OggPictureStorage;
-
-                let Ok(file) = std::fs::File::open(path) else { return false };
-                let mut reader = std::io::BufReader::new(file);
-                let Ok(vorbis) = lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default()) else { return false };
-                !vorbis.vorbis_comments().pictures().is_empty()
-            }
-            _ => {
-                use lofty::file::TaggedFileExt;
-                use lofty::probe::Probe;
-
-                let Ok(tagged_file) = Probe::open(path).and_then(|p| p.read()) else { return false };
-                tagged_file.tags().iter().any(|tag| tag.picture_count() > 0)
-            }
-        }
-    }
-
     /// Extract metadata about embedded pictures from an audio file.
     ///
     /// Returns info for the first CoverFront picture found (or first picture if
@@ -671,42 +618,6 @@ fn mime_type_to_format(mime: Option<&lofty::picture::MimeType>) -> String {
         Some(lofty::picture::MimeType::Tiff) => "tiff".to_string(),
         _ => "unknown".to_string(),
     }
-}
-
-/// Check if a sidecar image is better than existing embedded art.
-///
-/// Rules:
-/// 1. Higher pixel count (width * height) wins if difference > 10%
-/// 2. At similar resolution (within 10%): lossless (png/bmp) beats lossy (jpeg)
-/// 3. Same format + same resolution = not better
-pub fn is_sidecar_better(
-    sidecar_format: &str,
-    sidecar_width: u32,
-    sidecar_height: u32,
-    embedded: &PictureInfo,
-) -> bool {
-    let sidecar_pixels = (sidecar_width as u64) * (sidecar_height as u64);
-    let embedded_pixels = (embedded.width as u64) * (embedded.height as u64);
-
-    // If either has zero resolution info, can't reliably compare
-    if sidecar_pixels == 0 || embedded_pixels == 0 {
-        return false;
-    }
-
-    // Higher pixel count wins if difference > 10%
-    let ratio = sidecar_pixels as f64 / embedded_pixels as f64;
-    if ratio > 1.10 {
-        return true;
-    }
-    if ratio < 0.91 {
-        return false; // embedded is significantly larger
-    }
-
-    // Similar resolution: lossless beats lossy
-    let sidecar_lossless = matches!(sidecar_format, "png" | "bmp" | "tiff");
-    let embedded_lossless = matches!(embedded.format.as_str(), "png" | "bmp" | "tiff");
-
-    sidecar_lossless && !embedded_lossless
 }
 
 /// Extract image dimensions from an image file on disk.

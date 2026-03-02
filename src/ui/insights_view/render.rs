@@ -685,35 +685,6 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
         }
 
-        InsightType::AlbumArtWork => {
-            lines.push(Line::from(Span::styled(
-                "Album Art Review",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Directories with sidecar images",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(Span::styled(
-                "that can be embedded into artless",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(Span::styled(
-                "files or upgrade lower-quality",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(Span::styled(
-                "embedded art.",
-                Style::default().fg(text_color),
-            )));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Press Enter to review.",
-                Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }),
-            )));
-        }
-
         InsightType::MissingAlbumSingle => {
             lines.push(Line::from(Span::styled(
                 "Missing Album Singles",

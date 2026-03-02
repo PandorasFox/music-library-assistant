@@ -142,7 +142,6 @@ pub enum InsightType {
     TagCanonicity { tag_name: String },
     CompoundTagValueSafe { tag_name: String },   // All split parts exist in corpus
     CompoundTagValueReview { tag_name: String }, // Some/all parts are new to corpus
-    AlbumArtWork,
     MissingAlbumSingle,
     DiscExtraction,
     PathTagMismatch,
@@ -166,7 +165,6 @@ impl InsightType {
             InsightType::CorpusCorruptFiles => Some(DecisionKeyKind::CorruptFile),
             InsightType::CorpusShitFormatFiles => Some(DecisionKeyKind::ShitFormat),
             InsightType::SubparDuplicates => Some(DecisionKeyKind::SubparDuplicate),
-            InsightType::AlbumArtWork => Some(DecisionKeyKind::AlbumArt),
             // Informational entries
             InsightType::CorpusFilesInCorpus
             | InsightType::CorpusFilesIndexed
@@ -218,8 +216,6 @@ pub enum InsightAction {
     LaunchReleaseOverlapResolution,
     /// Launch subpar duplicate stash
     LaunchSubparDuplicateResolution,
-    /// Launch album art review modal (embed + upgrade)
-    LaunchAlbumArtReview,
     /// Launch manual review modal (redundant dups, deploy conflicts, metadata dups)
     LaunchManualReview,
     /// Launch missing tag resolution (opens tag editor with all affected files)
@@ -403,25 +399,6 @@ impl BucketEntry {
             color: if count > 0 { Color::Yellow } else { Color::DarkGray },
             rank: 0,
             action: InsightAction::LaunchPathTagMismatchResolution,
-        }
-    }
-
-    /// Create embeddable album art entry
-    fn album_art_work(embed_count: usize, upgrade_count: usize) -> Self {
-        let total = embed_count + upgrade_count;
-        let label = match (embed_count > 0, upgrade_count > 0) {
-            (true, true) => format!("Album art: {} to embed, {} to upgrade", embed_count, upgrade_count),
-            (true, false) => format!("Album art: {} to embed", embed_count),
-            (false, true) => format!("Album art: {} to upgrade", upgrade_count),
-            (false, false) => "Album art".to_string(),
-        };
-        Self {
-            insight_type: InsightType::AlbumArtWork,
-            label,
-            count: Some(total),
-            color: if total > 0 { Color::Cyan } else { Color::DarkGray },
-            rank: 0,
-            action: InsightAction::LaunchAlbumArtReview,
         }
     }
 
@@ -629,11 +606,6 @@ impl CachedBucketEntries {
         // Path-tag schema mismatches
         if bucket.path_tag_mismatch_count > 0 {
             entries.push(BucketEntry::path_tag_mismatch(bucket.path_tag_mismatch_count));
-        }
-
-        // Album art work at bottom (embed + upgrade combined)
-        if bucket.embeddable_album_art > 0 || bucket.upgradeable_album_art > 0 {
-            entries.push(BucketEntry::album_art_work(bucket.embeddable_album_art, bucket.upgradeable_album_art));
         }
 
         entries
@@ -1042,8 +1014,6 @@ mod tests {
                 tag_canonicity: vec![],
                 inconsistent_album_artist_count: 0,
                 compound_tags: vec![],
-                embeddable_album_art: 0,
-                upgradeable_album_art: 0,
                 missing_album_single_count: 0,
                 disc_extraction_count: 0,
                 path_tag_mismatch_count: 0,
@@ -1229,12 +1199,12 @@ mod tests {
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
         assert_eq!(state.current_selection().selected, 1);
 
-        // Navigate to end of corpus bucket (11 items: 0-10)
-        for _ in 0..9 {
+        // Navigate to end of corpus bucket (12 items: 0-11)
+        for _ in 0..10 {
             state.navigate_down();
         }
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 10);
+        assert_eq!(state.current_selection().selected, 11);
 
         // Navigate down should move to Placeholder bucket (no Library bucket between)
         state.navigate_down();
@@ -1244,7 +1214,7 @@ mod tests {
         // Navigate up should return to Corpus bucket at last item
         state.navigate_up();
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 10);
+        assert_eq!(state.current_selection().selected, 11);
     }
 
     #[test]
@@ -1260,10 +1230,10 @@ mod tests {
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
         assert_eq!(state.current_selection().selected, 0);
 
-        // Navigate to end - with no Other or Placeholder entries, Corpus is last non-empty bucket (11 items, so last is index 10)
+        // Navigate to end - with no Other or Placeholder entries, Corpus is last non-empty bucket (12 items, so last is index 11)
         state.navigate_to_end();
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 10);
+        assert_eq!(state.current_selection().selected, 11);
     }
 
     #[test]

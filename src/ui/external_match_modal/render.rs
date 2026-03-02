@@ -21,7 +21,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
     let padded = ResolutionLayout::padded(area);
     f.render_widget(Clear, padded);
 
-    let layout = ResolutionLayout::new(padded, 3, 3, 33);
+    let layout = ResolutionLayout::new(padded, 3, 3, 40);
 
     render_info_bar(f, layout.info_bar, state);
     render_file_list(f, layout.list_pane, state);
@@ -140,44 +140,41 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &ExternalMatchReviewSta
             Style::default().fg(Color::Green),
         )));
     } else {
+        // Column headers
+        let header_style = Style::default().fg(Color::DarkGray);
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:<14}", "TAG"), header_style),
+            Span::styled(format!("{:<30}", "DISK"), header_style),
+            Span::styled("EXTERNAL", header_style),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", "\u{2500}".repeat(60)),
+            header_style,
+        )));
+
         for diff in &entry.diffs {
-            // Tag name label
+            let disk_span = match &diff.corpus_value {
+                Some(cv) => Span::styled(
+                    format!("{:<30}", format!("\"{}\"", cv)),
+                    Style::default().fg(Color::Red),
+                ),
+                None => Span::styled(
+                    format!("{:<30}", "\u{2014}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            };
+
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("  {:<10}", diff.tag_name),
+                    format!("  {:<14}", diff.tag_name),
                     Style::default().fg(Color::Cyan),
                 ),
-            ]));
-
-            // External value
-            lines.push(Line::from(vec![
-                Span::styled("    ext:    ", Style::default().fg(Color::DarkGray)),
+                disk_span,
                 Span::styled(
                     format!("\"{}\"", diff.external_value),
                     Style::default().fg(Color::Green),
                 ),
             ]));
-
-            // Corpus value
-            match &diff.corpus_value {
-                Some(cv) => {
-                    lines.push(Line::from(vec![
-                        Span::styled("    corpus: ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(
-                            format!("\"{}\"", cv),
-                            Style::default().fg(Color::Yellow),
-                        ),
-                    ]));
-                }
-                None => {
-                    lines.push(Line::from(vec![
-                        Span::styled("    corpus: ", Style::default().fg(Color::DarkGray)),
-                        Span::styled("[not in corpus]", Style::default().fg(Color::DarkGray)),
-                    ]));
-                }
-            }
-
-            lines.push(Line::raw(""));
         }
     }
 

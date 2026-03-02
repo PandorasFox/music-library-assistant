@@ -660,78 +660,6 @@ pub struct ReleaseOverlapEntry {
     pub corpus_paths: Vec<String>,
 }
 
-/// Role/purpose of a sidecar image file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PictureRole {
-    CoverFront,
-    CoverBack,
-    Other,
-}
-
-/// A sidecar image file found alongside audio files.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SidecarImage {
-    /// Absolute path to the image file.
-    pub path: String,
-    /// Display name (e.g. "cover.jpg").
-    pub filename: String,
-    /// Role inferred from filename.
-    pub role: PictureRole,
-    /// Image format (e.g. "jpeg", "png").
-    pub format: String,
-    /// Image width in pixels (0 if unknown).
-    pub width: u32,
-    /// Image height in pixels (0 if unknown).
-    pub height: u32,
-}
-
-/// Directory contains sidecar album art embeddable into artless audio files.
-#[derive(Debug, Clone)]
-pub struct EmbeddableAlbumArtSignal {
-    pub key: String,
-    /// Serialized as bincode BLOB.
-    pub data: EmbeddableAlbumArtData,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddableAlbumArtData {
-    /// Absolute path to primary sidecar image file.
-    pub image_path: String,
-    /// Display name of primary image (e.g. "cover.jpg").
-    pub image_filename: String,
-    /// Inodes of audio files lacking embedded art.
-    pub artless_inodes: Vec<i64>,
-    /// Corpus-relative paths (parallel to artless_inodes).
-    pub artless_paths: Vec<String>,
-    /// All sidecar images found, ordered by priority.
-    #[serde(default)]
-    pub sidecar_images: Vec<SidecarImage>,
-}
-
-/// Directory contains sidecar art that is better than existing embedded art.
-#[derive(Debug, Clone)]
-pub struct UpgradeableAlbumArtSignal {
-    pub key: String,
-    /// Serialized as bincode BLOB.
-    pub data: UpgradeableAlbumArtData,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpgradeableAlbumArtData {
-    /// The sidecar image that is better than embedded art.
-    pub sidecar: SidecarImage,
-    /// Inodes of audio files with lower-quality embedded art.
-    pub upgradeable_inodes: Vec<i64>,
-    /// Corpus-relative paths (parallel to upgradeable_inodes).
-    pub upgradeable_paths: Vec<String>,
-    /// Current embedded art format (e.g. "jpeg").
-    pub embedded_format: String,
-    /// Current embedded art width.
-    pub embedded_width: u32,
-    /// Current embedded art height.
-    pub embedded_height: u32,
-}
-
 /// Group of files with identical fingerprints and equivalent quality.
 /// Neither file is subpar — requires operator choice.
 #[derive(Debug, Clone)]
@@ -938,8 +866,6 @@ pub enum TypedSignalWrite {
     CrossSourceOverlap(CrossSourceOverlapSignal),
     ReleaseOverlap(ReleaseOverlapSignal),
     RedundantDuplicate(RedundantDuplicateSignal),
-    EmbeddableAlbumArt(EmbeddableAlbumArtSignal),
-    UpgradeableAlbumArt(UpgradeableAlbumArtSignal),
     ExpectedOverlap(ExpectedOverlapSignal),
     ExpectedDuplicate(ExpectedDuplicateSignal),
     MissingAlbumSingle(MissingAlbumSingleSignal),
@@ -991,8 +917,6 @@ impl TypedSignalWrite {
             Self::CrossSourceOverlap(s) => s.insert(conn),
             Self::ReleaseOverlap(s) => s.insert(conn),
             Self::RedundantDuplicate(s) => s.insert(conn),
-            Self::EmbeddableAlbumArt(s) => s.insert(conn),
-            Self::UpgradeableAlbumArt(s) => s.insert(conn),
             Self::ExpectedOverlap(s) => s.insert(conn),
             Self::ExpectedDuplicate(s) => s.insert(conn),
             Self::MissingAlbumSingle(s) => s.insert(conn),
@@ -1044,8 +968,6 @@ impl TypedSignalWrite {
             Self::CrossSourceOverlap(s) => CrossSourceOverlapSignal::exists(conn, &s.key),
             Self::ReleaseOverlap(s) => ReleaseOverlapSignal::exists(conn, &s.key),
             Self::RedundantDuplicate(s) => RedundantDuplicateSignal::exists(conn, &s.key),
-            Self::EmbeddableAlbumArt(s) => EmbeddableAlbumArtSignal::exists(conn, &s.key),
-            Self::UpgradeableAlbumArt(s) => UpgradeableAlbumArtSignal::exists(conn, &s.key),
             Self::ExpectedOverlap(s) => ExpectedOverlapSignal::exists(conn, &s.key),
             Self::ExpectedDuplicate(s) => ExpectedDuplicateSignal::exists(conn, &s.key),
             Self::MissingAlbumSingle(s) => MissingAlbumSingleSignal::exists(conn, &s.key),
@@ -1161,16 +1083,6 @@ impl TypedSignalWrite {
                 }
             }
             Self::RedundantDuplicate(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::EmbeddableAlbumArt(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::UpgradeableAlbumArt(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }

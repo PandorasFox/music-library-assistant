@@ -13,8 +13,13 @@ use crate::corpus::tags;
 use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
 use crate::logging::log_general;
-use crate::meta::computations::analysis::album_art::{COVER_FRONT_NAMES, COVER_BACK_NAMES};
 use crate::meta::computations::types::ComputationWitness;
+
+/// Sidecar image filenames that map to CoverFront.
+pub(crate) const COVER_FRONT_NAMES: &[&str] = &["cover", "folder", "albumart", "album", "front"];
+
+/// Sidecar image filenames that map to CoverBack.
+pub(crate) const COVER_BACK_NAMES: &[&str] = &["back"];
 
 use super::{Computation, Result};
 

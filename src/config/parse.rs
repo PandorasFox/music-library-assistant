@@ -274,23 +274,10 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         }
                     }
                 }
-                _ => {}
-            }
-        }
-    }
-}
-
-/// Parse album-art opinions from KDL node
-fn parse_album_art_opinions(node: &kdl::KdlNode, opinions: &mut AlbumArtOpinions) {
-    if let Some(children) = node.children() {
-        for child in children.nodes() {
-            match child.name().value() {
-                "min-acceptable-resolution" => {
+                "show-musicbrainz-url" => {
                     if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_i64() {
-                            if val > 0 {
-                                opinions.min_acceptable_resolution = val as u32;
-                            }
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.show_musicbrainz_url = val;
                         }
                     }
                 }
@@ -298,6 +285,11 @@ fn parse_album_art_opinions(node: &kdl::KdlNode, opinions: &mut AlbumArtOpinions
             }
         }
     }
+}
+
+/// Parse album-art opinions from KDL node
+fn parse_album_art_opinions(_node: &kdl::KdlNode, _opinions: &mut AlbumArtOpinions) {
+    // Album art embed/upgrade fields removed; sidecar_deploy_mode is parsed elsewhere.
 }
 
 /// Parse disc-extraction opinions from KDL node

@@ -56,8 +56,6 @@ pub enum DecisionKey {
     SubparDuplicate,
     /// Directory cluster overlap resolution (per cluster)
     DirectoryCluster { cluster_index: usize },
-    /// Album art work — embed + upgrade (bulk, single decision)
-    AlbumArt,
     /// Inbox corpus match stash (bulk, single decision)
     InboxCorpusMatch,
     /// Inbox organize into corpus (bulk, single decision)
@@ -99,7 +97,6 @@ impl DecisionKey {
             DecisionKey::CorruptFile => Some(DecisionKeyKind::CorruptFile),
             DecisionKey::ShitFormat => Some(DecisionKeyKind::ShitFormat),
             DecisionKey::SubparDuplicate => Some(DecisionKeyKind::SubparDuplicate),
-            DecisionKey::AlbumArt => Some(DecisionKeyKind::AlbumArt),
             DecisionKey::InboxCorpusMatch => Some(DecisionKeyKind::InboxCorpusMatch),
             DecisionKey::IntakeIndex => Some(DecisionKeyKind::IntakeIndex),
             _ => None,
@@ -132,7 +129,6 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::SubparDuplicate => write!(f, "Subpar Duplicate"),
             DecisionKey::DirectoryCluster { cluster_index } =>
                 write!(f, "Directory Cluster:{}", cluster_index),
-            DecisionKey::AlbumArt => write!(f, "Embed Album Art"),
             DecisionKey::InboxCorpusMatch => write!(f, "Inbox Corpus Match"),
             DecisionKey::InboxOrganize => write!(f, "Inbox Organize"),
             DecisionKey::MissingAlbum { group_index } =>
@@ -169,7 +165,6 @@ pub enum DecisionKeyKind {
     CorruptFile,
     ShitFormat,
     SubparDuplicate,
-    AlbumArt,
     InboxCorpusMatch,
     IntakeIndex,
 }

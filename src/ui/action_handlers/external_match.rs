@@ -80,8 +80,9 @@ impl App {
             return;
         }
 
+        let show_url = self.config().opinions.external_matching.show_musicbrainz_url;
         let _ = self.witch.start_transaction("External match review");
-        let state = external_match_modal::ExternalMatchReviewState::new(entries);
+        let state = external_match_modal::ExternalMatchReviewState::new(entries, show_url);
         self.view = ActiveView::ExternalMatchReview(state);
     }
 
@@ -112,6 +113,14 @@ impl App {
             }
             external_match_modal::ExternalMatchReviewAction::Cancel => {
                 self.cancel_and_return_to_source("External match review cancelled");
+            }
+            external_match_modal::ExternalMatchReviewAction::OpenRecordingUrl(url) => {
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(&url)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
             }
         }
     }

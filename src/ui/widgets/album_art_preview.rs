@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::meta::computations::analysis::album_art::{COVER_FRONT_NAMES, COVER_BACK_NAMES};
+use crate::meta::computations::analysis::image_index::{COVER_FRONT_NAMES, COVER_BACK_NAMES};
 
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
@@ -29,20 +29,6 @@ use ratatui_image::StatefulImage;
 /// Created once at app startup, used to create image protocols for rendering.
 pub struct AlbumArtPicker {
     picker: Option<Picker>,
-    /// Terminal font size in pixels: (width, height) per cell.
-    font_size: (u16, u16),
-}
-
-/// Compute the cell height needed to make a square in pixels, given a cell width.
-///
-/// Uses ceiling division: `(width_cells * font_w + font_h - 1) / font_h`.
-pub fn square_height(width_cells: u16, font_size: (u16, u16)) -> u16 {
-    let (font_w, font_h) = font_size;
-    if font_h == 0 {
-        return width_cells;
-    }
-    let px_width = width_cells as u32 * font_w as u32;
-    ((px_width + font_h as u32 - 1) / font_h as u32) as u16
 }
 
 impl AlbumArtPicker {
@@ -51,30 +37,8 @@ impl AlbumArtPicker {
     /// Must be called after entering alternate screen but before reading events.
     /// Returns a picker with halfblock fallback if protocol detection fails.
     pub fn init() -> Self {
-        // Query font size from terminal before creating the picker.
-        let font_size = crossterm::terminal::window_size()
-            .ok()
-            .and_then(|ws| {
-                if ws.columns > 0 && ws.rows > 0 && ws.width > 0 && ws.height > 0 {
-                    Some((ws.width / ws.columns, ws.height / ws.rows))
-                } else {
-                    None
-                }
-            })
-            .unwrap_or((10, 20)); // Standard 1:2 cell ratio fallback
-
         let picker = Picker::from_query_stdio().ok();
-        Self { picker, font_size }
-    }
-
-    /// Whether terminal image rendering is available.
-    pub fn is_available(&self) -> bool {
-        self.picker.is_some()
-    }
-
-    /// Terminal font size in pixels: (width, height) per cell.
-    pub fn font_size(&self) -> (u16, u16) {
-        self.font_size
+        Self { picker }
     }
 
     /// Create a new stateful protocol for rendering an image.
@@ -106,14 +70,6 @@ pub enum ArtCacheKey {
     /// Sidecar image file on disk (e.g., cover.jpg).
     Sidecar(PathBuf),
     /// Embedded art extracted from an audio file.
-    Embedded(PathBuf),
-}
-
-/// Entry type for batch preloading into the art cache.
-pub enum PreloadEntry {
-    /// Sidecar image file on disk.
-    Sidecar(PathBuf),
-    /// Embedded art from an audio file.
     Embedded(PathBuf),
 }
 
@@ -161,37 +117,12 @@ impl AlbumArtCache {
         self.entries.get_mut(&key).unwrap()
     }
 
-    /// Check if a key is already cached (no loading).
-    pub fn has_key(&self, key: &ArtCacheKey) -> bool {
-        self.entries.contains_key(key)
-    }
-
     /// Evict all entries whose key is not in the given set.
     /// Call this when selection changes to avoid unbounded growth.
     pub fn retain_only_keys(&mut self, keys: &[ArtCacheKey]) {
         self.entries.retain(|k, _| keys.contains(k));
     }
 
-    /// Pre-populate the cache with a set of images.
-    /// Call at modal init time to avoid per-frame jank during navigation.
-    pub fn preload_set(&mut self, entries: Vec<PreloadEntry>, picker: &mut AlbumArtPicker) {
-        for entry in entries {
-            match entry {
-                PreloadEntry::Sidecar(path) => {
-                    let key = ArtCacheKey::Sidecar(path.clone());
-                    self.entries
-                        .entry(key)
-                        .or_insert_with(|| load_sidecar_image(&path, picker));
-                }
-                PreloadEntry::Embedded(path) => {
-                    let key = ArtCacheKey::Embedded(path.clone());
-                    self.entries
-                        .entry(key)
-                        .or_insert_with(|| load_embedded_art(&path, picker));
-                }
-            }
-        }
-    }
 }
 
 /// Load a sidecar image from disk and create a protocol for it.

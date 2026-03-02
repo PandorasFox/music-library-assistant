@@ -257,6 +257,8 @@ pub struct ExternalMatchingConfig {
     pub acoustid_api_key: String,
     /// Rate limit: requests per second (default 3).
     pub requests_per_second: u32,
+    /// When true, show raw MusicBrainz URL instead of short label (default: false).
+    pub show_musicbrainz_url: bool,
 }
 
 /// Opinions for disc extraction from ALBUM and TRACKNUMBER tags.
@@ -294,10 +296,6 @@ pub enum SidecarDeployMode {
 /// Album art embedding and upgrade configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlbumArtOpinions {
-    /// Minimum resolution (both dimensions) below which embedded art is considered
-    /// upgradeable. Art at or above this threshold in both dimensions is "good enough."
-    /// Default: 700. Set to 0 to disable (all upgradeable art is reported).
-    pub min_acceptable_resolution: u32,
     /// Whether to deploy sidecar cover images alongside audio files to libraries.
     /// Default: PrimaryCover (deploy only the primary cover image).
     pub sidecar_deploy_mode: SidecarDeployMode,
@@ -306,7 +304,6 @@ pub struct AlbumArtOpinions {
 impl Default for AlbumArtOpinions {
     fn default() -> Self {
         Self {
-            min_acceptable_resolution: 700,
             sidecar_deploy_mode: SidecarDeployMode::default(),
         }
     }
@@ -317,6 +314,7 @@ impl Default for ExternalMatchingConfig {
         Self {
             acoustid_api_key: String::new(),
             requests_per_second: 3,
+            show_musicbrainz_url: false,
         }
     }
 }

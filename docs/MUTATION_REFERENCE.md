@@ -36,7 +36,7 @@ deployment operations.
 |-------|-------|-----------|
 | Config | 0 | ApplyConfigEdits, ApplyDirConfigEdit, ApplyBatchDirConfigEdits |
 | DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, InboxToCorpus, InboxDirToCorpus, ApplyDbTagsToDisk |
-| DiskFlush | 2 | Transcode, EmbedAlbumArt, UpgradeAlbumArt, AppendAlbumArt, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex |
+| DiskFlush | 2 | Transcode, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex |
 | DiskDeploy | 3 | HardLink, LibraryMove |
 | *(ChainEmitted)* | — | FlushTagsToDisk, AssimilateDiskTagsToDb *(spawned during execution, never in transactions)* |
 
@@ -135,14 +135,6 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 | AcknowledgeInodeChanged | UpdateCorpusFileSignals | — | InodeChanged | Update tracks.inode and files table for replaced files |
 
 Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutations documented in Tag Operations above. They clear OutOfBandTagSync, OutOfBandTagConflict, and tag_mismatch signals.
-
-### Album Art Operations
-
-| Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
-|----------|---------------------|-----------------|-----------------|-------|
-| EmbedAlbumArt | UpdateCorpusFileSignals | — | EmbeddableAlbumArt (exact key), MutableOnly scope signals for inode | Read sidecar image from disk, embed into audio file via lofty (FLAC: OggPictureStorage, Opus/OGG: VorbisComments, MP3: Id3v2). Supports FLAC, Opus, OGG, and MP3 formats |
-| UpgradeAlbumArt | UpdateCorpusFileSignals | — | UpgradeableAlbumArt (exact key), MutableOnly scope signals for inode | Replace existing embedded art with higher-quality sidecar image. Strips existing CoverFront picture(s) then embeds new art. Supports FLAC, Opus, OGG, and MP3 formats |
-| AppendAlbumArt | UpdateCorpusFileSignals | — | UpgradeableAlbumArt (exact key), MutableOnly scope signals for inode | Append sidecar image to audio file alongside existing embedded art. Does not strip existing pictures — adds the new image as an additional CoverFront. Supports FLAC, Opus, OGG, and MP3 formats |
 
 ### Signal Emission Operations
 

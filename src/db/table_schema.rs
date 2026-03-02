@@ -547,20 +547,6 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
-        name: "signal_embeddable_album_art",
-        kind: TableKind::Computed,
-        create_sql: <EmbeddableAlbumArtSignal as store::AggregateSignalStore>::TABLE_SQL,
-        index_sql: &[],
-    });
-
-    tables.push(TableEntry {
-        name: "signal_upgradeable_album_art",
-        kind: TableKind::Computed,
-        create_sql: <UpgradeableAlbumArtSignal as store::AggregateSignalStore>::TABLE_SQL,
-        index_sql: &[],
-    });
-
-    tables.push(TableEntry {
         name: "signal_inbox_tag_canonicity",
         kind: TableKind::Computed,
         create_sql: <InboxTagCanonicitySignal as store::AggregateSignalStore>::TABLE_SQL,

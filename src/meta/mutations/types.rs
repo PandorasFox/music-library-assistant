@@ -24,7 +24,6 @@ use super::indexing::{
 };
 use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
-use super::album_art::{AppendAlbumArtMutation, EmbedAlbumArtMutation, UpgradeAlbumArtMutation};
 use super::config_edit::ApplyConfigEditsMutation;
 use super::dir_config_edit::{ApplyDirConfigEditMutation, ApplyBatchDirConfigEditsMutation};
 
@@ -316,18 +315,6 @@ pub enum Mutation {
     EmitExpectedMissingTag(EmitExpectedMissingTagMutation),
 
     // ========================================================================
-    // Album Art Operations (struct-backed — see album_art.rs for trait impl)
-    // ========================================================================
-    /// Embed a sidecar image into an audio file.
-    EmbedAlbumArt(EmbedAlbumArtMutation),
-
-    /// Replace existing embedded art with a better sidecar image.
-    UpgradeAlbumArt(UpgradeAlbumArtMutation),
-
-    /// Append a sidecar image alongside existing embedded art.
-    AppendAlbumArt(AppendAlbumArtMutation),
-
-    // ========================================================================
     // Config Operations (struct-backed — see config_edit.rs for trait impl)
     // ========================================================================
     /// Apply edited config to disk (comment-preserving KDL modification).
@@ -368,9 +355,6 @@ impl Mutation {
             Mutation::EmitExpectedOverlap(m) => m,
             Mutation::EmitExpectedDuplicate(m) => m,
             Mutation::EmitExpectedMissingTag(m) => m,
-            Mutation::EmbedAlbumArt(m) => m,
-            Mutation::UpgradeAlbumArt(m) => m,
-            Mutation::AppendAlbumArt(m) => m,
             Mutation::ApplyConfigEdits(m) => m,
             Mutation::ApplyDirConfigEdit(m) => m,
             Mutation::ApplyBatchDirConfigEdits(m) => m,

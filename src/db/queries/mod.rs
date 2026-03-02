@@ -484,26 +484,6 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_organizable_inbox_files()
     }
 
-    /// Get embeddable album art signals with deserialized data.
-    pub fn get_embeddable_album_art_signals(&self) -> Result<Vec<crate::meta::signals::data::EmbeddableAlbumArtSignal>> {
-        self.db.get_embeddable_album_art_signals()
-    }
-
-    /// Get upgradeable album art signals with deserialized data.
-    pub fn get_upgradeable_album_art_signals(&self) -> Result<Vec<crate::meta::signals::data::UpgradeableAlbumArtSignal>> {
-        self.db.get_upgradeable_album_art_signals()
-    }
-
-    /// Get corpus audio files without embedded pictures.
-    pub fn get_artless_corpus_files(&self) -> Result<Vec<(i64, String)>> {
-        self.db.get_artless_corpus_files()
-    }
-
-    /// Get corpus audio files with embedded pictures and known metadata.
-    pub fn get_corpus_files_with_picture_info(&self) -> Result<Vec<(i64, String, String, u32, u32)>> {
-        self.db.get_corpus_files_with_picture_info()
-    }
-
     // =========================================================================
     // Library File Queries
     // =========================================================================

@@ -32,7 +32,6 @@ pub mod corrupt_file_modal;
 pub mod deploy_modal;
 pub mod disc_extraction_modal;
 pub mod directory_cluster_modal;
-pub mod embed_album_art_modal;
 pub mod external_match_modal;
 pub mod external_match_view;
 pub mod eye;
@@ -352,7 +351,6 @@ impl App {
             ActiveView::MissingDirectoryResolution(s) => ViewAction::MissingDirectoryResolution(s.handle_input(&action)),
             ActiveView::CorruptFileResolution(s) => ViewAction::CorruptFileResolution(s.handle_input(&action)),
             ActiveView::ShitFormatResolution(s) => ViewAction::ShitFormatResolution(s.handle_input(&action)),
-            ActiveView::EmbedAlbumArtResolution(s) => ViewAction::EmbedAlbumArtResolution(s.handle_input(&action)),
             ActiveView::SubparDuplicateResolution(s) => ViewAction::SubparDuplicateResolution(s.handle_input(&action)),
             ActiveView::InboxCorpusMatchResolution(s) => ViewAction::InboxCorpusMatchResolution(s.handle_input(&action)),
             ActiveView::InboxOrganize(s) => ViewAction::InboxOrganize(s.handle_input(&action)),

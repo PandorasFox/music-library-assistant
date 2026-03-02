@@ -233,11 +233,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             name: "Album Art",
             collapsed: false,
             fields: vec![
-                field("Min acceptable resolution", "Min resolution (px) below which embedded art is upgradeable (0 = all)",
-                    ConfigValue::UintU32(ops.album_art.min_acceptable_resolution),
-                    source_for(ops.album_art.min_acceptable_resolution == defaults.album_art.min_acceptable_resolution, "min-acceptable-resolution"),
-                    false,
-                    |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.album_art.min_acceptable_resolution = *n; } }),
                 field("Sidecar deploy mode", "Deploy sidecar cover images alongside audio files to libraries",
                     ConfigValue::Enum { selected: sidecar_deploy_index(ops.album_art.sidecar_deploy_mode), options: SIDECAR_DEPLOY_OPTIONS.to_vec() },
                     source_for(ops.album_art.sidecar_deploy_mode == defaults.album_art.sidecar_deploy_mode, "sidecar-deploy-mode"),
@@ -277,6 +272,11 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     source_for(ops.external_matching.requests_per_second == defaults.external_matching.requests_per_second, "requests-per-second"),
                     false,
                     |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.external_matching.requests_per_second = *n; } }),
+                field("Show MusicBrainz URL", "Show raw MusicBrainz URL instead of short clickable label in match review",
+                    ConfigValue::Bool(ops.external_matching.show_musicbrainz_url),
+                    source_for(ops.external_matching.show_musicbrainz_url == defaults.external_matching.show_musicbrainz_url, "show-musicbrainz-url"),
+                    false,
+                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.external_matching.show_musicbrainz_url = *b; } }),
             ],
         },
     ]
@@ -387,7 +387,6 @@ mod tests {
         assert_eq!(rebuilt.opinions.duplicate_analysis.fingerprint_similarity_threshold, config.opinions.duplicate_analysis.fingerprint_similarity_threshold);
         assert_eq!(rebuilt.opinions.disc_extraction.disc_tag_name, config.opinions.disc_extraction.disc_tag_name);
         assert_eq!(rebuilt.opinions.disc_extraction.map_letters_to_numbers, config.opinions.disc_extraction.map_letters_to_numbers);
-        assert_eq!(rebuilt.opinions.album_art.min_acceptable_resolution, config.opinions.album_art.min_acceptable_resolution);
         assert_eq!(rebuilt.opinions.album_art.sidecar_deploy_mode, config.opinions.album_art.sidecar_deploy_mode);
     }
 

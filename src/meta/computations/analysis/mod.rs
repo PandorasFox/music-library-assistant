@@ -38,9 +38,7 @@ mod duplicates;
 mod tags;
 mod deploy;
 mod formats;
-pub(crate) mod album_art;
-mod album_art_info;
-mod image_index;
+pub(crate) mod image_index;
 mod inbox_matches;
 mod inbox_tags;
 mod path_schema;
@@ -56,8 +54,6 @@ pub use duplicates::*;
 pub use tags::*;
 pub use deploy::*;
 pub use formats::*;
-pub use album_art::*;
-pub use album_art_info::*;
 pub use image_index::*;
 pub use inbox_matches::*;
 pub use inbox_tags::*;
@@ -174,12 +170,6 @@ pub enum Computation {
     /// DeployedHealthy (correctly deployed). Runs after DeriveDeployHealthSignals.
     DeriveCorpusDeployStatus,
 
-    /// Detect directories with sidecar album art embeddable into artless audio files.
-    ///
-    /// Scans directories for image files (cover.jpg, folder.png, etc.) and probes
-    /// audio files for embedded pictures. Emits EmbeddableAlbumArt signals.
-    DetectEmbeddableAlbumArt,
-
     /// Detect inbox files that match corpus files by fingerprint+duration.
     ///
     /// For each inbox file with a fingerprint, finds corpus files with similar
@@ -226,12 +216,6 @@ pub enum Computation {
     /// MetadataOnly) and per-tag diffs.
     DeriveExternalMatches,
 
-    /// Backfill picture metadata (format, resolution, count) for existing files.
-    ///
-    /// Single-pass dirty-inode computation: extracts picture info via lofty and
-    /// writes pic_format/pic_width/pic_height/pic_count to audio_info.
-    BackfillAlbumArtInfo,
-
     /// Seed dirty inodes for compound tag recomputation after config change.
     ///
     /// Carries the new (tag_name, separator) pairs from a tag_splitting config
@@ -268,7 +252,6 @@ impl Computation {
             Computation::DetectReleaseOverlaps => "Detecting release overlaps",
             Computation::DeriveDeployHealthSignals { .. } => "Deriving deploy health",
             Computation::DeriveCorpusDeployStatus => "Deriving corpus deploy status",
-            Computation::DetectEmbeddableAlbumArt => "Detecting embeddable album art",
             Computation::DetectInboxCorpusMatches => "Detecting inbox-corpus matches",
             Computation::DetectInboxTagCanonicity => "Detecting inbox tag canonicity",
             Computation::DetectInboxMissingTags => "Detecting inbox missing tags",
@@ -276,7 +259,6 @@ impl Computation {
             Computation::DetectDiscExtractions => "Detecting disc extractions",
             Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
             Computation::DeriveExternalMatches => "Deriving external match signals",
-            Computation::BackfillAlbumArtInfo => "Backfilling album art metadata",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
             Computation::IndexImageFile => "Indexing image files",
         }
@@ -333,9 +315,6 @@ impl Computation {
             Computation::DeriveCorpusDeployStatus => {
                 execute_derive_corpus_deploy_status(ctx.read_db, ctx.witness, ctx.start)
             }
-            Computation::DetectEmbeddableAlbumArt => {
-                execute_detect_embeddable_album_art(ctx.read_db, ctx.witness, ctx.start)
-            }
             Computation::DetectInboxCorpusMatches => {
                 execute_detect_inbox_corpus_matches(ctx.read_db, ctx.witness, ctx.start)
             }
@@ -356,9 +335,6 @@ impl Computation {
             }
             Computation::DeriveExternalMatches => {
                 execute_derive_external_matches(ctx.read_db, ctx.witness, ctx.start)
-            }
-            Computation::BackfillAlbumArtInfo => {
-                execute_backfill_album_art_info(ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::SeedCompoundTagDirtyInodes { ref new_separators } => {
                 execute_seed_compound_tag_dirty_inodes(ctx.read_db, new_separators, ctx.witness, ctx.start)

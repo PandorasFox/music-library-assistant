@@ -5,7 +5,7 @@
 //! These flows share a common pattern: load data, show preview, stage mutations.
 
 use crate::meta::decisions::DecisionKey;
-use crate::ui::{corrupt_file_modal, embed_album_art_modal, missing_directory_modal, missing_file_modal, shit_format_modal, subpar_duplicate_modal, ActiveView};
+use crate::ui::{corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal, subpar_duplicate_modal, ActiveView};
 use super::witness;
 use super::super::App;
 
@@ -451,102 +451,6 @@ impl App {
         // Create preview state with cached data
         let preview = directory_cluster_modal::DirectoryClusterPreviewState::new(data);
         self.view = ActiveView::DirectoryClusterResolution(preview);
-    }
-
-    // =========================================================================
-    // Album Art Review
-    // =========================================================================
-
-    /// Start per-directory album art review modal from Insights view.
-    pub(in crate::ui) fn start_album_art_review(&mut self) {
-        let directories = self.cache.query(|db| {
-            embed_album_art_modal::load_review_directories(&db).unwrap_or_default()
-        }).recv();
-
-        // Preload all art images upfront to avoid per-frame jank during navigation
-        {
-            use crate::corpus::paths;
-            use crate::ui::widgets::PreloadEntry;
-
-            let resolver = paths::get_resolver();
-            let mut preload = Vec::new();
-            for dir in &directories {
-                preload.push(PreloadEntry::Sidecar(
-                    std::path::PathBuf::from(&dir.sidecar.path),
-                ));
-                for entry in &dir.upgrade_entries {
-                    let audio_path = resolver.resolve(std::path::Path::new(&entry.path));
-                    preload.push(PreloadEntry::Embedded(audio_path));
-                }
-            }
-            self.art_cache.preload_set(preload, &mut self.art_picker);
-        }
-
-        let state = embed_album_art_modal::AlbumArtReviewState::new(directories);
-        self.view = ActiveView::EmbedAlbumArtResolution(state);
-    }
-
-    /// Handle album art review actions (per-directory replace/append/skip/cancel).
-    pub(super) fn handle_album_art_review_action(
-        &mut self,
-        action: embed_album_art_modal::AlbumArtReviewAction,
-        witness: Option<&witness::ConfirmationGesture>,
-    ) {
-        match action {
-            embed_album_art_modal::AlbumArtReviewAction::None => {}
-            embed_album_art_modal::AlbumArtReviewAction::ReplaceDirectory => {
-                let Some(w) = witness else { return };
-                self.confirm_album_art_directory(embed_album_art_modal::AlbumArtReviewButton::Replace, w);
-            }
-            embed_album_art_modal::AlbumArtReviewAction::AppendDirectory => {
-                let Some(w) = witness else { return };
-                self.confirm_album_art_directory(embed_album_art_modal::AlbumArtReviewButton::Append, w);
-            }
-            embed_album_art_modal::AlbumArtReviewAction::SkipDirectory => {
-                let Some(w) = witness else { return };
-                if let ActiveView::EmbedAlbumArtResolution(ref mut state) = self.view {
-                    let all_done = state.mark_processed_and_advance();
-                    if all_done {
-                        self.finalize_album_art_review(w);
-                    }
-                }
-            }
-            embed_album_art_modal::AlbumArtReviewAction::Cancel => {
-                self.cancel_and_return_to_source("Album art review cancelled");
-            }
-        }
-    }
-
-    /// Confirm current directory with the given button mode (Replace or Append).
-    fn confirm_album_art_directory(
-        &mut self,
-        button: embed_album_art_modal::AlbumArtReviewButton,
-        w: &witness::ConfirmationGesture,
-    ) {
-        if let ActiveView::EmbedAlbumArtResolution(ref mut state) = self.view {
-            if let Some(dir) = state.directories.get(state.current_dir) {
-                let mutations = dir.mutations_with_mode(button);
-                state.staged_mutations.extend(mutations);
-                state.confirmed_count += 1;
-            }
-            let all_done = state.mark_processed_and_advance();
-            if all_done {
-                self.finalize_album_art_review(w);
-            }
-        }
-    }
-
-    /// All directories processed — stage accumulated mutations for review.
-    fn finalize_album_art_review(&mut self, w: &witness::ConfirmationGesture) {
-        if let ActiveView::EmbedAlbumArtResolution(ref mut state) = self.view {
-            let mutations = std::mem::take(&mut state.staged_mutations);
-            if !mutations.is_empty() {
-                self.stage_mutations_with_transaction(mutations, "Album art", DecisionKey::AlbumArt, w);
-                self.after_staging_decisions();
-            } else {
-                self.cancel_and_return_to_source("No album art changes staged");
-            }
-        }
     }
 
     /// Stage directory cluster mutations for transaction review.

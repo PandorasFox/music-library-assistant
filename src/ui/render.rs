@@ -83,6 +83,7 @@ pub fn render_app(
             .with_deploy_needs_action(deploy_needs_action)
             .with_transactions_open(transactions_open)
             .with_transaction_has_decisions(transaction_has_decisions);
+        app.tab_click_rects = titlebar.tab_click_rects(chunks[0]);
         titlebar.render(f, chunks[0]);
 
         let start = Instant::now();
@@ -186,7 +187,7 @@ fn render_content(
             vname = "deploy";
             state.render(f, area);
         }
-        ActiveView::ExitConfirm(ref state) => {
+        ActiveView::ExitConfirm(ref mut state) => {
             vname = "exit_confirm_modal";
             render_exit_confirm_modal(f, area, state);
         }
@@ -330,7 +331,7 @@ fn render_content(
 fn render_exit_confirm_modal(
     f: &mut Frame,
     area: ratatui::layout::Rect,
-    state: &ExitConfirmModalState,
+    state: &mut ExitConfirmModalState,
 ) {
     let selected_no = state.selected_no;
     let has_operations = state.has_operations;
@@ -381,6 +382,29 @@ fn render_exit_confirm_modal(
     button_spans.push(Span::raw("     "));
     button_spans.extend(no_btn.render_with_indicator());
     let button_line = Line::from(button_spans);
+
+    // Compute button click targets
+    let (modal_w, modal_h, button_line_idx) = if has_operations {
+        (50u16, 16u16, 12u16) // button_line is content[12]
+    } else {
+        (40u16, 9u16, 4u16) // button_line is content[4]
+    };
+    let modal_rect = super::widgets::centered_rect_fixed(modal_w, modal_h, area);
+    let inner_x = modal_rect.x + 1; // inside Borders::ALL
+    let inner_y = modal_rect.y + 1;
+    let button_row = inner_y + button_line_idx;
+
+    state.button_rects.clear();
+    let mut bx = inner_x;
+    // First button: " > " (3 chars) + label
+    let first_label_len = if has_operations { 3u16 } else { 7u16 }; // "Yes" / "Confirm"
+    let first_width = 3 + first_label_len;
+    state.button_rects.set("yes", ratatui::layout::Rect::new(bx, button_row, first_width, 1));
+    bx += first_width + 5; // 5-char gap
+    // Second button: " > " (3 chars) + label
+    let second_label_len = if has_operations { 2u16 } else { 6u16 }; // "No" / "Cancel"
+    let second_width = 3 + second_label_len;
+    state.button_rects.set("no", ratatui::layout::Rect::new(bx, button_row, second_width, 1));
 
     if has_operations {
         // Warning modal for operations in progress

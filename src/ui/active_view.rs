@@ -299,12 +299,23 @@ pub(crate) enum ExitConfirmAction {
 
 /// State for the exit confirmation modal.
 /// Default selection is "No" (stay in application).
-#[derive(Debug, Clone, Default)]
 pub(crate) struct ExitConfirmModalState {
     /// True = "No" selected (default), False = "Yes" selected
     pub selected_no: bool,
     /// True if operations are in progress (shows warning)
     pub has_operations: bool,
+    /// Click target rects for buttons, populated during render.
+    pub button_rects: crate::ui::widgets::ButtonRects,
+}
+
+impl Default for ExitConfirmModalState {
+    fn default() -> Self {
+        Self {
+            selected_no: false,
+            has_operations: false,
+            button_rects: Default::default(),
+        }
+    }
 }
 
 // ============================================================================

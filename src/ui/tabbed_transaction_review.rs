@@ -40,11 +40,7 @@ impl TabbedTransactionReviewState {
 
         // Delegate everything else to the core
         match self.review.handle_input(action) {
-            TransactionReviewAction::Cancel => {
-                // No cancel in tabbed mode — Esc produces Cancel from core,
-                // but here it's a no-op (tabbed view has no parent to pop to)
-                TabbedTransactionReviewAction::None
-            }
+            TransactionReviewAction::Cancel => TabbedTransactionReviewAction::RequestQuit,
             other => TabbedTransactionReviewAction::Review(other),
         }
     }
@@ -57,9 +53,9 @@ impl TabbedTransactionReviewState {
 /// Actions produced by the tabbed transaction review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TabbedTransactionReviewAction {
-    None,
     CycleNext,
     CyclePrev,
+    RequestQuit,
     /// Core action delegated from TransactionReviewState.
     Review(TransactionReviewAction),
 }

@@ -182,6 +182,45 @@ impl UnifiedTitleBar {
         self.render_title(f, chunks[1]);
     }
 
+    /// Compute click target rects for each tab label.
+    ///
+    /// Returns (LateralView, Rect) pairs for hit-testing mouse clicks.
+    /// Must be called with the same `area` passed to `render()`.
+    pub fn tab_click_rects(&self, area: Rect) -> Vec<(LateralView, Rect)> {
+        if area.height < 3 || area.width < TITLE_PANE_WIDTH + 10 {
+            return Vec::new();
+        }
+
+        // Same horizontal split as render()
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(20),
+                Constraint::Length(TITLE_PANE_WIDTH),
+            ])
+            .split(area);
+
+        let tab_area = chunks[0];
+        // Inner area (inside Borders::ALL)
+        let inner_x = tab_area.x + 1;
+        let inner_y = tab_area.y + 1;
+
+        let mut rects = Vec::new();
+        let mut x = inner_x;
+
+        let all_views = LateralView::all(self.transactions_open);
+        for (i, view) in all_views.iter().enumerate() {
+            if i > 0 {
+                x += 3; // " | " separator
+            }
+            let label_len = view.label().len() as u16;
+            rects.push((*view, Rect::new(x, inner_y, label_len, 1)));
+            x += label_len;
+        }
+
+        rects
+    }
+
     fn render_tab_switcher(&self, f: &mut Frame, area: Rect) {
         let mut spans = Vec::new();
         let all_views = LateralView::all(self.transactions_open);

@@ -1449,12 +1449,18 @@ impl App {
         use transaction_review::TransactionReviewAction;
 
         match action {
-            TabbedTransactionReviewAction::None => {}
             TabbedTransactionReviewAction::CycleNext => {
                 self.start_lateral_view(widgets::LateralView::Transaction.next(self.transactions_open()));
             }
             TabbedTransactionReviewAction::CyclePrev => {
                 self.start_lateral_view(widgets::LateralView::Transaction.prev(self.transactions_open()));
+            }
+            TabbedTransactionReviewAction::RequestQuit => {
+                if self.has_pending_operations() {
+                    self.status_message = Some("Cannot quit while operations are pending".to_string());
+                } else {
+                    self.view = ActiveView::ExitConfirm(super::ExitConfirmModalState::default());
+                }
             }
             TabbedTransactionReviewAction::Review(review_action) => match review_action {
                 TransactionReviewAction::None => {}
@@ -1533,9 +1539,37 @@ impl App {
     /// minted once here and threaded to views that need it for button witnessing.
     /// Views return an optional action; if present, it's dispatched as a confirmation.
     pub(super) fn handle_click(&mut self, x: u16, y: u16) {
+        // Check titlebar tab clicks first (applies to all lateral views)
+        if self.view.lateral_view().is_some() {
+            for (view, rect) in &self.tab_click_rects {
+                if crate::ui::widgets::rect_contains(*rect, x, y) {
+                    let target = *view;
+                    self.start_lateral_view(target);
+                    return;
+                }
+            }
+        }
+
         let gesture = witness::ConfirmationGesture::new();
 
         let action = match &mut self.view {
+            ActiveView::ExitConfirm(state) => {
+                if let Some(button) = state.button_rects.hit_test(x, y) {
+                    match button {
+                        "yes" => {
+                            state.selected_no = false;
+                            Some(ViewAction::ExitConfirm(super::ExitConfirmAction::Quit))
+                        }
+                        "no" => {
+                            state.selected_no = true;
+                            Some(ViewAction::ExitConfirm(super::ExitConfirmAction::Cancel))
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
             ActiveView::OobSyncResolution(state) => {
                 state.handle_click(x, y, &gesture).map(ViewAction::OobSyncResolution)
             }

@@ -148,6 +148,9 @@ pub(crate) struct App {
     /// When true, drain the input buffer before the next event poll.
     /// Set by render code after expensive image loads to prevent stacked events.
     pub(super) drain_input_next: bool,
+
+    /// Click targets for titlebar tabs, populated during render.
+    pub(super) tab_click_rects: Vec<(widgets::LateralView, ratatui::layout::Rect)>,
 }
 
 impl App {
@@ -181,6 +184,7 @@ impl App {
             art_picker: widgets::AlbumArtPicker::init(),
             art_cache: widgets::AlbumArtCache::new(),
             drain_input_next: false,
+            tab_click_rects: Vec::new(),
         }
     }
 

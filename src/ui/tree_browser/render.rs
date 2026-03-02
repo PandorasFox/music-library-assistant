@@ -335,9 +335,9 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool, is_pending_edit: bool) 
 
     let expand_indicator = if entry.is_directory() {
         if entry.is_expanded {
-            "▼ "
+            "▽ "
         } else if entry.has_children {
-            "▶ "
+            "▷ "
         } else {
             "  "
         }

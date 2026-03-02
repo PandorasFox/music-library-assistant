@@ -143,7 +143,7 @@ fn render_corpus_entry(entry: &crate::ui::tree_browser::TreeEntry, is_cursor: bo
 
     let expand_indicator = if entry.is_directory() {
         if entry.has_children {
-            if entry.is_expanded { "▼ " } else { "▶ " }
+            if entry.is_expanded { "▽ " } else { "▷ " }
         } else {
             "  "
         }

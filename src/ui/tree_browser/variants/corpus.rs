@@ -903,7 +903,7 @@ impl CorpusBrowserVariant {
             .map(|(idx, path)| {
                 let path_str = truncate_left(&path.to_string_lossy(), (max_width - 6) as usize);
                 let indicator = if idx == self.match_selection_idx {
-                    "▶ "
+                    "▷ "
                 } else {
                     "  "
                 };

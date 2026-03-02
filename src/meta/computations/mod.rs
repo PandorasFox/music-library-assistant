@@ -63,7 +63,7 @@ use stats::{ensure_thread_id, record_task_stats};
 /// Used by:
 /// - Post-execution pipeline (dirty marking after mutations)
 /// - Migration seeding (re-seed dirty inodes after schema changes)
-pub const PER_INODE_COMPUTATIONS: &[&str] = &["compound_tag", "shit_format"];
+pub const PER_INODE_COMPUTATIONS: &[&str] = &["compound_tag", "shit_format", "sidecar_deploy"];
 
 // ============================================================================
 // Unified Computation Enum (for daemon's queue)

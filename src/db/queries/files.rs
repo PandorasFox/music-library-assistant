@@ -942,27 +942,26 @@ impl Database {
     // Image File Queries
     // =========================================================================
 
-    /// Get corpus image files in a directory (joins files + image_info).
+    /// Get all corpus image files with their inodes (batch query).
     ///
-    /// Returns (path, format, width, height, role) for image files
-    /// in the given directory prefix.
-    pub fn get_corpus_images_in_directory(&self, dir_path: &str) -> Result<Vec<ImageFileInfo>> {
-        let pattern = super::dir_like_pattern_str(dir_path);
+    /// Returns all image files in the corpus zone, avoiding per-directory LIKE scans.
+    /// Used by sidecar deploy signal derivation for batch processing.
+    pub fn get_all_corpus_images(&self) -> Result<Vec<CorpusImageEntry>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT f.path, i.format, i.width, i.height, i.role
+            "SELECT f.inode, f.path, i.format, i.width, i.height, i.role
              FROM files f
              JOIN image_info i ON f.inode = i.inode
-             WHERE f.zone = 'corpus' AND f.is_dir = 0
-             AND f.path LIKE ?1 ESCAPE '\\'",
+             WHERE f.zone = 'corpus' AND f.is_dir = 0",
         )?;
 
-        let rows = stmt.query_map(params![pattern], |row| {
-            Ok(ImageFileInfo {
-                path: row.get(0)?,
-                format: row.get(1)?,
-                width: row.get(2)?,
-                height: row.get(3)?,
-                role: row.get(4)?,
+        let rows = stmt.query_map(params![], |row| {
+            Ok(CorpusImageEntry {
+                inode: row.get(0)?,
+                path: row.get(1)?,
+                format: row.get(2)?,
+                width: row.get(3)?,
+                height: row.get(4)?,
+                role: row.get(5)?,
             })
         })?;
 
@@ -975,9 +974,10 @@ impl Database {
 
 }
 
-/// Metadata for an image file in the corpus.
+/// A corpus image file with its inode (for batch sidecar deploy processing).
 #[derive(Debug, Clone)]
-pub struct ImageFileInfo {
+pub struct CorpusImageEntry {
+    pub inode: i64,
     pub path: String,
     pub format: String,
     pub width: u32,

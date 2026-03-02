@@ -336,6 +336,13 @@ pub fn execute_scan_corpus_directory(
                 "index_image_file",
                 witness,
             );
+
+            // Mark dirty for sidecar deploy recomputation
+            sender.mark_dirty_inodes(
+                vec![*img_inode],
+                "sidecar_deploy",
+                witness,
+            );
         }
     }
 

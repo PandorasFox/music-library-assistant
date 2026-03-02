@@ -432,6 +432,7 @@ fn seed_dirty_inodes_all(conn: &Connection) -> Result<()> {
         "oob_tag_sync",
         "external_match",
         "album_art_info",
+        "sidecar_deploy",
     ];
 
     for comp_type in &computation_types {

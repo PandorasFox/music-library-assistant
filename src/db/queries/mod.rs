@@ -345,6 +345,11 @@ impl<'a> ReadOnlyDb<'a> {
         S::exists(self.db.conn(), inode).unwrap_or(false)
     }
 
+    /// Count signals in a corpus signal table (generic, type-safe).
+    pub fn corpus_signal_count<S: crate::meta::signals::store::CorpusSignalStore>(&self) -> usize {
+        S::count(self.db.conn()).unwrap_or(0)
+    }
+
     /// Query all inodes that have signals in a corpus signal table (generic, type-safe).
     pub fn corpus_signal_all_inodes<S: crate::meta::signals::store::CorpusSignalStore>(&self) -> Result<Vec<i64>> {
         Ok(S::all_inodes(self.db.conn())?)
@@ -819,9 +824,9 @@ impl<'a> ReadOnlyDb<'a> {
     // Image File Queries
     // =========================================================================
 
-    /// Get corpus image files in a directory.
-    pub fn get_corpus_images_in_directory(&self, dir_path: &str) -> Result<Vec<files::ImageFileInfo>> {
-        self.db.get_corpus_images_in_directory(dir_path)
+    /// Get all corpus image files with inodes (batch query for sidecar deploy).
+    pub fn get_all_corpus_images(&self) -> Result<Vec<files::CorpusImageEntry>> {
+        self.db.get_all_corpus_images()
     }
 
 }

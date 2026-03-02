@@ -727,6 +727,24 @@ impl Database {
         Ok(count as usize)
     }
 
+    /// Get image file count, optionally filtered by zone.
+    pub fn get_image_file_count(&self, zone: Option<&str>) -> Result<usize> {
+        let count: i64 = if let Some(src) = zone {
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM files f JOIN image_info i ON f.inode = i.inode WHERE f.zone = ?1 AND f.is_dir = 0",
+                params![src],
+                |row| row.get(0),
+            )?
+        } else {
+            self.conn.query_row(
+                "SELECT COUNT(*) FROM files f JOIN image_info i ON f.inode = i.inode WHERE f.is_dir = 0",
+                params![],
+                |row| row.get(0),
+            )?
+        };
+        Ok(count as usize)
+    }
+
     // ========================================================================
     // Row Conversion Helpers
     // ========================================================================

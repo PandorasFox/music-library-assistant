@@ -407,11 +407,26 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Files with complete metadata",
+                "Audio files with complete metadata",
                 Style::default().fg(text_color),
             )));
             lines.push(Line::from(Span::styled(
                 "in the database.",
+                Style::default().fg(text_color),
+            )));
+        }
+        InsightType::CorpusImagesInCorpus => {
+            lines.push(Line::from(Span::styled(
+                "Images in Corpus",
+                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Image files (sidecar album art, etc.)",
+                Style::default().fg(text_color),
+            )));
+            lines.push(Line::from(Span::styled(
+                "indexed in the corpus.",
                 Style::default().fg(text_color),
             )));
         }

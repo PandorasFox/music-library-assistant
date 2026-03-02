@@ -126,6 +126,7 @@ pub enum InsightType {
     CorpusOobTagConflict,
     CorpusFilesInCorpus,
     CorpusFilesIndexed,
+    CorpusImagesInCorpus,
     CorpusFilesUnindexed,
     CorpusFilesMissing,
     CorpusDirectoriesMissing,
@@ -168,7 +169,8 @@ impl InsightType {
             InsightType::AlbumArtWork => Some(DecisionKeyKind::AlbumArt),
             // Informational entries
             InsightType::CorpusFilesInCorpus
-            | InsightType::CorpusFilesIndexed => None,
+            | InsightType::CorpusFilesIndexed
+            | InsightType::CorpusImagesInCorpus => None,
             // Per-item sources — modals already back-fill from staged decisions
             InsightType::TagCanonicity { .. }
             | InsightType::CompoundTagValueSafe { .. }
@@ -504,6 +506,14 @@ impl CachedBucketEntries {
                 InsightType::CorpusFilesIndexed,
                 "Files indexed",
                 corpus.files_indexed,
+                1,
+                Color::Green,
+                InsightAction::Informational,
+            ),
+            BucketEntry::corpus(
+                InsightType::CorpusImagesInCorpus,
+                "Images in corpus",
+                corpus.images_in_corpus,
                 1,
                 Color::Green,
                 InsightAction::Informational,
@@ -1020,6 +1030,7 @@ mod tests {
                 files_relocated: 2,
                 corrupt_files: 0,
                 shit_format_files: 0,
+                images_in_corpus: 10,
                 file_type_breakdown: vec![],
                 _directory_breakdown: Default::default(),
             },

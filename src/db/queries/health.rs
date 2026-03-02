@@ -515,6 +515,9 @@ impl Database {
         let corrupt_files = self.count_signal_type("corrupt_file")?;
         let shit_format_files = self.count_signal_type("shit_format")?;
 
+        // Image files
+        let images_in_corpus = self.get_image_file_count(Some("corpus")).unwrap_or(0);
+
         // File type breakdown
         let file_type_breakdown = self.get_file_type_breakdown()?;
 
@@ -533,6 +536,7 @@ impl Database {
             files_relocated,
             corrupt_files,
             shit_format_files,
+            images_in_corpus,
             file_type_breakdown,
             _directory_breakdown: directory_breakdown,
         })

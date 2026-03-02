@@ -36,6 +36,8 @@ pub struct CorpusFilesBucket {
     pub corrupt_files: usize,
     /// Files in non-Vorbis container formats (MP3, M4A, AAC, WMA, etc.)
     pub shit_format_files: usize,
+    /// Corpus image files (sidecar art, etc.) with entries in image_info
+    pub images_in_corpus: usize,
     /// Filetype breakdown for files_in_corpus
     pub file_type_breakdown: Vec<(String, usize)>,
     /// Directory-level aggregation for selected signal

@@ -818,4 +818,14 @@ impl<'a> ReadOnlyDb<'a> {
     pub fn get_corpus_images_in_directory(&self, dir_path: &str) -> Result<Vec<files::ImageFileInfo>> {
         self.db.get_corpus_images_in_directory(dir_path)
     }
+
+    /// Get all image files in a zone (extension-based, no image_info JOIN).
+    pub fn get_images_in_zone(&self, zone: super::types::Zone) -> Result<Vec<(i64, String)>> {
+        self.db.get_images_in_zone(zone)
+    }
+
+    /// Get image files in a directory within a zone (extension-based, no image_info JOIN).
+    pub fn get_images_in_directory(&self, zone: super::types::Zone, dir_path: &str) -> Result<Vec<(i64, String)>> {
+        self.db.get_images_in_directory(zone, dir_path)
+    }
 }

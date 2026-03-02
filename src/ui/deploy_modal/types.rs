@@ -108,8 +108,8 @@ impl DeployModalData {
             }
         }
 
-        // Compute sidecar images to deploy alongside new audio files
-        let sidecars = Self::compute_sidecars(&new, read_db, config);
+        // Compute sidecar images to deploy alongside audio files (all deployed dirs)
+        let sidecars = Self::compute_sidecars(&healthy, &new, &stale, &conflicts, read_db, config);
 
         crate::logging::log_general(format!(
             "[UI] DeployModalData::load: healthy={}, new={}, conflicts={}, leftover={}, stale={}, sidecars={}",
@@ -210,12 +210,16 @@ impl DeployModalData {
         result
     }
 
-    /// Compute sidecar images to deploy alongside new audio files.
+    /// Compute sidecar images to deploy for all deployed album directories.
     ///
-    /// Groups new files by corpus directory, queries image_info for each,
-    /// applies SidecarDeployMode filter, and deduplicates by target path.
+    /// Discovers corpus directories from ALL deploy signal sources (healthy,
+    /// new, stale, conflicts), queries image_info for each, applies
+    /// SidecarDeployMode filter, and skips images already present in the library.
     fn compute_sidecars(
+        healthy: &[DeploySignalFile],
         new_files: &[DeploySignalFile],
+        stale: &[StaleSignalFile],
+        conflicts: &[ConflictGroup],
         read_db: &ReadOnlyDb<'_>,
         config: Option<&crate::config::Config>,
     ) -> Vec<SidecarDeployEntry> {
@@ -229,9 +233,29 @@ impl DeployModalData {
             return Vec::new();
         }
 
-        // Group new files by (corpus_parent_dir, library_name, library_album_dir)
-        // We need the library album dir from the deploy path
+        // Build dir_targets: corpus_dir → (library_name, album_dir) from ALL sources
         let mut dir_targets: HashMap<String, (String, String)> = HashMap::new();
+
+        // Healthy files: deploy_path = "{library_name}/artist/album/file" (includes library prefix)
+        for file in healthy {
+            if file.library_name.is_empty() || file.deploy_path.is_empty() {
+                continue;
+            }
+            let corpus_dir = Path::new(&file.corpus_path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            // Strip library_name prefix from deploy_path to get the relative path
+            let relative = file.deploy_path
+                .strip_prefix(&file.library_name)
+                .and_then(|s| s.strip_prefix('/'))
+                .unwrap_or(&file.deploy_path);
+            let album_dir = deploy_album_directory(relative);
+            dir_targets.entry(corpus_dir)
+                .or_insert_with(|| (file.library_name.clone(), album_dir));
+        }
+
+        // New files: deploy_path = "artist/album/file" (no library prefix)
         for file in new_files {
             if file.library_name.is_empty() || file.deploy_path.is_empty() {
                 continue;
@@ -244,6 +268,58 @@ impl DeployModalData {
             dir_targets.entry(corpus_dir)
                 .or_insert_with(|| (file.library_name.clone(), album_dir));
         }
+
+        // Stale files: expected_path = "{library_name}/path/..." but no corpus_path.
+        // We can resolve corpus_path via config by reversing the library association.
+        // However, if any audio in the same corpus dir is healthy or new, we already
+        // have it covered. Stale-only dirs are edge cases where sidecars don't matter
+        // until the stale situation is resolved. We still extract their target info
+        // for completeness when we can find the corpus dir from the DB.
+        for file in stale {
+            if file.library_name.is_empty() || file.expected_path.is_empty() {
+                continue;
+            }
+            // expected_path = "{library_name}/artist/album/file" — extract album_dir
+            let relative = file.expected_path
+                .strip_prefix(&file.library_name)
+                .and_then(|s| s.strip_prefix('/'))
+                .unwrap_or(&file.expected_path);
+            let album_dir = deploy_album_directory(relative);
+            // We don't have a corpus_path, but the library_path points to the
+            // currently deployed file which shares the same inode as the corpus file.
+            // Rather than doing per-file DB lookups, rely on healthy/new coverage
+            // for the corpus dir. If a directory has ONLY stale files, sidecars
+            // can wait until the stale situation is resolved.
+            let _ = (album_dir, &file.library_name);
+        }
+
+        // Conflicts: conflicting_files has (corpus_path, inode); deploy_path has no library prefix
+        for group in conflicts {
+            if group.deploy_path.is_empty() || group.conflicting_files.is_empty() {
+                continue;
+            }
+            let (corpus_path, _) = &group.conflicting_files[0];
+            let corpus_dir = Path::new(corpus_path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            // Resolve library name via config
+            if let Some(lib) = cfg.resolve_source_config_for_db_path(corpus_path)
+                .and_then(|r| r.libraries.into_iter().next())
+            {
+                let album_dir = deploy_album_directory(&group.deploy_path);
+                dir_targets.entry(corpus_dir)
+                    .or_insert_with(|| (lib, album_dir));
+            }
+        }
+
+        // Get already-deployed library images to skip sidecars that are already present
+        let deployed_images: HashSet<String> = read_db
+            .get_images_in_zone(crate::db::types::Zone::Library)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect();
 
         // For each corpus directory, query image files and build sidecar entries
         let mut seen: HashSet<(String, String, String)> = HashSet::new(); // (library, album_dir, filename)
@@ -273,6 +349,12 @@ impl DeployModalData {
                     .unwrap_or_default();
 
                 if filename.is_empty() {
+                    continue;
+                }
+
+                // Skip if this image is already deployed in the library
+                let library_image_path = format!("{}/{}/{}", library_name, album_dir, filename);
+                if deployed_images.contains(&library_image_path) {
                     continue;
                 }
 

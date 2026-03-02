@@ -360,6 +360,7 @@ fn process_refresh(
                 });
             }
             Ok((LookupOutcome::RateLimited, _)) => {
+                crate::logging::log_general("[FETCH] Rate limited by AcoustID, backing off 2s");
                 retry_count += 1;
                 let _ = result_tx.send(FetchResult::NeedsRetry {
                     inode: item.inode,
@@ -371,12 +372,17 @@ fn process_refresh(
                 thread::sleep(Duration::from_secs(2));
             }
             Err(e) => {
+                let error_msg = format!("{:#}", e);
+                crate::logging::log_error(format!(
+                    "[FETCH] Lookup failed for inode {}: {}",
+                    item.inode, error_msg
+                ));
                 retry_count += 1;
                 let _ = result_tx.send(FetchResult::NeedsRetry {
                     inode: item.inode,
                     fingerprint: item.fingerprint_blob,
                     source,
-                    error: format!("{:#}", e),
+                    error: error_msg,
                 });
             }
         }

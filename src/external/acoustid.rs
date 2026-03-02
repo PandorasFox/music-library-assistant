@@ -116,26 +116,10 @@ impl AcoustIDClient {
         Self { api_key, agent }
     }
 
-    /// Encode a chromaprint fingerprint as the text format expected by AcoustID API.
-    ///
-    /// AcoustID expects the fingerprint as a base64-like compressed string.
-    /// The `rusty-chromaprint` crate provides `fingerprint_to_raw` which gives Vec<u32>;
-    /// we need to convert this to the standard chromaprint text encoding.
+    /// Encode a chromaprint fingerprint as the compressed text format expected
+    /// by the AcoustID API (chromaprint binary compression + URL-safe base64).
     fn encode_fingerprint(fingerprint: &[u32]) -> String {
-        // The AcoustID API accepts raw fingerprint data as comma-separated integers
-        // when using the `fingerprint` parameter. However, the standard format
-        // is the compressed chromaprint string.
-        //
-        // Since we store raw u32 values, we use rusty-chromaprint's encoding
-        // if available, or fall back to the raw integer list approach.
-        //
-        // For now, use the comma-separated integer format which the API accepts
-        // via the `fingerprint` parameter with `format=raw`.
-        fingerprint
-            .iter()
-            .map(|n| n.to_string())
-            .collect::<Vec<_>>()
-            .join(",")
+        compress_fingerprint(fingerprint, CHROMAPRINT_ALGORITHM)
     }
 
     /// Look up a fingerprint against AcoustID and return both parsed results and raw JSON.
@@ -227,6 +211,130 @@ pub fn find_recording_in_response<'a>(response: &'a AcoustIdResponse, recording_
         .find(|rec| rec.id == recording_id)
 }
 
+// ============================================================================
+// Chromaprint Fingerprint Compression
+// ============================================================================
+
+const CHROMAPRINT_ALGORITHM: u8 = 1;
+const MAX_NORMAL_VALUE: u32 = 7; // 2^3 - 1
+const NORMAL_BITS: u32 = 3;
+const EXCEPTIONAL_BITS: u32 = 5;
+
+/// Compress a raw chromaprint fingerprint (Vec<u32>) into the standard
+/// compressed text format accepted by AcoustID.
+///
+/// Algorithm matches chromaprint's C++ `FingerprintCompressor`:
+/// 1. XOR-delta encode consecutive subfingerprints
+/// 2. For each delta, extract set-bit gaps, split into normal (3-bit)
+///    and exceptional (5-bit) values
+/// 3. Pack both arrays into bytes
+/// 4. Prepend 4-byte header (algorithm + length)
+/// 5. URL-safe base64 encode (no padding)
+fn compress_fingerprint(fingerprint: &[u32], algorithm: u8) -> String {
+    use base64::Engine;
+
+    let raw = compress_fingerprint_bytes(fingerprint, algorithm);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&raw)
+}
+
+/// Compress to raw bytes (pre-base64). Exposed for testing.
+fn compress_fingerprint_bytes(fingerprint: &[u32], algorithm: u8) -> Vec<u8> {
+    if fingerprint.is_empty() {
+        return vec![algorithm, 0, 0, 0];
+    }
+
+    let mut normal_bits: Vec<u32> = Vec::new();
+    let mut exceptional_bits: Vec<u32> = Vec::new();
+
+    // First subfingerprint: raw value
+    process_subfingerprint(fingerprint[0], &mut normal_bits, &mut exceptional_bits);
+
+    // Subsequent: XOR delta with previous
+    for i in 1..fingerprint.len() {
+        process_subfingerprint(
+            fingerprint[i] ^ fingerprint[i - 1],
+            &mut normal_bits,
+            &mut exceptional_bits,
+        );
+    }
+
+    // Header: [algorithm, size_hi, size_mid, size_lo]
+    let size = fingerprint.len();
+    let mut result = Vec::with_capacity(4 + (normal_bits.len() * 3 + 7) / 8 + (exceptional_bits.len() * 5 + 7) / 8);
+    result.push(algorithm);
+    result.push(((size >> 16) & 0xFF) as u8);
+    result.push(((size >> 8) & 0xFF) as u8);
+    result.push((size & 0xFF) as u8);
+
+    // Pack normal bits (3 bits per value)
+    pack_bits(&normal_bits, NORMAL_BITS, &mut result);
+    // Pack exceptional bits (5 bits per value)
+    pack_bits(&exceptional_bits, EXCEPTIONAL_BITS, &mut result);
+
+    result
+}
+
+/// Extract set-bit gaps from a subfingerprint value, splitting into
+/// normal (≤6) and exceptional (≥7, stored as value-7) components.
+fn process_subfingerprint(
+    mut x: u32,
+    normal_bits: &mut Vec<u32>,
+    exceptional_bits: &mut Vec<u32>,
+) {
+    let mut bit = 1u32;
+    let mut last_bit = 0u32;
+
+    while x != 0 {
+        if (x & 1) != 0 {
+            let gap = bit - last_bit;
+            last_bit = bit;
+            if gap >= MAX_NORMAL_VALUE {
+                normal_bits.push(MAX_NORMAL_VALUE);
+                exceptional_bits.push(gap - MAX_NORMAL_VALUE);
+            } else {
+                normal_bits.push(gap);
+            }
+        }
+        x >>= 1;
+        bit += 1;
+    }
+    normal_bits.push(0); // terminator
+}
+
+/// Pack an array of N-bit values into bytes, LSB-first.
+fn pack_bits(values: &[u32], bits_per_value: u32, output: &mut Vec<u8>) {
+    let mut bit_pos: u32 = 0;
+    let mut current_byte: u8 = 0;
+
+    for &value in values {
+        let mut v = value;
+        let mut remaining = bits_per_value;
+        let mut pos_in_byte = bit_pos % 8;
+
+        while remaining > 0 {
+            let space = 8 - pos_in_byte;
+            let take = remaining.min(space);
+            let mask = (1u32 << take) - 1;
+            current_byte |= ((v & mask) as u8) << pos_in_byte;
+            v >>= take;
+            remaining -= take;
+            bit_pos += take;
+            pos_in_byte += take;
+
+            if pos_in_byte >= 8 {
+                output.push(current_byte);
+                current_byte = 0;
+                pos_in_byte = 0;
+            }
+        }
+    }
+
+    // Flush any remaining partial byte
+    if bit_pos % 8 != 0 {
+        output.push(current_byte);
+    }
+}
+
 /// Minimal URL encoding for form parameters.
 fn urlencoded(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 16);
@@ -245,4 +353,101 @@ fn urlencoded(s: &str) -> String {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Test cases from chromaprint's test_fingerprint_compressor.cpp.
+
+    #[test]
+    fn one_item_one_bit() {
+        assert_eq!(
+            compress_fingerprint_bytes(&[1], 0),  // C++ tests use algorithm 0
+            vec![0, 0, 0, 1, 1]
+        );
+    }
+
+    #[test]
+    fn one_item_three_bits() {
+        assert_eq!(
+            compress_fingerprint_bytes(&[7], 0),
+            vec![0, 0, 0, 1, 73, 0]
+        );
+    }
+
+    #[test]
+    fn one_item_one_bit_except() {
+        assert_eq!(
+            compress_fingerprint_bytes(&[64], 0),
+            vec![0, 0, 0, 1, 7, 0]
+        );
+    }
+
+    #[test]
+    fn one_item_one_bit_except2() {
+        assert_eq!(
+            compress_fingerprint_bytes(&[256], 0),
+            vec![0, 0, 0, 1, 7, 2]
+        );
+    }
+
+    #[test]
+    fn two_items() {
+        assert_eq!(
+            compress_fingerprint_bytes(&[1, 0], 0),
+            vec![0, 0, 0, 2, 65, 0]
+        );
+    }
+
+    #[test]
+    fn two_items_no_change() {
+        assert_eq!(
+            compress_fingerprint_bytes(&[1, 1], 0),
+            vec![0, 0, 0, 2, 1, 0]
+        );
+    }
+
+    #[test]
+    fn empty_fingerprint() {
+        assert_eq!(
+            compress_fingerprint_bytes(&[], 0),
+            vec![0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn header_encodes_length_correctly() {
+        let fp = vec![0u32; 300];
+        let result = compress_fingerprint_bytes(&fp, 1);
+        assert_eq!(result[0], 1);
+        assert_eq!(result[1], 0);   // (300 >> 16)
+        assert_eq!(result[2], 1);   // (300 >> 8)
+        assert_eq!(result[3], 44);  // 300 & 0xFF
+    }
+
+    #[test]
+    fn base64_output_is_url_safe() {
+        let fp = vec![0xDEADBEEF, 0xCAFEBABE, 0x12345678];
+        let encoded = compress_fingerprint(&fp, CHROMAPRINT_ALGORITHM);
+        assert!(!encoded.contains('+'), "contains +: {}", encoded);
+        assert!(!encoded.contains('/'), "contains /: {}", encoded);
+        assert!(!encoded.ends_with('='), "has padding: {}", encoded);
+    }
+
+    #[test]
+    fn round_trip_header() {
+        let fp = vec![42u32; 10];
+        let encoded = compress_fingerprint(&fp, CHROMAPRINT_ALGORITHM);
+        use base64::Engine;
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&encoded)
+            .unwrap();
+        assert_eq!(decoded[0], CHROMAPRINT_ALGORITHM);
+        let len = ((decoded[1] as usize) << 16)
+            | ((decoded[2] as usize) << 8)
+            | (decoded[3] as usize);
+        assert_eq!(len, 10);
+    }
 }

@@ -76,6 +76,9 @@ rand = "0.8"
 ureq = "2"
 serde_json = "1"
 
+# Base64 encoding (for chromaprint fingerprint compression)
+base64 = "0.22"
+
 [[bin]]
 name = "mm"
 path = "src/main.rs"

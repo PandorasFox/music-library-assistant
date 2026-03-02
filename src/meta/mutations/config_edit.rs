@@ -149,14 +149,7 @@ fn config_diff_entries(old: &Config, new: &Config) -> Vec<DiffEntry> {
     cmp!(float "Vacuum threshold", o.startup.vacuum_threshold, n.startup.vacuum_threshold);
     cmp!(debug "Default view", o.startup.default_view, n.startup.default_view);
 
-    // Fingerprint Matching
-    cmp!(float "FP: Duration tolerance %", o.fingerprint_matching.duration_tolerance_percent, n.fingerprint_matching.duration_tolerance_percent);
-    cmp!("FP: Require matching track#", o.fingerprint_matching.require_matching_track_number, n.fingerprint_matching.require_matching_track_number);
-    cmp!("FP: Require matching album", o.fingerprint_matching.require_matching_album, n.fingerprint_matching.require_matching_album);
-
     // Quality Resolution
-    cmp!("QR: Auto-resolve format tier", o.quality_resolution.auto_resolve_format_tier, n.quality_resolution.auto_resolve_format_tier);
-    cmp!(float "QR: Bitrate threshold %", o.quality_resolution.bitrate_threshold_percent, n.quality_resolution.bitrate_threshold_percent);
     cmp!(float "QR: Inbox bitrate fuzz %", o.quality_resolution.inbox_bitrate_fuzz_percent, n.quality_resolution.inbox_bitrate_fuzz_percent);
 
     // Canonicalization
@@ -170,8 +163,6 @@ fn config_diff_entries(old: &Config, new: &Config) -> Vec<DiffEntry> {
     // Duplicate Analysis
     cmp!(float "Dup: FP similarity threshold", o.duplicate_analysis.fingerprint_similarity_threshold, n.duplicate_analysis.fingerprint_similarity_threshold);
     cmp!("Dup: Duration tolerance (ms)", o.duplicate_analysis.duration_tolerance_ms, n.duplicate_analysis.duration_tolerance_ms);
-    cmp!("Dup: Cross-directory max keys", o.duplicate_analysis.cross_directory_max_keys, n.duplicate_analysis.cross_directory_max_keys);
-    cmp!("Dup: Within-directory min keys", o.duplicate_analysis.within_directory_min_keys, n.duplicate_analysis.within_directory_min_keys);
     cmp!("Dup: Elide variant titles", o.duplicate_analysis.elide_variant_titles, n.duplicate_analysis.elide_variant_titles);
 
     // Inbox Organize
@@ -233,8 +224,7 @@ fn config_recomputation_scope(old: &Config, new: &Config) -> RecomputationScope 
     }
 
     // FILES: fields that affect file/fingerprint/duplicate detection
-    if o.fingerprint_matching != n.fingerprint_matching
-        || o.duplicate_analysis != n.duplicate_analysis
+    if o.duplicate_analysis != n.duplicate_analysis
         || o.lossy_shit_formats_to_flac != n.lossy_shit_formats_to_flac
         || o.album_art.min_acceptable_resolution != n.album_art.min_acceptable_resolution
     {

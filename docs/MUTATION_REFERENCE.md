@@ -141,7 +141,7 @@ Note: ApplyDbTagsToDisk and AssimilateDiskTagsToDb are now single-track mutation
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
 | EmbedAlbumArt | UpdateCorpusFileSignals | — | EmbeddableAlbumArt (exact key), MutableOnly scope signals for inode | Read sidecar image from disk, embed into audio file via lofty (FLAC: OggPictureStorage, Opus/OGG: VorbisComments, MP3: Id3v2). Supports FLAC, Opus, OGG, and MP3 formats |
-| UpgradeAlbumArt | UpdateCorpusFileSignals | — | UpgradeableAlbumArt (exact key), MutableOnly scope signals for inode | Replace existing embedded art with higher-quality sidecar image. Strips existing CoverFront picture(s) then embeds new art. Supports FLAC, Opus, OGG, and MP3 formats. Uses `preserve_other_pictures_on_upgrade` config opinion |
+| UpgradeAlbumArt | UpdateCorpusFileSignals | — | UpgradeableAlbumArt (exact key), MutableOnly scope signals for inode | Replace existing embedded art with higher-quality sidecar image. Strips existing CoverFront picture(s) then embeds new art. Supports FLAC, Opus, OGG, and MP3 formats |
 | AppendAlbumArt | UpdateCorpusFileSignals | — | UpgradeableAlbumArt (exact key), MutableOnly scope signals for inode | Append sidecar image to audio file alongside existing embedded art. Does not strip existing pictures — adds the new image as an additional CoverFront. Supports FLAC, Opus, OGG, and MP3 formats |
 
 ### Signal Emission Operations

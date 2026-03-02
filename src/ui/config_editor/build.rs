@@ -92,43 +92,11 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     |v, c| { if let ConfigValue::Enum { selected, .. } = v { c.opinions.startup.default_view = startup_view_from_index(*selected); } }),
             ],
         },
-        // Group 3: Fingerprint Matching
-        ConfigGroup {
-            name: "Fingerprint Matching",
-            collapsed: false,
-            fields: vec![
-                field("Duration tolerance percent", "Duration difference above this % = different track",
-                    ConfigValue::Float(ops.fingerprint_matching.duration_tolerance_percent),
-                    source_for((ops.fingerprint_matching.duration_tolerance_percent - defaults.fingerprint_matching.duration_tolerance_percent).abs() < f64::EPSILON, "duration-tolerance-percent"),
-                    false,
-                    |v, c| { if let ConfigValue::Float(f) = v { c.opinions.fingerprint_matching.duration_tolerance_percent = *f; } }),
-                field("Require matching track number", "Same dir + different track# = not duplicate",
-                    ConfigValue::Bool(ops.fingerprint_matching.require_matching_track_number),
-                    source_for(ops.fingerprint_matching.require_matching_track_number == defaults.fingerprint_matching.require_matching_track_number, "require-matching-track-number"),
-                    false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.fingerprint_matching.require_matching_track_number = *b; } }),
-                field("Require matching album", "Different albums can still be duplicates",
-                    ConfigValue::Bool(ops.fingerprint_matching.require_matching_album),
-                    source_for(ops.fingerprint_matching.require_matching_album == defaults.fingerprint_matching.require_matching_album, "require-matching-album"),
-                    false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.fingerprint_matching.require_matching_album = *b; } }),
-            ],
-        },
-        // Group 4: Quality Resolution
+        // Group 3: Quality Resolution
         ConfigGroup {
             name: "Quality Resolution",
             collapsed: false,
             fields: vec![
-                field("Auto resolve format tier", "FLAC beats MP3 automatically",
-                    ConfigValue::Bool(ops.quality_resolution.auto_resolve_format_tier),
-                    source_for(ops.quality_resolution.auto_resolve_format_tier == defaults.quality_resolution.auto_resolve_format_tier, "auto-resolve-format-tier"),
-                    false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.quality_resolution.auto_resolve_format_tier = *b; } }),
-                field("Bitrate threshold percent", "Bitrate diff above this % = clear winner",
-                    ConfigValue::Float(ops.quality_resolution.bitrate_threshold_percent),
-                    source_for((ops.quality_resolution.bitrate_threshold_percent - defaults.quality_resolution.bitrate_threshold_percent).abs() < f64::EPSILON, "bitrate-threshold-percent"),
-                    false,
-                    |v, c| { if let ConfigValue::Float(f) = v { c.opinions.quality_resolution.bitrate_threshold_percent = *f; } }),
                 field("Inbox bitrate fuzz percent", "Inbox-to-corpus bitrate tolerance for equivalence",
                     ConfigValue::Float(ops.quality_resolution.inbox_bitrate_fuzz_percent),
                     source_for((ops.quality_resolution.inbox_bitrate_fuzz_percent - defaults.quality_resolution.inbox_bitrate_fuzz_percent).abs() < f64::EPSILON, "inbox-bitrate-fuzz-percent"),
@@ -185,16 +153,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     source_for(ops.duplicate_analysis.duration_tolerance_ms == defaults.duplicate_analysis.duration_tolerance_ms, "duration-tolerance-ms"),
                     false,
                     |v, c| { if let ConfigValue::SignedInt(n) = v { c.opinions.duplicate_analysis.duration_tolerance_ms = *n; } }),
-                field("Cross directory max keys", "Max diverging dir keys for cross-directory overlap signal",
-                    ConfigValue::Uint(ops.duplicate_analysis.cross_directory_max_keys),
-                    source_for(ops.duplicate_analysis.cross_directory_max_keys == defaults.duplicate_analysis.cross_directory_max_keys, "cross-directory-max-keys"),
-                    false,
-                    |v, c| { if let ConfigValue::Uint(n) = v { c.opinions.duplicate_analysis.cross_directory_max_keys = *n; } }),
-                field("Within directory min keys", "Min diverging dir keys to skip (likely variants)",
-                    ConfigValue::Uint(ops.duplicate_analysis.within_directory_min_keys),
-                    source_for(ops.duplicate_analysis.within_directory_min_keys == defaults.duplicate_analysis.within_directory_min_keys, "within-directory-min-keys"),
-                    false,
-                    |v, c| { if let ConfigValue::Uint(n) = v { c.opinions.duplicate_analysis.within_directory_min_keys = *n; } }),
                 field("Elide variant titles", "Skip dupe pairs where titles differ and contain remix/live/etc.",
                     ConfigValue::Bool(ops.duplicate_analysis.elide_variant_titles),
                     source_for(ops.duplicate_analysis.elide_variant_titles == defaults.duplicate_analysis.elide_variant_titles, "elide-variant-titles"),
@@ -246,11 +204,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     source_for(ops.tag_splitting.collaboration_keywords == defaults.tag_splitting.collaboration_keywords, "collab"),
                     false,
                     |v, c| { if let ConfigValue::StringSet(items) = v { c.opinions.tag_splitting.collaboration_keywords = items.iter().cloned().collect(); } }),
-                field("Canonicalization synonyms", "Substitutions during matching (e.g., and -> &)",
-                    ConfigValue::StringPairMap(ops.tag_splitting.canonicalization_synonyms.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
-                    source_for(ops.tag_splitting.canonicalization_synonyms == defaults.tag_splitting.canonicalization_synonyms, "synonyms"),
-                    false,
-                    |v, c| { if let ConfigValue::StringPairMap(items) = v { c.opinions.tag_splitting.canonicalization_synonyms = items.iter().cloned().collect(); } }),
                 field("Tag separators", "Per-tag separator strings",
                     ConfigValue::StringListMap(ops.tag_splitting.tag_separators.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
                     source_for(ops.tag_splitting.tag_separators == defaults.tag_splitting.tag_separators, "tag-separators"),
@@ -280,16 +233,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             name: "Album Art",
             collapsed: false,
             fields: vec![
-                field("Tag padding bytes", "Preferred padding size in bytes for tag writes (block-aligned dedup)",
-                    ConfigValue::UintU32(ops.album_art.tag_padding_bytes),
-                    source_for(ops.album_art.tag_padding_bytes == defaults.album_art.tag_padding_bytes, "tag-padding-bytes"),
-                    false,
-                    |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.album_art.tag_padding_bytes = *n; } }),
-                field("Preserve other pictures on upgrade", "Keep existing non-CoverFront pictures when replacing art",
-                    ConfigValue::Bool(ops.album_art.preserve_other_pictures_on_upgrade),
-                    source_for(ops.album_art.preserve_other_pictures_on_upgrade == defaults.album_art.preserve_other_pictures_on_upgrade, "preserve-other-pictures-on-upgrade"),
-                    false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.album_art.preserve_other_pictures_on_upgrade = *b; } }),
                 field("Min acceptable resolution", "Min resolution (px) below which embedded art is upgradeable (0 = all)",
                     ConfigValue::UintU32(ops.album_art.min_acceptable_resolution),
                     source_for(ops.album_art.min_acceptable_resolution == defaults.album_art.min_acceptable_resolution, "min-acceptable-resolution"),
@@ -440,12 +383,10 @@ mod tests {
 
         // Verify key fields survive the round-trip
         assert_eq!(rebuilt.opinions.startup.default_view, config.opinions.startup.default_view);
-        assert_eq!(rebuilt.opinions.quality_resolution.auto_resolve_format_tier, config.opinions.quality_resolution.auto_resolve_format_tier);
+        assert_eq!(rebuilt.opinions.quality_resolution.inbox_bitrate_fuzz_percent, config.opinions.quality_resolution.inbox_bitrate_fuzz_percent);
         assert_eq!(rebuilt.opinions.duplicate_analysis.fingerprint_similarity_threshold, config.opinions.duplicate_analysis.fingerprint_similarity_threshold);
         assert_eq!(rebuilt.opinions.disc_extraction.disc_tag_name, config.opinions.disc_extraction.disc_tag_name);
         assert_eq!(rebuilt.opinions.disc_extraction.map_letters_to_numbers, config.opinions.disc_extraction.map_letters_to_numbers);
-        assert_eq!(rebuilt.opinions.album_art.tag_padding_bytes, config.opinions.album_art.tag_padding_bytes);
-        assert_eq!(rebuilt.opinions.album_art.preserve_other_pictures_on_upgrade, config.opinions.album_art.preserve_other_pictures_on_upgrade);
         assert_eq!(rebuilt.opinions.album_art.min_acceptable_resolution, config.opinions.album_art.min_acceptable_resolution);
         assert_eq!(rebuilt.opinions.album_art.sidecar_deploy_mode, config.opinions.album_art.sidecar_deploy_mode);
     }

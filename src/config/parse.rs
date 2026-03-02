@@ -22,57 +22,11 @@ fn parse_size_mb(s: &str) -> Option<u32> {
     }
 }
 
-/// Parse fingerprint-matching opinions from KDL node
-fn parse_fingerprint_matching_opinions(node: &kdl::KdlNode, opinions: &mut FingerprintMatchingOpinions) {
-    if let Some(children) = node.children() {
-        for child in children.nodes() {
-            match child.name().value() {
-                "duration-tolerance-percent" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_f64() {
-                            opinions.duration_tolerance_percent = val;
-                        }
-                    }
-                }
-                "require-matching-track-number" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.require_matching_track_number = val;
-                        }
-                    }
-                }
-                "require-matching-album" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.require_matching_album = val;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
 /// Parse quality-resolution opinions from KDL node
 fn parse_quality_resolution_opinions(node: &kdl::KdlNode, opinions: &mut QualityResolutionOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "auto-resolve-format-tier" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.auto_resolve_format_tier = val;
-                        }
-                    }
-                }
-                "bitrate-threshold-percent" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_f64() {
-                            opinions.bitrate_threshold_percent = val;
-                        }
-                    }
-                }
                 "inbox-bitrate-fuzz-percent" => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_f64() {
@@ -226,16 +180,12 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
 /// ```kdl
 /// tag-splitting {
 ///     collab "feat" "featuring" "ft" "with" "vs"
-///     synonyms {
-///         "and" "&"
-///     }
 ///     artist ";"
 ///     genre ";" ","
 /// }
 /// ```
 ///
 /// - `collab` node: list of collaboration keywords (replaces defaults if present)
-/// - `synonyms` node: key-value pairs for canonicalization substitutions
 /// - Other nodes: tag name with list of separator strings
 fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplittingOpinions) {
     if let Some(children) = node.children() {
@@ -252,23 +202,6 @@ fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplitting
                         .collect();
                     if !keywords.is_empty() {
                         opinions.collaboration_keywords = keywords;
-                    }
-                }
-                "synonyms" => {
-                    // Parse synonyms block: each child node is "from" "to"
-                    if let Some(synonym_nodes) = child.children() {
-                        let mut synonyms = std::collections::HashMap::new();
-                        for synonym_node in synonym_nodes.nodes() {
-                            let from = synonym_node.name().value().to_string();
-                            if let Some(entry) = synonym_node.entries().first() {
-                                if let Some(to) = entry.value().as_string() {
-                                    synonyms.insert(from, to.to_string());
-                                }
-                            }
-                        }
-                        if !synonyms.is_empty() {
-                            opinions.canonicalization_synonyms = synonyms;
-                        }
                     }
                 }
                 _ => {
@@ -304,24 +237,6 @@ fn parse_duplicate_analysis_opinions(node: &kdl::KdlNode, opinions: &mut Duplica
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_i64() {
                             opinions.duration_tolerance_ms = val;
-                        }
-                    }
-                }
-                "cross-directory-max-keys" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_i64() {
-                            if val > 0 {
-                                opinions.cross_directory_max_keys = val as usize;
-                            }
-                        }
-                    }
-                }
-                "within-directory-min-keys" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_i64() {
-                            if val > 0 {
-                                opinions.within_directory_min_keys = val as usize;
-                            }
                         }
                     }
                 }
@@ -370,22 +285,6 @@ fn parse_album_art_opinions(node: &kdl::KdlNode, opinions: &mut AlbumArtOpinions
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "tag-padding-bytes" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_i64() {
-                            if val > 0 {
-                                opinions.tag_padding_bytes = val as u32;
-                            }
-                        }
-                    }
-                }
-                "preserve-other-pictures-on-upgrade" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.preserve_other_pictures_on_upgrade = val;
-                        }
-                    }
-                }
                 "min-acceptable-resolution" => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_i64() {
@@ -487,9 +386,6 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                                         config.opinions.lossy_shit_formats_to_flac = val;
                                     }
                                 }
-                            }
-                            "fingerprint-matching" => {
-                                parse_fingerprint_matching_opinions(child, &mut config.opinions.fingerprint_matching);
                             }
                             "quality-resolution" => {
                                 parse_quality_resolution_opinions(child, &mut config.opinions.quality_resolution);
@@ -608,35 +504,18 @@ root "/archive"
 root "/archive"
 
 opinions {
-    fingerprint-matching {
-        duration-tolerance-percent 15.0
-        require-matching-track-number false
-        require-matching-album true
-    }
-
     quality-resolution {
-        auto-resolve-format-tier false
-        bitrate-threshold-percent 75.0
         inbox-bitrate-fuzz-percent 3.0
     }
 
     canonicalization {
         strip-album-format-suffixes false
     }
-
-    re-releases {
-        same-fingerprint-different-album "flag"
-    }
 }
 "#;
 
         let config = parse_kdl_config(kdl).unwrap();
 
-        assert_eq!(config.opinions.fingerprint_matching.duration_tolerance_percent, 15.0);
-        assert!(!config.opinions.fingerprint_matching.require_matching_track_number);
-        assert!(config.opinions.fingerprint_matching.require_matching_album);
-        assert!(!config.opinions.quality_resolution.auto_resolve_format_tier);
-        assert_eq!(config.opinions.quality_resolution.bitrate_threshold_percent, 75.0);
         assert_eq!(config.opinions.quality_resolution.inbox_bitrate_fuzz_percent, 3.0);
         assert!(!config.opinions.canonicalization.strip_album_format_suffixes);
     }
@@ -650,11 +529,6 @@ root "/archive"
         let config = parse_kdl_config(kdl).unwrap();
 
         assert!(!config.opinions.lossy_shit_formats_to_flac);
-        assert_eq!(config.opinions.fingerprint_matching.duration_tolerance_percent, 1.0);
-        assert!(config.opinions.fingerprint_matching.require_matching_track_number);
-        assert!(!config.opinions.fingerprint_matching.require_matching_album);
-        assert!(config.opinions.quality_resolution.auto_resolve_format_tier);
-        assert_eq!(config.opinions.quality_resolution.bitrate_threshold_percent, 50.0);
         assert_eq!(config.opinions.quality_resolution.inbox_bitrate_fuzz_percent, 5.0);
         assert!(!config.opinions.canonicalization.strip_album_format_suffixes);
     }

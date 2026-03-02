@@ -54,42 +54,13 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         }
     }
 
-    // --- Fingerprint Matching ---
-    let old_fm = &old_config.opinions.fingerprint_matching;
-    let new_fm = &new_config.opinions.fingerprint_matching;
-    if new_fm.duration_tolerance_percent != old_fm.duration_tolerance_percent
-        || new_fm.require_matching_track_number != old_fm.require_matching_track_number
-        || new_fm.require_matching_album != old_fm.require_matching_album
-    {
-        let block = ensure_child_block(opinions_doc, "fingerprint-matching");
-        if new_fm.duration_tolerance_percent != old_fm.duration_tolerance_percent {
-            set_or_create_float_node(block, "duration-tolerance-percent", new_fm.duration_tolerance_percent);
-        }
-        if new_fm.require_matching_track_number != old_fm.require_matching_track_number {
-            set_or_create_bool_node(block, "require-matching-track-number", new_fm.require_matching_track_number);
-        }
-        if new_fm.require_matching_album != old_fm.require_matching_album {
-            set_or_create_bool_node(block, "require-matching-album", new_fm.require_matching_album);
-        }
-    }
-
     // --- Quality Resolution ---
     let old_qr = &old_config.opinions.quality_resolution;
     let new_qr = &new_config.opinions.quality_resolution;
-    if new_qr.auto_resolve_format_tier != old_qr.auto_resolve_format_tier
-        || new_qr.bitrate_threshold_percent != old_qr.bitrate_threshold_percent
-        || new_qr.inbox_bitrate_fuzz_percent != old_qr.inbox_bitrate_fuzz_percent
+    if new_qr.inbox_bitrate_fuzz_percent != old_qr.inbox_bitrate_fuzz_percent
     {
         let block = ensure_child_block(opinions_doc, "quality-resolution");
-        if new_qr.auto_resolve_format_tier != old_qr.auto_resolve_format_tier {
-            set_or_create_bool_node(block, "auto-resolve-format-tier", new_qr.auto_resolve_format_tier);
-        }
-        if new_qr.bitrate_threshold_percent != old_qr.bitrate_threshold_percent {
-            set_or_create_float_node(block, "bitrate-threshold-percent", new_qr.bitrate_threshold_percent);
-        }
-        if new_qr.inbox_bitrate_fuzz_percent != old_qr.inbox_bitrate_fuzz_percent {
-            set_or_create_float_node(block, "inbox-bitrate-fuzz-percent", new_qr.inbox_bitrate_fuzz_percent);
-        }
+        set_or_create_float_node(block, "inbox-bitrate-fuzz-percent", new_qr.inbox_bitrate_fuzz_percent);
     }
 
     // --- Canonicalization ---
@@ -128,8 +99,6 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
     let new_da = &new_config.opinions.duplicate_analysis;
     if new_da.fingerprint_similarity_threshold != old_da.fingerprint_similarity_threshold
         || new_da.duration_tolerance_ms != old_da.duration_tolerance_ms
-        || new_da.cross_directory_max_keys != old_da.cross_directory_max_keys
-        || new_da.within_directory_min_keys != old_da.within_directory_min_keys
         || new_da.elide_variant_titles != old_da.elide_variant_titles
     {
         let block = ensure_child_block(opinions_doc, "duplicate-analysis");
@@ -138,12 +107,6 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         }
         if new_da.duration_tolerance_ms != old_da.duration_tolerance_ms {
             set_or_create_int_node(block, "duration-tolerance-ms", new_da.duration_tolerance_ms);
-        }
-        if new_da.cross_directory_max_keys != old_da.cross_directory_max_keys {
-            set_or_create_int_node(block, "cross-directory-max-keys", new_da.cross_directory_max_keys as i64);
-        }
-        if new_da.within_directory_min_keys != old_da.within_directory_min_keys {
-            set_or_create_int_node(block, "within-directory-min-keys", new_da.within_directory_min_keys as i64);
         }
         if new_da.elide_variant_titles != old_da.elide_variant_titles {
             set_or_create_bool_node(block, "elide-variant-titles", new_da.elide_variant_titles);
@@ -177,7 +140,6 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
     let new_ts = &new_config.opinions.tag_splitting;
     if new_ts.collaboration_keywords != old_ts.collaboration_keywords
         || new_ts.tag_separators != old_ts.tag_separators
-        || new_ts.canonicalization_synonyms != old_ts.canonicalization_synonyms
     {
         let block = ensure_child_block(opinions_doc, "tag-splitting");
 
@@ -193,28 +155,10 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
             block.nodes_mut().push(node);
         }
 
-        // Write synonyms if changed
-        if new_ts.canonicalization_synonyms != old_ts.canonicalization_synonyms {
-            block.nodes_mut().retain(|n| n.name().value() != "synonyms");
-            let mut synonyms_node = kdl::KdlNode::new("synonyms");
-            let synonyms_doc = synonyms_node.ensure_children();
-            let mut pairs: Vec<(&String, &String)> = new_ts.canonicalization_synonyms.iter().collect();
-            pairs.sort_by_key(|(k, _)| *k);
-            for (from, to) in pairs {
-                let mut syn_node = kdl::KdlNode::new(from.as_str());
-                syn_node.push(kdl::KdlEntry::new(kdl::KdlValue::String(to.clone())));
-                synonyms_doc.nodes_mut().push(syn_node);
-            }
-            block.nodes_mut().push(synonyms_node);
-        }
-
         // Write tag separators if changed
         if new_ts.tag_separators != old_ts.tag_separators {
-            // Remove old tag separator nodes (all non-collab, non-synonyms nodes)
-            block.nodes_mut().retain(|n| {
-                let name = n.name().value();
-                name == "collab" || name == "synonyms"
-            });
+            // Remove old tag separator nodes (all non-collab nodes)
+            block.nodes_mut().retain(|n| n.name().value() == "collab");
             let mut tags: Vec<(&String, &Vec<String>)> = new_ts.tag_separators.iter().collect();
             tags.sort_by_key(|(k, _)| *k);
             for (tag_name, seps) in tags {
@@ -470,11 +414,11 @@ opinions {
 "#;
         let old_config = parse_kdl_config(kdl).unwrap();
         let mut new_config = old_config.clone();
-        new_config.opinions.quality_resolution.bitrate_threshold_percent = 75.0;
+        new_config.opinions.quality_resolution.inbox_bitrate_fuzz_percent = 3.0;
 
         let result = apply_config_edits_to_kdl(kdl, &old_config, &new_config).unwrap();
         let reparsed = parse_kdl_config(&result).unwrap();
-        assert_eq!(reparsed.opinions.quality_resolution.bitrate_threshold_percent, 75.0);
+        assert_eq!(reparsed.opinions.quality_resolution.inbox_bitrate_fuzz_percent, 3.0);
     }
 
     #[test]
@@ -482,17 +426,17 @@ opinions {
         let kdl = r#"root "/archive"
 
 opinions {
-    fingerprint-matching {
-        require-matching-album false
+    duplicate-analysis {
+        elide-variant-titles true
     }
 }
 "#;
         let old_config = parse_kdl_config(kdl).unwrap();
         let mut new_config = old_config.clone();
-        new_config.opinions.fingerprint_matching.require_matching_album = true;
+        new_config.opinions.duplicate_analysis.elide_variant_titles = false;
 
         let result = apply_config_edits_to_kdl(kdl, &old_config, &new_config).unwrap();
         let reparsed = parse_kdl_config(&result).unwrap();
-        assert!(reparsed.opinions.fingerprint_matching.require_matching_album);
+        assert!(!reparsed.opinions.duplicate_analysis.elide_variant_titles);
     }
 }

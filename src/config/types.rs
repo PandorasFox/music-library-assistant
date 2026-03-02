@@ -21,7 +21,6 @@ pub struct Opinions {
     /// instead of transcoded to Opus. The decoded PCM waveform is losslessly
     /// stored in a FLAC container with extension `.mp3.LOSSY.flac`.
     pub lossy_shit_formats_to_flac: bool,
-    pub fingerprint_matching: FingerprintMatchingOpinions,
     pub quality_resolution: QualityResolutionOpinions,
     pub canonicalization: CanonicalizationOpinions,
     pub startup: StartupOpinions,
@@ -46,34 +45,9 @@ pub struct Opinions {
 }
 
 
-/// Opinions for fingerprint matching thresholds
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FingerprintMatchingOpinions {
-    /// Duration difference above this % = different track (default: 10.0)
-    pub duration_tolerance_percent: f64,
-    /// Same dir + different track# = not duplicate (default: true)
-    pub require_matching_track_number: bool,
-    /// Different albums can still be duplicates (default: false)
-    pub require_matching_album: bool,
-}
-
-impl Default for FingerprintMatchingOpinions {
-    fn default() -> Self {
-        Self {
-            duration_tolerance_percent: 1.0,
-            require_matching_track_number: true,
-            require_matching_album: false,
-        }
-    }
-}
-
 /// Opinions for quality-based auto-resolution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualityResolutionOpinions {
-    /// FLAC beats MP3 automatically (default: true)
-    pub auto_resolve_format_tier: bool,
-    /// Bitrate diff above this % = clear winner (default: 50.0)
-    pub bitrate_threshold_percent: f64,
     /// Inbox-to-corpus bitrate fuzz tolerance as a percentage (default: 5.0).
     /// Files within this % bitrate difference (same format class and sample rate)
     /// are treated as equivalent rather than superior/inferior. Suppresses noise
@@ -84,8 +58,6 @@ pub struct QualityResolutionOpinions {
 impl Default for QualityResolutionOpinions {
     fn default() -> Self {
         Self {
-            auto_resolve_format_tier: true,
-            bitrate_threshold_percent: 50.0,
             inbox_bitrate_fuzz_percent: 5.0,
         }
     }
@@ -192,10 +164,8 @@ impl Default for PerformanceOpinions {
 
 /// Opinions for detecting and splitting compound tag values.
 ///
-/// Simplified structure for easier editing via the config UI:
 /// - `collaboration_keywords`: Keywords like "feat", "ft", "vs" for artist collabs
 /// - `tag_separators`: Per-tag separator lists (e.g., ARTIST: [";"], GENRE: [";", ","])
-/// - `canonicalization_synonyms`: Substitutions during matching (e.g., "and" -> "&")
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TagSplittingOpinions {
     /// Collaboration keywords for artist tags (e.g., "feat", "ft", "featuring", "vs", "with").
@@ -205,11 +175,6 @@ pub struct TagSplittingOpinions {
     /// Per-tag separator strings. Key is uppercase tag name (e.g., "ARTIST", "GENRE").
     /// Each tag has a list of separators to check in order (e.g., [";", ","]).
     pub tag_separators: std::collections::HashMap<String, Vec<String>>,
-
-    /// Canonicalization synonyms: before checking for known values during
-    /// "separator-if-known" matching, these substitutions are applied.
-    /// e.g., "and" -> "&" allows "Simon and Garfunkel" to match "Simon & Garfunkel".
-    pub canonicalization_synonyms: std::collections::HashMap<String, String>,
 }
 
 impl Default for TagSplittingOpinions {
@@ -225,13 +190,9 @@ impl Default for TagSplittingOpinions {
         tag_separators.insert("ARTIST".to_string(), vec![";".to_string()]);
         tag_separators.insert("GENRE".to_string(), vec![";".to_string()]);
 
-        let mut canonicalization_synonyms = std::collections::HashMap::new();
-        canonicalization_synonyms.insert("and".to_string(), "&".to_string());
-
         Self {
             collaboration_keywords,
             tag_separators,
-            canonicalization_synonyms,
         }
     }
 }
@@ -248,14 +209,6 @@ pub struct DuplicateAnalysisOpinions {
     /// Duration tolerance in milliseconds. Tracks with duration difference above this
     /// are clustered separately. Default: 2000 (2 seconds)
     pub duration_tolerance_ms: i64,
-    /// Max diverging directory keys to consider as cross-directory overlap (emit signal).
-    /// e.g., bandcamp|indie = 2 keys, emit CrossSourceOverlap signal.
-    /// Default: 2
-    pub cross_directory_max_keys: usize,
-    /// Min diverging directory keys to skip entirely (likely legitimate variants).
-    /// e.g., 3+ keys in monstercat = skip (don't emit signal).
-    /// Default: 3
-    pub within_directory_min_keys: usize,
     /// Skip duplicate pairs where either title contains variant keywords (remix, live,
     /// acoustic, etc.) and the titles differ. Prevents false duplicate matches between
     /// different versions of the same track. Default: true
@@ -267,8 +220,6 @@ impl Default for DuplicateAnalysisOpinions {
         Self {
             fingerprint_similarity_threshold: 95.0,
             duration_tolerance_ms: 2000,
-            cross_directory_max_keys: 2,
-            within_directory_min_keys: 3,
             elide_variant_titles: true,
         }
     }
@@ -343,12 +294,6 @@ pub enum SidecarDeployMode {
 /// Album art embedding and upgrade configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlbumArtOpinions {
-    /// Preferred padding size in bytes for tag writes (for block-aligned dedup).
-    /// Default: 4096 (matching common filesystem block size).
-    pub tag_padding_bytes: u32,
-    /// When replacing art, preserve existing non-CoverFront pictures.
-    /// Default: false
-    pub preserve_other_pictures_on_upgrade: bool,
     /// Minimum resolution (both dimensions) below which embedded art is considered
     /// upgradeable. Art at or above this threshold in both dimensions is "good enough."
     /// Default: 700. Set to 0 to disable (all upgradeable art is reported).
@@ -361,8 +306,6 @@ pub struct AlbumArtOpinions {
 impl Default for AlbumArtOpinions {
     fn default() -> Self {
         Self {
-            tag_padding_bytes: 4096,
-            preserve_other_pictures_on_upgrade: false,
             min_acceptable_resolution: 700,
             sidecar_deploy_mode: SidecarDeployMode::default(),
         }
@@ -382,7 +325,6 @@ impl Default for Opinions {
     fn default() -> Self {
         Self {
             lossy_shit_formats_to_flac: false,
-            fingerprint_matching: FingerprintMatchingOpinions::default(),
             quality_resolution: QualityResolutionOpinions::default(),
             canonicalization: CanonicalizationOpinions::default(),
             startup: StartupOpinions::default(),

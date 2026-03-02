@@ -54,34 +54,12 @@ opinions {
     }
 
     // -------------------------------------------------------------------------
-    // Fingerprint Matching - How to detect duplicate audio
-    // -------------------------------------------------------------------------
-    fingerprint-matching {
-        // Duration difference above this % = different track (default: 10.0)
-        // Higher values = more lenient matching
-        // duration-tolerance-percent 10.0
-
-        // Same directory + different track number = not duplicate (default: true)
-        // Prevents marking "Track 01" and "Track 02" from same album as dupes
-        // require-matching-track-number true
-
-        // Require matching album to be considered duplicate (default: false)
-        // Set to true if you want re-releases to be flagged separately
-        // require-matching-album false
-    }
-
-    // -------------------------------------------------------------------------
     // Quality Resolution - Auto-resolve duplicate quality variants
     // -------------------------------------------------------------------------
-    quality-resolution {
-        // FLAC beats MP3 automatically (default: true)
-        // When true, lossless formats auto-win over lossy
-        // auto-resolve-format-tier true
-
-        // Bitrate difference above this % = clear winner (default: 50.0)
-        // e.g., 320kbps vs 128kbps = 150% diff, clear winner
-        // bitrate-threshold-percent 50.0
-    }
+    // quality-resolution {
+    //     // Inbox-to-corpus bitrate tolerance for equivalence (default: 5.0%)
+    //     // inbox-bitrate-fuzz-percent 5.0
+    // }
 
     // -------------------------------------------------------------------------
     // Canonicalization - Tag normalization rules
@@ -105,14 +83,10 @@ opinions {
     // Tag Splitting - Detect compound tag values
     // -------------------------------------------------------------------------
     // - collab: keywords for detecting featuring patterns (artist tags only)
-    // - synonyms: substitutions during matching (e.g., "and" -> "&")
     // - Other nodes: tag name with list of separator strings
     //
     // tag-splitting {
     //     collab "feat" "featuring" "ft" "with" "vs"
-    //     synonyms {
-    //         "and" "&"
-    //     }
     //     artist ";"
     //     genre ";"
     // }
@@ -128,12 +102,6 @@ opinions {
         // Duration tolerance in ms (default: 2000)
         // Tracks with duration difference above this are clustered separately
         // duration-tolerance-ms 2000
-
-        // Max diverging directory keys for cross-source overlap signals (default: 2)
-        // cross-directory-max-keys 2
-
-        // Min diverging directory keys to skip (likely legitimate variants) (default: 3)
-        // within-directory-min-keys 3
     }
 
     // -------------------------------------------------------------------------

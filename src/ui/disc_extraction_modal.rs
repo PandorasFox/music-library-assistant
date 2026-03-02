@@ -17,11 +17,12 @@
 //! - Escape: Cancel
 
 use crate::meta::signals::data::{DiscExtractionSignal, DiscExtractionSource};
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::helpers::render_pane;
 use crate::ui::input::InputAction;
 use crate::ui::widgets::{
-    control_colors as cc, render_file_path_list, ConfirmationButton, FocusPane, PathEntry,
-    ResolutionLayout,
+    control_colors as cc, render_file_path_list, ConfirmationButton, FocusPane, ListClickTargets,
+    PathEntry, ResolutionLayout,
 };
 use ratatui::{
     layout::{Alignment, Rect},
@@ -223,6 +224,8 @@ pub struct DiscExtractionState {
     pub selected_resolution: DiscResolution,
     /// Disc tag name from config (e.g., "DISCNUMBER").
     pub disc_tag_name: String,
+    /// Click targets for file list items (set during render)
+    pub click_targets: ListClickTargets,
 }
 
 impl DiscExtractionState {
@@ -235,6 +238,7 @@ impl DiscExtractionState {
             focus_pane: FocusPane::List,
             selected_resolution: DiscResolution::Apply,
             disc_tag_name,
+            click_targets: ListClickTargets::new(),
         }
     }
 
@@ -255,6 +259,20 @@ impl DiscExtractionState {
         self.current_group_data()
             .map(|g| g.files.iter().map(|f| f.inode).collect())
             .unwrap_or_default()
+    }
+
+    /// Handle a mouse click at (x, y).
+    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<DiscExtractionAction> {
+        if let Some(id) = self.click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                let file_count = self.current_group_data().map_or(0, |g| g.files.len());
+                if idx < file_count {
+                    self.focus_pane = FocusPane::List;
+                    self.file_cursor = idx;
+                }
+            }
+        }
+        None
     }
 
     /// Handle input action.
@@ -328,17 +346,16 @@ impl DiscExtractionState {
     }
 
     /// Render the modal.
-    pub fn render(&self, f: &mut Frame, area: Rect) {
+    pub fn render(&mut self, f: &mut Frame, area: Rect) {
         let padded = ResolutionLayout::padded(area);
         f.render_widget(Clear, padded);
 
         let layout = ResolutionLayout::new(padded, 3, 3, 50);
 
-        let group = self.current_group_data();
         let total_groups = self.data.groups.len();
 
         // Info bar: description, group counter
-        let header_text = if let Some(g) = group {
+        let header_text = if let Some(g) = self.data.groups.get(self.current_group) {
             format!(
                 " {} ({} files) [group {}/{}] ",
                 g.description,
@@ -357,9 +374,9 @@ impl DiscExtractionState {
         render_pane(f, layout.info_bar, header_block);
 
         // Content panes
-        if let Some(g) = group {
-            self.render_file_list(f, layout.list_pane, g);
-            self.render_preview(f, layout.details_pane, g);
+        if self.current_group < self.data.groups.len() {
+            self.render_file_list(f, layout.list_pane);
+            self.render_preview(f, layout.details_pane);
         } else {
             let empty = Paragraph::new("All groups resolved.")
                 .block(Block::default().borders(Borders::ALL));
@@ -370,7 +387,7 @@ impl DiscExtractionState {
         self.render_buttons(f, layout.buttons);
     }
 
-    fn render_file_list(&self, f: &mut Frame, area: Rect, group: &DiscExtractionGroup) {
+    fn render_file_list(&mut self, f: &mut Frame, area: Rect) {
         let is_focused = self.focus_pane == FocusPane::List;
         let border_color = if is_focused {
             Color::Yellow
@@ -383,6 +400,17 @@ impl DiscExtractionState {
             .title(" Files ")
             .border_style(Style::default().fg(border_color));
         let inner = render_pane(f, area, block);
+
+        let group = &self.data.groups[self.current_group];
+
+        // Populate click targets for file list
+        self.click_targets.clear();
+        self.click_targets.set_list_area(inner);
+        let visible_height = inner.height as usize;
+        for (vis_idx, entry_idx) in (self.file_scroll..).take(visible_height).enumerate() {
+            if entry_idx >= group.files.len() { break; }
+            self.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        }
 
         let entries: Vec<PathEntry> = group
             .files
@@ -400,7 +428,7 @@ impl DiscExtractionState {
         render_file_path_list(f, inner, &entries, self.file_cursor, self.file_scroll);
     }
 
-    fn render_preview(&self, f: &mut Frame, area: Rect, group: &DiscExtractionGroup) {
+    fn render_preview(&self, f: &mut Frame, area: Rect) {
         let title = match self.selected_resolution {
             DiscResolution::Apply => " Preview: Apply ",
             DiscResolution::Skip => " Preview: Skip ",
@@ -412,6 +440,7 @@ impl DiscExtractionState {
             .border_style(Style::default().fg(Color::DarkGray));
         let inner = render_pane(f, area, block);
 
+        let group = &self.data.groups[self.current_group];
         let lines: Vec<ListItem> = match self.selected_resolution {
             DiscResolution::Apply => group
                 .files

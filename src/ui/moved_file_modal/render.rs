@@ -13,7 +13,7 @@ use crate::ui::helpers::render_pane;
 use crate::ui::widgets::{FocusPane, PathField, CURSOR_STYLE, LIST_ITEM_STYLE};
 
 /// Render the moved file acknowledgement modal.
-pub fn render(state: &MovedFileState, f: &mut Frame, area: Rect) {
+pub fn render(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
     // Main layout: header, list, details, buttons
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -48,7 +48,7 @@ fn render_header(state: &MovedFileState, f: &mut Frame, area: Rect) {
     f.render_widget(paragraph, area);
 }
 
-fn render_file_list(state: &MovedFileState, f: &mut Frame, area: Rect) {
+fn render_file_list(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
     let is_focused = state.focus_pane == FocusPane::List;
     let border_style = if is_focused {
         Style::default().fg(Color::Cyan)
@@ -62,6 +62,14 @@ fn render_file_list(state: &MovedFileState, f: &mut Frame, area: Rect) {
         .border_style(border_style);
 
     let inner = render_pane(f, area, block);
+
+    // Populate click targets for list items
+    state.click_targets.clear();
+    state.click_targets.set_list_area(inner);
+    for (vis_idx, entry_idx) in (0..state.files.len()).enumerate() {
+        if vis_idx >= inner.height as usize { break; }
+        state.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+    }
 
     if state.files.is_empty() {
         let empty = Paragraph::new("No moved files to acknowledge");
@@ -137,7 +145,7 @@ fn render_details(state: &MovedFileState, f: &mut Frame, area: Rect) {
     f.render_widget(paragraph, inner);
 }
 
-fn render_buttons(state: &MovedFileState, f: &mut Frame, area: Rect) {
+fn render_buttons(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
     let is_focused = state.focus_pane == FocusPane::Buttons;
 
     let block = Block::default()
@@ -155,6 +163,11 @@ fn render_buttons(state: &MovedFileState, f: &mut Frame, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(inner);
+
+    // Track button rects for click detection
+    state.button_rects.clear();
+    state.button_rects.set("acknowledge", button_chunks[0]);
+    state.button_rects.set("cancel", button_chunks[1]);
 
     // Acknowledge button
     let ack_selected = state.selected_button == MovedFileButton::Acknowledge && is_focused;

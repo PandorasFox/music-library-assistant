@@ -1545,6 +1545,21 @@ impl App {
             ActiveView::ExternalMatchReview(state) => {
                 state.handle_click(x, y, &gesture).map(ViewAction::ExternalMatchReview)
             }
+            ActiveView::MovedFileAcknowledge(state) => {
+                state.handle_click(x, y, &gesture).map(ViewAction::MovedFileAcknowledge)
+            }
+            ActiveView::SubparDuplicateResolution(state) => {
+                state.handle_click(x, y, &gesture).map(ViewAction::SubparDuplicateResolution)
+            }
+            ActiveView::InboxCorpusMatchResolution(state) => {
+                state.handle_click(x, y, &gesture).map(ViewAction::InboxCorpusMatchResolution)
+            }
+            ActiveView::MissingAlbumSingleResolution(state) => {
+                state.handle_click(x, y, &gesture).map(ViewAction::MissingAlbumSingleResolution)
+            }
+            ActiveView::DiscExtractionResolution(state) => {
+                state.handle_click(x, y, &gesture).map(ViewAction::DiscExtractionResolution)
+            }
             ActiveView::Insights(state) => {
                 state.handle_click(x, y);
                 None

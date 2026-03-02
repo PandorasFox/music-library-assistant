@@ -10,6 +10,7 @@
 //! - Enter: Execute selected button action
 //! - Escape: Cancel
 
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -21,7 +22,7 @@ use ratatui::{
 
 use super::types::{SubparDuplicateModalData, SelectedButton};
 use crate::ui::helpers::{render_pane, truncate_left};
-use crate::ui::widgets::{PathField, CURSOR_STYLE};
+use crate::ui::widgets::{ListClickTargets, PathField, CURSOR_STYLE};
 
 /// Which pane has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -69,6 +70,8 @@ pub struct SubparDuplicatePreviewState {
     pub selected_button: SelectedButton,
     /// Which pane has focus
     pub focus_pane: FocusPane,
+    /// Click targets for file list items (set during render)
+    pub click_targets: ListClickTargets,
 }
 
 impl SubparDuplicatePreviewState {
@@ -84,7 +87,21 @@ impl SubparDuplicatePreviewState {
             scroll: 0,
             selected_button: SelectedButton::Cancel,
             focus_pane: FocusPane::List,
+            click_targets: ListClickTargets::new(),
         }
+    }
+
+    /// Handle a mouse click at (x, y).
+    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<SubparDuplicatePreviewAction> {
+        if let Some(id) = self.click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.cached_data.files.len() {
+                    self.focus_pane = FocusPane::List;
+                    self.scroll = idx;
+                }
+            }
+        }
+        None
     }
 
     /// Handle input action.
@@ -156,7 +173,7 @@ impl SubparDuplicatePreviewState {
     }
 
     /// Render the subpar duplicate resolution modal.
-    pub fn render(&self, f: &mut Frame, area: Rect) {
+    pub fn render(&mut self, f: &mut Frame, area: Rect) {
         // Clear background
         f.render_widget(Clear, area);
 
@@ -195,7 +212,7 @@ impl SubparDuplicatePreviewState {
         f.render_widget(title, area);
     }
 
-    fn render_content(&self, f: &mut Frame, area: Rect) {
+    fn render_content(&mut self, f: &mut Frame, area: Rect) {
         let count = self.cached_data.files.len();
         let list_focused = self.focus_pane == FocusPane::List;
 
@@ -223,10 +240,20 @@ impl SubparDuplicatePreviewState {
 
         let inner = render_pane(f, chunks[0], block);
 
+        // Populate click targets for list items
+        self.click_targets.clear();
+        self.click_targets.set_list_area(inner);
+
         if !self.cached_data.files.is_empty() {
             // Calculate visible lines
             let visible_lines = inner.height as usize;
             let scroll = self.scroll;
+
+            // Track click target rows
+            for (vis_idx, entry_idx) in (scroll..).take(visible_lines).enumerate() {
+                if entry_idx >= self.cached_data.files.len() { break; }
+                self.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+            }
 
             // Four columns: 40% subpar path | 10% reason | 8% score | 42% superior path
             let total_width = inner.width as usize;

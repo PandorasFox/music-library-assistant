@@ -15,6 +15,7 @@
 //! - Ctrl+R: Show transaction review
 //! - Escape: Cancel
 
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 use ratatui::{
     layout::{Alignment, Rect},
@@ -27,8 +28,8 @@ use ratatui::{
 use crate::meta::signals::data::MissingAlbumSingleSignal;
 use crate::ui::helpers::render_pane;
 use crate::ui::widgets::{
-    control_colors as cc, render_file_path_list, ConfirmationButton, FocusPane, PathEntry,
-    ResolutionLayout,
+    control_colors as cc, render_file_path_list, ConfirmationButton, FocusPane, ListClickTargets,
+    PathEntry, ResolutionLayout,
 };
 
 // ============================================================================
@@ -156,6 +157,8 @@ pub struct MissingAlbumState {
     pub focus_pane: FocusPane,
     /// Currently selected resolution option.
     pub selected_resolution: AlbumResolution,
+    /// Click targets for file list items (set during render)
+    pub click_targets: ListClickTargets,
 }
 
 impl MissingAlbumState {
@@ -168,6 +171,7 @@ impl MissingAlbumState {
             suffix,
             focus_pane: FocusPane::List,
             selected_resolution: AlbumResolution::PerTrackTitle,
+            click_targets: ListClickTargets::new(),
         }
     }
 
@@ -188,6 +192,20 @@ impl MissingAlbumState {
         self.current_group_data()
             .map(|g| g.tracks.iter().map(|t| t.inode).collect())
             .unwrap_or_default()
+    }
+
+    /// Handle a mouse click at (x, y).
+    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<MissingAlbumAction> {
+        if let Some(id) = self.click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                let track_count = self.current_group_data().map_or(0, |g| g.tracks.len());
+                if idx < track_count {
+                    self.focus_pane = FocusPane::List;
+                    self.track_cursor = idx;
+                }
+            }
+        }
+        None
     }
 
     /// Handle input action.
@@ -261,17 +279,16 @@ impl MissingAlbumState {
     }
 
     /// Render the modal.
-    pub fn render(&self, f: &mut Frame, area: Rect) {
+    pub fn render(&mut self, f: &mut Frame, area: Rect) {
         let padded = ResolutionLayout::padded(area);
         f.render_widget(Clear, padded);
 
         let layout = ResolutionLayout::new(padded, 3, 3, 50);
 
-        let group = self.current_group_data();
         let total_groups = self.data.groups.len();
 
         // Info bar: artist name, group counter
-        let header_text = if let Some(g) = group {
+        let header_text = if let Some(g) = self.data.groups.get(self.current_group) {
             format!(
                 " Artist: {} ({} tracks) [group {}/{}] ",
                 g.artist,
@@ -290,9 +307,9 @@ impl MissingAlbumState {
         render_pane(f, layout.info_bar, header_block);
 
         // Content panes
-        if let Some(g) = group {
-            self.render_track_list(f, layout.list_pane, g);
-            self.render_preview(f, layout.details_pane, g);
+        if self.current_group < self.data.groups.len() {
+            self.render_track_list(f, layout.list_pane);
+            self.render_preview(f, layout.details_pane);
         } else {
             let empty = Paragraph::new("All groups resolved.")
                 .block(Block::default().borders(Borders::ALL));
@@ -303,7 +320,7 @@ impl MissingAlbumState {
         self.render_buttons(f, layout.buttons);
     }
 
-    fn render_track_list(&self, f: &mut Frame, area: Rect, group: &ArtistGroup) {
+    fn render_track_list(&mut self, f: &mut Frame, area: Rect) {
         let is_focused = self.focus_pane == FocusPane::List;
         let border_color = if is_focused {
             Color::Yellow
@@ -316,6 +333,17 @@ impl MissingAlbumState {
             .title(" Tracks ")
             .border_style(Style::default().fg(border_color));
         let inner = render_pane(f, area, block);
+
+        let group = &self.data.groups[self.current_group];
+
+        // Populate click targets for track list
+        self.click_targets.clear();
+        self.click_targets.set_list_area(inner);
+        let visible_height = inner.height as usize;
+        for (vis_idx, entry_idx) in (self.track_scroll..).take(visible_height).enumerate() {
+            if entry_idx >= group.tracks.len() { break; }
+            self.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        }
 
         let entries: Vec<PathEntry> = group
             .tracks
@@ -333,7 +361,7 @@ impl MissingAlbumState {
         render_file_path_list(f, inner, &entries, self.track_cursor, self.track_scroll);
     }
 
-    fn render_preview(&self, f: &mut Frame, area: Rect, group: &ArtistGroup) {
+    fn render_preview(&self, f: &mut Frame, area: Rect) {
         let title = match self.selected_resolution {
             AlbumResolution::PerTrackTitle => " Preview: Per-Track Title ",
             AlbumResolution::AllSingles => " Preview: \"Singles\" ",
@@ -346,6 +374,7 @@ impl MissingAlbumState {
             .border_style(Style::default().fg(Color::DarkGray));
         let inner = render_pane(f, area, block);
 
+        let group = &self.data.groups[self.current_group];
         let lines: Vec<ListItem> = match self.selected_resolution {
             AlbumResolution::PerTrackTitle => group
                 .tracks

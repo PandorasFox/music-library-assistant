@@ -1,9 +1,10 @@
 //! Types for moved file acknowledgement modal.
 
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 
 use crate::meta::views::MovedFileInfo;
-use crate::ui::widgets::FocusPane;
+use crate::ui::widgets::{ButtonRects, FocusPane, ListClickTargets};
 
 // ============================================================================
 // Button Selection
@@ -58,6 +59,10 @@ pub struct MovedFileState {
     pub selected_button: MovedFileButton,
     /// Current focus pane (List or Buttons)
     pub focus_pane: FocusPane,
+    /// Button rectangles for click detection (set during render)
+    pub button_rects: ButtonRects,
+    /// Click targets for file list items (set during render)
+    pub click_targets: ListClickTargets,
 }
 
 impl MovedFileState {
@@ -72,6 +77,8 @@ impl MovedFileState {
             current_file: 0,
             selected_button: MovedFileButton::Acknowledge,
             focus_pane: FocusPane::List,
+            button_rects: ButtonRects::new(),
+            click_targets: ListClickTargets::new(),
         }
     }
 
@@ -83,6 +90,33 @@ impl MovedFileState {
             .iter()
             .map(|f| (f.inode, f.new_path.clone(), f.old_zone.clone(), f.new_zone.clone()))
             .collect()
+    }
+
+    /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
+    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<MovedFileAction> {
+        if let Some(button_name) = self.button_rects.hit_test(x, y) {
+            self.focus_pane = FocusPane::Buttons;
+            return match button_name {
+                "acknowledge" => {
+                    self.selected_button = MovedFileButton::Acknowledge;
+                    if !self.files.is_empty() { Some(MovedFileAction::Acknowledge) } else { None }
+                }
+                "cancel" => {
+                    self.selected_button = MovedFileButton::Cancel;
+                    Some(MovedFileAction::Cancel)
+                }
+                _ => None,
+            };
+        }
+        if let Some(id) = self.click_targets.hit_test(x, y) {
+            if let Ok(idx) = id.parse::<usize>() {
+                if idx < self.files.len() {
+                    self.focus_pane = FocusPane::List;
+                    self.current_file = idx;
+                }
+            }
+        }
+        None
     }
 
     pub fn handle_input(&mut self, action: &InputAction) -> MovedFileAction {

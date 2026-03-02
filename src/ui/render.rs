@@ -282,11 +282,11 @@ fn render_content(
                 app.drain_input_next = true;
             }
         }
-        ActiveView::SubparDuplicateResolution(ref preview) => {
+        ActiveView::SubparDuplicateResolution(ref mut preview) => {
             vname = "subpar_duplicate_resolution";
             preview.render(f, area);
         }
-        ActiveView::InboxCorpusMatchResolution(ref preview) => {
+        ActiveView::InboxCorpusMatchResolution(ref mut preview) => {
             vname = "inbox_corpus_match_resolution";
             preview.render(f, area);
         }
@@ -298,11 +298,11 @@ fn render_content(
             vname = "directory_cluster_resolution";
             preview.render(f, area);
         }
-        ActiveView::MissingAlbumSingleResolution(ref state) => {
+        ActiveView::MissingAlbumSingleResolution(ref mut state) => {
             vname = "missing_album_single";
             state.render(f, area);
         }
-        ActiveView::DiscExtractionResolution(ref state) => {
+        ActiveView::DiscExtractionResolution(ref mut state) => {
             vname = "disc_extraction";
             state.render(f, area);
         }

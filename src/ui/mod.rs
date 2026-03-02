@@ -883,8 +883,12 @@ fn run_app<B: ratatui::backend::Backend>(
         if matches!(app.view, ActiveView::History(_)) {
             app.cache.want_history();
         }
-        if matches!(app.view, ActiveView::ExternalMatches(_)) {
-            app.cache.want_external_matches();
+        if let ActiveView::ExternalMatches(ref view) = app.view {
+            if view.fetch_active {
+                app.cache.want_external_matches_urgent();
+            } else {
+                app.cache.want_external_matches();
+            }
         }
 
         let draw_start = std::time::Instant::now();

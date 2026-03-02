@@ -38,6 +38,9 @@ pub(crate) enum CacheRequest {
     WantHistory,
     /// UI wants fresh external matches data (throttled).
     WantExternalMatches,
+    /// UI wants external matches data with urgency (shorter throttle).
+    /// Used when fetch is actively running so confidence counts update in near-realtime.
+    WantExternalMatchesUrgent,
     /// Invalidate all cached data (force re-query on next want).
     InvalidateAll,
     /// Execute a one-shot query on the read-only connection.
@@ -93,6 +96,12 @@ impl CacheHandle {
     /// Signal demand for external matches data (throttled by cache thread).
     pub(crate) fn want_external_matches(&self) {
         let _ = self.request_tx.send(CacheRequest::WantExternalMatches);
+    }
+
+    /// Signal urgent demand for external matches data (shorter throttle).
+    /// Use when external fetch is actively running.
+    pub(crate) fn want_external_matches_urgent(&self) {
+        let _ = self.request_tx.send(CacheRequest::WantExternalMatchesUrgent);
     }
 
     /// Invalidate all cached data. Next want_* call will force a re-query.
@@ -205,6 +214,8 @@ struct ThrottleState {
     deploy_wanted: bool,
     history_wanted: bool,
     external_matches_wanted: bool,
+    /// When true, external matches uses a 2s throttle instead of 15s.
+    external_matches_urgent: bool,
     insights_at: Option<Instant>,
     inbox_at: Option<Instant>,
     deploy_at: Option<Instant>,
@@ -218,6 +229,7 @@ impl ThrottleState {
     const DEPLOY_THROTTLE: Duration = Duration::from_secs(15);
     const HISTORY_THROTTLE: Duration = Duration::from_secs(30);
     const EXTERNAL_MATCHES_THROTTLE: Duration = Duration::from_secs(15);
+    const EXTERNAL_MATCHES_URGENT_THROTTLE: Duration = Duration::from_secs(5);
 
     fn new() -> Self {
         Self {
@@ -226,6 +238,7 @@ impl ThrottleState {
             deploy_wanted: false,
             history_wanted: false,
             external_matches_wanted: false,
+            external_matches_urgent: false,
             insights_at: None,
             inbox_at: None,
             deploy_at: None,
@@ -246,6 +259,7 @@ impl ThrottleState {
         self.deploy_wanted = true;
         self.history_wanted = true;
         self.external_matches_wanted = true;
+        self.external_matches_urgent = false;
     }
 
     fn should_refresh_insights(&self) -> bool {
@@ -269,8 +283,13 @@ impl ThrottleState {
     }
 
     fn should_refresh_external_matches(&self) -> bool {
+        let throttle = if self.external_matches_urgent {
+            Self::EXTERNAL_MATCHES_URGENT_THROTTLE
+        } else {
+            Self::EXTERNAL_MATCHES_THROTTLE
+        };
         self.external_matches_wanted && self.external_matches_at
-            .map_or(true, |t| t.elapsed() >= Self::EXTERNAL_MATCHES_THROTTLE)
+            .map_or(true, |t| t.elapsed() >= throttle)
     }
 }
 
@@ -374,6 +393,11 @@ fn process_request(
         }
         CacheRequest::WantExternalMatches => {
             throttle.external_matches_wanted = true;
+            throttle.external_matches_urgent = false;
+        }
+        CacheRequest::WantExternalMatchesUrgent => {
+            throttle.external_matches_wanted = true;
+            throttle.external_matches_urgent = true;
         }
         CacheRequest::InvalidateAll => {
             throttle.invalidate_all();

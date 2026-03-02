@@ -274,13 +274,6 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         }
                     }
                 }
-                "show-musicbrainz-url" => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.show_musicbrainz_url = val;
-                        }
-                    }
-                }
                 _ => {}
             }
         }

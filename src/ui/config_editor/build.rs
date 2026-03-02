@@ -272,11 +272,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     source_for(ops.external_matching.requests_per_second == defaults.external_matching.requests_per_second, "requests-per-second"),
                     false,
                     |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.external_matching.requests_per_second = *n; } }),
-                field("Show MusicBrainz URL", "Show raw MusicBrainz URL instead of short clickable label in match review",
-                    ConfigValue::Bool(ops.external_matching.show_musicbrainz_url),
-                    source_for(ops.external_matching.show_musicbrainz_url == defaults.external_matching.show_musicbrainz_url, "show-musicbrainz-url"),
-                    false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.external_matching.show_musicbrainz_url = *b; } }),
             ],
         },
     ]

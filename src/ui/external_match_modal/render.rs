@@ -123,34 +123,25 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &mut ExternalMatchRevie
 
     let mut lines = Vec::new();
 
-    // MusicBrainz recording link + confidence
+    // Confidence line
+    lines.push(Line::from(Span::styled(
+        format!("{:.0}% confidence", entry.confidence * 100.0),
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    // MusicBrainz recording URL (underlined for shift-click in terminal)
     let mb_url = format!("https://musicbrainz.org/recording/{}", entry.recording_id);
     let link_style = Style::default()
         .fg(Color::Blue)
         .add_modifier(Modifier::UNDERLINED);
+    let link_len = mb_url.chars().count() as u16;
 
-    let link_text = if state.show_musicbrainz_url {
-        mb_url.clone()
-    } else {
-        "MusicBrainz Recording".to_string()
-    };
-    let link_len = link_text.chars().count() as u16;
-
-    // "Recording: " prefix is 12 chars; link starts after that
-    let link_x = inner.x + 12;
-    // Recording line is the first line (y offset 0 within inner)
-    let link_y = inner.y;
+    // Track link position for mouse click → xdg-open
+    let link_x = inner.x;
+    let link_y = inner.y + 1; // second line
     state.recording_link_rect = Some(Rect::new(link_x, link_y, link_len, 1));
 
-    lines.push(Line::from(vec![
-        Span::styled("Recording: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(link_text, link_style),
-        Span::raw("  "),
-        Span::styled(
-            format!("({:.0}% confidence)", entry.confidence * 100.0),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]));
+    lines.push(Line::from(Span::styled(&mb_url, link_style)));
     lines.push(Line::raw(""));
 
     if entry.diffs.is_empty() {

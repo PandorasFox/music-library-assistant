@@ -80,9 +80,8 @@ impl App {
             return;
         }
 
-        let show_url = self.config().opinions.external_matching.show_musicbrainz_url;
         let _ = self.witch.start_transaction("External match review");
-        let state = external_match_modal::ExternalMatchReviewState::new(entries, show_url);
+        let state = external_match_modal::ExternalMatchReviewState::new(entries);
         self.view = ActiveView::ExternalMatchReview(state);
     }
 

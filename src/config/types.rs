@@ -257,8 +257,6 @@ pub struct ExternalMatchingConfig {
     pub acoustid_api_key: String,
     /// Rate limit: requests per second (default 3).
     pub requests_per_second: u32,
-    /// When true, show raw MusicBrainz URL instead of short label (default: false).
-    pub show_musicbrainz_url: bool,
 }
 
 /// Opinions for disc extraction from ALBUM and TRACKNUMBER tags.
@@ -314,7 +312,6 @@ impl Default for ExternalMatchingConfig {
         Self {
             acoustid_api_key: String::new(),
             requests_per_second: 3,
-            show_musicbrainz_url: false,
         }
     }
 }

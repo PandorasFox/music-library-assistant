@@ -54,14 +54,12 @@ pub struct ExternalMatchReviewState {
     pub focus_pane: FocusPane,
     pub button_rects: ButtonRects,
     pub click_targets: ListClickTargets,
-    /// Cached config: show raw URL instead of short label.
-    pub show_musicbrainz_url: bool,
     /// Click rect for the MusicBrainz recording link (set during render).
     pub recording_link_rect: Option<Rect>,
 }
 
 impl ExternalMatchReviewState {
-    pub fn new(entries: Vec<ExternalMatchReviewEntry>, show_musicbrainz_url: bool) -> Self {
+    pub fn new(entries: Vec<ExternalMatchReviewEntry>) -> Self {
         Self {
             entries,
             cursor: 0,
@@ -70,7 +68,6 @@ impl ExternalMatchReviewState {
             focus_pane: FocusPane::List,
             button_rects: ButtonRects::new(),
             click_targets: ListClickTargets::new(),
-            show_musicbrainz_url,
             recording_link_rect: None,
         }
     }

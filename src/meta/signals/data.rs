@@ -863,6 +863,26 @@ pub struct CrossSourceTrackPair {
 }
 
 // ============================================================================
+// Deploy Lifecycle Classification
+// ============================================================================
+
+/// Deploy lifecycle phases for library files (audio and sidecar).
+///
+/// Exhaustive match on this enum at classification sites ensures
+/// both audio and sidecar codepaths handle all phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeployLifecyclePhase {
+    /// File ready for deployment (not yet in library).
+    Ready,
+    /// File correctly deployed at expected library path.
+    Healthy,
+    /// File deployed but at wrong path (tags changed since deploy).
+    Stale,
+    /// File in library with no corpus backing.
+    Leftover,
+}
+
+// ============================================================================
 // Typed Signal Write Envelope
 // ============================================================================
 

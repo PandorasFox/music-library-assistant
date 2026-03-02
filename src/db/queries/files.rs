@@ -939,6 +939,33 @@ impl Database {
     }
 
     // =========================================================================
+    // Audio Sibling Queries
+    // =========================================================================
+
+    /// Find any single audio file in a corpus directory (for deriving album_dir from sibling tags).
+    ///
+    /// Used by `DeriveDeployHealthSignals` to determine the expected deploy path
+    /// for sidecar images when the image itself has no audio_info row.
+    pub fn get_any_audio_sibling_in_directory(&self, corpus_dir: &str) -> Result<Option<(i64, String)>> {
+        let pattern = super::dir_like_pattern_str(corpus_dir);
+
+        let result = self.conn.query_row(
+            r#"SELECT f.inode, f.path FROM files f
+               JOIN audio_info a ON f.inode = a.inode
+               WHERE f.zone = 'corpus' AND f.path LIKE ?1 ESCAPE '\' AND f.is_dir = 0
+               LIMIT 1"#,
+            rusqlite::params![pattern],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        );
+
+        match result {
+            Ok(pair) => Ok(Some(pair)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    // =========================================================================
     // Image File Queries
     // =========================================================================
 

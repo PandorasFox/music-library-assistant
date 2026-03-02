@@ -833,4 +833,9 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_all_corpus_images()
     }
 
+    /// Find any single audio file in a corpus directory (for sidecar stale detection).
+    pub fn get_any_audio_sibling_in_directory(&self, corpus_dir: &str) -> Result<Option<(i64, String)>> {
+        self.db.get_any_audio_sibling_in_directory(corpus_dir)
+    }
+
 }

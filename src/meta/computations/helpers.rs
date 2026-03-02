@@ -53,7 +53,7 @@ pub(super) fn is_audio_file(path: &Path) -> bool {
 /// Check if path has an image file extension.
 ///
 /// Filters out macOS resource fork files (`._*`).
-pub(super) fn is_image_file(path: &Path) -> bool {
+pub(crate) fn is_image_file(path: &Path) -> bool {
     if is_macos_resource_fork(path) {
         return false;
     }

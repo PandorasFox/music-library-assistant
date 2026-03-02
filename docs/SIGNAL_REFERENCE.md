@@ -83,7 +83,7 @@ For each track, re-queue an `ApplyDbTagsToDisk` mutation. Since `ApplyDbTagsToDi
 | Signal | Emitted By | Cleared By | Meaning |
 |--------|------------|------------|---------|
 | LibraryLeftover | DeriveDeployHealthSignals | UpdateDeploySignals, mutations | Library file with no corpus backing |
-| LibraryStale | DeriveDeployHealthSignals | UpdateDeploySignals, LibraryMove | Library file at wrong path |
+| LibraryStale | DeriveDeployHealthSignals | UpdateDeploySignals, LibraryMove | Library file at wrong path (audio or sidecar image) |
 | DeployReady | DeriveCorpusDeployStatus | UpdateDeploySignals, HardLink | Healthy corpus file not deployed. Metadata: `{ "deploy_path": "..." }` |
 | DeployedHealthy | DeriveCorpusDeployStatus, UpdateDeploySignals | DeriveCorpusDeployStatus | Healthy corpus file correctly deployed. Metadata: `{ "library_path": "{library_name}/..." }` |
 | SidecarDeployReady | DeriveCorpusDeployStatus | DeriveCorpusDeployStatus (reconcile) | Corpus sidecar image not yet deployed to library. Tiebreak winner if conflicting. Keyed by image inode. BLOB data: role, format, width, height |

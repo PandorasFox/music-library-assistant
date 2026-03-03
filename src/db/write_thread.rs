@@ -461,6 +461,21 @@ enum DbWriteOp {
         fetched_at: i64,
     },
 
+    /// Upsert a MusicBrainz release cache entry.
+    UpsertMbReleaseCache {
+        release_id: String,
+        raw_json: Vec<u8>,
+        fetched_at: i64,
+    },
+
+    /// Insert a known MusicBrainz entity (for resumable fetching).
+    InsertMbKnownEntity {
+        mbid: String,
+        entity_type: String,
+        discovered_from: Option<String>,
+        discovered_at: i64,
+    },
+
     // =========================================================================
     // Edit History Purge Operations (operator-confirmed UI action)
     // =========================================================================
@@ -1221,6 +1236,38 @@ impl SignalWriteSender {
         });
     }
 
+    /// Upsert a MusicBrainz release cache entry.
+    pub fn upsert_mb_release_cache(
+        &self,
+        release_id: &str,
+        raw_json: Vec<u8>,
+        fetched_at: i64,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::UpsertMbReleaseCache {
+            release_id: release_id.to_string(),
+            raw_json,
+            fetched_at,
+        });
+    }
+
+    /// Insert a known MusicBrainz entity for resumable fetching.
+    pub fn insert_mb_known_entity(
+        &self,
+        mbid: &str,
+        entity_type: &str,
+        discovered_from: Option<&str>,
+        discovered_at: i64,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::InsertMbKnownEntity {
+            mbid: mbid.to_string(),
+            entity_type: entity_type.to_string(),
+            discovered_from: discovered_from.map(|s| s.to_string()),
+            discovered_at,
+        });
+    }
+
     // =========================================================================
     // Edit History Purge Operations (operator-confirmed UI action)
     // =========================================================================
@@ -1765,6 +1812,18 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::UpsertMbArtistCache { artist_id, raw_json, fetched_at } => {
             with_retry("upsert_mb_artist_cache", artist_id, || {
                 execute_upsert_mb_artist_cache(db, artist_id, raw_json, *fetched_at)
+            });
+        }
+
+        DbWriteOp::UpsertMbReleaseCache { release_id, raw_json, fetched_at } => {
+            with_retry("upsert_mb_release_cache", release_id, || {
+                execute_upsert_mb_release_cache(db, release_id, raw_json, *fetched_at)
+            });
+        }
+
+        DbWriteOp::InsertMbKnownEntity { mbid, entity_type, discovered_from, discovered_at } => {
+            with_retry("insert_mb_known_entity", mbid, || {
+                execute_insert_mb_known_entity(db, mbid, entity_type, discovered_from.as_deref(), *discovered_at)
             });
         }
 
@@ -2703,6 +2762,45 @@ fn execute_upsert_mb_artist_cache(
            (artist_id, raw_json, fetched_at)
            VALUES (?1, ?2, ?3)"#,
         params![artist_id, raw_json, fetched_at],
+    )?;
+
+    Ok(())
+}
+
+/// Execute UpsertMbReleaseCache: cache raw MB release JSON.
+fn execute_upsert_mb_release_cache(
+    db: &Database,
+    release_id: &str,
+    raw_json: &[u8],
+    fetched_at: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        r#"INSERT OR REPLACE INTO mb_release_cache
+           (release_id, raw_json, fetched_at)
+           VALUES (?1, ?2, ?3)"#,
+        params![release_id, raw_json, fetched_at],
+    )?;
+
+    Ok(())
+}
+
+/// Execute InsertMbKnownEntity: persist a discovered MB entity for resumable fetching.
+fn execute_insert_mb_known_entity(
+    db: &Database,
+    mbid: &str,
+    entity_type: &str,
+    discovered_from: Option<&str>,
+    discovered_at: i64,
+) -> anyhow::Result<()> {
+    use rusqlite::params;
+
+    db.conn().execute(
+        r#"INSERT OR IGNORE INTO mb_known_entities
+           (mbid, entity_type, discovered_from, discovered_at)
+           VALUES (?1, ?2, ?3, ?4)"#,
+        params![mbid, entity_type, discovered_from, discovered_at],
     )?;
 
     Ok(())

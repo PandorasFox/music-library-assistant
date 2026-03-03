@@ -698,6 +698,21 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_external_matches_for_derivation(source_key)
     }
 
+    /// Get cached MusicBrainz recording JSON by recording ID.
+    pub fn get_mb_recording_cache(&self, recording_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        self.db.get_mb_recording_cache(recording_id)
+    }
+
+    /// Get cached MusicBrainz artist JSON by artist ID.
+    pub fn get_mb_artist_cache(&self, artist_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        self.db.get_mb_artist_cache(artist_id)
+    }
+
+    /// Get cached MusicBrainz release JSON by release ID.
+    pub fn get_mb_release_cache(&self, release_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        self.db.get_mb_release_cache(release_id)
+    }
+
     // =========================================================================
     // Redundant / Metadata Duplicate Queries
     // =========================================================================

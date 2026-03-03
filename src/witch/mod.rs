@@ -1027,10 +1027,12 @@ impl Witch {
             None => return,
         };
 
+        let acoustid_source_key = crate::meta::external::ExternalSource::AcoustID.to_key();
+
         for result in results {
             match result {
-                external_fetch::FetchResult::Matches {
-                    inode, fingerprint, source, recordings, raw_response,
+                external_fetch::FetchResult::AcoustIdMatch {
+                    inode, fingerprint, recordings,
                 } => {
                     let now = SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -1041,59 +1043,101 @@ impl Witch {
                         sender.insert_external_match(
                             inode,
                             fingerprint.clone(),
-                            source.to_key(),
+                            acoustid_source_key,
                             &row.recording_id,
                             row.confidence,
-                            raw_response.clone(),
+                            None, // No raw_response — MB data supersedes
+                            now,
+                        );
+                        // Persist recording ID as known entity for resumable MB fetching
+                        sender.insert_mb_known_entity(
+                            &row.recording_id,
+                            "recording",
+                            None,
                             now,
                         );
                     }
-                    // Clear any retry entry for this inode
-                    sender.delete_external_retry(inode, source.to_key());
+                    sender.delete_external_retry(inode, acoustid_source_key);
                 }
-                external_fetch::FetchResult::NoMatch {
-                    inode, fingerprint, source,
+                external_fetch::FetchResult::AcoustIdNoMatch {
+                    inode, fingerprint,
                 } => {
                     let now = SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs() as i64)
                         .unwrap_or(0);
 
-                    sender.insert_external_no_match(fingerprint, source.to_key(), now);
-                    // Clear any retry entry for this inode
-                    sender.delete_external_retry(inode, source.to_key());
+                    sender.insert_external_no_match(fingerprint, acoustid_source_key, now);
+                    sender.delete_external_retry(inode, acoustid_source_key);
                 }
-                external_fetch::FetchResult::NeedsRetry {
-                    inode, fingerprint, source, error,
+                external_fetch::FetchResult::AcoustIdRetry {
+                    inode, fingerprint, error,
                 } => {
                     sender.upsert_external_retry(
                         inode,
                         fingerprint,
-                        source.to_key(),
+                        acoustid_source_key,
                         &error,
                     );
+                }
+                external_fetch::FetchResult::MbEntityCached {
+                    kind, mbid, raw_json,
+                } => {
+                    let now = SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    match kind {
+                        external_fetch::MbEntityKind::Recording => {
+                            sender.upsert_mb_recording_cache(&mbid, raw_json, now);
+                        }
+                        external_fetch::MbEntityKind::Artist => {
+                            sender.upsert_mb_artist_cache(&mbid, raw_json, now);
+                        }
+                        external_fetch::MbEntityKind::Release => {
+                            sender.upsert_mb_release_cache(&mbid, raw_json, now);
+                        }
+                    }
+                }
+                external_fetch::FetchResult::MbEntityNotFound { kind, mbid } => {
+                    crate::logging::log_general(format!(
+                        "[FETCH] MB {} {} not found (404)", kind.as_str(), mbid
+                    ));
+                }
+                external_fetch::FetchResult::MbEntityRetry { kind, mbid, error } => {
+                    crate::logging::log_general(format!(
+                        "[FETCH] MB {} {} retry: {}", kind.as_str(), mbid, error
+                    ));
+                }
+                external_fetch::FetchResult::MbEntitiesDiscovered { entities } => {
+                    let now = SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    for (kind, mbid, discovered_from) in entities {
+                        sender.insert_mb_known_entity(
+                            &mbid,
+                            kind.as_str(),
+                            discovered_from.as_deref(),
+                            now,
+                        );
+                    }
                 }
                 external_fetch::FetchResult::Progress(p) => {
                     self.fetch_progress = Some(p);
                 }
-                external_fetch::FetchResult::BatchDone {
-                    source, processed, matched, no_match, retries,
-                } => {
-                    // Store final snapshot so last-batch summary stays visible
-                    self.fetch_progress = Some(external_fetch::FetchProgress {
-                        total: processed,
-                        processed,
-                        matched,
-                        no_match,
-                        retries,
-                    });
+                external_fetch::FetchResult::SourceDone { source, stats } => {
                     crate::logging::log_general(format!(
-                        "[FETCH] {} batch done: {} processed, {} matched, {} no-match, {} retries",
-                        source.name(), processed, matched, no_match, retries
+                        "[FETCH] {} done: {} processed, {} matched, {} no-match, {} retries",
+                        source.name(), stats.processed, stats.matched,
+                        stats.no_match, stats.retries
                     ));
-                    if matched > 0 {
+                    if stats.matched > 0 {
                         self.session_recomputation_scope |= crate::meta::recomputation::RecomputationScope::EXTERNAL;
                     }
+                }
+                external_fetch::FetchResult::AllDone => {
+                    // batch_active cleared by ExternalFetchHandle::drain_results
                 }
             }
         }
@@ -1151,10 +1195,7 @@ impl Witch {
             eligible_dirs.len()
         ));
 
-        handle.request_refresh(
-            crate::meta::external::ExternalSource::AcoustID,
-            eligible_dirs,
-        );
+        handle.request_fetch(eligible_dirs);
     }
 
     /// Whether an external AcoustID fetch batch is currently active.

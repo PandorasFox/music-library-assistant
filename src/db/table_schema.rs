@@ -263,6 +263,32 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
+        name: "mb_release_cache",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS mb_release_cache (
+            release_id TEXT PRIMARY KEY,
+            raw_json BLOB NOT NULL,
+            fetched_at INTEGER NOT NULL
+        )",
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
+        name: "mb_known_entities",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS mb_known_entities (
+            mbid TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            discovered_from TEXT,
+            discovered_at INTEGER NOT NULL,
+            PRIMARY KEY (mbid, entity_type)
+        )",
+        index_sql: &[
+            "CREATE INDEX IF NOT EXISTS idx_mb_known_entities_type ON mb_known_entities(entity_type)",
+        ],
+    });
+
+    tables.push(TableEntry {
         name: "external_retry",
         kind: TableKind::Core,
         create_sql: "CREATE TABLE IF NOT EXISTS external_retry (

@@ -2,6 +2,7 @@
 
 use ratatui::layout::Rect;
 
+use crate::external::musicbrainz::{MbRecording, MbArtist, MbRelease};
 use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::bulk_selection::BulkSelectionState;
 use crate::ui::input::InputAction;
@@ -50,6 +51,18 @@ pub enum ExternalMatchReviewAction {
     Cancel,
     /// Open MusicBrainz recording URL in browser.
     OpenRecordingUrl(String),
+    /// Show structured MB recording detail overlay ('v' key).
+    ViewRecordingDetail,
+    /// Close the recording detail overlay (Esc while viewing).
+    CloseRecordingDetail,
+}
+
+/// Structured MB recording detail for the 'v' overlay.
+pub struct RecordingDetailState {
+    pub recording: MbRecording,
+    pub artists: Vec<(String, Option<MbArtist>)>,
+    pub releases: Vec<(String, Option<MbRelease>)>,
+    pub scroll: usize,
 }
 
 pub struct ExternalMatchReviewState {
@@ -66,6 +79,8 @@ pub struct ExternalMatchReviewState {
     pub selection: BulkSelectionState,
     /// Scroll offset for the tag diff table in the details pane.
     pub diff_scroll: usize,
+    /// Recording detail overlay (shown with 'v' key).
+    pub viewing_detail: Option<RecordingDetailState>,
 }
 
 impl ExternalMatchReviewState {
@@ -81,6 +96,7 @@ impl ExternalMatchReviewState {
             recording_link_rect: None,
             selection: BulkSelectionState::new(),
             diff_scroll: 0,
+            viewing_detail: None,
         }
     }
 
@@ -157,6 +173,29 @@ impl ExternalMatchReviewState {
     }
 
     pub fn handle_input(&mut self, action: &InputAction) -> ExternalMatchReviewAction {
+        // When viewing recording detail, only Up/Down scroll and Esc closes
+        if let Some(ref mut detail) = self.viewing_detail {
+            match action {
+                InputAction::NavUp => {
+                    detail.scroll = detail.scroll.saturating_sub(1);
+                    return ExternalMatchReviewAction::None;
+                }
+                InputAction::NavDown => {
+                    detail.scroll += 1;
+                    return ExternalMatchReviewAction::None;
+                }
+                InputAction::Cancel => {
+                    return ExternalMatchReviewAction::CloseRecordingDetail;
+                }
+                _ => return ExternalMatchReviewAction::None,
+            }
+        }
+
+        // 'v' key: view recording detail
+        if matches!(action, InputAction::Char('v')) {
+            return ExternalMatchReviewAction::ViewRecordingDetail;
+        }
+
         // FocusUp / FocusDown: cycle focus pane
         match action {
             InputAction::FocusUp => {

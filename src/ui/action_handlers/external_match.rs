@@ -44,7 +44,7 @@ impl App {
             }
             external_match_view::ExternalMatchesAction::RequestFetch => {
                 self.witch.request_external_fetch();
-                self.status_message = Some("AcoustID lookup requested".to_string());
+                self.status_message = Some("External fetch requested".to_string());
                 if let ActiveView::ExternalMatches(ref mut state) = self.view {
                     state.fetch_active = self.witch.is_external_fetch_active();
                 }
@@ -141,6 +141,14 @@ impl App {
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .spawn();
+            }
+            external_match_modal::ExternalMatchReviewAction::ViewRecordingDetail => {
+                self.load_recording_detail();
+            }
+            external_match_modal::ExternalMatchReviewAction::CloseRecordingDetail => {
+                if let ActiveView::ExternalMatchReview(ref mut state) = self.view {
+                    state.viewing_detail = None;
+                }
             }
         }
     }
@@ -245,6 +253,86 @@ impl App {
         if let ActiveView::ExternalMatchReview(ref mut state) = self.view {
             if !state.advance() {
                 self.after_staging_decisions();
+            }
+        }
+    }
+
+    /// Load MB recording detail for the current entry from cache.
+    fn load_recording_detail(&mut self) {
+        use crate::external::musicbrainz;
+
+        let recording_id = match self.view {
+            ActiveView::ExternalMatchReview(ref state) => {
+                if state.viewing_detail.is_some() {
+                    return; // Already viewing
+                }
+                match state.current_entry() {
+                    Some(entry) => entry.recording_id.clone(),
+                    None => return,
+                }
+            }
+            _ => return,
+        };
+
+        // Query all needed cache data in one shot on cache thread
+        let rec_id = recording_id.clone();
+        let result = self.cache.query(move |db| {
+            let rec_cache = db.get_mb_recording_cache(&rec_id).ok().flatten();
+            let recording = rec_cache
+                .and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
+
+            let Some(recording) = recording else {
+                return None;
+            };
+
+            // Collect unique artist IDs from credits + relations
+            let mut artist_ids: Vec<String> = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for credit in &recording.artist_credit {
+                if seen.insert(credit.artist.id.clone()) {
+                    artist_ids.push(credit.artist.id.clone());
+                }
+            }
+            for relation in &recording.relations {
+                if let Some(ref artist) = relation.artist {
+                    if seen.insert(artist.id.clone()) {
+                        artist_ids.push(artist.id.clone());
+                    }
+                }
+            }
+
+            // Load cached artist data
+            let artists: Vec<_> = artist_ids.into_iter().map(|id| {
+                let parsed = db.get_mb_artist_cache(&id).ok().flatten()
+                    .and_then(|(json, _)| musicbrainz::parse_artist(&json).ok());
+                (id, parsed)
+            }).collect();
+
+            // Load cached release data
+            let releases: Vec<_> = recording.releases.iter().map(|r| {
+                let parsed = db.get_mb_release_cache(&r.id).ok().flatten()
+                    .and_then(|(json, _)| musicbrainz::parse_release(&json).ok());
+                (r.id.clone(), parsed)
+            }).collect();
+
+            Some((recording, artists, releases))
+        }).recv();
+
+        match result {
+            Some((recording, artists, releases)) => {
+                if let ActiveView::ExternalMatchReview(ref mut state) = self.view {
+                    state.viewing_detail = Some(
+                        external_match_modal::types::RecordingDetailState {
+                            recording,
+                            artists,
+                            releases,
+                            scroll: 0,
+                        }
+                    );
+                }
+            }
+            None => {
+                self.status_message = Some("No cached recording data available".to_string());
             }
         }
     }

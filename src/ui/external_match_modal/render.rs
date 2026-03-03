@@ -27,6 +27,11 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
     render_file_list(f, layout.list_pane, state);
     render_diff_details(f, layout.details_pane, state);
     render_buttons(f, layout.buttons, state);
+
+    // Recording detail overlay (covers the details pane)
+    if state.viewing_detail.is_some() {
+        render_recording_detail(f, padded, state);
+    }
 }
 
 fn render_info_bar(f: &mut Frame, area: Rect, state: &ExternalMatchReviewState) {
@@ -312,5 +317,203 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewStat
     let hint_line = Line::from(hint_spans);
 
     let para = Paragraph::new(vec![buttons_line, hint_line]).alignment(Alignment::Center);
+    f.render_widget(para, inner);
+}
+
+fn render_recording_detail(f: &mut Frame, area: Rect, state: &ExternalMatchReviewState) {
+    let detail = match state.viewing_detail {
+        Some(ref d) => d,
+        None => return,
+    };
+
+    // Clear and draw bordered box over the whole area
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .title(" Recording Detail ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = render_pane(f, area, block);
+
+    let label_style = Style::default().fg(Color::DarkGray);
+    let value_style = Style::default().fg(Color::White);
+    let heading_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let dim_style = Style::default().fg(Color::DarkGray);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Recording title + length
+    let rec = &detail.recording;
+    lines.push(Line::from(vec![
+        Span::styled("Recording: ", label_style),
+        Span::styled(format!("\"{}\"", rec.title), value_style),
+    ]));
+    if let Some(length_ms) = rec.length {
+        let mins = length_ms / 60000;
+        let secs = (length_ms % 60000) / 1000;
+        lines.push(Line::from(vec![
+            Span::styled("Length:    ", label_style),
+            Span::styled(format!("{}:{:02}", mins, secs), value_style),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        Span::styled("MBID:      ", label_style),
+        Span::styled(&rec.id, dim_style),
+    ]));
+    lines.push(Line::raw(""));
+
+    // Artist credits
+    if !rec.artist_credit.is_empty() {
+        lines.push(Line::from(Span::styled("Artist Credits:", heading_style)));
+        for credit in &rec.artist_credit {
+            let mut spans = vec![
+                Span::styled("  ", label_style),
+                Span::styled(&credit.name, value_style),
+            ];
+            if credit.artist.sort_name != credit.artist.name {
+                spans.push(Span::styled(
+                    format!(" (sort: {})", credit.artist.sort_name),
+                    dim_style,
+                ));
+            }
+            if !credit.joinphrase.is_empty() {
+                spans.push(Span::styled(
+                    format!(" [join: \"{}\"]", credit.joinphrase.trim()),
+                    dim_style,
+                ));
+            }
+            lines.push(Line::from(spans));
+
+            // Show aliases if we have cached artist data
+            if let Some((_, Some(ref artist))) = detail.artists.iter()
+                .find(|(id, _)| *id == credit.artist.id)
+            {
+                // Show canonical name if different from credited name
+                if artist.name != credit.name {
+                    lines.push(Line::from(vec![
+                        Span::styled("    canonical: ", dim_style),
+                        Span::styled(&artist.name, dim_style),
+                        Span::styled(format!(" [{}]", artist.id), dim_style),
+                    ]));
+                }
+                if artist.sort_name != artist.name {
+                    lines.push(Line::from(vec![
+                        Span::styled("    sort: ", dim_style),
+                        Span::styled(&artist.sort_name, dim_style),
+                    ]));
+                }
+                if !artist.aliases.is_empty() {
+                    let alias_strs: Vec<String> = artist.aliases.iter()
+                        .take(5)
+                        .map(|a| {
+                            let mut s = a.name.clone();
+                            if let Some(ref locale) = a.locale {
+                                s = format!("{} ({})", s, locale);
+                            }
+                            if let Some(ref t) = a.type_ {
+                                if a.primary.as_deref() == Some("primary") {
+                                    s = format!("{} [{}*]", s, t);
+                                }
+                            }
+                            s
+                        })
+                        .collect();
+                    lines.push(Line::from(vec![
+                        Span::styled("    aka: ", dim_style),
+                        Span::styled(alias_strs.join(", "), dim_style),
+                    ]));
+                }
+            }
+        }
+        lines.push(Line::raw(""));
+    }
+
+    // Relations (only backward = artist→recording, which is the relevant direction)
+    let relevant_relations: Vec<_> = rec.relations.iter()
+        .filter(|r| r.artist.is_some() && r.direction.as_deref() != Some("forward"))
+        .collect();
+    if !relevant_relations.is_empty() {
+        lines.push(Line::from(Span::styled("Relations:", heading_style)));
+        for relation in &relevant_relations {
+            if let Some(ref artist) = relation.artist {
+                let mut role = relation.type_.clone();
+                if !relation.attributes.is_empty() {
+                    role = format!("{} ({})", role, relation.attributes.join(", "));
+                }
+                lines.push(Line::from(vec![
+                    Span::styled("  ", label_style),
+                    Span::styled(format!("{}: ", role), dim_style),
+                    Span::styled(&artist.name, value_style),
+                ]));
+            }
+        }
+        lines.push(Line::raw(""));
+    }
+
+    // Releases — use full cached release data, fall back to recording's release refs
+    if !detail.releases.is_empty() {
+        lines.push(Line::from(Span::styled("Releases:", heading_style)));
+        for (id, parsed) in &detail.releases {
+            match parsed {
+                Some(release) => {
+                    let artist_str: String = release.artist_credit.iter()
+                        .map(|c| c.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let mut spans = vec![
+                        Span::styled("  ", label_style),
+                        Span::styled(&release.title, value_style),
+                    ];
+                    if !artist_str.is_empty() {
+                        spans.push(Span::styled(format!(" by {}", artist_str), dim_style));
+                    }
+                    lines.push(Line::from(spans));
+                    lines.push(Line::from(vec![
+                        Span::styled("    ", label_style),
+                        Span::styled(&release.id, dim_style),
+                    ]));
+                }
+                None => {
+                    // Fall back to recording's release ref for title
+                    let fallback_title = rec.releases.iter()
+                        .find(|r| r.id == *id)
+                        .and_then(|r| r.title.as_deref());
+                    let fallback_rg = rec.releases.iter()
+                        .find(|r| r.id == *id)
+                        .and_then(|r| r.release_group.as_ref());
+                    let mut spans = vec![
+                        Span::styled("  ", label_style),
+                    ];
+                    if let Some(title) = fallback_title {
+                        spans.push(Span::styled(title, value_style));
+                        spans.push(Span::styled(" (not cached)", dim_style));
+                    } else {
+                        spans.push(Span::styled(id, dim_style));
+                        spans.push(Span::styled(" (not cached)", dim_style));
+                    }
+                    lines.push(Line::from(spans));
+                    if let Some(rg) = fallback_rg {
+                        lines.push(Line::from(vec![
+                            Span::styled("    release-group: ", dim_style),
+                            Span::styled(&rg.id, dim_style),
+                        ]));
+                    }
+                }
+            }
+        }
+        lines.push(Line::raw(""));
+    }
+
+    // Hint line
+    lines.push(Line::from(Span::styled(
+        "Esc to close  \u{2191}\u{2193} to scroll",
+        dim_style,
+    )));
+
+    // Apply scroll
+    let scroll = detail.scroll;
+    let visible: Vec<Line> = lines.into_iter().skip(scroll).collect();
+
+    let para = Paragraph::new(visible);
     f.render_widget(para, inner);
 }

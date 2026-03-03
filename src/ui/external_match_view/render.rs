@@ -70,7 +70,15 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
             ("No API Key".to_string(), Color::Red)
         } else if state.fetch_active {
             if let Some(ref p) = state.fetch_progress {
-                (format!("{}/{}", p.processed, p.total), Color::Yellow)
+                let a = &p.acoustid;
+                let m = &p.mb;
+                if m.total > 0 && a.total > 0 {
+                    (format!("{}/{} + MB {}/{}", a.processed, a.total, m.processed, m.total), Color::Yellow)
+                } else if m.total > 0 {
+                    (format!("MB {}/{}", m.processed, m.total), Color::Yellow)
+                } else {
+                    (format!("{}/{}", a.processed, a.total), Color::Yellow)
+                }
             } else {
                 ("Active".to_string(), Color::Yellow)
             }
@@ -269,33 +277,69 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
     } else if state.fetch_active {
         // Active batch with progress
         if let Some(ref p) = state.fetch_progress {
-            lines.push(Line::from(vec![
-                Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("Active ({}/{})", p.processed, p.total),
-                    Style::default().fg(Color::Yellow),
-                ),
-            ]));
+            let a = &p.acoustid;
+            let m = &p.mb;
+
+            // AcoustID section
+            if a.total > 0 {
+                lines.push(Line::from(vec![
+                    Span::styled("AcoustID:  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{}/{}", a.processed, a.total),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  Matched:    ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{:>5}", a.matched), Style::default().fg(Color::Green)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  No match:   ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{:>5}", a.no_match), Style::default().fg(Color::White)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  Retries:    ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{:>5}", a.retries), Style::default().fg(Color::Yellow)),
+                ]));
+            }
+
+            // MB section (only shown when MB has work)
+            if m.total > 0 {
+                if a.total > 0 { lines.push(Line::from(Span::raw(""))); }
+                lines.push(Line::from(vec![
+                    Span::styled("MusicBrainz: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{}/{}", m.processed, m.total),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  Cached:     ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{:>5}", m.matched), Style::default().fg(Color::Green)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  Not found:  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{:>5}", m.no_match), Style::default().fg(Color::White)),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  Retries:    ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{:>5}", m.retries), Style::default().fg(Color::Yellow)),
+                ]));
+            }
+
             lines.push(Line::from(Span::raw("")));
-            lines.push(Line::from(vec![
-                Span::styled("  Matched:    ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:>5}", p.matched), Style::default().fg(Color::Green)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("  No match:   ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:>5}", p.no_match), Style::default().fg(Color::White)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("  Retries:    ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:>5}", p.retries), Style::default().fg(Color::Yellow)),
-            ]));
-            lines.push(Line::from(Span::raw("")));
-            // Braille progress bar with ETA
-            lines.push(Line::from(render_braille_bar(p.processed, p.total, state.tick_count)));
-            let remaining = p.total.saturating_sub(p.processed);
+
+            // Progress bar: show combined progress
+            let total_processed = a.processed + m.processed;
+            let total_items = a.total + m.total;
+            lines.push(Line::from(render_braille_bar(total_processed, total_items, state.tick_count)));
+
+            // ETA: AcoustID items at configured rps, MB items at 1/sec
+            let a_remaining = a.total.saturating_sub(a.processed);
+            let m_remaining = m.total.saturating_sub(m.processed);
             let rps = state.requests_per_second.max(1);
-            if remaining > 0 {
-                let secs = remaining as u64 / rps as u64;
+            let secs = (a_remaining as u64 / rps as u64) + m_remaining as u64;
+            if secs > 0 {
                 let eta = if secs >= 3600 {
                     format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60)
                 } else if secs >= 60 {
@@ -326,20 +370,29 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
         ]));
 
         if let Some(ref p) = state.fetch_progress {
-            if p.total > 0 {
+            let a = &p.acoustid;
+            let m = &p.mb;
+            let total = a.total + m.total;
+            if total > 0 {
                 lines.push(Line::from(Span::raw("")));
-                lines.push(Line::from(Span::styled(
-                    format!("Last batch: {} processed", p.total),
-                    Style::default().fg(Color::DarkGray),
-                )));
-                lines.push(Line::from(vec![
-                    Span::styled("  Matched: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{}", p.matched), Style::default().fg(Color::Green)),
-                    Span::styled("  No match: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{}", p.no_match), Style::default().fg(Color::White)),
-                    Span::styled("  Retries: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{}", p.retries), Style::default().fg(Color::Yellow)),
-                ]));
+                if a.total > 0 {
+                    lines.push(Line::from(Span::styled(
+                        format!("Last AcoustID: {} processed", a.total),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                    lines.push(Line::from(vec![
+                        Span::styled("  Matched: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{}", a.matched), Style::default().fg(Color::Green)),
+                        Span::styled("  No match: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{}", a.no_match), Style::default().fg(Color::White)),
+                    ]));
+                }
+                if m.total > 0 {
+                    lines.push(Line::from(Span::styled(
+                        format!("Last MB: {} cached", m.matched),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
             }
         }
 

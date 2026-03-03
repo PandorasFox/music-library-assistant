@@ -935,7 +935,13 @@ fn run_app<B: ratatui::backend::Backend>(
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
-                    if key.code == crossterm::event::KeyCode::Char('c')
+                    // Only process Press and Repeat events. Terminals that support
+                    // the kitty keyboard protocol (WezTerm, Ghostty, kitty, etc.)
+                    // also send Release events — without this guard every keypress
+                    // fires handle_input twice, eating every other intentional press.
+                    if !matches!(key.kind, crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat) {
+                        // do nothing
+                    } else if key.code == crossterm::event::KeyCode::Char('c')
                         && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
                     {
                         app.handle_input(InputAction::Cancel);

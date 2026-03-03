@@ -184,6 +184,8 @@ impl App {
                 ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {
                     // Invalidate caches before transitioning - mutations just completed
                     self.cache.invalidate_all();
+                    // Release SQLite page cache memory now that the computation burst is done
+                    self.witch.post_cycle_housekeeping();
                     // Transition to configured default view
                     self.start_default_view();
                 }

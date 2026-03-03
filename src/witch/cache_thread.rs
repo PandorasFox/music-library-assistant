@@ -45,6 +45,9 @@ pub(crate) enum CacheRequest {
     InvalidateAll,
     /// Execute a one-shot query on the read-only connection.
     Query(Box<dyn FnOnce(&ReadOnlyDb<'_>) + Send>),
+    /// Release unused SQLite page cache memory on the cache thread's connection.
+    /// Called post-computation-cycle to reclaim memory after burst queries complete.
+    ShrinkMemory,
     /// Close and reopen the read-only connection (after schema migrations).
     ReconnectDb,
     /// Shut down the cache thread.
@@ -192,6 +195,11 @@ impl CacheThreadHandle {
     /// Tell the cache thread to invalidate all cached data.
     pub(crate) fn invalidate_all(&self) {
         let _ = self.request_tx.send(CacheRequest::InvalidateAll);
+    }
+
+    /// Tell the cache thread to release unused SQLite page cache memory.
+    pub(crate) fn shrink_memory(&self) {
+        let _ = self.request_tx.send(CacheRequest::ShrinkMemory);
     }
 
     /// Shut down the cache thread and wait for it to exit.
@@ -418,6 +426,11 @@ fn process_request(
                 crate::logging::log_error(
                     "[CACHE_THREAD] Query received but no DB connection available"
                 );
+            }
+        }
+        CacheRequest::ShrinkMemory => {
+            if let Some(ref db_conn) = db {
+                let _ = db_conn.conn().execute_batch("PRAGMA shrink_memory;");
             }
         }
         CacheRequest::ReconnectDb => {

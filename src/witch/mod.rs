@@ -1554,6 +1554,33 @@ impl Witch {
         false
     }
 
+    /// Release SQLite page cache memory across all open connections after a computation cycle.
+    ///
+    /// Called when the progress screen transitions back to an actionable view, i.e. the
+    /// computation burst is complete and no more heavy queries are imminent. Two things happen:
+    ///
+    /// 1. All rayon worker thread-local read-only connections are closed via broadcast.
+    ///    They reopen lazily on the next computation. This drops their page caches entirely.
+    ///
+    /// 2. The cache thread's connection issues `PRAGMA shrink_memory` to release unused
+    ///    pages. It stays open (needed for periodic refreshes) but gives back what it can.
+    ///
+    /// The write thread's connection is left alone — its cache is actively useful.
+    /// jemalloc's background thread will return the freed OS pages within ~1s anyway,
+    /// but this accelerates the process and makes it deterministic.
+    pub fn post_cycle_housekeeping(&self) {
+        // Close thread-local read-only connections on all rayon workers.
+        // They reopen lazily next time with_read_only_db() is called.
+        rayon::broadcast(|_| {
+            crate::meta::computations::close_thread_local_connection();
+        });
+        crate::logging::log_general("[WITCH] Post-cycle: closed rayon thread-local DB connections");
+
+        // Shrink the cache thread's page cache.
+        self.cache_thread_handle.shrink_memory();
+        crate::logging::log_general("[WITCH] Post-cycle: requested cache thread SQLite shrink");
+    }
+
     /// Get current DB thread stats for UI display.
     /// Returns None if timing instrumentation is disabled.
     pub fn db_stats(&self) -> Option<DbThreadStats> {

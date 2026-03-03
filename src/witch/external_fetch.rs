@@ -219,16 +219,6 @@ impl RateLimiter {
         }
     }
 
-    fn new_mb(requests_per_second: u32) -> Self {
-        let rps = requests_per_second.max(1);
-        Self {
-            base_interval: Duration::from_millis(1000 / rps as u64),
-            backoff_multiplier: 1,
-            last_request_at: None,
-            max_backoff: 32, // Exponential backoff cap
-        }
-    }
-
     /// Duration until this limiter is ready for another request.
     /// Returns `Duration::ZERO` if ready now.
     fn time_until_ready(&self) -> Duration {
@@ -254,6 +244,111 @@ impl RateLimiter {
     /// Reset backoff to normal rate.
     fn reset_backoff(&mut self) {
         self.backoff_multiplier = 1;
+    }
+}
+
+/// Initial MB requests per second (conservative start).
+const MB_INITIAL_RPS: f64 = 4.0;
+/// How many consecutive successes before ramping up by 1 RPS.
+const MB_RAMP_SUCCESS_WINDOW: u32 = 20;
+
+/// Adaptive rate limiter for MusicBrainz.
+///
+/// Starts at a conservative rate (~4 RPS), ramps up toward the configured
+/// ceiling after sustained success, and halves on rate-limit responses.
+/// Logs every rate adjustment with the RPS at which failure occurred.
+struct AdaptiveRateLimiter {
+    /// Current interval between requests (1/current_rps).
+    current_interval: Duration,
+    /// Minimum RPS floor (won't drop below this on backoff).
+    min_rps: f64,
+    /// Maximum RPS ceiling from config.
+    max_rps: f64,
+    /// Current effective RPS (tracked as f64 for smooth ramping).
+    current_rps: f64,
+    /// When the last request was issued.
+    last_request_at: Option<Instant>,
+    /// Consecutive successes since last failure (for ramp-up gating).
+    consecutive_successes: u32,
+    /// RPS values at which rate-limit failures occurred (for heuristics).
+    failure_rps_history: Vec<f64>,
+}
+
+impl AdaptiveRateLimiter {
+    fn new(max_rps: u32) -> Self {
+        let max = (max_rps.max(1) as f64).max(MB_INITIAL_RPS);
+        let initial = MB_INITIAL_RPS.min(max);
+        Self {
+            current_interval: Self::interval_for_rps(initial),
+            min_rps: 1.0,
+            max_rps: max,
+            current_rps: initial,
+            last_request_at: None,
+            consecutive_successes: 0,
+            failure_rps_history: Vec::new(),
+        }
+    }
+
+    fn interval_for_rps(rps: f64) -> Duration {
+        Duration::from_micros((1_000_000.0 / rps) as u64)
+    }
+
+    /// Duration until this limiter is ready for another request.
+    fn time_until_ready(&self) -> Duration {
+        match self.last_request_at {
+            None => Duration::ZERO,
+            Some(last) => self.current_interval.saturating_sub(last.elapsed()),
+        }
+    }
+
+    /// Mark that a request was just dispatched.
+    fn mark_request(&mut self) {
+        self.last_request_at = Some(Instant::now());
+    }
+
+    /// Record a successful response. After enough consecutive successes,
+    /// ramp up rate by ~1 RPS toward the ceiling.
+    fn record_success(&mut self) {
+        self.consecutive_successes += 1;
+        if self.consecutive_successes >= MB_RAMP_SUCCESS_WINDOW
+            && self.current_rps < self.max_rps
+        {
+            let old_rps = self.current_rps;
+            self.current_rps = (self.current_rps + 1.0).min(self.max_rps);
+            self.current_interval = Self::interval_for_rps(self.current_rps);
+            self.consecutive_successes = 0;
+            crate::logging::log_general(format!(
+                "[FETCH] MB rate ramp-up: {:.1} -> {:.1} RPS (after {} clean results)",
+                old_rps, self.current_rps, MB_RAMP_SUCCESS_WINDOW,
+            ));
+        }
+    }
+
+    /// Rate-limit hit: halve the current rate, log the failure RPS.
+    fn apply_backoff(&mut self) {
+        let failed_at = self.current_rps;
+        self.failure_rps_history.push(failed_at);
+        self.consecutive_successes = 0;
+
+        let new_rps = (self.current_rps / 2.0).max(self.min_rps);
+        crate::logging::log_general(format!(
+            "[FETCH] MB rate backoff: {:.1} -> {:.1} RPS (rate-limited at {:.1}, \
+             failure history: {:?})",
+            self.current_rps, new_rps, failed_at,
+            self.failure_rps_history,
+        ));
+        self.current_rps = new_rps;
+        self.current_interval = Self::interval_for_rps(self.current_rps);
+    }
+
+    /// Clear last-request timestamp (used when a cache hit skips HTTP).
+    fn clear_last_request(&mut self) {
+        self.last_request_at = None;
+    }
+
+    /// Current effective RPS (for logging).
+    fn current_rps(&self) -> f64 {
+        self.current_rps
     }
 }
 
@@ -430,7 +525,7 @@ fn run_scheduling_loop(
 
     // Rate limiters
     let mut acoustid_limiter = RateLimiter::new_acoustid(rps);
-    let mut mb_limiter = RateLimiter::new_mb(mb_rps);
+    let mut mb_limiter = AdaptiveRateLimiter::new(mb_rps);
 
     // Per-source stats
     let mut acoustid_stats = SourceProgress::default();
@@ -476,8 +571,10 @@ fn run_scheduling_loop(
     }
 
     crate::logging::log_general(format!(
-        "[FETCH] Scheduling: {} AcoustID items, {} MB items, auto_enrich={}, MB rate={}rps",
-        acoustid_queue.len(), mb_queue.len(), auto_enrich, mb_rps,
+        "[FETCH] Scheduling: {} AcoustID items, {} MB items, auto_enrich={}, \
+         MB rate={:.1}rps (ceiling {}rps)",
+        acoustid_queue.len(), mb_queue.len(), auto_enrich,
+        mb_limiter.current_rps(), mb_rps,
     ));
 
     // Send initial progress
@@ -564,22 +661,20 @@ fn run_scheduling_loop(
                         }
                     }
 
-                    mb_limiter.reset_backoff();
+                    mb_limiter.record_success();
                 }
                 FetchOutcome::MbNotFound => {
                     mb_in_flight = mb_in_flight.saturating_sub(1);
                     mb_stats.no_match += 1;
                     mb_stats.processed += 1;
-                    mb_limiter.reset_backoff();
+                    mb_limiter.record_success();
                 }
                 FetchOutcome::MbRateLimited { task } => {
                     mb_in_flight = mb_in_flight.saturating_sub(1);
-                    let backoff_secs = mb_limiter.base_interval.as_secs()
-                        * mb_limiter.backoff_multiplier as u64 * 2;
                     if let ExternalFetchTask::MusicBrainz(ref t) = task {
                         crate::logging::log_general(format!(
-                            "[FETCH] MB rate limited for {} {}, backoff {}s",
-                            t.kind.as_str(), t.mbid, backoff_secs
+                            "[FETCH] MB rate limited for {} {}",
+                            t.kind.as_str(), t.mbid,
                         ));
                     }
                     mb_stats.retries += 1;
@@ -646,8 +741,9 @@ fn run_scheduling_loop(
             if already_cached {
                 // Already fresh in cache — skip without HTTP call
                 mb_stats.total = mb_stats.total.saturating_sub(1);
-                // Don't consume rate limiter slot
-                mb_limiter.last_request_at = None;
+                // Don't consume rate limiter slot — clear last_request so
+                // the next real dispatch isn't delayed by the cache check.
+                mb_limiter.clear_last_request();
             } else {
                 mb_limiter.mark_request();
                 mb_in_flight += 1;
@@ -679,9 +775,11 @@ fn run_scheduling_loop(
         if !mb_done && mb_in_flight == 0 && mb_queue.is_empty() {
             mb_done = true;
             crate::logging::log_general(format!(
-                "[FETCH] MusicBrainz done: {} processed, {} cached, {} not-found, {} retries",
+                "[FETCH] MusicBrainz done: {} processed, {} cached, {} not-found, {} retries, \
+                 final rate={:.1}rps, failure-at-rps={:?}",
                 mb_stats.processed, mb_stats.matched,
-                mb_stats.no_match, mb_stats.retries
+                mb_stats.no_match, mb_stats.retries,
+                mb_limiter.current_rps(), mb_limiter.failure_rps_history,
             ));
             let _ = message_tx.send(SchedulerMessage::SourceDone {
                 source: ExternalSource::MusicBrainz,

@@ -1,25 +1,21 @@
-//! Coordinator + worker architecture for external metadata fetching.
+//! Scheduler + rayon architecture for external metadata fetching.
 //!
-//! The Witch spawns three threads:
-//! - **Coordinator**: manages scheduling, rate limiting, queues, dedup, and
-//!   chain-emit. Does NO HTTP calls. Ticks on its own schedule.
-//! - **AcoustID worker**: receives individual tasks, makes blocking HTTP calls,
-//!   returns results. No rate limiting or state.
-//! - **MusicBrainz worker**: same pattern, different backend.
-//!
-//! True parallelism: AcoustID and MB HTTP calls happen concurrently on
-//! different threads while the coordinator manages scheduling centrally.
+//! The Witch spawns one scheduler thread that manages queues, rate limiting,
+//! dedup, and chain-emit. Actual HTTP calls are dispatched to the Witch's
+//! rayon pool as `ExternalFetch` tasks, keeping all background work under
+//! the Witch's orchestration.
 //!
 //! ## Channel Topology
 //!
 //! ```text
-//!                   FetchRequest                FetchResult
-//!   Witch ───────────────────► Coordinator ──────────────────► Witch
-//!                                  │   ▲           │   ▲
-//!                   AcoustIdTask   │   │  MbTask   │   │
-//!                                  ▼   │           ▼   │
-//!                           AcoustID  (result)  MB Worker
-//!                            Worker              (result)
+//!                    SchedulerMessage              TaskResult (existing)
+//!   Scheduler ────────────────────► Witch ──────────────────► (processes)
+//!       ▲                              │                          │
+//!       │          FetchOutcome        │  spawns on rayon         │
+//!       └──────────────────────────────┘                          │
+//!                                      │                          │
+//!                                 rayon pool ◄────────────────────┘
+//!                                 (HTTP calls)
 //! ```
 //!
 //! Does NOT affect the Witch's work_state — She stays Idle while fetches run.
@@ -35,31 +31,81 @@ use crate::db::Database;
 use crate::meta::external::ExternalSource;
 
 // ============================================================================
-// Public Types (Coordinator ↔ Witch)
+// Public Types
 // ============================================================================
 
-/// Handle held by the Witch for communicating with the fetch subsystem.
-pub struct ExternalFetchHandle {
-    /// Send requests to the coordinator thread.
-    request_tx: Sender<FetchRequest>,
-    /// Receive results from the coordinator thread.
-    result_rx: Receiver<FetchResult>,
-    /// Join handles for all three threads.
-    handles: Option<FetchThreadHandles>,
-    /// Whether the coordinator is currently active.
-    batch_active: bool,
+/// A single external API call to execute on rayon.
+#[derive(Debug, Clone)]
+pub enum ExternalFetchTask {
+    AcoustId(AcoustIdFetchTask),
+    MusicBrainz(MbFetchTask),
 }
 
-struct FetchThreadHandles {
-    coordinator: JoinHandle<()>,
-    acoustid_worker: JoinHandle<()>,
-    mb_worker: JoinHandle<()>,
+/// AcoustID fingerprint lookup task.
+#[derive(Debug, Clone)]
+pub struct AcoustIdFetchTask {
+    pub inode: i64,
+    pub fingerprint_raw: Vec<u32>,
+    pub fingerprint_blob: Vec<u8>,
+    pub duration_secs: u32,
+    pub api_key: String,
+}
+
+/// MusicBrainz entity fetch task.
+#[derive(Debug, Clone)]
+pub struct MbFetchTask {
+    pub kind: MbEntityKind,
+    pub mbid: String,
+}
+
+impl ExternalFetchTask {
+    /// Human-readable label for status display.
+    pub fn label(&self) -> &str {
+        match self {
+            Self::AcoustId(_) => "AcoustID lookup",
+            Self::MusicBrainz(t) => match t.kind {
+                MbEntityKind::Recording => "MB recording fetch",
+                MbEntityKind::Artist => "MB artist fetch",
+                MbEntityKind::Release => "MB release fetch",
+            },
+        }
+    }
+}
+
+/// Result data from executing an ExternalFetchTask on rayon.
+///
+/// DB writes (cache entries, external_matches, mb_known_entities) happen
+/// immediately on the rayon thread via signal_sender. This struct carries
+/// only what the Witch/scheduler need for progress tracking and chain-emit.
+#[derive(Debug)]
+pub enum FetchResultData {
+    AcoustIdMatch { recordings: Vec<MatchRow> },
+    AcoustIdNoMatch,
+    AcoustIdRateLimited { task: ExternalFetchTask },
+    /// AcoustID hard error. Already logged on the rayon thread.
+    AcoustIdError,
+    /// MB entity fetched. DB cache already written by rayon task.
+    /// `discovered_entities` populated only for recordings (chain-emit).
+    MbFound { discovered_entities: Vec<(MbEntityKind, String)> },
+    MbNotFound,
+    MbRateLimited { task: ExternalFetchTask },
+    /// MB hard error. Already logged on the rayon thread.
+    MbError,
 }
 
 /// A match row to write to external_matches (recording MBID + confidence only).
 pub struct MatchRow {
     pub recording_id: String,
     pub confidence: f64,
+}
+
+impl std::fmt::Debug for MatchRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MatchRow")
+            .field("recording_id", &self.recording_id)
+            .field("confidence", &self.confidence)
+            .finish()
+    }
 }
 
 /// Per-source progress snapshot.
@@ -77,89 +123,6 @@ pub struct SourceProgress {
 pub struct FetchProgress {
     pub acoustid: SourceProgress,
     pub mb: SourceProgress,
-}
-
-/// Result from coordinator back to the Witch.
-pub enum FetchResult {
-    // --- AcoustID results ---
-    /// AcoustID match(es) found for an inode (recording MBIDs + confidence only).
-    AcoustIdMatch {
-        inode: i64,
-        fingerprint: Vec<u8>,
-        recordings: Vec<MatchRow>,
-    },
-    /// No AcoustID match for this fingerprint.
-    AcoustIdNoMatch {
-        inode: i64,
-        fingerprint: Vec<u8>,
-    },
-    /// AcoustID lookup failed — needs retry.
-    AcoustIdRetry {
-        inode: i64,
-        fingerprint: Vec<u8>,
-        error: String,
-    },
-
-    // --- MusicBrainz results ---
-    /// MB entity data fetched and ready to cache (recording, artist, or release).
-    MbEntityCached {
-        kind: MbEntityKind,
-        mbid: String,
-        raw_json: Vec<u8>,
-    },
-    /// MB entity not found (404).
-    MbEntityNotFound {
-        kind: MbEntityKind,
-        mbid: String,
-    },
-    /// MB entity fetch failed (transient).
-    MbEntityRetry {
-        kind: MbEntityKind,
-        mbid: String,
-        error: String,
-    },
-    /// Newly discovered MB entity IDs (artist/release from recording parsing).
-    /// Witch persists these to mb_known_entities for resumable fetching.
-    MbEntitiesDiscovered {
-        /// (kind, mbid, discovered_from recording_id)
-        entities: Vec<(MbEntityKind, String, Option<String>)>,
-    },
-
-    // --- Scheduler-level ---
-    /// Intermediate progress snapshot.
-    Progress(FetchProgress),
-    /// One source's queue has drained.
-    SourceDone {
-        source: ExternalSource,
-        stats: SourceProgress,
-    },
-    /// Both sources done — coordinator going back to sleep.
-    AllDone,
-}
-
-// ============================================================================
-// Request Types (Witch → Coordinator)
-// ============================================================================
-
-/// Request from Witch to coordinator thread.
-enum FetchRequest {
-    /// Scan eligible dirs for inodes needing AcoustID fingerprint lookup.
-    /// Also populates MB queue for existing matches needing enrichment.
-    AcoustIdScan { eligible_dirs: Vec<PathBuf> },
-    /// Shut down the fetch subsystem.
-    Shutdown,
-}
-
-// ============================================================================
-// Worker Task/Result Types (Coordinator ↔ Workers)
-// ============================================================================
-
-/// Task sent to the AcoustID worker. One HTTP call per task.
-struct AcoustIdTask {
-    inode: i64,
-    fingerprint_raw: Vec<u32>,
-    fingerprint_blob: Vec<u8>,
-    duration_secs: u32,
 }
 
 /// What kind of MusicBrainz entity to fetch.
@@ -181,60 +144,53 @@ impl MbEntityKind {
     }
 }
 
-/// Task sent to the MB worker. One HTTP call per task.
-struct MbTask {
-    kind: MbEntityKind,
-    mbid: String,
+// ============================================================================
+// Internal Types (Scheduler ↔ Witch)
+// ============================================================================
+
+/// Message from scheduler to Witch (tasks + status updates).
+pub(super) enum SchedulerMessage {
+    /// A task for the Witch to execute on rayon.
+    TaskRequest {
+        task: ExternalFetchTask,
+        label: String,
+    },
+    /// Intermediate progress snapshot.
+    Progress(FetchProgress),
+    /// One source's queue has drained.
+    SourceDone {
+        source: ExternalSource,
+        stats: SourceProgress,
+    },
+    /// Both sources done — scheduler going back to sleep.
+    AllDone,
 }
 
-/// Result from the AcoustID worker for one lookup.
-enum AcoustIdWorkerResult {
-    /// Matches found.
-    Match {
-        inode: i64,
-        fingerprint_blob: Vec<u8>,
-        recordings: Vec<MatchRow>,
-    },
-    /// No match for this fingerprint.
-    NoMatch {
-        inode: i64,
-        fingerprint_blob: Vec<u8>,
-    },
-    /// Rate limited (429). Returns task for coordinator to re-queue.
-    RateLimited {
-        task: AcoustIdTask,
-    },
-    /// Hard error (network failure, bad response). Don't re-queue.
-    Error {
-        inode: i64,
-        fingerprint_blob: Vec<u8>,
-        error: String,
-    },
+/// Outcome sent from Witch back to scheduler for chain-emit and progress tracking.
+///
+/// DB persistence already happened on the rayon thread. This carries only
+/// what the scheduler needs for queue management and chain-emit decisions.
+pub(super) enum FetchOutcome {
+    AcoustIdMatch { recordings: Vec<MatchRow> },
+    AcoustIdNoMatch,
+    AcoustIdRateLimited { task: ExternalFetchTask },
+    AcoustIdError,
+    /// MB entity fetched successfully. `discovered_entities` carries newly
+    /// discovered artist/release IDs (from recording parsing) for the
+    /// scheduler to queue as follow-up fetches.
+    MbFound { discovered_entities: Vec<(MbEntityKind, String)> },
+    MbNotFound,
+    MbRateLimited { task: ExternalFetchTask },
+    MbError,
 }
 
-/// Result from the MB worker for one fetch.
-enum MbWorkerResult {
-    /// Entity found, raw JSON for cache.
-    Found {
-        kind: MbEntityKind,
-        mbid: String,
-        raw_json: Vec<u8>,
-    },
-    /// Entity does not exist (404).
-    NotFound {
-        kind: MbEntityKind,
-        mbid: String,
-    },
-    /// Rate limited (429) or service unavailable (503). Returns task for re-queue.
-    RateLimited {
-        task: MbTask,
-    },
-    /// Hard error. Don't re-queue.
-    Error {
-        kind: MbEntityKind,
-        mbid: String,
-        error: String,
-    },
+/// Command from Witch to scheduler.
+enum FetchCommand {
+    /// Scan eligible dirs for inodes needing AcoustID fingerprint lookup.
+    /// Also populates MB queue for existing matches needing enrichment.
+    Start { eligible_dirs: Vec<PathBuf> },
+    /// Shut down the scheduler thread.
+    Shutdown,
 }
 
 // ============================================================================
@@ -263,12 +219,13 @@ impl RateLimiter {
         }
     }
 
-    fn new_mb() -> Self {
+    fn new_mb(requests_per_second: u32) -> Self {
+        let rps = requests_per_second.max(1);
         Self {
-            base_interval: Duration::from_secs(1), // MB enforces 1 req/sec
+            base_interval: Duration::from_millis(1000 / rps as u64),
             backoff_multiplier: 1,
             last_request_at: None,
-            max_backoff: 32, // Exponential: 1→2→4→8→16→32s
+            max_backoff: 32, // Exponential backoff cap
         }
     }
 
@@ -304,59 +261,42 @@ impl RateLimiter {
 // ExternalFetchHandle — Witch-side API
 // ============================================================================
 
+/// Handle held by the Witch for communicating with the scheduler thread.
+pub struct ExternalFetchHandle {
+    /// Send commands to scheduler (start, shutdown).
+    command_tx: Sender<FetchCommand>,
+    /// Receive messages from scheduler (task requests + status).
+    message_rx: Receiver<SchedulerMessage>,
+    /// Send outcomes back to scheduler (for chain-emit).
+    outcome_tx: Sender<FetchOutcome>,
+    /// Join handle for the scheduler thread.
+    handle: Option<JoinHandle<()>>,
+    /// Whether the scheduler is currently active.
+    batch_active: bool,
+}
+
 impl ExternalFetchHandle {
-    /// Spawn the coordinator and worker threads.
+    /// Spawn the scheduler thread.
     ///
-    /// All three threads sleep until they receive work. The coordinator
-    /// blocks on `recv()` when idle; workers block on their task channels.
+    /// The scheduler sleeps until it receives a Start command, then
+    /// dispatches tasks to the Witch via the message channel.
     pub fn spawn(shared_config: SharedConfig) -> Self {
-        // Witch ↔ Coordinator channels
-        let (request_tx, request_rx) = mpsc::channel();
-        let (result_tx, result_rx) = mpsc::channel();
+        // Witch → Scheduler: commands
+        let (command_tx, command_rx) = mpsc::channel();
+        // Scheduler → Witch: task requests + status
+        let (message_tx, message_rx) = mpsc::channel();
+        // Witch → Scheduler: outcomes for chain-emit
+        let (outcome_tx, outcome_rx) = mpsc::channel();
 
-        // Coordinator ↔ AcoustID Worker channels
-        let (acoustid_task_tx, acoustid_task_rx) = mpsc::channel::<Option<AcoustIdTask>>();
-        let (acoustid_result_tx, acoustid_result_rx) = mpsc::channel::<AcoustIdWorkerResult>();
-
-        // Coordinator ↔ MB Worker channels
-        let (mb_task_tx, mb_task_rx) = mpsc::channel::<Option<MbTask>>();
-        let (mb_result_tx, mb_result_rx) = mpsc::channel::<MbWorkerResult>();
-
-        // Read API key for AcoustID worker
-        let api_key = {
-            let config = shared_config.read().expect("SharedConfig lock poisoned");
-            config.opinions.external_matching.acoustid_api_key.clone()
-        };
-
-        // Spawn AcoustID worker
-        let acoustid_worker = thread::spawn(move || {
-            run_acoustid_worker(acoustid_task_rx, acoustid_result_tx, api_key);
-        });
-
-        // Spawn MB worker
-        let mb_worker = thread::spawn(move || {
-            run_mb_worker(mb_task_rx, mb_result_tx);
-        });
-
-        // Spawn coordinator
-        let coord_config = shared_config;
-        let coordinator = thread::spawn(move || {
-            run_coordinator(
-                request_rx, result_tx,
-                acoustid_task_tx, acoustid_result_rx,
-                mb_task_tx, mb_result_rx,
-                coord_config,
-            );
+        let handle = thread::spawn(move || {
+            run_scheduler(command_rx, message_tx, outcome_rx, shared_config);
         });
 
         Self {
-            request_tx,
-            result_rx,
-            handles: Some(FetchThreadHandles {
-                coordinator,
-                acoustid_worker,
-                mb_worker,
-            }),
+            command_tx,
+            message_rx,
+            outcome_tx,
+            handle: Some(handle),
             batch_active: false,
         }
     }
@@ -370,36 +310,39 @@ impl ExternalFetchHandle {
             return; // Don't stack requests
         }
         self.batch_active = true;
-        let _ = self.request_tx.send(FetchRequest::AcoustIdScan { eligible_dirs });
+        let _ = self.command_tx.send(FetchCommand::Start { eligible_dirs });
     }
 
-    /// Drain available results (non-blocking).
+    /// Drain available messages from the scheduler (non-blocking).
     ///
-    /// Returns results received since last drain. The Witch calls this
-    /// each tick() to process fetch results.
-    pub fn drain_results(&mut self) -> Vec<FetchResult> {
-        let mut results = Vec::new();
-        while let Ok(result) = self.result_rx.try_recv() {
-            if matches!(result, FetchResult::AllDone) {
+    /// Returns messages received since last drain. Also clears batch_active
+    /// when AllDone is received.
+    pub(super) fn drain_messages(&mut self) -> Vec<SchedulerMessage> {
+        let mut msgs = Vec::new();
+        while let Ok(msg) = self.message_rx.try_recv() {
+            if matches!(msg, SchedulerMessage::AllDone) {
                 self.batch_active = false;
             }
-            results.push(result);
+            msgs.push(msg);
         }
-        results
+        msgs
     }
 
-    /// Whether the coordinator is currently active.
+    /// Send an outcome back to the scheduler for chain-emit decisions.
+    pub(super) fn send_outcome(&self, outcome: FetchOutcome) {
+        let _ = self.outcome_tx.send(outcome);
+    }
+
+    /// Whether the scheduler is currently active.
     pub fn is_batch_active(&self) -> bool {
         self.batch_active
     }
 
-    /// Shut down all threads (coordinator + workers).
+    /// Shut down the scheduler thread.
     pub fn shutdown(&mut self) {
-        let _ = self.request_tx.send(FetchRequest::Shutdown);
-        if let Some(handles) = self.handles.take() {
-            let _ = handles.coordinator.join();
-            let _ = handles.acoustid_worker.join();
-            let _ = handles.mb_worker.join();
+        let _ = self.command_tx.send(FetchCommand::Shutdown);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
         }
     }
 }
@@ -411,170 +354,41 @@ impl Drop for ExternalFetchHandle {
 }
 
 // ============================================================================
-// AcoustID Worker Thread
+// Scheduler Thread
 // ============================================================================
 
-/// Simple worker loop: receive task → HTTP call → send result. No state.
-fn run_acoustid_worker(
-    task_rx: Receiver<Option<AcoustIdTask>>,
-    result_tx: Sender<AcoustIdWorkerResult>,
-    api_key: String,
-) {
-    use crate::external::acoustid::{AcoustIDClient, LookupOutcome};
-
-    crate::logging::log_general("[FETCH] AcoustID worker started");
-    let client = AcoustIDClient::new(api_key);
-
-    loop {
-        let task = match task_rx.recv() {
-            Ok(Some(task)) => task,
-            Ok(None) => break, // Shutdown signal
-            Err(_) => break,   // Channel closed
-        };
-
-        let result = match client.lookup_with_raw(&task.fingerprint_raw, task.duration_secs) {
-            Ok((LookupOutcome::Matches(recordings), _raw)) => {
-                // _raw intentionally discarded — MB data supersedes AcoustID metadata
-                let rows: Vec<MatchRow> = recordings
-                    .into_iter()
-                    .map(|r| MatchRow {
-                        recording_id: r.recording_id,
-                        confidence: r.confidence,
-                    })
-                    .collect();
-                AcoustIdWorkerResult::Match {
-                    inode: task.inode,
-                    fingerprint_blob: task.fingerprint_blob,
-                    recordings: rows,
-                }
-            }
-            Ok((LookupOutcome::NoMatch, _)) => {
-                AcoustIdWorkerResult::NoMatch {
-                    inode: task.inode,
-                    fingerprint_blob: task.fingerprint_blob,
-                }
-            }
-            Ok((LookupOutcome::RateLimited, _)) => {
-                AcoustIdWorkerResult::RateLimited { task }
-            }
-            Err(e) => {
-                AcoustIdWorkerResult::Error {
-                    inode: task.inode,
-                    fingerprint_blob: task.fingerprint_blob,
-                    error: format!("{:#}", e),
-                }
-            }
-        };
-
-        let _ = result_tx.send(result);
-    }
-
-    crate::logging::log_general("[FETCH] AcoustID worker exiting");
-}
-
-// ============================================================================
-// MusicBrainz Worker Thread
-// ============================================================================
-
-/// Simple worker loop: receive task → HTTP call → send result. No state.
-fn run_mb_worker(
-    task_rx: Receiver<Option<MbTask>>,
-    result_tx: Sender<MbWorkerResult>,
-) {
-    use crate::external::musicbrainz::{MusicBrainzClient, MbLookupOutcome};
-
-    crate::logging::log_general("[FETCH] MusicBrainz worker started");
-    let client = MusicBrainzClient::new();
-
-    loop {
-        let task = match task_rx.recv() {
-            Ok(Some(task)) => task,
-            Ok(None) => break,
-            Err(_) => break,
-        };
-
-        let fetch_result = match task.kind {
-            MbEntityKind::Recording => client.fetch_recording(&task.mbid),
-            MbEntityKind::Artist => client.fetch_artist(&task.mbid),
-            MbEntityKind::Release => client.fetch_release(&task.mbid),
-        };
-
-        let kind = task.kind;
-        let result = match fetch_result {
-            Ok(MbLookupOutcome::Found(json)) => {
-                MbWorkerResult::Found {
-                    kind,
-                    mbid: task.mbid,
-                    raw_json: json,
-                }
-            }
-            Ok(MbLookupOutcome::NotFound) => {
-                MbWorkerResult::NotFound {
-                    kind,
-                    mbid: task.mbid,
-                }
-            }
-            Ok(MbLookupOutcome::RateLimited) | Ok(MbLookupOutcome::ServiceUnavailable) => {
-                MbWorkerResult::RateLimited { task }
-            }
-            Err(e) => {
-                MbWorkerResult::Error {
-                    kind,
-                    mbid: task.mbid,
-                    error: format!("{:#}", e),
-                }
-            }
-        };
-
-        let _ = result_tx.send(result);
-    }
-
-    crate::logging::log_general("[FETCH] MusicBrainz worker exiting");
-}
-
-// ============================================================================
-// Coordinator Thread
-// ============================================================================
-
-/// Coordinator main loop. Manages scheduling, rate limiting, queues,
-/// dedup, and chain-emit. Dispatches individual tasks to workers and
-/// reads back results each tick. Never does HTTP.
-fn run_coordinator(
-    request_rx: Receiver<FetchRequest>,
-    result_tx: Sender<FetchResult>,
-    acoustid_task_tx: Sender<Option<AcoustIdTask>>,
-    acoustid_result_rx: Receiver<AcoustIdWorkerResult>,
-    mb_task_tx: Sender<Option<MbTask>>,
-    mb_result_rx: Receiver<MbWorkerResult>,
+/// Scheduler main loop. Manages queues, rate limiting, dedup, and chain-emit.
+/// Dispatches individual tasks to the Witch via message channel. Never does HTTP.
+fn run_scheduler(
+    command_rx: Receiver<FetchCommand>,
+    message_tx: Sender<SchedulerMessage>,
+    outcome_rx: Receiver<FetchOutcome>,
     shared_config: SharedConfig,
 ) {
-    crate::logging::log_general("[FETCH] Coordinator started");
+    crate::logging::log_general("[FETCH] Scheduler started");
 
     // Open thread-local read-only DB connection
     let db = match crate::config::get_db_path().and_then(|p| Database::open_read_only(&p)) {
         Ok(db) => db,
         Err(e) => {
             crate::logging::log_error(format!("[FETCH] Failed to open database: {}", e));
-            shutdown_workers(&acoustid_task_tx, &mb_task_tx);
             return;
         }
     };
 
     loop {
-        // Block until we get a request (idle state)
-        let request = match request_rx.recv() {
-            Ok(req) => req,
+        // Block until we get a command (idle state)
+        let command = match command_rx.recv() {
+            Ok(cmd) => cmd,
             Err(_) => break, // Channel closed
         };
 
-        match request {
-            FetchRequest::Shutdown => break,
-            work_request => {
+        match command {
+            FetchCommand::Shutdown => break,
+            FetchCommand::Start { eligible_dirs } => {
                 let shutdown = run_scheduling_loop(
-                    &db, &request_rx, &result_tx,
-                    &acoustid_task_tx, &acoustid_result_rx,
-                    &mb_task_tx, &mb_result_rx,
-                    &shared_config, work_request,
+                    &db, &command_rx, &message_tx, &outcome_rx,
+                    &shared_config, eligible_dirs,
                 );
                 if shutdown {
                     break;
@@ -583,60 +397,48 @@ fn run_coordinator(
         }
     }
 
-    shutdown_workers(&acoustid_task_tx, &mb_task_tx);
-    crate::logging::log_general("[FETCH] Coordinator exiting");
+    crate::logging::log_general("[FETCH] Scheduler exiting");
 }
 
-fn shutdown_workers(
-    acoustid_tx: &Sender<Option<AcoustIdTask>>,
-    mb_tx: &Sender<Option<MbTask>>,
-) {
-    let _ = acoustid_tx.send(None);
-    let _ = mb_tx.send(None);
-}
-
-/// Active scheduling loop. Dispatches tasks to workers, drains results,
-/// manages rate limiting and chain-emit. Returns `true` if shutdown requested.
-#[allow(clippy::too_many_arguments)]
+/// Active scheduling loop. Dispatches tasks to Witch via message channel,
+/// receives outcomes back for chain-emit. Returns `true` if shutdown requested.
 fn run_scheduling_loop(
     db: &Database,
-    request_rx: &Receiver<FetchRequest>,
-    result_tx: &Sender<FetchResult>,
-    acoustid_task_tx: &Sender<Option<AcoustIdTask>>,
-    acoustid_result_rx: &Receiver<AcoustIdWorkerResult>,
-    mb_task_tx: &Sender<Option<MbTask>>,
-    mb_result_rx: &Receiver<MbWorkerResult>,
+    command_rx: &Receiver<FetchCommand>,
+    message_tx: &Sender<SchedulerMessage>,
+    outcome_rx: &Receiver<FetchOutcome>,
     shared_config: &SharedConfig,
-    initial_request: FetchRequest,
+    eligible_dirs: Vec<PathBuf>,
 ) -> bool {
     // Read config
-    let (api_key, rps, auto_enrich, ttl_secs, max_candidates) = {
+    let (api_key, rps, mb_rps, auto_enrich, ttl_secs, max_candidates) = {
         let config = shared_config.read().expect("SharedConfig lock poisoned");
         let em = &config.opinions.external_matching;
         (
             em.acoustid_api_key.clone(),
             em.requests_per_second,
+            em.mb_requests_per_second,
             em.auto_enrich_on_match,
             (em.mb_cache_ttl_days as i64) * 86400,
             em.mb_max_candidates,
         )
     };
 
-    // Work queues
-    let mut acoustid_queue: VecDeque<AcoustIdTask> = VecDeque::new();
-    let mut mb_queue: VecDeque<MbTask> = VecDeque::new();
+    // Work queues (internal to scheduler — items here haven't been dispatched yet)
+    let mut acoustid_queue: VecDeque<AcoustIdQueueItem> = VecDeque::new();
+    let mut mb_queue: VecDeque<MbQueueItem> = VecDeque::new();
 
-    // Rate limiters (coordinator-owned, workers have none)
+    // Rate limiters
     let mut acoustid_limiter = RateLimiter::new_acoustid(rps);
-    let mut mb_limiter = RateLimiter::new_mb();
+    let mut mb_limiter = RateLimiter::new_mb(mb_rps);
 
     // Per-source stats
     let mut acoustid_stats = SourceProgress::default();
     let mut mb_stats = SourceProgress::default();
 
-    // In-flight tracking: at most 1 task per worker
-    let mut acoustid_in_flight = false;
-    let mut mb_in_flight = false;
+    // In-flight tracking (multiple tasks can be in-flight on rayon concurrently)
+    let mut acoustid_in_flight: usize = 0;
+    let mut mb_in_flight: usize = 0;
 
     // Tracking flags
     let mut acoustid_done = false;
@@ -645,71 +447,67 @@ fn run_scheduling_loop(
     // All MB recording IDs already queued (for chain-emit dedup)
     let mut mb_queued_ids: HashSet<String> = HashSet::new();
 
-    // Populate queues from the triggering request
-    match initial_request {
-        FetchRequest::AcoustIdScan { ref eligible_dirs } => {
-            if api_key.is_empty() {
-                crate::logging::log_general("[FETCH] No AcoustID API key configured, skipping");
-                acoustid_done = true;
-            } else {
-                populate_acoustid_queue(db, eligible_dirs, &mut acoustid_queue);
-                acoustid_stats.total = acoustid_queue.len();
-            }
-            // Populate MB queue upfront from existing matches needing enrichment
-            if auto_enrich {
-                populate_mb_queue(db, ttl_secs, max_candidates, &mut mb_queue);
-                mb_stats.total = mb_queue.len();
-                // Seed dedup set from pre-populated MB items
-                for item in &mb_queue {
-                    mb_queued_ids.insert(item.mbid.clone());
-                }
-            } else {
-                mb_done = true;
-            }
+    // Populate queues
+    if api_key.is_empty() {
+        crate::logging::log_general("[FETCH] No AcoustID API key configured, skipping");
+        acoustid_done = true;
+    } else {
+        populate_acoustid_queue(db, &eligible_dirs, &api_key, &mut acoustid_queue);
+        acoustid_stats.total = acoustid_queue.len();
+    }
+
+    if auto_enrich {
+        populate_mb_queue(db, ttl_secs, max_candidates, &mut mb_queue);
+        mb_stats.total = mb_queue.len();
+        for item in &mb_queue {
+            mb_queued_ids.insert(item.mbid.clone());
         }
-        FetchRequest::Shutdown => return true,
-    };
+    } else {
+        mb_done = true;
+    }
 
     // Nothing to do at all
-    if acoustid_queue.is_empty() && mb_queue.is_empty() {
+    if acoustid_queue.is_empty() && mb_queue.is_empty()
+        && acoustid_in_flight == 0 && mb_in_flight == 0
+    {
         crate::logging::log_general("[FETCH] No work needed for any source");
-        let _ = result_tx.send(FetchResult::AllDone);
+        let _ = message_tx.send(SchedulerMessage::AllDone);
         return false;
     }
 
     crate::logging::log_general(format!(
-        "[FETCH] Scheduling: {} AcoustID items, {} MB items, auto_enrich={}",
-        acoustid_queue.len(), mb_queue.len(), auto_enrich,
+        "[FETCH] Scheduling: {} AcoustID items, {} MB items, auto_enrich={}, MB rate={}rps",
+        acoustid_queue.len(), mb_queue.len(), auto_enrich, mb_rps,
     ));
 
     // Send initial progress
-    send_progress(result_tx, &acoustid_stats, &mb_stats);
+    send_progress(message_tx, &acoustid_stats, &mb_stats);
 
     loop {
-        // ---- 1. Check for new requests / shutdown (non-blocking) ----
-        match request_rx.try_recv() {
-            Ok(FetchRequest::Shutdown) => {
+        // ---- 1. Check for new commands / shutdown (non-blocking) ----
+        match command_rx.try_recv() {
+            Ok(FetchCommand::Shutdown) => {
                 crate::logging::log_general("[FETCH] Shutdown received mid-scheduling");
                 return true;
             }
-            Ok(FetchRequest::AcoustIdScan { eligible_dirs }) => {
-                populate_acoustid_queue(db, &eligible_dirs, &mut acoustid_queue);
+            Ok(FetchCommand::Start { eligible_dirs }) => {
+                populate_acoustid_queue(db, &eligible_dirs, &api_key, &mut acoustid_queue);
                 acoustid_stats.total += acoustid_queue.len();
                 acoustid_done = false;
             }
             Err(_) => {} // Empty or Disconnected — both fine
         }
 
-        // ---- 2. Drain AcoustID worker results (non-blocking) ----
-        while let Ok(result) = acoustid_result_rx.try_recv() {
-            acoustid_in_flight = false;
-            match result {
-                AcoustIdWorkerResult::Match { inode, fingerprint_blob, recordings } => {
+        // ---- 2. Drain outcomes from Witch (non-blocking) ----
+        while let Ok(outcome) = outcome_rx.try_recv() {
+            match outcome {
+                FetchOutcome::AcoustIdMatch { recordings } => {
+                    acoustid_in_flight = acoustid_in_flight.saturating_sub(1);
                     // Chain-emit: push matched recording IDs into MB queue
                     if auto_enrich {
                         for row in &recordings {
                             if mb_queued_ids.insert(row.recording_id.clone()) {
-                                mb_queue.push_back(MbTask {
+                                mb_queue.push_back(MbQueueItem {
                                     kind: MbEntityKind::Recording,
                                     mbid: row.recording_id.clone(),
                                 });
@@ -720,149 +518,118 @@ fn run_scheduling_loop(
                     }
                     acoustid_stats.matched += 1;
                     acoustid_stats.processed += 1;
-                    let _ = result_tx.send(FetchResult::AcoustIdMatch {
-                        inode,
-                        fingerprint: fingerprint_blob,
-                        recordings,
-                    });
                     acoustid_limiter.reset_backoff();
                 }
-                AcoustIdWorkerResult::NoMatch { inode, fingerprint_blob } => {
+                FetchOutcome::AcoustIdNoMatch => {
+                    acoustid_in_flight = acoustid_in_flight.saturating_sub(1);
                     acoustid_stats.no_match += 1;
                     acoustid_stats.processed += 1;
-                    let _ = result_tx.send(FetchResult::AcoustIdNoMatch {
-                        inode,
-                        fingerprint: fingerprint_blob,
-                    });
                     acoustid_limiter.reset_backoff();
                 }
-                AcoustIdWorkerResult::RateLimited { task } => {
+                FetchOutcome::AcoustIdRateLimited { task } => {
+                    acoustid_in_flight = acoustid_in_flight.saturating_sub(1);
                     crate::logging::log_general("[FETCH] AcoustID rate limited, backing off");
                     acoustid_stats.retries += 1;
-                    // Re-queue at front for retry after backoff
-                    acoustid_queue.push_front(task);
+                    // Re-queue the original item at front for retry
+                    if let ExternalFetchTask::AcoustId(t) = task {
+                        acoustid_queue.push_front(AcoustIdQueueItem {
+                            inode: t.inode,
+                            fingerprint_raw: t.fingerprint_raw,
+                            fingerprint_blob: t.fingerprint_blob,
+                            duration_secs: t.duration_secs,
+                            api_key: t.api_key,
+                        });
+                    }
                     acoustid_limiter.apply_backoff();
-                    // Mark the limiter as having just fired so backoff interval applies
                     acoustid_limiter.mark_request();
                 }
-                AcoustIdWorkerResult::Error { inode, fingerprint_blob, error } => {
-                    crate::logging::log_error(format!(
-                        "[FETCH] AcoustID lookup failed for inode {}: {}", inode, error
-                    ));
+                FetchOutcome::AcoustIdError => {
+                    acoustid_in_flight = acoustid_in_flight.saturating_sub(1);
                     acoustid_stats.retries += 1;
                     acoustid_stats.processed += 1;
-                    let _ = result_tx.send(FetchResult::AcoustIdRetry {
-                        inode,
-                        fingerprint: fingerprint_blob,
-                        error,
-                    });
                 }
-            }
-            send_progress(result_tx, &acoustid_stats, &mb_stats);
-        }
-
-        // ---- 3. Drain MB worker results (non-blocking) ----
-        while let Ok(result) = mb_result_rx.try_recv() {
-            mb_in_flight = false;
-            match result {
-                MbWorkerResult::Found { kind, mbid, raw_json } => {
+                FetchOutcome::MbFound { discovered_entities } => {
+                    mb_in_flight = mb_in_flight.saturating_sub(1);
                     mb_stats.matched += 1;
                     mb_stats.processed += 1;
 
-                    // Chain-emit: when a Recording is fetched, parse it to discover
-                    // artist and release IDs, queue them for fetching too.
-                    if kind == MbEntityKind::Recording {
-                        if let Some(discovered) = extract_entities_from_recording(&raw_json, &mbid) {
-                            // Queue newly discovered entities
-                            for &(ek, ref eid) in &discovered {
-                                if mb_queued_ids.insert(eid.clone()) {
-                                    mb_queue.push_back(MbTask { kind: ek, mbid: eid.clone() });
-                                    mb_stats.total += 1;
-                                    mb_done = false;
-                                }
-                            }
-                            // Tell Witch about discovered entities for DB persistence
-                            let entities: Vec<_> = discovered.into_iter()
-                                .map(|(ek, eid)| (ek, eid, Some(mbid.clone())))
-                                .collect();
-                            if !entities.is_empty() {
-                                let _ = result_tx.send(FetchResult::MbEntitiesDiscovered { entities });
-                            }
+                    // Chain-emit: queue discovered artist/release entities for fetching.
+                    // Entity persistence (mb_known_entities) already happened on the rayon
+                    // thread via signal_sender, so even if we shut down now, nothing is lost.
+                    for (ek, eid) in discovered_entities {
+                        if mb_queued_ids.insert(eid.clone()) {
+                            mb_queue.push_back(MbQueueItem { kind: ek, mbid: eid });
+                            mb_stats.total += 1;
+                            mb_done = false;
                         }
                     }
 
-                    let _ = result_tx.send(FetchResult::MbEntityCached {
-                        kind,
-                        mbid,
-                        raw_json,
-                    });
                     mb_limiter.reset_backoff();
                 }
-                MbWorkerResult::NotFound { kind, mbid } => {
+                FetchOutcome::MbNotFound => {
+                    mb_in_flight = mb_in_flight.saturating_sub(1);
                     mb_stats.no_match += 1;
                     mb_stats.processed += 1;
-                    let _ = result_tx.send(FetchResult::MbEntityNotFound {
-                        kind,
-                        mbid,
-                    });
                     mb_limiter.reset_backoff();
                 }
-                MbWorkerResult::RateLimited { task } => {
+                FetchOutcome::MbRateLimited { task } => {
+                    mb_in_flight = mb_in_flight.saturating_sub(1);
                     let backoff_secs = mb_limiter.base_interval.as_secs()
                         * mb_limiter.backoff_multiplier as u64 * 2;
-                    crate::logging::log_general(format!(
-                        "[FETCH] MB rate limited for {} {}, backoff {}s",
-                        task.kind.as_str(), task.mbid, backoff_secs
-                    ));
+                    if let ExternalFetchTask::MusicBrainz(ref t) = task {
+                        crate::logging::log_general(format!(
+                            "[FETCH] MB rate limited for {} {}, backoff {}s",
+                            t.kind.as_str(), t.mbid, backoff_secs
+                        ));
+                    }
                     mb_stats.retries += 1;
-                    let _ = result_tx.send(FetchResult::MbEntityRetry {
-                        kind: task.kind,
-                        mbid: task.mbid.clone(),
-                        error: format!("Rate limited (backoff {}s)", backoff_secs),
-                    });
-                    mb_queue.push_front(task);
+                    // Re-queue the item at front for retry
+                    if let ExternalFetchTask::MusicBrainz(t) = task {
+                        mb_queue.push_front(MbQueueItem { kind: t.kind, mbid: t.mbid });
+                    }
                     mb_limiter.apply_backoff();
                     mb_limiter.mark_request();
                 }
-                MbWorkerResult::Error { kind, mbid, error } => {
-                    crate::logging::log_error(format!(
-                        "[FETCH] MB fetch failed for {} {}: {}", kind.as_str(), mbid, error
-                    ));
+                FetchOutcome::MbError => {
+                    mb_in_flight = mb_in_flight.saturating_sub(1);
                     mb_stats.retries += 1;
                     mb_stats.processed += 1;
-                    let _ = result_tx.send(FetchResult::MbEntityRetry {
-                        kind,
-                        mbid,
-                        error,
-                    });
                     // Don't re-queue on hard errors — next scan picks it up
                 }
             }
-            send_progress(result_tx, &acoustid_stats, &mb_stats);
+            send_progress(message_tx, &acoustid_stats, &mb_stats);
         }
 
-        // ---- 4. Dispatch to workers if rate limiter ready AND worker idle ----
-        if !acoustid_in_flight
-            && !acoustid_queue.is_empty()
+        // ---- 3. Dispatch AcoustID tasks if rate limiter ready ----
+        if !acoustid_queue.is_empty()
             && acoustid_limiter.time_until_ready() == Duration::ZERO
         {
-            let task = acoustid_queue.pop_front().unwrap();
+            let item = acoustid_queue.pop_front().unwrap();
             acoustid_limiter.mark_request();
-            acoustid_in_flight = true;
-            let _ = acoustid_task_tx.send(Some(task));
+            acoustid_in_flight += 1;
+            let _ = message_tx.send(SchedulerMessage::TaskRequest {
+                task: ExternalFetchTask::AcoustId(AcoustIdFetchTask {
+                    inode: item.inode,
+                    fingerprint_raw: item.fingerprint_raw,
+                    fingerprint_blob: item.fingerprint_blob,
+                    duration_secs: item.duration_secs,
+                    api_key: item.api_key,
+                }),
+                label: "AcoustID lookup".to_string(),
+            });
         }
 
-        if !mb_in_flight
-            && !mb_queue.is_empty()
+        // ---- 4. Dispatch MB tasks if rate limiter ready ----
+        if !mb_queue.is_empty()
             && mb_limiter.time_until_ready() == Duration::ZERO
         {
-            let task = mb_queue.pop_front().unwrap();
+            let item = mb_queue.pop_front().unwrap();
 
             // Check DB cache first — skip if already fresh
-            let cache_result = match task.kind {
-                MbEntityKind::Recording => db.get_mb_recording_cache(&task.mbid),
-                MbEntityKind::Artist => db.get_mb_artist_cache(&task.mbid),
-                MbEntityKind::Release => db.get_mb_release_cache(&task.mbid),
+            let cache_result = match item.kind {
+                MbEntityKind::Recording => db.get_mb_recording_cache(&item.mbid),
+                MbEntityKind::Artist => db.get_mb_artist_cache(&item.mbid),
+                MbEntityKind::Release => db.get_mb_release_cache(&item.mbid),
             };
             let already_cached = cache_result
                 .ok()
@@ -881,36 +648,42 @@ fn run_scheduling_loop(
                 mb_stats.total = mb_stats.total.saturating_sub(1);
                 // Don't consume rate limiter slot
                 mb_limiter.last_request_at = None;
-                // Don't set mb_in_flight — immediately eligible for next item
             } else {
                 mb_limiter.mark_request();
-                mb_in_flight = true;
-                let _ = mb_task_tx.send(Some(task));
+                mb_in_flight += 1;
+                let label = format!("MB {} fetch", item.kind.as_str());
+                let _ = message_tx.send(SchedulerMessage::TaskRequest {
+                    task: ExternalFetchTask::MusicBrainz(MbFetchTask {
+                        kind: item.kind,
+                        mbid: item.mbid,
+                    }),
+                    label,
+                });
             }
         }
 
         // ---- 5. Check source completion ----
-        if !acoustid_done && !acoustid_in_flight && acoustid_queue.is_empty() {
+        if !acoustid_done && acoustid_in_flight == 0 && acoustid_queue.is_empty() {
             acoustid_done = true;
             crate::logging::log_general(format!(
                 "[FETCH] AcoustID done: {} processed, {} matched, {} no-match, {} retries",
                 acoustid_stats.processed, acoustid_stats.matched,
                 acoustid_stats.no_match, acoustid_stats.retries
             ));
-            let _ = result_tx.send(FetchResult::SourceDone {
+            let _ = message_tx.send(SchedulerMessage::SourceDone {
                 source: ExternalSource::AcoustID,
                 stats: acoustid_stats.clone(),
             });
         }
 
-        if !mb_done && !mb_in_flight && mb_queue.is_empty() {
+        if !mb_done && mb_in_flight == 0 && mb_queue.is_empty() {
             mb_done = true;
             crate::logging::log_general(format!(
                 "[FETCH] MusicBrainz done: {} processed, {} cached, {} not-found, {} retries",
                 mb_stats.processed, mb_stats.matched,
                 mb_stats.no_match, mb_stats.retries
             ));
-            let _ = result_tx.send(FetchResult::SourceDone {
+            let _ = message_tx.send(SchedulerMessage::SourceDone {
                 source: ExternalSource::MusicBrainz,
                 stats: mb_stats.clone(),
             });
@@ -918,27 +691,46 @@ fn run_scheduling_loop(
 
         // ---- 6. Both done? Signal AllDone and return to outer idle loop ----
         if acoustid_done && mb_done {
-            let _ = result_tx.send(FetchResult::AllDone);
+            let _ = message_tx.send(SchedulerMessage::AllDone);
             return false;
         }
 
         // ---- 7. Sleep for the shortest relevant interval ----
-        let acoustid_wait = if acoustid_queue.is_empty() || acoustid_in_flight {
+        let acoustid_wait = if acoustid_queue.is_empty() {
             Duration::from_secs(60) // effectively infinite — nothing to dispatch
         } else {
             acoustid_limiter.time_until_ready()
         };
-        let mb_wait = if mb_queue.is_empty() || mb_in_flight {
+        let mb_wait = if mb_queue.is_empty() {
             Duration::from_secs(60)
         } else {
             mb_limiter.time_until_ready()
         };
-        // Cap at 100ms for shutdown responsiveness and result draining
+        // Cap at 100ms for shutdown responsiveness and outcome draining
         let sleep_time = acoustid_wait.min(mb_wait).min(Duration::from_millis(100));
         if sleep_time > Duration::ZERO {
             thread::sleep(sleep_time);
         }
     }
+}
+
+// ============================================================================
+// Internal Queue Item Types (scheduler-internal, not sent over channels)
+// ============================================================================
+
+/// AcoustID queue item (scheduler-internal).
+struct AcoustIdQueueItem {
+    inode: i64,
+    fingerprint_raw: Vec<u32>,
+    fingerprint_blob: Vec<u8>,
+    duration_secs: u32,
+    api_key: String,
+}
+
+/// MB queue item (scheduler-internal).
+struct MbQueueItem {
+    kind: MbEntityKind,
+    mbid: String,
 }
 
 // ============================================================================
@@ -949,7 +741,8 @@ fn run_scheduling_loop(
 fn populate_acoustid_queue(
     db: &Database,
     eligible_dirs: &[PathBuf],
-    queue: &mut VecDeque<AcoustIdTask>,
+    api_key: &str,
+    queue: &mut VecDeque<AcoustIdQueueItem>,
 ) {
     let source_key = ExternalSource::AcoustID.to_key();
     let dir_refs: Vec<&std::path::Path> = eligible_dirs.iter().map(|p| p.as_path()).collect();
@@ -959,11 +752,12 @@ fn populate_acoustid_queue(
         Ok(candidates) => {
             for c in candidates {
                 let blob = fingerprint_to_blob(&c.fingerprint);
-                queue.push_back(AcoustIdTask {
+                queue.push_back(AcoustIdQueueItem {
                     inode: c.inode,
                     fingerprint_raw: c.fingerprint,
                     fingerprint_blob: blob,
                     duration_secs: c.duration_secs,
+                    api_key: api_key.to_string(),
                 });
             }
         }
@@ -979,11 +773,12 @@ fn populate_acoustid_queue(
         Ok(retries) => {
             for c in retries {
                 let blob = fingerprint_to_blob(&c.fingerprint);
-                queue.push_back(AcoustIdTask {
+                queue.push_back(AcoustIdQueueItem {
                     inode: c.inode,
                     fingerprint_raw: c.fingerprint,
                     fingerprint_blob: blob,
                     duration_secs: c.duration_secs,
+                    api_key: api_key.to_string(),
                 });
             }
         }
@@ -1004,13 +799,13 @@ fn populate_mb_queue(
     db: &Database,
     ttl_secs: i64,
     max_candidates: u32,
-    queue: &mut VecDeque<MbTask>,
+    queue: &mut VecDeque<MbQueueItem>,
 ) {
     // Legacy path: recording IDs from external_matches needing cache
     match db.get_recording_ids_needing_mb_fetch(ttl_secs, max_candidates) {
         Ok(ids) => {
             for id in ids {
-                queue.push_back(MbTask { kind: MbEntityKind::Recording, mbid: id });
+                queue.push_back(MbQueueItem { kind: MbEntityKind::Recording, mbid: id });
             }
         }
         Err(e) => {
@@ -1025,7 +820,7 @@ fn populate_mb_queue(
         match db.get_known_entities_needing_fetch(entity_kind.as_str(), ttl_secs) {
             Ok(ids) => {
                 for id in ids {
-                    queue.push_back(MbTask { kind: *entity_kind, mbid: id });
+                    queue.push_back(MbQueueItem { kind: *entity_kind, mbid: id });
                 }
             }
             Err(e) => {
@@ -1039,11 +834,11 @@ fn populate_mb_queue(
 
 /// Send a combined progress snapshot for both sources.
 fn send_progress(
-    result_tx: &Sender<FetchResult>,
+    message_tx: &Sender<SchedulerMessage>,
     acoustid: &SourceProgress,
     mb: &SourceProgress,
 ) {
-    let _ = result_tx.send(FetchResult::Progress(FetchProgress {
+    let _ = message_tx.send(SchedulerMessage::Progress(FetchProgress {
         acoustid: acoustid.clone(),
         mb: mb.clone(),
     }));
@@ -1058,7 +853,7 @@ fn fingerprint_to_blob(fp: &[u32]) -> Vec<u8> {
 ///
 /// Parses the recording, collects artist IDs from credits and relations,
 /// and release IDs from the releases list. Returns None on parse failure.
-fn extract_entities_from_recording(
+pub(super) fn extract_entities_from_recording(
     raw_json: &[u8],
     _recording_mbid: &str,
 ) -> Option<Vec<(MbEntityKind, String)>> {

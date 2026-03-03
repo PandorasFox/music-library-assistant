@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -511,8 +511,19 @@ impl Witch {
         // Drain completed results and collect spawned computations and mutations
         let mut spawned_computations: Vec<Computation> = Vec::new();
         let mut spawned_mutations: Vec<types::SpawnedMutation> = Vec::new();
+        // Collect fetch outcomes to send to scheduler after we're done borrowing self
+        let mut fetch_outcomes: Vec<external_fetch::FetchOutcome> = Vec::new();
 
         while let Ok(result) = self.result_rx.try_recv() {
+            // ExternalFetch results bypass work_state — they're independent of the
+            // Witch's task lifecycle. Process them separately.
+            if result.kind == types::TaskKind::ExternalFetch {
+                if let Some(fetch_data) = result.fetch_result {
+                    fetch_outcomes.push(self.fetch_result_to_outcome(fetch_data));
+                }
+                continue;
+            }
+
             // Task has completed - no longer in flight
             self.work_state.dec_in_flight();
             self.work_state.inc_processed();
@@ -591,6 +602,13 @@ impl Witch {
             self.queue_spawned_mutation(mutation);
         }
 
+        // Send fetch outcomes to scheduler for chain-emit decisions
+        if let Some(ref handle) = self.external_fetch {
+            for outcome in fetch_outcomes {
+                handle.send_outcome(outcome);
+            }
+        }
+
         // Cache thread handles its own periodic refreshes — no action needed here.
 
         // Capture current state for status before transitions
@@ -605,8 +623,8 @@ impl Witch {
         // Check if idle rescan should trigger
         self.maybe_start_idle_rescan();
 
-        // External fetch: drain results
-        self.drain_external_fetch_results();
+        // External fetch: drain scheduler messages (task requests + status)
+        self.drain_scheduler_messages();
 
         // Emit status update to UI
         let _ = self.notice_tx.send(WitchNotice::StatusUpdate(WorkStatus {
@@ -1013,120 +1031,27 @@ impl Witch {
     // External Fetch Integration
     // =========================================================================
 
-    /// Drain results from the external fetch thread and write them to the DB.
+    /// Drain messages from the external fetch scheduler and act on them.
     ///
-    /// Called each tick(). Non-blocking: processes whatever results are available.
-    fn drain_external_fetch_results(&mut self) {
-        let results = match self.external_fetch {
-            Some(ref mut handle) => handle.drain_results(),
+    /// Task requests are spawned on rayon. Status updates (progress, source
+    /// completion) are tracked locally. Called each tick().
+    fn drain_scheduler_messages(&mut self) {
+        let messages = match self.external_fetch {
+            Some(ref mut handle) => handle.drain_messages(),
             None => return,
         };
 
-        let sender = match write_thread::signal_sender() {
-            Some(s) => s,
-            None => return,
-        };
-
-        let acoustid_source_key = crate::meta::external::ExternalSource::AcoustID.to_key();
-
-        for result in results {
-            match result {
-                external_fetch::FetchResult::AcoustIdMatch {
-                    inode, fingerprint, recordings,
-                } => {
-                    let now = SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-
-                    for row in &recordings {
-                        sender.insert_external_match(
-                            inode,
-                            fingerprint.clone(),
-                            acoustid_source_key,
-                            &row.recording_id,
-                            row.confidence,
-                            None, // No raw_response — MB data supersedes
-                            now,
-                        );
-                        // Persist recording ID as known entity for resumable MB fetching
-                        sender.insert_mb_known_entity(
-                            &row.recording_id,
-                            "recording",
-                            None,
-                            now,
-                        );
-                    }
-                    sender.delete_external_retry(inode, acoustid_source_key);
+        for msg in messages {
+            match msg {
+                external_fetch::SchedulerMessage::TaskRequest { task, label } => {
+                    // Spawn on rayon — bypasses work_state tracking entirely
+                    let t = Task::ExternalFetch(task);
+                    self.spawn_task(t, label, Instant::now());
                 }
-                external_fetch::FetchResult::AcoustIdNoMatch {
-                    inode, fingerprint,
-                } => {
-                    let now = SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-
-                    sender.insert_external_no_match(fingerprint, acoustid_source_key, now);
-                    sender.delete_external_retry(inode, acoustid_source_key);
-                }
-                external_fetch::FetchResult::AcoustIdRetry {
-                    inode, fingerprint, error,
-                } => {
-                    sender.upsert_external_retry(
-                        inode,
-                        fingerprint,
-                        acoustid_source_key,
-                        &error,
-                    );
-                }
-                external_fetch::FetchResult::MbEntityCached {
-                    kind, mbid, raw_json,
-                } => {
-                    let now = SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-                    match kind {
-                        external_fetch::MbEntityKind::Recording => {
-                            sender.upsert_mb_recording_cache(&mbid, raw_json, now);
-                        }
-                        external_fetch::MbEntityKind::Artist => {
-                            sender.upsert_mb_artist_cache(&mbid, raw_json, now);
-                        }
-                        external_fetch::MbEntityKind::Release => {
-                            sender.upsert_mb_release_cache(&mbid, raw_json, now);
-                        }
-                    }
-                }
-                external_fetch::FetchResult::MbEntityNotFound { kind, mbid } => {
-                    crate::logging::log_general(format!(
-                        "[FETCH] MB {} {} not found (404)", kind.as_str(), mbid
-                    ));
-                }
-                external_fetch::FetchResult::MbEntityRetry { kind, mbid, error } => {
-                    crate::logging::log_general(format!(
-                        "[FETCH] MB {} {} retry: {}", kind.as_str(), mbid, error
-                    ));
-                }
-                external_fetch::FetchResult::MbEntitiesDiscovered { entities } => {
-                    let now = SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-                    for (kind, mbid, discovered_from) in entities {
-                        sender.insert_mb_known_entity(
-                            &mbid,
-                            kind.as_str(),
-                            discovered_from.as_deref(),
-                            now,
-                        );
-                    }
-                }
-                external_fetch::FetchResult::Progress(p) => {
+                external_fetch::SchedulerMessage::Progress(p) => {
                     self.fetch_progress = Some(p);
                 }
-                external_fetch::FetchResult::SourceDone { source, stats } => {
+                external_fetch::SchedulerMessage::SourceDone { source, stats } => {
                     crate::logging::log_general(format!(
                         "[FETCH] {} done: {} processed, {} matched, {} no-match, {} retries",
                         source.name(), stats.processed, stats.matched,
@@ -1136,9 +1061,48 @@ impl Witch {
                         self.session_recomputation_scope |= crate::meta::recomputation::RecomputationScope::EXTERNAL;
                     }
                 }
-                external_fetch::FetchResult::AllDone => {
-                    // batch_active cleared by ExternalFetchHandle::drain_results
+                external_fetch::SchedulerMessage::AllDone => {
+                    // batch_active already cleared by drain_messages()
                 }
+            }
+        }
+    }
+
+    /// Convert a FetchResultData (from rayon) into a FetchOutcome (for the scheduler).
+    ///
+    /// DB writes already happened on the rayon thread. This just extracts the
+    /// scheduling-relevant information the scheduler needs for chain-emit and
+    /// progress tracking.
+    fn fetch_result_to_outcome(
+        &self,
+        data: external_fetch::FetchResultData,
+    ) -> external_fetch::FetchOutcome {
+        use external_fetch::{FetchResultData, FetchOutcome};
+
+        match data {
+            FetchResultData::AcoustIdMatch { recordings } => {
+                FetchOutcome::AcoustIdMatch { recordings }
+            }
+            FetchResultData::AcoustIdNoMatch => {
+                FetchOutcome::AcoustIdNoMatch
+            }
+            FetchResultData::AcoustIdRateLimited { task } => {
+                FetchOutcome::AcoustIdRateLimited { task }
+            }
+            FetchResultData::AcoustIdError => {
+                FetchOutcome::AcoustIdError
+            }
+            FetchResultData::MbFound { discovered_entities } => {
+                FetchOutcome::MbFound { discovered_entities }
+            }
+            FetchResultData::MbNotFound => {
+                FetchOutcome::MbNotFound
+            }
+            FetchResultData::MbRateLimited { task } => {
+                FetchOutcome::MbRateLimited { task }
+            }
+            FetchResultData::MbError => {
+                FetchOutcome::MbError
             }
         }
     }
@@ -1357,6 +1321,7 @@ impl Witch {
                         thread_stats: None,
                         config_update: None,
                         recomputation_scope: crate::meta::recomputation::RecomputationScope::EMPTY,
+                        fetch_result: None,
                         observed_corpus_inodes: HashMap::new(),
                         observed_inbox_inodes: HashMap::new(),
                         observed_library_files: Vec::new(),

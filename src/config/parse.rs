@@ -274,6 +274,15 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         }
                     }
                 }
+                "mb-requests-per-second" => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            if val > 0 {
+                                opinions.mb_requests_per_second = val as u32;
+                            }
+                        }
+                    }
+                }
                 "auto-enrich-on-match" => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {

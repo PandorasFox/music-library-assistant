@@ -257,6 +257,8 @@ pub struct ExternalMatchingConfig {
     pub acoustid_api_key: String,
     /// Rate limit: requests per second for AcoustID (default 3).
     pub requests_per_second: u32,
+    /// Rate limit: requests per second for MusicBrainz (default 25).
+    pub mb_requests_per_second: u32,
     /// Auto-trigger MB enrichment when AcoustID matches arrive (default true).
     pub auto_enrich_on_match: bool,
     /// How many days before re-fetching MB cache entries (default 30).
@@ -324,6 +326,7 @@ impl Default for ExternalMatchingConfig {
         Self {
             acoustid_api_key: String::new(),
             requests_per_second: 3,
+            mb_requests_per_second: 25,
             auto_enrich_on_match: true,
             mb_cache_ttl_days: 30,
             mb_max_candidates: 3,

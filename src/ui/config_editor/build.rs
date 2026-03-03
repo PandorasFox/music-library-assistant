@@ -9,7 +9,7 @@ use crate::config::{
     StartupOpinions, QualityResolutionOpinions, CanonicalizationOpinions,
     HealthDetectionOpinions, PerformanceOpinions, TagSplittingOpinions,
     DuplicateAnalysisOpinions, InboxOrganizeOpinions, ExternalMatchingConfig,
-    DiscExtractionOpinions, AlbumArtOpinions,
+    DiscExtractionOpinions, AlbumArtOpinions, DebugOpinions,
 };
 use super::types::*;
 
@@ -64,7 +64,7 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
     };
 
     vec![
-        // Group 1: General
+        // General
         ConfigGroup {
             name: "General",
             collapsed: false,
@@ -76,7 +76,7 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.lossy_shit_formats_to_flac = *b; } }),
             ],
         },
-        // Group 2: Startup
+        // Startup
         ConfigGroup {
             name: "Startup",
             collapsed: false,
@@ -98,53 +98,7 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     |v, c| { if let ConfigValue::Enum { selected, .. } = v { c.opinions.startup.default_view = startup_view_from_index(*selected); } }),
             ],
         },
-        // Group 3: Quality Resolution
-        ConfigGroup {
-            name: "Quality Resolution",
-            collapsed: false,
-            fields: vec![
-                field("Inbox bitrate fuzz percent", "Inbox-to-corpus bitrate tolerance for equivalence",
-                    ConfigValue::Float(ops.quality_resolution.inbox_bitrate_fuzz_percent),
-                    source_for((ops.quality_resolution.inbox_bitrate_fuzz_percent - defaults.quality_resolution.inbox_bitrate_fuzz_percent).abs() < f64::EPSILON, QualityResolutionOpinions::KDL_BITRATE_FUZZ),
-                    false,
-                    |v, c| { if let ConfigValue::Float(f) = v { c.opinions.quality_resolution.inbox_bitrate_fuzz_percent = *f; } }),
-            ],
-        },
-        // Group 5: Canonicalization
-        ConfigGroup {
-            name: "Canonicalization",
-            collapsed: false,
-            fields: vec![
-                field("Strip album format suffixes", "Normalize EP/LP suffixes during album collision detection",
-                    ConfigValue::Bool(ops.canonicalization.strip_album_format_suffixes),
-                    source_for(ops.canonicalization.strip_album_format_suffixes == defaults.canonicalization.strip_album_format_suffixes, CanonicalizationOpinions::KDL_STRIP_SUFFIXES),
-                    false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.canonicalization.strip_album_format_suffixes = *b; } }),
-            ],
-        },
-        // Group 6: Health Detection
-        ConfigGroup {
-            name: "Health Detection",
-            collapsed: false,
-            fields: vec![
-                field("Required tags", "Tags that must be present on every track",
-                    ConfigValue::StringList(ops.health_detection.required_tags.clone()),
-                    source_for(ops.health_detection.required_tags == defaults.health_detection.required_tags, HealthDetectionOpinions::KDL_REQUIRED_TAGS),
-                    false,
-                    |v, c| { if let ConfigValue::StringList(list) = v { c.opinions.health_detection.required_tags = list.clone(); } }),
-                field("Album artist only if compilation", "Only require album_artist on multi-artist albums",
-                    ConfigValue::Bool(ops.health_detection.album_artist_only_required_if_compilation),
-                    source_for(ops.health_detection.album_artist_only_required_if_compilation == defaults.health_detection.album_artist_only_required_if_compilation, HealthDetectionOpinions::KDL_ALBUM_ARTIST_COMPILATION),
-                    false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.health_detection.album_artist_only_required_if_compilation = *b; } }),
-                field("Single album suffix", "Suffix appended when tagging as single",
-                    ConfigValue::String(ops.health_detection.single_album_suffix.clone()),
-                    source_for(ops.health_detection.single_album_suffix == defaults.health_detection.single_album_suffix, HealthDetectionOpinions::KDL_SINGLE_ALBUM_SUFFIX),
-                    false,
-                    |v, c| { if let ConfigValue::String(s) = v { c.opinions.health_detection.single_album_suffix = s.clone(); } }),
-            ],
-        },
-        // Group 7: Duplicate Analysis
+        // Duplicate Analysis
         ConfigGroup {
             name: "Duplicate Analysis",
             collapsed: false,
@@ -166,41 +120,7 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.duplicate_analysis.elide_variant_titles = *b; } }),
             ],
         },
-        // Group 8: Inbox Organize
-        ConfigGroup {
-            name: "Inbox Organize",
-            collapsed: false,
-            fields: vec![
-                field("Directory granularity", "How to group inbox directories for organize workflow",
-                    ConfigValue::Enum { selected: granularity_index(ops.inbox_organize.directory_granularity), options: GRANULARITY_OPTIONS.to_vec() },
-                    source_for(ops.inbox_organize.directory_granularity == defaults.inbox_organize.directory_granularity, InboxOrganizeOpinions::KDL_DIR_GRANULARITY),
-                    false,
-                    |v, c| { if let ConfigValue::Enum { selected, .. } = v { c.opinions.inbox_organize.directory_granularity = granularity_from_index(*selected); } }),
-            ],
-        },
-        // Group 9: Performance
-        ConfigGroup {
-            name: "Performance",
-            collapsed: false,
-            fields: vec![
-                field("Worker threads", "Number of worker threads (auto = 2x logical cores)",
-                    ConfigValue::OptionalUint(ops.performance.worker_threads),
-                    source_for(ops.performance.worker_threads == defaults.performance.worker_threads, PerformanceOpinions::KDL_WORKER_THREADS),
-                    true,
-                    |v, c| { if let ConfigValue::OptionalUint(n) = v { c.opinions.performance.worker_threads = *n; } }),
-                field("DB cache MB", "SQLite page cache size per connection in MB",
-                    ConfigValue::UintU32(ops.performance.db_cache_mb),
-                    source_for(ops.performance.db_cache_mb == defaults.performance.db_cache_mb, PerformanceOpinions::KDL_DB_CACHE),
-                    true,
-                    |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.performance.db_cache_mb = *n; } }),
-                field("Timing instrumentation", "Enable stats display and atomic counter updates",
-                    ConfigValue::Bool(ops.performance.timing_instrumentation),
-                    source_for(ops.performance.timing_instrumentation == defaults.performance.timing_instrumentation, PerformanceOpinions::KDL_TIMING),
-                    true,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.performance.timing_instrumentation = *b; } }),
-            ],
-        },
-        // Group 10: Tag Splitting
+        // Tag Splitting
         ConfigGroup {
             name: "Tag Splitting",
             collapsed: false,
@@ -217,53 +137,7 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     |v, c| { if let ConfigValue::StringListMap(items) = v { c.opinions.tag_splitting.tag_separators = items.iter().cloned().collect(); } }),
             ],
         },
-        // Group 11: Disc Extraction
-        ConfigGroup {
-            name: "Disc Extraction",
-            collapsed: false,
-            fields: vec![
-                field("Disc tag name", "Tag name to write extracted disc identifier into",
-                    ConfigValue::String(ops.disc_extraction.disc_tag_name.clone()),
-                    source_for(ops.disc_extraction.disc_tag_name == defaults.disc_extraction.disc_tag_name, DiscExtractionOpinions::KDL_DISC_TAG_NAME),
-                    false,
-                    |v, c| { if let ConfigValue::String(s) = v { c.opinions.disc_extraction.disc_tag_name = s.clone(); } }),
-                field("Map letters to numbers", "Map letter prefixes to numbers (A\u{2192}1, B\u{2192}2, ...)",
-                    ConfigValue::Bool(ops.disc_extraction.map_letters_to_numbers),
-                    source_for(ops.disc_extraction.map_letters_to_numbers == defaults.disc_extraction.map_letters_to_numbers, DiscExtractionOpinions::KDL_MAP_LETTERS),
-                    false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.disc_extraction.map_letters_to_numbers = *b; } }),
-            ],
-        },
-        // Group 12: Album Art
-        ConfigGroup {
-            name: "Album Art",
-            collapsed: false,
-            fields: vec![
-                field("Sidecar deploy mode", "Deploy sidecar cover images alongside audio files to libraries",
-                    ConfigValue::Enum { selected: sidecar_deploy_index(ops.album_art.sidecar_deploy_mode), options: SIDECAR_DEPLOY_OPTIONS.to_vec() },
-                    source_for(ops.album_art.sidecar_deploy_mode == defaults.album_art.sidecar_deploy_mode, AlbumArtOpinions::KDL_SIDECAR_DEPLOY),
-                    false,
-                    |v, c| { if let ConfigValue::Enum { selected, .. } = v { c.opinions.album_art.sidecar_deploy_mode = sidecar_deploy_from_index(*selected); } }),
-            ],
-        },
-        // Group 13: Advanced
-        ConfigGroup {
-            name: "Advanced",
-            collapsed: false,
-            fields: vec![
-                field("Idle rescan interval", "Idle time before auto-rescanning corpus/inbox (e.g. 3m, 180s, disabled)",
-                    ConfigValue::Duration(ops.idle_rescan_interval_secs),
-                    source_for(ops.idle_rescan_interval_secs == defaults.idle_rescan_interval_secs, Opinions::KDL_IDLE_RESCAN),
-                    false,
-                    |v, c| { if let ConfigValue::Duration(secs) = v { c.opinions.idle_rescan_interval_secs = *secs; } }),
-                field("Leave transactions open", "Keep one open transaction; adds Transaction tab to view ring",
-                    ConfigValue::Bool(ops.leave_transactions_open),
-                    source_for(ops.leave_transactions_open == defaults.leave_transactions_open, Opinions::KDL_LEAVE_TXN_OPEN),
-                    false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.leave_transactions_open = *b; } }),
-            ],
-        },
-        // Group 14: External Matching
+        // External Matching
         ConfigGroup {
             name: "External Matching",
             collapsed: false,
@@ -293,6 +167,144 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     source_for(ops.external_matching.mb_max_candidates == defaults.external_matching.mb_max_candidates, ExternalMatchingConfig::KDL_MB_MAX_CANDIDATES),
                     false,
                     |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.external_matching.mb_max_candidates = *n; } }),
+            ],
+        },
+        // Disc Extraction
+        ConfigGroup {
+            name: "Disc Extraction",
+            collapsed: false,
+            fields: vec![
+                field("Disc tag name", "Tag name to write extracted disc identifier into",
+                    ConfigValue::String(ops.disc_extraction.disc_tag_name.clone()),
+                    source_for(ops.disc_extraction.disc_tag_name == defaults.disc_extraction.disc_tag_name, DiscExtractionOpinions::KDL_DISC_TAG_NAME),
+                    false,
+                    |v, c| { if let ConfigValue::String(s) = v { c.opinions.disc_extraction.disc_tag_name = s.clone(); } }),
+                field("Map letters to numbers", "Map letter prefixes to numbers (A\u{2192}1, B\u{2192}2, ...)",
+                    ConfigValue::Bool(ops.disc_extraction.map_letters_to_numbers),
+                    source_for(ops.disc_extraction.map_letters_to_numbers == defaults.disc_extraction.map_letters_to_numbers, DiscExtractionOpinions::KDL_MAP_LETTERS),
+                    false,
+                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.disc_extraction.map_letters_to_numbers = *b; } }),
+            ],
+        },
+        // Album Art
+        ConfigGroup {
+            name: "Album Art",
+            collapsed: false,
+            fields: vec![
+                field("Sidecar deploy mode", "Deploy sidecar cover images alongside audio files to libraries",
+                    ConfigValue::Enum { selected: sidecar_deploy_index(ops.album_art.sidecar_deploy_mode), options: SIDECAR_DEPLOY_OPTIONS.to_vec() },
+                    source_for(ops.album_art.sidecar_deploy_mode == defaults.album_art.sidecar_deploy_mode, AlbumArtOpinions::KDL_SIDECAR_DEPLOY),
+                    false,
+                    |v, c| { if let ConfigValue::Enum { selected, .. } = v { c.opinions.album_art.sidecar_deploy_mode = sidecar_deploy_from_index(*selected); } }),
+            ],
+        },
+        // Quality Resolution
+        ConfigGroup {
+            name: "Quality Resolution",
+            collapsed: false,
+            fields: vec![
+                field("Inbox bitrate fuzz percent", "Inbox-to-corpus bitrate tolerance for equivalence",
+                    ConfigValue::Float(ops.quality_resolution.inbox_bitrate_fuzz_percent),
+                    source_for((ops.quality_resolution.inbox_bitrate_fuzz_percent - defaults.quality_resolution.inbox_bitrate_fuzz_percent).abs() < f64::EPSILON, QualityResolutionOpinions::KDL_BITRATE_FUZZ),
+                    false,
+                    |v, c| { if let ConfigValue::Float(f) = v { c.opinions.quality_resolution.inbox_bitrate_fuzz_percent = *f; } }),
+            ],
+        },
+        // Canonicalization
+        ConfigGroup {
+            name: "Canonicalization",
+            collapsed: false,
+            fields: vec![
+                field("Strip album format suffixes", "Normalize EP/LP suffixes during album collision detection",
+                    ConfigValue::Bool(ops.canonicalization.strip_album_format_suffixes),
+                    source_for(ops.canonicalization.strip_album_format_suffixes == defaults.canonicalization.strip_album_format_suffixes, CanonicalizationOpinions::KDL_STRIP_SUFFIXES),
+                    false,
+                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.canonicalization.strip_album_format_suffixes = *b; } }),
+            ],
+        },
+        // Health Detection
+        ConfigGroup {
+            name: "Health Detection",
+            collapsed: false,
+            fields: vec![
+                field("Required tags", "Tags that must be present on every track",
+                    ConfigValue::StringList(ops.health_detection.required_tags.clone()),
+                    source_for(ops.health_detection.required_tags == defaults.health_detection.required_tags, HealthDetectionOpinions::KDL_REQUIRED_TAGS),
+                    false,
+                    |v, c| { if let ConfigValue::StringList(list) = v { c.opinions.health_detection.required_tags = list.clone(); } }),
+                field("Album artist only if compilation", "Only require album_artist on multi-artist albums",
+                    ConfigValue::Bool(ops.health_detection.album_artist_only_required_if_compilation),
+                    source_for(ops.health_detection.album_artist_only_required_if_compilation == defaults.health_detection.album_artist_only_required_if_compilation, HealthDetectionOpinions::KDL_ALBUM_ARTIST_COMPILATION),
+                    false,
+                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.health_detection.album_artist_only_required_if_compilation = *b; } }),
+                field("Single album suffix", "Suffix appended when tagging as single",
+                    ConfigValue::String(ops.health_detection.single_album_suffix.clone()),
+                    source_for(ops.health_detection.single_album_suffix == defaults.health_detection.single_album_suffix, HealthDetectionOpinions::KDL_SINGLE_ALBUM_SUFFIX),
+                    false,
+                    |v, c| { if let ConfigValue::String(s) = v { c.opinions.health_detection.single_album_suffix = s.clone(); } }),
+            ],
+        },
+        // Inbox Organize
+        ConfigGroup {
+            name: "Inbox Organize",
+            collapsed: false,
+            fields: vec![
+                field("Directory granularity", "How to group inbox directories for organize workflow",
+                    ConfigValue::Enum { selected: granularity_index(ops.inbox_organize.directory_granularity), options: GRANULARITY_OPTIONS.to_vec() },
+                    source_for(ops.inbox_organize.directory_granularity == defaults.inbox_organize.directory_granularity, InboxOrganizeOpinions::KDL_DIR_GRANULARITY),
+                    false,
+                    |v, c| { if let ConfigValue::Enum { selected, .. } = v { c.opinions.inbox_organize.directory_granularity = granularity_from_index(*selected); } }),
+            ],
+        },
+        // Advanced
+        ConfigGroup {
+            name: "Advanced",
+            collapsed: false,
+            fields: vec![
+                field("Idle rescan interval", "Idle time before auto-rescanning corpus/inbox (e.g. 3m, 180s, disabled)",
+                    ConfigValue::Duration(ops.idle_rescan_interval_secs),
+                    source_for(ops.idle_rescan_interval_secs == defaults.idle_rescan_interval_secs, Opinions::KDL_IDLE_RESCAN),
+                    false,
+                    |v, c| { if let ConfigValue::Duration(secs) = v { c.opinions.idle_rescan_interval_secs = *secs; } }),
+                field("Leave transactions open", "Keep one open transaction; adds Transaction tab to view ring",
+                    ConfigValue::Bool(ops.leave_transactions_open),
+                    source_for(ops.leave_transactions_open == defaults.leave_transactions_open, Opinions::KDL_LEAVE_TXN_OPEN),
+                    false,
+                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.leave_transactions_open = *b; } }),
+            ],
+        },
+        // Performance
+        ConfigGroup {
+            name: "Performance",
+            collapsed: false,
+            fields: vec![
+                field("Worker threads", "Number of worker threads (auto = 2x logical cores)",
+                    ConfigValue::OptionalUint(ops.performance.worker_threads),
+                    source_for(ops.performance.worker_threads == defaults.performance.worker_threads, PerformanceOpinions::KDL_WORKER_THREADS),
+                    true,
+                    |v, c| { if let ConfigValue::OptionalUint(n) = v { c.opinions.performance.worker_threads = *n; } }),
+                field("DB cache MB", "SQLite page cache size per connection in MB",
+                    ConfigValue::UintU32(ops.performance.db_cache_mb),
+                    source_for(ops.performance.db_cache_mb == defaults.performance.db_cache_mb, PerformanceOpinions::KDL_DB_CACHE),
+                    true,
+                    |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.performance.db_cache_mb = *n; } }),
+                field("Timing instrumentation", "Enable stats display and atomic counter updates",
+                    ConfigValue::Bool(ops.performance.timing_instrumentation),
+                    source_for(ops.performance.timing_instrumentation == defaults.performance.timing_instrumentation, PerformanceOpinions::KDL_TIMING),
+                    true,
+                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.performance.timing_instrumentation = *b; } }),
+            ],
+        },
+        // Debug
+        ConfigGroup {
+            name: "Debug",
+            collapsed: false,
+            fields: vec![
+                field("Memory logging", "Log periodic memory snapshots (RSS, SQLite, threads) to general.log",
+                    ConfigValue::Bool(ops.debug.memory_logging),
+                    source_for(ops.debug.memory_logging == defaults.debug.memory_logging, DebugOpinions::KDL_MEMORY_LOGGING),
+                    true,
+                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.debug.memory_logging = *b; } }),
             ],
         },
     ]

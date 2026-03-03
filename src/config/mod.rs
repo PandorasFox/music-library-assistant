@@ -27,7 +27,7 @@ pub use types::{
     StartupOpinions, QualityResolutionOpinions, CanonicalizationOpinions,
     HealthDetectionOpinions, PerformanceOpinions, TagSplittingOpinions,
     DuplicateAnalysisOpinions, InboxOrganizeOpinions, ExternalMatchingConfig,
-    DiscExtractionOpinions, AlbumArtOpinions,
+    DiscExtractionOpinions, AlbumArtOpinions, DebugOpinions,
 };
 pub use performance::{init_performance_config, get_worker_thread_count, get_db_cache_kb, is_timing_enabled};
 pub use debug::{init_debug_config, is_memory_logging_enabled};

@@ -42,6 +42,8 @@ pub struct Opinions {
     pub disc_extraction: DiscExtractionOpinions,
     /// Album art embedding/upgrade configuration.
     pub album_art: AlbumArtOpinions,
+    /// Debug/diagnostic options.
+    pub debug: DebugOpinions,
 }
 
 /// KDL field names — single source of truth for parse/edit/source-detection.
@@ -63,6 +65,7 @@ impl Opinions {
     pub const KDL_BLOCK_EXTERNAL_MATCHING: &str = "external-matching";
     pub const KDL_BLOCK_DISC_EXTRACTION: &str = "disc-extraction";
     pub const KDL_BLOCK_ALBUM_ART: &str = "album-art";
+    pub const KDL_BLOCK_DEBUG: &str = "debug";
 }
 
 /// Opinions for quality-based auto-resolution
@@ -390,6 +393,26 @@ impl AlbumArtOpinions {
     pub const KDL_SIDECAR_DEPLOY: &str = "sidecar-deploy-mode";
 }
 
+/// Debug and diagnostic options.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebugOpinions {
+    /// Log periodic memory snapshots (RSS, SQLite, threads) to general.log.
+    /// Default: false.
+    pub memory_logging: bool,
+}
+
+impl Default for DebugOpinions {
+    fn default() -> Self {
+        Self {
+            memory_logging: false,
+        }
+    }
+}
+
+impl DebugOpinions {
+    pub const KDL_MEMORY_LOGGING: &str = "memory-logging";
+}
+
 impl Default for ExternalMatchingConfig {
     fn default() -> Self {
         Self {
@@ -433,6 +456,7 @@ impl Default for Opinions {
             external_matching: ExternalMatchingConfig::default(),
             disc_extraction: DiscExtractionOpinions::default(),
             album_art: AlbumArtOpinions::default(),
+            debug: DebugOpinions::default(),
         }
     }
 }

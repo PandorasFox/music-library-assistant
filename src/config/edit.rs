@@ -227,6 +227,14 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         }
     }
 
+    // --- Debug ---
+    let old_d = &old_config.opinions.debug;
+    let new_d = &new_config.opinions.debug;
+    if new_d.memory_logging != old_d.memory_logging {
+        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_DEBUG);
+        set_or_create_bool_node(block, DebugOpinions::KDL_MEMORY_LOGGING, new_d.memory_logging);
+    }
+
     Ok(doc.to_string())
 }
 

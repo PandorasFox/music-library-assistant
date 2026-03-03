@@ -150,6 +150,9 @@ pub(crate) struct App {
 
     /// Click targets for titlebar tabs, populated during render.
     pub(super) tab_click_rects: Vec<(widgets::LateralView, ratatui::layout::Rect)>,
+
+    /// Periodic memory diagnostics (logs to general.log every 30s).
+    mem_diag: crate::diagnostics::MemoryDiagnostics,
 }
 
 impl App {
@@ -184,6 +187,7 @@ impl App {
             art_cache: widgets::AlbumArtCache::new(),
             drain_input_next: false,
             tab_click_rects: Vec::new(),
+            mem_diag: crate::diagnostics::MemoryDiagnostics::new(),
         }
     }
 
@@ -400,6 +404,7 @@ impl App {
 
     /// Start the configured default view (post-startup landing screen).
     pub(super) fn start_default_view(&mut self) {
+        self.mem_diag.snapshot_now(); // memory at steady-state
         let default_view = self.config().opinions.startup.default_view;
         match default_view {
             crate::config::StartupView::Health => self.start_health_view(),
@@ -684,6 +689,7 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
     let mut app = App::new_with_witch(shared_config, witch, cache_handle, notice_rx);
     app.vacuum_threshold = vacuum_threshold;
     app.db_path = db_path.clone();
+    app.mem_diag.snapshot_now(); // baseline memory snapshot
 
     // Determine initial view based on startup state
     if app.witch.needs_schema_update() {
@@ -870,6 +876,9 @@ fn run_app<B: ratatui::backend::Backend>(
         if matches!(app.view, ActiveView::TagCanonicityLoading { .. }) {
             app.tick_tag_canonicity_loading();
         }
+
+        // Periodic memory diagnostics (logs every 30s)
+        app.mem_diag.tick();
 
         // Flag demand for cached UI data
         // Always want deploy status — titlebar needs it for purple indicator

@@ -23,6 +23,7 @@ pub const MM_TITLE: &str = "Music Magic (mm beta 8)";
 mod config;
 mod corpus;
 mod db;
+mod diagnostics;
 mod external;
 mod logging;
 mod meta;
@@ -50,6 +51,7 @@ fn main() -> Result<()> {
             // Log successful parse and initialize performance globals
             logging::log_general("Config loaded successfully");
             config::init_performance_config(cfg.opinions.performance.clone());
+            config::init_debug_config(cfg.opinions.debug.clone());
             cfg
         }
         Err(e) => {

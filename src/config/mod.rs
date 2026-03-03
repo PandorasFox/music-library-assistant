@@ -4,6 +4,7 @@
 
 mod types;
 mod performance;
+mod debug;
 mod dirs;
 mod parse;
 mod edit;
@@ -29,6 +30,7 @@ pub use types::{
     DiscExtractionOpinions, AlbumArtOpinions,
 };
 pub use performance::{init_performance_config, get_worker_thread_count, get_db_cache_kb, is_timing_enabled};
+pub use debug::{init_debug_config, is_memory_logging_enabled};
 pub use dirs::{parse_dirs_kdl, write_dirs_to_disk};
 pub use edit::write_config_to_disk;
 pub use path_schema::parse_path_schema;

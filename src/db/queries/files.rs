@@ -194,17 +194,21 @@ impl Database {
     }
 
     /// Get all audio files for a zone.
-    pub fn get_all_audio_files(&self, zone: Zone) -> Result<Vec<AudioFile>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT
+    ///
+    /// Pass `with_fingerprints: false` if the caller does not need the fingerprint
+    /// blob — this avoids transferring ~7KB per file (307MB total for the corpus)
+    /// from SQLite into process memory needlessly.
+    pub fn get_all_audio_files(&self, zone: Zone, with_fingerprints: bool) -> Result<Vec<AudioFile>> {
+        let fp_col = if with_fingerprints { "a.fingerprint" } else { "NULL" };
+        let sql = format!(r#"SELECT
                 f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
-                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
+                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, {fp_col}, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             WHERE f.zone = ?1 AND f.is_dir = 0
-            ORDER BY f.path"#
-        )?;
+            ORDER BY f.path"#);
 
+        let mut stmt = self.conn.prepare(&sql)?;
         let files = stmt.query_map(params![zone.as_str()], Self::row_to_audio_file)?;
         files.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -695,8 +699,11 @@ impl Database {
     /// Get all audio files with their tags (for search functionality).
     /// Tags are keyed by uppercase tag name; values are collected into Vec
     /// since a single tag name can have multiple values (e.g. multiple genres).
-    pub fn get_all_audio_files_with_tags(&self, zone: Zone) -> Result<Vec<(AudioFile, HashMap<String, Vec<String>>)>> {
-        let files = self.get_all_audio_files(zone)?;
+    ///
+    /// Pass `with_fingerprints: false` if the caller does not need fingerprint
+    /// data — see `get_all_audio_files` for the rationale.
+    pub fn get_all_audio_files_with_tags(&self, zone: Zone, with_fingerprints: bool) -> Result<Vec<(AudioFile, HashMap<String, Vec<String>>)>> {
+        let files = self.get_all_audio_files(zone, with_fingerprints)?;
         let mut results = Vec::new();
         for file in files {
             let tags = self.get_corpus_tags(file.inode())?;

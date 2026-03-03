@@ -50,6 +50,9 @@ tempfile = "3.8"
 # Parallel processing
 rayon = "1.10"
 
+# Memory allocator (jemalloc: better arena return behavior vs glibc malloc)
+tikv-jemallocator = "0.6"
+
 # Collections
 indexmap = "2.6"
 

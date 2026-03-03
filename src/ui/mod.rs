@@ -229,7 +229,7 @@ impl App {
                                 }
                             } else {
                                 let matching_paths = self.cache.query(move |db| {
-                                    let audio_files = db.get_all_audio_files(crate::db::types::Zone::Corpus)
+                                    let audio_files = db.get_all_audio_files(crate::db::types::Zone::Corpus, false)
                                         .unwrap_or_default();
                                     let mut paths = Vec::new();
                                     for audio_file in audio_files {

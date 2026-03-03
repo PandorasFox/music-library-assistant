@@ -62,7 +62,7 @@ pub fn execute_detect_inbox_corpus_matches(
     let bitrate_fuzz_percent = config.opinions.quality_resolution.inbox_bitrate_fuzz_percent;
 
     // Get all inbox audio files with fingerprints
-    let inbox_audio = match read_only_db.get_all_audio_files(Zone::Inbox) {
+    let inbox_audio = match read_only_db.get_all_audio_files(Zone::Inbox, true) {
         Ok(files) => files,
         Err(e) => {
             return Result::failure(
@@ -93,7 +93,7 @@ pub fn execute_detect_inbox_corpus_matches(
     }
 
     // Get all corpus audio files with fingerprints
-    let corpus_audio = match read_only_db.get_all_audio_files(Zone::Corpus) {
+    let corpus_audio = match read_only_db.get_all_audio_files(Zone::Corpus, true) {
         Ok(files) => files,
         Err(e) => {
             return Result::failure(

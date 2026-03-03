@@ -229,8 +229,8 @@ impl<'a> ReadOnlyDb<'a> {
     // =========================================================================
 
     /// Get all audio files for a source.
-    pub fn get_all_audio_files(&self, source: super::types::Zone) -> Result<Vec<super::types::AudioFile>> {
-        self.db.get_all_audio_files(source)
+    pub fn get_all_audio_files(&self, source: super::types::Zone, with_fingerprints: bool) -> Result<Vec<super::types::AudioFile>> {
+        self.db.get_all_audio_files(source, with_fingerprints)
     }
 
     /// Get an audio file by path.
@@ -259,8 +259,8 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     /// Get all audio files with their tags (for search functionality).
-    pub fn get_all_audio_files_with_tags(&self, source: super::types::Zone) -> Result<Vec<(super::types::AudioFile, std::collections::HashMap<String, Vec<String>>)>> {
-        self.db.get_all_audio_files_with_tags(source)
+    pub fn get_all_audio_files_with_tags(&self, source: super::types::Zone, with_fingerprints: bool) -> Result<Vec<(super::types::AudioFile, std::collections::HashMap<String, Vec<String>>)>> {
+        self.db.get_all_audio_files_with_tags(source, with_fingerprints)
     }
 
     /// Get tags for an audio file by inode (corpus only).

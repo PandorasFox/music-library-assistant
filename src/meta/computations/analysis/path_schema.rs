@@ -67,7 +67,7 @@ pub fn execute_detect_path_tag_mismatches(
     }
 
     // Load all corpus audio files with their tags.
-    let files_with_tags = match read_only_db.get_all_audio_files_with_tags(Zone::Corpus) {
+    let files_with_tags = match read_only_db.get_all_audio_files_with_tags(Zone::Corpus, false) {
         Ok(f) => f,
         Err(e) => {
             return Result::failure(

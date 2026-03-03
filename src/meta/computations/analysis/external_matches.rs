@@ -78,7 +78,7 @@ pub fn execute_derive_external_matches(
     ));
 
     // 3. Load all corpus audio files with tags for O(1) lookup.
-    let files_with_tags = match read_only_db.get_all_audio_files_with_tags(Zone::Corpus) {
+    let files_with_tags = match read_only_db.get_all_audio_files_with_tags(Zone::Corpus, false) {
         Ok(f) => f,
         Err(e) => {
             return Result::failure(

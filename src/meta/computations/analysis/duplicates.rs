@@ -107,7 +107,7 @@ pub fn execute_detect_fingerprint_overlaps(
     let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
 
     // Get all corpus audio files with fingerprints and durations
-    let all_audio = match read_only_db.get_all_audio_files(Zone::Corpus) {
+    let all_audio = match read_only_db.get_all_audio_files(Zone::Corpus, true) {
         Ok(files) => files,
         Err(e) => {
             return Result::failure(

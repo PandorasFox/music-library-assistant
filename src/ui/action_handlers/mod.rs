@@ -867,7 +867,7 @@ impl App {
                 // Execute search via cache thread (blocking — fast single query)
                 if let ActiveView::TagSearch(ref mut search) = self.view {
                     let all_files = self.cache.query(|db| {
-                        db.get_all_audio_files_with_tags(crate::db::types::Zone::Corpus)
+                        db.get_all_audio_files_with_tags(crate::db::types::Zone::Corpus, false)
                             .unwrap_or_default()
                     }).recv();
                     search.execute_search(all_files);

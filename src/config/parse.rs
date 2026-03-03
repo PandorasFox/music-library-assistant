@@ -27,7 +27,7 @@ fn parse_quality_resolution_opinions(node: &kdl::KdlNode, opinions: &mut Quality
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "inbox-bitrate-fuzz-percent" => {
+                QualityResolutionOpinions::KDL_BITRATE_FUZZ => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_f64() {
                             opinions.inbox_bitrate_fuzz_percent = val;
@@ -45,7 +45,7 @@ fn parse_canonicalization_opinions(node: &kdl::KdlNode, opinions: &mut Canonical
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "strip-album-format-suffixes" => {
+                CanonicalizationOpinions::KDL_STRIP_SUFFIXES => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
                             opinions.strip_album_format_suffixes = val;
@@ -63,21 +63,21 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "force-check-all-files" => {
+                StartupOpinions::KDL_FORCE_CHECK => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
                             opinions.force_check_all_files_at_startup = val;
                         }
                     }
                 }
-                "vacuum-threshold" => {
+                StartupOpinions::KDL_VACUUM_THRESHOLD => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_f64() {
                             opinions.vacuum_threshold = val;
                         }
                     }
                 }
-                "default-view" => {
+                StartupOpinions::KDL_DEFAULT_VIEW => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_string() {
                             match val {
@@ -101,7 +101,7 @@ fn parse_health_detection_opinions(node: &kdl::KdlNode, opinions: &mut HealthDet
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "required-tags" => {
+                HealthDetectionOpinions::KDL_REQUIRED_TAGS => {
                     let tags: Vec<String> = child
                         .entries()
                         .iter()
@@ -111,14 +111,14 @@ fn parse_health_detection_opinions(node: &kdl::KdlNode, opinions: &mut HealthDet
                         opinions.required_tags = tags;
                     }
                 }
-                "album-artist-only-required-if-compilation" => {
+                HealthDetectionOpinions::KDL_ALBUM_ARTIST_COMPILATION => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
                             opinions.album_artist_only_required_if_compilation = val;
                         }
                     }
                 }
-                "single-album-suffix" => {
+                HealthDetectionOpinions::KDL_SINGLE_ALBUM_SUFFIX => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_string() {
                             opinions.single_album_suffix = val.to_string();
@@ -136,7 +136,7 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "worker-threads" => {
+                PerformanceOpinions::KDL_WORKER_THREADS => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_i64() {
                             if val > 0 {
@@ -145,7 +145,7 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
                         }
                     }
                 }
-                "db-cache" => {
+                PerformanceOpinions::KDL_DB_CACHE => {
                     if let Some(entry) = child.entries().first() {
                         // Try string first (e.g., "256mb", "1gb")
                         if let Some(s) = entry.value().as_string() {
@@ -161,7 +161,7 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
                         }
                     }
                 }
-                "timing-instrumentation" => {
+                PerformanceOpinions::KDL_TIMING => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
                             opinions.timing_instrumentation = val;
@@ -193,7 +193,7 @@ fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplitting
             let node_name = child.name().value();
 
             match node_name {
-                "collab" => {
+                TagSplittingOpinions::KDL_COLLAB => {
                     // Parse collaboration keywords
                     let keywords: std::collections::HashSet<String> = child
                         .entries()
@@ -226,21 +226,21 @@ fn parse_duplicate_analysis_opinions(node: &kdl::KdlNode, opinions: &mut Duplica
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "fingerprint-similarity-threshold" => {
+                DuplicateAnalysisOpinions::KDL_FP_THRESHOLD => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_f64() {
                             opinions.fingerprint_similarity_threshold = val;
                         }
                     }
                 }
-                "duration-tolerance-ms" => {
+                DuplicateAnalysisOpinions::KDL_DURATION_TOLERANCE => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_i64() {
                             opinions.duration_tolerance_ms = val;
                         }
                     }
                 }
-                "elide-variant-titles" => {
+                DuplicateAnalysisOpinions::KDL_ELIDE_VARIANTS => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
                             opinions.elide_variant_titles = val;
@@ -258,14 +258,14 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "acoustid-api-key" => {
+                ExternalMatchingConfig::KDL_ACOUSTID_KEY => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_string() {
                             opinions.acoustid_api_key = val.to_string();
                         }
                     }
                 }
-                "requests-per-second" => {
+                ExternalMatchingConfig::KDL_REQ_PER_SEC => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_i64() {
                             if val > 0 {
@@ -274,7 +274,7 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         }
                     }
                 }
-                "mb-requests-per-second" => {
+                ExternalMatchingConfig::KDL_MB_REQ_PER_SEC => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_i64() {
                             if val > 0 {
@@ -283,14 +283,14 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         }
                     }
                 }
-                "auto-enrich-on-match" => {
+                ExternalMatchingConfig::KDL_AUTO_ENRICH => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
                             opinions.auto_enrich_on_match = val;
                         }
                     }
                 }
-                "mb-cache-ttl-days" => {
+                ExternalMatchingConfig::KDL_MB_CACHE_TTL => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_i64() {
                             if val > 0 {
@@ -299,7 +299,7 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         }
                     }
                 }
-                "mb-max-candidates" => {
+                ExternalMatchingConfig::KDL_MB_MAX_CANDIDATES => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_i64() {
                             if val > 0 {
@@ -308,7 +308,7 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         }
                     }
                 }
-                "preferred-locales" => {
+                ExternalMatchingConfig::KDL_PREFERRED_LOCALES => {
                     // Multi-value node: preferred-locales "en" "ja"
                     let locales: Vec<String> = child.entries()
                         .iter()
@@ -318,7 +318,7 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         opinions.preferred_locales = locales;
                     }
                 }
-                "tag-templates" => {
+                ExternalMatchingConfig::KDL_TAG_TEMPLATES => {
                     parse_tag_templates(child, &mut opinions.tag_templates);
                 }
                 _ => {}
@@ -351,14 +351,14 @@ fn parse_disc_extraction_opinions(node: &kdl::KdlNode, opinions: &mut DiscExtrac
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "disc-tag-name" => {
+                DiscExtractionOpinions::KDL_DISC_TAG_NAME => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_string() {
                             opinions.disc_tag_name = val.to_string();
                         }
                     }
                 }
-                "map-letters-to-numbers" => {
+                DiscExtractionOpinions::KDL_MAP_LETTERS => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {
                             opinions.map_letters_to_numbers = val;
@@ -376,7 +376,7 @@ fn parse_inbox_organize_opinions(node: &kdl::KdlNode, opinions: &mut InboxOrgani
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "directory-granularity" => {
+                InboxOrganizeOpinions::KDL_DIR_GRANULARITY => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_string() {
                             match val {
@@ -426,38 +426,38 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                 if let Some(children) = node.children() {
                     for child in children.nodes() {
                         match child.name().value() {
-                            "lossy-shit-formats-to-flac" => {
+                            Opinions::KDL_LOSSY_SHIT => {
                                 if let Some(entry) = child.entries().first() {
                                     if let Some(val) = entry.value().as_bool() {
                                         config.opinions.lossy_shit_formats_to_flac = val;
                                     }
                                 }
                             }
-                            "quality-resolution" => {
+                            Opinions::KDL_BLOCK_QUALITY_RESOLUTION => {
                                 parse_quality_resolution_opinions(child, &mut config.opinions.quality_resolution);
                             }
-                            "canonicalization" => {
+                            Opinions::KDL_BLOCK_CANONICALIZATION => {
                                 parse_canonicalization_opinions(child, &mut config.opinions.canonicalization);
                             }
-                            "startup" => {
+                            Opinions::KDL_BLOCK_STARTUP => {
                                 parse_startup_opinions(child, &mut config.opinions.startup);
                             }
-                            "health-detection" => {
+                            Opinions::KDL_BLOCK_HEALTH_DETECTION => {
                                 parse_health_detection_opinions(child, &mut config.opinions.health_detection);
                             }
-                            "performance" => {
+                            Opinions::KDL_BLOCK_PERFORMANCE => {
                                 parse_performance_opinions(child, &mut config.opinions.performance);
                             }
-                            "tag-splitting" => {
+                            Opinions::KDL_BLOCK_TAG_SPLITTING => {
                                 parse_tag_splitting_opinions(child, &mut config.opinions.tag_splitting);
                             }
-                            "duplicate-analysis" => {
+                            Opinions::KDL_BLOCK_DUPLICATE_ANALYSIS => {
                                 parse_duplicate_analysis_opinions(child, &mut config.opinions.duplicate_analysis);
                             }
-                            "inbox-organize" => {
+                            Opinions::KDL_BLOCK_INBOX_ORGANIZE => {
                                 parse_inbox_organize_opinions(child, &mut config.opinions.inbox_organize);
                             }
-                            "idle-rescan-interval" => {
+                            Opinions::KDL_IDLE_RESCAN => {
                                 if let Some(entry) = child.entries().first() {
                                     if let Some(s) = entry.value().as_string() {
                                         if let Ok(dur) = humantime::parse_duration(s) {
@@ -469,20 +469,20 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                                     }
                                 }
                             }
-                            "leave-transactions-open" => {
+                            Opinions::KDL_LEAVE_TXN_OPEN => {
                                 if let Some(entry) = child.entries().first() {
                                     if let Some(val) = entry.value().as_bool() {
                                         config.opinions.leave_transactions_open = val;
                                     }
                                 }
                             }
-                            "external-matching" => {
+                            Opinions::KDL_BLOCK_EXTERNAL_MATCHING => {
                                 parse_external_matching_opinions(child, &mut config.opinions.external_matching);
                             }
-                            "disc-extraction" => {
+                            Opinions::KDL_BLOCK_DISC_EXTRACTION => {
                                 parse_disc_extraction_opinions(child, &mut config.opinions.disc_extraction);
                             }
-                            "album-art" => {
+                            Opinions::KDL_BLOCK_ALBUM_ART => {
                                 parse_album_art_opinions(child, &mut config.opinions.album_art);
                             }
                             _ => {}

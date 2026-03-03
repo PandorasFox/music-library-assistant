@@ -23,6 +23,10 @@ pub use mm_utils::{
 pub use types::{
     Config, Opinions, StartupView, InboxOrganizeGranularity,
     SourceDir, SharedConfig, read_shared_config, SidecarDeployMode,
+    StartupOpinions, QualityResolutionOpinions, CanonicalizationOpinions,
+    HealthDetectionOpinions, PerformanceOpinions, TagSplittingOpinions,
+    DuplicateAnalysisOpinions, InboxOrganizeOpinions, ExternalMatchingConfig,
+    DiscExtractionOpinions, AlbumArtOpinions,
 };
 pub use performance::{init_performance_config, get_worker_thread_count, get_db_cache_kb, is_timing_enabled};
 pub use dirs::{parse_dirs_kdl, write_dirs_to_disk};

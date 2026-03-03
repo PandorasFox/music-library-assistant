@@ -26,7 +26,7 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
 
     // --- General opinions (direct children of "opinions") ---
     if new_config.opinions.lossy_shit_formats_to_flac != old_config.opinions.lossy_shit_formats_to_flac {
-        set_or_create_bool_node(opinions_doc, "lossy-shit-formats-to-flac", new_config.opinions.lossy_shit_formats_to_flac);
+        set_or_create_bool_node(opinions_doc, Opinions::KDL_LOSSY_SHIT, new_config.opinions.lossy_shit_formats_to_flac);
     }
 
     // --- Startup ---
@@ -36,12 +36,12 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         || new_s.vacuum_threshold != old_s.vacuum_threshold
         || new_s.default_view != old_s.default_view
     {
-        let startup = ensure_child_block(opinions_doc, "startup");
+        let startup = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_STARTUP);
         if new_s.force_check_all_files_at_startup != old_s.force_check_all_files_at_startup {
-            set_or_create_bool_node(startup, "force-check-all-files", new_s.force_check_all_files_at_startup);
+            set_or_create_bool_node(startup, StartupOpinions::KDL_FORCE_CHECK, new_s.force_check_all_files_at_startup);
         }
         if new_s.vacuum_threshold != old_s.vacuum_threshold {
-            set_or_create_float_node(startup, "vacuum-threshold", new_s.vacuum_threshold);
+            set_or_create_float_node(startup, StartupOpinions::KDL_VACUUM_THRESHOLD, new_s.vacuum_threshold);
         }
         if new_s.default_view != old_s.default_view {
             let view_str = match new_s.default_view {
@@ -50,7 +50,7 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
                 StartupView::Browser => "browser",
                 StartupView::Inbox => "inbox",
             };
-            set_or_create_string_node(startup, "default-view", view_str);
+            set_or_create_string_node(startup, StartupOpinions::KDL_DEFAULT_VIEW, view_str);
         }
     }
 
@@ -59,14 +59,14 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
     let new_qr = &new_config.opinions.quality_resolution;
     if new_qr.inbox_bitrate_fuzz_percent != old_qr.inbox_bitrate_fuzz_percent
     {
-        let block = ensure_child_block(opinions_doc, "quality-resolution");
-        set_or_create_float_node(block, "inbox-bitrate-fuzz-percent", new_qr.inbox_bitrate_fuzz_percent);
+        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_QUALITY_RESOLUTION);
+        set_or_create_float_node(block, QualityResolutionOpinions::KDL_BITRATE_FUZZ, new_qr.inbox_bitrate_fuzz_percent);
     }
 
     // --- Canonicalization ---
     if new_config.opinions.canonicalization.strip_album_format_suffixes != old_config.opinions.canonicalization.strip_album_format_suffixes {
-        let block = ensure_child_block(opinions_doc, "canonicalization");
-        set_or_create_bool_node(block, "strip-album-format-suffixes", new_config.opinions.canonicalization.strip_album_format_suffixes);
+        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_CANONICALIZATION);
+        set_or_create_bool_node(block, CanonicalizationOpinions::KDL_STRIP_SUFFIXES, new_config.opinions.canonicalization.strip_album_format_suffixes);
     }
 
     // --- Health Detection ---
@@ -76,21 +76,21 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         || new_hd.album_artist_only_required_if_compilation != old_hd.album_artist_only_required_if_compilation
         || new_hd.single_album_suffix != old_hd.single_album_suffix
     {
-        let block = ensure_child_block(opinions_doc, "health-detection");
+        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_HEALTH_DETECTION);
         if new_hd.required_tags != old_hd.required_tags {
             // Remove old node and create new one with all tag values
-            block.nodes_mut().retain(|n| n.name().value() != "required-tags");
-            let mut node = kdl::KdlNode::new("required-tags");
+            block.nodes_mut().retain(|n| n.name().value() != HealthDetectionOpinions::KDL_REQUIRED_TAGS);
+            let mut node = kdl::KdlNode::new(HealthDetectionOpinions::KDL_REQUIRED_TAGS);
             for tag in &new_hd.required_tags {
                 node.push(kdl::KdlEntry::new(kdl::KdlValue::String(tag.clone())));
             }
             block.nodes_mut().push(node);
         }
         if new_hd.album_artist_only_required_if_compilation != old_hd.album_artist_only_required_if_compilation {
-            set_or_create_bool_node(block, "album-artist-only-required-if-compilation", new_hd.album_artist_only_required_if_compilation);
+            set_or_create_bool_node(block, HealthDetectionOpinions::KDL_ALBUM_ARTIST_COMPILATION, new_hd.album_artist_only_required_if_compilation);
         }
         if new_hd.single_album_suffix != old_hd.single_album_suffix {
-            set_or_create_string_node(block, "single-album-suffix", &new_hd.single_album_suffix);
+            set_or_create_string_node(block, HealthDetectionOpinions::KDL_SINGLE_ALBUM_SUFFIX, &new_hd.single_album_suffix);
         }
     }
 
@@ -101,15 +101,15 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         || new_da.duration_tolerance_ms != old_da.duration_tolerance_ms
         || new_da.elide_variant_titles != old_da.elide_variant_titles
     {
-        let block = ensure_child_block(opinions_doc, "duplicate-analysis");
+        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_DUPLICATE_ANALYSIS);
         if new_da.fingerprint_similarity_threshold != old_da.fingerprint_similarity_threshold {
-            set_or_create_float_node(block, "fingerprint-similarity-threshold", new_da.fingerprint_similarity_threshold);
+            set_or_create_float_node(block, DuplicateAnalysisOpinions::KDL_FP_THRESHOLD, new_da.fingerprint_similarity_threshold);
         }
         if new_da.duration_tolerance_ms != old_da.duration_tolerance_ms {
-            set_or_create_int_node(block, "duration-tolerance-ms", new_da.duration_tolerance_ms);
+            set_or_create_int_node(block, DuplicateAnalysisOpinions::KDL_DURATION_TOLERANCE, new_da.duration_tolerance_ms);
         }
         if new_da.elide_variant_titles != old_da.elide_variant_titles {
-            set_or_create_bool_node(block, "elide-variant-titles", new_da.elide_variant_titles);
+            set_or_create_bool_node(block, DuplicateAnalysisOpinions::KDL_ELIDE_VARIANTS, new_da.elide_variant_titles);
         }
     }
 
@@ -117,22 +117,22 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
     if new_config.opinions.idle_rescan_interval_secs != old_config.opinions.idle_rescan_interval_secs {
         let dur = std::time::Duration::from_secs(new_config.opinions.idle_rescan_interval_secs);
         let formatted = humantime::format_duration(dur).to_string();
-        set_or_create_string_node(opinions_doc, "idle-rescan-interval", &formatted);
+        set_or_create_string_node(opinions_doc, Opinions::KDL_IDLE_RESCAN, &formatted);
     }
 
     // --- Leave Transactions Open ---
     if new_config.opinions.leave_transactions_open != old_config.opinions.leave_transactions_open {
-        set_or_create_bool_node(opinions_doc, "leave-transactions-open", new_config.opinions.leave_transactions_open);
+        set_or_create_bool_node(opinions_doc, Opinions::KDL_LEAVE_TXN_OPEN, new_config.opinions.leave_transactions_open);
     }
 
     // --- Inbox Organize ---
     if new_config.opinions.inbox_organize.directory_granularity != old_config.opinions.inbox_organize.directory_granularity {
-        let block = ensure_child_block(opinions_doc, "inbox-organize");
+        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_INBOX_ORGANIZE);
         let gran_str = match new_config.opinions.inbox_organize.directory_granularity {
             InboxOrganizeGranularity::Leaf => "leaf",
             InboxOrganizeGranularity::TopLevel => "top-level",
         };
-        set_or_create_string_node(block, "directory-granularity", gran_str);
+        set_or_create_string_node(block, InboxOrganizeOpinions::KDL_DIR_GRANULARITY, gran_str);
     }
 
     // --- Tag Splitting ---
@@ -141,12 +141,12 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
     if new_ts.collaboration_keywords != old_ts.collaboration_keywords
         || new_ts.tag_separators != old_ts.tag_separators
     {
-        let block = ensure_child_block(opinions_doc, "tag-splitting");
+        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_TAG_SPLITTING);
 
         // Write collab keywords if changed
         if new_ts.collaboration_keywords != old_ts.collaboration_keywords {
-            block.nodes_mut().retain(|n| n.name().value() != "collab");
-            let mut node = kdl::KdlNode::new("collab");
+            block.nodes_mut().retain(|n| n.name().value() != TagSplittingOpinions::KDL_COLLAB);
+            let mut node = kdl::KdlNode::new(TagSplittingOpinions::KDL_COLLAB);
             let mut keywords: Vec<&String> = new_ts.collaboration_keywords.iter().collect();
             keywords.sort();
             for kw in keywords {
@@ -158,7 +158,7 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         // Write tag separators if changed
         if new_ts.tag_separators != old_ts.tag_separators {
             // Remove old tag separator nodes (all non-collab nodes)
-            block.nodes_mut().retain(|n| n.name().value() == "collab");
+            block.nodes_mut().retain(|n| n.name().value() == TagSplittingOpinions::KDL_COLLAB);
             let mut tags: Vec<(&String, &Vec<String>)> = new_ts.tag_separators.iter().collect();
             tags.sort_by_key(|(k, _)| *k);
             for (tag_name, seps) in tags {
@@ -178,15 +178,15 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         || new_em.requests_per_second != old_em.requests_per_second
         || new_em.mb_requests_per_second != old_em.mb_requests_per_second
     {
-        let block = ensure_child_block(opinions_doc, "external-matching");
+        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_EXTERNAL_MATCHING);
         if new_em.acoustid_api_key != old_em.acoustid_api_key {
-            set_or_create_string_node(block, "acoustid-api-key", &new_em.acoustid_api_key);
+            set_or_create_string_node(block, ExternalMatchingConfig::KDL_ACOUSTID_KEY, &new_em.acoustid_api_key);
         }
         if new_em.requests_per_second != old_em.requests_per_second {
-            set_or_create_int_node(block, "requests-per-second", new_em.requests_per_second as i64);
+            set_or_create_int_node(block, ExternalMatchingConfig::KDL_REQ_PER_SEC, new_em.requests_per_second as i64);
         }
         if new_em.mb_requests_per_second != old_em.mb_requests_per_second {
-            set_or_create_int_node(block, "mb-requests-per-second", new_em.mb_requests_per_second as i64);
+            set_or_create_int_node(block, ExternalMatchingConfig::KDL_MB_REQ_PER_SEC, new_em.mb_requests_per_second as i64);
         }
     }
 
@@ -196,12 +196,12 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
     if new_de.disc_tag_name != old_de.disc_tag_name
         || new_de.map_letters_to_numbers != old_de.map_letters_to_numbers
     {
-        let block = ensure_child_block(opinions_doc, "disc-extraction");
+        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_DISC_EXTRACTION);
         if new_de.disc_tag_name != old_de.disc_tag_name {
-            set_or_create_string_node(block, "disc-tag-name", &new_de.disc_tag_name);
+            set_or_create_string_node(block, DiscExtractionOpinions::KDL_DISC_TAG_NAME, &new_de.disc_tag_name);
         }
         if new_de.map_letters_to_numbers != old_de.map_letters_to_numbers {
-            set_or_create_bool_node(block, "map-letters-to-numbers", new_de.map_letters_to_numbers);
+            set_or_create_bool_node(block, DiscExtractionOpinions::KDL_MAP_LETTERS, new_de.map_letters_to_numbers);
         }
     }
 
@@ -212,18 +212,18 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         || new_p.db_cache_mb != old_p.db_cache_mb
         || new_p.timing_instrumentation != old_p.timing_instrumentation
     {
-        let block = ensure_child_block(opinions_doc, "performance");
+        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_PERFORMANCE);
         if new_p.worker_threads != old_p.worker_threads {
             match new_p.worker_threads {
-                Some(n) => set_or_create_int_node(block, "worker-threads", n as i64),
-                None => { block.nodes_mut().retain(|n| n.name().value() != "worker-threads"); }
+                Some(n) => set_or_create_int_node(block, PerformanceOpinions::KDL_WORKER_THREADS, n as i64),
+                None => { block.nodes_mut().retain(|n| n.name().value() != PerformanceOpinions::KDL_WORKER_THREADS); }
             }
         }
         if new_p.db_cache_mb != old_p.db_cache_mb {
-            set_or_create_int_node(block, "db-cache", new_p.db_cache_mb as i64);
+            set_or_create_int_node(block, PerformanceOpinions::KDL_DB_CACHE, new_p.db_cache_mb as i64);
         }
         if new_p.timing_instrumentation != old_p.timing_instrumentation {
-            set_or_create_bool_node(block, "timing-instrumentation", new_p.timing_instrumentation);
+            set_or_create_bool_node(block, PerformanceOpinions::KDL_TIMING, new_p.timing_instrumentation);
         }
     }
 
@@ -442,5 +442,28 @@ opinions {
         let result = apply_config_edits_to_kdl(kdl, &old_config, &new_config).unwrap();
         let reparsed = parse_kdl_config(&result).unwrap();
         assert!(!reparsed.opinions.duplicate_analysis.elide_variant_titles);
+    }
+
+    #[test]
+    fn test_apply_config_edits_performance() {
+        let kdl = r#"root "/archive"
+"#;
+        let old_config = parse_kdl_config(kdl).unwrap();
+        let mut new_config = old_config.clone();
+        new_config.opinions.performance.worker_threads = Some(12);
+        new_config.opinions.performance.db_cache_mb = 64;
+
+        let result = apply_config_edits_to_kdl(kdl, &old_config, &new_config).unwrap();
+        let reparsed = parse_kdl_config(&result).unwrap();
+        assert_eq!(reparsed.opinions.performance.worker_threads, Some(12));
+        assert_eq!(reparsed.opinions.performance.db_cache_mb, 64);
+
+        // Verify reverting worker_threads to auto removes the node
+        let mut reverted = new_config.clone();
+        reverted.opinions.performance.worker_threads = None;
+        let result2 = apply_config_edits_to_kdl(&result, &new_config, &reverted).unwrap();
+        let reparsed2 = parse_kdl_config(&result2).unwrap();
+        assert_eq!(reparsed2.opinions.performance.worker_threads, None);
+        assert_eq!(reparsed2.opinions.performance.db_cache_mb, 64); // preserved
     }
 }

@@ -44,6 +44,26 @@ pub struct Opinions {
     pub album_art: AlbumArtOpinions,
 }
 
+/// KDL field names — single source of truth for parse/edit/source-detection.
+impl Opinions {
+    // Direct children of the "opinions" block
+    pub const KDL_LOSSY_SHIT: &str = "lossy-shit-formats-to-flac";
+    pub const KDL_IDLE_RESCAN: &str = "idle-rescan-interval";
+    pub const KDL_LEAVE_TXN_OPEN: &str = "leave-transactions-open";
+
+    // Sub-block names
+    pub const KDL_BLOCK_STARTUP: &str = "startup";
+    pub const KDL_BLOCK_QUALITY_RESOLUTION: &str = "quality-resolution";
+    pub const KDL_BLOCK_CANONICALIZATION: &str = "canonicalization";
+    pub const KDL_BLOCK_HEALTH_DETECTION: &str = "health-detection";
+    pub const KDL_BLOCK_PERFORMANCE: &str = "performance";
+    pub const KDL_BLOCK_TAG_SPLITTING: &str = "tag-splitting";
+    pub const KDL_BLOCK_DUPLICATE_ANALYSIS: &str = "duplicate-analysis";
+    pub const KDL_BLOCK_INBOX_ORGANIZE: &str = "inbox-organize";
+    pub const KDL_BLOCK_EXTERNAL_MATCHING: &str = "external-matching";
+    pub const KDL_BLOCK_DISC_EXTRACTION: &str = "disc-extraction";
+    pub const KDL_BLOCK_ALBUM_ART: &str = "album-art";
+}
 
 /// Opinions for quality-based auto-resolution
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +83,10 @@ impl Default for QualityResolutionOpinions {
     }
 }
 
+impl QualityResolutionOpinions {
+    pub const KDL_BITRATE_FUZZ: &str = "inbox-bitrate-fuzz-percent";
+}
+
 /// Opinions for tag canonicalization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanonicalizationOpinions {
@@ -77,6 +101,10 @@ impl Default for CanonicalizationOpinions {
             strip_album_format_suffixes: false,
         }
     }
+}
+
+impl CanonicalizationOpinions {
+    pub const KDL_STRIP_SUFFIXES: &str = "strip-album-format-suffixes";
 }
 
 /// Which view to land on after startup progress completes.
@@ -113,6 +141,12 @@ impl Default for StartupOpinions {
     }
 }
 
+impl StartupOpinions {
+    pub const KDL_FORCE_CHECK: &str = "force-check-all-files";
+    pub const KDL_VACUUM_THRESHOLD: &str = "vacuum-threshold";
+    pub const KDL_DEFAULT_VIEW: &str = "default-view";
+}
+
 /// Opinions for health detection behavior
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthDetectionOpinions {
@@ -140,6 +174,12 @@ impl Default for HealthDetectionOpinions {
     }
 }
 
+impl HealthDetectionOpinions {
+    pub const KDL_REQUIRED_TAGS: &str = "required-tags";
+    pub const KDL_ALBUM_ARTIST_COMPILATION: &str = "album-artist-only-required-if-compilation";
+    pub const KDL_SINGLE_ALBUM_SUFFIX: &str = "single-album-suffix";
+}
+
 /// Opinions for performance tuning (threads, caches, instrumentation)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceOpinions {
@@ -160,6 +200,12 @@ impl Default for PerformanceOpinions {
             timing_instrumentation: false,
         }
     }
+}
+
+impl PerformanceOpinions {
+    pub const KDL_WORKER_THREADS: &str = "worker-threads";
+    pub const KDL_DB_CACHE: &str = "db-cache";
+    pub const KDL_TIMING: &str = "timing-instrumentation";
 }
 
 /// Opinions for detecting and splitting compound tag values.
@@ -197,6 +243,10 @@ impl Default for TagSplittingOpinions {
     }
 }
 
+impl TagSplittingOpinions {
+    pub const KDL_COLLAB: &str = "collab";
+}
+
 /// Opinions for fingerprint duplicate analysis.
 ///
 /// Controls similarity thresholds and duration tolerance for detecting
@@ -225,6 +275,12 @@ impl Default for DuplicateAnalysisOpinions {
     }
 }
 
+impl DuplicateAnalysisOpinions {
+    pub const KDL_FP_THRESHOLD: &str = "fingerprint-similarity-threshold";
+    pub const KDL_DURATION_TOLERANCE: &str = "duration-tolerance-ms";
+    pub const KDL_ELIDE_VARIANTS: &str = "elide-variant-titles";
+}
+
 /// Directory granularity for inbox organize workflow.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum InboxOrganizeGranularity {
@@ -248,6 +304,10 @@ impl Default for InboxOrganizeOpinions {
             directory_granularity: InboxOrganizeGranularity::default(),
         }
     }
+}
+
+impl InboxOrganizeOpinions {
+    pub const KDL_DIR_GRANULARITY: &str = "directory-granularity";
 }
 
 /// Configuration for external metadata matching (AcoustID, MusicBrainz).
@@ -293,6 +353,11 @@ impl Default for DiscExtractionOpinions {
     }
 }
 
+impl DiscExtractionOpinions {
+    pub const KDL_DISC_TAG_NAME: &str = "disc-tag-name";
+    pub const KDL_MAP_LETTERS: &str = "map-letters-to-numbers";
+}
+
 /// Controls whether sidecar images are deployed alongside audio files.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum SidecarDeployMode {
@@ -321,6 +386,10 @@ impl Default for AlbumArtOpinions {
     }
 }
 
+impl AlbumArtOpinions {
+    pub const KDL_SIDECAR_DEPLOY: &str = "sidecar-deploy-mode";
+}
+
 impl Default for ExternalMatchingConfig {
     fn default() -> Self {
         Self {
@@ -334,6 +403,17 @@ impl Default for ExternalMatchingConfig {
             tag_templates: Vec::new(),
         }
     }
+}
+
+impl ExternalMatchingConfig {
+    pub const KDL_ACOUSTID_KEY: &str = "acoustid-api-key";
+    pub const KDL_REQ_PER_SEC: &str = "requests-per-second";
+    pub const KDL_MB_REQ_PER_SEC: &str = "mb-requests-per-second";
+    pub const KDL_AUTO_ENRICH: &str = "auto-enrich-on-match";
+    pub const KDL_MB_CACHE_TTL: &str = "mb-cache-ttl-days";
+    pub const KDL_MB_MAX_CANDIDATES: &str = "mb-max-candidates";
+    pub const KDL_PREFERRED_LOCALES: &str = "preferred-locales";
+    pub const KDL_TAG_TEMPLATES: &str = "tag-templates";
 }
 
 impl Default for Opinions {

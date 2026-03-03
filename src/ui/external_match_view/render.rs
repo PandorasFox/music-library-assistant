@@ -334,11 +334,12 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
             let total_items = a.total + m.total;
             lines.push(Line::from(render_braille_bar(total_processed, total_items, state.tick_count)));
 
-            // ETA: AcoustID items at configured rps, MB items at 1/sec
+            // ETA: use live rates from the scheduler's rate limiters
             let a_remaining = a.total.saturating_sub(a.processed);
             let m_remaining = m.total.saturating_sub(m.processed);
-            let rps = state.requests_per_second.max(1);
-            let secs = (a_remaining as u64 / rps as u64) + m_remaining as u64;
+            let a_rps = p.acoustid_rps.max(0.1);
+            let m_rps = p.mb_rps.max(0.1);
+            let secs = (a_remaining as f32 / a_rps + m_remaining as f32 / m_rps) as u64;
             if secs > 0 {
                 let eta = if secs >= 3600 {
                     format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60)

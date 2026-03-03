@@ -69,8 +69,6 @@ pub(crate) struct ExternalMatchesViewState {
     pub click_targets: crate::ui::widgets::ListClickTargets,
     /// Animation tick counter (incremented each UI tick while fetch is active).
     pub tick_count: u32,
-    /// Rate limit from config (requests/sec), for ETA display.
-    pub requests_per_second: u32,
 }
 
 // ============================================================================
@@ -88,7 +86,6 @@ impl ExternalMatchesViewState {
             fetch_progress: None,
             click_targets: Default::default(),
             tick_count: 0,
-            requests_per_second: 3,
         }
     }
 

@@ -124,6 +124,10 @@ pub struct SourceProgress {
 pub struct FetchProgress {
     pub acoustid: SourceProgress,
     pub mb: SourceProgress,
+    /// Current effective AcoustID requests/sec (from rate limiter).
+    pub acoustid_rps: f32,
+    /// Current effective MB requests/sec (from adaptive rate limiter).
+    pub mb_rps: f32,
 }
 
 /// What kind of MusicBrainz entity to fetch.
@@ -245,6 +249,12 @@ impl RateLimiter {
     /// Reset backoff to normal rate.
     fn reset_backoff(&mut self) {
         self.backoff_multiplier = 1;
+    }
+
+    /// Current effective requests per second (accounting for backoff).
+    fn effective_rps(&self) -> f64 {
+        let effective_micros = self.base_interval.as_micros() as f64 * self.backoff_multiplier.max(1) as f64;
+        1_000_000.0 / effective_micros
     }
 }
 
@@ -599,7 +609,7 @@ fn run_scheduling_loop(
     ));
 
     // Send initial progress
-    send_progress(message_tx, &acoustid_stats, &mb_stats);
+    send_progress(message_tx, &acoustid_stats, &mb_stats, &acoustid_limiter, &mb_limiter);
 
     loop {
         // ---- 1. Check for new commands / shutdown (non-blocking) ----
@@ -713,7 +723,7 @@ fn run_scheduling_loop(
                     // Don't re-queue on hard errors — next scan picks it up
                 }
             }
-            send_progress(message_tx, &acoustid_stats, &mb_stats);
+            send_progress(message_tx, &acoustid_stats, &mb_stats, &acoustid_limiter, &mb_limiter);
         }
 
         // ---- 3. Dispatch AcoustID tasks if rate limiter ready ----
@@ -957,10 +967,14 @@ fn send_progress(
     message_tx: &Sender<SchedulerMessage>,
     acoustid: &SourceProgress,
     mb: &SourceProgress,
+    acoustid_limiter: &RateLimiter,
+    mb_limiter: &AdaptiveRateLimiter,
 ) {
     let _ = message_tx.send(SchedulerMessage::Progress(FetchProgress {
         acoustid: acoustid.clone(),
         mb: mb.clone(),
+        acoustid_rps: acoustid_limiter.effective_rps() as f32,
+        mb_rps: mb_limiter.current_rps() as f32,
     }));
 }
 

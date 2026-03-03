@@ -1,7 +1,7 @@
 //! External Matches lateral view — browse AcoustID matches by confidence tier.
 //!
 //! Two sections in one flat navigable list:
-//! - **Actions**: Fetch AcoustID Data (kicks off lookup via Witch)
+//! - **Actions**: Cache external metadata matches (kicks off lookup via Witch)
 //! - **Matches**: Confidence-bucketed entries (untagged files + confidence tiers)
 //!
 //! Enter on a match bucket launches the existing `external_match_modal` review flow.
@@ -25,7 +25,7 @@ pub(crate) enum ExternalMatchesAction {
     CyclePrev,
     /// Esc → quit request
     RequestQuit,
-    /// Enter on "Fetch AcoustID Data" entry
+    /// Enter on "Cache external metadata matches" entry
     RequestFetch,
     /// Enter on "Untagged files" bucket → launch review for MetadataOnly entries
     LaunchUntaggedReview,
@@ -40,7 +40,7 @@ pub(crate) enum ExternalMatchesAction {
 /// A navigable entry in the left pane (cursor indexes into this list).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NavigableEntry {
-    /// "Fetch AcoustID Data" action entry (always present)
+    /// "Cache external metadata matches" action entry (always present)
     FetchAction,
     /// "Untagged files" bucket (MetadataOnly entries)
     UntaggedBucket,

@@ -98,7 +98,7 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
         let line_idx = lines.len();
         lines.push(Line::from(vec![
             Span::styled(marker, label_style),
-            Span::styled("Fetch AcoustID Data  ", label_style),
+            Span::styled("Cache external metadata matches  ", label_style),
             Span::styled(format!("{:<12}", status_label), Style::default().fg(status_color)),
         ]));
         state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
@@ -253,7 +253,7 @@ fn render_right_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState
 fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
-            "AcoustID Fetch",
+            "Cache external metadata matches",
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::raw("")),
@@ -314,7 +314,7 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
                     ),
                 ]));
                 lines.push(Line::from(vec![
-                    Span::styled("  Cached:     ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("  Good fetch: ", Style::default().fg(Color::DarkGray)),
                     Span::styled(format!("{:>5}", m.matched), Style::default().fg(Color::Green)),
                 ]));
                 lines.push(Line::from(vec![
@@ -389,7 +389,7 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
                 }
                 if m.total > 0 {
                     lines.push(Line::from(Span::styled(
-                        format!("Last MB: {} cached", m.matched),
+                        format!("Last MB: {} good fetch", m.matched),
                         Style::default().fg(Color::DarkGray),
                     )));
                 }

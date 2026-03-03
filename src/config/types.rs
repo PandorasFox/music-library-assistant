@@ -322,6 +322,9 @@ pub struct ExternalMatchingConfig {
     pub requests_per_second: u32,
     /// Rate limit: requests per second for MusicBrainz (default 25).
     pub mb_requests_per_second: u32,
+    /// MusicBrainz API base URL. Default: "https://musicbrainz.org/ws/2".
+    /// Set to a local mirror (e.g. "https://mb.example.com/ws/2") to bypass rate limits.
+    pub mb_base_url: String,
     /// Auto-trigger MB enrichment when AcoustID matches arrive (default true).
     pub auto_enrich_on_match: bool,
     /// How many days before re-fetching MB cache entries (default 30).
@@ -419,6 +422,7 @@ impl Default for ExternalMatchingConfig {
             acoustid_api_key: String::new(),
             requests_per_second: 3,
             mb_requests_per_second: 25,
+            mb_base_url: Self::DEFAULT_MB_BASE_URL.to_string(),
             auto_enrich_on_match: true,
             mb_cache_ttl_days: 30,
             mb_max_candidates: 3,
@@ -429,9 +433,12 @@ impl Default for ExternalMatchingConfig {
 }
 
 impl ExternalMatchingConfig {
+    pub const DEFAULT_MB_BASE_URL: &str = "https://musicbrainz.org/ws/2";
+
     pub const KDL_ACOUSTID_KEY: &str = "acoustid-api-key";
     pub const KDL_REQ_PER_SEC: &str = "requests-per-second";
     pub const KDL_MB_REQ_PER_SEC: &str = "mb-requests-per-second";
+    pub const KDL_MB_BASE_URL: &str = "mb-base-url";
     pub const KDL_AUTO_ENRICH: &str = "auto-enrich-on-match";
     pub const KDL_MB_CACHE_TTL: &str = "mb-cache-ttl-days";
     pub const KDL_MB_MAX_CANDIDATES: &str = "mb-max-candidates";

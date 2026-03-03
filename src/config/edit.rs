@@ -177,6 +177,7 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
     if new_em.acoustid_api_key != old_em.acoustid_api_key
         || new_em.requests_per_second != old_em.requests_per_second
         || new_em.mb_requests_per_second != old_em.mb_requests_per_second
+        || new_em.mb_base_url != old_em.mb_base_url
     {
         let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_EXTERNAL_MATCHING);
         if new_em.acoustid_api_key != old_em.acoustid_api_key {
@@ -187,6 +188,9 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         }
         if new_em.mb_requests_per_second != old_em.mb_requests_per_second {
             set_or_create_int_node(block, ExternalMatchingConfig::KDL_MB_REQ_PER_SEC, new_em.mb_requests_per_second as i64);
+        }
+        if new_em.mb_base_url != old_em.mb_base_url {
+            set_or_create_string_node(block, ExternalMatchingConfig::KDL_MB_BASE_URL, &new_em.mb_base_url);
         }
     }
 

@@ -301,6 +301,13 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         }
                     }
                 }
+                ExternalMatchingConfig::KDL_MB_BASE_URL => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_string() {
+                            opinions.mb_base_url = val.trim_end_matches('/').to_string();
+                        }
+                    }
+                }
                 ExternalMatchingConfig::KDL_AUTO_ENRICH => {
                     if let Some(entry) = child.entries().first() {
                         if let Some(val) = entry.value().as_bool() {

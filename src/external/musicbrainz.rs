@@ -21,6 +21,8 @@ use serde::Deserialize;
 /// MusicBrainz API client.
 pub struct MusicBrainzClient {
     agent: ureq::Agent,
+    /// Base URL for the MusicBrainz WS/2 API (e.g. "https://musicbrainz.org/ws/2").
+    base_url: String,
 }
 
 /// Outcome of a single MB API lookup.
@@ -36,19 +38,24 @@ pub enum MbLookupOutcome {
 }
 
 impl MusicBrainzClient {
-    pub fn new() -> Self {
+    pub fn new(base_url: &str) -> Self {
         let agent = ureq::AgentBuilder::new()
             .timeout(std::time::Duration::from_secs(15))
             .user_agent("MusicMagic/0.1 (https://github.com/example/musicmagic)")
             .build();
-        Self { agent }
+        Self { agent, base_url: base_url.trim_end_matches('/').to_string() }
+    }
+
+    /// Returns the configured base URL.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     /// Fetch a recording by MBID with artist credits, artist relations, and work relations.
     pub fn fetch_recording(&self, mbid: &str) -> Result<MbLookupOutcome> {
         let url = format!(
-            "https://musicbrainz.org/ws/2/recording/{}?inc=artist-credits+artist-rels+work-rels+releases&fmt=json",
-            mbid
+            "{}/recording/{}?inc=artist-credits+artist-rels+work-rels+releases&fmt=json",
+            self.base_url, mbid
         );
         self.fetch_entity(&url)
     }
@@ -56,8 +63,8 @@ impl MusicBrainzClient {
     /// Fetch an artist by MBID with aliases.
     pub fn fetch_artist(&self, mbid: &str) -> Result<MbLookupOutcome> {
         let url = format!(
-            "https://musicbrainz.org/ws/2/artist/{}?inc=aliases&fmt=json",
-            mbid
+            "{}/artist/{}?inc=aliases&fmt=json",
+            self.base_url, mbid
         );
         self.fetch_entity(&url)
     }
@@ -65,8 +72,8 @@ impl MusicBrainzClient {
     /// Fetch a release by MBID with artist credits.
     pub fn fetch_release(&self, mbid: &str) -> Result<MbLookupOutcome> {
         let url = format!(
-            "https://musicbrainz.org/ws/2/release/{}?inc=artist-credits&fmt=json",
-            mbid
+            "{}/release/{}?inc=artist-credits&fmt=json",
+            self.base_url, mbid
         );
         self.fetch_entity(&url)
     }

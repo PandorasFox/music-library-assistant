@@ -56,6 +56,7 @@ pub struct AcoustIdFetchTask {
 pub struct MbFetchTask {
     pub kind: MbEntityKind,
     pub mbid: String,
+    pub base_url: String,
 }
 
 impl ExternalFetchTask {
@@ -506,13 +507,14 @@ fn run_scheduling_loop(
     eligible_dirs: Vec<PathBuf>,
 ) -> bool {
     // Read config
-    let (api_key, rps, mb_rps, auto_enrich, ttl_secs, max_candidates) = {
+    let (api_key, rps, mb_rps, mb_base_url, auto_enrich, ttl_secs, max_candidates) = {
         let config = shared_config.read().expect("SharedConfig lock poisoned");
         let em = &config.opinions.external_matching;
         (
             em.acoustid_api_key.clone(),
             em.requests_per_second,
             em.mb_requests_per_second,
+            em.mb_base_url.clone(),
             em.auto_enrich_on_match,
             (em.mb_cache_ttl_days as i64) * 86400,
             em.mb_max_candidates,
@@ -752,6 +754,7 @@ fn run_scheduling_loop(
                     task: ExternalFetchTask::MusicBrainz(MbFetchTask {
                         kind: item.kind,
                         mbid: item.mbid,
+                        base_url: mb_base_url.clone(),
                     }),
                     label,
                 });

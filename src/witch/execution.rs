@@ -522,7 +522,7 @@ pub(super) fn execute_external_fetch(
             execute_acoustid_lookup(t.inode, &t.fingerprint_raw, t.fingerprint_blob.clone(), t.duration_secs, &t.api_key)
         }
         ExternalFetchTask::MusicBrainz(ref t) => {
-            execute_mb_fetch(t.kind, &t.mbid)
+            execute_mb_fetch(t.kind, &t.mbid, &t.base_url)
         }
     };
 
@@ -647,13 +647,18 @@ fn execute_acoustid_lookup(
 }
 
 /// Execute a MusicBrainz entity fetch. Writes cache + discovered entities to DB immediately.
-fn execute_mb_fetch(kind: MbEntityKind, mbid: &str) -> FetchResultData {
+fn execute_mb_fetch(kind: MbEntityKind, mbid: &str, base_url: &str) -> FetchResultData {
     use crate::external::musicbrainz::{MusicBrainzClient, MbLookupOutcome};
 
     let fetch_result = MB_CLIENT.with(|cell| {
         let mut opt = cell.borrow_mut();
-        if opt.is_none() {
-            *opt = Some(MusicBrainzClient::new());
+        // Re-create client if base URL changed (e.g. switched to local mirror).
+        let needs_init = match opt.as_ref() {
+            None => true,
+            Some(c) => c.base_url() != base_url,
+        };
+        if needs_init {
+            *opt = Some(MusicBrainzClient::new(base_url));
         }
         let client = opt.as_ref().unwrap();
         match kind {
@@ -719,6 +724,7 @@ fn execute_mb_fetch(kind: MbEntityKind, mbid: &str) -> FetchResultData {
                 task: ExternalFetchTask::MusicBrainz(super::external_fetch::MbFetchTask {
                     kind,
                     mbid: mbid.to_string(),
+                    base_url: base_url.to_string(),
                 }),
             }
         }

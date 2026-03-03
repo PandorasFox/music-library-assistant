@@ -290,6 +290,20 @@ impl AdaptiveRateLimiter {
         }
     }
 
+    /// For local mirrors: start at the ceiling immediately, no ramp-up needed.
+    fn new_unthrottled(max_rps: u32) -> Self {
+        let max = max_rps.max(1) as f64;
+        Self {
+            current_interval: Self::interval_for_rps(max),
+            min_rps: max,
+            max_rps: max,
+            current_rps: max,
+            last_request_at: None,
+            consecutive_successes: 0,
+            failure_rps_history: Vec::new(),
+        }
+    }
+
     fn interval_for_rps(rps: f64) -> Duration {
         Duration::from_micros((1_000_000.0 / rps) as u64)
     }
@@ -527,7 +541,12 @@ fn run_scheduling_loop(
 
     // Rate limiters
     let mut acoustid_limiter = RateLimiter::new_acoustid(rps);
-    let mut mb_limiter = AdaptiveRateLimiter::new(mb_rps);
+    let is_local_mirror = mb_base_url != crate::config::ExternalMatchingConfig::DEFAULT_MB_BASE_URL;
+    let mut mb_limiter = if is_local_mirror {
+        AdaptiveRateLimiter::new_unthrottled(mb_rps)
+    } else {
+        AdaptiveRateLimiter::new(mb_rps)
+    };
 
     // Per-source stats
     let mut acoustid_stats = SourceProgress::default();

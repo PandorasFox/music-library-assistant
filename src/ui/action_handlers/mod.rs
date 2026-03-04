@@ -78,6 +78,7 @@ impl App {
             ViewAction::DiscExtractionResolution(a) => self.handle_disc_extraction_action(a, witness.as_ref()),
             ViewAction::ManualReview(a) => self.handle_manual_review_action(a, witness.as_ref()),
             ViewAction::ExternalMatchReview(a) => self.handle_external_match_review_action(a, witness.as_ref()),
+            ViewAction::ReleasePackingBrowser(a) => self.handle_release_packing_browser_action(a),
             ViewAction::History(a) => self.handle_history_action(a, witness.as_ref()),
             ViewAction::TransactionReview(a) => self.handle_transaction_review_action(a, witness.as_ref()),
         }

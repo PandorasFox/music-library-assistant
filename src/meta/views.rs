@@ -181,6 +181,18 @@ pub struct ExternalMatchesData {
     pub untagged_entries: Vec<ExternalMatchReviewEntry>,
     /// ContentDiff entries bucketed by confidence tier.
     pub confidence_buckets: Vec<ConfidenceBucket>,
+
+    // Release packing summary counts (cheap COUNTs, refreshed with cache)
+    /// Number of corpus files assigned to releases.
+    pub packing_assigned_count: usize,
+    /// Number of distinct releases in packing results.
+    pub packing_release_count: usize,
+    /// Number of unfilled release slots.
+    pub packing_unfilled_count: usize,
+    /// Number of near-miss releases.
+    pub packing_near_miss_count: usize,
+    /// Number of unmatched corpus tracks.
+    pub packing_unmatched_count: usize,
 }
 
 /// Bucket 3: Other signals (sorted by magnitude)

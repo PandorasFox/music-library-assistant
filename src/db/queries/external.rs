@@ -417,6 +417,98 @@ impl Database {
     }
 
 
+    // =========================================================================
+    // Signal Data Reading (for Release Packing Browser)
+    // =========================================================================
+
+    /// Read all ReleasePackingSignal rows with deserialized data.
+    pub fn get_release_packing_signal_data(
+        &self,
+    ) -> Result<Vec<(i64, String, crate::meta::signals::data::ReleasePackingData)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT inode, path, data FROM signal_release_packing ORDER BY path",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let inode: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            let blob: Vec<u8> = row.get(2)?;
+            Ok((inode, path, blob))
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            let (inode, path, blob) = row?;
+            if let Ok(data) = bincode::deserialize(&blob) {
+                results.push((inode, path, data));
+            }
+        }
+        Ok(results)
+    }
+
+    /// Read all UnmatchedCorpusTrackSignal rows with deserialized data.
+    pub fn get_unmatched_corpus_track_signal_data(
+        &self,
+    ) -> Result<Vec<(i64, String, crate::meta::signals::data::UnmatchedCorpusTrackData)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT inode, path, data FROM signal_unmatched_corpus_track ORDER BY path",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let inode: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            let blob: Vec<u8> = row.get(2)?;
+            Ok((inode, path, blob))
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            let (inode, path, blob) = row?;
+            if let Ok(data) = bincode::deserialize(&blob) {
+                results.push((inode, path, data));
+            }
+        }
+        Ok(results)
+    }
+
+    /// Read all UnfilledReleaseSlotSignal rows with deserialized data.
+    pub fn get_unfilled_release_slot_signal_data(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::UnfilledReleaseSlotData>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT data FROM signal_unfilled_release_slot",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(0)?;
+            Ok(blob)
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            let blob = row?;
+            if let Ok(data) = bincode::deserialize(&blob) {
+                results.push(data);
+            }
+        }
+        Ok(results)
+    }
+
+    /// Read all NearMissReleaseSignal rows with deserialized data.
+    pub fn get_near_miss_release_signal_data(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::NearMissReleaseData>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT data FROM signal_near_miss_release",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(0)?;
+            Ok(blob)
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            let blob = row?;
+            if let Ok(data) = bincode::deserialize(&blob) {
+                results.push(data);
+            }
+        }
+        Ok(results)
+    }
+
     /// Get retry candidates for a given source.
     ///
     /// Returns inodes that previously failed lookup and need retry.

@@ -188,6 +188,52 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                 state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
                 nav_index += 1;
             }
+            // Release Packing section (after confidence tiers)
+            if data.packing_assigned_count > 0 || data.packing_unmatched_count > 0 {
+                lines.push(Line::from(Span::raw(""))); // spacer
+                lines.push(Line::from(Span::styled(
+                    "── Release Packing ──────",
+                    Style::default().fg(Color::DarkGray),
+                )));
+
+                let selected = state.cursor == nav_index;
+                let marker = if selected { "▸ " } else { "  " };
+                let label_style = if selected {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                // Summary subtitle
+                let mut parts = Vec::new();
+                if data.packing_release_count > 0 {
+                    parts.push(format!("{} releases", data.packing_release_count));
+                }
+                if data.packing_unfilled_count > 0 {
+                    parts.push(format!("{} unfilled", data.packing_unfilled_count));
+                }
+                if data.packing_near_miss_count > 0 {
+                    parts.push(format!("{} near-miss", data.packing_near_miss_count));
+                }
+
+                let line_idx = lines.len();
+                lines.push(Line::from(vec![
+                    Span::styled(marker.to_string(), label_style),
+                    Span::styled("R".to_string(), Style::default().fg(Color::Cyan)),
+                    Span::styled(format!(" {:<24}", "Release assignments"), label_style),
+                    Span::styled(format!("{:>6}", data.packing_assigned_count), Style::default().fg(Color::Yellow)),
+                ]));
+                state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
+
+                // Subtitle line (indented, non-navigable)
+                if !parts.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("      {}", parts.join(", ")),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                let _ = nav_index; // last entry, suppress unused warning
+            }
         }
     } else {
         lines.push(Line::from(Span::raw("")));
@@ -262,6 +308,7 @@ fn render_right_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState
         Some(NavigableEntry::PackReleasesAction) => render_pack_releases_detail(state),
         Some(NavigableEntry::UntaggedMatches) => render_untagged_detail(state),
         Some(NavigableEntry::ConfidenceBucket(tier)) => render_tier_detail(state, tier),
+        Some(NavigableEntry::ReleasePackingResults) => render_packing_results_detail(state),
         None => vec![Line::from(Span::styled(
             "No selection",
             Style::default().fg(Color::DarkGray),
@@ -577,6 +624,56 @@ fn render_untagged_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>
             Style::default().fg(HINT_COLOR),
         )),
     ]
+}
+
+fn render_packing_results_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Release Packing Results",
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::raw("")),
+    ];
+
+    if let Some(ref data) = state.cached_data {
+        lines.push(Line::from(vec![
+            Span::styled("Assigned:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", data.packing_assigned_count), Style::default().fg(Color::Green)),
+            Span::styled(" tracks", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Releases:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", data.packing_release_count), Style::default().fg(Color::Yellow)),
+        ]));
+        if data.packing_unfilled_count > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("Unfilled:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{}", data.packing_unfilled_count), Style::default().fg(Color::Red)),
+                Span::styled(" slots", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+        if data.packing_near_miss_count > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("Near-miss:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{}", data.packing_near_miss_count), Style::default().fg(Color::Yellow)),
+            ]));
+        }
+        if data.packing_unmatched_count > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("Unmatched:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{}", data.packing_unmatched_count), Style::default().fg(Color::DarkGray)),
+                Span::styled(" tracks", Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(Span::raw("")));
+    lines.push(Line::from(Span::styled(
+        "Press Enter to browse.",
+        Style::default().fg(HINT_COLOR),
+    )));
+
+    lines
 }
 
 fn render_tier_detail(state: &ExternalMatchesViewState, tier: ConfidenceTier) -> Vec<Line<'static>> {

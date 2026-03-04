@@ -260,6 +260,10 @@ fn render_content(
             vname = "external_match_review";
             external_match_modal::render(f, area, state);
         }
+        ActiveView::ReleasePackingBrowser(ref mut state) => {
+            vname = "release_packing_browser";
+            super::release_packing_browser::render::render(f, area, state);
+        }
         ActiveView::MovedFileAcknowledge(ref mut state) => {
             vname = "moved_file_acknowledge";
             super::moved_file_modal::render(state, f, area);
@@ -491,6 +495,7 @@ fn view_name(view: &ActiveView) -> &'static str {
         ActiveView::OobConflictInspection(_) => "oob_conflict_inspection",
         ActiveView::ExternalMatches(_) => "external_matches",
         ActiveView::ExternalMatchReview(_) => "external_match_review",
+        ActiveView::ReleasePackingBrowser(_) => "release_packing_browser",
         ActiveView::TagCanonicityResolution { .. } => "tag_canonicity_resolution",
         ActiveView::TagCanonicityLoading { .. } => "tag_canonicity_loading",
         ActiveView::CompoundTagSplit { .. } => "compound_tag_split",

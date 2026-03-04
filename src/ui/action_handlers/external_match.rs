@@ -48,6 +48,9 @@ impl App {
                     super::super::progress_screen::ProgressPhase::ContentAnalysis,
                 );
             }
+            external_match_view::ExternalMatchesAction::LaunchReleasePackingBrowser => {
+                self.launch_release_packing_browser();
+            }
             external_match_view::ExternalMatchesAction::LaunchUntaggedReview => {
                 let entries = if let ActiveView::ExternalMatches(ref state) = self.view {
                     state.cached_data.as_ref()
@@ -267,6 +270,46 @@ impl App {
             }
             None => {
                 self.status_message = Some("No cached recording data available".to_string());
+            }
+        }
+    }
+
+    // =========================================================================
+    // Release Packing Browser
+    // =========================================================================
+
+    /// Load packing signal data and launch the browser.
+    fn launch_release_packing_browser(&mut self) {
+        use crate::ui::release_packing_browser::ReleasePackingBrowserState;
+
+        let result = self.cache.query(move |db| {
+            let packing = db.get_release_packing_signal_data().unwrap_or_default();
+            let unmatched = db.get_unmatched_corpus_track_signal_data().unwrap_or_default();
+            let unfilled = db.get_unfilled_release_slot_signal_data().unwrap_or_default();
+            let near_miss = db.get_near_miss_release_signal_data().unwrap_or_default();
+            (packing, unmatched, unfilled, near_miss)
+        }).recv();
+
+        let (packing, unmatched, unfilled, near_miss) = result;
+
+        if packing.is_empty() && unmatched.is_empty() {
+            self.status_message = Some("No release packing results available".to_string());
+            return;
+        }
+
+        let state = ReleasePackingBrowserState::build(packing, unmatched, unfilled, near_miss);
+        self.view = ActiveView::ReleasePackingBrowser(state);
+    }
+
+    /// Handle release packing browser actions.
+    pub(super) fn handle_release_packing_browser_action(
+        &mut self,
+        action: crate::ui::release_packing_browser::ReleasePackingBrowserAction,
+    ) {
+        match action {
+            crate::ui::release_packing_browser::ReleasePackingBrowserAction::None => {}
+            crate::ui::release_packing_browser::ReleasePackingBrowserAction::Cancel => {
+                self.cancel_and_return_to_source("Release packing browser closed");
             }
         }
     }

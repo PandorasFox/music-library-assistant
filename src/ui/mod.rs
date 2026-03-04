@@ -61,6 +61,7 @@ pub mod tree_browser;
 pub mod wait_state;
 pub mod widgets;
 pub mod progressive_worker;
+pub mod release_packing_browser;
 
 // Re-export for convenience
 pub(crate) use active_view::{
@@ -359,6 +360,7 @@ impl App {
             ActiveView::OobSyncResolution(s) => ViewAction::OobSyncResolution(s.handle_input(&action)),
             ActiveView::OobConflictInspection(s) => ViewAction::OobConflictInspection(s.handle_input(&action)),
             ActiveView::ExternalMatchReview(s) => ViewAction::ExternalMatchReview(s.handle_input(&action)),
+            ActiveView::ReleasePackingBrowser(s) => ViewAction::ReleasePackingBrowser(s.handle_input(&action)),
             ActiveView::History(s) => ViewAction::History(s.handle_input(&action)),
             ActiveView::TagCanonicityResolution { state, .. } => ViewAction::TagCanonicityResolution(state.handle_input(&action)),
             ActiveView::CompoundTagSplit { state, .. } => ViewAction::CompoundTagSplit(state.handle_input(&action)),

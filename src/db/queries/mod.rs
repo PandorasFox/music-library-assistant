@@ -729,6 +729,30 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     // =========================================================================
+    // Release Packing Signal Data Queries
+    // =========================================================================
+
+    /// Read all ReleasePackingSignal rows with deserialized data.
+    pub fn get_release_packing_signal_data(&self) -> Result<Vec<(i64, String, crate::meta::signals::data::ReleasePackingData)>> {
+        self.db.get_release_packing_signal_data()
+    }
+
+    /// Read all UnmatchedCorpusTrackSignal rows with deserialized data.
+    pub fn get_unmatched_corpus_track_signal_data(&self) -> Result<Vec<(i64, String, crate::meta::signals::data::UnmatchedCorpusTrackData)>> {
+        self.db.get_unmatched_corpus_track_signal_data()
+    }
+
+    /// Read all UnfilledReleaseSlotSignal rows with deserialized data.
+    pub fn get_unfilled_release_slot_signal_data(&self) -> Result<Vec<crate::meta::signals::data::UnfilledReleaseSlotData>> {
+        self.db.get_unfilled_release_slot_signal_data()
+    }
+
+    /// Read all NearMissReleaseSignal rows with deserialized data.
+    pub fn get_near_miss_release_signal_data(&self) -> Result<Vec<crate::meta::signals::data::NearMissReleaseData>> {
+        self.db.get_near_miss_release_signal_data()
+    }
+
+    // =========================================================================
     // Redundant / Metadata Duplicate Queries
     // =========================================================================
 

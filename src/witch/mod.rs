@@ -655,6 +655,32 @@ impl Witch {
                 // Idle → Working: handled in queue methods
             }
             WorkState::Working { processed, .. } => {
+                // Phase advancement: if all in-flight tasks have landed and the
+                // db_thread has drained, but deferred computation phases are
+                // waiting, pop and spawn the next phase.  This must happen
+                // *before* the has_pending() gate because deferred phases are
+                // accumulated mid-session (from Result::pipeline returns) and
+                // would otherwise deadlock: has_pending() sees them and blocks
+                // transition_to_completed(), which is the only place that used
+                // to drain them.
+                if self.work_state.in_flight() == 0
+                    && self.db_thread_handle.queue_empty()
+                    && !self.pending_computation_phases.is_empty()
+                {
+                    let (stage, computations) = self.pending_computation_phases.pop_front().unwrap();
+                    crate::logging::log_general(format!(
+                        "[PIPELINE] Phase advancement: draining db_thread, then queueing {} ({} computations). \
+                         {} phase(s) remaining.",
+                        stage.label(), computations.len(), self.pending_computation_phases.len()
+                    ));
+                    write_thread::wait_for_queue_drain();
+
+                    for comp in computations {
+                        self.queue_computation_with_label(comp, None);
+                    }
+                    return; // Stay in Working — more work queued
+                }
+
                 // Working → Done: when all work finishes (no in-flight tasks AND
                 // db_thread queue empty). Uses centralized has_pending() for consistency
                 // with exit handlers and UI state display.
@@ -694,22 +720,9 @@ impl Witch {
             return; // Don't transition to Done — more phases to execute
         }
 
-        // Computation pipeline phase advancement: if there are deferred computation
-        // phases (e.g., from release packing pipeline), drain the db_thread queue,
-        // then queue the next phase. Stay in Working state.
-        if let Some((stage, computations)) = self.pending_computation_phases.pop_front() {
-            crate::logging::log_general(format!(
-                "[PIPELINE] Phase advancement: draining db_thread, then queueing {} ({} computations). \
-                 {} phase(s) remaining.",
-                stage.label(), computations.len(), self.pending_computation_phases.len()
-            ));
-            write_thread::wait_for_queue_drain();
-
-            for comp in computations {
-                self.queue_computation_with_label(comp, None);
-            }
-            return; // Don't transition to Done — more phases to execute
-        }
+        // NOTE: Deferred computation phases (pending_computation_phases) are now
+        // drained in update_state() before the has_pending() gate.  By the time
+        // we reach transition_to_completed(), they are guaranteed empty.
 
         // Mutations with non-empty scope need re-awakening. Mutations with EMPTY
         // scope (AcknowledgeMtimeOnly, operational config edits) don't — their

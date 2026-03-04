@@ -239,7 +239,7 @@ pub fn execute_pack_releases(
     let source_key = ExternalSource::AcoustID.to_key();
 
     // === Load all external matches (corpus only) ===
-    let all_rows = match read_only_db.get_external_matches_for_derivation(source_key) {
+    let all_rows = match read_only_db.get_external_matches_slim(source_key) {
         Ok(rows) => rows,
         Err(e) => {
             return Result::failure(
@@ -486,19 +486,75 @@ pub fn execute_pack_releases(
         .collect();
     sender.write_packing_manifest(manifest_rows, witness);
 
-    // === Determine which releases have candidate inodes ===
-    // Build the set of release IDs that actually have candidate inodes
+    // === Write candidate rows and determine which releases have candidates ===
     let mut releases_with_candidates: HashSet<String> = HashSet::new();
-    for rec_matches in inode_recordings.values() {
+    let mut candidate_rows: Vec<write_thread::PackingCandidateRow> = Vec::new();
+
+    for (inode, rec_matches) in &inode_recordings {
+        let corpus = corpus_info.get(inode);
+        // Get path from the original ExternalMatchRow data
+        let inode_path = best_per_inode
+            .iter()
+            .find(|(i, _)| i == inode)
+            .map(|(_, row)| row.path.clone())
+            .unwrap_or_default();
+
         for rec_match in rec_matches {
             if let Some(release_ids) = recording_releases.get(&rec_match.recording_id) {
                 for release_id in release_ids {
-                    if release_tracklists.contains_key(release_id) {
-                        releases_with_candidates.insert(release_id.clone());
+                    if !release_tracklists.contains_key(release_id) {
+                        continue;
                     }
+                    releases_with_candidates.insert(release_id.clone());
+
+                    let parent_dir = corpus
+                        .map(|c| c.parent_dir.clone())
+                        .unwrap_or_default();
+                    let duration_ms = corpus.and_then(|c| c.duration_ms);
+                    let tag_title = corpus
+                        .and_then(|c| c.tags.get("TITLE"))
+                        .and_then(|v| v.first())
+                        .cloned();
+                    let tag_artist = corpus
+                        .and_then(|c| c.tags.get("ARTIST"))
+                        .and_then(|v| v.first())
+                        .cloned();
+                    let tag_album = corpus
+                        .and_then(|c| c.tags.get("ALBUM"))
+                        .and_then(|v| v.first())
+                        .cloned();
+                    let tag_tracknumber = corpus
+                        .and_then(|c| c.tags.get("TRACKNUMBER"))
+                        .and_then(|v| v.first())
+                        .cloned();
+
+                    candidate_rows.push(write_thread::PackingCandidateRow {
+                        release_id: release_id.clone(),
+                        inode: *inode,
+                        recording_id: rec_match.recording_id.clone(),
+                        confidence: rec_match.confidence,
+                        path: inode_path.clone(),
+                        parent_dir,
+                        duration_ms,
+                        tag_title,
+                        tag_artist,
+                        tag_album,
+                        tag_tracknumber,
+                    });
                 }
             }
         }
+    }
+
+    // Write candidates to intermediate table for Stage 2 consumption
+    if !candidate_rows.is_empty() {
+        log_general(format!(
+            "[COMPUTE] PackReleases: writing {} candidate rows to intermediate table",
+            candidate_rows.len()
+        ));
+        sender.write_packing_candidates(candidate_rows, witness);
+        // Drain write queue so candidates are visible to Stage 2 threads
+        write_thread::wait_for_queue_drain();
     }
 
     // === Spawn per-release scorers (Stage 2) ===
@@ -544,9 +600,9 @@ pub fn execute_pack_releases(
 
 /// Execute ScoreReleaseCandidates — score all candidate inodes for one release.
 ///
-/// Loads the release tracklist, finds matching corpus inodes via the recording→release
-/// mapping, scores each (inode, track_slot) pairing, solves optimal per-release
-/// assignment via greedy, and writes results to `release_packing_scores`.
+/// Reads pre-filtered candidates from `release_packing_candidates` (written by Stage 1),
+/// loads the release tracklist, scores each (inode, track_slot) pairing, solves optimal
+/// per-release assignment via greedy, and writes results to `release_packing_scores`.
 pub fn execute_score_release_candidates(
     read_only_db: &ReadOnlyDb<'_>,
     release_id: &str,
@@ -579,7 +635,6 @@ pub fn execute_score_release_candidates(
         }
     };
     let duration_tolerance_pct = config.opinions.release_packing.duration_tolerance_pct;
-    let min_confidence = config.opinions.release_packing.min_confidence;
     let preferred_locales = config.opinions.external_matching.preferred_locales.clone();
 
     // Load the release tracklist
@@ -636,117 +691,55 @@ pub fn execute_score_release_candidates(
         &preferred_locales,
     );
 
-    // Collect all recording IDs in this release's tracklist
-    let mut release_recording_ids: HashSet<String> = HashSet::new();
-    for medium in &release.media {
-        for track in &medium.tracks {
-            release_recording_ids.insert(track.recording.id.clone());
-        }
-    }
-
-    // Find corpus inodes matched to any recording in this release
-    let source_key = ExternalSource::AcoustID.to_key();
-    let all_rows = match read_only_db.get_external_matches_for_derivation(source_key) {
+    // Load pre-filtered candidates from intermediate table (written by Stage 1)
+    let candidate_rows = match read_only_db.get_packing_candidates_for_release(release_id) {
         Ok(rows) => rows,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to query external matches: {}", e),
+                format!("Failed to query packing candidates: {}", e),
             );
         }
     };
 
-    let best_per_inode = group_best_per_inode(all_rows);
-
-    // Filter to inodes whose recording appears in this release
-    let mut candidate_inodes: HashMap<i64, RecordingMatch> = HashMap::new();
-    for (inode, row) in &best_per_inode {
-        if row.confidence < min_confidence {
-            continue;
-        }
-        // Check if this recording's MB data links to our release
-        let recording_json = match read_only_db.get_mb_recording_cache(&row.recording_id) {
-            Ok(Some((json, _))) => json,
-            _ => continue,
-        };
-        let recording = match musicbrainz::parse_recording(&recording_json) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-
-        // Check if this recording is linked to our release
-        let links_to_this_release = recording
-            .releases
-            .iter()
-            .any(|r| r.id == release_id);
-        if !links_to_this_release {
-            continue;
-        }
-
-        // Duration filter
-        if let (Some(corpus_dur), Some(mb_dur)) = (
-            read_only_db
-                .get_audio_info(*inode)
-                .ok()
-                .flatten()
-                .and_then(|ai| ai.duration_ms),
-            recording.length,
-        ) {
-            if mb_dur > 0 {
-                let ratio = (corpus_dur as f64 - mb_dur as f64).abs() / mb_dur as f64;
-                if ratio > duration_tolerance_pct {
-                    continue;
-                }
-            }
-        }
-
-        candidate_inodes.insert(
-            *inode,
-            RecordingMatch {
-                recording_id: row.recording_id.clone(),
-                confidence: row.confidence,
-            },
-        );
-    }
-
-    if candidate_inodes.is_empty() {
+    if candidate_rows.is_empty() {
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
-    // Load corpus metadata for candidates
-    let files_with_tags = match read_only_db.get_all_audio_files_with_tags(Zone::Corpus, false) {
-        Ok(f) => f,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to query corpus files: {}", e),
-            );
-        }
-    };
+    // Build candidate_inodes and corpus_info from the pre-computed candidate rows
+    let mut candidate_inodes: HashMap<i64, RecordingMatch> = HashMap::new();
+    let mut corpus_info: HashMap<i64, CorpusFileInfo> = HashMap::new();
 
-    let corpus_info: HashMap<i64, CorpusFileInfo> = files_with_tags
-        .into_iter()
-        .filter(|(af, _)| candidate_inodes.contains_key(&af.inode()))
-        .map(|(af, tags)| {
-            let path = af.path().to_string();
-            let parent_dir = Path::new(&path)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            (
-                af.inode(),
-                CorpusFileInfo {
-                    parent_dir,
-                    tags,
-                    duration_ms: af.audio.duration_ms,
-                },
-            )
-        })
-        .collect();
+    for row in &candidate_rows {
+        candidate_inodes.entry(row.inode).or_insert_with(|| RecordingMatch {
+            recording_id: row.recording_id.clone(),
+            confidence: row.confidence,
+        });
 
-    // Build candidates
+        corpus_info.entry(row.inode).or_insert_with(|| {
+            let mut tags = HashMap::new();
+            if let Some(ref v) = row.tag_title {
+                tags.insert("TITLE".to_string(), vec![v.clone()]);
+            }
+            if let Some(ref v) = row.tag_artist {
+                tags.insert("ARTIST".to_string(), vec![v.clone()]);
+            }
+            if let Some(ref v) = row.tag_album {
+                tags.insert("ALBUM".to_string(), vec![v.clone()]);
+            }
+            if let Some(ref v) = row.tag_tracknumber {
+                tags.insert("TRACKNUMBER".to_string(), vec![v.clone()]);
+            }
+            CorpusFileInfo {
+                parent_dir: row.parent_dir.clone(),
+                tags,
+                duration_ms: row.duration_ms,
+            }
+        });
+    }
+
+    // Build candidates by matching against the release tracklist
     let mut candidates: Vec<CandidateAssignment> = Vec::new();
 
     for (inode, rec_match) in &candidate_inodes {
@@ -987,21 +980,17 @@ pub fn execute_resolve_release_conflicts(
         *release_filled.entry(&row.release_id).or_default() += 1;
     }
 
-    // Load corpus paths for signal emission
-    let files_with_tags = match read_only_db.get_all_audio_files_with_tags(Zone::Corpus, false) {
-        Ok(f) => f,
+    // Load corpus paths from candidates table (no full corpus scan needed)
+    let corpus_paths: HashMap<i64, String> = match read_only_db.get_candidate_paths() {
+        Ok(rows) => rows.into_iter().collect(),
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to query corpus files: {}", e),
+                format!("Failed to query candidate paths: {}", e),
             );
         }
     };
-    let corpus_paths: HashMap<i64, String> = files_with_tags
-        .into_iter()
-        .map(|(af, _)| (af.inode(), af.path().to_string()))
-        .collect();
 
     // Emit signals
     let mut computed: Vec<ComputedCorpusSignal> = Vec::new();
@@ -1106,8 +1095,6 @@ pub fn execute_analyze_release_gaps(
         }
     };
 
-    let source_key = ExternalSource::AcoustID.to_key();
-
     // Read the manifest and optimal scores
     let manifest = match read_only_db.get_packing_manifest() {
         Ok(rows) => rows,
@@ -1140,24 +1127,22 @@ pub fn execute_analyze_release_gaps(
 
     // === Unmatched corpus tracks ===
     // Inodes with external matches but no release assignment
-    let all_rows = match read_only_db.get_external_matches_for_derivation(source_key) {
-        Ok(rows) => rows,
+
+    // Build inode → recording IDs map from candidates table (no full external_matches scan)
+    let mut inode_recordings: HashMap<i64, Vec<String>> = HashMap::new();
+    match read_only_db.get_candidate_inode_recordings() {
+        Ok(rows) => {
+            for (inode, recording_id) in rows {
+                inode_recordings.entry(inode).or_default().push(recording_id);
+            }
+        }
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to query external matches: {}", e),
+                format!("Failed to query candidate inode recordings: {}", e),
             );
         }
-    };
-
-    // Build inode → recording IDs map from external matches
-    let mut inode_recordings: HashMap<i64, Vec<String>> = HashMap::new();
-    for row in &all_rows {
-        inode_recordings
-            .entry(row.inode)
-            .or_default()
-            .push(row.recording_id.clone());
     }
 
     // Build inode → considered releases from scoring table
@@ -1169,16 +1154,16 @@ pub fn execute_analyze_release_gaps(
             .push(row.release_id.clone());
     }
 
-    // Load corpus paths
-    let corpus_paths: HashMap<i64, String> = {
-        let files =
-            read_only_db
-                .get_all_audio_files_with_tags(Zone::Corpus, false)
-                .unwrap_or_default();
-        files
-            .into_iter()
-            .map(|(af, _)| (af.inode(), af.path().to_string()))
-            .collect()
+    // Load corpus paths from candidates table (no full corpus scan)
+    let corpus_paths: HashMap<i64, String> = match read_only_db.get_candidate_paths() {
+        Ok(rows) => rows.into_iter().collect(),
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to query candidate paths: {}", e),
+            );
+        }
     };
 
     let mut unmatched_signals: Vec<ComputedCorpusSignal> = Vec::new();

@@ -668,6 +668,28 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
+        name: "release_packing_candidates",
+        kind: TableKind::Computed,
+        create_sql: "CREATE TABLE IF NOT EXISTS release_packing_candidates (
+            release_id TEXT NOT NULL,
+            inode INTEGER NOT NULL,
+            recording_id TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            path TEXT NOT NULL,
+            parent_dir TEXT NOT NULL,
+            duration_ms INTEGER,
+            tag_title TEXT,
+            tag_artist TEXT,
+            tag_album TEXT,
+            tag_tracknumber TEXT,
+            PRIMARY KEY (release_id, inode)
+        )",
+        index_sql: &[
+            "CREATE INDEX IF NOT EXISTS idx_rpc_release ON release_packing_candidates(release_id)",
+        ],
+    });
+
+    tables.push(TableEntry {
         name: "release_packing_scores",
         kind: TableKind::Computed,
         create_sql: "CREATE TABLE IF NOT EXISTS release_packing_scores (

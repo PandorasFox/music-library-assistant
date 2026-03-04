@@ -723,6 +723,29 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_mb_release_cache(release_id)
     }
 
+    /// Get external matches without raw_response blobs (for packing pipeline).
+    pub fn get_external_matches_slim(
+        &self,
+        source_key: i64,
+    ) -> Result<Vec<external::ExternalMatchRow>> {
+        self.db.get_external_matches_slim(source_key)
+    }
+
+    /// Get packing candidates for a specific release (indexed lookup).
+    pub fn get_packing_candidates_for_release(&self, release_id: &str) -> Result<Vec<external::PackingCandidateRow>> {
+        self.db.get_packing_candidates_for_release(release_id)
+    }
+
+    /// Get distinct (inode, path) pairs from the candidates table.
+    pub fn get_candidate_paths(&self) -> Result<Vec<(i64, String)>> {
+        self.db.get_candidate_paths()
+    }
+
+    /// Get distinct (inode, recording_id) pairs from the candidates table.
+    pub fn get_candidate_inode_recordings(&self) -> Result<Vec<(i64, String)>> {
+        self.db.get_candidate_inode_recordings()
+    }
+
     /// Bulk-load cached MusicBrainz release JSON for a set of release IDs.
     pub fn get_mb_release_cache_bulk(&self, release_ids: &[&str]) -> Result<Vec<(String, Vec<u8>)>> {
         self.db.get_mb_release_cache_bulk(release_ids)

@@ -104,6 +104,22 @@ pub struct PackingScoreRow {
     pub is_optimal: bool,
 }
 
+/// A row for the release_packing_candidates intermediate table.
+#[derive(Debug, Clone)]
+pub struct PackingCandidateRow {
+    pub release_id: String,
+    pub inode: i64,
+    pub recording_id: String,
+    pub confidence: f64,
+    pub path: String,
+    pub parent_dir: String,
+    pub duration_ms: Option<i64>,
+    pub tag_title: Option<String>,
+    pub tag_artist: Option<String>,
+    pub tag_album: Option<String>,
+    pub tag_tracknumber: Option<String>,
+}
+
 // ============================================================================
 // Signal Witness Trait
 // ============================================================================
@@ -538,6 +554,11 @@ enum DbWriteOp {
     /// Write a batch of scored candidates to release_packing_scores.
     WritePackingScores {
         rows: Vec<PackingScoreRow>,
+    },
+
+    /// Write a batch of candidate rows to release_packing_candidates.
+    WritePackingCandidates {
+        rows: Vec<PackingCandidateRow>,
     },
 
     Shutdown,
@@ -1355,6 +1376,16 @@ impl SignalWriteSender {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::WritePackingScores { rows });
     }
+
+    /// Write a batch of candidate rows to release_packing_candidates.
+    pub fn write_packing_candidates(
+        &self,
+        rows: Vec<PackingCandidateRow>,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::WritePackingCandidates { rows });
+    }
 }
 
 // IndexWriteSender has been removed - all operations now go through SignalWriteSender.
@@ -1919,7 +1950,7 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::TruncatePackingTables => {
             with_retry("truncate_packing_tables", "all", || {
                 db.conn().execute_batch(
-                    "DELETE FROM release_packing_manifest; DELETE FROM release_packing_scores;"
+                    "DELETE FROM release_packing_manifest; DELETE FROM release_packing_scores; DELETE FROM release_packing_candidates;"
                 )?;
                 Ok(())
             });
@@ -1957,6 +1988,33 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                         row.score,
                         row.score_breakdown,
                         row.is_optimal as i32,
+                    ])?;
+                }
+                Ok(())
+            });
+        }
+
+        DbWriteOp::WritePackingCandidates { rows } => {
+            with_retry("write_packing_candidates", "batch", || {
+                let mut stmt = db.conn().prepare(
+                    "INSERT OR REPLACE INTO release_packing_candidates \
+                     (release_id, inode, recording_id, confidence, path, parent_dir, duration_ms, \
+                      tag_title, tag_artist, tag_album, tag_tracknumber) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+                )?;
+                for row in rows {
+                    stmt.execute(rusqlite::params![
+                        row.release_id,
+                        row.inode,
+                        row.recording_id,
+                        row.confidence,
+                        row.path,
+                        row.parent_dir,
+                        row.duration_ms,
+                        row.tag_title,
+                        row.tag_artist,
+                        row.tag_album,
+                        row.tag_tracknumber,
                     ])?;
                 }
                 Ok(())

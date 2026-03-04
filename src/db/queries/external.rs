@@ -41,6 +41,19 @@ pub struct OptimalPackingScoreRow {
     pub score_breakdown: Vec<u8>,
 }
 
+/// A row from release_packing_candidates (Stage 1 → Stage 2 intermediate).
+pub struct PackingCandidateRow {
+    pub inode: i64,
+    pub recording_id: String,
+    pub confidence: f64,
+    pub parent_dir: String,
+    pub duration_ms: Option<i64>,
+    pub tag_title: Option<String>,
+    pub tag_artist: Option<String>,
+    pub tag_album: Option<String>,
+    pub tag_tracknumber: Option<String>,
+}
+
 /// A candidate inode for external lookup.
 pub struct ExternalLookupCandidate {
     pub inode: i64,
@@ -59,6 +72,42 @@ impl Database {
     ) -> Result<Vec<ExternalMatchRow>> {
         let mut stmt = self.conn().prepare(
             r#"SELECT em.inode, em.recording_id, em.confidence, em.raw_response, f.path
+               FROM external_matches em
+               JOIN files f ON em.inode = f.inode
+               WHERE f.zone = 'corpus' AND em.source = ?1
+               ORDER BY em.inode, em.confidence DESC"#,
+        )?;
+
+        let rows = stmt.query_map(params![source_key], |row| {
+            Ok(ExternalMatchRow {
+                inode: row.get(0)?,
+                recording_id: row.get(1)?,
+                confidence: row.get(2)?,
+                raw_response: row.get(3)?,
+                path: row.get(4)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            if let Ok(r) = row {
+                results.push(r);
+            }
+        }
+        Ok(results)
+    }
+
+    /// Get external matches for corpus files, without raw_response blobs.
+    ///
+    /// Slim variant of `get_external_matches_for_derivation` for the release
+    /// packing pipeline which never reads raw_response. Avoids loading kilobytes
+    /// of AcoustID JSON per row.
+    pub fn get_external_matches_slim(
+        &self,
+        source_key: i64,
+    ) -> Result<Vec<ExternalMatchRow>> {
+        let mut stmt = self.conn().prepare(
+            r#"SELECT em.inode, em.recording_id, em.confidence, NULL, f.path
                FROM external_matches em
                JOIN files f ON em.inode = f.inode
                WHERE f.zone = 'corpus' AND em.source = ?1
@@ -505,6 +554,74 @@ impl Database {
             if let Ok(data) = bincode::deserialize(&blob) {
                 results.push(data);
             }
+        }
+        Ok(results)
+    }
+
+    // =========================================================================
+    // Release Packing Candidates Queries
+    // =========================================================================
+
+    /// Get all packing candidates for a specific release (indexed lookup).
+    pub fn get_packing_candidates_for_release(
+        &self,
+        release_id: &str,
+    ) -> Result<Vec<PackingCandidateRow>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT inode, recording_id, confidence, parent_dir, duration_ms, \
+             tag_title, tag_artist, tag_album, tag_tracknumber \
+             FROM release_packing_candidates WHERE release_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![release_id], |row| {
+            Ok(PackingCandidateRow {
+                inode: row.get(0)?,
+                recording_id: row.get(1)?,
+                confidence: row.get(2)?,
+                parent_dir: row.get(3)?,
+                duration_ms: row.get(4)?,
+                tag_title: row.get(5)?,
+                tag_artist: row.get(6)?,
+                tag_album: row.get(7)?,
+                tag_tracknumber: row.get(8)?,
+            })
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get distinct (inode, path) pairs from the candidates table.
+    ///
+    /// Used by Stages 3-4 to get corpus paths without a full corpus scan.
+    pub fn get_candidate_paths(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT DISTINCT inode, path FROM release_packing_candidates",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get distinct (inode, recording_id) pairs from the candidates table.
+    ///
+    /// Used by Stage 4 to build inode→recording_ids map without loading external_matches.
+    pub fn get_candidate_inode_recordings(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT inode, recording_id FROM release_packing_candidates",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
         }
         Ok(results)
     }

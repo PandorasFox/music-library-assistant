@@ -708,6 +708,16 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_mb_artist_cache(artist_id)
     }
 
+    /// Get the release packing manifest (populated by Stage 1).
+    pub fn get_packing_manifest(&self) -> Result<Vec<external::PackingManifestRow>> {
+        self.db.get_packing_manifest()
+    }
+
+    /// Get optimal packing scores (is_optimal=1, populated by Stage 2).
+    pub fn get_optimal_packing_scores(&self) -> Result<Vec<external::OptimalPackingScoreRow>> {
+        self.db.get_optimal_packing_scores()
+    }
+
     /// Get cached MusicBrainz release JSON by release ID.
     pub fn get_mb_release_cache(&self, release_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
         self.db.get_mb_release_cache(release_id)

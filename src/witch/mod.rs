@@ -166,6 +166,11 @@ pub struct Witch {
     /// Populated by `confirm_transaction()`, drained by `transition_to_completed()`.
     pending_mutation_phases: VecDeque<(crate::meta::mutations::MutationExecutionStage, Vec<Mutation>)>,
 
+    /// Remaining computation phases from a staged pipeline (e.g., release packing).
+    /// Populated by `tick()` from computation result `deferred_phases`, drained by
+    /// `transition_to_completed()` after mutation phases.
+    pending_computation_phases: VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,
+
     /// Handle to the dedicated DB write thread.
     /// Provides stats access and shutdown coordination.
     /// Spawned at construction time — always present.
@@ -296,6 +301,7 @@ impl Witch {
             kind_counts: HashMap::new(),
             pending_transaction: None,
             pending_mutation_phases: VecDeque::new(),
+            pending_computation_phases: VecDeque::new(),
             db_thread_handle: write_thread::spawn(),
             worker_stats_shared,
             cache_thread_handle: cache_witch_handle,
@@ -587,6 +593,11 @@ impl Witch {
             // Collect spawned follow-up computations and mutations
             spawned_computations.extend(result.spawn);
             spawned_mutations.extend(result.spawn_mutations);
+
+            // Collect deferred computation phases (pipeline orchestrators)
+            if !result.deferred_phases.is_empty() {
+                self.pending_computation_phases.extend(result.deferred_phases);
+            }
         }
 
         // Queue spawned follow-up computations (chaining)
@@ -680,6 +691,23 @@ impl Witch {
                 None
             };
             self.queue_mutations_internal(mutations, label);
+            return; // Don't transition to Done — more phases to execute
+        }
+
+        // Computation pipeline phase advancement: if there are deferred computation
+        // phases (e.g., from release packing pipeline), drain the db_thread queue,
+        // then queue the next phase. Stay in Working state.
+        if let Some((stage, computations)) = self.pending_computation_phases.pop_front() {
+            crate::logging::log_general(format!(
+                "[PIPELINE] Phase advancement: draining db_thread, then queueing {} ({} computations). \
+                 {} phase(s) remaining.",
+                stage.label(), computations.len(), self.pending_computation_phases.len()
+            ));
+            write_thread::wait_for_queue_drain();
+
+            for comp in computations {
+                self.queue_computation_with_label(comp, None);
+            }
             return; // Don't transition to Done — more phases to execute
         }
 
@@ -1330,6 +1358,7 @@ impl Witch {
                         observed_corpus_inodes: HashMap::new(),
                         observed_inbox_inodes: HashMap::new(),
                         observed_library_files: Vec::new(),
+                        deferred_phases: VecDeque::new(),
                     }
                 }
             };
@@ -1554,6 +1583,10 @@ impl Witch {
         }
         // Check db_thread queue
         if !self.db_thread_handle.queue_empty() {
+            return true;
+        }
+        // Check pending mutation/computation pipeline phases
+        if !self.pending_mutation_phases.is_empty() || !self.pending_computation_phases.is_empty() {
             return true;
         }
         false

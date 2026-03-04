@@ -19,6 +19,28 @@ pub struct ExternalMatchRow {
     pub path: String,
 }
 
+/// A row from release_packing_manifest.
+pub struct PackingManifestRow {
+    pub release_id: String,
+    pub total_tracks: i32,
+    pub release_title: String,
+    pub release_artist: String,
+}
+
+/// An optimal packing score row (is_optimal=1 or per-inode query).
+pub struct OptimalPackingScoreRow {
+    pub release_id: String,
+    pub inode: i64,
+    pub recording_id: String,
+    pub medium_pos: i32,
+    pub track_pos: i32,
+    pub track_title: String,
+    pub medium_format: Option<String>,
+    pub track_number: String,
+    pub score: f64,
+    pub score_breakdown: Vec<u8>,
+}
+
 /// A candidate inode for external lookup.
 pub struct ExternalLookupCandidate {
     pub inode: i64,
@@ -340,6 +362,60 @@ impl Database {
         }
         Ok(results)
     }
+
+    // =========================================================================
+    // Release Packing Pipeline Queries
+    // =========================================================================
+
+    /// Get the full packing manifest (all releases in the current pipeline run).
+    pub fn get_packing_manifest(&self) -> Result<Vec<PackingManifestRow>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT release_id, total_tracks, release_title, release_artist FROM release_packing_manifest",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PackingManifestRow {
+                release_id: row.get(0)?,
+                total_tracks: row.get(1)?,
+                release_title: row.get(2)?,
+                release_artist: row.get(3)?,
+            })
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get optimal (is_optimal=1) packing scores, grouped by release.
+    pub fn get_optimal_packing_scores(&self) -> Result<Vec<OptimalPackingScoreRow>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT release_id, inode, recording_id, medium_pos, track_pos, track_title, \
+             medium_format, track_number, score, score_breakdown \
+             FROM release_packing_scores WHERE is_optimal = 1 \
+             ORDER BY release_id, medium_pos, track_pos",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(OptimalPackingScoreRow {
+                release_id: row.get(0)?,
+                inode: row.get(1)?,
+                recording_id: row.get(2)?,
+                medium_pos: row.get(3)?,
+                track_pos: row.get(4)?,
+                track_title: row.get(5)?,
+                medium_format: row.get(6)?,
+                track_number: row.get(7)?,
+                score: row.get(8)?,
+                score_breakdown: row.get(9)?,
+            })
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
 
     /// Get retry candidates for a given source.
     ///

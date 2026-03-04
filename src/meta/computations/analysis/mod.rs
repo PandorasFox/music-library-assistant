@@ -46,6 +46,7 @@ mod external_matches;
 mod release_packing;
 
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crate::meta::recomputation::RecomputationScope;
@@ -211,15 +212,35 @@ pub enum Computation {
     /// path structure agrees with its DB tags. Emits PathTagMismatch signals.
     DetectPathTagMismatches,
 
-    /// Pack corpus files into MusicBrainz releases.
+    /// Pack corpus files into MusicBrainz releases (Stage 1 — orchestrator).
     ///
-    /// Builds a bipartite graph of inodes ↔ recordings ↔ releases,
-    /// scores each possible (inode, track_position) assignment, and
-    /// greedily assigns files to their best-matching release.
-    /// Emits ReleasePackingSignal per assigned inode.
+    /// Loads external matches, identifies releases, writes session manifest,
+    /// spawns N ScoreReleaseCandidates (Stage 2), defers ResolveReleaseConflicts
+    /// (Stage 3) and AnalyzeReleaseGaps (Stage 4) as barrier-separated phases.
     ///
     /// Manual trigger only (expensive), not part of ScheduleContentAnalysis.
     PackReleases,
+
+    /// Score candidates for a single MusicBrainz release (Stage 2).
+    ///
+    /// Loads the release tracklist, finds matching corpus inodes, scores each
+    /// (inode, track_slot) pairing, solves optimal per-release assignment,
+    /// writes results to release_packing_scores table.
+    ScoreReleaseCandidates {
+        release_id: String,
+    },
+
+    /// Global conflict resolution across per-release scoring results (Stage 3).
+    ///
+    /// Reads optimal picks from all releases, resolves cross-release inode conflicts
+    /// via greedy global assignment, emits ReleasePackingSignal per assigned inode.
+    ResolveReleaseConflicts,
+
+    /// Gap analysis after release packing (Stage 4).
+    ///
+    /// Identifies unmatched corpus tracks, unfilled release slots, and near-miss
+    /// patterns where (n-1)/n tracks match from the same directory.
+    AnalyzeReleaseGaps,
 
     /// Derive external match signals from AcoustID lookup results.
     ///
@@ -271,6 +292,9 @@ impl Computation {
             Computation::DetectDiscExtractions => "Detecting disc extractions",
             Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
             Computation::PackReleases => "Packing releases",
+            Computation::ScoreReleaseCandidates { .. } => "Scoring release candidates",
+            Computation::ResolveReleaseConflicts => "Resolving release conflicts",
+            Computation::AnalyzeReleaseGaps => "Analyzing release gaps",
             Computation::DeriveExternalMatches => "Deriving external match signals",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
             Computation::IndexImageFile => "Indexing image files",
@@ -349,6 +373,15 @@ impl Computation {
             Computation::PackReleases => {
                 execute_pack_releases(ctx.read_db, ctx.witness, ctx.start)
             }
+            Computation::ScoreReleaseCandidates { ref release_id } => {
+                execute_score_release_candidates(ctx.read_db, release_id, ctx.witness, ctx.start)
+            }
+            Computation::ResolveReleaseConflicts => {
+                execute_resolve_release_conflicts(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::AnalyzeReleaseGaps => {
+                execute_analyze_release_gaps(ctx.read_db, ctx.witness, ctx.start)
+            }
             Computation::DeriveExternalMatches => {
                 execute_derive_external_matches(ctx.read_db, ctx.witness, ctx.start)
             }
@@ -378,6 +411,9 @@ pub struct Result {
     pub duration_ms: u64,
     /// Follow-up computations - ONLY Analysis computations allowed.
     pub spawn: Vec<Computation>,
+    /// Barrier-separated follow-up phases. Each phase runs only after all
+    /// prior work drains. Only used by pipeline orchestrators (e.g., PackReleases).
+    pub deferred_phases: VecDeque<(super::PipelineStage, Vec<super::Computation>)>,
 }
 
 impl Result {
@@ -388,6 +424,7 @@ impl Result {
             error: None,
             duration_ms,
             spawn,
+            deferred_phases: VecDeque::new(),
         }
     }
 
@@ -398,6 +435,27 @@ impl Result {
             error: Some(error),
             duration_ms,
             spawn: Vec::new(),
+            deferred_phases: VecDeque::new(),
+        }
+    }
+
+    /// Create a pipeline orchestrator result with barrier-separated follow-up phases.
+    ///
+    /// `spawn` computations are queued immediately (same as normal).
+    /// `deferred_phases` are queued one-at-a-time after all prior work drains.
+    pub fn pipeline(
+        computation: Computation,
+        duration_ms: u64,
+        spawn: Vec<Computation>,
+        deferred_phases: Vec<(super::PipelineStage, Vec<super::Computation>)>,
+    ) -> Self {
+        Self {
+            _computation: computation,
+            success: true,
+            error: None,
+            duration_ms,
+            spawn,
+            deferred_phases: VecDeque::from(deferred_phases),
         }
     }
 }

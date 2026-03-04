@@ -738,14 +738,13 @@ impl Database {
         let mut untagged_entries: Vec<ExternalMatchReviewEntry> = Vec::new();
 
         let rows = stmt.query_map(params![], |row| {
-            let inode: i64 = row.get(0)?;
             let path: String = row.get(1)?;
             let blob: Vec<u8> = row.get(2)?;
-            Ok((inode, path, blob))
+            Ok((path, blob))
         })?;
 
         for row in rows {
-            let (inode, path, blob) = row?;
+            let (path, blob) = row?;
             let data: ExternalMatchData = match bincode::deserialize(&blob) {
                 Ok(d) => d,
                 Err(_) => continue,
@@ -756,7 +755,6 @@ impl Database {
             }
 
             let entry = ExternalMatchReviewEntry {
-                inode,
                 path,
                 confidence: data.confidence,
                 recording_id: data.recording_id,

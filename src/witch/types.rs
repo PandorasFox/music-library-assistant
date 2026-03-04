@@ -427,6 +427,8 @@ pub(super) struct TaskResult {
     pub observed_library_files: Vec<crate::meta::computations::derivation::ObservedLibraryFile>,
     /// External fetch result data (only populated for ExternalFetch tasks).
     pub fetch_result: Option<super::external_fetch::FetchResultData>,
+    /// Barrier-separated follow-up computation phases (pipeline orchestrators only).
+    pub deferred_phases: std::collections::VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,
 }
 
 // ============================================================================

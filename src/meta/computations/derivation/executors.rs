@@ -584,6 +584,7 @@ fn gc_orphaned_corpus_signals(
     total += gc_signal_table::<MissingDirectorySignal>(read_only_db, sender, known_inodes, witness);
     total += gc_signal_table::<ExternalMatchSignal>(read_only_db, sender, known_inodes, witness);
     total += gc_signal_table::<ReleasePackingSignal>(read_only_db, sender, known_inodes, witness);
+    total += gc_signal_table::<UnmatchedCorpusTrackSignal>(read_only_db, sender, known_inodes, witness);
     // FileInCorpus excluded: it IS the disk observation, always part of known_inodes
     total
 }

@@ -1997,6 +1997,131 @@ impl InboxTagCanonicitySignal {
 
 }
 
+// ============================================================================
+// Release Packing Gap Analysis Signal Implementations
+// ============================================================================
+
+impl CorpusSignalStore for UnmatchedCorpusTrackSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_unmatched_corpus_track (
+        inode INTEGER PRIMARY KEY,
+        path TEXT NOT NULL,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_unmatched_corpus_track";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_unmatched_corpus_track (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![self.inode, self.path, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn query_inode_hashes(conn: &Connection) -> Result<HashMap<i64, i64>> {
+        let mut stmt = conn.prepare("SELECT inode, data_hash FROM signal_unmatched_corpus_track")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
+        conn.execute("DELETE FROM signal_unmatched_corpus_track WHERE inode = ?1", [inode])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, inode: i64) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_unmatched_corpus_track WHERE inode = ?1)",
+            [inode],
+            |row| row.get(0),
+        )
+    }
+}
+
+impl AggregateSignalStore for UnfilledReleaseSlotSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_unfilled_release_slot (
+        key TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_unfilled_release_slot";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_unfilled_release_slot (key, data, data_hash) VALUES (?1, ?2, ?3)",
+            rusqlite::params![self.key, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn query_key_hashes(conn: &Connection) -> Result<HashMap<String, i64>> {
+        let mut stmt = conn.prepare("SELECT key, data_hash FROM signal_unfilled_release_slot")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_unfilled_release_slot WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_unfilled_release_slot WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
+impl AggregateSignalStore for NearMissReleaseSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_near_miss_release (
+        key TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_near_miss_release";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_near_miss_release (key, data, data_hash) VALUES (?1, ?2, ?3)",
+            rusqlite::params![self.key, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn query_key_hashes(conn: &Connection) -> Result<HashMap<String, i64>> {
+        let mut stmt = conn.prepare("SELECT key, data_hash FROM signal_near_miss_release")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_near_miss_release WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_near_miss_release WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
 // Table creation is now handled by `db::table_schema::schema_inventory()`.
 // Signal TABLE_SQL consts on each type remain as the source of truth,
 // referenced by the inventory entries.

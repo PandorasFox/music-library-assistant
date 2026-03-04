@@ -104,7 +104,6 @@ pub type PlaceholderBucket = TagSquashBucket;
 /// Actual tagging decisions come from the bin-packed release analysis.
 #[derive(Debug, Clone)]
 pub struct ExternalMatchReviewEntry {
-    pub inode: i64,
     pub path: String,
     /// AcoustID confidence score.
     pub confidence: f64,

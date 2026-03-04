@@ -12,7 +12,8 @@ All computation code lives in `src/meta/computations/`:
 - **Stats**: `stats.rs` (thread-local stats + read-only DB connections)
 - **Observation phase**: `observation/mod.rs`, `observation/executors.rs`
 - **Derivation phase**: `derivation/mod.rs`, `derivation/executors.rs`
-- **Analysis phase**: `analysis/mod.rs`, `analysis/schedule.rs`, `analysis/duplicates.rs`, `analysis/tags.rs`, `analysis/deploy.rs`, `analysis/formats.rs`, `analysis/album_art.rs`, `analysis/album_art_info.rs`, `analysis/image_files.rs`, `analysis/inbox_matches.rs`, `analysis/external_matches.rs`, `analysis/release_packing.rs`
+- **Analysis phase**: `analysis/mod.rs`, `analysis/schedule.rs`, `analysis/duplicates.rs`, `analysis/tags.rs`, `analysis/deploy.rs`, `analysis/formats.rs`, `analysis/album_art.rs`, `analysis/album_art_info.rs`, `analysis/image_files.rs`, `analysis/inbox_matches.rs`, `analysis/external_matches.rs`, `analysis/release_packing.rs` (4-stage pipeline)
+- **Pipeline infrastructure**: `mod.rs` (`PipelineStage` enum, `deferred_phases` on `ComputationResult`)
 
 ## Phase Overview
 
@@ -25,6 +26,18 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | **Analysis** | Full-corpus analysis requiring complete awareness | After Derivation completes |
 
 **Phase Boundary Enforcement**: Each phase has its own `Result` struct with a `spawn: Vec<PhaseComputation>` field that only accepts that phase's computations. Attempting to spawn a computation from a different phase will result in a compile error.
+
+### Staged Pipelines (Barrier-Separated Phases)
+
+Some computations require multi-stage execution with barriers between stages. The `deferred_phases` mechanism on `ComputationResult` enables this:
+
+1. **Stage 1 (orchestrator)** returns `spawn: [N computations]` (queued immediately) plus `deferred_phases: [(Resolve, [...]), (Analyze, [...])]`
+2. The Witch's `tick()` queues spawned computations and stores `deferred_phases` in `pending_computation_phases`
+3. All Stage 2 computations run in parallel. When all complete and the db write queue drains, `transition_to_completed()` fires
+4. `transition_to_completed()` pops the next phase from `pending_computation_phases`, waits for the db write queue to drain, then queues that phase's computations
+5. Repeats until all phases are drained, then transitions to Done
+
+This follows the same pattern as `pending_mutation_phases` (used for two-stage derivation). Pipeline stages are labeled via `PipelineStage` enum (`Resolve`, `Analyze`) for logging.
 
 ---
 
@@ -72,7 +85,10 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectInboxCompoundTags | Single-pass compound tag detection for inbox files. Checks collaboration keywords + per-tag separators, enriches matching_parts against corpus vocabulary. No orchestrator/dirty-inode tracking (inbox is small). Full recompute each cycle |
 | DetectPathTagMismatches | Detect files whose paths don't match their source dir's path-tag schema. Extracts tag values from path structure, compares against DB tags (case-insensitive). Emits per-file PathTagMismatch signals |
 | DeriveExternalMatches | Derive external match signals from AcoustID results. Compares recording metadata (title, artist, album) against corpus tags using raw string equality. Emits per-file ExternalMatch signals with classification and diffs |
-| PackReleases | Bin-pack AcoustID-matched recordings into MusicBrainz releases. Scores candidates by AcoustID confidence (0.35), duration match (0.20), tag similarity (0.20), track number match (0.10), and directory cohesion (0.15). Greedy assignment prevents double-booking release track slots. Manual trigger only (not in ScheduleContentAnalysis). Respects `release_packing` config (duration_tolerance_pct, min_confidence) |
+| PackReleases | **Stage 1 orchestrator** for the release bin-packing pipeline. Loads AcoustID external matches, filters by min_confidence and duration_tolerance_pct, identifies candidate releases, loads tracklists and locale-resolved artist names, writes session manifest to `release_packing_manifest`, truncates intermediate tables. Spawns N `ScoreReleaseCandidates` (one per release). Defers `ResolveReleaseConflicts` (Resolve stage) and `AnalyzeReleaseGaps` (Analyze stage) as barrier-separated phases. Manual trigger only |
+| ScoreReleaseCandidates | **Stage 2** (N parallel). Per-release candidate scoring. Loads release tracklist, finds corpus inodes matched via AcoustID recordings linked to this release, scores each (inode, track_slot) pairing by AcoustID confidence (0.35), duration match (0.20), tag similarity (0.20), track number match (0.10), and directory cohesion (0.15). Greedy local assignment marks optimal picks. Writes all candidates + optimal flags to `release_packing_scores` table |
+| ResolveReleaseConflicts | **Stage 3** (after barrier). Global conflict resolution across all per-release scoring results. Reads optimal picks from `release_packing_scores`, resolves cross-release inode conflicts via greedy global assignment (highest score first), emits `ReleasePacking` signals per assigned inode. Computes per-release coverage |
+| AnalyzeReleaseGaps | **Stage 4** (after barrier). Post-resolution gap analysis. Identifies unmatched corpus tracks (AcoustID matches but no release assignment) → `UnmatchedCorpusTrack` signals. Identifies unfilled release slots → `UnfilledReleaseSlot` signals. Detects near-miss patterns ((n-1)/n tracks matched from same directory containing n audio files) → `NearMissRelease` signals |
 | DetectDiscExtractions | Detect extractable disc numbers from ALBUM and TRACKNUMBER tags. Pass 1 (album): scans ALBUM tags for `,?\s*disc\s+(\d+)\s*$` pattern. Pass 2 (track number): scans TRACKNUMBER for `^([A-Za-z]+)(\d+)$`, groups by release context (album+album_artist), only emits if group has ≥2 files. Scans both corpus and inbox. Emits DiscExtraction aggregate signals |
 | AnalyzeFingerprintOverlaps | Analyze fingerprint overlaps for similarity, variants, quality tier partitioning |
 | DetectCrossSourceOverlaps | Cluster FingerprintOverlap signals by source directory (from config `dir` stanzas). Within-source overlaps ignored. |
@@ -132,7 +148,10 @@ MM uses three-phase computations with compile-time enforced boundaries:
 | DetectPathTagMismatches | — | PathTagMismatch | PathTagMismatch (via hash-based corpus reconciliation). For each corpus audio file with a matching source dir schema (direct or inherited), strips source dir prefix and extension, runs schema extraction, compares extracted tags against DB tags (case-insensitive). Emits StructureMismatch or ValueMismatch signals |
 | DetectDiscExtractions | — | DiscExtraction | DiscExtraction (via hash-based aggregate reconciliation). Pass 1: scans ALBUM tags from corpus_tags and inbox_tags for `,?\s*disc\s+(\d+)\s*$` pattern. Pass 2: scans TRACKNUMBER tags for `^([A-Za-z]+)(\d+)$` prefix pattern, groups by release context (album+album_artist), only emits if group has ≥2 files |
 | DeriveExternalMatches | — | ExternalMatch | ExternalMatch (via hash-based corpus reconciliation). For each corpus inode with AcoustID matches, parses stored raw response JSON, compares recording title/artist/album against corpus tags (raw string equality), classifies as ExactMatch/ContentDiff/MetadataOnly. Triggered by EXTERNAL, TAGS, or FILES scope |
-| PackReleases | — | ReleasePacking | ReleasePacking (via hash-based corpus reconciliation). Loads AcoustID matches, filters by min_confidence and duration_tolerance_pct, enumerates candidate (inode, recording, release, medium, track) tuples, scores compositely, applies greedy assignment with slot-occupancy tracking. Computes per-release coverage. Manual trigger only — not spawned by any orchestrator |
+| PackReleases | ScoreReleaseCandidates × N; defers ResolveReleaseConflicts (Resolve), AnalyzeReleaseGaps (Analyze) | — | — | Stage 1 orchestrator. Loads AcoustID matches, filters, writes manifest to `release_packing_manifest`, truncates intermediate tables, spawns per-release scorers. Clears stale ReleasePacking signals if no matches. Manual trigger only |
+| ScoreReleaseCandidates | — | — | — | Stage 2. Per-release scoring. Writes all candidates + optimal picks to `release_packing_scores` table. No signals emitted (intermediate data only) |
+| ResolveReleaseConflicts | — | ReleasePacking | ReleasePacking (via hash-based corpus reconciliation). Stage 3. Reads optimal picks, resolves cross-release inode conflicts via greedy global assignment, emits per-inode ReleasePacking signals with coverage data |
+| AnalyzeReleaseGaps | — | UnmatchedCorpusTrack, UnfilledReleaseSlot, NearMissRelease | UnmatchedCorpusTrack (via hash-based corpus reconciliation), UnfilledReleaseSlot (via hash-based aggregate reconciliation), NearMissRelease (via hash-based aggregate reconciliation). Stage 4. Only emits UnmatchedCorpusTrack for inodes that were scored but not assigned. Only emits UnfilledReleaseSlot for releases with at least one filled slot. Near-miss requires (n-1)/n tracks matched, all from same directory containing exactly n audio files |
 | DetectCrossSourceOverlaps | — | CrossSourceOverlap (keyed by sorted source pair, e.g., "bandcamp\|indie") | CrossSourceOverlap (via hash-based aggregate reconciliation). Skips source pairs with an ExpectedOverlap signal (operator whitelist) |
 | IndexImageFile | — | — | — | Dirty-inode computation spawned by ScheduleContentAnalysis (FILES scope). For each dirty inode in "index_image_file": determines image format from file extension, infers role from filename (cover_front/cover_back/other using COVER_FRONT_NAMES/COVER_BACK_NAMES constants), reads dimensions via image_dimensions(), writes to image_info table via UpsertImageInfo DbWriteOp. Clears dirty inodes after processing |
 | DetectDeployConflicts | — | DeployConflict | DeployConflict (via hash-based aggregate reconciliation). Uses inode-based signal lookup (signal.inode + metadata path). |

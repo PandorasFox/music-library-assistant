@@ -85,6 +85,26 @@ pub struct FileEntryData {
 }
 
 // ============================================================================
+// Pipeline Intermediate Data Types
+// ============================================================================
+
+/// A row for the release_packing_scores intermediate table.
+#[derive(Debug, Clone)]
+pub struct PackingScoreRow {
+    pub release_id: String,
+    pub inode: i64,
+    pub recording_id: String,
+    pub medium_pos: i32,
+    pub track_pos: i32,
+    pub track_title: String,
+    pub medium_format: Option<String>,
+    pub track_number: String,
+    pub score: f64,
+    pub score_breakdown: Vec<u8>, // bincode-serialized PackingScoreBreakdown
+    pub is_optimal: bool,
+}
+
+// ============================================================================
 // Signal Witness Trait
 // ============================================================================
 
@@ -503,6 +523,23 @@ enum DbWriteOp {
     },
 
     /// Shutdown sentinel — close DB connection and exit thread.
+    // =========================================================================
+    // Release Packing Pipeline Operations (intermediate tables)
+    // =========================================================================
+
+    /// Truncate both release packing intermediate tables for a fresh pipeline run.
+    TruncatePackingTables,
+
+    /// Write a batch of rows to release_packing_manifest.
+    WritePackingManifest {
+        rows: Vec<(String, i32, String, String)>, // (release_id, total_tracks, title, artist)
+    },
+
+    /// Write a batch of scored candidates to release_packing_scores.
+    WritePackingScores {
+        rows: Vec<PackingScoreRow>,
+    },
+
     Shutdown,
 }
 
@@ -1288,6 +1325,36 @@ impl SignalWriteSender {
             session_id: session_id.to_string(),
         });
     }
+
+    // =========================================================================
+    // Release Packing Pipeline Operations
+    // =========================================================================
+
+    /// Truncate both release packing intermediate tables for a fresh pipeline run.
+    pub fn truncate_packing_tables(&self, _witness: &impl SignalWitness) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::TruncatePackingTables);
+    }
+
+    /// Write a batch of rows to release_packing_manifest.
+    pub fn write_packing_manifest(
+        &self,
+        rows: Vec<(String, i32, String, String)>,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::WritePackingManifest { rows });
+    }
+
+    /// Write a batch of scored candidates to release_packing_scores.
+    pub fn write_packing_scores(
+        &self,
+        rows: Vec<PackingScoreRow>,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::WritePackingScores { rows });
+    }
 }
 
 // IndexWriteSender has been removed - all operations now go through SignalWriteSender.
@@ -1849,6 +1916,53 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         // ExecuteVacuum, ApplyReconciliation, and Shutdown are handled in the run_db_thread loop, never reach here
         DbWriteOp::ExecuteVacuum { .. } => unreachable!("ExecuteVacuum handled in run_db_thread loop"),
         DbWriteOp::ApplyReconciliation { .. } => unreachable!("ApplyReconciliation handled in run_db_thread loop"),
+        DbWriteOp::TruncatePackingTables => {
+            with_retry("truncate_packing_tables", "all", || {
+                db.conn().execute_batch(
+                    "DELETE FROM release_packing_manifest; DELETE FROM release_packing_scores;"
+                )?;
+                Ok(())
+            });
+        }
+
+        DbWriteOp::WritePackingManifest { rows } => {
+            with_retry("write_packing_manifest", "batch", || {
+                let mut stmt = db.conn().prepare(
+                    "INSERT OR REPLACE INTO release_packing_manifest (release_id, total_tracks, release_title, release_artist) VALUES (?1, ?2, ?3, ?4)"
+                )?;
+                for (release_id, total_tracks, title, artist) in rows {
+                    stmt.execute(rusqlite::params![release_id, total_tracks, title, artist])?;
+                }
+                Ok(())
+            });
+        }
+
+        DbWriteOp::WritePackingScores { rows } => {
+            with_retry("write_packing_scores", "batch", || {
+                let mut stmt = db.conn().prepare(
+                    "INSERT OR REPLACE INTO release_packing_scores \
+                     (release_id, inode, recording_id, medium_pos, track_pos, track_title, medium_format, track_number, score, score_breakdown, is_optimal) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+                )?;
+                for row in rows {
+                    stmt.execute(rusqlite::params![
+                        row.release_id,
+                        row.inode,
+                        row.recording_id,
+                        row.medium_pos,
+                        row.track_pos,
+                        row.track_title,
+                        row.medium_format,
+                        row.track_number,
+                        row.score,
+                        row.score_breakdown,
+                        row.is_optimal as i32,
+                    ])?;
+                }
+                Ok(())
+            });
+        }
+
         DbWriteOp::Shutdown => unreachable!("Shutdown handled in run_db_thread loop"),
     }
 }

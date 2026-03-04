@@ -124,6 +124,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
                 observed_inbox_inodes: HashMap::new(),
                 observed_library_files: Vec::new(),
                 fetch_result: None,
+                deferred_phases: std::collections::VecDeque::new(),
             };
         }
     };
@@ -212,6 +213,7 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
         observed_inbox_inodes: HashMap::new(),
         observed_library_files: Vec::new(),
         fetch_result: None,
+        deferred_phases: std::collections::VecDeque::new(),
     }
 }
 
@@ -243,6 +245,7 @@ pub(super) fn execute_computation(computation: Computation, label: String, queue
         observed_inbox_inodes: result.observed_inbox_inodes,
         observed_library_files: result.observed_library_files,
         fetch_result: None,
+        deferred_phases: result.deferred_phases,
     }
 }
 
@@ -300,6 +303,7 @@ pub(super) fn execute_maintenance(task: DbMaintenanceTask, label: String, queue_
         observed_corpus_inodes: HashMap::new(),
         observed_inbox_inodes: HashMap::new(),
         observed_library_files: Vec::new(),
+        deferred_phases: std::collections::VecDeque::new(),
     }
 }
 
@@ -548,6 +552,7 @@ pub(super) fn execute_external_fetch(
         observed_corpus_inodes: HashMap::new(),
         observed_inbox_inodes: HashMap::new(),
         observed_library_files: Vec::new(),
+        deferred_phases: std::collections::VecDeque::new(),
     }
 }
 

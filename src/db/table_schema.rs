@@ -629,6 +629,67 @@ pub fn schema_inventory() -> Vec<TableEntry> {
         index_sql: &[],
     });
 
+    // Release packing gap analysis signals
+    tables.push(TableEntry {
+        name: "signal_unmatched_corpus_track",
+        kind: TableKind::Computed,
+        create_sql: <UnmatchedCorpusTrackSignal as store::CorpusSignalStore>::TABLE_SQL,
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
+        name: "signal_unfilled_release_slot",
+        kind: TableKind::Computed,
+        create_sql: <UnfilledReleaseSlotSignal as store::AggregateSignalStore>::TABLE_SQL,
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
+        name: "signal_near_miss_release",
+        kind: TableKind::Computed,
+        create_sql: <NearMissReleaseSignal as store::AggregateSignalStore>::TABLE_SQL,
+        index_sql: &[],
+    });
+
+    // =================================================================
+    // Intermediate computed tables (pipeline scratch data)
+    // =================================================================
+
+    tables.push(TableEntry {
+        name: "release_packing_manifest",
+        kind: TableKind::Computed,
+        create_sql: "CREATE TABLE IF NOT EXISTS release_packing_manifest (
+            release_id TEXT PRIMARY KEY,
+            total_tracks INTEGER NOT NULL,
+            release_title TEXT NOT NULL,
+            release_artist TEXT NOT NULL
+        )",
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
+        name: "release_packing_scores",
+        kind: TableKind::Computed,
+        create_sql: "CREATE TABLE IF NOT EXISTS release_packing_scores (
+            release_id TEXT NOT NULL,
+            inode INTEGER NOT NULL,
+            recording_id TEXT NOT NULL,
+            medium_pos INTEGER NOT NULL,
+            track_pos INTEGER NOT NULL,
+            track_title TEXT NOT NULL,
+            medium_format TEXT,
+            track_number TEXT NOT NULL,
+            score REAL NOT NULL,
+            score_breakdown BLOB NOT NULL,
+            is_optimal INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (release_id, inode, medium_pos, track_pos)
+        )",
+        index_sql: &[
+            "CREATE INDEX IF NOT EXISTS idx_rps_optimal ON release_packing_scores(is_optimal)",
+            "CREATE INDEX IF NOT EXISTS idx_rps_inode ON release_packing_scores(inode)",
+        ],
+    });
+
     tables
 }
 

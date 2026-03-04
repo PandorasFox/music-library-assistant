@@ -49,9 +49,38 @@ pub use types::ComputationWitness;
 pub use stats::{close_thread_local_connection, get_thread_stats, with_read_only_db, ThreadStats};
 
 // Internal imports for execute functions
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use crate::config;
 use stats::{ensure_thread_id, record_task_stats};
+
+// ============================================================================
+// Pipeline Stages (multi-phase computation barriers)
+// ============================================================================
+
+/// Named stages for multi-phase computation pipelines.
+///
+/// Orchestrator computations (e.g., PackReleases) return `deferred_phases`
+/// containing barrier-separated follow-up stages. Each stage runs only after
+/// all prior work drains (in-flight tasks + db write queue).
+///
+/// Actual execution order is determined by VecDeque insertion order at the
+/// orchestrator, not by variant declaration order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PipelineStage {
+    /// Global conflict resolution across scored entities.
+    Resolve,
+    /// Post-resolution gap/quality analysis.
+    Analyze,
+}
+
+impl PipelineStage {
+    pub fn label(&self) -> &'static str {
+        match self {
+            PipelineStage::Resolve => "Resolving",
+            PipelineStage::Analyze => "Analyzing",
+        }
+    }
+}
 
 // ============================================================================
 // Shared Constants
@@ -111,6 +140,9 @@ pub struct ComputationResult {
     pub spawn_derivation: Vec<derivation::Computation>,
     /// Analysis computations to spawn
     pub spawn_analysis: Vec<analysis::Computation>,
+    /// Barrier-separated follow-up phases. Each phase runs only after all
+    /// prior work drains (in-flight tasks + db write queue empty).
+    pub deferred_phases: VecDeque<(PipelineStage, Vec<Computation>)>,
     /// Corpus inodes observed on disk during this computation (inode → relative path).
     pub observed_corpus_inodes: HashMap<i64, String>,
     /// Inbox inodes observed on disk during this computation (inode → relative path).
@@ -128,6 +160,7 @@ impl ComputationResult {
             spawn_observation: result.spawn,
             spawn_derivation: Vec::new(),
             spawn_analysis: Vec::new(),
+            deferred_phases: VecDeque::new(),
             observed_corpus_inodes: result.observed_corpus_inodes,
             observed_inbox_inodes: result.observed_inbox_inodes,
             observed_library_files: Vec::new(),
@@ -142,6 +175,7 @@ impl ComputationResult {
             spawn_observation: Vec::new(),
             spawn_derivation: result.spawn,
             spawn_analysis: Vec::new(),
+            deferred_phases: VecDeque::new(),
             observed_corpus_inodes: HashMap::new(),
             observed_inbox_inodes: HashMap::new(),
             observed_library_files: result.observed_library_files,
@@ -156,6 +190,7 @@ impl ComputationResult {
             spawn_observation: Vec::new(),
             spawn_derivation: Vec::new(),
             spawn_analysis: result.spawn,
+            deferred_phases: result.deferred_phases,
             observed_corpus_inodes: HashMap::new(),
             observed_inbox_inodes: HashMap::new(),
             observed_library_files: Vec::new(),
@@ -236,6 +271,7 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             spawn_observation: Vec::new(),
             spawn_derivation: Vec::new(),
             spawn_analysis: Vec::new(),
+            deferred_phases: VecDeque::new(),
             observed_corpus_inodes: HashMap::new(),
             observed_inbox_inodes: HashMap::new(),
             observed_library_files: Vec::new(),

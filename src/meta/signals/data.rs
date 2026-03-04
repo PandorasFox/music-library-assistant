@@ -450,6 +450,79 @@ pub struct PackingScoreBreakdown {
     pub directory_cohesion: f64,
 }
 
+// ============================================================================
+// Release Packing Gap Analysis Signals
+// ============================================================================
+
+/// Corpus inode with AcoustID recording matches but no release assignment
+/// after global conflict resolution. (Corpus signal, inode PK)
+#[derive(Debug, Clone)]
+pub struct UnmatchedCorpusTrackSignal {
+    pub inode: i64,
+    pub path: String,
+    /// Serialized as bincode BLOB.
+    pub data: UnmatchedCorpusTrackData,
+}
+
+/// Bincode payload for UnmatchedCorpusTrack.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnmatchedCorpusTrackData {
+    /// Recording MBIDs this inode matched via AcoustID.
+    pub recording_ids: Vec<String>,
+    /// Release MBIDs where this inode was a candidate but lost conflict resolution.
+    pub considered_release_ids: Vec<String>,
+}
+
+/// Release track position with no matching corpus file after global assignment.
+/// (Aggregate signal, key = `{release_id}:{medium_pos}:{track_pos}`)
+#[derive(Debug, Clone)]
+pub struct UnfilledReleaseSlotSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: UnfilledReleaseSlotData,
+}
+
+/// Bincode payload for UnfilledReleaseSlot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnfilledReleaseSlotData {
+    pub release_id: String,
+    pub release_title: String,
+    pub release_artist: String,
+    pub medium_pos: u32,
+    pub track_pos: u32,
+    pub track_title: String,
+    pub recording_id: String,
+    pub filled_count: u32,
+    pub total_tracks: u32,
+}
+
+/// Near-miss: release with (n-1)/n tracks matched, all from same directory
+/// containing n total audio files. The missing track is likely the unmatched file.
+/// (Aggregate signal, key = `{release_id}:{directory}`)
+#[derive(Debug, Clone)]
+pub struct NearMissReleaseSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: NearMissReleaseData,
+}
+
+/// Bincode payload for NearMissRelease.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NearMissReleaseData {
+    pub release_id: String,
+    pub release_title: String,
+    pub release_artist: String,
+    pub directory: String,
+    pub candidate_inode: i64,
+    pub candidate_path: String,
+    pub missing_medium_pos: u32,
+    pub missing_track_pos: u32,
+    pub missing_track_title: String,
+    pub missing_recording_id: String,
+    pub filled_count: u32,
+    pub total_tracks: u32,
+}
+
 /// A group of inodes sharing the same compound tag value.
 /// Used to aggregate compound split resolution by value rather than per-file.
 #[derive(Debug, Clone)]
@@ -912,6 +985,7 @@ pub enum TypedSignalWrite {
     PathTagMismatch(PathTagMismatchSignal),
     ExternalMatch(ExternalMatchSignal),
     ReleasePacking(ReleasePackingSignal),
+    UnmatchedCorpusTrack(UnmatchedCorpusTrackSignal),
     // Aggregate signals (semantic-keyed)
     CanonicalTag(CanonicalTagSignal),
     LibraryLeftover(LibraryLeftoverSignal),
@@ -935,6 +1009,8 @@ pub enum TypedSignalWrite {
     InboxMissingTag(InboxMissingTagSignal),
     InboxCompoundTag(InboxCompoundTagSignal),
     DiscExtraction(DiscExtractionSignal),
+    UnfilledReleaseSlot(UnfilledReleaseSlotSignal),
+    NearMissRelease(NearMissReleaseSignal),
 }
 
 impl TypedSignalWrite {
@@ -965,6 +1041,7 @@ impl TypedSignalWrite {
             Self::PathTagMismatch(s) => s.insert(conn),
             Self::ExternalMatch(s) => s.insert(conn),
             Self::ReleasePacking(s) => s.insert(conn),
+            Self::UnmatchedCorpusTrack(s) => s.insert(conn),
             Self::CanonicalTag(s) => s.insert(conn),
             Self::LibraryLeftover(s) => s.insert(conn),
             Self::LibraryStale(s) => s.insert(conn),
@@ -987,6 +1064,8 @@ impl TypedSignalWrite {
             Self::InboxMissingTag(s) => s.insert(conn),
             Self::InboxCompoundTag(s) => s.insert(conn),
             Self::DiscExtraction(s) => s.insert(conn),
+            Self::UnfilledReleaseSlot(s) => s.insert(conn),
+            Self::NearMissRelease(s) => s.insert(conn),
         }
     }
 
@@ -1017,6 +1096,7 @@ impl TypedSignalWrite {
             Self::PathTagMismatch(s) => PathTagMismatchSignal::exists(conn, s.inode),
             Self::ExternalMatch(s) => ExternalMatchSignal::exists(conn, s.inode),
             Self::ReleasePacking(s) => ReleasePackingSignal::exists(conn, s.inode),
+            Self::UnmatchedCorpusTrack(s) => UnmatchedCorpusTrackSignal::exists(conn, s.inode),
             Self::CanonicalTag(s) => CanonicalTagSignal::exists(conn, &s.key),
             Self::LibraryLeftover(s) => LibraryLeftoverSignal::exists(conn, &s.key),
             Self::LibraryStale(s) => LibraryStaleSignal::exists(conn, &s.key),
@@ -1039,6 +1119,8 @@ impl TypedSignalWrite {
             Self::InboxMissingTag(s) => InboxMissingTagSignal::exists(conn, &s.key),
             Self::InboxCompoundTag(s) => InboxCompoundTagSignal::exists(conn, s.inode),
             Self::DiscExtraction(s) => DiscExtractionSignal::exists(conn, &s.key),
+            Self::UnfilledReleaseSlot(s) => UnfilledReleaseSlotSignal::exists(conn, &s.key),
+            Self::NearMissRelease(s) => NearMissReleaseSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }
@@ -1090,6 +1172,11 @@ impl TypedSignalWrite {
                 }
             }
             Self::ReleasePacking(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::UnmatchedCorpusTrack(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }
@@ -1233,6 +1320,16 @@ impl TypedSignalWrite {
                 s.source_b.hash(&mut hasher);
             }
             Self::ExpectedDuplicate(_) => {} // key + created_at only
+            Self::UnfilledReleaseSlot(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::NearMissRelease(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
         }
         hasher.finish()
     }

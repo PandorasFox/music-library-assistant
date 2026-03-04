@@ -1,12 +1,14 @@
 //! Release Packing Browser — read-only full-screen browser for packing results.
 //!
-//! Shows all release packing signals grouped by release, with unfilled slots,
-//! near-misses, and unmatched files in a hierarchical navigable list.
+//! Three-pane layout:
+//! - Left: flat list of releases, near-misses, and unmatched files
+//! - Middle: tracks/slots for the selected release
+//! - Bottom-right: per-track detail (score breakdown, file info)
 
 pub mod render;
 pub mod types;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::meta::signals::data::{
     NearMissReleaseData, ReleasePackingData, UnfilledReleaseSlotData, UnmatchedCorpusTrackData,
@@ -29,22 +31,25 @@ pub(crate) enum ReleasePackingBrowserAction {
 // ============================================================================
 
 pub(crate) struct ReleasePackingBrowserState {
-    /// Flat navigable list entries.
+    // Left pane (flat list: releases + near-miss + unmatched)
     pub entries: Vec<PackingListEntry>,
-    /// Cursor position in `entries` (skips section headers).
     pub cursor: usize,
-    /// Left pane scroll offset.
     pub scroll: usize,
-    /// Right pane scroll offset.
-    pub detail_scroll: usize,
-    /// Whether the right (detail) pane has focus.
-    pub detail_focused: bool,
-    /// Click targets for the left pane.
-    pub click_targets: ListClickTargets,
-    /// Expanded release IDs (all expanded by default).
-    pub expanded: HashSet<String>,
 
-    // Source data (for rebuild after expand/collapse)
+    // Middle pane (tracks for selected release)
+    pub track_cursor: usize,
+    pub track_scroll: usize,
+
+    // Detail pane
+    pub detail_scroll: usize,
+
+    // Focus
+    pub focused_pane: FocusedPane,
+
+    // Click targets
+    pub click_targets: ListClickTargets,
+
+    // Source data
     pub releases: Vec<ReleaseGroup>,
     pub near_misses: Vec<NearMissReleaseData>,
     pub unmatched: Vec<UnmatchedEntry>,
@@ -87,7 +92,6 @@ impl ReleasePackingBrowserState {
 
         // Build release groups
         let mut releases: Vec<ReleaseGroup> = Vec::new();
-        let mut expanded = HashSet::new();
 
         for (release_id, rows) in &release_map {
             let first = &rows[0].2;
@@ -132,8 +136,6 @@ impl ReleasePackingBrowserState {
                 0.0
             };
 
-            expanded.insert(release_id.clone());
-
             releases.push(ReleaseGroup {
                 release_id: release_id.clone(),
                 release_title: first.release_title.clone(),
@@ -165,10 +167,11 @@ impl ReleasePackingBrowserState {
             entries: Vec::new(),
             cursor: 0,
             scroll: 0,
+            track_cursor: 0,
+            track_scroll: 0,
             detail_scroll: 0,
-            detail_focused: false,
+            focused_pane: FocusedPane::LeftPane,
             click_targets: Default::default(),
-            expanded,
             releases,
             near_misses: near_miss_rows,
             unmatched,
@@ -176,44 +179,23 @@ impl ReleasePackingBrowserState {
             total_releases,
         };
         state.rebuild_entries();
-        // Set cursor to first navigable entry
         state.advance_cursor_to_navigable(0);
         state
     }
 
-    /// Regenerate the flat entry list from source data + expanded set.
+    /// Regenerate the flat entry list from source data.
     pub fn rebuild_entries(&mut self) {
         let mut entries = Vec::new();
 
-        // Releases section
         if !self.releases.is_empty() {
             entries.push(PackingListEntry::ReleaseSectionHeader {
                 count: self.releases.len(),
             });
-            for (idx, release) in self.releases.iter().enumerate() {
-                let is_expanded = self.expanded.contains(&release.release_id);
-                entries.push(PackingListEntry::ReleaseHeader {
-                    release_idx: idx,
-                    expanded: is_expanded,
-                });
-                if is_expanded {
-                    for track_idx in 0..release.tracks.len() {
-                        entries.push(PackingListEntry::AssignedTrack {
-                            release_idx: idx,
-                            track_idx,
-                        });
-                    }
-                    for slot_idx in 0..release.unfilled.len() {
-                        entries.push(PackingListEntry::UnfilledSlot {
-                            release_idx: idx,
-                            slot_idx,
-                        });
-                    }
-                }
+            for idx in 0..self.releases.len() {
+                entries.push(PackingListEntry::ReleaseHeader { release_idx: idx });
             }
         }
 
-        // Near-misses section
         if !self.near_misses.is_empty() {
             entries.push(PackingListEntry::NearMissSectionHeader {
                 count: self.near_misses.len(),
@@ -223,7 +205,6 @@ impl ReleasePackingBrowserState {
             }
         }
 
-        // Unmatched section
         if !self.unmatched.is_empty() {
             entries.push(PackingListEntry::UnmatchedSectionHeader {
                 count: self.unmatched.len(),
@@ -244,13 +225,30 @@ impl ReleasePackingBrowserState {
                 return;
             }
         }
-        // Fallback: stay at from
         self.cursor = from.min(self.entries.len().saturating_sub(1));
     }
 
     /// Get the currently selected entry.
     pub fn selected_entry(&self) -> Option<&PackingListEntry> {
         self.entries.get(self.cursor)
+    }
+
+    /// Get the release for the current left-pane selection, if any.
+    pub fn selected_release(&self) -> Option<&ReleaseGroup> {
+        match self.selected_entry()? {
+            PackingListEntry::ReleaseHeader { release_idx } => {
+                self.releases.get(*release_idx)
+            }
+            _ => None,
+        }
+    }
+
+    /// Total track+unfilled count for the selected release (for middle pane bounds).
+    pub fn selected_release_item_count(&self) -> usize {
+        match self.selected_release() {
+            Some(r) => r.tracks.len() + r.unfilled.len(),
+            None => 0,
+        }
     }
 }
 
@@ -260,63 +258,84 @@ impl ReleasePackingBrowserState {
 
 impl ReleasePackingBrowserState {
     pub fn handle_input(&mut self, action: &InputAction) -> ReleasePackingBrowserAction {
-        if self.detail_focused {
-            return self.handle_detail_input(action);
+        match self.focused_pane {
+            FocusedPane::LeftPane => self.handle_left_input(action),
+            FocusedPane::MiddlePane => self.handle_middle_input(action),
+            FocusedPane::DetailPane => self.handle_detail_input(action),
         }
+    }
 
+    fn handle_left_input(&mut self, action: &InputAction) -> ReleasePackingBrowserAction {
         match action {
             InputAction::NavUp => {
                 self.move_cursor_up();
-                self.detail_scroll = 0;
+                self.reset_middle_pane();
                 ReleasePackingBrowserAction::None
             }
             InputAction::NavDown => {
                 self.move_cursor_down();
-                self.detail_scroll = 0;
+                self.reset_middle_pane();
                 ReleasePackingBrowserAction::None
             }
-            InputAction::NavRight => {
-                // Expand release, or focus detail pane
-                if let Some(PackingListEntry::ReleaseHeader { release_idx, expanded: false }) =
-                    self.entries.get(self.cursor)
-                {
-                    let release_id = self.releases[*release_idx].release_id.clone();
-                    self.expanded.insert(release_id);
-                    self.rebuild_entries();
-                } else {
-                    self.detail_focused = true;
-                    self.detail_scroll = 0;
-                }
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::NavLeft => {
-                // Collapse release
-                if let Some(PackingListEntry::ReleaseHeader { release_idx, expanded: true }) =
-                    self.entries.get(self.cursor)
-                {
-                    let release_id = self.releases[*release_idx].release_id.clone();
-                    self.expanded.remove(&release_id);
-                    self.rebuild_entries();
-                }
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::FocusRight => {
-                self.detail_focused = true;
-                self.detail_scroll = 0;
+            InputAction::NavRight | InputAction::FocusRight => {
+                self.focused_pane = FocusedPane::MiddlePane;
                 ReleasePackingBrowserAction::None
             }
             InputAction::Home => {
                 self.advance_cursor_to_navigable(0);
-                self.detail_scroll = 0;
+                self.reset_middle_pane();
                 ReleasePackingBrowserAction::None
             }
             InputAction::End => {
-                // Find last navigable entry
                 for i in (0..self.entries.len()).rev() {
                     if !self.entries[i].is_section_header() {
                         self.cursor = i;
                         break;
                     }
+                }
+                self.reset_middle_pane();
+                ReleasePackingBrowserAction::None
+            }
+            InputAction::Cancel => ReleasePackingBrowserAction::Cancel,
+            _ => ReleasePackingBrowserAction::None,
+        }
+    }
+
+    fn handle_middle_input(&mut self, action: &InputAction) -> ReleasePackingBrowserAction {
+        let item_count = self.selected_release_item_count();
+
+        match action {
+            InputAction::NavUp => {
+                if self.track_cursor > 0 {
+                    self.track_cursor -= 1;
+                    self.detail_scroll = 0;
+                }
+                ReleasePackingBrowserAction::None
+            }
+            InputAction::NavDown => {
+                if item_count > 0 && self.track_cursor < item_count - 1 {
+                    self.track_cursor += 1;
+                    self.detail_scroll = 0;
+                }
+                ReleasePackingBrowserAction::None
+            }
+            InputAction::NavLeft | InputAction::FocusLeft => {
+                self.focused_pane = FocusedPane::LeftPane;
+                ReleasePackingBrowserAction::None
+            }
+            InputAction::FocusRight => {
+                self.focused_pane = FocusedPane::DetailPane;
+                self.detail_scroll = 0;
+                ReleasePackingBrowserAction::None
+            }
+            InputAction::Home => {
+                self.track_cursor = 0;
+                self.detail_scroll = 0;
+                ReleasePackingBrowserAction::None
+            }
+            InputAction::End => {
+                if item_count > 0 {
+                    self.track_cursor = item_count - 1;
                 }
                 self.detail_scroll = 0;
                 ReleasePackingBrowserAction::None
@@ -349,16 +368,22 @@ impl ReleasePackingBrowserState {
                 ReleasePackingBrowserAction::None
             }
             InputAction::End => {
-                self.detail_scroll = usize::MAX / 2; // will be clamped in render
+                self.detail_scroll = usize::MAX / 2;
                 ReleasePackingBrowserAction::None
             }
             InputAction::NavLeft | InputAction::FocusLeft => {
-                self.detail_focused = false;
+                self.focused_pane = FocusedPane::MiddlePane;
                 ReleasePackingBrowserAction::None
             }
             InputAction::Cancel => ReleasePackingBrowserAction::Cancel,
             _ => ReleasePackingBrowserAction::None,
         }
+    }
+
+    fn reset_middle_pane(&mut self) {
+        self.track_cursor = 0;
+        self.track_scroll = 0;
+        self.detail_scroll = 0;
     }
 
     fn move_cursor_up(&mut self) {

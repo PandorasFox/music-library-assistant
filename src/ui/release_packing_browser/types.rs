@@ -2,6 +2,16 @@
 
 use crate::meta::signals::data::{PackingScoreBreakdown, UnmatchedCorpusTrackData};
 
+/// Which pane currently has focus.
+pub enum FocusedPane {
+    /// Left pane: release/near-miss/unmatched list.
+    LeftPane,
+    /// Middle pane: tracks list for selected release.
+    MiddlePane,
+    /// Bottom-right pane: per-track detail (scrollable).
+    DetailPane,
+}
+
 /// A release group with its assigned tracks and unfilled slots.
 pub struct ReleaseGroup {
     pub release_id: String,
@@ -41,16 +51,13 @@ pub struct UnmatchedEntry {
     pub data: UnmatchedCorpusTrackData,
 }
 
-/// An entry in the flat navigable list.
+/// An entry in the flat left-pane navigable list.
+/// Tracks are shown in the middle pane, not inline here.
 pub enum PackingListEntry {
     /// Section header for releases.
     ReleaseSectionHeader { count: usize },
-    /// A release header row (expandable).
-    ReleaseHeader { release_idx: usize, expanded: bool },
-    /// An assigned track under a release.
-    AssignedTrack { release_idx: usize, track_idx: usize },
-    /// An unfilled slot under a release.
-    UnfilledSlot { release_idx: usize, slot_idx: usize },
+    /// A release row.
+    ReleaseHeader { release_idx: usize },
     /// Section header for near-misses.
     NearMissSectionHeader { count: usize },
     /// A near-miss release entry.

@@ -1,8 +1,9 @@
 //! Rendering for the Release Packing Browser.
 //!
-//! Full-screen two-pane layout (35/65):
-//! - Left: hierarchical navigable list (releases → tracks/slots, near-misses, unmatched)
-//! - Right: context-sensitive detail pane with wrapping text
+//! Three-pane layout:
+//! - Left (25%): flat release/near-miss/unmatched list
+//! - Top-right (60%): tracks+unfilled for selected release
+//! - Bottom-right (40%): per-track detail with score breakdown
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -14,29 +15,42 @@ use ratatui::{
 
 use super::types::*;
 use super::ReleasePackingBrowserState;
+use crate::ui::widgets::control_colors;
 
 pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
-    // Info bar (1 line) + content area
+    // Outer: info bar (1) + content (min) + controls (1)
     let outer = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
         .split(area);
 
     render_info_bar(f, outer[0], state);
+    render_controls(f, outer[2]);
 
-    // Two-pane horizontal split: 35% left, 65% right
+    // Content: left (25%) + right (75%)
     let panes = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+        .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
         .split(outer[1]);
 
+    // Right side: tracks (60%) + detail (40%)
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(panes[1]);
+
     render_left_pane(f, panes[0], state);
-    render_right_pane(f, panes[1], state);
+    render_tracks_pane(f, right[0], state);
+    render_detail_pane(f, right[1], state);
 }
 
 fn render_info_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserState) {
     let summary = format!(
-        " {} tracks assigned to {} releases | Esc to close | Shift+Arrow to switch panes",
+        " {} tracks assigned to {} releases",
         state.total_assigned, state.total_releases,
     );
     let line = Line::from(Span::styled(
@@ -46,16 +60,26 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserState
     f.render_widget(Paragraph::new(vec![line]), area);
 }
 
+fn render_controls(f: &mut Frame, area: Rect) {
+    let line = Line::from(vec![
+        control_colors::text(" "),
+        control_colors::nav("^v"),
+        control_colors::text(" nav  "),
+        control_colors::nav("Shift+Arrow"),
+        control_colors::text(" switch pane  "),
+        control_colors::cancel("Esc"),
+        control_colors::text(" close"),
+    ]);
+    f.render_widget(Paragraph::new(vec![line]), area);
+}
+
 // ============================================================================
-// Left Pane: Hierarchical List
+// Left Pane: Flat Release List
 // ============================================================================
 
 fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
-    let border_color = if state.detail_focused {
-        Color::DarkGray
-    } else {
-        Color::Yellow
-    };
+    let focused = matches!(state.focused_pane, FocusedPane::LeftPane);
+    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
     let block = Block::default()
         .title(" Releases ")
         .borders(Borders::ALL)
@@ -73,8 +97,8 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowser
     let mut lines: Vec<Line> = Vec::new();
 
     for (idx, entry) in state.entries.iter().enumerate() {
-        let is_selected = !state.detail_focused && state.cursor == idx;
-        let line = render_list_entry(entry, is_selected, state);
+        let is_selected = focused && state.cursor == idx;
+        let line = render_left_entry(entry, is_selected, state, inner.width as usize);
         let line_idx = lines.len();
 
         if !entry.is_section_header() {
@@ -103,23 +127,22 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowser
     f.render_widget(Paragraph::new(visible_lines), inner);
 }
 
-fn render_list_entry(
+fn render_left_entry(
     entry: &PackingListEntry,
     selected: bool,
     state: &ReleasePackingBrowserState,
+    width: usize,
 ) -> Line<'static> {
+    let title_max = width.saturating_sub(10); // room for marker + coverage
+
     match entry {
         PackingListEntry::ReleaseSectionHeader { count } => Line::from(Span::styled(
-            format!("── Releases ({}) ──────────────", count),
+            format!("── Releases ({}) ──", count),
             Style::default().fg(Color::DarkGray),
         )),
 
-        PackingListEntry::ReleaseHeader {
-            release_idx,
-            expanded,
-        } => {
+        PackingListEntry::ReleaseHeader { release_idx } => {
             let release = &state.releases[*release_idx];
-            let arrow = if *expanded { "▾" } else { "▸" };
             let marker = if selected { "▸ " } else { "  " };
             let coverage_color = if release.coverage >= 0.9 {
                 Color::Green
@@ -141,9 +164,8 @@ fn render_list_entry(
 
             Line::from(vec![
                 Span::styled(marker.to_string(), title_style),
-                Span::styled(format!("{} ", arrow), Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    truncate_for_width(&release.release_title, 25),
+                    truncate_for_width(&release.release_title, title_max),
                     title_style,
                 ),
                 Span::styled(
@@ -153,91 +175,8 @@ fn render_list_entry(
             ])
         }
 
-        PackingListEntry::AssignedTrack {
-            release_idx,
-            track_idx,
-        } => {
-            let track = &state.releases[*release_idx].tracks[*track_idx];
-            let marker = if selected { "▸ " } else { "  " };
-            let label_style = if selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            // Show tree connector
-            let release = &state.releases[*release_idx];
-            let is_last = *track_idx == release.tracks.len() - 1 && release.unfilled.is_empty();
-            let connector = if is_last { "└ " } else { "├ " };
-
-            let filename = track
-                .path
-                .rsplit('/')
-                .next()
-                .unwrap_or(&track.path);
-
-            Line::from(vec![
-                Span::styled(marker.to_string(), label_style),
-                Span::styled(
-                    format!("  {} ", connector),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("{:>2} ", track.track_number),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    truncate_for_width(filename, 20),
-                    label_style,
-                ),
-                Span::styled(
-                    format!(" {:.2}", track.score),
-                    Style::default().fg(Color::Yellow),
-                ),
-            ])
-        }
-
-        PackingListEntry::UnfilledSlot {
-            release_idx,
-            slot_idx,
-        } => {
-            let slot = &state.releases[*release_idx].unfilled[*slot_idx];
-            let marker = if selected { "▸ " } else { "  " };
-            let is_last = *slot_idx == state.releases[*release_idx].unfilled.len() - 1;
-            let connector = if is_last { "└ " } else { "├ " };
-            let label_style = if selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Red)
-            };
-
-            Line::from(vec![
-                Span::styled(marker.to_string(), label_style),
-                Span::styled(
-                    format!("  {} ", connector),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled("░ ".to_string(), Style::default().fg(Color::Red)),
-                Span::styled(
-                    format!("{:02} ", slot.track_pos),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    truncate_for_width(&slot.track_title, 18),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-                Span::styled(" ----", Style::default().fg(Color::DarkGray)),
-            ])
-        }
-
         PackingListEntry::NearMissSectionHeader { count } => Line::from(Span::styled(
-            format!("── Near-Misses ({}) ──────────", count),
+            format!("── Near-Misses ({}) ──", count),
             Style::default().fg(Color::DarkGray),
         )),
 
@@ -256,7 +195,7 @@ fn render_list_entry(
                 Span::styled(marker.to_string(), label_style),
                 Span::styled("! ", Style::default().fg(Color::Yellow)),
                 Span::styled(
-                    truncate_for_width(&nm.release_title, 28),
+                    truncate_for_width(&nm.release_title, title_max.saturating_sub(2)),
                     label_style,
                 ),
                 Span::styled(
@@ -267,7 +206,7 @@ fn render_list_entry(
         }
 
         PackingListEntry::UnmatchedSectionHeader { count } => Line::from(Span::styled(
-            format!("── Unmatched ({}) ───────────", count),
+            format!("── Unmatched ({}) ──", count),
             Style::default().fg(Color::DarkGray),
         )),
 
@@ -286,37 +225,162 @@ fn render_list_entry(
 
             Line::from(vec![
                 Span::styled(marker.to_string(), label_style),
-                Span::styled(truncate_for_width(filename, 35).to_string(), label_style),
+                Span::styled(
+                    truncate_for_width(filename, title_max),
+                    label_style,
+                ),
             ])
         }
     }
 }
 
-/// Truncate a string to max_chars, appending "..." if truncated.
-/// Uses char boundaries for safety.
-fn truncate_for_width(s: &str, max_chars: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_chars {
-        s.to_string()
-    } else if max_chars <= 3 {
-        s.chars().take(max_chars).collect()
-    } else {
-        let mut result: String = s.chars().take(max_chars - 3).collect();
-        result.push_str("...");
-        result
+// ============================================================================
+// Middle Pane: Tracks for Selected Release
+// ============================================================================
+
+fn render_tracks_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
+    let focused = matches!(state.focused_pane, FocusedPane::MiddlePane);
+    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
+    let block = Block::default()
+        .title(" Tracks ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height < 2 || inner.width < 10 {
+        return;
+    }
+
+    // For non-release selections, show relevant detail in the middle pane
+    match state.selected_entry() {
+        Some(PackingListEntry::ReleaseHeader { release_idx }) => {
+            let release_idx = *release_idx;
+            render_release_tracks(f, inner, state, release_idx);
+        }
+        Some(PackingListEntry::NearMissEntry { idx }) => {
+            let lines = render_near_miss_detail(&state.near_misses[*idx]);
+            render_scrollable_lines(f, inner, &lines, 0);
+        }
+        Some(PackingListEntry::UnmatchedFile { idx }) => {
+            let lines = render_unmatched_detail(&state.unmatched[*idx]);
+            render_scrollable_lines(f, inner, &lines, 0);
+        }
+        _ => {
+            let line = Line::from(Span::styled(
+                "No release selected",
+                Style::default().fg(Color::DarkGray),
+            ));
+            f.render_widget(Paragraph::new(vec![line]), inner);
+        }
     }
 }
 
+fn render_release_tracks(
+    f: &mut Frame,
+    area: Rect,
+    state: &mut ReleasePackingBrowserState,
+    release_idx: usize,
+) {
+    let focused = matches!(state.focused_pane, FocusedPane::MiddlePane);
+    let release = &state.releases[release_idx];
+    let track_count = release.tracks.len();
+    let unfilled_count = release.unfilled.len();
+    let total = track_count + unfilled_count;
+
+    // Build merged list: tracks and unfilled slots sorted by position
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Assigned tracks
+    for (i, track) in release.tracks.iter().enumerate() {
+        let is_selected = focused && state.track_cursor == i;
+        let filename = track.path.rsplit('/').next().unwrap_or(&track.path);
+
+        let label_style = if is_selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let marker = if is_selected { "▸ " } else { "  " };
+
+        lines.push(Line::from(vec![
+            Span::styled(marker.to_string(), label_style),
+            Span::styled(
+                format!("{:>2} ", track.track_number),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                truncate_for_width(filename, 30),
+                label_style,
+            ),
+            Span::styled(
+                format!("  {:.2}", track.score),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
+    }
+
+    // Unfilled slots
+    for (i, slot) in release.unfilled.iter().enumerate() {
+        let idx = track_count + i;
+        let is_selected = focused && state.track_cursor == idx;
+        let label_style = if is_selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Red)
+        };
+        let marker = if is_selected { "▸ " } else { "  " };
+
+        lines.push(Line::from(vec![
+            Span::styled(marker.to_string(), label_style),
+            Span::styled(
+                format!("{:>2} ", slot.track_pos),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled("░ ", Style::default().fg(Color::Red)),
+            Span::styled(
+                truncate_for_width(&slot.track_title, 28),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::styled("  ----", Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    // Clamp track_cursor
+    if total > 0 && state.track_cursor >= total {
+        state.track_cursor = total - 1;
+    }
+
+    // Scroll: ensure track_cursor is visible
+    let visible_height = area.height as usize;
+    if visible_height > 0 && state.track_cursor >= state.track_scroll + visible_height {
+        state.track_scroll = state.track_cursor - visible_height + 1;
+    }
+    if state.track_cursor < state.track_scroll {
+        state.track_scroll = state.track_cursor;
+    }
+
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(state.track_scroll)
+        .take(visible_height)
+        .collect();
+    f.render_widget(Paragraph::new(visible_lines), area);
+}
+
 // ============================================================================
-// Right Pane: Context-Sensitive Detail
+// Detail Pane: Per-Track Detail
 // ============================================================================
 
-fn render_right_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
-    let border_color = if state.detail_focused {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
+fn render_detail_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
+    let focused = matches!(state.focused_pane, FocusedPane::DetailPane);
+    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
     let block = Block::default()
         .title(" Detail ")
         .borders(Borders::ALL)
@@ -329,23 +393,19 @@ fn render_right_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowse
     }
 
     let lines = match state.selected_entry() {
-        Some(PackingListEntry::ReleaseHeader { release_idx, .. }) => {
-            render_release_detail(&state.releases[*release_idx])
+        Some(PackingListEntry::ReleaseHeader { release_idx }) => {
+            let release = &state.releases[*release_idx];
+            let track_count = release.tracks.len();
+            let track_cursor = state.track_cursor;
+
+            if track_cursor < track_count {
+                render_track_detail(&release.tracks[track_cursor], release)
+            } else if track_cursor < track_count + release.unfilled.len() {
+                render_unfilled_detail(&release.unfilled[track_cursor - track_count], release)
+            } else {
+                render_release_summary(release)
+            }
         }
-        Some(PackingListEntry::AssignedTrack {
-            release_idx,
-            track_idx,
-        }) => render_track_detail(
-            &state.releases[*release_idx].tracks[*track_idx],
-            &state.releases[*release_idx],
-        ),
-        Some(PackingListEntry::UnfilledSlot {
-            release_idx,
-            slot_idx,
-        }) => render_unfilled_detail(
-            &state.releases[*release_idx].unfilled[*slot_idx],
-            &state.releases[*release_idx],
-        ),
         Some(PackingListEntry::NearMissEntry { idx }) => {
             render_near_miss_detail(&state.near_misses[*idx])
         }
@@ -358,6 +418,8 @@ fn render_right_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowse
         ))],
     };
 
+    render_scrollable_lines(f, inner, &lines, state.detail_scroll);
+
     // Clamp detail_scroll
     let total_lines = lines.len();
     let visible = inner.height as usize;
@@ -368,19 +430,26 @@ fn render_right_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowse
     } else {
         state.detail_scroll = 0;
     }
-
-    let visible_lines: Vec<Line> = lines
-        .into_iter()
-        .skip(state.detail_scroll)
-        .take(visible)
-        .collect();
-
-    let paragraph = Paragraph::new(visible_lines).wrap(Wrap { trim: false });
-    f.render_widget(paragraph, inner);
 }
 
-fn render_release_detail(release: &ReleaseGroup) -> Vec<Line<'static>> {
-    let mut lines = vec![
+fn render_scrollable_lines(f: &mut Frame, area: Rect, lines: &[Line<'static>], scroll: usize) {
+    let visible = area.height as usize;
+    let visible_lines: Vec<Line> = lines
+        .iter()
+        .skip(scroll)
+        .take(visible)
+        .cloned()
+        .collect();
+    let paragraph = Paragraph::new(visible_lines).wrap(Wrap { trim: false });
+    f.render_widget(paragraph, area);
+}
+
+// ============================================================================
+// Detail Renderers (reused from original)
+// ============================================================================
+
+fn render_release_summary(release: &ReleaseGroup) -> Vec<Line<'static>> {
+    vec![
         kv_line("Release:", &release.release_title),
         kv_line("Artist:", &release.release_artist),
         kv_line("MBID:", &release.release_id),
@@ -403,52 +472,7 @@ fn render_release_detail(release: &ReleaseGroup) -> Vec<Line<'static>> {
                 }),
             ),
         ]),
-        Line::from(Span::raw("")),
-        Line::from(Span::styled(
-            "── Track List ──────────────────────",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::raw("")),
-    ];
-
-    // Track table
-    for track in &release.tracks {
-        let filename = track.path.rsplit('/').next().unwrap_or(&track.path);
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(" {:>2} ", track.track_number),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                format!("{:<20} ", truncate_for_width(&track.track_title, 20)),
-                Style::default().fg(Color::White),
-            ),
-            Span::styled(
-                format!("{:<18} ", truncate_for_width(filename, 18)),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(format!("{:.2}", track.score), Style::default().fg(Color::Yellow)),
-        ]));
-    }
-
-    // Unfilled slots
-    for slot in &release.unfilled {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(" {:>2} ", slot.track_pos),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                format!("{:<20} ", truncate_for_width(&slot.track_title, 20)),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-            Span::styled("(unfilled)", Style::default().fg(Color::Red)),
-        ]));
-    }
-
-    lines
+    ]
 }
 
 fn render_track_detail(track: &AssignedTrackInfo, release: &ReleaseGroup) -> Vec<Line<'static>> {
@@ -494,7 +518,6 @@ fn render_track_detail(track: &AssignedTrackInfo, release: &ReleaseGroup) -> Vec
         Line::from(Span::raw("")),
     ];
 
-    // Score breakdown bars
     let breakdown = &track.score_breakdown;
     let scores = [
         ("AcoustID confidence:", breakdown.acoustid_confidence),
@@ -619,7 +642,6 @@ fn render_unmatched_detail(um: &UnmatchedEntry) -> Vec<Line<'static>> {
     ];
 
     let rec_count = um.data.recording_ids.len();
-    let rel_count = um.data.considered_release_ids.len();
 
     if rec_count > 0 {
         lines.push(Line::from(Span::styled(
@@ -657,6 +679,7 @@ fn render_unmatched_detail(um: &UnmatchedEntry) -> Vec<Line<'static>> {
     }
 
     if !um.data.considered_release_ids.is_empty() {
+        let rel_count = um.data.considered_release_ids.len();
         lines.push(Line::from(Span::raw("")));
         lines.push(Line::from(Span::styled(
             format!("Considered releases: {}", rel_count),
@@ -677,7 +700,6 @@ fn render_unmatched_detail(um: &UnmatchedEntry) -> Vec<Line<'static>> {
 // Helpers
 // ============================================================================
 
-/// Key-value line: "Label:  value"
 fn kv_line(label: &str, value: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
@@ -688,7 +710,6 @@ fn kv_line(label: &str, value: &str) -> Line<'static> {
     ])
 }
 
-/// Render a score bar: "  label  0.95  ████████████████████"
 fn render_score_bar(label: &str, value: f64) -> Line<'static> {
     const BAR_WIDTH: usize = 20;
     let filled = ((value * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
@@ -700,4 +721,18 @@ fn render_score_bar(label: &str, value: f64) -> Line<'static> {
         Span::styled(format!(" {:.2}  ", value), Style::default().fg(Color::White)),
         Span::styled(bar, Style::default().fg(Color::Yellow)),
     ])
+}
+
+/// Truncate a string to max_chars, appending "..." if truncated.
+fn truncate_for_width(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else if max_chars <= 3 {
+        s.chars().take(max_chars).collect()
+    } else {
+        let mut result: String = s.chars().take(max_chars - 3).collect();
+        result.push_str("...");
+        result
+    }
 }

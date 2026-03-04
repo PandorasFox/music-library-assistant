@@ -144,10 +144,6 @@ pub(crate) struct App {
     pub(super) art_picker: widgets::AlbumArtPicker,
     pub(super) art_cache: widgets::AlbumArtCache,
 
-    /// When true, drain the input buffer before the next event poll.
-    /// Set by render code after expensive image loads to prevent stacked events.
-    pub(super) drain_input_next: bool,
-
     /// Click targets for titlebar tabs, populated during render.
     pub(super) tab_click_rects: Vec<(widgets::LateralView, ratatui::layout::Rect)>,
 
@@ -162,6 +158,7 @@ impl App {
         witch: crate::witch::Witch,
         cache: crate::witch::cache_thread::CacheHandle,
         notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
+        art_picker: widgets::AlbumArtPicker,
     ) -> Self {
         Self {
             shared_config,
@@ -183,9 +180,8 @@ impl App {
             notice_rx,
             cached_status: Default::default(),
             cache_stale: false,
-            art_picker: widgets::AlbumArtPicker::init(),
+            art_picker,
             art_cache: widgets::AlbumArtCache::new(),
-            drain_input_next: false,
             tab_click_rects: Vec::new(),
             mem_diag: crate::diagnostics::MemoryDiagnostics::new(),
         }
@@ -665,6 +661,14 @@ fn render(f: &mut Frame, app: &mut App) {
 pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging::LogOp>) -> Result<()> {
     crate::logging::log_general("=== MM startup ===");
 
+    // Init the image picker BEFORE crossterm takes over stdin.
+    // Picker::from_query_stdio() spawns a thread that reads raw bytes from stdin
+    // to probe terminal graphics capabilities. If the terminal response is slow
+    // (SSH, tmux), the thread outlives its 1s timeout and keeps reading stdin,
+    // racing with crossterm's event reader and eating ~50% of keypresses.
+    // By running the probe before raw mode, the thread has exclusive stdin access.
+    let art_picker = widgets::AlbumArtPicker::init();
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
@@ -686,7 +690,7 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
         crate::witch::Witch::with_opinions(&cfg, false, force_check, Some(log_rx))
     };
 
-    let mut app = App::new_with_witch(shared_config, witch, cache_handle, notice_rx);
+    let mut app = App::new_with_witch(shared_config, witch, cache_handle, notice_rx, art_picker);
     app.vacuum_threshold = vacuum_threshold;
     app.db_path = db_path.clone();
     app.mem_diag.snapshot_now(); // baseline memory snapshot
@@ -922,25 +926,11 @@ fn run_app<B: ratatui::backend::Backend>(
         // Tick tag search for pending bulk edit (after modal has rendered)
         app.tick_tag_search();
 
-        // Drain buffered input events after expensive operations (e.g., image loading)
-        // to prevent stacked Tab/arrow presses from firing on next frames.
-        if app.drain_input_next {
-            app.drain_input_next = false;
-            while event::poll(std::time::Duration::ZERO)? {
-                let _ = event::read();
-            }
-        }
 
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
-                    // Only process Press and Repeat events. Terminals that support
-                    // the kitty keyboard protocol (WezTerm, Ghostty, kitty, etc.)
-                    // also send Release events — without this guard every keypress
-                    // fires handle_input twice, eating every other intentional press.
-                    if !matches!(key.kind, crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat) {
-                        // do nothing
-                    } else if key.code == crossterm::event::KeyCode::Char('c')
+                    if key.code == crossterm::event::KeyCode::Char('c')
                         && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
                     {
                         app.handle_input(InputAction::Cancel);

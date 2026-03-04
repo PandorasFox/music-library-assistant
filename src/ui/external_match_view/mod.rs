@@ -29,6 +29,8 @@ pub(crate) enum ExternalMatchesAction {
     RequestFetch,
     /// Enter on "Analyze release matches" entry
     RequestReleasePacking,
+    /// Enter on "Untagged matches" → launch review for untagged entries
+    LaunchUntaggedReview,
     /// Enter on a confidence bucket → launch review for entries in that tier
     LaunchTierReview(ConfidenceTier),
 }
@@ -44,6 +46,8 @@ pub(crate) enum NavigableEntry {
     FetchAction,
     /// "Analyze release matches" action entry (always present)
     PackReleasesAction,
+    /// "Untagged matches" — files with fingerprint hits but no existing tags
+    UntaggedMatches,
     /// Confidence tier bucket
     ConfidenceBucket(ConfidenceTier),
 }
@@ -116,6 +120,9 @@ impl ExternalMatchesViewState {
         let mut entries = vec![NavigableEntry::FetchAction, NavigableEntry::PackReleasesAction];
 
         if let Some(ref data) = self.cached_data {
+            if !data.untagged_entries.is_empty() {
+                entries.push(NavigableEntry::UntaggedMatches);
+            }
             for bucket in &data.confidence_buckets {
                 entries.push(NavigableEntry::ConfidenceBucket(bucket.tier));
             }
@@ -173,13 +180,16 @@ impl ExternalMatchesViewState {
                     }
                     Some(NavigableEntry::PackReleasesAction) => {
                         let has_data = self.cached_data.as_ref().is_some_and(|d| {
-                            !d.confidence_buckets.is_empty()
+                            !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty()
                         });
                         if !self.fetch_active && has_data {
                             ExternalMatchesAction::RequestReleasePacking
                         } else {
                             ExternalMatchesAction::None
                         }
+                    }
+                    Some(NavigableEntry::UntaggedMatches) => {
+                        ExternalMatchesAction::LaunchUntaggedReview
                     }
                     Some(NavigableEntry::ConfidenceBucket(tier)) => {
                         ExternalMatchesAction::LaunchTierReview(*tier)

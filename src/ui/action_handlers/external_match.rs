@@ -48,6 +48,16 @@ impl App {
                     super::super::progress_screen::ProgressPhase::ContentAnalysis,
                 );
             }
+            external_match_view::ExternalMatchesAction::LaunchUntaggedReview => {
+                let entries = if let ActiveView::ExternalMatches(ref state) = self.view {
+                    state.cached_data.as_ref()
+                        .map(|d| d.untagged_entries.clone())
+                        .unwrap_or_default()
+                } else {
+                    vec![]
+                };
+                self.start_external_match_review_with(entries);
+            }
             external_match_view::ExternalMatchesAction::LaunchTierReview(tier) => {
                 let entries = if let ActiveView::ExternalMatches(ref state) = self.view {
                     state.cached_data.as_ref()

@@ -735,6 +735,7 @@ impl Database {
         )?;
 
         let mut tier_map: HashMap<ConfidenceTier, Vec<ExternalMatchReviewEntry>> = HashMap::new();
+        let mut untagged_entries: Vec<ExternalMatchReviewEntry> = Vec::new();
 
         let rows = stmt.query_map(params![], |row| {
             let inode: i64 = row.get(0)?;
@@ -761,8 +762,12 @@ impl Database {
                 recording_id: data.recording_id,
             };
 
-            let tier = ConfidenceTier::from_confidence(entry.confidence);
-            tier_map.entry(tier).or_default().push(entry);
+            if data.classification == MatchClassification::MetadataOnly {
+                untagged_entries.push(entry);
+            } else {
+                let tier = ConfidenceTier::from_confidence(entry.confidence);
+                tier_map.entry(tier).or_default().push(entry);
+            }
         }
 
         let confidence_buckets: Vec<ConfidenceBucket> = ConfidenceTier::ALL.iter()
@@ -778,6 +783,7 @@ impl Database {
             .collect();
 
         Ok(ExternalMatchesData {
+            untagged_entries,
             confidence_buckets,
         })
     }

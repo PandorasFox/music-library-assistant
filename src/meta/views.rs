@@ -178,7 +178,9 @@ pub struct ConfidenceBucket {
 /// Data for the External Matches lateral view (loaded via cache thread).
 #[derive(Debug, Clone, Default)]
 pub struct ExternalMatchesData {
-    /// All non-ExactMatch entries bucketed by confidence tier.
+    /// MetadataOnly entries — fingerprint matches on files with no existing tags.
+    pub untagged_entries: Vec<ExternalMatchReviewEntry>,
+    /// ContentDiff entries bucketed by confidence tier.
     pub confidence_buckets: Vec<ConfidenceBucket>,
 }
 

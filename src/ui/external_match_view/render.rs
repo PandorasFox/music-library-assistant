@@ -109,7 +109,7 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
     {
         let selected = state.cursor == nav_index;
         let has_data = state.cached_data.as_ref().is_some_and(|d| {
-            !d.confidence_buckets.is_empty()
+            !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty()
         });
         let (status_label, status_color) = if state.fetch_active {
             ("Fetch active", Color::DarkGray)
@@ -140,12 +140,29 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
 
     // Section header: Matches (only if there's data)
     if let Some(ref data) = state.cached_data {
-        if !data.confidence_buckets.is_empty() {
+        let has_any = !data.untagged_entries.is_empty() || !data.confidence_buckets.is_empty();
+        if has_any {
             lines.push(Line::from(Span::raw(""))); // spacer
             lines.push(Line::from(Span::styled(
                 "── Matches ──────────────",
                 Style::default().fg(Color::DarkGray),
             )));
+
+            // Untagged matches entry (before confidence tiers)
+            if !data.untagged_entries.is_empty() {
+                let selected = state.cursor == nav_index;
+                let line_idx = lines.len();
+                lines.push(render_bucket_line_styled(
+                    selected,
+                    "?",
+                    Color::Magenta,
+                    "Untagged matches",
+                    data.untagged_entries.len(),
+                    false,
+                ));
+                state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
+                nav_index += 1;
+            }
 
             // Confidence tier entries
             for bucket in &data.confidence_buckets {
@@ -243,6 +260,7 @@ fn render_right_pane(f: &mut Frame, area: Rect, state: &ExternalMatchesViewState
     let lines = match selected {
         Some(NavigableEntry::FetchAction) => render_fetch_detail(state),
         Some(NavigableEntry::PackReleasesAction) => render_pack_releases_detail(state),
+        Some(NavigableEntry::UntaggedMatches) => render_untagged_detail(state),
         Some(NavigableEntry::ConfidenceBucket(tier)) => render_tier_detail(state, tier),
         None => vec![Line::from(Span::styled(
             "No selection",
@@ -532,6 +550,33 @@ fn render_pack_releases_detail(state: &ExternalMatchesViewState) -> Vec<Line<'st
     }
 
     lines
+}
+
+fn render_untagged_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
+    let count = state.cached_data.as_ref()
+        .map(|d| d.untagged_entries.len())
+        .unwrap_or(0);
+
+    vec![
+        Line::from(Span::styled(
+            "Untagged Matches",
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::raw("")),
+        Line::from(Span::styled(
+            format!("{} files with fingerprint matches", count),
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            "but no existing tags for matched fields.",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::raw("")),
+        Line::from(Span::styled(
+            "Press Enter to browse.",
+            Style::default().fg(HINT_COLOR),
+        )),
+    ]
 }
 
 fn render_tier_detail(state: &ExternalMatchesViewState, tier: ConfidenceTier) -> Vec<Line<'static>> {

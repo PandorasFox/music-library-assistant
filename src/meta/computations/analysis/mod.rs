@@ -43,6 +43,7 @@ mod inbox_matches;
 mod inbox_tags;
 mod path_schema;
 mod external_matches;
+mod release_packing;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -59,6 +60,7 @@ pub use inbox_matches::*;
 pub use inbox_tags::*;
 pub use path_schema::*;
 pub use external_matches::*;
+pub use release_packing::*;
 
 // ============================================================================
 // Analysis Computation Enum
@@ -209,6 +211,16 @@ pub enum Computation {
     /// path structure agrees with its DB tags. Emits PathTagMismatch signals.
     DetectPathTagMismatches,
 
+    /// Pack corpus files into MusicBrainz releases.
+    ///
+    /// Builds a bipartite graph of inodes ↔ recordings ↔ releases,
+    /// scores each possible (inode, track_position) assignment, and
+    /// greedily assigns files to their best-matching release.
+    /// Emits ReleasePackingSignal per assigned inode.
+    ///
+    /// Manual trigger only (expensive), not part of ScheduleContentAnalysis.
+    PackReleases,
+
     /// Derive external match signals from AcoustID lookup results.
     ///
     /// Compares AcoustID recording metadata against corpus tags, emitting
@@ -258,6 +270,7 @@ impl Computation {
             Computation::DetectInboxCompoundTags => "Detecting inbox compound tags",
             Computation::DetectDiscExtractions => "Detecting disc extractions",
             Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
+            Computation::PackReleases => "Packing releases",
             Computation::DeriveExternalMatches => "Deriving external match signals",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
             Computation::IndexImageFile => "Indexing image files",
@@ -332,6 +345,9 @@ impl Computation {
             }
             Computation::DetectPathTagMismatches => {
                 execute_detect_path_tag_mismatches(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::PackReleases => {
+                execute_pack_releases(ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::DeriveExternalMatches => {
                 execute_derive_external_matches(ctx.read_db, ctx.witness, ctx.start)

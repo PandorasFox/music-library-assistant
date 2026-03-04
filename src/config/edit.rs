@@ -113,6 +113,21 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
         }
     }
 
+    // --- Release Packing ---
+    let old_rp = &old_config.opinions.release_packing;
+    let new_rp = &new_config.opinions.release_packing;
+    if (new_rp.duration_tolerance_pct - old_rp.duration_tolerance_pct).abs() > f64::EPSILON
+        || (new_rp.min_confidence - old_rp.min_confidence).abs() > f64::EPSILON
+    {
+        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_RELEASE_PACKING);
+        if (new_rp.duration_tolerance_pct - old_rp.duration_tolerance_pct).abs() > f64::EPSILON {
+            set_or_create_float_node(block, ReleasePackingOpinions::KDL_DURATION_TOLERANCE_PCT, new_rp.duration_tolerance_pct);
+        }
+        if (new_rp.min_confidence - old_rp.min_confidence).abs() > f64::EPSILON {
+            set_or_create_float_node(block, ReleasePackingOpinions::KDL_MIN_CONFIDENCE, new_rp.min_confidence);
+        }
+    }
+
     // --- Idle Rescan Interval ---
     if new_config.opinions.idle_rescan_interval_secs != old_config.opinions.idle_rescan_interval_secs {
         let dur = std::time::Duration::from_secs(new_config.opinions.idle_rescan_interval_secs);

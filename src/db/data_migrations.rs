@@ -52,6 +52,14 @@ pub fn all_data_migrations() -> Vec<DataMigrationEntry> {
                 Ok(())
             },
         },
+        DataMigrationEntry {
+            id: "2026-03-clear-release-cache-for-tracklists",
+            description: "Clear MB release cache to re-fetch with tracklist data (inc=recordings+media)",
+            apply: |db| {
+                db.conn().execute("DELETE FROM mb_release_cache", [])?;
+                Ok(())
+            },
+        },
     ]
 }
 

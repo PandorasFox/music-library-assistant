@@ -1573,7 +1573,7 @@ impl App {
                 state.handle_click(x, y, &gesture).map(ViewAction::OobConflictInspection)
             }
             ActiveView::ExternalMatchReview(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::ExternalMatchReview)
+                state.handle_click(x, y).map(ViewAction::ExternalMatchReview)
             }
             ActiveView::MovedFileAcknowledge(state) => {
                 state.handle_click(x, y, &gesture).map(ViewAction::MovedFileAcknowledge)

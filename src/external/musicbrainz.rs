@@ -11,6 +11,8 @@
 //!
 //! API docs: https://musicbrainz.org/doc/MusicBrainz_API
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
@@ -69,10 +71,10 @@ impl MusicBrainzClient {
         self.fetch_entity(&url)
     }
 
-    /// Fetch a release by MBID with artist credits.
+    /// Fetch a release by MBID with artist credits, recordings, and media (tracklist).
     pub fn fetch_release(&self, mbid: &str) -> Result<MbLookupOutcome> {
         let url = format!(
-            "{}/release/{}?inc=artist-credits&fmt=json",
+            "{}/release/{}?inc=recordings+media+artist-credits&fmt=json",
             self.base_url, mbid
         );
         self.fetch_entity(&url)
@@ -165,7 +167,7 @@ pub struct MbArtistRef {
 }
 
 /// A full MusicBrainz artist with aliases (from artist endpoint).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct MbArtist {
     pub id: String,
     pub name: String,
@@ -176,7 +178,7 @@ pub struct MbArtist {
 }
 
 /// An artist alias (locale-specific name variant).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct MbAlias {
     pub name: String,
     pub locale: Option<String>,
@@ -202,13 +204,141 @@ pub struct MbRelation {
     pub artist: Option<MbArtistRef>,
 }
 
-/// A full MusicBrainz release with artist credits (from release endpoint).
+/// A full MusicBrainz release with artist credits and tracklist (from release endpoint).
 #[derive(Debug, Deserialize)]
 pub struct MbRelease {
     pub id: String,
     pub title: String,
     #[serde(default, rename = "artist-credit")]
     pub artist_credit: Vec<MbArtistCredit>,
+    /// Media (discs/sides) with track listings. Empty for old cached JSON
+    /// that was fetched without `inc=recordings+media`.
+    #[serde(default)]
+    pub media: Vec<MbMedium>,
+}
+
+/// A medium within a release (CD, vinyl side, digital media, etc.).
+#[derive(Debug, Deserialize)]
+pub struct MbMedium {
+    /// Medium position (1-indexed: disc 1, disc 2, etc.).
+    pub position: u32,
+    /// Medium format ("CD", "Digital Media", "12\" Vinyl", etc.).
+    pub format: Option<String>,
+    /// Track list for this medium.
+    #[serde(default)]
+    pub tracks: Vec<MbTrack>,
+}
+
+/// A track within a medium (position + recording reference).
+#[derive(Debug, Deserialize)]
+pub struct MbTrack {
+    /// Track position within the medium (1-indexed).
+    pub position: u32,
+    /// Track number as printed (e.g., "A1", "3", etc.).
+    pub number: String,
+    /// Track title (may differ from recording title for compilations).
+    pub title: String,
+    /// Duration in milliseconds (track-level, may differ from recording).
+    #[serde(default)]
+    pub length: Option<i64>,
+    /// The recording this track points to.
+    pub recording: MbTrackRecording,
+}
+
+/// Minimal recording reference within a track.
+#[derive(Debug, Deserialize)]
+pub struct MbTrackRecording {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub length: Option<i64>,
+}
+
+// ============================================================================
+// Locale-Aware Artist Name Resolution
+// ============================================================================
+
+/// Resolve a single artist credit's display name using locale preferences.
+///
+/// Walks `locales` in order, searching the artist's aliases for a matching locale.
+/// Prefers aliases marked `primary == "primary"` and `type_ == "Artist name"`.
+/// Falls back to the credit's `name` field (as-credited / native script).
+pub fn resolve_artist_name(
+    credit: &MbArtistCredit,
+    artist: Option<&MbArtist>,
+    locales: &[String],
+) -> String {
+    let Some(artist) = artist else {
+        return credit.name.clone();
+    };
+
+    for locale in locales {
+        let locale_lower = locale.to_lowercase();
+
+        // Find all aliases matching this locale.
+        let mut matches: Vec<&MbAlias> = artist
+            .aliases
+            .iter()
+            .filter(|a| {
+                a.locale
+                    .as_ref()
+                    .is_some_and(|l| l.to_lowercase() == locale_lower)
+            })
+            .collect();
+
+        if matches.is_empty() {
+            continue;
+        }
+
+        // Sort: primary "Artist name" > primary other > non-primary "Artist name" > rest
+        matches.sort_by(|a, b| {
+            let score = |alias: &MbAlias| -> u8 {
+                let is_primary = alias.primary.as_deref() == Some("primary");
+                let is_artist_name = alias.type_.as_deref() == Some("Artist name");
+                match (is_primary, is_artist_name) {
+                    (true, true) => 3,
+                    (true, false) => 2,
+                    (false, true) => 1,
+                    (false, false) => 0,
+                }
+            };
+            score(b).cmp(&score(a))
+        });
+
+        return matches[0].name.clone();
+    }
+
+    credit.name.clone()
+}
+
+/// Join artist credits into a display string using locale-aware name resolution.
+///
+/// Each credit is resolved against its corresponding artist data (if cached),
+/// then joined with the credit's joinphrase.
+pub fn join_artist_credits_localized(
+    credits: &[MbArtistCredit],
+    artists: &[(String, Option<MbArtist>)],
+    locales: &[String],
+) -> String {
+    // Build a lookup from artist MBID → &MbArtist.
+    let artist_map: HashMap<&str, &MbArtist> = artists
+        .iter()
+        .filter_map(|(id, opt)| opt.as_ref().map(|a| (id.as_str(), a)))
+        .collect();
+
+    let mut result = String::new();
+    for (i, credit) in credits.iter().enumerate() {
+        let resolved = resolve_artist_name(credit, artist_map.get(credit.artist.id.as_str()).copied(), locales);
+        result.push_str(&resolved);
+        if i < credits.len() - 1 {
+            if credit.joinphrase.is_empty() {
+                result.push_str(", ");
+            } else {
+                result.push_str(&credit.joinphrase);
+            }
+        }
+    }
+    result
 }
 
 // ============================================================================

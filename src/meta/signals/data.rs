@@ -369,7 +369,7 @@ pub struct ExternalMatchData {
 }
 
 /// Classification of how well external metadata matches corpus tags.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatchClassification {
     /// All compared tags identical (raw string equality).
     ExactMatch,
@@ -388,6 +388,66 @@ pub struct ExternalTagDiff {
     pub external_value: String,
     /// Value from corpus (None if tag absent).
     pub corpus_value: Option<String>,
+}
+
+// ============================================================================
+// Release Packing (inode-keyed)
+// ============================================================================
+
+/// Release bin-packing result for a corpus file.
+/// Inode-keyed, one signal per corpus file that was successfully packed into a release.
+#[derive(Debug, Clone)]
+pub struct ReleasePackingSignal {
+    pub inode: i64,
+    pub path: String,
+    /// Serialized as bincode BLOB.
+    pub data: ReleasePackingData,
+}
+
+/// Bincode-serialized payload for ReleasePacking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleasePackingData {
+    /// Best-matching MusicBrainz release MBID.
+    pub release_id: String,
+    /// Release title (denormalized for display without cache lookup).
+    pub release_title: String,
+    /// Release artist credit (joined string).
+    pub release_artist: String,
+    /// Track position within the medium (1-indexed).
+    pub track_position: u32,
+    /// Medium position (disc number, 1-indexed).
+    pub medium_position: u32,
+    /// Medium format (e.g. "CD", "Digital Media", "12\" Vinyl").
+    pub medium_format: Option<String>,
+    /// Track number string from the release (e.g. "A1" for vinyl, "3" for CD).
+    pub track_number: String,
+    /// Recording MBID at this track position.
+    pub recording_id: String,
+    /// Track title from the release tracklist.
+    pub track_title: String,
+    /// Composite confidence score (0.0-1.0).
+    pub score: f64,
+    /// Score breakdown for debugging/display.
+    pub score_breakdown: PackingScoreBreakdown,
+    /// Number of alternative releases considered for this inode.
+    pub alternatives_count: u16,
+    /// Release coverage: fraction of this release's tracks that are matched.
+    pub release_coverage: f32,
+}
+
+/// Breakdown of the composite packing score.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackingScoreBreakdown {
+    /// AcoustID fingerprint confidence (0.0-1.0).
+    pub acoustid_confidence: f64,
+    /// Duration match quality (1.0 = exact, decays with mismatch).
+    pub duration_match: f64,
+    /// String similarity between corpus tags and MB metadata (0.0-1.0).
+    pub tag_similarity: f64,
+    /// Track number match bonus (1.0 if TRACKNUMBER matches position, 0.0 otherwise).
+    pub track_number_match: f64,
+    /// Directory cohesion bonus (fraction of sibling files mapping to same release).
+    pub directory_cohesion: f64,
 }
 
 /// A group of inodes sharing the same compound tag value.
@@ -851,6 +911,7 @@ pub enum TypedSignalWrite {
     CompoundTag(CompoundTagSignal),
     PathTagMismatch(PathTagMismatchSignal),
     ExternalMatch(ExternalMatchSignal),
+    ReleasePacking(ReleasePackingSignal),
     // Aggregate signals (semantic-keyed)
     CanonicalTag(CanonicalTagSignal),
     LibraryLeftover(LibraryLeftoverSignal),
@@ -903,6 +964,7 @@ impl TypedSignalWrite {
             Self::CompoundTag(s) => s.insert(conn),
             Self::PathTagMismatch(s) => s.insert(conn),
             Self::ExternalMatch(s) => s.insert(conn),
+            Self::ReleasePacking(s) => s.insert(conn),
             Self::CanonicalTag(s) => s.insert(conn),
             Self::LibraryLeftover(s) => s.insert(conn),
             Self::LibraryStale(s) => s.insert(conn),
@@ -954,6 +1016,7 @@ impl TypedSignalWrite {
             Self::CompoundTag(s) => CompoundTagSignal::exists(conn, s.inode),
             Self::PathTagMismatch(s) => PathTagMismatchSignal::exists(conn, s.inode),
             Self::ExternalMatch(s) => ExternalMatchSignal::exists(conn, s.inode),
+            Self::ReleasePacking(s) => ReleasePackingSignal::exists(conn, s.inode),
             Self::CanonicalTag(s) => CanonicalTagSignal::exists(conn, &s.key),
             Self::LibraryLeftover(s) => LibraryLeftoverSignal::exists(conn, &s.key),
             Self::LibraryStale(s) => LibraryStaleSignal::exists(conn, &s.key),
@@ -1022,6 +1085,11 @@ impl TypedSignalWrite {
                 }
             }
             Self::ExternalMatch(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::ReleasePacking(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }

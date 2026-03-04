@@ -239,6 +239,31 @@ fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplitting
     }
 }
 
+/// Parse release-packing opinions from KDL node.
+fn parse_release_packing_opinions(node: &kdl::KdlNode, opinions: &mut ReleasePackingOpinions) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            match child.name().value() {
+                ReleasePackingOpinions::KDL_DURATION_TOLERANCE_PCT => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            opinions.duration_tolerance_pct = val;
+                        }
+                    }
+                }
+                ReleasePackingOpinions::KDL_MIN_CONFIDENCE => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            opinions.min_confidence = val;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Parse duplicate-analysis opinions from KDL node
 fn parse_duplicate_analysis_opinions(node: &kdl::KdlNode, opinions: &mut DuplicateAnalysisOpinions) {
     if let Some(children) = node.children() {
@@ -478,6 +503,9 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                             }
                             Opinions::KDL_BLOCK_DUPLICATE_ANALYSIS => {
                                 parse_duplicate_analysis_opinions(child, &mut config.opinions.duplicate_analysis);
+                            }
+                            Opinions::KDL_BLOCK_RELEASE_PACKING => {
+                                parse_release_packing_opinions(child, &mut config.opinions.release_packing);
                             }
                             Opinions::KDL_BLOCK_INBOX_ORGANIZE => {
                                 parse_inbox_organize_opinions(child, &mut config.opinions.inbox_organize);

@@ -8,7 +8,7 @@ use crate::config::{
     Config, Opinions, StartupView, InboxOrganizeGranularity, SidecarDeployMode,
     StartupOpinions, QualityResolutionOpinions, CanonicalizationOpinions,
     HealthDetectionOpinions, PerformanceOpinions, TagSplittingOpinions,
-    DuplicateAnalysisOpinions, InboxOrganizeOpinions, ExternalMatchingConfig,
+    DuplicateAnalysisOpinions, ReleasePackingOpinions, InboxOrganizeOpinions, ExternalMatchingConfig,
     DiscExtractionOpinions, AlbumArtOpinions, DebugOpinions,
 };
 use super::types::*;
@@ -118,6 +118,23 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     source_for(ops.duplicate_analysis.elide_variant_titles == defaults.duplicate_analysis.elide_variant_titles, DuplicateAnalysisOpinions::KDL_ELIDE_VARIANTS),
                     false,
                     |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.duplicate_analysis.elide_variant_titles = *b; } }),
+            ],
+        },
+        // Release Packing
+        ConfigGroup {
+            name: "Release Packing",
+            collapsed: false,
+            fields: vec![
+                field("Duration tolerance %", "Discard recording matches with duration diff above this fraction (0.0-1.0)",
+                    ConfigValue::Float(ops.release_packing.duration_tolerance_pct),
+                    source_for((ops.release_packing.duration_tolerance_pct - defaults.release_packing.duration_tolerance_pct).abs() < f64::EPSILON, ReleasePackingOpinions::KDL_DURATION_TOLERANCE_PCT),
+                    false,
+                    |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.duration_tolerance_pct = *f; } }),
+                field("Min AcoustID confidence", "Discard recording matches below this confidence (0.0-1.0)",
+                    ConfigValue::Float(ops.release_packing.min_confidence),
+                    source_for((ops.release_packing.min_confidence - defaults.release_packing.min_confidence).abs() < f64::EPSILON, ReleasePackingOpinions::KDL_MIN_CONFIDENCE),
+                    false,
+                    |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.min_confidence = *f; } }),
             ],
         },
         // Tag Splitting

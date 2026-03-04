@@ -466,6 +466,13 @@ pub fn schema_inventory() -> Vec<TableEntry> {
         index_sql: &[],
     });
 
+    tables.push(TableEntry {
+        name: "signal_release_packing",
+        kind: TableKind::Computed,
+        create_sql: <ReleasePackingSignal as store::CorpusSignalStore>::TABLE_SQL,
+        index_sql: &[],
+    });
+
     // Inbox file signals
     tables.push(TableEntry {
         name: "signal_file_in_inbox",

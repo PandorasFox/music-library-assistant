@@ -2,17 +2,10 @@
 //!
 //! Handles both:
 //! - The External Matches lateral view (browse/fetch/launch)
-//! - The External Match Review modal (accept/dismiss/cancel)
+//! - The External Match Review modal (read-only browser)
 
-use crate::db::types::Zone;
-use crate::meta::decisions::DecisionKey;
-use crate::meta::mutations::Mutation;
-use crate::meta::mutations::indexing::DropExternalMatchMutation;
-use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
-use crate::meta::mutations::TagOp;
 use crate::meta::views::ExternalMatchReviewEntry;
 use crate::ui::{external_match_modal, external_match_view, widgets, ActiveView};
-use super::witness;
 use super::super::App;
 
 impl App {
@@ -49,15 +42,11 @@ impl App {
                     state.fetch_active = self.witch.is_external_fetch_active();
                 }
             }
-            external_match_view::ExternalMatchesAction::LaunchUntaggedReview => {
-                let entries = if let ActiveView::ExternalMatches(ref state) = self.view {
-                    state.cached_data.as_ref()
-                        .map(|d| d.untagged_entries.clone())
-                        .unwrap_or_default()
-                } else {
-                    vec![]
-                };
-                self.start_external_match_review_with(entries);
+            external_match_view::ExternalMatchesAction::RequestReleasePacking => {
+                self.witch.request_release_packing();
+                self.transition_to_progress_after_mutations(
+                    super::super::progress_screen::ProgressPhase::ContentAnalysis,
+                );
             }
             external_match_view::ExternalMatchesAction::LaunchTierReview(tier) => {
                 let entries = if let ActiveView::ExternalMatches(ref state) = self.view {
@@ -74,65 +63,105 @@ impl App {
         }
     }
 
-    /// Start external match review with pre-filtered entries (from the lateral view).
-    ///
-    /// Filters out entries whose inodes already have staged decisions (accept or drop).
+    /// Start external match review (read-only browser) with pre-filtered entries.
     fn start_external_match_review_with(&mut self, entries: Vec<ExternalMatchReviewEntry>) {
-        // Collect inodes that already have staged decisions
-        let staged_inodes: std::collections::HashSet<i64> = self.witch.decision_keys()
-            .into_iter()
-            .filter_map(|key| match key {
-                DecisionKey::ExternalMatch { inode } => Some(inode),
-                DecisionKey::DropExternalMatch { inode } => Some(inode),
-                _ => None,
-            })
-            .collect();
-
-        let filtered: Vec<_> = entries.into_iter()
-            .filter(|e| !staged_inodes.contains(&e.inode))
-            .collect();
-
-        if filtered.is_empty() {
+        if entries.is_empty() {
             self.status_message = Some("No external matches to review".to_string());
             return;
         }
 
-        let _ = self.witch.start_transaction("External match review");
-        let state = external_match_modal::ExternalMatchReviewState::new(filtered);
+        let mut state = external_match_modal::ExternalMatchReviewState::new(entries);
+
+        // Pre-load cached MB recording summaries for all entries
+        self.preload_recording_summaries(&mut state);
+
         self.view = ActiveView::ExternalMatchReview(state);
     }
 
+    /// Batch-load MB recording summaries from the cache thread.
+    fn preload_recording_summaries(
+        &mut self,
+        state: &mut external_match_modal::ExternalMatchReviewState,
+    ) {
+        use crate::external::musicbrainz;
+
+        // Collect unique recording IDs
+        let mut recording_ids: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for entry in &state.entries {
+            if seen.insert(entry.recording_id.clone()) {
+                recording_ids.push(entry.recording_id.clone());
+            }
+        }
+
+        // Load preferred locales from config.
+        let preferred_locales = crate::config::load_config()
+            .map(|c| c.opinions.external_matching.preferred_locales.clone())
+            .unwrap_or_default();
+
+        // Query cache thread for all recording data in one batch
+        let ids = recording_ids.clone();
+        let result = self.cache.query(move |db| {
+            let mut summaries = Vec::new();
+            for rec_id in &ids {
+                let rec_cache = db.get_mb_recording_cache(rec_id).ok().flatten();
+                let recording = rec_cache
+                    .and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
+
+                if let Some(rec) = recording {
+                    // Load cached artist data for locale-aware name resolution.
+                    let artists: Vec<(String, Option<musicbrainz::MbArtist>)> = rec
+                        .artist_credit
+                        .iter()
+                        .map(|c| {
+                            let parsed = db
+                                .get_mb_artist_cache(&c.artist.id)
+                                .ok()
+                                .flatten()
+                                .and_then(|(json, _)| musicbrainz::parse_artist(&json).ok());
+                            (c.artist.id.clone(), parsed)
+                        })
+                        .collect();
+
+                    let artist_credit = musicbrainz::join_artist_credits_localized(
+                        &rec.artist_credit,
+                        &artists,
+                        &preferred_locales,
+                    );
+
+                    summaries.push((
+                        rec_id.clone(),
+                        external_match_modal::types::RecordingSummary {
+                            title: rec.title.clone(),
+                            artist_credit,
+                            length_ms: rec.length.map(|l| l as u64),
+                            release_count: rec.releases.len(),
+                        },
+                    ));
+                }
+            }
+            summaries
+        }).recv();
+
+        for (id, summary) in result {
+            state.recording_summaries.insert(id, summary);
+        }
+    }
+
     // =========================================================================
-    // External Match Review Modal Actions
+    // External Match Review Modal Actions (read-only)
     // =========================================================================
 
     /// Handle external match review actions.
     pub(super) fn handle_external_match_review_action(
         &mut self,
         action: external_match_modal::ExternalMatchReviewAction,
-        witness: Option<&witness::ConfirmationGesture>,
+        _witness: Option<&super::witness::ConfirmationGesture>,
     ) {
         match action {
             external_match_modal::ExternalMatchReviewAction::None => {}
-            external_match_modal::ExternalMatchReviewAction::Accept => {
-                let Some(w) = witness else { return };
-                self.stage_external_match_accept(w);
-            }
-            external_match_modal::ExternalMatchReviewAction::DropSelected => {
-                let Some(w) = witness else { return };
-                self.stage_external_match_drops(w);
-            }
-            external_match_modal::ExternalMatchReviewAction::Dismiss => {
-                // Skip to next entry without staging a mutation.
-                if let ActiveView::ExternalMatchReview(ref mut state) = self.view {
-                    if !state.advance() {
-                        // Was the last entry — show review if any decisions were staged.
-                        self.after_staging_decisions();
-                    }
-                }
-            }
             external_match_modal::ExternalMatchReviewAction::Cancel => {
-                self.cancel_and_return_to_source("External match review cancelled");
+                self.cancel_and_return_to_source("External match browser closed");
             }
             external_match_modal::ExternalMatchReviewAction::OpenRecordingUrl(url) => {
                 let _ = std::process::Command::new("xdg-open")
@@ -149,110 +178,6 @@ impl App {
                 if let ActiveView::ExternalMatchReview(ref mut state) = self.view {
                     state.viewing_detail = None;
                 }
-            }
-        }
-    }
-
-    /// Stage drop mutations for all selected entries.
-    fn stage_external_match_drops(&mut self, gesture: &witness::ConfirmationGesture) {
-        let inodes: Vec<i64> = {
-            let state = match self.view {
-                ActiveView::ExternalMatchReview(ref state) => state,
-                _ => return,
-            };
-
-            if state.selection.selection_count() == 0 {
-                self.status_message = Some("No files selected".to_string());
-                return;
-            }
-
-            state.selection.selected_indices()
-                .iter()
-                .filter_map(|&idx| state.entries.get(idx).map(|e| e.inode))
-                .collect()
-        };
-
-        for inode in &inodes {
-            let mutation = Mutation::DropExternalMatch(DropExternalMatchMutation { inode: *inode });
-            let key = DecisionKey::DropExternalMatch { inode: *inode };
-            let label = "Drop external match";
-
-            let _ = super::super::operator_decisions::stage_decision(
-                &mut self.witch,
-                key,
-                label,
-                vec![mutation],
-                gesture,
-            );
-        }
-
-        // Clear selection and show review
-        if let ActiveView::ExternalMatchReview(ref mut state) = self.view {
-            state.selection = crate::ui::bulk_selection::BulkSelectionState::new();
-        }
-        self.after_staging_decisions();
-    }
-
-    /// Stage tag edit mutations from the current entry's external match diffs.
-    fn stage_external_match_accept(&mut self, gesture: &witness::ConfirmationGesture) {
-        let (inode, ops) = {
-            let state = match self.view {
-                ActiveView::ExternalMatchReview(ref state) => state,
-                _ => return,
-            };
-
-            let Some(entry) = state.current_entry() else { return };
-            let inode = entry.inode;
-
-            let mut ops = Vec::new();
-            for diff in &entry.diffs {
-                match &diff.corpus_value {
-                    Some(old) => {
-                        // Replace existing tag value with external value
-                        ops.push(TagOp::replace_tag(
-                            inode,
-                            &diff.tag_name,
-                            old.clone(),
-                            &diff.external_value,
-                        ));
-                    }
-                    None => {
-                        // Add tag value (corpus doesn't have it)
-                        ops.push(TagOp::add_tag(
-                            inode,
-                            &diff.tag_name,
-                            &diff.external_value,
-                        ));
-                    }
-                }
-            }
-
-            (inode, ops)
-        };
-
-        if ops.is_empty() {
-            return;
-        }
-
-        let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation {
-            ops,
-            zone: Zone::Corpus,
-        });
-        let key = DecisionKey::ExternalMatch { inode };
-        let label = "Accept external match tags";
-
-        let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
-            key,
-            label,
-            vec![mutation],
-            gesture,
-        );
-
-        // Advance to next entry, or show review if at end.
-        if let ActiveView::ExternalMatchReview(ref mut state) = self.view {
-            if !state.advance() {
-                self.after_staging_decisions();
             }
         }
     }
@@ -274,7 +199,6 @@ impl App {
             _ => return,
         };
 
-        // Query all needed cache data in one shot on cache thread
         let rec_id = recording_id.clone();
         let result = self.cache.query(move |db| {
             let rec_cache = db.get_mb_recording_cache(&rec_id).ok().flatten();

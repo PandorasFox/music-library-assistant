@@ -99,6 +99,9 @@ pub type PlaceholderBucket = TagSquashBucket;
 // ============================================================================
 
 /// An external match entry ready for operator review.
+///
+/// Read-only view: track → MB recording URL with confidence score.
+/// Actual tagging decisions come from the bin-packed release analysis.
 #[derive(Debug, Clone)]
 pub struct ExternalMatchReviewEntry {
     pub inode: i64,
@@ -107,25 +110,6 @@ pub struct ExternalMatchReviewEntry {
     pub confidence: f64,
     /// Recording MBID.
     pub recording_id: String,
-    /// Overall match classification.
-    pub classification: ExternalMatchClassificationView,
-    /// Per-tag differences.
-    pub diffs: Vec<ExternalMatchDiffView>,
-}
-
-/// Classification for UI layer (mirrors signal MatchClassification minus ExactMatch).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExternalMatchClassificationView {
-    ContentDiff,
-    MetadataOnly,
-}
-
-/// Per-tag diff for UI layer.
-#[derive(Debug, Clone)]
-pub struct ExternalMatchDiffView {
-    pub tag_name: String,
-    pub external_value: String,
-    pub corpus_value: Option<String>,
 }
 
 // ============================================================================
@@ -182,13 +166,11 @@ impl ConfidenceTier {
     ];
 }
 
-/// A confidence bucket with counts by classification.
+/// A confidence bucket grouping external matches by AcoustID confidence tier.
 #[derive(Debug, Clone)]
 pub struct ConfidenceBucket {
     pub tier: ConfidenceTier,
     pub total: usize,
-    pub content_diff_count: usize,
-    pub metadata_only_count: usize,
     /// Entries in this bucket (for launching the review modal).
     pub entries: Vec<ExternalMatchReviewEntry>,
 }
@@ -196,9 +178,7 @@ pub struct ConfidenceBucket {
 /// Data for the External Matches lateral view (loaded via cache thread).
 #[derive(Debug, Clone, Default)]
 pub struct ExternalMatchesData {
-    /// MetadataOnly entries at any confidence (untagged files bucket).
-    pub untagged_entries: Vec<ExternalMatchReviewEntry>,
-    /// ContentDiff entries bucketed by confidence tier.
+    /// All non-ExactMatch entries bucketed by confidence tier.
     pub confidence_buckets: Vec<ConfidenceBucket>,
 }
 

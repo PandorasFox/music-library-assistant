@@ -1,7 +1,7 @@
-//! External Match Review Modal
+//! External Match Browser Modal
 //!
-//! Displays corpus files with AcoustID match metadata for operator review.
-//! Accept applies external tag values, Dismiss skips the file.
+//! Read-only browser: track → MB recording URL + confidence.
+//! Shows cached MB recording data inline when available.
 
 pub mod types;
 pub mod render;

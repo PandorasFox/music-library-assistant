@@ -713,6 +713,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_mb_release_cache(release_id)
     }
 
+    /// Bulk-load cached MusicBrainz release JSON for a set of release IDs.
+    pub fn get_mb_release_cache_bulk(&self, release_ids: &[&str]) -> Result<Vec<(String, Vec<u8>)>> {
+        self.db.get_mb_release_cache_bulk(release_ids)
+    }
+
     // =========================================================================
     // Redundant / Metadata Duplicate Queries
     // =========================================================================

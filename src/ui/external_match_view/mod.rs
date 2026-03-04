@@ -27,8 +27,8 @@ pub(crate) enum ExternalMatchesAction {
     RequestQuit,
     /// Enter on "Cache external metadata matches" entry
     RequestFetch,
-    /// Enter on "Untagged files" bucket → launch review for MetadataOnly entries
-    LaunchUntaggedReview,
+    /// Enter on "Analyze release matches" entry
+    RequestReleasePacking,
     /// Enter on a confidence bucket → launch review for entries in that tier
     LaunchTierReview(ConfidenceTier),
 }
@@ -42,9 +42,9 @@ pub(crate) enum ExternalMatchesAction {
 pub(crate) enum NavigableEntry {
     /// "Cache external metadata matches" action entry (always present)
     FetchAction,
-    /// "Untagged files" bucket (MetadataOnly entries)
-    UntaggedBucket,
-    /// Confidence tier bucket (ContentDiff entries at this tier)
+    /// "Analyze release matches" action entry (always present)
+    PackReleasesAction,
+    /// Confidence tier bucket
     ConfidenceBucket(ConfidenceTier),
 }
 
@@ -113,12 +113,9 @@ impl ExternalMatchesViewState {
 
     /// Build the navigable entry list from cached data.
     pub fn navigable_entries(&self) -> Vec<NavigableEntry> {
-        let mut entries = vec![NavigableEntry::FetchAction];
+        let mut entries = vec![NavigableEntry::FetchAction, NavigableEntry::PackReleasesAction];
 
         if let Some(ref data) = self.cached_data {
-            if !data.untagged_entries.is_empty() {
-                entries.push(NavigableEntry::UntaggedBucket);
-            }
             for bucket in &data.confidence_buckets {
                 entries.push(NavigableEntry::ConfidenceBucket(bucket.tier));
             }
@@ -174,8 +171,15 @@ impl ExternalMatchesViewState {
                             ExternalMatchesAction::None
                         }
                     }
-                    Some(NavigableEntry::UntaggedBucket) => {
-                        ExternalMatchesAction::LaunchUntaggedReview
+                    Some(NavigableEntry::PackReleasesAction) => {
+                        let has_data = self.cached_data.as_ref().is_some_and(|d| {
+                            !d.confidence_buckets.is_empty()
+                        });
+                        if !self.fetch_active && has_data {
+                            ExternalMatchesAction::RequestReleasePacking
+                        } else {
+                            ExternalMatchesAction::None
+                        }
                     }
                     Some(NavigableEntry::ConfidenceBucket(tier)) => {
                         ExternalMatchesAction::LaunchTierReview(*tier)

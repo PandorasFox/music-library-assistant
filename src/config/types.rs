@@ -28,6 +28,7 @@ pub struct Opinions {
     pub performance: PerformanceOpinions,
     pub tag_splitting: TagSplittingOpinions,
     pub duplicate_analysis: DuplicateAnalysisOpinions,
+    pub release_packing: ReleasePackingOpinions,
     pub inbox_organize: InboxOrganizeOpinions,
     /// Seconds of idle time before auto-rescanning corpus/inbox for filesystem changes.
     /// Default: 180. Set to 0 to disable.
@@ -61,6 +62,7 @@ impl Opinions {
     pub const KDL_BLOCK_PERFORMANCE: &str = "performance";
     pub const KDL_BLOCK_TAG_SPLITTING: &str = "tag-splitting";
     pub const KDL_BLOCK_DUPLICATE_ANALYSIS: &str = "duplicate-analysis";
+    pub const KDL_BLOCK_RELEASE_PACKING: &str = "release-packing";
     pub const KDL_BLOCK_INBOX_ORGANIZE: &str = "inbox-organize";
     pub const KDL_BLOCK_EXTERNAL_MATCHING: &str = "external-matching";
     pub const KDL_BLOCK_DISC_EXTRACTION: &str = "disc-extraction";
@@ -284,6 +286,33 @@ impl DuplicateAnalysisOpinions {
     pub const KDL_ELIDE_VARIANTS: &str = "elide-variant-titles";
 }
 
+/// Opinions for MusicBrainz release bin-packing.
+///
+/// Controls filtering thresholds for discarding poor-quality recording matches
+/// before the greedy release assignment algorithm runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReleasePackingOpinions {
+    /// Duration tolerance as a fraction (0.0-1.0). Recording matches where the
+    /// duration differs by more than this fraction are discarded. Default: 0.15 (15%).
+    pub duration_tolerance_pct: f64,
+    /// Minimum AcoustID confidence to consider a recording match. Default: 0.3
+    pub min_confidence: f64,
+}
+
+impl Default for ReleasePackingOpinions {
+    fn default() -> Self {
+        Self {
+            duration_tolerance_pct: 0.15,
+            min_confidence: 0.3,
+        }
+    }
+}
+
+impl ReleasePackingOpinions {
+    pub const KDL_DURATION_TOLERANCE_PCT: &str = "duration-tolerance-pct";
+    pub const KDL_MIN_CONFIDENCE: &str = "min-confidence";
+}
+
 /// Directory granularity for inbox organize workflow.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum InboxOrganizeGranularity {
@@ -457,6 +486,7 @@ impl Default for Opinions {
             performance: PerformanceOpinions::default(),
             tag_splitting: TagSplittingOpinions::default(),
             duplicate_analysis: DuplicateAnalysisOpinions::default(),
+            release_packing: ReleasePackingOpinions::default(),
             inbox_organize: InboxOrganizeOpinions::default(),
             idle_rescan_interval_secs: 180,
             leave_transactions_open: false,

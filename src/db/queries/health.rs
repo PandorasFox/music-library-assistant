@@ -718,13 +718,13 @@ impl Database {
         Ok(OtherSignalsBucket { entries })
     }
 
-    /// Load all external match entries, bucketed for the External Matches lateral view.
+    /// Load all external match entries, bucketed by confidence tier for the lateral view.
     ///
-    /// Reads `signal_external_match`, skips ExactMatch, splits MetadataOnly entries
-    /// into `untagged_entries` and ContentDiff entries into confidence-tier buckets.
+    /// Reads `signal_external_match`, skips ExactMatch, buckets everything else
+    /// by AcoustID confidence tier.
     pub fn get_external_matches_data(&self) -> Result<crate::meta::views::ExternalMatchesData> {
         use crate::meta::views::{
-            ExternalMatchReviewEntry, ExternalMatchClassificationView, ExternalMatchDiffView,
+            ExternalMatchReviewEntry,
             ExternalMatchesData, ConfidenceTier, ConfidenceBucket,
         };
         use crate::meta::signals::data::{ExternalMatchData, MatchClassification};
@@ -734,8 +734,6 @@ impl Database {
             "SELECT inode, path, data FROM signal_external_match ORDER BY path"
         )?;
 
-        let mut untagged_entries = Vec::new();
-        // Tier -> Vec<entry>
         let mut tier_map: HashMap<ConfidenceTier, Vec<ExternalMatchReviewEntry>> = HashMap::new();
 
         let rows = stmt.query_map(params![], |row| {
@@ -752,59 +750,34 @@ impl Database {
                 Err(_) => continue,
             };
 
-            let classification = match data.classification {
-                MatchClassification::ExactMatch => continue,
-                MatchClassification::ContentDiff => ExternalMatchClassificationView::ContentDiff,
-                MatchClassification::MetadataOnly => ExternalMatchClassificationView::MetadataOnly,
-            };
-
-            let diffs = data.diffs.into_iter().map(|d| ExternalMatchDiffView {
-                tag_name: d.tag_name,
-                external_value: d.external_value,
-                corpus_value: d.corpus_value,
-            }).collect();
+            if data.classification == MatchClassification::ExactMatch {
+                continue;
+            }
 
             let entry = ExternalMatchReviewEntry {
                 inode,
                 path,
                 confidence: data.confidence,
                 recording_id: data.recording_id,
-                classification,
-                diffs,
             };
 
-            match classification {
-                ExternalMatchClassificationView::MetadataOnly => {
-                    untagged_entries.push(entry);
-                }
-                ExternalMatchClassificationView::ContentDiff => {
-                    let tier = ConfidenceTier::from_confidence(entry.confidence);
-                    tier_map.entry(tier).or_default().push(entry);
-                }
-            }
+            let tier = ConfidenceTier::from_confidence(entry.confidence);
+            tier_map.entry(tier).or_default().push(entry);
         }
 
-        // Build confidence buckets in tier order, omitting empty tiers
         let confidence_buckets: Vec<ConfidenceBucket> = ConfidenceTier::ALL.iter()
             .filter_map(|&tier| {
                 let entries = tier_map.remove(&tier)?;
                 let total = entries.len();
-                let content_diff_count = entries.iter()
-                    .filter(|e| e.classification == ExternalMatchClassificationView::ContentDiff)
-                    .count();
-                let metadata_only_count = total - content_diff_count;
                 Some(ConfidenceBucket {
                     tier,
                     total,
-                    content_diff_count,
-                    metadata_only_count,
                     entries,
                 })
             })
             .collect();
 
         Ok(ExternalMatchesData {
-            untagged_entries,
             confidence_buckets,
         })
     }

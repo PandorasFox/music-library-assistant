@@ -219,6 +219,39 @@ impl Database {
         }
     }
 
+    /// Bulk-load cached MusicBrainz release JSON for a set of release IDs.
+    ///
+    /// Returns `Vec<(release_id, raw_json)>` for all release IDs that have cache entries.
+    /// Uses chunked IN-clause queries for large ID sets.
+    pub fn get_mb_release_cache_bulk(&self, release_ids: &[&str]) -> Result<Vec<(String, Vec<u8>)>> {
+        if release_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut results = Vec::new();
+
+        // Process in chunks to avoid SQLite variable limit (999)
+        for chunk in release_ids.chunks(500) {
+            let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+            let sql = format!(
+                "SELECT release_id, raw_json FROM mb_release_cache WHERE release_id IN ({})",
+                placeholders.join(", ")
+            );
+            let mut stmt = self.conn().prepare(&sql)?;
+            let params: Vec<&dyn rusqlite::types::ToSql> = chunk.iter()
+                .map(|id| id as &dyn rusqlite::types::ToSql)
+                .collect();
+            let rows = stmt.query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
+            for row in rows {
+                results.push(row?);
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Get known entity MBIDs that need fetching (no cache entry or stale).
     ///
     /// Queries `mb_known_entities` for entities of the given type that either

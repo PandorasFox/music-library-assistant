@@ -165,6 +165,10 @@ fn config_diff_entries(old: &Config, new: &Config) -> Vec<DiffEntry> {
     cmp!("Dup: Duration tolerance (ms)", o.duplicate_analysis.duration_tolerance_ms, n.duplicate_analysis.duration_tolerance_ms);
     cmp!("Dup: Elide variant titles", o.duplicate_analysis.elide_variant_titles, n.duplicate_analysis.elide_variant_titles);
 
+    // Release Packing
+    cmp!(float "Release packing: Duration tolerance %", o.release_packing.duration_tolerance_pct, n.release_packing.duration_tolerance_pct);
+    cmp!(float "Release packing: Min confidence", o.release_packing.min_confidence, n.release_packing.min_confidence);
+
     // Inbox Organize
     cmp!(debug "Inbox organize granularity", o.inbox_organize.directory_granularity, n.inbox_organize.directory_granularity);
 

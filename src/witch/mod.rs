@@ -1181,6 +1181,18 @@ impl Witch {
         })
     }
 
+    /// Queue release bin-packing analysis (operator-initiated).
+    ///
+    /// Analyzes cached MusicBrainz data and assigns corpus files to releases
+    /// using greedy bin-packing. Does not require a ConfirmationGesture.
+    pub fn request_release_packing(&mut self) {
+        crate::logging::log_general("[WITCH] Release packing analysis requested");
+        self.queue_computation_with_label(
+            Computation::Analysis(analysis::Computation::PackReleases),
+            Some("Release packing".to_string()),
+        );
+    }
+
     /// Queue re-observation computations (WalkCorpus) for re-awakening after mutations.
     ///
     /// Similar to `queue_observing_computations` but for re-awakening cycles.

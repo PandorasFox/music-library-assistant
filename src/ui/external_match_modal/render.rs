@@ -1,32 +1,45 @@
 //! Rendering for the external match review modal.
 //!
+//! Read-only browser: track → MB recording URL + confidence.
 //! Uses full-area layout with:
 //! - Info bar showing full untruncated path and confidence
-//! - 40% list pane / 60% details pane
-//! - Decision buttons bar (focusable via Shift+Up/Down)
+//! - 40% list pane / 60% details pane (MB recording info)
 
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::meta::views::ExternalMatchClassificationView;
 use crate::ui::helpers::render_pane;
-use crate::ui::widgets::{render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout, StyledCell, ThreeColTable};
+use crate::ui::widgets::{render_file_path_list, PathEntry, PathField, ResolutionLayout};
 
-use super::types::{ExternalMatchButton, ExternalMatchReviewState};
+use super::types::ExternalMatchReviewState;
 
 pub fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
     let padded = ResolutionLayout::padded(area);
     f.render_widget(Clear, padded);
 
-    let layout = ResolutionLayout::new(padded, 3, 3, 40);
+    // Two-row layout: info bar (3 lines) + content panes (rest)
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(5),
+        ])
+        .split(padded);
 
-    render_info_bar(f, layout.info_bar, state);
-    render_file_list(f, layout.list_pane, state);
-    render_diff_details(f, layout.details_pane, state);
-    render_buttons(f, layout.buttons, state);
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Percentage(60),
+        ])
+        .split(vertical[1]);
+
+    render_info_bar(f, vertical[0], state);
+    render_file_list(f, horizontal[0], state);
+    render_details(f, horizontal[1], state);
 
     // Recording detail overlay (covers the details pane)
     if state.viewing_detail.is_some() {
@@ -35,21 +48,11 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
 }
 
 fn render_info_bar(f: &mut Frame, area: Rect, state: &ExternalMatchReviewState) {
-    let sel_count = state.selection.selection_count();
-    let title = if sel_count > 0 {
-        format!(
-            " External Match Review \u{2014} {} file{} ({} selected) ",
-            state.entries.len(),
-            if state.entries.len() == 1 { "" } else { "s" },
-            sel_count,
-        )
-    } else {
-        format!(
-            " External Match Review \u{2014} {} file{} ",
-            state.entries.len(),
-            if state.entries.len() == 1 { "" } else { "s" },
-        )
-    };
+    let title = format!(
+        " External Match Browser \u{2014} {} file{} ",
+        state.entries.len(),
+        if state.entries.len() == 1 { "" } else { "s" },
+    );
 
     let block = Block::default()
         .title(title)
@@ -72,16 +75,12 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &ExternalMatchReviewState) 
 }
 
 fn render_file_list(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
-    let is_focused = state.focus_pane == FocusPane::List;
-    let border_color = if is_focused { Color::Yellow } else { Color::DarkGray };
-
     let block = Block::default()
         .title("Files")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+        .border_style(Style::default().fg(Color::Yellow));
     let inner = render_pane(f, area, block);
 
-    // Populate click targets for list items
     state.click_targets.clear();
     state.click_targets.set_list_area(inner);
     let visible_height = inner.height as usize;
@@ -91,37 +90,12 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewSt
         state.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
     }
 
-    let selection_active = state.selection.is_active();
     let entries: Vec<PathEntry> = state.entries
         .iter()
-        .enumerate()
-        .map(|(idx, entry)| {
-            let marker = match entry.classification {
-                ExternalMatchClassificationView::ContentDiff => "!",
-                ExternalMatchClassificationView::MetadataOnly => "?",
-            };
-            let marker_color = match entry.classification {
-                ExternalMatchClassificationView::ContentDiff => Color::Yellow,
-                ExternalMatchClassificationView::MetadataOnly => Color::Cyan,
-            };
-
-            let mut prefix = Vec::new();
-            if selection_active {
-                let sel_marker = state.selection.marker(idx);
-                let sel_color = if state.selection.is_selected(idx) { Color::Green } else { Color::DarkGray };
-                prefix.push(Span::styled(
-                    format!("{} ", sel_marker),
-                    Style::default().fg(sel_color),
-                ));
-            }
-            prefix.push(Span::styled(
-                format!("{} ", marker),
-                Style::default().fg(marker_color),
-            ));
-
+        .map(|entry| {
             PathEntry {
                 path: &entry.path,
-                prefix,
+                prefix: vec![],
                 suffix: vec![
                     Span::styled(
                         format!(" {:.0}%", entry.confidence * 100.0),
@@ -135,9 +109,9 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewSt
     render_file_path_list(f, inner, &entries, state.cursor, state.scroll);
 }
 
-fn render_diff_details(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
+fn render_details(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
     let block = Block::default()
-        .title("Tag Differences")
+        .title("Recording")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
     let inner = render_pane(f, area, block);
@@ -147,176 +121,87 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &mut ExternalMatchRevie
         return;
     };
 
+    let label_style = Style::default().fg(Color::DarkGray);
+    let value_style = Style::default().fg(Color::White);
+    let dim_style = Style::default().fg(Color::DarkGray);
+
     let mut lines = Vec::new();
 
-    // Confidence line
-    lines.push(Line::from(Span::styled(
-        format!("{:.0}% confidence", entry.confidence * 100.0),
-        Style::default().fg(Color::DarkGray),
-    )));
+    // Confidence
+    lines.push(Line::from(vec![
+        Span::styled("Confidence: ", label_style),
+        Span::styled(
+            format!("{:.1}%", entry.confidence * 100.0),
+            Style::default().fg(Color::Yellow),
+        ),
+    ]));
 
-    // MusicBrainz recording URL (underlined for shift-click in terminal)
+    // MusicBrainz recording URL
     let mb_url = format!("https://musicbrainz.org/recording/{}", entry.recording_id);
     let link_style = Style::default()
         .fg(Color::Blue)
         .add_modifier(Modifier::UNDERLINED);
     let link_len = mb_url.chars().count() as u16;
 
-    // Track link position for mouse click → xdg-open
     let link_x = inner.x;
-    let link_y = inner.y + 1; // second line
+    let link_y = inner.y + 1;
     state.recording_link_rect = Some(Rect::new(link_x, link_y, link_len, 1));
 
     lines.push(Line::from(Span::styled(&mb_url, link_style)));
     lines.push(Line::raw(""));
 
-    if entry.diffs.is_empty() {
+    // Inline MB recording summary if pre-loaded
+    if let Some(summary) = state.recording_summaries.get(&entry.recording_id) {
+        lines.push(Line::from(vec![
+            Span::styled("Title:  ", label_style),
+            Span::styled(&summary.title, value_style),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Artist: ", label_style),
+            Span::styled(&summary.artist_credit, value_style),
+        ]));
+        if let Some(length_ms) = summary.length_ms {
+            let mins = length_ms / 60000;
+            let secs = (length_ms % 60000) / 1000;
+            lines.push(Line::from(vec![
+                Span::styled("Length: ", label_style),
+                Span::styled(format!("{}:{:02}", mins, secs), value_style),
+            ]));
+        }
+        if summary.release_count > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("Releases: ", label_style),
+                Span::styled(
+                    format!("{}", summary.release_count),
+                    value_style,
+                ),
+            ]));
+        }
+        lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
-            "No tag differences",
-            Style::default().fg(Color::Green),
+            "Press 'v' for full recording detail.",
+            dim_style,
         )));
-        let para = Paragraph::new(lines);
-        f.render_widget(para, inner);
     } else {
-        let header_lines = lines.len() as u16;
-        let para = Paragraph::new(lines);
-        let header_area = Rect { height: header_lines, ..inner };
-        f.render_widget(para, header_area);
-
-        let table_area = Rect {
-            y: inner.y + header_lines,
-            height: inner.height.saturating_sub(header_lines),
-            ..inner
-        };
-
-        let bold = Modifier::BOLD;
-        let table = ThreeColTable {
-            headers: [
-                ("TAG".into(), Style::default().fg(Color::DarkGray).add_modifier(bold)),
-                ("DISK".into(), Style::default().fg(Color::DarkGray).add_modifier(bold)),
-                ("EXTERNAL".into(), Style::default().fg(Color::DarkGray).add_modifier(bold)),
-            ],
-            rows: entry.diffs.iter().map(|diff| {
-                let disk_text = match &diff.corpus_value {
-                    Some(cv) => format!("\"{}\"", cv),
-                    None => "\u{2014}".to_string(),
-                };
-                let disk_color = match &diff.corpus_value {
-                    Some(_) => Color::Red,
-                    None => Color::DarkGray,
-                };
-                let ext_text = format!("\"{}\"", diff.external_value);
-                [
-                    StyledCell::new(&diff.tag_name, Style::default().fg(Color::Cyan)),
-                    StyledCell::new(disk_text, Style::default().fg(disk_color)),
-                    StyledCell::new(ext_text, Style::default().fg(Color::Green)),
-                ]
-            }).collect(),
-            col_ratio: [20, 40, 40],
-            scroll: state.diff_scroll,
-            separator_style: Style::default().fg(Color::DarkGray),
-            alternate_rows: true,
-        };
-        table.render(f, table_area);
+        lines.push(Line::from(Span::styled(
+            "MB recording data not cached.",
+            dim_style,
+        )));
+        lines.push(Line::from(Span::styled(
+            "Run a fetch to populate.",
+            dim_style,
+        )));
     }
-}
 
-fn render_buttons(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
-    let is_focused = state.focus_pane == FocusPane::Buttons;
-    let border_color = if is_focused { Color::Yellow } else { Color::DarkGray };
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "Esc to close  \u{2191}\u{2193} navigate  click link to open",
+        dim_style,
+    )));
 
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(border_color));
-    let inner = render_pane(f, area, block);
-
-    state.button_rects.clear();
-
-    let accept_label = " Accept Tags ";
-    let drop_label = " Drop Selected ";
-    let dismiss_label = " Dismiss ";
-    let cancel_label = " Cancel ";
-
-    let total_width = accept_label.len() + 2 + drop_label.len() + 2 + dismiss_label.len() + 2 + cancel_label.len();
-    let start_x = inner.x + (inner.width.saturating_sub(total_width as u16)) / 2;
-
-    let mut x = start_x;
-
-    let accept_rect = Rect::new(x, inner.y, accept_label.len() as u16, 1);
-    state.button_rects.set("accept", accept_rect);
-    x += accept_label.len() as u16 + 2;
-
-    let drop_rect = Rect::new(x, inner.y, drop_label.len() as u16, 1);
-    state.button_rects.set("drop_selected", drop_rect);
-    x += drop_label.len() as u16 + 2;
-
-    let dismiss_rect = Rect::new(x, inner.y, dismiss_label.len() as u16, 1);
-    state.button_rects.set("dismiss", dismiss_rect);
-    x += dismiss_label.len() as u16 + 2;
-
-    let cancel_rect = Rect::new(x, inner.y, cancel_label.len() as u16, 1);
-    state.button_rects.set("cancel", cancel_rect);
-
-    let accept_style = if state.selected_button == ExternalMatchButton::Accept && is_focused {
-        Style::default().fg(Color::Black).bg(Color::Green)
-    } else {
-        Style::default().fg(Color::Green)
-    };
-
-    let drop_style = if state.selected_button == ExternalMatchButton::DropSelected && is_focused {
-        Style::default().fg(Color::Black).bg(Color::Red)
-    } else {
-        Style::default().fg(Color::Red)
-    };
-
-    let dismiss_style = if state.selected_button == ExternalMatchButton::Dismiss && is_focused {
-        Style::default().fg(Color::Black).bg(Color::Magenta)
-    } else {
-        Style::default().fg(Color::Magenta)
-    };
-
-    let cancel_style = if state.selected_button == ExternalMatchButton::Cancel && is_focused {
-        Style::default().fg(Color::Black).bg(Color::White)
-    } else {
-        Style::default().fg(Color::White)
-    };
-
-    let buttons_line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(accept_label, accept_style),
-        Span::raw("  "),
-        Span::styled(drop_label, drop_style),
-        Span::raw("  "),
-        Span::styled(dismiss_label, dismiss_style),
-        Span::raw("  "),
-        Span::styled(cancel_label, cancel_style),
-        Span::raw("  "),
-    ]);
-
-    let sel_count = state.selection.selection_count();
-    let hint_style = Style::default().fg(Color::DarkGray);
-    let mut hint_spans = vec![
-        Span::styled("Space", hint_style),
-        Span::styled(" select", hint_style),
-        Span::styled("  \u{00b7}  ", hint_style),
-        Span::styled("Shift+\u{2191}\u{2193}", hint_style),
-        Span::styled(" focus", hint_style),
-        Span::styled("  \u{00b7}  ", hint_style),
-        Span::styled("\u{2190}\u{2192}", hint_style),
-        Span::styled(" buttons", hint_style),
-        Span::styled("  \u{00b7}  ", hint_style),
-        Span::styled("Enter", hint_style),
-        Span::styled(" confirm", hint_style),
-    ];
-    if sel_count > 0 {
-        hint_spans.push(Span::styled(
-            format!("  \u{00b7}  {} selected", sel_count),
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-    let hint_line = Line::from(hint_spans);
-
-    let para = Paragraph::new(vec![buttons_line, hint_line]).alignment(Alignment::Center);
+    // Apply scroll
+    let visible: Vec<Line> = lines.into_iter().skip(state.detail_scroll).collect();
+    let para = Paragraph::new(visible);
     f.render_widget(para, inner);
 }
 
@@ -388,7 +273,6 @@ fn render_recording_detail(f: &mut Frame, area: Rect, state: &ExternalMatchRevie
             if let Some((_, Some(ref artist))) = detail.artists.iter()
                 .find(|(id, _)| *id == credit.artist.id)
             {
-                // Show canonical name if different from credited name
                 if artist.name != credit.name {
                     lines.push(Line::from(vec![
                         Span::styled("    canonical: ", dim_style),
@@ -428,7 +312,7 @@ fn render_recording_detail(f: &mut Frame, area: Rect, state: &ExternalMatchRevie
         lines.push(Line::raw(""));
     }
 
-    // Relations (only backward = artist→recording, which is the relevant direction)
+    // Relations
     let relevant_relations: Vec<_> = rec.relations.iter()
         .filter(|r| r.artist.is_some() && r.direction.as_deref() != Some("forward"))
         .collect();
@@ -450,7 +334,7 @@ fn render_recording_detail(f: &mut Frame, area: Rect, state: &ExternalMatchRevie
         lines.push(Line::raw(""));
     }
 
-    // Releases — use full cached release data, fall back to recording's release refs
+    // Releases
     if !detail.releases.is_empty() {
         lines.push(Line::from(Span::styled("Releases:", heading_style)));
         for (id, parsed) in &detail.releases {
@@ -474,7 +358,6 @@ fn render_recording_detail(f: &mut Frame, area: Rect, state: &ExternalMatchRevie
                     ]));
                 }
                 None => {
-                    // Fall back to recording's release ref for title
                     let fallback_title = rec.releases.iter()
                         .find(|r| r.id == *id)
                         .and_then(|r| r.title.as_deref());

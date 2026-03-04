@@ -30,9 +30,9 @@ pub fn execute_schedule_content_analysis(
 
     // Note: OOB tag change classification is now handled in Observation phase by VerifyTags
     //
-    // AnalyzeFingerprintOverlaps and ClusterDirectoryOverlaps are NOT spawned here.
+    // AnalyzeFingerprintOverlaps and DetectCrossSourceOverlaps are NOT spawned here.
     // They depend on FingerprintOverlap signals written by DetectFingerprintOverlaps,
-    // so DetectFingerprintOverlaps spawns them after calling wait_for_queue_drain().
+    // so DetectFingerprintOverlaps defers them behind a pipeline barrier.
 
     let mut spawn = Vec::new();
 
@@ -54,7 +54,6 @@ pub fn execute_schedule_content_analysis(
             Computation::DetectDuplicateInodes,
             Computation::DetectShitFormats,
             Computation::IndexImageFile,
-            Computation::DetectCrossSourceOverlaps,
         ]);
     }
 

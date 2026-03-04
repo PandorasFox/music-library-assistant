@@ -71,6 +71,10 @@ pub enum PipelineStage {
     Resolve,
     /// Post-resolution gap/quality analysis.
     Analyze,
+    /// Dependent analysis: spawn computations that read signals written by the
+    /// parent computation. General-purpose "write signals → barrier → analyze"
+    /// pattern (e.g., DetectFingerprintOverlaps → AnalyzeFingerprintOverlaps).
+    DependentAnalysis,
 }
 
 impl PipelineStage {
@@ -78,6 +82,7 @@ impl PipelineStage {
         match self {
             PipelineStage::Resolve => "Resolving",
             PipelineStage::Analyze => "Analyzing",
+            PipelineStage::DependentAnalysis => "Dependent analysis",
         }
     }
 }

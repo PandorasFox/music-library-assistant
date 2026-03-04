@@ -305,14 +305,19 @@ pub fn execute_detect_release_overlaps(
         unchanged,
     ));
 
-    // Wait for ReleaseOverlap signals to be written before spawning
-    // DeriveCorpusDeployStatus, which reads them to suppress DeployReady.
-    write_thread::wait_for_queue_drain();
-
-    Result::success(
+    // DeriveCorpusDeployStatus reads ReleaseOverlap signals written above.
+    // Defer it behind a barrier so the Witch drains all in-flight work + DB
+    // writes before spawning it.
+    Result::pipeline(
         computation,
         start.elapsed().as_millis() as u64,
-        vec![Computation::DeriveCorpusDeployStatus],
+        vec![],
+        vec![(
+            super::super::PipelineStage::DependentAnalysis,
+            vec![
+                super::super::Computation::Analysis(Computation::DeriveCorpusDeployStatus),
+            ],
+        )],
     )
 }
 

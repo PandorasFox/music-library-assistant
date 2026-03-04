@@ -138,14 +138,17 @@ pub fn execute_detect_fingerprint_overlaps(
             "[COMPUTE] DetectFingerprintOverlaps: 0 groups, cleared={}, new={}, updated={}, unchanged={}",
             cleared, new_count, updated, unchanged
         ));
-        write_thread::wait_for_queue_drain();
-        return Result::success(
+        return Result::pipeline(
             computation,
             start.elapsed().as_millis() as u64,
-            vec![
-                Computation::AnalyzeFingerprintOverlaps,
-                Computation::DetectCrossSourceOverlaps,
-            ],
+            vec![],
+            vec![(
+                super::super::PipelineStage::DependentAnalysis,
+                vec![
+                    super::super::Computation::Analysis(Computation::AnalyzeFingerprintOverlaps),
+                    super::super::Computation::Analysis(Computation::DetectCrossSourceOverlaps),
+                ],
+            )],
         );
     }
 
@@ -254,19 +257,20 @@ pub fn execute_detect_fingerprint_overlaps(
         total_groups, total_tracks, cleared, new_count, updated, unchanged
     ));
 
-    // Wait for all FingerprintOverlap signals to be written before spawning
-    // dependent computations. This ensures AnalyzeFingerprintOverlaps and
-    // ClusterDirectoryOverlaps see the fresh signal data.
-    write_thread::wait_for_queue_drain();
-
-    // Spawn dependent computations that read FingerprintOverlap signals
-    Result::success(
+    // Dependent computations (AnalyzeFingerprintOverlaps, DetectCrossSourceOverlaps)
+    // read FingerprintOverlap signals written above. Defer them behind a barrier
+    // so the Witch drains all in-flight work + DB writes before spawning them.
+    Result::pipeline(
         computation,
         start.elapsed().as_millis() as u64,
-        vec![
-            Computation::AnalyzeFingerprintOverlaps,
-            Computation::DetectCrossSourceOverlaps,
-        ],
+        vec![],
+        vec![(
+            super::super::PipelineStage::DependentAnalysis,
+            vec![
+                super::super::Computation::Analysis(Computation::AnalyzeFingerprintOverlaps),
+                super::super::Computation::Analysis(Computation::DetectCrossSourceOverlaps),
+            ],
+        )],
     )
 }
 

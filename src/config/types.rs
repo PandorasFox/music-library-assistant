@@ -358,8 +358,6 @@ pub struct ExternalMatchingConfig {
     pub auto_enrich_on_match: bool,
     /// How many days before re-fetching MB cache entries (default 30).
     pub mb_cache_ttl_days: u32,
-    /// Max MB recording candidates to enrich per inode (default 3).
-    pub mb_max_candidates: u32,
     /// Locale preference order for artist names (BCP 47, e.g. ["en", "ja"]).
     /// Native script is always the final fallback.
     pub preferred_locales: Vec<String>,
@@ -454,7 +452,6 @@ impl Default for ExternalMatchingConfig {
             mb_base_url: Self::DEFAULT_MB_BASE_URL.to_string(),
             auto_enrich_on_match: true,
             mb_cache_ttl_days: 30,
-            mb_max_candidates: 3,
             preferred_locales: Vec::new(),
             tag_templates: Vec::new(),
         }
@@ -470,7 +467,6 @@ impl ExternalMatchingConfig {
     pub const KDL_MB_BASE_URL: &str = "mb-base-url";
     pub const KDL_AUTO_ENRICH: &str = "auto-enrich-on-match";
     pub const KDL_MB_CACHE_TTL: &str = "mb-cache-ttl-days";
-    pub const KDL_MB_MAX_CANDIDATES: &str = "mb-max-candidates";
     pub const KDL_PREFERRED_LOCALES: &str = "preferred-locales";
     pub const KDL_TAG_TEMPLATES: &str = "tag-templates";
 }

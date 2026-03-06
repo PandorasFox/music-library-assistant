@@ -349,15 +349,6 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         }
                     }
                 }
-                ExternalMatchingConfig::KDL_MB_MAX_CANDIDATES => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_i64() {
-                            if val > 0 {
-                                opinions.mb_max_candidates = val as u32;
-                            }
-                        }
-                    }
-                }
                 ExternalMatchingConfig::KDL_PREFERRED_LOCALES => {
                     // Multi-value node: preferred-locales "en" "ja"
                     let locales: Vec<String> = child.entries()

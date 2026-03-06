@@ -531,7 +531,7 @@ fn run_scheduling_loop(
     eligible_dirs: Vec<PathBuf>,
 ) -> bool {
     // Read config
-    let (api_key, rps, mb_rps, mb_base_url, auto_enrich, ttl_secs, max_candidates) = {
+    let (api_key, rps, mb_rps, mb_base_url, auto_enrich, ttl_secs) = {
         let config = shared_config.read().expect("SharedConfig lock poisoned");
         let em = &config.opinions.external_matching;
         (
@@ -541,7 +541,6 @@ fn run_scheduling_loop(
             em.mb_base_url.clone(),
             em.auto_enrich_on_match,
             (em.mb_cache_ttl_days as i64) * 86400,
-            em.mb_max_candidates,
         )
     };
 
@@ -583,7 +582,7 @@ fn run_scheduling_loop(
     }
 
     if auto_enrich {
-        populate_mb_queue(db, ttl_secs, max_candidates, &mut mb_queue);
+        populate_mb_queue(db, ttl_secs, &mut mb_queue);
         mb_stats.total = mb_queue.len();
         for item in &mb_queue {
             mb_queued_ids.insert(item.mbid.clone());
@@ -928,11 +927,10 @@ fn populate_acoustid_queue(
 fn populate_mb_queue(
     db: &Database,
     ttl_secs: i64,
-    max_candidates: u32,
     queue: &mut VecDeque<MbQueueItem>,
 ) {
     // Legacy path: recording IDs from external_matches needing cache
-    match db.get_recording_ids_needing_mb_fetch(ttl_secs, max_candidates) {
+    match db.get_recording_ids_needing_mb_fetch(ttl_secs) {
         Ok(ids) => {
             for id in ids {
                 queue.push_back(MbQueueItem { kind: MbEntityKind::Recording, mbid: id });

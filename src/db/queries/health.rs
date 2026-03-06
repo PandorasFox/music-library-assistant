@@ -785,7 +785,8 @@ impl Database {
             "SELECT COUNT(*) FROM signal_release_packing", [], |row| row.get(0),
         ).unwrap_or(0);
         let packing_release_count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM release_packing_manifest", [], |row| row.get(0),
+            "SELECT COUNT(DISTINCT release_id) FROM release_packing_scores WHERE is_optimal = 1",
+            [], |row| row.get(0),
         ).unwrap_or(0);
         let packing_near_miss_count: usize = self.conn.query_row(
             "SELECT COUNT(*) FROM signal_near_miss_release", [], |row| row.get(0),

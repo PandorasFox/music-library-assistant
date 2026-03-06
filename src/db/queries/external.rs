@@ -371,12 +371,11 @@ impl Database {
 
     /// Get recording IDs that need MB cache fetch.
     ///
-    /// For each inode, returns up to `max_candidates` recording IDs by confidence
+    /// Returns all distinct recording IDs from external matches (corpus files)
     /// that either have no MB cache entry or a stale one.
     pub fn get_recording_ids_needing_mb_fetch(
         &self,
         ttl_secs: i64,
-        max_candidates: u32,
     ) -> Result<Vec<String>> {
         let stale_threshold = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -385,22 +384,16 @@ impl Database {
             - ttl_secs;
 
         let sql = r#"
-            WITH ranked AS (
-                SELECT em.recording_id, em.inode, em.confidence,
-                       ROW_NUMBER() OVER (PARTITION BY em.inode ORDER BY em.confidence DESC) as rn
-                FROM external_matches em
-                JOIN files f ON em.inode = f.inode
-                WHERE f.zone = 'corpus' AND em.source = 1
-            )
-            SELECT DISTINCT r.recording_id
-            FROM ranked r
-            LEFT JOIN mb_recording_cache mrc ON r.recording_id = mrc.recording_id
-            WHERE r.rn <= ?1
-              AND (mrc.recording_id IS NULL OR mrc.fetched_at < ?2)
+            SELECT DISTINCT em.recording_id
+            FROM external_matches em
+            JOIN files f ON em.inode = f.inode
+            LEFT JOIN mb_recording_cache mrc ON em.recording_id = mrc.recording_id
+            WHERE f.zone = 'corpus' AND em.source = 1
+              AND (mrc.recording_id IS NULL OR mrc.fetched_at < ?1)
         "#;
 
         let mut stmt = self.conn().prepare(sql)?;
-        let rows = stmt.query_map(params![max_candidates, stale_threshold], |row| {
+        let rows = stmt.query_map(params![stale_threshold], |row| {
             row.get::<_, String>(0)
         })?;
 

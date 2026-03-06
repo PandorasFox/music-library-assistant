@@ -289,6 +289,12 @@ enum DbWriteOp {
     WriteTypedSignal {
         signal: crate::meta::signals::data::TypedSignalWrite,
     },
+    /// Write a batch of typed signals in a single transaction.
+    ///
+    /// Reduces channel overhead for reconcile operations that emit many signals.
+    WriteTypedSignalBatch {
+        signals: Vec<crate::meta::signals::data::TypedSignalWrite>,
+    },
     /// Update file mtime in files table (after OOB verification).
     /// Uses (zone, inode) as the unique key for reliable updates.
     UpdateFileMtime {
@@ -820,6 +826,22 @@ impl SignalWriteSender {
     ) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::WriteTypedSignal { signal });
+    }
+
+    /// Write a batch of typed signals in a single channel message.
+    ///
+    /// All signals are inserted in one transaction on the DB thread, reducing
+    /// both channel overhead and SQLite transaction costs for bulk reconciliation.
+    pub fn write_typed_signal_batch(
+        &self,
+        signals: Vec<crate::meta::signals::data::TypedSignalWrite>,
+        _witness: &impl SignalWitness,
+    ) {
+        if signals.is_empty() {
+            return;
+        }
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::WriteTypedSignalBatch { signals });
     }
 
     // =========================================================================
@@ -1727,6 +1749,15 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                 crate::logging::log_error(format!(
                     "[DB_THREAD] write_typed_signal failed: {}", e
                 ));
+            }
+        }
+        DbWriteOp::WriteTypedSignalBatch { signals } => {
+            for signal in signals {
+                if let Err(e) = signal.clone().insert(db.conn()) {
+                    crate::logging::log_error(format!(
+                        "[DB_THREAD] write_typed_signal_batch item failed: {}", e
+                    ));
+                }
             }
         }
         DbWriteOp::UpdateFileMtime {

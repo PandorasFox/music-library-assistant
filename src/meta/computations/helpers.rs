@@ -300,6 +300,7 @@ pub(super) fn reconcile_aggregate_signals<S: AggregateSignalStore>(
     }
 
     // For each computed signal: check hash to decide write vs skip
+    let mut batch: Vec<TypedSignalWrite> = Vec::new();
     for signal in &computed {
         match existing_hashes.get(&signal.key) {
             Some(&existing_hash) if existing_hash == signal.content_hash => {
@@ -308,16 +309,17 @@ pub(super) fn reconcile_aggregate_signals<S: AggregateSignalStore>(
             }
             Some(_) => {
                 // Key exists but hash differs — update
-                sender.write_typed_signal(signal.typed_data.clone(), witness);
+                batch.push(signal.typed_data.clone());
                 updated += 1;
             }
             None => {
                 // New signal
-                sender.write_typed_signal(signal.typed_data.clone(), witness);
+                batch.push(signal.typed_data.clone());
                 new += 1;
             }
         }
     }
+    sender.write_typed_signal_batch(batch, witness);
 
     (cleared, new, updated, unchanged)
 }
@@ -372,6 +374,7 @@ pub(super) fn reconcile_corpus_signals<S: CorpusSignalStore>(
     }
 
     // For each computed signal: check hash or existence to decide write vs skip
+    let mut batch: Vec<TypedSignalWrite> = Vec::new();
     for signal in &computed {
         if use_hashes {
             match existing_hashes.get(&signal.inode) {
@@ -379,11 +382,11 @@ pub(super) fn reconcile_corpus_signals<S: CorpusSignalStore>(
                     unchanged += 1;
                 }
                 Some(_) => {
-                    sender.write_typed_signal(signal.typed_data.clone(), witness);
+                    batch.push(signal.typed_data.clone());
                     updated += 1;
                 }
                 None => {
-                    sender.write_typed_signal(signal.typed_data.clone(), witness);
+                    batch.push(signal.typed_data.clone());
                     new += 1;
                 }
             }
@@ -392,11 +395,12 @@ pub(super) fn reconcile_corpus_signals<S: CorpusSignalStore>(
             if existing_inodes.contains(&signal.inode) {
                 unchanged += 1;
             } else {
-                sender.write_typed_signal(signal.typed_data.clone(), witness);
+                batch.push(signal.typed_data.clone());
                 new += 1;
             }
         }
     }
+    sender.write_typed_signal_batch(batch, witness);
 
     (cleared, new, updated, unchanged)
 }

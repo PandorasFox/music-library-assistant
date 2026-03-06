@@ -58,6 +58,10 @@ pub enum PackingListEntry {
     ReleaseSectionHeader { count: usize },
     /// A release row.
     ReleaseHeader { release_idx: usize },
+    /// Section header for singles (releases with total_tracks == 1).
+    SinglesSectionHeader { count: usize },
+    /// A single release row.
+    SingleHeader { single_idx: usize },
     /// Section header for near-misses.
     NearMissSectionHeader { count: usize },
     /// A near-miss release entry.
@@ -74,6 +78,7 @@ impl PackingListEntry {
         matches!(
             self,
             Self::ReleaseSectionHeader { .. }
+                | Self::SinglesSectionHeader { .. }
                 | Self::NearMissSectionHeader { .. }
                 | Self::UnmatchedSectionHeader { .. }
         )

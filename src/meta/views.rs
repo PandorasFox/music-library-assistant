@@ -187,8 +187,6 @@ pub struct ExternalMatchesData {
     pub packing_assigned_count: usize,
     /// Number of distinct releases in packing results.
     pub packing_release_count: usize,
-    /// Number of unfilled release slots.
-    pub packing_unfilled_count: usize,
     /// Number of near-miss releases.
     pub packing_near_miss_count: usize,
     /// Number of unmatched corpus tracks.

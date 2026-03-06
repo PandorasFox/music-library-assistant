@@ -751,6 +751,21 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_mb_release_cache_bulk(release_ids)
     }
 
+    /// Count corpus files with non-null fingerprints.
+    pub fn count_fingerprinted_corpus_files(&self) -> Result<usize> {
+        self.db.count_fingerprinted_corpus_files()
+    }
+
+    /// Count distinct corpus inodes with at least one external match.
+    pub fn count_externally_matched_corpus_files(&self, source_key: i64) -> Result<usize> {
+        self.db.count_externally_matched_corpus_files(source_key)
+    }
+
+    /// Count distinct recording IDs matched across corpus files.
+    pub fn count_matched_recordings(&self, source_key: i64) -> Result<usize> {
+        self.db.count_matched_recordings(source_key)
+    }
+
     // =========================================================================
     // Release Packing Signal Data Queries
     // =========================================================================

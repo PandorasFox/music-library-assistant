@@ -287,17 +287,28 @@ impl App {
             let unmatched = db.get_unmatched_corpus_track_signal_data().unwrap_or_default();
             let unfilled = db.get_unfilled_release_slot_signal_data().unwrap_or_default();
             let near_miss = db.get_near_miss_release_signal_data().unwrap_or_default();
-            (packing, unmatched, unfilled, near_miss)
+
+            let source_key = crate::meta::external::ExternalSource::AcoustID.to_key();
+            let fingerprinted_count = db.count_fingerprinted_corpus_files().unwrap_or(0);
+            let matched_count = db.count_externally_matched_corpus_files(source_key).unwrap_or(0);
+            let recording_count = db.count_matched_recordings(source_key).unwrap_or(0);
+
+            (packing, unmatched, unfilled, near_miss,
+             fingerprinted_count, matched_count, recording_count)
         }).recv();
 
-        let (packing, unmatched, unfilled, near_miss) = result;
+        let (packing, unmatched, unfilled, near_miss,
+             fingerprinted_count, matched_count, recording_count) = result;
 
         if packing.is_empty() && unmatched.is_empty() {
             self.status_message = Some("No release packing results available".to_string());
             return;
         }
 
-        let state = ReleasePackingBrowserState::build(packing, unmatched, unfilled, near_miss);
+        let state = ReleasePackingBrowserState::build(
+            packing, unmatched, unfilled, near_miss,
+            fingerprinted_count, matched_count, recording_count,
+        );
         self.view = ActiveView::ReleasePackingBrowser(state);
     }
 

@@ -670,4 +670,40 @@ impl Database {
 
         Ok(candidates)
     }
+
+    /// Count corpus files that have a non-null fingerprint in audio_info.
+    pub fn count_fingerprinted_corpus_files(&self) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT a.inode) FROM audio_info a
+             JOIN files f ON a.inode = f.inode
+             WHERE f.zone = 'corpus' AND a.fingerprint IS NOT NULL AND f.is_dir = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Count distinct corpus inodes that have at least one external match.
+    pub fn count_externally_matched_corpus_files(&self, source_key: i64) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT em.inode) FROM external_matches em
+             JOIN files f ON em.inode = f.inode
+             WHERE f.zone = 'corpus' AND em.source = ?1",
+            [source_key],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Count distinct recording IDs across all external matches for corpus files.
+    pub fn count_matched_recordings(&self, source_key: i64) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT em.recording_id) FROM external_matches em
+             JOIN files f ON em.inode = f.inode
+             WHERE f.zone = 'corpus' AND em.source = ?1",
+            [source_key],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
 }

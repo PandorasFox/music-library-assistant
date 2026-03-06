@@ -209,9 +209,6 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                 if data.packing_release_count > 0 {
                     parts.push(format!("{} releases", data.packing_release_count));
                 }
-                if data.packing_unfilled_count > 0 {
-                    parts.push(format!("{} unfilled", data.packing_unfilled_count));
-                }
                 if data.packing_near_miss_count > 0 {
                     parts.push(format!("{} near-miss", data.packing_near_miss_count));
                 }
@@ -645,13 +642,6 @@ fn render_packing_results_detail(state: &ExternalMatchesViewState) -> Vec<Line<'
             Span::styled("Releases:   ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{}", data.packing_release_count), Style::default().fg(Color::Yellow)),
         ]));
-        if data.packing_unfilled_count > 0 {
-            lines.push(Line::from(vec![
-                Span::styled("Unfilled:   ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}", data.packing_unfilled_count), Style::default().fg(Color::Red)),
-                Span::styled(" slots", Style::default().fg(Color::DarkGray)),
-            ]));
-        }
         if data.packing_near_miss_count > 0 {
             lines.push(Line::from(vec![
                 Span::styled("Near-miss:  ", Style::default().fg(Color::DarkGray)),

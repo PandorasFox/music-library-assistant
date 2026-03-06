@@ -49,14 +49,30 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState)
 }
 
 fn render_info_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserState) {
-    let summary = format!(
-        " {} tracks assigned to {} releases",
-        state.total_assigned, state.total_releases,
-    );
-    let line = Line::from(Span::styled(
-        summary,
-        Style::default().fg(Color::DarkGray),
-    ));
+    let line = Line::from(vec![
+        Span::styled(" ", Style::default()),
+        Span::styled(
+            format!("{}", state.fingerprinted_count),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(" fingerprinted → ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{}", state.matched_count),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            format!(" matched ({} recordings) → ", state.recording_count),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            format!("{}", state.total_assigned),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            format!(" assigned to {} releases", state.total_releases),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
     f.render_widget(Paragraph::new(vec![line]), area);
 }
 
@@ -175,6 +191,35 @@ fn render_left_entry(
             ])
         }
 
+        PackingListEntry::SinglesSectionHeader { count } => Line::from(Span::styled(
+            format!("── Singles ({}) ──", count),
+            Style::default().fg(Color::DarkGray),
+        )),
+
+        PackingListEntry::SingleHeader { single_idx } => {
+            let single = &state.singles[*single_idx];
+            let marker = if selected { "▸ " } else { "  " };
+            let title_style = if selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            Line::from(vec![
+                Span::styled(marker.to_string(), title_style),
+                Span::styled(
+                    truncate_for_width(&single.release_title, title_max),
+                    title_style,
+                ),
+                Span::styled(
+                    " 1/1".to_string(),
+                    Style::default().fg(Color::Green),
+                ),
+            ])
+        }
+
         PackingListEntry::NearMissSectionHeader { count } => Line::from(Span::styled(
             format!("── Near-Misses ({}) ──", count),
             Style::default().fg(Color::DarkGray),
@@ -252,21 +297,39 @@ fn render_tracks_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrows
         return;
     }
 
-    // For non-release selections, show relevant detail in the middle pane
-    match state.selected_entry() {
-        Some(PackingListEntry::ReleaseHeader { release_idx }) => {
-            let release_idx = *release_idx;
-            render_release_tracks(f, inner, state, release_idx);
+    // Determine which release to show (if any) before borrowing state mutably
+    enum TrackSource {
+        Release(usize),
+        Single(usize),
+        NearMiss(usize),
+        Unmatched(usize),
+        None,
+    }
+
+    let source = match state.selected_entry() {
+        Some(PackingListEntry::ReleaseHeader { release_idx }) => TrackSource::Release(*release_idx),
+        Some(PackingListEntry::SingleHeader { single_idx }) => TrackSource::Single(*single_idx),
+        Some(PackingListEntry::NearMissEntry { idx }) => TrackSource::NearMiss(*idx),
+        Some(PackingListEntry::UnmatchedFile { idx }) => TrackSource::Unmatched(*idx),
+        _ => TrackSource::None,
+    };
+
+    match source {
+        TrackSource::Release(idx) => {
+            render_release_tracks(f, inner, state, idx, false);
         }
-        Some(PackingListEntry::NearMissEntry { idx }) => {
-            let lines = render_near_miss_detail(&state.near_misses[*idx]);
+        TrackSource::Single(idx) => {
+            render_release_tracks(f, inner, state, idx, true);
+        }
+        TrackSource::NearMiss(idx) => {
+            let lines = render_near_miss_detail(&state.near_misses[idx]);
             render_scrollable_lines(f, inner, &lines, 0);
         }
-        Some(PackingListEntry::UnmatchedFile { idx }) => {
-            let lines = render_unmatched_detail(&state.unmatched[*idx]);
+        TrackSource::Unmatched(idx) => {
+            let lines = render_unmatched_detail(&state.unmatched[idx]);
             render_scrollable_lines(f, inner, &lines, 0);
         }
-        _ => {
+        TrackSource::None => {
             let line = Line::from(Span::styled(
                 "No release selected",
                 Style::default().fg(Color::DarkGray),
@@ -280,10 +343,11 @@ fn render_release_tracks(
     f: &mut Frame,
     area: Rect,
     state: &mut ReleasePackingBrowserState,
-    release_idx: usize,
+    idx: usize,
+    is_single: bool,
 ) {
     let focused = matches!(state.focused_pane, FocusedPane::MiddlePane);
-    let release = &state.releases[release_idx];
+    let release = if is_single { &state.singles[idx] } else { &state.releases[idx] };
     let track_count = release.tracks.len();
     let unfilled_count = release.unfilled.len();
     let total = track_count + unfilled_count;
@@ -394,17 +458,10 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrows
 
     let lines = match state.selected_entry() {
         Some(PackingListEntry::ReleaseHeader { release_idx }) => {
-            let release = &state.releases[*release_idx];
-            let track_count = release.tracks.len();
-            let track_cursor = state.track_cursor;
-
-            if track_cursor < track_count {
-                render_track_detail(&release.tracks[track_cursor], release)
-            } else if track_cursor < track_count + release.unfilled.len() {
-                render_unfilled_detail(&release.unfilled[track_cursor - track_count], release)
-            } else {
-                render_release_summary(release)
-            }
+            detail_for_release(&state.releases[*release_idx], state.track_cursor)
+        }
+        Some(PackingListEntry::SingleHeader { single_idx }) => {
+            detail_for_release(&state.singles[*single_idx], state.track_cursor)
         }
         Some(PackingListEntry::NearMissEntry { idx }) => {
             render_near_miss_detail(&state.near_misses[*idx])
@@ -429,6 +486,17 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrows
         }
     } else {
         state.detail_scroll = 0;
+    }
+}
+
+fn detail_for_release(release: &ReleaseGroup, track_cursor: usize) -> Vec<Line<'static>> {
+    let track_count = release.tracks.len();
+    if track_cursor < track_count {
+        render_track_detail(&release.tracks[track_cursor], release)
+    } else if track_cursor < track_count + release.unfilled.len() {
+        render_unfilled_detail(&release.unfilled[track_cursor - track_count], release)
+    } else {
+        render_release_summary(release)
     }
 }
 

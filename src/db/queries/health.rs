@@ -787,9 +787,6 @@ impl Database {
         let packing_release_count: usize = self.conn.query_row(
             "SELECT COUNT(*) FROM release_packing_manifest", [], |row| row.get(0),
         ).unwrap_or(0);
-        let packing_unfilled_count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM signal_unfilled_release_slot", [], |row| row.get(0),
-        ).unwrap_or(0);
         let packing_near_miss_count: usize = self.conn.query_row(
             "SELECT COUNT(*) FROM signal_near_miss_release", [], |row| row.get(0),
         ).unwrap_or(0);
@@ -802,7 +799,6 @@ impl Database {
             confidence_buckets,
             packing_assigned_count,
             packing_release_count,
-            packing_unfilled_count,
             packing_near_miss_count,
             packing_unmatched_count,
         })

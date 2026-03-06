@@ -49,14 +49,20 @@ pub(crate) struct ReleasePackingBrowserState {
     // Click targets
     pub click_targets: ListClickTargets,
 
-    // Source data
+    // Source data (releases = multi-track, singles = total_tracks == 1)
     pub releases: Vec<ReleaseGroup>,
+    pub singles: Vec<ReleaseGroup>,
     pub near_misses: Vec<NearMissReleaseData>,
     pub unmatched: Vec<UnmatchedEntry>,
 
     // Summary
     pub total_assigned: usize,
     pub total_releases: usize,
+
+    // Funnel counts (fingerprinted → matched → assigned)
+    pub fingerprinted_count: usize,
+    pub matched_count: usize,
+    pub recording_count: usize,
 }
 
 // ============================================================================
@@ -70,6 +76,9 @@ impl ReleasePackingBrowserState {
         unmatched_rows: Vec<(i64, String, UnmatchedCorpusTrackData)>,
         unfilled_rows: Vec<UnfilledReleaseSlotData>,
         near_miss_rows: Vec<NearMissReleaseData>,
+        fingerprinted_count: usize,
+        matched_count: usize,
+        recording_count: usize,
     ) -> Self {
         // Group packing rows by release_id
         let mut release_map: HashMap<String, Vec<(i64, String, ReleasePackingData)>> =
@@ -155,8 +164,12 @@ impl ReleasePackingBrowserState {
                 .then(b.total_tracks.cmp(&a.total_tracks))
         });
 
-        let total_assigned = releases.iter().map(|r| r.tracks.len()).sum();
-        let total_releases = releases.len();
+        // Partition into multi-track releases and singles
+        let (releases, singles): (Vec<_>, Vec<_>) =
+            releases.into_iter().partition(|r| r.total_tracks > 1);
+
+        let total_assigned = releases.iter().chain(singles.iter()).map(|r| r.tracks.len()).sum();
+        let total_releases = releases.len() + singles.len();
 
         let unmatched: Vec<UnmatchedEntry> = unmatched_rows
             .into_iter()
@@ -173,10 +186,14 @@ impl ReleasePackingBrowserState {
             focused_pane: FocusedPane::LeftPane,
             click_targets: Default::default(),
             releases,
+            singles,
             near_misses: near_miss_rows,
             unmatched,
             total_assigned,
             total_releases,
+            fingerprinted_count,
+            matched_count,
+            recording_count,
         };
         state.rebuild_entries();
         state.advance_cursor_to_navigable(0);
@@ -193,6 +210,15 @@ impl ReleasePackingBrowserState {
             });
             for idx in 0..self.releases.len() {
                 entries.push(PackingListEntry::ReleaseHeader { release_idx: idx });
+            }
+        }
+
+        if !self.singles.is_empty() {
+            entries.push(PackingListEntry::SinglesSectionHeader {
+                count: self.singles.len(),
+            });
+            for idx in 0..self.singles.len() {
+                entries.push(PackingListEntry::SingleHeader { single_idx: idx });
             }
         }
 
@@ -238,6 +264,9 @@ impl ReleasePackingBrowserState {
         match self.selected_entry()? {
             PackingListEntry::ReleaseHeader { release_idx } => {
                 self.releases.get(*release_idx)
+            }
+            PackingListEntry::SingleHeader { single_idx } => {
+                self.singles.get(*single_idx)
             }
             _ => None,
         }

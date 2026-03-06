@@ -492,12 +492,7 @@ fn find_substring(haystack: &[char], needle: &[char], start: usize) -> Option<us
     if needle.is_empty() {
         return Some(start);
     }
-    for i in start..=haystack.len().saturating_sub(needle.len()) {
-        if haystack[i..i + needle.len()] == *needle {
-            return Some(i);
-        }
-    }
-    None
+    haystack[start..].windows(needle.len()).position(|w| w == needle).map(|i| i + start)
 }
 
 enum OptionalGroupResult {

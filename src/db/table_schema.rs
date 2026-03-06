@@ -51,6 +51,7 @@ pub struct TableEntry {
 /// This is the single source of truth. `initialize_schema()` iterates this
 /// to create tables in fresh databases. The reconciler compares this against
 /// the actual database to detect drift.
+#[allow(clippy::vec_init_then_push)] // 50+ entries, push pattern is clearer with section comments
 pub fn schema_inventory() -> Vec<TableEntry> {
     let mut tables = Vec::new();
 

@@ -131,7 +131,7 @@ impl App {
         eye.update(can_animate);
 
         // Tick progress screen - it checks daemon state for completion
-        let completed = screen.tick(&mut self.witch);
+        let completed = screen.tick(&self.witch);
         if completed {
             let status = self.witch.status();
             crate::logging::log_general(format!(
@@ -232,7 +232,7 @@ impl App {
             ));
 
             let gather_start = std::time::Instant::now();
-            let result = startup::IntakeConfirmationState::gather_startup(&db, &corpus_root);
+            let result = startup::IntakeConfirmationState::gather_startup(db, &corpus_root);
             crate::logging::log_general(format!(
                 "[TRANSITION] IntakeConfirmationState::gather_startup took {}ms",
                 gather_start.elapsed().as_millis()
@@ -309,7 +309,7 @@ impl App {
         // Progressive worker only used for corpus compound splits (Ctrl+A in safe mode)
         let group_clone = group.clone();
         let data = match self.cache.query(move |db| {
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group_clone, &db, crate::db::types::Zone::Corpus)
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group_clone, db, crate::db::types::Zone::Corpus)
         }).recv() {
             Some(d) => d,
             None => {

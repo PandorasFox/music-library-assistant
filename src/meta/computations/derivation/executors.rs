@@ -354,6 +354,7 @@ pub fn execute_derive_corpus_signals(
 /// Compares disk inodes (from FileInInbox signals) against inbox-indexed inodes:
 /// - disk_only (disk - indexed) → InboxUnindexed signals
 /// - both (disk ∩ indexed) → InboxHealthy signals
+///
 /// Inbox files don't produce MissingFile — missing inbox files are simply gone.
 pub fn execute_derive_inbox_signals(
     read_only_db: &ReadOnlyDb<'_>,

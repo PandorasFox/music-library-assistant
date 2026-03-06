@@ -125,10 +125,8 @@ impl App {
     /// In open-txn mode: leaves the persistent transaction intact.
     pub(in crate::ui) fn cancel_and_return_to_source(&mut self, log_message: &str) {
         crate::logging::log_general(log_message);
-        if !self.open_txn_mode() {
-            if self.witch.has_transaction() {
-                let _ = super::operator_decisions::discard_transaction(&mut self.witch);
-            }
+        if !self.open_txn_mode() && self.witch.has_transaction() {
+            let _ = super::operator_decisions::discard_transaction(&mut self.witch);
         }
         self.return_to_last_lateral_view();
     }
@@ -425,7 +423,7 @@ impl App {
     fn start_intake_confirmation_from_health(&mut self) {
         let corpus_root = self.config().corpus_dir();
         let intake_state = self.cache.query(move |db| {
-            startup::IntakeConfirmationState::gather(&db, &corpus_root, startup::IntakeSource::Health)
+            startup::IntakeConfirmationState::gather(db, &corpus_root, startup::IntakeSource::Health)
         }).recv();
 
         if let Some(state) = intake_state {
@@ -568,7 +566,6 @@ impl App {
                     } else {
                         // All groups visited — go to review
                         self.after_staging_decisions();
-                        return;
                     }
                 }
             }
@@ -763,7 +760,6 @@ impl App {
                         state.current_group += 1;
                     } else {
                         self.after_staging_decisions();
-                        return;
                     }
                 }
             }
@@ -949,10 +945,8 @@ impl App {
                 crate::logging::log_general("IntakeConfirmation: user skipped indexing");
 
                 // Discard any active transaction from review modal (not in open-txn mode)
-                if !self.open_txn_mode() {
-                    if self.witch.has_transaction() {
-                        let _ = operator_decisions::discard_transaction(&mut self.witch);
-                    }
+                if !self.open_txn_mode() && self.witch.has_transaction() {
+                    let _ = operator_decisions::discard_transaction(&mut self.witch);
                 }
 
                 if is_inbox_source {

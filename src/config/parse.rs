@@ -26,15 +26,12 @@ fn parse_size_mb(s: &str) -> Option<u32> {
 fn parse_quality_resolution_opinions(node: &kdl::KdlNode, opinions: &mut QualityResolutionOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
-            match child.name().value() {
-                QualityResolutionOpinions::KDL_BITRATE_FUZZ => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_f64() {
-                            opinions.inbox_bitrate_fuzz_percent = val;
-                        }
+            if child.name().value() == QualityResolutionOpinions::KDL_BITRATE_FUZZ {
+                if let Some(entry) = child.entries().first() {
+                    if let Some(val) = entry.value().as_f64() {
+                        opinions.inbox_bitrate_fuzz_percent = val;
                     }
                 }
-                _ => {}
             }
         }
     }
@@ -44,15 +41,12 @@ fn parse_quality_resolution_opinions(node: &kdl::KdlNode, opinions: &mut Quality
 fn parse_canonicalization_opinions(node: &kdl::KdlNode, opinions: &mut CanonicalizationOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
-            match child.name().value() {
-                CanonicalizationOpinions::KDL_STRIP_SUFFIXES => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.strip_album_format_suffixes = val;
-                        }
+            if child.name().value() == CanonicalizationOpinions::KDL_STRIP_SUFFIXES {
+                if let Some(entry) = child.entries().first() {
+                    if let Some(val) = entry.value().as_bool() {
+                        opinions.strip_album_format_suffixes = val;
                     }
                 }
-                _ => {}
             }
         }
     }
@@ -178,15 +172,12 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
 fn parse_debug_opinions(node: &kdl::KdlNode, opinions: &mut DebugOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
-            match child.name().value() {
-                DebugOpinions::KDL_MEMORY_LOGGING => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.memory_logging = val;
-                        }
+            if child.name().value() == DebugOpinions::KDL_MEMORY_LOGGING {
+                if let Some(entry) = child.entries().first() {
+                    if let Some(val) = entry.value().as_bool() {
+                        opinions.memory_logging = val;
                     }
                 }
-                _ => {}
             }
         }
     }
@@ -416,19 +407,16 @@ fn parse_disc_extraction_opinions(node: &kdl::KdlNode, opinions: &mut DiscExtrac
 fn parse_inbox_organize_opinions(node: &kdl::KdlNode, opinions: &mut InboxOrganizeOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
-            match child.name().value() {
-                InboxOrganizeOpinions::KDL_DIR_GRANULARITY => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_string() {
-                            match val {
-                                "leaf" => opinions.directory_granularity = InboxOrganizeGranularity::Leaf,
-                                "top-level" => opinions.directory_granularity = InboxOrganizeGranularity::TopLevel,
-                                _ => {}
-                            }
+            if child.name().value() == InboxOrganizeOpinions::KDL_DIR_GRANULARITY {
+                if let Some(entry) = child.entries().first() {
+                    if let Some(val) = entry.value().as_string() {
+                        match val {
+                            "leaf" => opinions.directory_granularity = InboxOrganizeGranularity::Leaf,
+                            "top-level" => opinions.directory_granularity = InboxOrganizeGranularity::TopLevel,
+                            _ => {}
                         }
                     }
                 }
-                _ => {}
             }
         }
     }

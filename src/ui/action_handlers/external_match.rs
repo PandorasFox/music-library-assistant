@@ -218,9 +218,7 @@ impl App {
             let recording = rec_cache
                 .and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
 
-            let Some(recording) = recording else {
-                return None;
-            };
+            let recording = recording?;
 
             // Collect unique artist IDs from credits + relations
             let mut artist_ids: Vec<String> = Vec::new();

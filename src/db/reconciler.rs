@@ -277,7 +277,7 @@ impl ReconciliationPlan {
 
         // 4. Create missing indices on existing tables
         for i in &self.new_indices {
-            crate::logging::log_general(format!("[RECONCILER] Creating index"));
+            crate::logging::log_general("[RECONCILER] Creating index");
             conn.execute_batch(&i.create_sql)
                 .context("Failed to create index")?;
         }

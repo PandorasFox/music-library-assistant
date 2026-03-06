@@ -267,15 +267,12 @@ impl ConfigEditorState {
                         // Exit sub-collection, move to next tag in collection
                         self.sub_collection_pos = None;
                         let collection_len = self.current_collection_len();
-                        match self.collection_pos {
-                            Some(CollectionPosition::Item(n)) => {
-                                if n + 1 < collection_len {
-                                    self.collection_pos = Some(CollectionPosition::Item(n + 1));
-                                } else {
-                                    self.collection_pos = Some(CollectionPosition::AddNew);
-                                }
+                        if let Some(CollectionPosition::Item(n)) = self.collection_pos {
+                            if n + 1 < collection_len {
+                                self.collection_pos = Some(CollectionPosition::Item(n + 1));
+                            } else {
+                                self.collection_pos = Some(CollectionPosition::AddNew);
                             }
-                            _ => {}
                         }
                     }
                     None => {}

@@ -1284,12 +1284,12 @@ fn derive_sidecar_deploy_signals(
         if group.len() == 1 {
             // Single candidate: emit SidecarDeployReady
             let img = group[0];
-            computed_sidecars.push(make_sidecar_ready_signal(img, &deploy_path, library_name));
+            computed_sidecars.push(make_sidecar_ready_signal(img, deploy_path, library_name));
         } else {
             // Conflict: tiebreak winner (alphabetically first corpus path) gets DeployReady,
             // all inodes go into the conflict signal.
             let winner = group.iter().min_by_key(|img| &img.path).unwrap();
-            computed_sidecars.push(make_sidecar_ready_signal(winner, &deploy_path, library_name));
+            computed_sidecars.push(make_sidecar_ready_signal(winner, deploy_path, library_name));
 
             let conflict_key = format!("{}/{}", library_name, deploy_path);
             let inodes: Vec<i64> = group.iter().map(|img| img.inode).collect();

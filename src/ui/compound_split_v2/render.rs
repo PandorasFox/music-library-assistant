@@ -308,7 +308,7 @@ fn render_tags_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
     };
 
     // Show pending tag editor edits for this file, if any
-    if let Some(ref f) = file {
+    if let Some(f) = file.as_ref() {
         if let Some(ref edits_map) = state.pending_tag_edits {
             if let Some(edits) = edits_map.get(&f.inode) {
                 if !edits.is_empty() && items.len() < visible_height {

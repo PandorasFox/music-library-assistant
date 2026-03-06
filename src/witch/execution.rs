@@ -19,7 +19,7 @@
 //! which defines its post-execution behavior:
 //!
 //! 1. **Signal clearing** - Clear corpus signals by inode (scope from `signal_clear_scope()`)
-//! 1c. **Dirty inode marking** - Mark affected inodes dirty for per-inode computations (when scope includes TAGS)
+//!    1c. **Dirty inode marking** - Mark affected inodes dirty for per-inode computations (when scope includes TAGS)
 //! 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via pending_signals
 //! 3. **Signal update spawning** - Spawn UpdateFileSignals (from `paths_for_signal_updates()`)
 //! 4. **Additional computations** - Spawn extra computations (from `additional_computations()`)
@@ -322,7 +322,7 @@ pub(super) fn execute_maintenance(task: DbMaintenanceTask, label: String, queue_
 /// ## Phases
 ///
 /// 1. **Inode signal clearing** - Clear corpus signals by inode based on `signal_clear_scope()`
-/// 1c. **Dirty inode marking** - Mark affected inodes dirty for per-inode computations (TAGS scope)
+///    1c. **Dirty inode marking** - Mark affected inodes dirty for per-inode computations (TAGS scope)
 /// 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via pending_signals
 /// 3. **Signal update spawning** - Spawn UpdateFileSignals for `paths_for_signal_updates()`
 /// 4. **Additional computations** - Spawn extra computations from `additional_computations()`

@@ -628,7 +628,7 @@ impl CachedBucketEntries {
         let dominated = |e: &BucketEntry| {
             e.insight_type
                 .single_decision_kind()
-                .map_or(false, |k| handled.contains(&k))
+                .is_some_and(|k| handled.contains(&k))
         };
         self.corpus.retain(|e| !dominated(e));
         self.placeholder.retain(|e| !dominated(e));
@@ -789,7 +789,7 @@ impl InsightsViewState {
         // Rebuild when new insights data arrives OR when the handled set changes
         if insights_data.is_some() || handled_changed {
             // Use new data if available, otherwise rebuild from cached data
-            if let Some(ref data) = insights_data.as_ref().or(self.cached_data.as_ref()) {
+            if let Some(data) = insights_data.as_ref().or(self.cached_data.as_ref()) {
                 let mut entries = CachedBucketEntries::from_insights_data(data);
                 entries.filter_handled(handled_sources);
                 self.cached_entries = entries;

@@ -260,7 +260,7 @@ fn compress_fingerprint_bytes(fingerprint: &[u32], algorithm: u8) -> Vec<u8> {
 
     // Header: [algorithm, size_hi, size_mid, size_lo]
     let size = fingerprint.len();
-    let mut result = Vec::with_capacity(4 + (normal_bits.len() * 3 + 7) / 8 + (exceptional_bits.len() * 5 + 7) / 8);
+    let mut result = Vec::with_capacity(4 + (normal_bits.len() * 3).div_ceil(8) + (exceptional_bits.len() * 5).div_ceil(8));
     result.push(algorithm);
     result.push(((size >> 16) & 0xFF) as u8);
     result.push(((size >> 8) & 0xFF) as u8);
@@ -330,7 +330,7 @@ fn pack_bits(values: &[u32], bits_per_value: u32, output: &mut Vec<u8>) {
     }
 
     // Flush any remaining partial byte
-    if bit_pos % 8 != 0 {
+    if !bit_pos.is_multiple_of(8) {
         output.push(current_byte);
     }
 }

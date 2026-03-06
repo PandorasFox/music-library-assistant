@@ -18,7 +18,7 @@ impl App {
     pub(in crate::ui) fn start_missing_file_resolution(&mut self) {
         // Load categorized missing file data
         let data = self.cache.query(|db| {
-            missing_file_modal::MissingFileModalData::load(&db).ok().unwrap_or_default()
+            missing_file_modal::MissingFileModalData::load(db).ok().unwrap_or_default()
         }).recv();
 
         // Create preview state with cached data
@@ -74,7 +74,7 @@ impl App {
     pub(in crate::ui) fn start_missing_directory_resolution(&mut self) {
         // Load missing directory data
         let data = self.cache.query(|db| {
-            missing_directory_modal::MissingDirectoryModalData::load(&db).ok().unwrap_or_default()
+            missing_directory_modal::MissingDirectoryModalData::load(db).ok().unwrap_or_default()
         }).recv();
 
         // Create preview state with cached data
@@ -115,7 +115,7 @@ impl App {
     pub(in crate::ui) fn start_corrupt_file_resolution(&mut self) {
         // Load corrupt file data
         let data = self.cache.query(|db| {
-            corrupt_file_modal::CorruptFileModalData::load(&db).ok().unwrap_or_default()
+            corrupt_file_modal::CorruptFileModalData::load(db).ok().unwrap_or_default()
         }).recv();
 
         // Create preview state with cached data
@@ -156,7 +156,7 @@ impl App {
     pub(in crate::ui) fn start_shit_format_resolution(&mut self) {
         // Load shit format file data
         let mut data = self.cache.query(|db| {
-            shit_format_modal::ShitFormatModalData::load(&db).ok().unwrap_or_default()
+            shit_format_modal::ShitFormatModalData::load(db).ok().unwrap_or_default()
         }).recv();
 
         // Thread opinion: lossy files -> FLAC capture instead of Opus transcode
@@ -231,7 +231,7 @@ impl App {
     pub(in crate::ui) fn start_subpar_duplicate_resolution(&mut self) {
         // Load subpar duplicate file data
         let data = self.cache.query(|db| {
-            subpar_duplicate_modal::SubparDuplicateModalData::load(&db).ok().unwrap_or_default()
+            subpar_duplicate_modal::SubparDuplicateModalData::load(db).ok().unwrap_or_default()
         }).recv();
 
         // Create preview state with cached data
@@ -274,7 +274,7 @@ impl App {
 
         // Load directory overlap cluster data
         let data = self.cache.query(|db| {
-            directory_cluster_modal::DirectoryClusterModalData::load(&db).ok().unwrap_or_default()
+            directory_cluster_modal::DirectoryClusterModalData::load(db).ok().unwrap_or_default()
         }).recv();
 
         // Create preview state with cached data
@@ -445,7 +445,7 @@ impl App {
 
         // Load release overlap data
         let data = self.cache.query(|db| {
-            directory_cluster_modal::DirectoryClusterModalData::load_release_overlaps(&db).ok().unwrap_or_default()
+            directory_cluster_modal::DirectoryClusterModalData::load_release_overlaps(db).ok().unwrap_or_default()
         }).recv();
 
         // Create preview state with cached data

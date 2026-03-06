@@ -496,13 +496,7 @@ fn run_scheduler(
         }
     };
 
-    loop {
-        // Block until we get a command (idle state)
-        let command = match command_rx.recv() {
-            Ok(cmd) => cmd,
-            Err(_) => break, // Channel closed
-        };
-
+    while let Ok(command) = command_rx.recv() {
         match command {
             FetchCommand::Shutdown => break,
             FetchCommand::Start { eligible_dirs } => {

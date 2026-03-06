@@ -173,8 +173,6 @@ pub fn render_detail_panel(
             .constraints(
                 if button_height > 0 && hint_height > 0 {
                     vec![Constraint::Length(1), Constraint::Length(1)]
-                } else if button_height > 0 {
-                    vec![Constraint::Length(1)]
                 } else {
                     vec![Constraint::Length(1)]
                 },

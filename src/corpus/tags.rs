@@ -317,9 +317,9 @@ impl TagSet {
             for item in tag.items() {
                 // Canonical Vorbis name is primary (ARTIST, TRACKNUMBER, etc.)
                 // Fall back to source format's native name for tags without Vorbis mapping
-                let key = match item.key().clone().map_key(TagType::VorbisComments) {
+                let key = match item.key().map_key(TagType::VorbisComments) {
                     Some(k) => k.to_string(),
-                    None => match item.key().clone().map_key(tag_type) {
+                    None => match item.key().map_key(tag_type) {
                         Some(k) => k.to_string(),
                         None => continue,
                     },

@@ -437,7 +437,7 @@ impl App {
         self.last_lateral_view = widgets::LateralView::Inbox;
         // Check for inbox unindexed files — show intake popup if any
         let intake_state = self.cache.query(|db| {
-            startup::IntakeConfirmationState::gather_inbox(&db, startup::IntakeSource::Inbox)
+            startup::IntakeConfirmationState::gather_inbox(db, startup::IntakeSource::Inbox)
         }).recv();
 
         if let Some(state) = intake_state {
@@ -510,12 +510,12 @@ impl App {
         self.last_lateral_view = widgets::LateralView::Deploy;
         let deploy_status = self.cached_deploy.clone();
 
-        let needs_action = deploy_status.as_ref().map_or(false, |s| s.needs_action);
+        let needs_action = deploy_status.as_ref().is_some_and(|s| s.needs_action);
 
         if needs_action {
             let data = self.cache.query(|db| {
                 let config = crate::config::load_config().ok();
-                deploy_modal::DeployModalData::load(&db, config.as_ref())
+                deploy_modal::DeployModalData::load(db, config.as_ref())
                     .unwrap_or_default()
             }).recv();
             let preview = deploy_modal::DeploymentPreviewState::new(data);

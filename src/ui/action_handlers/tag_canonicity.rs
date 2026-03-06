@@ -366,7 +366,7 @@ impl App {
 
         let kind = clusters.kind;
         let pending = self.cache.query(move |db| {
-            Self::load_typed_signal_data(&signal_key, kind, &db)
+            Self::load_typed_signal_data(&signal_key, kind, db)
         });
 
         self.view = ActiveView::TagCanonicityLoading { pending, clusters };

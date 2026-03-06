@@ -404,7 +404,7 @@ impl Database {
     /// "Organizable" = has InboxHealthySignal AND:
     /// - has NO InboxCorpusMatchSignal, OR
     /// - has InboxCorpusMatchSignal classified as 'better' (inbox is higher quality)
-    /// AND is NOT referenced by InboxTagCanonicitySignal.
+    ///   AND is NOT referenced by InboxTagCanonicitySignal.
     ///
     /// Tag canonicity exclusion is done in Rust because inbox_inodes are
     /// stored in a bincode BLOB.

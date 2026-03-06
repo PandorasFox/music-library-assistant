@@ -89,13 +89,7 @@ impl Database {
             })
         })?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            if let Ok(r) = row {
-                results.push(r);
-            }
-        }
-        Ok(results)
+        Ok(rows.flatten().collect())
     }
 
     /// Get external matches for corpus files, without raw_response blobs.
@@ -125,13 +119,7 @@ impl Database {
             })
         })?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            if let Ok(r) = row {
-                results.push(r);
-            }
-        }
-        Ok(results)
+        Ok(rows.flatten().collect())
     }
 
     /// Get corpus inodes needing external lookup for a given source.
@@ -224,14 +212,7 @@ impl Database {
             })
         })?;
 
-        let mut candidates = Vec::new();
-        for row in rows {
-            if let Ok(c) = row {
-                candidates.push(c);
-            }
-        }
-
-        Ok(candidates)
+        Ok(rows.flatten().collect())
     }
 
     /// Get cached MusicBrainz recording JSON by recording ID.
@@ -360,13 +341,7 @@ impl Database {
             row.get::<_, String>(0)
         })?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            if let Ok(id) = row {
-                results.push(id);
-            }
-        }
-        Ok(results)
+        Ok(rows.flatten().collect())
     }
 
     /// Get recording IDs that need MB cache fetch.
@@ -397,13 +372,7 @@ impl Database {
             row.get::<_, String>(0)
         })?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            if let Ok(id) = row {
-                results.push(id);
-            }
-        }
-        Ok(results)
+        Ok(rows.flatten().collect())
     }
 
     // =========================================================================
@@ -722,14 +691,7 @@ impl Database {
             })
         })?;
 
-        let mut candidates = Vec::new();
-        for row in rows {
-            if let Ok(c) = row {
-                candidates.push(c);
-            }
-        }
-
-        Ok(candidates)
+        Ok(rows.flatten().collect())
     }
 
     /// Count corpus files that have a non-null fingerprint in audio_info.

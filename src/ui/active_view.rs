@@ -299,6 +299,7 @@ pub(crate) enum ExitConfirmAction {
 
 /// State for the exit confirmation modal.
 /// Default selection is "No" (stay in application).
+#[derive(Default)]
 pub(crate) struct ExitConfirmModalState {
     /// True = "No" selected (default), False = "Yes" selected
     pub selected_no: bool,
@@ -308,15 +309,6 @@ pub(crate) struct ExitConfirmModalState {
     pub button_rects: crate::ui::widgets::ButtonRects,
 }
 
-impl Default for ExitConfirmModalState {
-    fn default() -> Self {
-        Self {
-            selected_no: false,
-            has_operations: false,
-            button_rects: Default::default(),
-        }
-    }
-}
 
 // ============================================================================
 // FilterOverlay - bundles filter popup state + context

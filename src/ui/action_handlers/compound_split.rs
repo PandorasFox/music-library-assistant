@@ -55,7 +55,7 @@ impl App {
         // Load the first group into modal data
         let first_group = clusters.all_groups()[0].clone();
         let data = self.cache.query(move |db| {
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&first_group, &db, zone)
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&first_group, db, zone)
         }).recv();
 
         let data = match data {
@@ -364,7 +364,7 @@ impl App {
         };
 
         let data = self.cache.query(move |db| {
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &db, zone)
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, db, zone)
         }).recv();
 
         let Some(data) = data else {
@@ -413,7 +413,7 @@ impl App {
         let (group_index, total) = (clusters.current_index(), clusters.total());
 
         let data = self.cache.query(move |db| {
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, &db, zone)
+            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, db, zone)
         }).recv();
 
         let Some(data) = data else {

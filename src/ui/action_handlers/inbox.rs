@@ -37,7 +37,7 @@ impl App {
             InboxAction::LaunchIntake => {
                 // Gather inbox unindexed files and show intake confirmation
                 let intake_state = self.cache.query(|db| {
-                    startup::IntakeConfirmationState::gather_inbox(&db, startup::IntakeSource::Inbox)
+                    startup::IntakeConfirmationState::gather_inbox(db, startup::IntakeSource::Inbox)
                 }).recv();
 
                 if let Some(state) = intake_state {
@@ -91,7 +91,7 @@ impl App {
     pub(in crate::ui) fn start_inbox_corpus_match_resolution(&mut self) {
         let fuzz = self.config().opinions.quality_resolution.inbox_bitrate_fuzz_percent;
         let data = self.cache.query(move |db| {
-            inbox_corpus_match_modal::InboxCorpusMatchModalData::load(&db, fuzz).ok().unwrap_or_default()
+            inbox_corpus_match_modal::InboxCorpusMatchModalData::load(db, fuzz).ok().unwrap_or_default()
         }).recv();
 
         let preview = inbox_corpus_match_modal::InboxCorpusMatchPreviewState::new(data);
@@ -146,7 +146,7 @@ impl App {
     fn start_inbox_organize(&mut self) {
         let config = self.config().clone();
         let state = self.cache.query(move |db| {
-            inbox_organize::InboxOrganizeState::load_from_read_db(&db, &config)
+            inbox_organize::InboxOrganizeState::load_from_read_db(db, &config)
         }).recv();
 
         if let Some(state) = state {

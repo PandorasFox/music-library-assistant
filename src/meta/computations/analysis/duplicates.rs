@@ -188,8 +188,7 @@ pub fn execute_detect_fingerprint_overlaps(
         for i in 0..bucket.len() {
             let idx_i = bucket[i];
             let fp_i = fingerprinted[idx_i].audio.fingerprint.as_ref().unwrap();
-            for j in (i + 1)..bucket.len() {
-                let idx_j = bucket[j];
+            for &idx_j in &bucket[(i + 1)..] {
                 let fp_j = fingerprinted[idx_j].audio.fingerprint.as_ref().unwrap();
 
                 let similarity = fingerprint_similarity(fp_i, fp_j);
@@ -211,7 +210,7 @@ pub fn execute_detect_fingerprint_overlaps(
     let mut computed = Vec::new();
     let mut total_tracks = 0;
 
-    for (_, members) in &groups {
+    for members in groups.values() {
         if members.len() < 2 {
             continue;
         }

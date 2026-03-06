@@ -389,8 +389,7 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let has_edits = state.has_edits();
-    let save_label = if has_edits { " [ Save ] " } else { " [ Save ] " };
+    let save_label = " [ Save ] ";
 
     let line = Line::from(vec![
         Span::raw("                                       "),

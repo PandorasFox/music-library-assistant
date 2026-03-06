@@ -195,7 +195,7 @@ fn new_tag_separator_pairs(old: &Config, new: &Config) -> Vec<(String, String)> 
     for (tag, new_sep_list) in new_seps {
         let old_sep_list = old_seps.get(tag);
         for sep in new_sep_list {
-            let is_new = old_sep_list.map_or(true, |old| !old.contains(sep));
+            let is_new = old_sep_list.is_none_or(|old| !old.contains(sep));
             if is_new {
                 pairs.push((tag.clone(), sep.clone()));
             }

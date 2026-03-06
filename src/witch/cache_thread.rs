@@ -272,22 +272,22 @@ impl ThrottleState {
 
     fn should_refresh_insights(&self) -> bool {
         self.insights_wanted && self.insights_at
-            .map_or(true, |t| t.elapsed() >= Self::INSIGHTS_THROTTLE)
+            .is_none_or(|t| t.elapsed() >= Self::INSIGHTS_THROTTLE)
     }
 
     fn should_refresh_inbox(&self) -> bool {
         self.inbox_wanted && self.inbox_at
-            .map_or(true, |t| t.elapsed() >= Self::INBOX_THROTTLE)
+            .is_none_or(|t| t.elapsed() >= Self::INBOX_THROTTLE)
     }
 
     fn should_refresh_deploy(&self) -> bool {
         self.deploy_wanted && self.deploy_at
-            .map_or(true, |t| t.elapsed() >= Self::DEPLOY_THROTTLE)
+            .is_none_or(|t| t.elapsed() >= Self::DEPLOY_THROTTLE)
     }
 
     fn should_refresh_history(&self) -> bool {
         self.history_wanted && self.history_at
-            .map_or(true, |t| t.elapsed() >= Self::HISTORY_THROTTLE)
+            .is_none_or(|t| t.elapsed() >= Self::HISTORY_THROTTLE)
     }
 
     fn should_refresh_external_matches(&self) -> bool {
@@ -297,7 +297,7 @@ impl ThrottleState {
             Self::EXTERNAL_MATCHES_THROTTLE
         };
         self.external_matches_wanted && self.external_matches_at
-            .map_or(true, |t| t.elapsed() >= throttle)
+            .is_none_or(|t| t.elapsed() >= throttle)
     }
 }
 

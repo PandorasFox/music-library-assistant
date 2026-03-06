@@ -148,7 +148,7 @@ impl App {
             let resolver = paths::get_resolver();
             let abs_path = resolver.resolve(std::path::Path::new(&path));
             state.current_diff = self.cache.query(move |db| {
-                oob_conflict_modal::types::compute_tag_diff(&db, inode, &abs_path)
+                oob_conflict_modal::types::compute_tag_diff(db, inode, &abs_path)
             }).recv();
         }
 
@@ -202,7 +202,7 @@ impl App {
         let resolver = paths::get_resolver();
         let abs_path = resolver.resolve(std::path::Path::new(&path));
         self.cache.query(move |db| {
-            oob_conflict_modal::types::compute_tag_diff(&db, inode, &abs_path)
+            oob_conflict_modal::types::compute_tag_diff(db, inode, &abs_path)
         }).recv()
     }
 

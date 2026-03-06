@@ -48,8 +48,7 @@ fn sanitize_path_component(s: &str) -> String {
 /// name variants are handled: ALBUMARTIST ≈ ALBUM_ARTIST, TRACKNUMBER ≈ TRACK_NUMBER.
 pub fn compute_deployment_path_with_tags(file_path: &str, tags: &HashMap<String, String>) -> PathBuf {
     // Get extension from original path, preserving compound .LOSSY.flac extension
-    let ext = if file_path.ends_with(".LOSSY.flac") {
-        let without_lossy = &file_path[..file_path.len() - ".LOSSY.flac".len()];
+    let ext = if let Some(without_lossy) = file_path.strip_suffix(".LOSSY.flac") {
         match Path::new(without_lossy).extension().and_then(|e| e.to_str()) {
             Some(orig_ext) => format!("{}.LOSSY.flac", orig_ext),
             None => "LOSSY.flac".to_string(),

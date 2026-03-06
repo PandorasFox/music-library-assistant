@@ -93,19 +93,11 @@ impl QualityResolutionOpinions {
 }
 
 /// Opinions for tag canonicalization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CanonicalizationOpinions {
     /// Strip EP/LP suffixes during album collision detection (default: false).
     /// When true, "Album EP" and "Album" normalize to the same key and collide.
     pub strip_album_format_suffixes: bool,
-}
-
-impl Default for CanonicalizationOpinions {
-    fn default() -> Self {
-        Self {
-            strip_album_format_suffixes: false,
-        }
-    }
 }
 
 impl CanonicalizationOpinions {
@@ -324,18 +316,10 @@ pub enum InboxOrganizeGranularity {
 }
 
 /// Opinions for inbox organize workflow.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InboxOrganizeOpinions {
     /// How to group inbox directories for the organize workflow.
     pub directory_granularity: InboxOrganizeGranularity,
-}
-
-impl Default for InboxOrganizeOpinions {
-    fn default() -> Self {
-        Self {
-            directory_granularity: InboxOrganizeGranularity::default(),
-        }
-    }
 }
 
 impl InboxOrganizeOpinions {
@@ -404,19 +388,11 @@ pub enum SidecarDeployMode {
 }
 
 /// Album art embedding and upgrade configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AlbumArtOpinions {
     /// Whether to deploy sidecar cover images alongside audio files to libraries.
     /// Default: PrimaryCover (deploy only the primary cover image).
     pub sidecar_deploy_mode: SidecarDeployMode,
-}
-
-impl Default for AlbumArtOpinions {
-    fn default() -> Self {
-        Self {
-            sidecar_deploy_mode: SidecarDeployMode::default(),
-        }
-    }
 }
 
 impl AlbumArtOpinions {
@@ -424,19 +400,11 @@ impl AlbumArtOpinions {
 }
 
 /// Debug and diagnostic options.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DebugOpinions {
     /// Log periodic memory snapshots (RSS, SQLite, threads) to general.log.
     /// Default: false.
     pub memory_logging: bool,
-}
-
-impl Default for DebugOpinions {
-    fn default() -> Self {
-        Self {
-            memory_logging: false,
-        }
-    }
 }
 
 impl DebugOpinions {

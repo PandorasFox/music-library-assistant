@@ -1205,7 +1205,7 @@ impl Witch {
 
     /// Whether an external AcoustID fetch batch is currently active.
     pub fn is_external_fetch_active(&self) -> bool {
-        self.external_fetch.as_ref().map_or(false, |h| h.is_batch_active())
+        self.external_fetch.as_ref().is_some_and(|h| h.is_batch_active())
     }
 
     /// Latest progress snapshot from the external fetch thread.
@@ -1216,7 +1216,7 @@ impl Witch {
 
     /// Whether an AcoustID API key is configured.
     pub fn has_acoustid_api_key(&self) -> bool {
-        self.shared_config.as_ref().map_or(false, |sc| {
+        self.shared_config.as_ref().is_some_and(|sc| {
             let config = sc.read().expect("SharedConfig lock poisoned");
             !config.opinions.external_matching.acoustid_api_key.is_empty()
         })

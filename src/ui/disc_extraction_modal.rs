@@ -156,7 +156,7 @@ impl DiscExtractionData {
                         per_file,
                     } => {
                         let disc_value = if map_letters_to_numbers {
-                            letter_to_number(&disc_prefix)
+                            letter_to_number(disc_prefix)
                         } else {
                             disc_prefix.clone()
                         };

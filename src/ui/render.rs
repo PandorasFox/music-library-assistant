@@ -74,7 +74,7 @@ pub fn render_app(
         // Read deploy_needs_action from locally cached deploy status
         let deploy_needs_action = app.cached_deploy
             .as_ref()
-            .map_or(false, |s| s.needs_action);
+            .is_some_and(|s| s.needs_action);
 
         let transactions_open = app.config().opinions.leave_transactions_open;
         let transaction_has_decisions = app.witch.has_transaction() && app.witch.transaction_summary().is_some_and(|(_, d, _)| d > 0);

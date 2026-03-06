@@ -251,8 +251,7 @@ fn encode_opus(source: &Path, dest: &Path, bitrate_kbps: u32) -> Result<()> {
     // Encode audio in 960-sample frames
     let samples_per_frame = FRAME_SIZE * channels;
     let total_interleaved = samples_48k.len();
-    let total_frames_count =
-        (total_interleaved + samples_per_frame - 1) / samples_per_frame;
+    let total_frames_count = total_interleaved.div_ceil(samples_per_frame);
 
     let mut packet_buf = vec![0u8; 4000];
     let mut granule_pos: u64 = pre_skip as u64;
@@ -371,11 +370,12 @@ fn resample_to_48k(samples: &[i16], source_rate: u32, channels: usize) -> Result
     // Reinterleave f64 → i16
     let output_frames = output_channels[0].len();
     let mut result = Vec::with_capacity(output_frames * channels);
-    for frame in 0..output_frames {
-        for ch in 0..channels {
-            let sample = (output_channels[ch][frame] * 32768.0).clamp(-32768.0, 32767.0) as i16;
-            result.push(sample);
-        }
+    for frame_idx in 0..output_frames {
+        result.extend(
+            output_channels
+                .iter()
+                .map(|ch| (ch[frame_idx] * 32768.0).clamp(-32768.0, 32767.0) as i16),
+        );
     }
 
     Ok(result)
@@ -642,32 +642,29 @@ fn copy_pictures(source: &Path, dest: &Path) -> Result<()> {
         .map(|s| s.to_lowercase())
         .unwrap_or_default();
 
-    match dest_ext.as_str() {
-        "flac" => {
-            use lofty::config::{ParseOptions, WriteOptions};
-            use lofty::file::AudioFile;
-            use lofty::ogg::OggPictureStorage;
+    if dest_ext == "flac" {
+        use lofty::config::{ParseOptions, WriteOptions};
+        use lofty::file::AudioFile;
+        use lofty::ogg::OggPictureStorage;
 
-            let file = File::open(dest)
-                .with_context(|| format!("Failed to open dest FLAC for pictures: {}", dest.display()))?;
-            let mut reader = std::io::BufReader::new(file);
-            let mut flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
-                .with_context(|| format!("Failed to read dest FLAC: {}", dest.display()))?;
+        let file = File::open(dest)
+            .with_context(|| format!("Failed to open dest FLAC for pictures: {}", dest.display()))?;
+        let mut reader = std::io::BufReader::new(file);
+        let mut flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
+            .with_context(|| format!("Failed to read dest FLAC: {}", dest.display()))?;
 
-            for pic in &pictures {
-                // info=None lets lofty infer PictureInformation from the picture data
-                flac.insert_picture((*pic).clone(), None)
-                    .with_context(|| "Failed to insert picture into FLAC")?;
-            }
-
-            flac.save_to_path(dest, WriteOptions::default())
-                .with_context(|| format!("Failed to save pictures to FLAC: {}", dest.display()))?;
+        for pic in &pictures {
+            // info=None lets lofty infer PictureInformation from the picture data
+            flac.insert_picture((*pic).clone(), None)
+                .with_context(|| "Failed to insert picture into FLAC")?;
         }
+
+        flac.save_to_path(dest, WriteOptions::default())
+            .with_context(|| format!("Failed to save pictures to FLAC: {}", dest.display()))?;
         // Opus pictures are written inside VorbisComments by copy_tags; lofty's
         // generic Tag → OggOpusFile write path handles this. For now, pictures
         // for Opus targets are not copied here (they'd need to be base64-encoded
         // into METADATA_BLOCK_PICTURE vorbis comment fields).
-        _ => {}
     }
 
     Ok(())

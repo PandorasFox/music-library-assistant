@@ -706,7 +706,7 @@ pub fn execute_pack_releases(
     }
 
     let mut releases_with_candidates: HashSet<String> = HashSet::new();
-    for ((release_id, _), _) in &deduped {
+    for (release_id, _) in deduped.keys() {
         releases_with_candidates.insert(release_id.clone());
     }
     let candidate_rows: Vec<write_thread::PackingCandidateRow> =

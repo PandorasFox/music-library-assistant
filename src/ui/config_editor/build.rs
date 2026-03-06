@@ -48,16 +48,14 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
 
     // Helper: check if a KDL node path exists in the file content
     let in_kdl = |path: &str| -> bool {
-        kdl_content.map_or(false, |content| content.contains(path))
+        kdl_content.is_some_and(|content| content.contains(path))
     };
 
     // Determine field source: if value differs from default it's Loaded (must be from file),
     // otherwise check if the key exists in KDL content.
     let source_for = |matches_default: bool, kdl_key: &str| -> FieldSource {
-        if !matches_default {
+        if !matches_default || in_kdl(kdl_key) {
             FieldSource::Loaded
-        } else if in_kdl(kdl_key) {
-            FieldSource::Loaded // Explicitly set to default value in file
         } else {
             FieldSource::Default
         }

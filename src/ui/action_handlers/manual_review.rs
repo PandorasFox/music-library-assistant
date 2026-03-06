@@ -17,7 +17,7 @@ impl App {
     /// and switches to the ManualReview view.
     pub(in crate::ui) fn start_manual_review(&mut self, kind: types::ReviewKind) {
         let data = self.cache.query(move |db| {
-            types::ManualReviewData::load(&db, kind).ok().unwrap_or_default()
+            types::ManualReviewData::load(db, kind).ok().unwrap_or_default()
         }).recv();
 
         // Start transaction for the review session
@@ -159,11 +159,9 @@ impl App {
                     state.current_group += 1;
                     state.file_cursor = 0;
                 }
-            } else {
-                if state.current_group > 0 {
-                    state.current_group -= 1;
-                    state.file_cursor = 0;
-                }
+            } else if state.current_group > 0 {
+                state.current_group -= 1;
+                state.file_cursor = 0;
             }
         }
     }

@@ -713,6 +713,19 @@ pub fn schema_inventory() -> Vec<TableEntry> {
         ],
     });
 
+    tables.push(TableEntry {
+        name: "pending_acoustid_submissions",
+        kind: TableKind::Computed,
+        create_sql: "CREATE TABLE IF NOT EXISTS pending_acoustid_submissions (
+            fingerprint TEXT NOT NULL,
+            recording_id TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            source TEXT NOT NULL DEFAULT 'elimination',
+            PRIMARY KEY (fingerprint, recording_id)
+        )",
+        index_sql: &[],
+    });
+
     tables
 }
 

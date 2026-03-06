@@ -41,7 +41,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | ExpectedMissingTag | EmitExpectedMissingTag | — | Operator-confirmed expected missing tag (persistent suppression). Table: `signal_expected_missing_tag`. Suppresses MissingAlbumSingleSignal for this inode in DetectMissingTags |
 | PathTagMismatch | DetectPathTagMismatches | DetectPathTagMismatches | File path doesn't match source dir's path-tag schema. Data (bincode BLOB): `source_dir`, `schema_template`, `mismatch_kind` (StructureMismatch or ValueMismatch with per-tag details). Table: `signal_path_tag_mismatch` (inode PK, path, data BLOB, data_hash) |
 | ExternalMatch | DeriveExternalMatches | DeriveExternalMatches | AcoustID recording metadata compared against corpus tags. Data (bincode BLOB): `source`, `recording_id`, `confidence`, `classification` (ExactMatch/ContentDiff/MetadataOnly), `diffs[]` (per-tag differences), `total_candidates`, `release_id`, `release_group_id`. Table: `signal_external_match` (inode PK, path, data BLOB, data_hash) |
-| ReleasePacking | ResolveReleaseConflicts (Stage 3) | ResolveReleaseConflicts | Bin-packed release assignment for a corpus file. Data (bincode BLOB): `release_id`, `release_title`, `release_artist`, `track_position`, `medium_position`, `medium_format`, `track_number`, `recording_id`, `track_title`, `score` (composite 0.0-1.0), `score_breakdown` (acoustid_confidence, duration_match, tag_similarity, track_number_match, directory_cohesion), `alternatives_count`, `release_coverage` (fraction of release tracks matched). Table: `signal_release_packing` (inode PK, path, data BLOB, data_hash). Emitted by Stage 3 of the 4-stage release packing pipeline (manual trigger via PackReleases) |
+| ReleasePacking | ResolveReleaseConflicts (Stage 3), EliminateByDirectory (Stage 4) | ResolveReleaseConflicts, EliminateByDirectory | Bin-packed release assignment for a corpus file. Data (bincode BLOB): `release_id`, `release_title`, `release_artist`, `track_position`, `medium_position`, `medium_format`, `track_number`, `recording_id`, `track_title`, `score` (composite 0.0-1.0), `score_breakdown` (acoustid_confidence, duration_match, tag_similarity, track_number_match, directory_cohesion), `alternatives_count`, `release_coverage` (fraction of release tracks matched), `match_method` (`AcoustId` = matched via fingerprint lookup, `Elimination` = matched by directory elimination when all siblings assigned to same release). Table: `signal_release_packing` (inode PK, path, data BLOB, data_hash). Emitted by Stages 3 and 4 of the 5-stage release packing pipeline (manual trigger via PackReleases) |
 | UnmatchedCorpusTrack | AnalyzeReleaseGaps (Stage 4) | AnalyzeReleaseGaps | Corpus file with AcoustID recording matches but no release assignment after global resolution. Only emitted for inodes that were scored (had candidates) but lost during greedy assignment. Data (bincode BLOB): `recording_ids[]`, `considered_release_ids[]`. Table: `signal_unmatched_corpus_track` (inode PK, path, data BLOB, data_hash) |
 
 ---
@@ -67,6 +67,19 @@ These are not signals but database columns that track synchronization state.
 | Flag | Set By | Cleared By | Meaning |
 |------|--------|------------|---------|
 | needs_disk_flush | ApplyTagOps | ApplyDbTagsToDisk | DB tags changed but not yet synced to disk file |
+
+### Pending AcoustID Submissions
+
+The `pending_acoustid_submissions` table records fingerprint-to-recording associations discovered by elimination matching (Stage 4: EliminateByDirectory) that should be submitted to AcoustID to improve the public database.
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| fingerprint | TEXT (PK) | Chromaprint fingerprint of the corpus file |
+| recording_id | TEXT (PK) | MusicBrainz recording MBID assigned by elimination |
+| duration_ms | INTEGER | Audio duration in milliseconds |
+| source | TEXT | How the association was discovered (default: `'elimination'`) |
+
+These rows are written by EliminateByDirectory when a corpus file is assigned to a release track slot without an existing AcoustID match. The fingerprint + recording_id pair, once submitted, would allow future AcoustID lookups to find this match directly.
 
 ### Recovery via needs_disk_flush
 

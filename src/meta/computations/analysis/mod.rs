@@ -216,7 +216,8 @@ pub enum Computation {
     ///
     /// Loads external matches, identifies releases, writes session manifest,
     /// spawns N ScoreReleaseCandidates (Stage 2), defers ResolveReleaseConflicts
-    /// (Stage 3) and AnalyzeReleaseGaps (Stage 4) as barrier-separated phases.
+    /// (Stage 3), EliminateByDirectory (Stage 4), and AnalyzeReleaseGaps (Stage 5)
+    /// as barrier-separated phases.
     ///
     /// Manual trigger only (expensive), not part of ScheduleContentAnalysis.
     PackReleases,
@@ -224,8 +225,8 @@ pub enum Computation {
     /// Score candidates for a single MusicBrainz release (Stage 2).
     ///
     /// Loads the release tracklist, finds matching corpus inodes, scores each
-    /// (inode, track_slot) pairing, solves optimal per-release assignment,
-    /// writes results to release_packing_scores table.
+    /// (inode, track_slot) pairing, solves optimal per-release assignment via
+    /// Hungarian algorithm, writes results to release_packing_scores table.
     ScoreReleaseCandidates {
         release_id: String,
     },
@@ -236,7 +237,15 @@ pub enum Computation {
     /// via greedy global assignment, emits ReleasePackingSignal per assigned inode.
     ResolveReleaseConflicts,
 
-    /// Gap analysis after release packing (Stage 4).
+    /// Elimination matching for unassigned files in cohesive directories (Stage 4).
+    ///
+    /// After global conflict resolution, finds directories where all assigned
+    /// inodes map to a single release, then assigns remaining files to unfilled
+    /// slots by elimination (duration matching as tiebreaker). Records
+    /// (fingerprint, recording_id) pairs for future AcoustID submission.
+    EliminateByDirectory,
+
+    /// Gap analysis after release packing (Stage 5).
     ///
     /// Identifies unmatched corpus tracks, unfilled release slots, and near-miss
     /// patterns where (n-1)/n tracks match from the same directory.
@@ -294,6 +303,7 @@ impl Computation {
             Computation::PackReleases => "Packing releases",
             Computation::ScoreReleaseCandidates { .. } => "Scoring release candidates",
             Computation::ResolveReleaseConflicts => "Resolving release conflicts",
+            Computation::EliminateByDirectory => "Eliminating by directory",
             Computation::AnalyzeReleaseGaps => "Analyzing release gaps",
             Computation::DeriveExternalMatches => "Deriving external match signals",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
@@ -378,6 +388,9 @@ impl Computation {
             }
             Computation::ResolveReleaseConflicts => {
                 execute_resolve_release_conflicts(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::EliminateByDirectory => {
+                execute_eliminate_by_directory(ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::AnalyzeReleaseGaps => {
                 execute_analyze_release_gaps(ctx.read_db, ctx.witness, ctx.start)

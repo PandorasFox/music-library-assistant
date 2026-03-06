@@ -404,6 +404,16 @@ pub struct ReleasePackingSignal {
     pub data: ReleasePackingData,
 }
 
+/// How a corpus file was matched to a release track slot.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MatchMethod {
+    /// Matched via AcoustID fingerprint lookup.
+    AcoustId,
+    /// Matched by elimination: all siblings assigned to same release,
+    /// remaining files fill remaining slots.
+    Elimination,
+}
+
 /// Bincode-serialized payload for ReleasePacking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleasePackingData {
@@ -433,6 +443,8 @@ pub struct ReleasePackingData {
     pub alternatives_count: u16,
     /// Release coverage: fraction of this release's tracks that are matched.
     pub release_coverage: f32,
+    /// How this file was matched to its track slot.
+    pub match_method: MatchMethod,
 }
 
 /// Breakdown of the composite packing score.

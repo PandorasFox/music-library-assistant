@@ -121,6 +121,15 @@ pub struct PackingCandidateRow {
     pub dir_file_count: i32,
 }
 
+/// A pending AcoustID submission from elimination matching.
+#[derive(Debug, Clone)]
+pub struct PendingAcoustIdSubmission {
+    pub fingerprint: String,
+    pub recording_id: String,
+    pub duration_ms: i64,
+    pub source: String,
+}
+
 // ============================================================================
 // Signal Witness Trait
 // ============================================================================
@@ -560,6 +569,11 @@ enum DbWriteOp {
     /// Write a batch of candidate rows to release_packing_candidates.
     WritePackingCandidates {
         rows: Vec<PackingCandidateRow>,
+    },
+
+    /// Write pending AcoustID submissions (elimination matching results).
+    WritePendingAcoustIdSubmissions {
+        rows: Vec<PendingAcoustIdSubmission>,
     },
 
     Shutdown,
@@ -1387,6 +1401,16 @@ impl SignalWriteSender {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::WritePackingCandidates { rows });
     }
+
+    /// Write pending AcoustID submission records (from elimination matching).
+    pub fn write_pending_acoustid_submissions(
+        &self,
+        rows: Vec<PendingAcoustIdSubmission>,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::WritePendingAcoustIdSubmissions { rows });
+    }
 }
 
 // IndexWriteSender has been removed - all operations now go through SignalWriteSender.
@@ -1951,7 +1975,7 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::TruncatePackingTables => {
             with_retry("truncate_packing_tables", "all", || {
                 db.conn().execute_batch(
-                    "DELETE FROM release_packing_manifest; DELETE FROM release_packing_scores; DELETE FROM release_packing_candidates;"
+                    "DELETE FROM release_packing_manifest; DELETE FROM release_packing_scores; DELETE FROM release_packing_candidates; DELETE FROM pending_acoustid_submissions;"
                 )?;
                 Ok(())
             });
@@ -2017,6 +2041,25 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                         row.tag_album,
                         row.tag_tracknumber,
                         row.dir_file_count,
+                    ])?;
+                }
+                Ok(())
+            });
+        }
+
+        DbWriteOp::WritePendingAcoustIdSubmissions { rows } => {
+            with_retry("write_pending_acoustid_submissions", "batch", || {
+                let mut stmt = db.conn().prepare(
+                    "INSERT OR REPLACE INTO pending_acoustid_submissions \
+                     (fingerprint, recording_id, duration_ms, source) \
+                     VALUES (?1, ?2, ?3, ?4)"
+                )?;
+                for row in rows {
+                    stmt.execute(rusqlite::params![
+                        row.fingerprint,
+                        row.recording_id,
+                        row.duration_ms,
+                        row.source,
                     ])?;
                 }
                 Ok(())

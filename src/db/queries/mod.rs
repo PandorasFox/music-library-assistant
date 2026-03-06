@@ -751,6 +751,20 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_candidate_inode_recordings()
     }
 
+    /// Read all release packing signal assignments.
+    pub fn get_release_packing_assignments(&self) -> Result<Vec<(i64, String, String, u32, u32)>> {
+        self.db.get_release_packing_assignments()
+    }
+
+    /// Get unassigned corpus audio files in a directory.
+    pub fn get_unassigned_audio_in_directory(
+        &self,
+        parent_dir: &str,
+        assigned_inodes: &std::collections::HashSet<i64>,
+    ) -> Result<Vec<(i64, String, Option<String>, Option<i64>)>> {
+        self.db.get_unassigned_audio_in_directory(parent_dir, assigned_inodes)
+    }
+
     /// Bulk-load cached MusicBrainz release JSON for a set of release IDs.
     pub fn get_mb_release_cache_bulk(&self, release_ids: &[&str]) -> Result<Vec<(String, Vec<u8>)>> {
         self.db.get_mb_release_cache_bulk(release_ids)

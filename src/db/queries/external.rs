@@ -621,6 +621,72 @@ impl Database {
         Ok(results)
     }
 
+    /// Read all release packing signal assignments: (inode, path, release_id, medium_pos, track_pos).
+    ///
+    /// Deserializes the bincode blob to extract release_id and slot positions.
+    /// Used by elimination matching to understand current assignments.
+    pub fn get_release_packing_assignments(
+        &self,
+    ) -> Result<Vec<(i64, String, String, u32, u32)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT inode, path, data FROM signal_release_packing"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let inode: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            let data_blob: Vec<u8> = row.get(2)?;
+            Ok((inode, path, data_blob))
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            let (inode, path, data_blob) = row?;
+            if let Ok(data) = bincode::deserialize::<crate::meta::signals::data::ReleasePackingData>(&data_blob) {
+                results.push((inode, path, data.release_id, data.medium_position, data.track_position));
+            }
+        }
+        Ok(results)
+    }
+
+    /// Get unassigned corpus audio files in a directory.
+    ///
+    /// Returns (inode, path, fingerprint_hex, duration_ms) for audio files in the
+    /// given directory that are NOT in the assigned_inodes set. Used by elimination
+    /// matching to find files that can be matched by directory cohesion.
+    pub fn get_unassigned_audio_in_directory(
+        &self,
+        parent_dir: &str,
+        assigned_inodes: &std::collections::HashSet<i64>,
+    ) -> Result<Vec<(i64, String, Option<String>, Option<i64>)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT f.inode, f.path, hex(a.fingerprint), a.duration_ms \
+             FROM files f \
+             JOIN audio_info a ON f.inode = a.inode \
+             WHERE f.zone = 'corpus' AND f.is_dir = 0 \
+             AND f.path LIKE ?1 \
+             AND f.path NOT LIKE ?2 \
+             ORDER BY f.path"
+        )?;
+        // Match files directly in parent_dir (not in subdirectories)
+        let prefix = format!("{}/%", parent_dir);
+        let subdir = format!("{}/%/%", parent_dir);
+        let rows = stmt.query_map(rusqlite::params![prefix, subdir], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+            ))
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            let r = row?;
+            if !assigned_inodes.contains(&r.0) {
+                results.push(r);
+            }
+        }
+        Ok(results)
+    }
+
     /// Get retry candidates for a given source.
     ///
     /// Returns inodes that previously failed lookup and need retry.

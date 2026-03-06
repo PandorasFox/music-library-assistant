@@ -11,7 +11,8 @@ pub mod types;
 use std::collections::HashMap;
 
 use crate::meta::signals::data::{
-    NearMissReleaseData, ReleasePackingData, UnfilledReleaseSlotData, UnmatchedCorpusTrackData,
+    NearMissReleaseData, PackedReleaseData, ReleasePackingData, UnfilledReleaseSlotData,
+    UnmatchedCorpusTrackData,
 };
 use crate::ui::input::InputAction;
 use crate::ui::widgets::ListClickTargets;
@@ -31,7 +32,10 @@ pub(crate) enum ReleasePackingBrowserAction {
 // ============================================================================
 
 pub(crate) struct ReleasePackingBrowserState {
-    // Left pane (flat list: releases + near-miss + unmatched)
+    // Which category this browser is showing
+    pub category: PackingCategory,
+
+    // Left pane (flat list)
     pub entries: Vec<PackingListEntry>,
     pub cursor: usize,
     pub scroll: usize,
@@ -49,20 +53,10 @@ pub(crate) struct ReleasePackingBrowserState {
     // Click targets
     pub click_targets: ListClickTargets,
 
-    // Source data (releases = multi-track, singles = total_tracks == 1)
+    // Source data (only the category being viewed is populated)
     pub releases: Vec<ReleaseGroup>,
-    pub singles: Vec<ReleaseGroup>,
     pub near_misses: Vec<NearMissReleaseData>,
     pub unmatched: Vec<UnmatchedEntry>,
-
-    // Summary
-    pub total_assigned: usize,
-    pub total_releases: usize,
-
-    // Funnel counts (fingerprinted → matched → assigned)
-    pub fingerprinted_count: usize,
-    pub matched_count: usize,
-    pub recording_count: usize,
 }
 
 // ============================================================================
@@ -70,21 +64,19 @@ pub(crate) struct ReleasePackingBrowserState {
 // ============================================================================
 
 impl ReleasePackingBrowserState {
-    /// Build the browser state from raw signal data.
-    pub fn build(
+    /// Build browser state for a release category (FullMatches, Singles, Incomplete)
+    /// from PackedReleaseData signals + per-inode track data + unfilled slots.
+    pub fn build_releases(
+        category: PackingCategory,
+        packed: Vec<PackedReleaseData>,
         packing_rows: Vec<(i64, String, ReleasePackingData)>,
-        unmatched_rows: Vec<(i64, String, UnmatchedCorpusTrackData)>,
         unfilled_rows: Vec<UnfilledReleaseSlotData>,
-        near_miss_rows: Vec<NearMissReleaseData>,
-        fingerprinted_count: usize,
-        matched_count: usize,
-        recording_count: usize,
     ) -> Self {
         // Group packing rows by release_id
-        let mut release_map: HashMap<String, Vec<(i64, String, ReleasePackingData)>> =
+        let mut track_map: HashMap<String, Vec<(i64, String, ReleasePackingData)>> =
             HashMap::new();
         for row in packing_rows {
-            release_map
+            track_map
                 .entry(row.2.release_id.clone())
                 .or_default()
                 .push(row);
@@ -99,15 +91,16 @@ impl ReleasePackingBrowserState {
                 .push(slot);
         }
 
-        // Build release groups
+        // Build release groups from PackedReleaseData (already categorized)
         let mut releases: Vec<ReleaseGroup> = Vec::new();
 
-        for (release_id, rows) in &release_map {
-            let first = &rows[0].2;
-            let mut tracks: Vec<AssignedTrackInfo> = rows
-                .iter()
+        for pr in packed {
+            let mut tracks: Vec<AssignedTrackInfo> = track_map
+                .remove(&pr.release_id)
+                .unwrap_or_default()
+                .into_iter()
                 .map(|(_inode, path, data)| AssignedTrackInfo {
-                    path: path.clone(),
+                    path,
                     track_number: data.track_number.clone(),
                     track_title: data.track_title.clone(),
                     medium_position: data.medium_position,
@@ -126,7 +119,7 @@ impl ReleasePackingBrowserState {
             });
 
             let mut unfilled: Vec<UnfilledSlotInfo> = unfilled_map
-                .remove(release_id)
+                .remove(&pr.release_id)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|s| UnfilledSlotInfo {
@@ -136,23 +129,26 @@ impl ReleasePackingBrowserState {
                     recording_id: s.recording_id,
                 })
                 .collect();
-            unfilled.sort_by(|a, b| a.medium_pos.cmp(&b.medium_pos).then(a.track_pos.cmp(&b.track_pos)));
+            unfilled.sort_by(|a, b| {
+                a.medium_pos
+                    .cmp(&b.medium_pos)
+                    .then(a.track_pos.cmp(&b.track_pos))
+            });
 
-            let total_tracks = (tracks.len() + unfilled.len()) as u32;
-            let coverage = if total_tracks > 0 {
-                tracks.len() as f32 / total_tracks as f32
+            let coverage = if pr.total_tracks > 0 {
+                pr.assigned_count as f32 / pr.total_tracks as f32
             } else {
                 0.0
             };
 
             releases.push(ReleaseGroup {
-                release_id: release_id.clone(),
-                release_title: first.release_title.clone(),
-                release_artist: first.release_artist.clone(),
+                release_id: pr.release_id,
+                release_title: pr.release_title,
+                release_artist: pr.release_artist,
                 tracks,
                 unfilled,
                 coverage,
-                total_tracks,
+                total_tracks: pr.total_tracks,
             });
         }
 
@@ -164,19 +160,8 @@ impl ReleasePackingBrowserState {
                 .then(b.total_tracks.cmp(&a.total_tracks))
         });
 
-        // Partition into multi-track releases and singles
-        let (releases, singles): (Vec<_>, Vec<_>) =
-            releases.into_iter().partition(|r| r.total_tracks > 1);
-
-        let total_assigned = releases.iter().chain(singles.iter()).map(|r| r.tracks.len()).sum();
-        let total_releases = releases.len() + singles.len();
-
-        let unmatched: Vec<UnmatchedEntry> = unmatched_rows
-            .into_iter()
-            .map(|(_inode, path, data)| UnmatchedEntry { path, data })
-            .collect();
-
         let mut state = Self {
+            category,
             entries: Vec::new(),
             cursor: 0,
             scroll: 0,
@@ -186,17 +171,57 @@ impl ReleasePackingBrowserState {
             focused_pane: FocusedPane::LeftPane,
             click_targets: Default::default(),
             releases,
-            singles,
-            near_misses: near_miss_rows,
-            unmatched,
-            total_assigned,
-            total_releases,
-            fingerprinted_count,
-            matched_count,
-            recording_count,
+            near_misses: Vec::new(),
+            unmatched: Vec::new(),
         };
         state.rebuild_entries();
-        state.advance_cursor_to_navigable(0);
+        state
+    }
+
+    /// Build browser state for near-miss releases.
+    pub fn build_near_misses(near_miss_rows: Vec<NearMissReleaseData>) -> Self {
+        let mut state = Self {
+            category: PackingCategory::NearMisses,
+            entries: Vec::new(),
+            cursor: 0,
+            scroll: 0,
+            track_cursor: 0,
+            track_scroll: 0,
+            detail_scroll: 0,
+            focused_pane: FocusedPane::LeftPane,
+            click_targets: Default::default(),
+            releases: Vec::new(),
+            near_misses: near_miss_rows,
+            unmatched: Vec::new(),
+        };
+        state.rebuild_entries();
+        state
+    }
+
+    /// Build browser state for unmatched corpus files.
+    pub fn build_unmatched(
+        unmatched_rows: Vec<(i64, String, UnmatchedCorpusTrackData)>,
+    ) -> Self {
+        let unmatched: Vec<UnmatchedEntry> = unmatched_rows
+            .into_iter()
+            .map(|(_inode, path, data)| UnmatchedEntry { path, data })
+            .collect();
+
+        let mut state = Self {
+            category: PackingCategory::Unmatched,
+            entries: Vec::new(),
+            cursor: 0,
+            scroll: 0,
+            track_cursor: 0,
+            track_scroll: 0,
+            detail_scroll: 0,
+            focused_pane: FocusedPane::LeftPane,
+            click_targets: Default::default(),
+            releases: Vec::new(),
+            near_misses: Vec::new(),
+            unmatched,
+        };
+        state.rebuild_entries();
         state
     }
 
@@ -204,54 +229,27 @@ impl ReleasePackingBrowserState {
     pub fn rebuild_entries(&mut self) {
         let mut entries = Vec::new();
 
-        if !self.releases.is_empty() {
-            entries.push(PackingListEntry::ReleaseSectionHeader {
-                count: self.releases.len(),
-            });
-            for idx in 0..self.releases.len() {
-                entries.push(PackingListEntry::ReleaseHeader { release_idx: idx });
+        match self.category {
+            PackingCategory::FullMatches
+            | PackingCategory::Singles
+            | PackingCategory::Incomplete => {
+                for idx in 0..self.releases.len() {
+                    entries.push(PackingListEntry::Release { idx });
+                }
             }
-        }
-
-        if !self.singles.is_empty() {
-            entries.push(PackingListEntry::SinglesSectionHeader {
-                count: self.singles.len(),
-            });
-            for idx in 0..self.singles.len() {
-                entries.push(PackingListEntry::SingleHeader { single_idx: idx });
+            PackingCategory::NearMisses => {
+                for idx in 0..self.near_misses.len() {
+                    entries.push(PackingListEntry::NearMiss { idx });
+                }
             }
-        }
-
-        if !self.near_misses.is_empty() {
-            entries.push(PackingListEntry::NearMissSectionHeader {
-                count: self.near_misses.len(),
-            });
-            for idx in 0..self.near_misses.len() {
-                entries.push(PackingListEntry::NearMissEntry { idx });
-            }
-        }
-
-        if !self.unmatched.is_empty() {
-            entries.push(PackingListEntry::UnmatchedSectionHeader {
-                count: self.unmatched.len(),
-            });
-            for idx in 0..self.unmatched.len() {
-                entries.push(PackingListEntry::UnmatchedFile { idx });
+            PackingCategory::Unmatched => {
+                for idx in 0..self.unmatched.len() {
+                    entries.push(PackingListEntry::Unmatched { idx });
+                }
             }
         }
 
         self.entries = entries;
-    }
-
-    /// Advance cursor to the next navigable (non-header) entry at or after `from`.
-    fn advance_cursor_to_navigable(&mut self, from: usize) {
-        for i in from..self.entries.len() {
-            if !self.entries[i].is_section_header() {
-                self.cursor = i;
-                return;
-            }
-        }
-        self.cursor = from.min(self.entries.len().saturating_sub(1));
     }
 
     /// Get the currently selected entry.
@@ -262,12 +260,7 @@ impl ReleasePackingBrowserState {
     /// Get the release for the current left-pane selection, if any.
     pub fn selected_release(&self) -> Option<&ReleaseGroup> {
         match self.selected_entry()? {
-            PackingListEntry::ReleaseHeader { release_idx } => {
-                self.releases.get(*release_idx)
-            }
-            PackingListEntry::SingleHeader { single_idx } => {
-                self.singles.get(*single_idx)
-            }
+            PackingListEntry::Release { idx } => self.releases.get(*idx),
             _ => None,
         }
     }
@@ -311,16 +304,13 @@ impl ReleasePackingBrowserState {
                 ReleasePackingBrowserAction::None
             }
             InputAction::Home => {
-                self.advance_cursor_to_navigable(0);
+                self.cursor = 0;
                 self.reset_middle_pane();
                 ReleasePackingBrowserAction::None
             }
             InputAction::End => {
-                for i in (0..self.entries.len()).rev() {
-                    if !self.entries[i].is_section_header() {
-                        self.cursor = i;
-                        break;
-                    }
+                if !self.entries.is_empty() {
+                    self.cursor = self.entries.len() - 1;
                 }
                 self.reset_middle_pane();
                 ReleasePackingBrowserAction::None
@@ -416,23 +406,14 @@ impl ReleasePackingBrowserState {
     }
 
     fn move_cursor_up(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        for i in (0..self.cursor).rev() {
-            if !self.entries[i].is_section_header() {
-                self.cursor = i;
-                return;
-            }
+        if self.cursor > 0 {
+            self.cursor -= 1;
         }
     }
 
     fn move_cursor_down(&mut self) {
-        for i in (self.cursor + 1)..self.entries.len() {
-            if !self.entries[i].is_section_header() {
-                self.cursor = i;
-                return;
-            }
+        if self.cursor + 1 < self.entries.len() {
+            self.cursor += 1;
         }
     }
 }

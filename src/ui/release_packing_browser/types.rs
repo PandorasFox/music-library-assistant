@@ -2,6 +2,16 @@
 
 use crate::meta::signals::data::{PackingScoreBreakdown, UnmatchedCorpusTrackData};
 
+/// Which category of packing results to display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackingCategory {
+    FullMatches,
+    Singles,
+    Incomplete,
+    NearMisses,
+    Unmatched,
+}
+
 /// Which pane currently has focus.
 pub enum FocusedPane {
     /// Left pane: release/near-miss/unmatched list.
@@ -54,33 +64,10 @@ pub struct UnmatchedEntry {
 /// An entry in the flat left-pane navigable list.
 /// Tracks are shown in the middle pane, not inline here.
 pub enum PackingListEntry {
-    /// Section header for releases.
-    ReleaseSectionHeader { count: usize },
-    /// A release row.
-    ReleaseHeader { release_idx: usize },
-    /// Section header for singles (releases with total_tracks == 1).
-    SinglesSectionHeader { count: usize },
-    /// A single release row.
-    SingleHeader { single_idx: usize },
-    /// Section header for near-misses.
-    NearMissSectionHeader { count: usize },
+    /// A release row (full match, single, or incomplete).
+    Release { idx: usize },
     /// A near-miss release entry.
-    NearMissEntry { idx: usize },
-    /// Section header for unmatched files.
-    UnmatchedSectionHeader { count: usize },
+    NearMiss { idx: usize },
     /// An unmatched corpus file.
-    UnmatchedFile { idx: usize },
-}
-
-impl PackingListEntry {
-    /// Whether this entry is a non-navigable section header.
-    pub fn is_section_header(&self) -> bool {
-        matches!(
-            self,
-            Self::ReleaseSectionHeader { .. }
-                | Self::SinglesSectionHeader { .. }
-                | Self::NearMissSectionHeader { .. }
-                | Self::UnmatchedSectionHeader { .. }
-        )
-    }
+    Unmatched { idx: usize },
 }

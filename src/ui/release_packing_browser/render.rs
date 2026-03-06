@@ -18,7 +18,7 @@ use super::ReleasePackingBrowserState;
 use crate::ui::widgets::control_colors;
 
 pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
-    // Outer: info bar (1) + content (min) + controls (1)
+    // Outer: title (1) + content (min) + controls (1)
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -28,7 +28,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState)
         ])
         .split(area);
 
-    render_info_bar(f, outer[0], state);
+    render_title_bar(f, outer[0], state);
     render_controls(f, outer[2]);
 
     // Content: left (25%) + right (75%)
@@ -48,28 +48,22 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState)
     render_detail_pane(f, right[1], state);
 }
 
-fn render_info_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserState) {
+fn render_title_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserState) {
+    let title = match state.category {
+        PackingCategory::FullMatches => "Full Matches",
+        PackingCategory::Singles => "Singles",
+        PackingCategory::Incomplete => "Incomplete Releases",
+        PackingCategory::NearMisses => "Near-Misses",
+        PackingCategory::Unmatched => "Unmatched Files",
+    };
+    let count = state.entries.len();
     let line = Line::from(vec![
-        Span::styled(" ", Style::default()),
         Span::styled(
-            format!("{}", state.fingerprinted_count),
-            Style::default().fg(Color::White),
-        ),
-        Span::styled(" fingerprinted → ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!("{}", state.matched_count),
-            Style::default().fg(Color::White),
+            format!(" {} ", title),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!(" matched ({} recordings) → ", state.recording_count),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(
-            format!("{}", state.total_assigned),
-            Style::default().fg(Color::White),
-        ),
-        Span::styled(
-            format!(" assigned to {} releases", state.total_releases),
+            format!("({} entries)", count),
             Style::default().fg(Color::DarkGray),
         ),
     ]);
@@ -117,11 +111,9 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowser
         let line = render_left_entry(entry, is_selected, state, inner.width as usize);
         let line_idx = lines.len();
 
-        if !entry.is_section_header() {
-            state
-                .click_targets
-                .add_row(idx.to_string(), inner.y + line_idx as u16);
-        }
+        state
+            .click_targets
+            .add_row(idx.to_string(), inner.y + line_idx as u16);
 
         lines.push(line);
     }
@@ -150,33 +142,23 @@ fn render_left_entry(
     width: usize,
 ) -> Line<'static> {
     let title_max = width.saturating_sub(10); // room for marker + coverage
+    let marker = if selected { "▸ " } else { "  " };
 
     match entry {
-        PackingListEntry::ReleaseSectionHeader { count } => Line::from(Span::styled(
-            format!("── Releases ({}) ──", count),
-            Style::default().fg(Color::DarkGray),
-        )),
-
-        PackingListEntry::ReleaseHeader { release_idx } => {
-            let release = &state.releases[*release_idx];
-            let marker = if selected { "▸ " } else { "  " };
-            let coverage_color = if release.coverage >= 0.9 {
+        PackingListEntry::Release { idx } => {
+            let release = &state.releases[*idx];
+            let title_style = if selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let coverage_color = if release.coverage >= 1.0 {
                 Color::Green
             } else if release.coverage >= 0.7 {
                 Color::Yellow
             } else {
                 Color::Red
             };
-            let title_style = if selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            let filled = release.tracks.len();
-            let total = release.total_tracks;
 
             Line::from(vec![
                 Span::styled(marker.to_string(), title_style),
@@ -185,60 +167,22 @@ fn render_left_entry(
                     title_style,
                 ),
                 Span::styled(
-                    format!(" {}/{}", filled, total),
+                    format!(" {}/{}", release.tracks.len(), release.total_tracks),
                     Style::default().fg(coverage_color),
                 ),
             ])
         }
 
-        PackingListEntry::SinglesSectionHeader { count } => Line::from(Span::styled(
-            format!("── Singles ({}) ──", count),
-            Style::default().fg(Color::DarkGray),
-        )),
-
-        PackingListEntry::SingleHeader { single_idx } => {
-            let single = &state.singles[*single_idx];
-            let marker = if selected { "▸ " } else { "  " };
-            let title_style = if selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            Line::from(vec![
-                Span::styled(marker.to_string(), title_style),
-                Span::styled(
-                    truncate_for_width(&single.release_title, title_max),
-                    title_style,
-                ),
-                Span::styled(
-                    " 1/1".to_string(),
-                    Style::default().fg(Color::Green),
-                ),
-            ])
-        }
-
-        PackingListEntry::NearMissSectionHeader { count } => Line::from(Span::styled(
-            format!("── Near-Misses ({}) ──", count),
-            Style::default().fg(Color::DarkGray),
-        )),
-
-        PackingListEntry::NearMissEntry { idx } => {
+        PackingListEntry::NearMiss { idx } => {
             let nm = &state.near_misses[*idx];
-            let marker = if selected { "▸ " } else { "  " };
             let label_style = if selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Yellow)
             };
 
             Line::from(vec![
                 Span::styled(marker.to_string(), label_style),
-                Span::styled("! ", Style::default().fg(Color::Yellow)),
                 Span::styled(
                     truncate_for_width(&nm.release_title, title_max.saturating_sub(2)),
                     label_style,
@@ -250,22 +194,13 @@ fn render_left_entry(
             ])
         }
 
-        PackingListEntry::UnmatchedSectionHeader { count } => Line::from(Span::styled(
-            format!("── Unmatched ({}) ──", count),
-            Style::default().fg(Color::DarkGray),
-        )),
-
-        PackingListEntry::UnmatchedFile { idx } => {
+        PackingListEntry::Unmatched { idx } => {
             let um = &state.unmatched[*idx];
-            let marker = if selected { "▸ " } else { "  " };
             let label_style = if selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
-
             let filename = um.path.rsplit('/').next().unwrap_or(&um.path);
 
             Line::from(vec![
@@ -297,41 +232,21 @@ fn render_tracks_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrows
         return;
     }
 
-    // Determine which release to show (if any) before borrowing state mutably
-    enum TrackSource {
-        Release(usize),
-        Single(usize),
-        NearMiss(usize),
-        Unmatched(usize),
-        None,
-    }
-
-    let source = match state.selected_entry() {
-        Some(PackingListEntry::ReleaseHeader { release_idx }) => TrackSource::Release(*release_idx),
-        Some(PackingListEntry::SingleHeader { single_idx }) => TrackSource::Single(*single_idx),
-        Some(PackingListEntry::NearMissEntry { idx }) => TrackSource::NearMiss(*idx),
-        Some(PackingListEntry::UnmatchedFile { idx }) => TrackSource::Unmatched(*idx),
-        _ => TrackSource::None,
-    };
-
-    match source {
-        TrackSource::Release(idx) => {
-            render_release_tracks(f, inner, state, idx, false);
+    match state.selected_entry() {
+        Some(PackingListEntry::Release { idx }) => {
+            render_release_tracks(f, inner, state, *idx);
         }
-        TrackSource::Single(idx) => {
-            render_release_tracks(f, inner, state, idx, true);
-        }
-        TrackSource::NearMiss(idx) => {
-            let lines = render_near_miss_detail(&state.near_misses[idx]);
+        Some(PackingListEntry::NearMiss { idx }) => {
+            let lines = render_near_miss_detail(&state.near_misses[*idx]);
             render_scrollable_lines(f, inner, &lines, 0);
         }
-        TrackSource::Unmatched(idx) => {
-            let lines = render_unmatched_detail(&state.unmatched[idx]);
+        Some(PackingListEntry::Unmatched { idx }) => {
+            let lines = render_unmatched_detail(&state.unmatched[*idx]);
             render_scrollable_lines(f, inner, &lines, 0);
         }
-        TrackSource::None => {
+        None => {
             let line = Line::from(Span::styled(
-                "No release selected",
+                "No entries",
                 Style::default().fg(Color::DarkGray),
             ));
             f.render_widget(Paragraph::new(vec![line]), inner);
@@ -344,10 +259,9 @@ fn render_release_tracks(
     area: Rect,
     state: &mut ReleasePackingBrowserState,
     idx: usize,
-    is_single: bool,
 ) {
     let focused = matches!(state.focused_pane, FocusedPane::MiddlePane);
-    let release = if is_single { &state.singles[idx] } else { &state.releases[idx] };
+    let release = &state.releases[idx];
     let track_count = release.tracks.len();
     let unfilled_count = release.unfilled.len();
     let total = track_count + unfilled_count;
@@ -457,19 +371,16 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrows
     }
 
     let lines = match state.selected_entry() {
-        Some(PackingListEntry::ReleaseHeader { release_idx }) => {
-            detail_for_release(&state.releases[*release_idx], state.track_cursor)
+        Some(PackingListEntry::Release { idx }) => {
+            detail_for_release(&state.releases[*idx], state.track_cursor)
         }
-        Some(PackingListEntry::SingleHeader { single_idx }) => {
-            detail_for_release(&state.singles[*single_idx], state.track_cursor)
-        }
-        Some(PackingListEntry::NearMissEntry { idx }) => {
+        Some(PackingListEntry::NearMiss { idx }) => {
             render_near_miss_detail(&state.near_misses[*idx])
         }
-        Some(PackingListEntry::UnmatchedFile { idx }) => {
+        Some(PackingListEntry::Unmatched { idx }) => {
             render_unmatched_detail(&state.unmatched[*idx])
         }
-        _ => vec![Line::from(Span::styled(
+        None => vec![Line::from(Span::styled(
             "No selection",
             Style::default().fg(Color::DarkGray),
         ))],

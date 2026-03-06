@@ -700,39 +700,46 @@ impl Database {
         Ok(rows.flatten().collect())
     }
 
-    /// Count corpus files that have a non-null fingerprint in audio_info.
-    pub fn count_fingerprinted_corpus_files(&self) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(DISTINCT a.inode) FROM audio_info a
-             JOIN files f ON a.inode = f.inode
-             WHERE f.zone = 'corpus' AND a.fingerprint IS NOT NULL AND f.is_dir = 0",
-            [],
-            |row| row.get(0),
+    /// Get all fingerprinted corpus file inodes and paths.
+    ///
+    /// Used by Stage 5 to find files that were fingerprinted but never entered
+    /// the release packing candidate pipeline (no AcoustID match).
+    pub fn get_fingerprinted_corpus_inodes(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.inode, f.path FROM files f
+             JOIN audio_info a ON f.inode = a.inode
+             WHERE f.zone = 'corpus' AND f.is_dir = 0 AND a.fingerprint IS NOT NULL"
         )?;
-        Ok(count as usize)
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+        Ok(rows.flatten().collect())
     }
 
-    /// Count distinct corpus inodes that have at least one external match.
-    pub fn count_externally_matched_corpus_files(&self, source_key: i64) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(DISTINCT em.inode) FROM external_matches em
-             JOIN files f ON em.inode = f.inode
-             WHERE f.zone = 'corpus' AND em.source = ?1",
-            [source_key],
-            |row| row.get(0),
+    /// Get packed release signal data for a specific category prefix.
+    ///
+    /// Category prefixes: "full_match", "single", "incomplete".
+    pub fn get_packed_releases_by_category(
+        &self,
+        category_prefix: &str,
+    ) -> Result<Vec<crate::meta::signals::data::PackedReleaseData>> {
+        let pattern = format!("{}:%", category_prefix);
+        let mut stmt = self.conn.prepare(
+            "SELECT data FROM signal_packed_release WHERE key LIKE ?1"
         )?;
-        Ok(count as usize)
+        let rows = stmt.query_map(params![pattern], |row| {
+            let blob: Vec<u8> = row.get(0)?;
+            let data: crate::meta::signals::data::PackedReleaseData =
+                bincode::deserialize(&blob).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
+                    )
+                })?;
+            Ok(data)
+        })?;
+        Ok(rows.flatten().collect())
     }
 
-    /// Count distinct recording IDs across all external matches for corpus files.
-    pub fn count_matched_recordings(&self, source_key: i64) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(DISTINCT em.recording_id) FROM external_matches em
-             JOIN files f ON em.inode = f.inode
-             WHERE f.zone = 'corpus' AND em.source = ?1",
-            [source_key],
-            |row| row.get(0),
-        )?;
-        Ok(count as usize)
-    }
 }

@@ -535,6 +535,46 @@ pub struct NearMissReleaseData {
     pub total_tracks: u32,
 }
 
+/// Per-release aggregate packing result.
+/// Key = `{category_prefix}:{release_id}` for SQL-level filtering.
+/// (Aggregate signal, key = `full_match:{release_id}` | `single:{release_id}` | `incomplete:{release_id}`)
+#[derive(Debug, Clone)]
+pub struct PackedReleaseSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: PackedReleaseData,
+}
+
+/// Category of a packed release in the optimal solution.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PackedReleaseCategory {
+    FullMatch,
+    Single,
+    Incomplete,
+}
+
+impl PackedReleaseCategory {
+    /// Key prefix for SQL LIKE filtering.
+    pub fn key_prefix(&self) -> &'static str {
+        match self {
+            Self::FullMatch => "full_match",
+            Self::Single => "single",
+            Self::Incomplete => "incomplete",
+        }
+    }
+}
+
+/// Bincode payload for PackedRelease.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackedReleaseData {
+    pub release_id: String,
+    pub release_title: String,
+    pub release_artist: String,
+    pub category: PackedReleaseCategory,
+    pub assigned_count: u32,
+    pub total_tracks: u32,
+}
+
 /// A group of inodes sharing the same compound tag value.
 /// Used to aggregate compound split resolution by value rather than per-file.
 #[derive(Debug, Clone)]
@@ -1023,6 +1063,7 @@ pub enum TypedSignalWrite {
     DiscExtraction(DiscExtractionSignal),
     UnfilledReleaseSlot(UnfilledReleaseSlotSignal),
     NearMissRelease(NearMissReleaseSignal),
+    PackedRelease(PackedReleaseSignal),
 }
 
 impl TypedSignalWrite {
@@ -1078,6 +1119,7 @@ impl TypedSignalWrite {
             Self::DiscExtraction(s) => s.insert(conn),
             Self::UnfilledReleaseSlot(s) => s.insert(conn),
             Self::NearMissRelease(s) => s.insert(conn),
+            Self::PackedRelease(s) => s.insert(conn),
         }
     }
 
@@ -1133,6 +1175,7 @@ impl TypedSignalWrite {
             Self::DiscExtraction(s) => DiscExtractionSignal::exists(conn, &s.key),
             Self::UnfilledReleaseSlot(s) => UnfilledReleaseSlotSignal::exists(conn, &s.key),
             Self::NearMissRelease(s) => NearMissReleaseSignal::exists(conn, &s.key),
+            Self::PackedRelease(s) => PackedReleaseSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }
@@ -1338,6 +1381,11 @@ impl TypedSignalWrite {
                 }
             }
             Self::NearMissRelease(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::PackedRelease(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }

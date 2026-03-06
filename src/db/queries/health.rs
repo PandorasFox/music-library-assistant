@@ -780,14 +780,20 @@ impl Database {
             })
             .collect();
 
-        // Packing summary counts (cheap COUNTs on signal tables)
-        let packing_assigned_count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM signal_release_packing", [], |row| row.get(0),
-        ).unwrap_or(0);
-        let packing_release_count: usize = self.conn.query_row(
-            "SELECT COUNT(DISTINCT release_id) FROM release_packing_scores WHERE is_optimal = 1",
+        // Packing per-category counts from PackedRelease aggregate signals
+        let packing_full_match_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'full_match:%'",
             [], |row| row.get(0),
         ).unwrap_or(0);
+        let packing_singles_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'single:%'",
+            [], |row| row.get(0),
+        ).unwrap_or(0);
+        let packing_incomplete_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'incomplete:%'",
+            [], |row| row.get(0),
+        ).unwrap_or(0);
+
         let packing_near_miss_count: usize = self.conn.query_row(
             "SELECT COUNT(*) FROM signal_near_miss_release", [], |row| row.get(0),
         ).unwrap_or(0);
@@ -798,8 +804,9 @@ impl Database {
         Ok(ExternalMatchesData {
             untagged_entries,
             confidence_buckets,
-            packing_assigned_count,
-            packing_release_count,
+            packing_full_match_count,
+            packing_singles_count,
+            packing_incomplete_count,
             packing_near_miss_count,
             packing_unmatched_count,
         })

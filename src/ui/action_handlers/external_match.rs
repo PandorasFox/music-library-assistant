@@ -48,8 +48,8 @@ impl App {
                     super::super::progress_screen::ProgressPhase::ContentAnalysis,
                 );
             }
-            external_match_view::ExternalMatchesAction::LaunchReleasePackingBrowser => {
-                self.launch_release_packing_browser();
+            external_match_view::ExternalMatchesAction::LaunchPackingCategory(cat) => {
+                self.launch_release_packing_browser(cat);
             }
             external_match_view::ExternalMatchesAction::LaunchUntaggedReview => {
                 let entries = if let ActiveView::ExternalMatches(ref state) = self.view {
@@ -276,37 +276,68 @@ impl App {
     // Release Packing Browser
     // =========================================================================
 
-    /// Load packing signal data and launch the browser.
-    fn launch_release_packing_browser(&mut self) {
+    /// Load packing signal data and launch the browser for a specific category.
+    fn launch_release_packing_browser(
+        &mut self,
+        category: crate::ui::release_packing_browser::types::PackingCategory,
+    ) {
+        use crate::meta::signals::data::PackedReleaseCategory;
         use crate::ui::release_packing_browser::ReleasePackingBrowserState;
+        use crate::ui::release_packing_browser::types::PackingCategory;
 
-        let result = self.cache.query(move |db| {
-            let packing = db.get_release_packing_signal_data().unwrap_or_default();
-            let unmatched = db.get_unmatched_corpus_track_signal_data().unwrap_or_default();
-            let unfilled = db.get_unfilled_release_slot_signal_data().unwrap_or_default();
-            let near_miss = db.get_near_miss_release_signal_data().unwrap_or_default();
+        let state = match category {
+            PackingCategory::FullMatches | PackingCategory::Singles | PackingCategory::Incomplete => {
+                // Map UI category to signal category prefix
+                let prefix = match category {
+                    PackingCategory::FullMatches => PackedReleaseCategory::FullMatch.key_prefix(),
+                    PackingCategory::Singles => PackedReleaseCategory::Single.key_prefix(),
+                    PackingCategory::Incomplete => PackedReleaseCategory::Incomplete.key_prefix(),
+                    _ => unreachable!(),
+                };
+                let prefix_owned = prefix.to_string();
 
-            let source_key = crate::meta::external::ExternalSource::AcoustID.to_key();
-            let fingerprinted_count = db.count_fingerprinted_corpus_files().unwrap_or(0);
-            let matched_count = db.count_externally_matched_corpus_files(source_key).unwrap_or(0);
-            let recording_count = db.count_matched_recordings(source_key).unwrap_or(0);
+                let result = self.cache.query(move |db| {
+                    let packed = db.get_packed_releases_by_category(&prefix_owned).unwrap_or_default();
+                    let packing = db.get_release_packing_signal_data().unwrap_or_default();
+                    let unfilled = db.get_unfilled_release_slot_signal_data().unwrap_or_default();
+                    (packed, packing, unfilled)
+                }).recv();
 
-            (packing, unmatched, unfilled, near_miss,
-             fingerprinted_count, matched_count, recording_count)
-        }).recv();
+                let (packed, packing, unfilled) = result;
 
-        let (packing, unmatched, unfilled, near_miss,
-             fingerprinted_count, matched_count, recording_count) = result;
+                if packed.is_empty() {
+                    self.status_message = Some("No releases in this category".to_string());
+                    return;
+                }
 
-        if packing.is_empty() && unmatched.is_empty() {
-            self.status_message = Some("No release packing results available".to_string());
-            return;
-        }
+                ReleasePackingBrowserState::build_releases(category, packed, packing, unfilled)
+            }
+            PackingCategory::NearMisses => {
+                let near_misses = self.cache.query(|db| {
+                    db.get_near_miss_release_signal_data().unwrap_or_default()
+                }).recv();
 
-        let state = ReleasePackingBrowserState::build(
-            packing, unmatched, unfilled, near_miss,
-            fingerprinted_count, matched_count, recording_count,
-        );
+                if near_misses.is_empty() {
+                    self.status_message = Some("No near-miss releases".to_string());
+                    return;
+                }
+
+                ReleasePackingBrowserState::build_near_misses(near_misses)
+            }
+            PackingCategory::Unmatched => {
+                let unmatched = self.cache.query(|db| {
+                    db.get_unmatched_corpus_track_signal_data().unwrap_or_default()
+                }).recv();
+
+                if unmatched.is_empty() {
+                    self.status_message = Some("No unmatched files".to_string());
+                    return;
+                }
+
+                ReleasePackingBrowserState::build_unmatched(unmatched)
+            }
+        };
+
         self.view = ActiveView::ReleasePackingBrowser(state);
     }
 

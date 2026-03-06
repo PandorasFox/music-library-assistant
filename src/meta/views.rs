@@ -182,14 +182,16 @@ pub struct ExternalMatchesData {
     /// ContentDiff entries bucketed by confidence tier.
     pub confidence_buckets: Vec<ConfidenceBucket>,
 
-    // Release packing summary counts (cheap COUNTs, refreshed with cache)
-    /// Number of corpus files assigned to releases.
-    pub packing_assigned_count: usize,
-    /// Number of distinct releases in packing results.
-    pub packing_release_count: usize,
-    /// Number of near-miss releases.
+    // Release packing per-category counts
+    /// Full-match releases (all tracks assigned, multi-track).
+    pub packing_full_match_count: usize,
+    /// Single-track releases.
+    pub packing_singles_count: usize,
+    /// Incomplete releases (some but not all tracks assigned).
+    pub packing_incomplete_count: usize,
+    /// Near-miss releases.
     pub packing_near_miss_count: usize,
-    /// Number of unmatched corpus tracks.
+    /// Unmatched corpus tracks.
     pub packing_unmatched_count: usize,
 }
 

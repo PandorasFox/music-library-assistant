@@ -770,21 +770,6 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_mb_release_cache_bulk(release_ids)
     }
 
-    /// Count corpus files with non-null fingerprints.
-    pub fn count_fingerprinted_corpus_files(&self) -> Result<usize> {
-        self.db.count_fingerprinted_corpus_files()
-    }
-
-    /// Count distinct corpus inodes with at least one external match.
-    pub fn count_externally_matched_corpus_files(&self, source_key: i64) -> Result<usize> {
-        self.db.count_externally_matched_corpus_files(source_key)
-    }
-
-    /// Count distinct recording IDs matched across corpus files.
-    pub fn count_matched_recordings(&self, source_key: i64) -> Result<usize> {
-        self.db.count_matched_recordings(source_key)
-    }
-
     // =========================================================================
     // Release Packing Signal Data Queries
     // =========================================================================
@@ -807,6 +792,19 @@ impl<'a> ReadOnlyDb<'a> {
     /// Read all NearMissReleaseSignal rows with deserialized data.
     pub fn get_near_miss_release_signal_data(&self) -> Result<Vec<crate::meta::signals::data::NearMissReleaseData>> {
         self.db.get_near_miss_release_signal_data()
+    }
+
+    /// Get all fingerprinted corpus file inodes and paths.
+    pub fn get_fingerprinted_corpus_inodes(&self) -> Result<Vec<(i64, String)>> {
+        self.db.get_fingerprinted_corpus_inodes()
+    }
+
+    /// Get packed release signal data for a specific category prefix.
+    pub fn get_packed_releases_by_category(
+        &self,
+        category_prefix: &str,
+    ) -> Result<Vec<crate::meta::signals::data::PackedReleaseData>> {
+        self.db.get_packed_releases_by_category(category_prefix)
     }
 
     // =========================================================================

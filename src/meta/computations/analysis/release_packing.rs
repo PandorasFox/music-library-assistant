@@ -56,9 +56,10 @@ use crate::meta::computations::types::ComputationWitness;
 use crate::meta::computations::{Computation, PipelineStage};
 use crate::meta::external::ExternalSource;
 use crate::meta::signals::data::{
-    MatchMethod, NearMissReleaseData, NearMissReleaseSignal, PackingScoreBreakdown,
-    ReleasePackingData, ReleasePackingSignal, TypedSignalWrite, UnfilledReleaseSlotData,
-    UnfilledReleaseSlotSignal, UnmatchedCorpusTrackData, UnmatchedCorpusTrackSignal,
+    MatchMethod, NearMissReleaseData, NearMissReleaseSignal, PackedReleaseCategory,
+    PackedReleaseData, PackedReleaseSignal, PackingScoreBreakdown, ReleasePackingData,
+    ReleasePackingSignal, TypedSignalWrite, UnfilledReleaseSlotData, UnfilledReleaseSlotSignal,
+    UnmatchedCorpusTrackData, UnmatchedCorpusTrackSignal,
 };
 
 use super::{Computation as AnalysisComputation, Result};
@@ -1816,6 +1817,36 @@ pub fn execute_analyze_release_gaps(
         ));
     }
 
+    // Also emit unmatched signals for fingerprinted corpus files that never entered
+    // the candidate pipeline (no AcoustID match → no recordings → not in inode_recordings).
+    match read_only_db.get_fingerprinted_corpus_inodes() {
+        Ok(fingerprinted) => {
+            for (inode, path) in fingerprinted {
+                if assigned_inodes.contains(&inode) || inode_recordings.contains_key(&inode) {
+                    continue;
+                }
+                let signal = UnmatchedCorpusTrackSignal {
+                    inode,
+                    path,
+                    data: UnmatchedCorpusTrackData {
+                        recording_ids: Vec::new(),
+                        considered_release_ids: Vec::new(),
+                    },
+                };
+                unmatched_signals.push(ComputedCorpusSignal::new(
+                    inode,
+                    TypedSignalWrite::UnmatchedCorpusTrack(signal),
+                ));
+            }
+        }
+        Err(e) => {
+            log_general(format!(
+                "[COMPUTE] AnalyzeReleaseGaps: failed to query fingerprinted inodes: {}",
+                e
+            ));
+        }
+    }
+
     let (uc_cleared, uc_new, uc_updated, uc_unchanged) =
         reconcile_corpus_signals::<UnmatchedCorpusTrackSignal>(
             read_only_db,
@@ -1825,15 +1856,19 @@ pub fn execute_analyze_release_gaps(
         );
 
     // === Unfilled release slots ===
-    // For each release in manifest, find track positions not filled by any assignment
+    // Build filled_slots from actual assignments (signal_release_packing), which
+    // includes both Stage 3 (AcoustId) and Stage 4 (Elimination) assignments.
+    // Cannot use optimal_scores: elimination-matched inodes bypass the scoring table.
+    let actual_assignments = read_only_db
+        .get_release_packing_assignments()
+        .unwrap_or_default();
+
     let mut filled_slots: HashMap<String, HashSet<(i32, i32)>> = HashMap::new();
-    for row in &optimal_scores {
-        if assigned_inodes.contains(&row.inode) {
-            filled_slots
-                .entry(row.release_id.clone())
-                .or_default()
-                .insert((row.medium_pos, row.track_pos));
-        }
+    for (_inode, _path, release_id, medium_pos, track_pos) in &actual_assignments {
+        filled_slots
+            .entry(release_id.clone())
+            .or_default()
+            .insert((*medium_pos as i32, *track_pos as i32));
     }
 
     // We need release tracklist info to identify unfilled slots
@@ -1904,6 +1939,57 @@ pub fn execute_analyze_release_gaps(
             witness,
         );
 
+    // === Packed release signals ===
+    // Emit one per-release aggregate signal with typed category.
+    let mut packed_signals: Vec<ComputedAggregateSignal> = Vec::new();
+
+    for manifest_row in &manifest {
+        let filled_count = filled_slots
+            .get(&manifest_row.release_id)
+            .map(|s| s.len() as u32)
+            .unwrap_or(0);
+
+        // Only emit for releases that have at least one assigned track
+        if filled_count == 0 {
+            continue;
+        }
+
+        let total = manifest_row.total_tracks as u32;
+        let category = if total == 1 {
+            PackedReleaseCategory::Single
+        } else if filled_count >= total {
+            PackedReleaseCategory::FullMatch
+        } else {
+            PackedReleaseCategory::Incomplete
+        };
+
+        let key = format!("{}:{}", category.key_prefix(), manifest_row.release_id);
+        let signal = PackedReleaseSignal {
+            key: key.clone(),
+            data: PackedReleaseData {
+                release_id: manifest_row.release_id.clone(),
+                release_title: manifest_row.release_title.clone(),
+                release_artist: manifest_row.release_artist.clone(),
+                category,
+                assigned_count: filled_count,
+                total_tracks: total,
+            },
+        };
+
+        packed_signals.push(ComputedAggregateSignal::new(
+            key,
+            TypedSignalWrite::PackedRelease(signal),
+        ));
+    }
+
+    let (pr_cleared, pr_new, pr_updated, pr_unchanged) =
+        reconcile_aggregate_signals::<PackedReleaseSignal>(
+            read_only_db,
+            &sender,
+            packed_signals,
+            witness,
+        );
+
     // === Near-miss detection ===
     // A release with (n-1)/n tracks matched, all from the same directory containing
     // exactly n audio files. The unmatched file is the likely missing track.
@@ -1926,15 +2012,13 @@ pub fn execute_analyze_release_gaps(
             continue;
         }
 
-        // Get the assigned inodes for this release
-        let mut release_inodes: Vec<i64> = Vec::new();
-        for row in &optimal_scores {
-            if row.release_id == manifest_row.release_id
-                && assigned_inodes.contains(&row.inode)
-            {
-                release_inodes.push(row.inode);
-            }
-        }
+        // Get the assigned inodes for this release (from actual assignments,
+        // which includes both AcoustId and Elimination matches)
+        let release_inodes: Vec<i64> = actual_assignments
+            .iter()
+            .filter(|(_, _, rid, _, _)| rid == &manifest_row.release_id)
+            .map(|(inode, _, _, _, _)| *inode)
+            .collect();
 
         // Check directory cohesion: all assigned inodes from same directory
         let mut dirs: HashSet<String> = HashSet::new();
@@ -2056,9 +2140,11 @@ pub fn execute_analyze_release_gaps(
         "[COMPUTE] AnalyzeReleaseGaps: \
          unmatched_corpus: cleared={}, new={}, updated={}, unchanged={} | \
          unfilled_slots: cleared={}, new={}, updated={}, unchanged={} | \
+         packed_release: cleared={}, new={}, updated={}, unchanged={} | \
          near_miss: cleared={}, new={}, updated={}, unchanged={}",
         uc_cleared, uc_new, uc_updated, uc_unchanged, us_cleared, us_new, us_updated,
-        us_unchanged, nm_cleared, nm_new, nm_updated, nm_unchanged
+        us_unchanged, pr_cleared, pr_new, pr_updated, pr_unchanged, nm_cleared, nm_new,
+        nm_updated, nm_unchanged
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

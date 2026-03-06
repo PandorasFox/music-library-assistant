@@ -2008,7 +2008,7 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::TruncatePackingTables => {
             with_retry("truncate_packing_tables", "all", || {
                 db.conn().execute_batch(
-                    "DELETE FROM release_packing_manifest; DELETE FROM release_packing_scores; DELETE FROM release_packing_candidates; DELETE FROM pending_acoustid_submissions;"
+                    "DELETE FROM release_packing_manifest; DELETE FROM release_packing_scores; DELETE FROM release_packing_candidates; DELETE FROM pending_acoustid_submissions; DELETE FROM signal_packed_release;"
                 )?;
                 Ok(())
             });

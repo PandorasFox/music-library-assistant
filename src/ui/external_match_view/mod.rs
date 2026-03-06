@@ -11,6 +11,7 @@ pub mod render;
 use crate::ui::input::InputAction;
 
 use crate::meta::views::{ConfidenceTier, ExternalMatchesData};
+use crate::ui::release_packing_browser::types::PackingCategory;
 
 // ============================================================================
 // Actions
@@ -33,8 +34,8 @@ pub(crate) enum ExternalMatchesAction {
     LaunchUntaggedReview,
     /// Enter on a confidence bucket → launch review for entries in that tier
     LaunchTierReview(ConfidenceTier),
-    /// Enter on "Release Packing Results" → launch release packing browser
-    LaunchReleasePackingBrowser,
+    /// Enter on a release packing category → launch browser for that category
+    LaunchPackingCategory(PackingCategory),
 }
 
 // ============================================================================
@@ -52,8 +53,8 @@ pub(crate) enum NavigableEntry {
     UntaggedMatches,
     /// Confidence tier bucket
     ConfidenceBucket(ConfidenceTier),
-    /// Release packing results (visible when packing signals exist)
-    ReleasePackingResults,
+    /// Release packing category entry
+    PackingCategory(PackingCategory),
 }
 
 // ============================================================================
@@ -130,9 +131,21 @@ impl ExternalMatchesViewState {
             for bucket in &data.confidence_buckets {
                 entries.push(NavigableEntry::ConfidenceBucket(bucket.tier));
             }
-            // Release packing results (only visible when packing signals exist)
-            if data.packing_assigned_count > 0 || data.packing_unmatched_count > 0 {
-                entries.push(NavigableEntry::ReleasePackingResults);
+            // Release packing categories (only visible when data exists)
+            if data.packing_full_match_count > 0 {
+                entries.push(NavigableEntry::PackingCategory(PackingCategory::FullMatches));
+            }
+            if data.packing_singles_count > 0 {
+                entries.push(NavigableEntry::PackingCategory(PackingCategory::Singles));
+            }
+            if data.packing_incomplete_count > 0 {
+                entries.push(NavigableEntry::PackingCategory(PackingCategory::Incomplete));
+            }
+            if data.packing_near_miss_count > 0 {
+                entries.push(NavigableEntry::PackingCategory(PackingCategory::NearMisses));
+            }
+            if data.packing_unmatched_count > 0 {
+                entries.push(NavigableEntry::PackingCategory(PackingCategory::Unmatched));
             }
         }
 
@@ -202,8 +215,8 @@ impl ExternalMatchesViewState {
                     Some(NavigableEntry::ConfidenceBucket(tier)) => {
                         ExternalMatchesAction::LaunchTierReview(*tier)
                     }
-                    Some(NavigableEntry::ReleasePackingResults) => {
-                        ExternalMatchesAction::LaunchReleasePackingBrowser
+                    Some(NavigableEntry::PackingCategory(cat)) => {
+                        ExternalMatchesAction::LaunchPackingCategory(*cat)
                     }
                     None => ExternalMatchesAction::None,
                 }

@@ -118,6 +118,7 @@ pub struct PackingCandidateRow {
     pub tag_artist: Option<String>,
     pub tag_album: Option<String>,
     pub tag_tracknumber: Option<String>,
+    pub dir_file_count: i32,
 }
 
 // ============================================================================
@@ -1999,8 +2000,8 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                 let mut stmt = db.conn().prepare(
                     "INSERT OR REPLACE INTO release_packing_candidates \
                      (release_id, inode, recording_id, confidence, path, parent_dir, duration_ms, \
-                      tag_title, tag_artist, tag_album, tag_tracknumber) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+                      tag_title, tag_artist, tag_album, tag_tracknumber, dir_file_count) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
                 )?;
                 for row in rows {
                     stmt.execute(rusqlite::params![
@@ -2015,6 +2016,7 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                         row.tag_artist,
                         row.tag_album,
                         row.tag_tracknumber,
+                        row.dir_file_count,
                     ])?;
                 }
                 Ok(())

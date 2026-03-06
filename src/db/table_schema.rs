@@ -682,6 +682,7 @@ pub fn schema_inventory() -> Vec<TableEntry> {
             tag_artist TEXT,
             tag_album TEXT,
             tag_tracknumber TEXT,
+            dir_file_count INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (release_id, inode)
         )",
         index_sql: &[

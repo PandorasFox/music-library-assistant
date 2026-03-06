@@ -85,20 +85,13 @@ struct CandidateAssignment {
 // Shared helpers
 // ============================================================================
 
-/// Group external match rows by inode, taking the first per inode (highest confidence).
-fn group_best_per_inode(rows: Vec<ExternalMatchRow>) -> Vec<(i64, ExternalMatchRow)> {
-    let mut best: Vec<(i64, ExternalMatchRow)> = Vec::new();
-    let mut last_inode: Option<i64> = None;
-
+/// Group external match rows by inode, keeping all recordings per inode.
+fn group_all_per_inode(rows: Vec<ExternalMatchRow>) -> HashMap<i64, Vec<ExternalMatchRow>> {
+    let mut grouped: HashMap<i64, Vec<ExternalMatchRow>> = HashMap::new();
     for row in rows {
-        if last_inode == Some(row.inode) {
-            continue;
-        }
-        last_inode = Some(row.inode);
-        best.push((row.inode, row));
+        grouped.entry(row.inode).or_default().push(row);
     }
-
-    best
+    grouped
 }
 
 /// Compute the scoring components for a candidate assignment.
@@ -174,11 +167,11 @@ fn compute_score(
 
 /// Compute weighted composite score from breakdown components.
 fn weighted_composite(b: &PackingScoreBreakdown) -> f64 {
-    0.35 * b.acoustid_confidence
+    0.25 * b.acoustid_confidence
         + 0.20 * b.duration_match
         + 0.20 * b.tag_similarity
         + 0.10 * b.track_number_match
-        + 0.15 * b.directory_cohesion
+        + 0.25 * b.directory_cohesion
 }
 
 /// Resolve a release's artist credit string using locale preferences.
@@ -250,9 +243,9 @@ pub fn execute_pack_releases(
         }
     };
 
-    let best_per_inode = group_best_per_inode(all_rows);
+    let all_per_inode = group_all_per_inode(all_rows);
 
-    if best_per_inode.is_empty() {
+    if all_per_inode.is_empty() {
         // No matches — clear stale signals and exit pipeline
         let (cleared, _, _, _) = reconcile_corpus_signals::<ReleasePackingSignal>(
             read_only_db,
@@ -271,7 +264,7 @@ pub fn execute_pack_releases(
 
     log_general(format!(
         "[COMPUTE] PackReleases: {} inodes with external matches",
-        best_per_inode.len()
+        all_per_inode.len()
     ));
 
     // === Load corpus metadata ===
@@ -313,56 +306,71 @@ pub fn execute_pack_releases(
     let mut filtered_confidence = 0usize;
     let mut recording_parse_failures = 0usize;
 
-    for (inode, row) in &best_per_inode {
-        if row.confidence < min_confidence {
-            filtered_confidence += 1;
-            continue;
-        }
-
-        let recording_json = match read_only_db.get_mb_recording_cache(&row.recording_id) {
-            Ok(Some((json, _))) => json,
-            _ => {
-                recording_parse_failures += 1;
+    for (inode, rows) in &all_per_inode {
+        for row in rows {
+            if row.confidence < min_confidence {
+                filtered_confidence += 1;
                 continue;
             }
-        };
 
-        let recording = match musicbrainz::parse_recording(&recording_json) {
-            Ok(r) => r,
-            Err(_) => {
-                recording_parse_failures += 1;
+            // Skip recordings we've already parsed (same recording from different source rows)
+            if recording_releases.contains_key(&row.recording_id) {
+                // Still add to inode_recordings with this inode's confidence
+                inode_recordings
+                    .entry(*inode)
+                    .or_default()
+                    .push(RecordingMatch {
+                        recording_id: row.recording_id.clone(),
+                        confidence: row.confidence,
+                    });
                 continue;
             }
-        };
 
-        if let (Some(corpus_dur), Some(mb_dur)) = (
-            corpus_info.get(inode).and_then(|c| c.duration_ms),
-            recording.length,
-        ) {
-            if mb_dur > 0 {
-                let ratio = (corpus_dur as f64 - mb_dur as f64).abs() / mb_dur as f64;
-                if ratio > duration_tolerance_pct {
-                    filtered_duration += 1;
+            let recording_json = match read_only_db.get_mb_recording_cache(&row.recording_id) {
+                Ok(Some((json, _))) => json,
+                _ => {
+                    recording_parse_failures += 1;
                     continue;
                 }
+            };
+
+            let recording = match musicbrainz::parse_recording(&recording_json) {
+                Ok(r) => r,
+                Err(_) => {
+                    recording_parse_failures += 1;
+                    continue;
+                }
+            };
+
+            if let (Some(corpus_dur), Some(mb_dur)) = (
+                corpus_info.get(inode).and_then(|c| c.duration_ms),
+                recording.length,
+            ) {
+                if mb_dur > 0 {
+                    let ratio = (corpus_dur as f64 - mb_dur as f64).abs() / mb_dur as f64;
+                    if ratio > duration_tolerance_pct {
+                        filtered_duration += 1;
+                        continue;
+                    }
+                }
             }
-        }
 
-        for release_ref in &recording.releases {
-            all_release_ids.insert(release_ref.id.clone());
-        }
-        recording_releases.insert(
-            recording.id.clone(),
-            recording.releases.iter().map(|r| r.id.clone()).collect(),
-        );
+            for release_ref in &recording.releases {
+                all_release_ids.insert(release_ref.id.clone());
+            }
+            recording_releases.insert(
+                recording.id.clone(),
+                recording.releases.iter().map(|r| r.id.clone()).collect(),
+            );
 
-        inode_recordings
-            .entry(*inode)
-            .or_default()
-            .push(RecordingMatch {
-                recording_id: recording.id.clone(),
-                confidence: row.confidence,
-            });
+            inode_recordings
+                .entry(*inode)
+                .or_default()
+                .push(RecordingMatch {
+                    recording_id: recording.id.clone(),
+                    confidence: row.confidence,
+                });
+        }
     }
 
     log_general(format!(
@@ -486,18 +494,29 @@ pub fn execute_pack_releases(
         .collect();
     sender.write_packing_manifest(manifest_rows, witness);
 
-    // === Write candidate rows and determine which releases have candidates ===
-    let mut releases_with_candidates: HashSet<String> = HashSet::new();
-    let mut candidate_rows: Vec<write_thread::PackingCandidateRow> = Vec::new();
+    // === Compute directory file counts for cohesion scoring ===
+    let mut dir_total_files: HashMap<String, i32> = HashMap::new();
+    for info in corpus_info.values() {
+        *dir_total_files.entry(info.parent_dir.clone()).or_default() += 1;
+    }
+
+    // === Build inode→path lookup from all_per_inode ===
+    let inode_paths: HashMap<i64, String> = all_per_inode
+        .iter()
+        .map(|(inode, rows)| (*inode, rows[0].path.clone()))
+        .collect();
+
+    // === Write candidate rows, deduplicating per (release_id, inode) ===
+    // Keeps the highest-confidence recording for each pair.
+    let mut deduped: HashMap<(String, i64), write_thread::PackingCandidateRow> = HashMap::new();
 
     for (inode, rec_matches) in &inode_recordings {
         let corpus = corpus_info.get(inode);
-        // Get path from the original ExternalMatchRow data
-        let inode_path = best_per_inode
-            .iter()
-            .find(|(i, _)| i == inode)
-            .map(|(_, row)| row.path.clone())
+        let inode_path = inode_paths.get(inode).cloned().unwrap_or_default();
+        let parent_dir = corpus
+            .map(|c| c.parent_dir.clone())
             .unwrap_or_default();
+        let dir_file_count = dir_total_files.get(&parent_dir).copied().unwrap_or(1);
 
         for rec_match in rec_matches {
             if let Some(release_ids) = recording_releases.get(&rec_match.recording_id) {
@@ -505,46 +524,63 @@ pub fn execute_pack_releases(
                     if !release_tracklists.contains_key(release_id) {
                         continue;
                     }
-                    releases_with_candidates.insert(release_id.clone());
 
-                    let parent_dir = corpus
-                        .map(|c| c.parent_dir.clone())
-                        .unwrap_or_default();
-                    let duration_ms = corpus.and_then(|c| c.duration_ms);
-                    let tag_title = corpus
-                        .and_then(|c| c.tags.get("TITLE"))
-                        .and_then(|v| v.first())
-                        .cloned();
-                    let tag_artist = corpus
-                        .and_then(|c| c.tags.get("ARTIST"))
-                        .and_then(|v| v.first())
-                        .cloned();
-                    let tag_album = corpus
-                        .and_then(|c| c.tags.get("ALBUM"))
-                        .and_then(|v| v.first())
-                        .cloned();
-                    let tag_tracknumber = corpus
-                        .and_then(|c| c.tags.get("TRACKNUMBER"))
-                        .and_then(|v| v.first())
-                        .cloned();
+                    let key = (release_id.clone(), *inode);
+                    let entry = deduped.entry(key);
+                    use std::collections::hash_map::Entry;
+                    match entry {
+                        Entry::Occupied(mut e) => {
+                            if rec_match.confidence > e.get().confidence {
+                                e.get_mut().recording_id = rec_match.recording_id.clone();
+                                e.get_mut().confidence = rec_match.confidence;
+                            }
+                        }
+                        Entry::Vacant(e) => {
+                            let duration_ms = corpus.and_then(|c| c.duration_ms);
+                            let tag_title = corpus
+                                .and_then(|c| c.tags.get("TITLE"))
+                                .and_then(|v| v.first())
+                                .cloned();
+                            let tag_artist = corpus
+                                .and_then(|c| c.tags.get("ARTIST"))
+                                .and_then(|v| v.first())
+                                .cloned();
+                            let tag_album = corpus
+                                .and_then(|c| c.tags.get("ALBUM"))
+                                .and_then(|v| v.first())
+                                .cloned();
+                            let tag_tracknumber = corpus
+                                .and_then(|c| c.tags.get("TRACKNUMBER"))
+                                .and_then(|v| v.first())
+                                .cloned();
 
-                    candidate_rows.push(write_thread::PackingCandidateRow {
-                        release_id: release_id.clone(),
-                        inode: *inode,
-                        recording_id: rec_match.recording_id.clone(),
-                        confidence: rec_match.confidence,
-                        path: inode_path.clone(),
-                        parent_dir,
-                        duration_ms,
-                        tag_title,
-                        tag_artist,
-                        tag_album,
-                        tag_tracknumber,
-                    });
+                            e.insert(write_thread::PackingCandidateRow {
+                                release_id: release_id.clone(),
+                                inode: *inode,
+                                recording_id: rec_match.recording_id.clone(),
+                                confidence: rec_match.confidence,
+                                path: inode_path.clone(),
+                                parent_dir: parent_dir.clone(),
+                                duration_ms,
+                                tag_title,
+                                tag_artist,
+                                tag_album,
+                                tag_tracknumber,
+                                dir_file_count,
+                            });
+                        }
+                    }
                 }
             }
         }
     }
+
+    let mut releases_with_candidates: HashSet<String> = HashSet::new();
+    for ((release_id, _), _) in &deduped {
+        releases_with_candidates.insert(release_id.clone());
+    }
+    let candidate_rows: Vec<write_thread::PackingCandidateRow> =
+        deduped.into_values().collect();
 
     // Write candidates to intermediate table for Stage 2 consumption
     if !candidate_rows.is_empty() {
@@ -774,35 +810,38 @@ pub fn execute_score_release_candidates(
         }
     }
 
-    // Compute directory cohesion for this release's candidates
-    let mut dir_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
-    let mut dir_release_counts: HashMap<String, usize> = HashMap::new();
+    // Compute directory cohesion for this release's candidates.
+    // cohesion = (unique candidate inodes from this dir for this release) / (total audio files in dir)
+    // dir_file_count comes from the candidates table (computed in Stage 1).
+    let mut dir_candidate_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
+    let mut dir_total: HashMap<String, i32> = HashMap::new();
 
     for candidate in &candidates {
         if let Some(corpus) = corpus_info.get(&candidate.inode) {
-            dir_inodes
+            dir_candidate_inodes
                 .entry(corpus.parent_dir.clone())
                 .or_default()
                 .insert(candidate.inode);
-            *dir_release_counts
-                .entry(corpus.parent_dir.clone())
-                .or_default() += 1;
         }
+    }
+    for row in &candidate_rows {
+        dir_total.entry(row.parent_dir.clone()).or_insert(row.dir_file_count);
     }
 
     for candidate in &mut candidates {
         if let Some(corpus) = corpus_info.get(&candidate.inode) {
-            let dir_size = dir_inodes
+            let unique_candidates = dir_candidate_inodes
                 .get(&corpus.parent_dir)
                 .map(|s| s.len())
-                .unwrap_or(1);
-            let release_count = dir_release_counts
+                .unwrap_or(0);
+            let total_files = dir_total
                 .get(&corpus.parent_dir)
                 .copied()
-                .unwrap_or(0);
+                .unwrap_or(1)
+                .max(1);
 
             candidate.breakdown.directory_cohesion =
-                release_count as f64 / dir_size.max(1) as f64;
+                unique_candidates as f64 / total_files as f64;
             candidate.score = weighted_composite(&candidate.breakdown);
         }
     }

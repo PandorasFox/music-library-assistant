@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
-use crate::meta::computations::helpers::{ComputedAggregateSignal, reconcile_aggregate_signals};
+use crate::meta::computations::helpers::{self, ComputedAggregateSignal, reconcile_aggregate_signals};
 use crate::meta::signals::data::{
     TypedSignalWrite, TagCanonicitySignal, TagCanonicityData,
     InconsistentAlbumArtistSignal, InconsistentAlbumArtistData,
@@ -511,9 +511,9 @@ pub fn execute_detect_compound_tags_for_inode(
         }
     }
 
-    // If no compounds found, clear any existing signal
+    // If no compounds found, clear any existing signal (only if one exists)
     if compounds.is_empty() {
-        sender.clear_corpus_signal::<CompoundTagSignal>(inode, witness);
+        helpers::drop_stale_corpus_signal::<CompoundTagSignal>(read_only_db, &sender, inode, witness);
         sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
@@ -542,12 +542,17 @@ pub fn execute_detect_compound_tags_for_inode(
             .collect();
     }
 
-    // Emit per-file CompoundTag signal
-    sender.write_typed_signal(TypedSignalWrite::CompoundTag(CompoundTagSignal {
+    // Emit per-file CompoundTag signal (skip if unchanged via hash comparison)
+    let signal = TypedSignalWrite::CompoundTag(CompoundTagSignal {
         inode,
         path: corpus_path,
         compounds,
-    }), witness);
+    });
+    let new_hash = signal.content_hash() as i64;
+    let existing_hash = read_only_db.corpus_signal_inode_hash::<CompoundTagSignal>(inode);
+    if existing_hash != Some(new_hash) {
+        sender.write_typed_signal(signal, witness);
+    }
 
     // Clear dirty flag after successful processing
     sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);

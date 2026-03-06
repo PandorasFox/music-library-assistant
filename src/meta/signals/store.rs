@@ -71,6 +71,16 @@ pub trait CorpusSignalStore: Sized {
         let _ = conn;
         Ok(HashMap::new())
     }
+
+    /// Query the data_hash for a single inode, if the signal exists.
+    ///
+    /// Default impl uses TABLE_NAME for a point query. BLOB signal types
+    /// get this for free from their `data_hash` column.
+    fn query_inode_hash(conn: &Connection, inode: i64) -> Result<Option<i64>> {
+        use rusqlite::OptionalExtension;
+        let sql = format!("SELECT data_hash FROM {} WHERE inode = ?1", Self::TABLE_NAME);
+        conn.query_row(&sql, [inode], |row| row.get(0)).optional()
+    }
 }
 
 /// Semantic-keyed aggregate signal storage.

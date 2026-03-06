@@ -373,6 +373,11 @@ impl<'a> ReadOnlyDb<'a> {
             .map_err(|e| anyhow::anyhow!("Failed to query signal inode hashes for {}: {}", S::TABLE_NAME, e))
     }
 
+    /// Query the data_hash for a single inode in a corpus signal table.
+    pub fn corpus_signal_inode_hash<S: crate::meta::signals::store::CorpusSignalStore>(&self, inode: i64) -> Option<i64> {
+        S::query_inode_hash(self.db.conn(), inode).ok().flatten()
+    }
+
     /// Check if a TypedSignalWrite already exists in its typed table.
     pub fn signal_exists(&self, signal: &crate::meta::signals::data::TypedSignalWrite) -> bool {
         signal.exists(self.db.conn())

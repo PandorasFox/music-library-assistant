@@ -519,7 +519,7 @@ impl App {
                     .unwrap_or_default()
             }).recv();
             let preview = deploy_modal::DeploymentPreviewState::new(data);
-            self.view = ActiveView::Deploy(deploy_modal::DeployViewState::Preview(preview));
+            self.view = ActiveView::Deploy(deploy_modal::DeployViewState::Preview(Box::new(preview)));
         } else {
             let counts = deploy_status
                 .map(|s| s.library_file_counts)

@@ -256,7 +256,7 @@ impl App {
 
         drain_input_buffer();
 
-        self.push_and_switch(SuspendTarget::EmbeddedTagEditor(editor));
+        self.push_and_switch(SuspendTarget::EmbeddedTagEditor(Box::new(editor)));
     }
 
     /// Start unified tag editor for aggregated bulk editing from tag search results

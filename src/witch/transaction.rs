@@ -87,7 +87,7 @@ fn coalesce_dir_config_edits(mutations: Vec<Mutation>) -> Vec<Mutation> {
 
     for mutation in mutations {
         match mutation {
-            Mutation::ApplyDirConfigEdit(m) => dir_edits.push(m),
+            Mutation::ApplyDirConfigEdit(m) => dir_edits.push(*m),
             m => other.push(m),
         }
     }
@@ -95,7 +95,7 @@ fn coalesce_dir_config_edits(mutations: Vec<Mutation>) -> Vec<Mutation> {
     if dir_edits.len() <= 1 {
         // Nothing to coalesce — put back as-is
         for m in dir_edits {
-            other.push(Mutation::ApplyDirConfigEdit(m));
+            other.push(Mutation::ApplyDirConfigEdit(Box::new(m)));
         }
         return other;
     }
@@ -128,12 +128,12 @@ fn coalesce_dir_config_edits(mutations: Vec<Mutation>) -> Vec<Mutation> {
         })
         .collect();
 
-    other.push(Mutation::ApplyBatchDirConfigEdits(
+    other.push(Mutation::ApplyBatchDirConfigEdits(Box::new(
         ApplyBatchDirConfigEditsMutation {
             edits: entries,
             new_config: merged_config,
         },
-    ));
+    )));
     other
 }
 

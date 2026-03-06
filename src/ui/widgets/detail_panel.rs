@@ -40,21 +40,33 @@ pub struct PanelButton<'a> {
     pub selected: bool,
 }
 
+/// Configuration for rendering a detail panel.
+pub struct DetailPanelParams<'a> {
+    pub title: &'a str,
+    pub border_color: Color,
+    pub fields: &'a [DetailField<'a>],
+    pub field_cursor: usize,
+    pub buttons: &'a [PanelButton<'a>],
+    pub focus_on_buttons: bool,
+    pub hint: Option<&'a str>,
+}
+
 /// Renders a bordered detail panel with fields, buttons, and hint line.
-pub fn render_detail_panel(
-    f: &mut Frame,
-    area: Rect,
-    title: &str,
-    border_color: Color,
-    fields: &[DetailField],
-    field_cursor: usize,
-    buttons: &[PanelButton],
-    focus_on_buttons: bool,
-    hint: Option<&str>,
-) {
+pub fn render_detail_panel(f: &mut Frame, area: Rect, params: &DetailPanelParams<'_>) {
+    let DetailPanelParams {
+        title,
+        border_color,
+        fields,
+        field_cursor,
+        buttons,
+        focus_on_buttons,
+        hint,
+    } = params;
+    let field_cursor = *field_cursor;
+    let focus_on_buttons = *focus_on_buttons;
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color))
+        .border_style(Style::default().fg(*border_color))
         .title(title.to_string());
 
     let inner = block.inner(area);

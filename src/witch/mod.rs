@@ -1434,7 +1434,7 @@ impl Witch {
         }
 
         for mutation in mutations {
-            let task = Task::Mutation(mutation);
+            let task = Task::Mutation(Box::new(mutation));
             let task_label = self.resolve_label(label.clone(), &task);
             self.work_state.inc_label(&task_label);
             self.spawn_task(task, task_label, queue_time);
@@ -1455,7 +1455,7 @@ impl Witch {
         // Spawned mutations inherit the working state from their parent
         // (transition_to_working already happened when parent was queued)
 
-        let task = Task::Mutation(mutation);
+        let task = Task::Mutation(Box::new(mutation));
         let task_label = TaskLabel::from_task(&task).0;
 
         self.work_state.inc_queued(1);

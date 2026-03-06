@@ -259,7 +259,7 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     /// Get all audio files with their tags (for search functionality).
-    pub fn get_all_audio_files_with_tags(&self, source: super::types::Zone, with_fingerprints: bool) -> Result<Vec<(super::types::AudioFile, std::collections::HashMap<String, Vec<String>>)>> {
+    pub fn get_all_audio_files_with_tags(&self, source: super::types::Zone, with_fingerprints: bool) -> Result<Vec<files::AudioFileWithTags>> {
         self.db.get_all_audio_files_with_tags(source, with_fingerprints)
     }
 
@@ -752,7 +752,7 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     /// Read all release packing signal assignments.
-    pub fn get_release_packing_assignments(&self) -> Result<Vec<(i64, String, String, u32, u32)>> {
+    pub fn get_release_packing_assignments(&self) -> Result<Vec<external::PackingAssignment>> {
         self.db.get_release_packing_assignments()
     }
 
@@ -761,7 +761,7 @@ impl<'a> ReadOnlyDb<'a> {
         &self,
         parent_dir: &str,
         assigned_inodes: &std::collections::HashSet<i64>,
-    ) -> Result<Vec<(i64, String, Option<String>, Option<i64>)>> {
+    ) -> Result<Vec<external::UnassignedAudioFile>> {
         self.db.get_unassigned_audio_in_directory(parent_dir, assigned_inodes)
     }
 

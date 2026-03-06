@@ -1078,6 +1078,7 @@ impl SignalWriteSender {
     /// Index an image file entry in the files table.
     ///
     /// Used during corpus scanning to register sidecar image files.
+    #[allow(clippy::too_many_arguments)] // channel-send boundary; args map 1:1 to DB columns
     pub fn index_image_file(
         &self,
         path: &str,
@@ -1220,6 +1221,7 @@ impl SignalWriteSender {
     ///
     /// Called by the Witch when draining fetch results, not from computation
     /// or mutation contexts, so no witness is required.
+    #[allow(clippy::too_many_arguments)] // channel-send boundary; args map 1:1 to DB columns
     pub fn insert_external_match(
         &self,
         inode: i64,
@@ -2549,7 +2551,8 @@ fn execute_update_track_path_with_metadata(
     }
 
     // Get old audio_info to copy to new inode
-    let (duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures): (Option<i64>, Option<i32>, Option<i32>, Option<Vec<u8>>, i32) =
+    type AudioInfoRow = (Option<i64>, Option<i32>, Option<i32>, Option<Vec<u8>>, i32);
+    let (duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures): AudioInfoRow =
         tx.query_row(
             "SELECT duration_ms, bitrate_kbps, sample_rate, fingerprint, has_pictures FROM audio_info WHERE inode = ?1",
             params![old_inode],
@@ -2877,6 +2880,7 @@ fn execute_delete_library_file(
 }
 
 /// Execute InsertExternalMatch: insert a match from an external API.
+#[allow(clippy::too_many_arguments)] // args map 1:1 to SQL columns
 fn execute_insert_external_match(
     db: &Database,
     inode: i64,

@@ -245,11 +245,11 @@ impl App {
                 if let Some((original_kdl, old_config, new_config)) = mutation_data {
                     let Some(g) = gesture else { return };
 
-                    let mutation = Mutation::ApplyConfigEdits(ApplyConfigEditsMutation {
+                    let mutation = Mutation::ApplyConfigEdits(Box::new(ApplyConfigEditsMutation {
                         original_kdl,
                         old_config,
                         new_config,
-                    });
+                    }));
 
                     let open_txn = self.open_txn_mode();
                     if !open_txn {
@@ -1117,14 +1117,14 @@ impl App {
             cfg
         };
 
-        let mutation = crate::meta::mutations::Mutation::ApplyDirConfigEdit(
+        let mutation = crate::meta::mutations::Mutation::ApplyDirConfigEdit(Box::new(
             crate::meta::mutations::dir_config_edit::ApplyDirConfigEditMutation {
                 source_path: source_path.clone(),
                 old_dir,
                 new_dir,
                 new_config,
             },
-        );
+        ));
 
         let key = DecisionKey::DirConfigEdit {
             source_path: source_path.clone(),

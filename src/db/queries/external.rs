@@ -10,6 +10,12 @@ use std::path::Path;
 
 use super::Database;
 
+/// A release packing assignment row: (inode, path, release_id, medium_position, track_position).
+pub type PackingAssignment = (i64, String, String, u32, u32);
+
+/// An unassigned corpus audio file in a directory: (inode, path, fingerprint_hex, duration_ms).
+pub type UnassignedAudioFile = (i64, String, Option<String>, Option<i64>);
+
 /// A row from external_matches joined with files, for signal derivation.
 pub struct ExternalMatchRow {
     pub inode: i64,
@@ -596,7 +602,7 @@ impl Database {
     /// Used by elimination matching to understand current assignments.
     pub fn get_release_packing_assignments(
         &self,
-    ) -> Result<Vec<(i64, String, String, u32, u32)>> {
+    ) -> Result<Vec<PackingAssignment>> {
         let mut stmt = self.conn().prepare(
             "SELECT inode, path, data FROM signal_release_packing"
         )?;
@@ -625,7 +631,7 @@ impl Database {
         &self,
         parent_dir: &str,
         assigned_inodes: &std::collections::HashSet<i64>,
-    ) -> Result<Vec<(i64, String, Option<String>, Option<i64>)>> {
+    ) -> Result<Vec<UnassignedAudioFile>> {
         let mut stmt = self.conn().prepare(
             "SELECT f.inode, f.path, hex(a.fingerprint), a.duration_ms \
              FROM files f \

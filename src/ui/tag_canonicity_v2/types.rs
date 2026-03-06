@@ -13,6 +13,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+/// Pending tag edits from an embedded tag editor decision.
+/// Maps inode → list of (tag_name, old_value, new_value) triples.
+pub type PendingTagEdits = HashMap<i64, Vec<(String, String, String)>>;
+
 use crate::db::types::Zone;
 use crate::meta::signals::data::{
     InconsistentAlbumArtistSignal, InboxTagCanonicitySignal, TagCanonicitySignal,
@@ -276,7 +280,7 @@ pub struct TagCanonicalityStateV2 {
     /// Scroll offset for files list
     pub file_scroll: usize,
     /// Pending tag edits from an embedded tag editor decision (inode → [(tag, old, new)])
-    pub pending_tag_edits: Option<HashMap<i64, Vec<(String, String, String)>>>,
+    pub pending_tag_edits: Option<PendingTagEdits>,
     /// Whether this modal is operating on album_artist (enables ^F flag action)
     pub is_album_artist_mode: bool,
     /// Whether the flag confirmation popup is showing

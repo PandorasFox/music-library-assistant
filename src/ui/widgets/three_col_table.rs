@@ -5,6 +5,9 @@
 //! within columns, and a 20/40/40 (or configurable) column ratio.
 
 use ratatui::layout::Rect;
+
+/// A wrapped row: three columns of wrapped text lines, plus the computed row height.
+type WrappedRow = (Vec<String>, Vec<String>, Vec<String>, usize);
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -190,7 +193,7 @@ impl ThreeColTable {
     fn compute_wrapped_rows(
         &self,
         col_widths: [usize; 3],
-    ) -> Vec<(Vec<String>, Vec<String>, Vec<String>, usize)> {
+    ) -> Vec<WrappedRow> {
         self.rows
             .iter()
             .map(|row| {

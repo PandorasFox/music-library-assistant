@@ -80,7 +80,7 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
                     self.source_path
                 ));
                 MutationResult {
-                    _mutation: super::Mutation::ApplyDirConfigEdit(self.clone()),
+                    _mutation: super::Mutation::ApplyDirConfigEdit(Box::new(self.clone())),
                     success: true,
                     error: None,
                     _duration_ms: 0,
@@ -95,7 +95,7 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
                     e
                 ));
                 MutationResult {
-                    _mutation: super::Mutation::ApplyDirConfigEdit(self.clone()),
+                    _mutation: super::Mutation::ApplyDirConfigEdit(Box::new(self.clone())),
                     success: false,
                     error: Some(format!("Dir config write failed: {:#}", e)),
                     _duration_ms: 0,
@@ -265,7 +265,7 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
                     self.edits.len()
                 ));
                 MutationResult {
-                    _mutation: super::Mutation::ApplyBatchDirConfigEdits(self.clone()),
+                    _mutation: super::Mutation::ApplyBatchDirConfigEdits(Box::new(self.clone())),
                     success: true,
                     error: None,
                     _duration_ms: 0,
@@ -280,7 +280,7 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
                     e
                 ));
                 MutationResult {
-                    _mutation: super::Mutation::ApplyBatchDirConfigEdits(self.clone()),
+                    _mutation: super::Mutation::ApplyBatchDirConfigEdits(Box::new(self.clone())),
                     success: false,
                     error: Some(format!("Batch dir config write failed: {:#}", e)),
                     _duration_ms: 0,

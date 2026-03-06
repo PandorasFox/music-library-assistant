@@ -180,7 +180,7 @@ pub enum InodeAwarenessLevel {
 #[derive(Debug, Clone)]
 pub enum Task {
     /// A state-altering mutation (requires ConfirmationGesture to stage).
-    Mutation(Mutation),
+    Mutation(Box<Mutation>),
     /// A read-only computation that emits signals (no gesture required).
     Computation(Computation),
     /// A database maintenance task (requires operator approval, bypasses accepting_mutations).

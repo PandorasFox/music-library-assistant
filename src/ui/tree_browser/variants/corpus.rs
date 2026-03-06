@@ -15,7 +15,7 @@ use ratatui::Frame;
 use crate::ui::helpers::truncate_left;
 use crate::ui::input::InputAction;
 use crate::ui::widgets::TextInputState;
-use crate::ui::widgets::detail_panel::{DetailField, DetailWidget, PanelButton, render_detail_panel};
+use crate::ui::widgets::detail_panel::{DetailField, DetailPanelParams, DetailWidget, PanelButton, render_detail_panel};
 
 use crate::ui::tree_browser::actions::TreeBrowserAction;
 use crate::ui::tree_browser::config::CorpusBrowserConfig;
@@ -203,17 +203,15 @@ impl DirConfigPanelState {
             Some("Enter/Space toggle  Tab buttons")
         };
 
-        render_detail_panel(
-            f,
-            area,
-            &title,
+        render_detail_panel(f, area, &DetailPanelParams {
+            title: &title,
             border_color,
-            &fields,
-            self.field_cursor,
-            &buttons,
-            self.focus == PanelFocus::Buttons,
+            fields: &fields,
+            field_cursor: self.field_cursor,
+            buttons: &buttons,
+            focus_on_buttons: self.focus == PanelFocus::Buttons,
             hint,
-        );
+        });
     }
 }
 

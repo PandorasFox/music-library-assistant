@@ -23,7 +23,7 @@ use super::App;
 pub(crate) enum SuspendTarget {
     TransactionReview(transaction_review::TransactionReviewState),
     ProgressiveWork(progressive_worker::ProgressiveWorkerState),
-    EmbeddedTagEditor(tag_editor::UnifiedTagEditorState),
+    EmbeddedTagEditor(Box<tag_editor::UnifiedTagEditorState>),
 }
 
 impl SuspendTarget {
@@ -31,7 +31,7 @@ impl SuspendTarget {
         match self {
             Self::TransactionReview(s) => ActiveView::TransactionReview(s),
             Self::ProgressiveWork(s) => ActiveView::ProgressiveWork(s),
-            Self::EmbeddedTagEditor(s) => ActiveView::UnifiedTagEditor(s),
+            Self::EmbeddedTagEditor(s) => ActiveView::UnifiedTagEditor(*s),
         }
     }
 }

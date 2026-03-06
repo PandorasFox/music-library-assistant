@@ -37,6 +37,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
+/// A cohesive directory mapping: (directory_path, release_id, filled_slots).
+/// Used by EliminateByDirectory to represent directories where all assigned
+/// files point to exactly one release.
+type CohesiveDir = (String, String, HashSet<(u32, u32)>);
+
 use crate::db::queries::external::ExternalMatchRow;
 use crate::db::types::Zone;
 use crate::db::write_thread::{self, PackingScoreRow};
@@ -188,6 +193,7 @@ fn weighted_composite(b: &PackingScoreBreakdown) -> f64 {
 /// Uses the Kuhn-Munkres algorithm on a cost matrix built from candidate scores.
 /// Matrix sizes are small (99.6% of releases have <100 score entries), so O(n³)
 /// is negligible.
+#[allow(clippy::needless_range_loop)] // Hungarian algorithm uses 1-based index arithmetic
 fn hungarian_assignment(candidates: &[CandidateAssignment]) -> HashSet<(i64, (u32, u32))> {
     // Collect unique inodes and slots
     let mut inode_set: Vec<i64> = candidates.iter().map(|c| c.inode).collect();
@@ -1249,6 +1255,7 @@ pub fn execute_resolve_release_conflicts(
 /// For directories where all AcoustID-assigned inodes map to a single release,
 /// finds unassigned audio files and maps them to unfilled track slots.
 /// Records (fingerprint, recording_id) pairs for future AcoustID submission.
+#[allow(clippy::needless_range_loop)] // Hungarian algorithm uses 1-based index arithmetic
 pub fn execute_eliminate_by_directory(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
@@ -1323,7 +1330,7 @@ pub fn execute_eliminate_by_directory(
     }
 
     // Filter to directories mapping to exactly one release
-    let cohesive_dirs: Vec<(String, String, HashSet<(u32, u32)>)> = dir_states
+    let cohesive_dirs: Vec<CohesiveDir> = dir_states
         .into_iter()
         .filter(|(_, state)| state.release_ids.len() == 1)
         .map(|(dir, state)| {

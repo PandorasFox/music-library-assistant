@@ -45,7 +45,7 @@ pub enum DeployViewState {
         library_file_counts: Vec<(String, usize)>,
     },
     /// Actionable deploy preview (existing UI).
-    Preview(DeploymentPreviewState),
+    Preview(Box<DeploymentPreviewState>),
 }
 
 impl DeployViewState {

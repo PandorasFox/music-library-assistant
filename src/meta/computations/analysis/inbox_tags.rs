@@ -18,6 +18,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
+/// A list of (tag_name, normalization_fn) pairs used for inbox tag canonicity checks.
+type TagNormalizer<'a> = Vec<(&'a str, Box<dyn Fn(&str) -> String>)>;
+
 use crate::db::ReadOnlyDb;
 use crate::db::types::Zone;
 use crate::corpus::health::normalization::{
@@ -79,7 +82,7 @@ pub fn execute_detect_inbox_tag_canonicity(
 
     let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
 
-    let tag_fields: Vec<(&str, Box<dyn Fn(&str) -> String>)> = vec![
+    let tag_fields: TagNormalizer<'_> = vec![
         ("artist", Box::new(|s: &str| normalize_artist(s))),
         (
             "album_artist",

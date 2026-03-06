@@ -44,7 +44,7 @@ impl MutationExecutor for ApplyConfigEditsMutation {
             Ok(()) => {
                 crate::logging::log_general("[CONFIG] Config written to disk successfully");
                 MutationResult {
-                    _mutation: super::Mutation::ApplyConfigEdits(self.clone()),
+                    _mutation: super::Mutation::ApplyConfigEdits(Box::new(self.clone())),
                     success: true,
                     error: None,
                     _duration_ms: 0, // Overwritten by caller
@@ -56,7 +56,7 @@ impl MutationExecutor for ApplyConfigEditsMutation {
             Err(e) => {
                 crate::logging::log_error(format!("[CONFIG] Config write failed: {:#}", e));
                 MutationResult {
-                    _mutation: super::Mutation::ApplyConfigEdits(self.clone()),
+                    _mutation: super::Mutation::ApplyConfigEdits(Box::new(self.clone())),
                     success: false,
                     error: Some(format!("Config write failed: {:#}", e)),
                     _duration_ms: 0,

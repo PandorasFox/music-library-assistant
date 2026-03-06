@@ -5,6 +5,10 @@ use rusqlite::params;
 
 use super::Database;
 
+/// A row from the album collision detection query:
+/// (album, artist_context, isrc, catalog_number, year, date).
+pub type AlbumCollisionRow = (String, String, String, String, String, String);
+
 impl Database {
     // ========================================================================
     // Tag Collision Detection Queries (for canonicalization signals)
@@ -47,7 +51,7 @@ impl Database {
     /// - BARCODE
     pub fn get_album_data_for_collision_detection(
         &self,
-    ) -> Result<Vec<(String, String, String, String, String, String)>> {
+    ) -> Result<Vec<AlbumCollisionRow>> {
         use mm_utils::tag_names::compound_tag_sql_in;
 
         let album_artist_in = compound_tag_sql_in("ALBUM", "ARTIST");

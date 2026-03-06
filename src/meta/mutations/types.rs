@@ -321,14 +321,14 @@ pub enum Mutation {
     // Config Operations (struct-backed — see config_edit.rs for trait impl)
     // ========================================================================
     /// Apply edited config to disk (comment-preserving KDL modification).
-    ApplyConfigEdits(ApplyConfigEditsMutation),
+    ApplyConfigEdits(Box<ApplyConfigEditsMutation>),
 
     /// Apply a source directory config edit to dirs.kdl.
-    ApplyDirConfigEdit(ApplyDirConfigEditMutation),
+    ApplyDirConfigEdit(Box<ApplyDirConfigEditMutation>),
 
     /// Batch-apply multiple source directory config edits to dirs.kdl atomically.
     /// Produced by coalescing individual ApplyDirConfigEdit mutations at commit time.
-    ApplyBatchDirConfigEdits(ApplyBatchDirConfigEditsMutation),
+    ApplyBatchDirConfigEdits(Box<ApplyBatchDirConfigEditsMutation>),
 }
 
 impl Mutation {
@@ -359,9 +359,9 @@ impl Mutation {
             Mutation::EmitExpectedDuplicate(m) => m,
             Mutation::EmitExpectedMissingTag(m) => m,
             Mutation::DropExternalMatch(m) => m,
-            Mutation::ApplyConfigEdits(m) => m,
-            Mutation::ApplyDirConfigEdit(m) => m,
-            Mutation::ApplyBatchDirConfigEdits(m) => m,
+            Mutation::ApplyConfigEdits(m) => m.as_ref(),
+            Mutation::ApplyDirConfigEdit(m) => m.as_ref(),
+            Mutation::ApplyBatchDirConfigEdits(m) => m.as_ref(),
         }
     }
 

@@ -54,7 +54,7 @@ pub(super) fn execute_task(task: Task, label: String, queue_time: Instant) -> Ta
     let kind = TaskKind::from_task(&task);
 
     let mut result = match task {
-        Task::Mutation(mutation) => execute_mutation(mutation, label, queue_wait_ms),
+        Task::Mutation(mutation) => execute_mutation(*mutation, label, queue_wait_ms),
         Task::Computation(computation) => execute_computation(computation, label, queue_wait_ms),
         Task::Maintenance(task) => execute_maintenance(task, label, queue_wait_ms),
         Task::ExternalFetch(fetch_task) => execute_external_fetch(fetch_task, label, queue_wait_ms),

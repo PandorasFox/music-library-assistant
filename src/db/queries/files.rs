@@ -14,6 +14,11 @@ use std::collections::{HashMap, HashSet};
 use super::Database;
 use crate::db::types::{AudioFile, AudioInfo, AudioTag, FileEntry, Zone};
 
+/// An audio file paired with its tag map (tag name → values).
+/// Tag names are uppercased; values are collected into Vec since a
+/// single tag name can have multiple values (e.g. multiple genres).
+pub type AudioFileWithTags = (AudioFile, HashMap<String, Vec<String>>);
+
 // ============================================================================
 // Fingerprint Conversion Helpers
 // ============================================================================
@@ -702,7 +707,7 @@ impl Database {
     ///
     /// Pass `with_fingerprints: false` if the caller does not need fingerprint
     /// data — see `get_all_audio_files` for the rationale.
-    pub fn get_all_audio_files_with_tags(&self, zone: Zone, with_fingerprints: bool) -> Result<Vec<(AudioFile, HashMap<String, Vec<String>>)>> {
+    pub fn get_all_audio_files_with_tags(&self, zone: Zone, with_fingerprints: bool) -> Result<Vec<AudioFileWithTags>> {
         let files = self.get_all_audio_files(zone, with_fingerprints)?;
         let mut results = Vec::new();
         for file in files {

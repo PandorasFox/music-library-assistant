@@ -12,6 +12,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// Pending tag edits from an embedded tag editor decision.
+/// Maps inode → list of (tag_name, old_value, new_value) triples.
+pub type PendingTagEdits = HashMap<i64, Vec<(String, String, String)>>;
+
 use crate::db::types::Zone;
 use crate::meta::signals::data::CompoundGroup;
 use crate::db::ReadOnlyDb;
@@ -211,7 +215,7 @@ pub struct CompoundSplitStateV2 {
     pub confirming_bulk_stage: bool,
 
     /// Pending tag edits from an embedded tag editor decision (inode → [(tag, old, new)])
-    pub pending_tag_edits: Option<HashMap<i64, Vec<(String, String, String)>>>,
+    pub pending_tag_edits: Option<PendingTagEdits>,
     /// Click targets for parts list items (set during render).
     pub part_click_targets: crate::ui::widgets::ListClickTargets,
     /// Click targets for file list items (set during render).

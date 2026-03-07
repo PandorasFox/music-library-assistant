@@ -663,12 +663,7 @@ fn render(f: &mut Frame, app: &mut App) {
 pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging::LogOp>) -> Result<()> {
     crate::logging::log_general("=== MM startup ===");
 
-    // Init the image picker BEFORE crossterm takes over stdin.
-    // Picker::from_query_stdio() spawns a thread that reads raw bytes from stdin
-    // to probe terminal graphics capabilities. If the terminal response is slow
-    // (SSH, tmux), the thread outlives its 1s timeout and keeps reading stdin,
-    // racing with crossterm's event reader and eating ~50% of keypresses.
-    // By running the probe before raw mode, the thread has exclusive stdin access.
+    // Init the image picker (env-based detection, no stdin probing).
     let art_picker = widgets::AlbumArtPicker::init();
 
     enable_raw_mode()?;

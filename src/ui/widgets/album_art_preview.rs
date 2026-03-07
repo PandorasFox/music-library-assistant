@@ -32,13 +32,21 @@ pub struct AlbumArtPicker {
 }
 
 impl AlbumArtPicker {
-    /// Initialize the picker by querying terminal capabilities.
+    /// Initialize the picker using environment-based protocol detection.
     ///
-    /// Must be called after entering alternate screen but before reading events.
-    /// Returns a picker with halfblock fallback if protocol detection fails.
+    /// Uses `from_fontsize()` which detects kitty/iterm2/sixel from env vars
+    /// without spawning threads or touching stdin. `from_query_stdio()` spawns
+    /// a thread that does blocking reads on stdin with a 1s timeout — if the
+    /// terminal is slow to respond (SSH, tmux), the thread outlives the timeout
+    /// and competes with crossterm's event reader for stdin, stealing ~2/3 of
+    /// keypresses. When it eventually finishes, it also restores pre-raw termios
+    /// settings, clobbering crossterm's raw mode entirely.
     pub fn init() -> Self {
-        let picker = Picker::from_query_stdio().ok();
-        Self { picker }
+        // (10, 20) is ratatui-image's own default when font size can't be queried.
+        // Exact font size only matters for pixel-perfect protocol rendering; for
+        // halfblocks it's irrelevant, and for kitty/sixel it's close enough.
+        let picker = Picker::from_fontsize((10, 20));
+        Self { picker: Some(picker) }
     }
 
     /// Create a new stateful protocol for rendering an image.

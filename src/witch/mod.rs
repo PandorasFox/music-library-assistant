@@ -163,7 +163,7 @@ pub struct Witch {
     pending_transaction: Option<PendingTransaction>,
 
     /// Remaining mutation phases from a staged transaction.
-    /// Populated by `confirm_transaction()`, drained by `transition_to_completed()`.
+    /// Populated by `confirm_transaction()`, drained by `update_state()`.
     pending_mutation_phases: VecDeque<(crate::meta::mutations::MutationExecutionStage, Vec<Mutation>)>,
 
     /// Remaining computation phases from a staged pipeline (e.g., release packing).
@@ -656,13 +656,37 @@ impl Witch {
             }
             WorkState::Working { processed, .. } => {
                 // Phase advancement: if all in-flight tasks have landed and the
-                // db_thread has drained, but deferred computation phases are
-                // waiting, pop and spawn the next phase.  This must happen
-                // *before* the has_pending() gate because deferred phases are
-                // accumulated mid-session (from Result::pipeline returns) and
-                // would otherwise deadlock: has_pending() sees them and blocks
-                // transition_to_completed(), which is the only place that used
-                // to drain them.
+                // db_thread has drained, but pending pipeline phases are waiting,
+                // pop and spawn the next phase.  This must happen *before* the
+                // has_pending() gate because has_pending() includes these phases
+                // in its check, which would otherwise deadlock: has_pending()
+                // returns true → transition_to_completed() never called → phases
+                // never drained.
+                //
+                // Mutation phases (from staged transactions) take priority over
+                // computation phases (from pipeline orchestrators).
+                if self.work_state.in_flight() == 0
+                    && self.db_thread_handle.queue_empty()
+                    && !self.pending_mutation_phases.is_empty()
+                {
+                    let (stage, mutations) = self.pending_mutation_phases.pop_front().unwrap();
+                    crate::logging::log_mutation(format!(
+                        "[TRANSACTION] Phase advancement: draining db_thread, then queueing {:?} ({} mutations). \
+                         {} phase(s) remaining.",
+                        stage, mutations.len(), self.pending_mutation_phases.len()
+                    ));
+                    write_thread::wait_for_queue_drain();
+
+                    // Extract label from current WorkState (preserves session label)
+                    let label = if let WorkState::Working { ref label, .. } = self.work_state {
+                        label.clone()
+                    } else {
+                        None
+                    };
+                    self.queue_mutations_internal(mutations, label);
+                    return; // Stay in Working — more work queued
+                }
+
                 if self.work_state.in_flight() == 0
                     && self.db_thread_handle.queue_empty()
                     && !self.pending_computation_phases.is_empty()
@@ -699,30 +723,9 @@ impl Witch {
     }
 
     fn transition_to_completed(&mut self) {
-        // Phase advancement: if there are more mutation phases from a staged
-        // transaction, drain the db_thread queue, then queue the next phase.
-        // Stay in Working state — more work to do.
-        if let Some((stage, mutations)) = self.pending_mutation_phases.pop_front() {
-            crate::logging::log_mutation(format!(
-                "[TRANSACTION] Phase advancement: draining db_thread, then queueing {:?} ({} mutations). \
-                 {} phase(s) remaining.",
-                stage, mutations.len(), self.pending_mutation_phases.len()
-            ));
-            write_thread::wait_for_queue_drain();
-
-            // Extract label from current WorkState before queueing (preserves session label)
-            let label = if let WorkState::Working { ref label, .. } = self.work_state {
-                label.clone()
-            } else {
-                None
-            };
-            self.queue_mutations_internal(mutations, label);
-            return; // Don't transition to Done — more phases to execute
-        }
-
-        // NOTE: Deferred computation phases (pending_computation_phases) are now
-        // drained in update_state() before the has_pending() gate.  By the time
-        // we reach transition_to_completed(), they are guaranteed empty.
+        // NOTE: Both pending_mutation_phases and pending_computation_phases are
+        // now drained in update_state() before the has_pending() gate.  By the
+        // time we reach transition_to_completed(), they are guaranteed empty.
 
         // Mutations with non-empty scope need re-awakening. Mutations with EMPTY
         // scope (AcknowledgeMtimeOnly, operational config edits) don't — their

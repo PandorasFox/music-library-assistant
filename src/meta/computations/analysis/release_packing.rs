@@ -1,48 +1,37 @@
 //! Release bin-packing staged pipeline.
 //!
-//! Five-stage pipeline for assigning corpus files to MusicBrainz releases:
+//! Four-stage pipeline for assigning corpus files to MusicBrainz releases:
 //!
 //! ```text
 //! Stage 1: PackReleases (orchestrator)
 //!     │  Loads external matches, identifies releases, writes manifest
 //!     │  Spawns N ScoreReleaseCandidates
-//!     │  Defers [Stage 3: Resolve, Stage 4: Eliminate, Stage 5: Analyze]
+//!     │  Defers [Stage 3: Resolve, Stage 4: Analyze]
 //!     ▼
 //! Stage 2: ScoreReleaseCandidates { release_id } × N  (parallel)
-//!     │  Each scores its release's tracklist against corpus inodes
-//!     │  Optimal per-release assignment via Hungarian algorithm
+//!     │  AcoustID Hungarian matching + per-release elimination
+//!     │  Each release builds its maximally-packed proposal independently
 //!     │  Writes results to intermediate table
 //!     │  ═══════ BARRIER ═══════
 //!     ▼
 //! Stage 3: ResolveReleaseConflicts
-//!     │  Greedy global resolution (cross-release conflict handling)
-//!     │  Emits ReleasePackingSignal (match_method: AcoustId) per assigned inode
+//!     │  MIS + per-inode-best resolution on fully-packed proposals
+//!     │  Emits ReleasePackingSignal per assigned inode
+//!     │  Records pending AcoustID submissions for elimination winners
 //!     │  ═══════ BARRIER ═══════
 //!     ▼
-//! Stage 4: EliminateByDirectory
-//!     │  For cohesive directories (all assigned to one release),
-//!     │  assigns remaining files to unfilled slots by elimination
-//!     │  Emits ReleasePackingSignal (match_method: Elimination)
-//!     │  Records pending AcoustID submissions
-//!     │  ═══════ BARRIER ═══════
-//!     ▼
-//! Stage 5: AnalyzeReleaseGaps
+//! Stage 4: AnalyzeReleaseGaps
 //!        Unmatched corpus tracks, unfilled slots, near-miss detection
 //!        Emits gap analysis signals
 //! ```
 //!
 //! Manual trigger only — not part of ScheduleContentAnalysis.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::time::Instant;
 
-/// A cohesive directory mapping: (directory_path, release_id, filled_slots).
-/// Used by EliminateByDirectory to represent directories where all assigned
-/// files point to exactly one release.
-type CohesiveDir = (String, String, HashSet<(u32, u32)>);
-
-use crate::db::queries::external::ExternalMatchRow;
+use crate::db::queries::external::{ExternalMatchRow, OptimalPackingScoreRow};
 use crate::db::types::Zone;
 use crate::db::write_thread::{self, PackingScoreRow};
 use crate::db::ReadOnlyDb;
@@ -106,6 +95,285 @@ fn group_all_per_inode(rows: Vec<ExternalMatchRow>) -> HashMap<i64, Vec<External
         grouped.entry(row.inode).or_default().push(row);
     }
     grouped
+}
+
+/// Entry for the MIS solver: an inode set and associated score.
+struct MisCandidate {
+    inode_set: HashSet<i64>,
+    score: f64,
+}
+
+/// Result of solving a Maximum Independent Set problem.
+struct MisResult {
+    /// Which candidates were selected (parallel to input slice).
+    selected: Vec<bool>,
+    /// Total number of selected candidates.
+    selected_count: usize,
+    /// Number of connected components in the conflict graph.
+    component_count: usize,
+    /// Size of the largest connected component.
+    max_component_size: usize,
+}
+
+/// Solve Maximum Independent Set: select the maximum number of candidates
+/// whose inode sets are pairwise disjoint. Tiebreak on total score.
+///
+/// Uses exhaustive bitmask enumeration for components ≤ 25, branch-and-bound
+/// for larger components.
+fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
+    let n = candidates.len();
+    if n == 0 {
+        return MisResult {
+            selected: Vec::new(),
+            selected_count: 0,
+            component_count: 0,
+            max_component_size: 0,
+        };
+    }
+
+    // Build conflict adjacency: edge between candidates that share any inode
+    let mut inode_to_idx: HashMap<i64, Vec<usize>> = HashMap::new();
+    for (i, cand) in candidates.iter().enumerate() {
+        for &inode in &cand.inode_set {
+            inode_to_idx.entry(inode).or_default().push(i);
+        }
+    }
+
+    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+    for indices in inode_to_idx.values() {
+        if indices.len() > 1 {
+            for &i in indices {
+                for &j in indices {
+                    if i != j {
+                        adj[i].insert(j);
+                    }
+                }
+            }
+        }
+    }
+    drop(inode_to_idx);
+
+    // Find connected components via BFS
+    let mut component_id: Vec<Option<usize>> = vec![None; n];
+    let mut components: Vec<Vec<usize>> = Vec::new();
+    for start in 0..n {
+        if component_id[start].is_some() {
+            continue;
+        }
+        let cid = components.len();
+        let mut comp = Vec::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(start);
+        component_id[start] = Some(cid);
+        while let Some(node) = queue.pop_front() {
+            comp.push(node);
+            for &neighbor in &adj[node] {
+                if component_id[neighbor].is_none() {
+                    component_id[neighbor] = Some(cid);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        components.push(comp);
+    }
+
+    let mut selected = vec![false; n];
+    let mut selected_count = 0usize;
+    let mut max_component_size = 0usize;
+
+    for component in &components {
+        max_component_size = max_component_size.max(component.len());
+
+        if component.len() == 1 {
+            selected[component[0]] = true;
+            selected_count += 1;
+            continue;
+        }
+
+        if component.len() <= 25 {
+            // Exhaustive bitmask enumeration
+            let k = component.len();
+            let mut best_mask: u32 = 0;
+            let mut best_count: usize = 0;
+            let mut best_score: f64 = f64::NEG_INFINITY;
+
+            for mask in 1u32..(1u32 << k) {
+                let mut claimed: HashSet<i64> = HashSet::new();
+                let mut feasible = true;
+                let mut count = 0usize;
+                let mut score = 0.0f64;
+
+                for (bit, &gi) in component.iter().enumerate() {
+                    if mask & (1 << bit) == 0 {
+                        continue;
+                    }
+                    if candidates[gi]
+                        .inode_set
+                        .iter()
+                        .any(|inode| claimed.contains(inode))
+                    {
+                        feasible = false;
+                        break;
+                    }
+                    claimed.extend(&candidates[gi].inode_set);
+                    count += 1;
+                    score += candidates[gi].score;
+                }
+
+                if feasible
+                    && (count > best_count
+                        || (count == best_count && score > best_score))
+                {
+                    best_count = count;
+                    best_score = score;
+                    best_mask = mask;
+                }
+            }
+
+            for (bit, &gi) in component.iter().enumerate() {
+                if best_mask & (1 << bit) != 0 {
+                    selected[gi] = true;
+                    selected_count += 1;
+                }
+            }
+        } else {
+            // Branch-and-bound for larger components
+            let comp_size = component.len();
+
+            let mut global_to_local: HashMap<usize, usize> = HashMap::new();
+            for (li, &gi) in component.iter().enumerate() {
+                global_to_local.insert(gi, li);
+            }
+            let mut local_adj: Vec<Vec<usize>> = vec![Vec::new(); comp_size];
+            for (li, &gi) in component.iter().enumerate() {
+                for &neighbor in &adj[gi] {
+                    if let Some(&ln) = global_to_local.get(&neighbor) {
+                        local_adj[li].push(ln);
+                    }
+                }
+            }
+
+            let local_scores: Vec<f64> =
+                component.iter().map(|&gi| candidates[gi].score).collect();
+            let local_inode_sets: Vec<&HashSet<i64>> =
+                component.iter().map(|&gi| &candidates[gi].inode_set).collect();
+
+            let mut best_count: usize = 0;
+            let mut best_score: f64 = f64::NEG_INFINITY;
+            let mut best_selected: Vec<bool> = vec![false; comp_size];
+
+            struct BnBState {
+                candidates: Vec<usize>,
+                selected: Vec<bool>,
+                selected_count: usize,
+                selected_score: f64,
+                claimed_inodes: HashSet<i64>,
+            }
+
+            let initial_candidates: Vec<usize> = (0..comp_size).collect();
+            let mut stack: Vec<BnBState> = vec![BnBState {
+                candidates: initial_candidates,
+                selected: vec![false; comp_size],
+                selected_count: 0,
+                selected_score: 0.0,
+                claimed_inodes: HashSet::new(),
+            }];
+
+            while let Some(state) = stack.pop() {
+                if state.selected_count + state.candidates.len() <= best_count {
+                    continue;
+                }
+                if state.selected_count + state.candidates.len() == best_count {
+                    let remaining_max_score: f64 =
+                        state.candidates.iter().map(|&c| local_scores[c]).sum();
+                    if state.selected_score + remaining_max_score <= best_score {
+                        continue;
+                    }
+                }
+
+                if state.candidates.is_empty() {
+                    if state.selected_count > best_count
+                        || (state.selected_count == best_count
+                            && state.selected_score > best_score)
+                    {
+                        best_count = state.selected_count;
+                        best_score = state.selected_score;
+                        best_selected = state.selected.clone();
+                    }
+                    continue;
+                }
+
+                let pivot = *state
+                    .candidates
+                    .iter()
+                    .max_by_key(|&&c| {
+                        state
+                            .candidates
+                            .iter()
+                            .filter(|&&other| local_adj[c].contains(&other))
+                            .count()
+                    })
+                    .unwrap();
+
+                // Branch B: EXCLUDE pivot (push first so INCLUDE is explored first)
+                {
+                    let new_candidates: Vec<usize> = state
+                        .candidates
+                        .iter()
+                        .copied()
+                        .filter(|&c| c != pivot)
+                        .collect();
+                    stack.push(BnBState {
+                        candidates: new_candidates,
+                        selected: state.selected.clone(),
+                        selected_count: state.selected_count,
+                        selected_score: state.selected_score,
+                        claimed_inodes: state.claimed_inodes.clone(),
+                    });
+                }
+
+                // Branch A: INCLUDE pivot
+                {
+                    let neighbors: HashSet<usize> =
+                        local_adj[pivot].iter().copied().collect();
+                    let pivot_inodes = local_inode_sets[pivot];
+                    if !pivot_inodes.iter().any(|i| state.claimed_inodes.contains(i)) {
+                        let new_candidates: Vec<usize> = state
+                            .candidates
+                            .iter()
+                            .copied()
+                            .filter(|&c| c != pivot && !neighbors.contains(&c))
+                            .collect();
+                        let mut new_selected = state.selected.clone();
+                        new_selected[pivot] = true;
+                        let mut new_claimed = state.claimed_inodes.clone();
+                        new_claimed.extend(pivot_inodes);
+                        stack.push(BnBState {
+                            candidates: new_candidates,
+                            selected: new_selected,
+                            selected_count: state.selected_count + 1,
+                            selected_score: state.selected_score + local_scores[pivot],
+                            claimed_inodes: new_claimed,
+                        });
+                    }
+                }
+            }
+
+            for (li, &gi) in component.iter().enumerate() {
+                if best_selected[li] {
+                    selected[gi] = true;
+                    selected_count += 1;
+                }
+            }
+        }
+    }
+
+    MisResult {
+        selected,
+        selected_count,
+        component_count: components.len(),
+        max_component_size,
+    }
 }
 
 /// Compute the scoring components for a candidate assignment.
@@ -182,62 +450,25 @@ fn compute_score(
 /// Compute weighted composite score from breakdown components.
 fn weighted_composite(b: &PackingScoreBreakdown) -> f64 {
     0.25 * b.acoustid_confidence
-        + 0.20 * b.duration_match
-        + 0.20 * b.tag_similarity
+        + 0.25 * b.duration_match
+        + 0.15 * b.tag_similarity
         + 0.10 * b.track_number_match
         + 0.25 * b.directory_cohesion
 }
 
-/// Optimal bipartite assignment via Hungarian algorithm.
+/// Kuhn-Munkres (Hungarian) algorithm on an n×n cost matrix.
 ///
-/// Returns set of (inode, (medium_pos, track_pos)) pairs that maximize total score.
-/// Uses the Kuhn-Munkres algorithm on a cost matrix built from candidate scores.
-/// Matrix sizes are small (99.6% of releases have <100 score entries), so O(n³)
-/// is negligible.
-#[allow(clippy::needless_range_loop)] // Hungarian algorithm uses 1-based index arithmetic
-fn hungarian_assignment(candidates: &[CandidateAssignment]) -> HashSet<(i64, (u32, u32))> {
-    // Collect unique inodes and slots
-    let mut inode_set: Vec<i64> = candidates.iter().map(|c| c.inode).collect();
-    inode_set.sort();
-    inode_set.dedup();
-    let inode_idx: HashMap<i64, usize> = inode_set.iter().enumerate().map(|(i, &v)| (v, i)).collect();
-
-    let mut slot_set: Vec<(u32, u32)> = candidates.iter().map(|c| (c.medium_pos, c.track_pos)).collect();
-    slot_set.sort();
-    slot_set.dedup();
-    let slot_idx: HashMap<(u32, u32), usize> = slot_set.iter().enumerate().map(|(i, &v)| (v, i)).collect();
-
-    let n_rows = inode_set.len();
-    let n_cols = slot_set.len();
-
-    if n_rows == 0 || n_cols == 0 {
-        return HashSet::new();
-    }
-
-    // Pad to square matrix
-    let n = n_rows.max(n_cols);
-
-    // Build cost matrix (negate scores for minimization; 0.0 for impossible/dummy)
-    let mut cost = vec![vec![0.0f64; n]; n];
-    for candidate in candidates {
-        let r = inode_idx[&candidate.inode];
-        let c = slot_idx[&(candidate.medium_pos, candidate.track_pos)];
-        // Take the max score if multiple candidates map same (inode, slot)
-        if candidate.score > -cost[r][c] {
-            cost[r][c] = -candidate.score;
-        }
-    }
-
-    // Hungarian algorithm (Kuhn-Munkres) for minimum cost assignment.
-    // Uses 1-indexed potentials and predecessor-tracked augmenting paths.
+/// Returns `col_to_row` assignment where `col_to_row[j]` is the 1-indexed row
+/// assigned to column j (0 = unassigned). The matrix must be square.
+#[allow(clippy::needless_range_loop)]
+fn kuhn_munkres(cost: &[Vec<f64>], n: usize) -> Vec<usize> {
     let inf = f64::MAX / 2.0;
     let mut u = vec![0.0f64; n + 1];
     let mut v = vec![0.0f64; n + 1];
-    let mut col_to_row = vec![0usize; n + 1]; // col_to_row[j] = row assigned to col j (1-indexed)
+    let mut col_to_row = vec![0usize; n + 1];
 
     for i in 1..=n {
-        // Assign row i
-        let mut links = vec![0usize; n + 1]; // links[j] = previous column in augmenting path
+        let mut links = vec![0usize; n + 1];
         let mut mins = vec![inf; n + 1];
         let mut visited = vec![false; n + 1];
 
@@ -280,7 +511,6 @@ fn hungarian_assignment(candidates: &[CandidateAssignment]) -> HashSet<(i64, (u3
             }
         }
 
-        // Augment path
         loop {
             let prev = links[j0];
             col_to_row[j0] = col_to_row[prev];
@@ -291,7 +521,45 @@ fn hungarian_assignment(candidates: &[CandidateAssignment]) -> HashSet<(i64, (u3
         }
     }
 
-    // Extract result: filter out dummy assignments
+    col_to_row
+}
+
+/// Optimal bipartite assignment via Hungarian algorithm (per-release).
+///
+/// Returns set of (inode, (medium_pos, track_pos)) pairs that maximize total score.
+/// Matrix sizes are small (99.6% of releases have <100 score entries), so O(n³)
+/// is negligible.
+#[allow(clippy::needless_range_loop)] // result extraction uses 1-based index arithmetic from kuhn_munkres
+fn hungarian_assignment(candidates: &[CandidateAssignment]) -> HashSet<(i64, (u32, u32))> {
+    let mut inode_set: Vec<i64> = candidates.iter().map(|c| c.inode).collect();
+    inode_set.sort();
+    inode_set.dedup();
+    let inode_idx: HashMap<i64, usize> = inode_set.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+
+    let mut slot_set: Vec<(u32, u32)> = candidates.iter().map(|c| (c.medium_pos, c.track_pos)).collect();
+    slot_set.sort();
+    slot_set.dedup();
+    let slot_idx: HashMap<(u32, u32), usize> = slot_set.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+
+    let n_rows = inode_set.len();
+    let n_cols = slot_set.len();
+
+    if n_rows == 0 || n_cols == 0 {
+        return HashSet::new();
+    }
+
+    let n = n_rows.max(n_cols);
+    let mut cost = vec![vec![0.0f64; n]; n];
+    for candidate in candidates {
+        let r = inode_idx[&candidate.inode];
+        let c = slot_idx[&(candidate.medium_pos, candidate.track_pos)];
+        if candidate.score > -cost[r][c] {
+            cost[r][c] = -candidate.score;
+        }
+    }
+
+    let col_to_row = kuhn_munkres(&cost, n);
+
     let mut result = HashSet::new();
     for j in 1..=n {
         let row = col_to_row[j];
@@ -300,11 +568,8 @@ fn hungarian_assignment(candidates: &[CandidateAssignment]) -> HashSet<(i64, (u3
         }
         let row_idx = row - 1;
         let col_idx = j - 1;
-        if row_idx < n_rows && col_idx < n_cols {
-            // Only include if this was a real (non-zero) score
-            if cost[row_idx][col_idx] < 0.0 {
-                result.insert((inode_set[row_idx], slot_set[col_idx]));
-            }
+        if row_idx < n_rows && col_idx < n_cols && cost[row_idx][col_idx] < 0.0 {
+            result.insert((inode_set[row_idx], slot_set[col_idx]));
         }
     }
 
@@ -739,22 +1004,16 @@ pub fn execute_pack_releases(
         .collect();
 
     log_general(format!(
-        "[COMPUTE] PackReleases: spawning {} ScoreReleaseCandidates, deferring Resolve + Analyze",
+        "[COMPUTE] PackReleases: spawning {} ScoreReleaseCandidates, deferring Resolve → Analyze",
         spawn.len()
     ));
 
-    // === Defer Stage 3, 4, 5 as barrier-separated phases ===
+    // === Defer Stage 3, 4 as barrier-separated phases ===
     let deferred_phases = vec![
         (
             PipelineStage::Resolve,
             vec![Computation::Analysis(
                 AnalysisComputation::ResolveReleaseConflicts,
-            )],
-        ),
-        (
-            PipelineStage::Elimination,
-            vec![Computation::Analysis(
-                AnalysisComputation::EliminateByDirectory,
             )],
         ),
         (
@@ -1018,7 +1277,230 @@ pub fn execute_score_release_candidates(
             score: candidate.score,
             score_breakdown: breakdown_bytes,
             is_optimal,
+            match_method: 0,
+            fingerprint_hex: None,
+            raw_duration_ms: None,
         });
+    }
+
+    // =====================================================================
+    // Per-release elimination: fill unfilled slots with unassigned directory files
+    // =====================================================================
+    // For each directory where this release has optimal AcoustID picks, find
+    // unassigned audio files and match them to unfilled track slots. Each release
+    // packs independently — we only exclude THIS release's AcoustID inodes.
+
+    let mut elimination_count = 0u32;
+
+    // Build per-directory AcoustID inodes + global filled slots from optimal pairs
+    let mut dir_acoustid_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
+    let mut all_filled_slots: HashSet<(u32, u32)> = HashSet::new();
+
+    for candidate in &candidates {
+        let slot = (candidate.medium_pos, candidate.track_pos);
+        if optimal_pairs.contains(&(candidate.inode, slot)) {
+            all_filled_slots.insert(slot);
+            if let Some(corpus) = corpus_info.get(&candidate.inode) {
+                dir_acoustid_inodes
+                    .entry(corpus.parent_dir.clone())
+                    .or_default()
+                    .insert(candidate.inode);
+            }
+        }
+    }
+
+    // Enumerate unfilled slots ONCE (global across all directories)
+    let mut unfilled: Vec<(u32, u32, &musicbrainz::MbTrack)> = Vec::new();
+    for medium in &release.media {
+        for track in &medium.tracks {
+            let slot = (medium.position, track.position);
+            if !all_filled_slots.contains(&slot) {
+                unfilled.push((medium.position, track.position, track));
+            }
+        }
+    }
+
+    if !unfilled.is_empty() {
+        // Collect ALL unassigned audio files across all directories with AcoustID picks
+        let mut all_unassigned: Vec<(i64, String, Option<String>, Option<i64>)> = Vec::new();
+        for (dir, acoustid_inodes) in &dir_acoustid_inodes {
+            match read_only_db.get_unassigned_audio_in_directory(dir, acoustid_inodes) {
+                Ok(files) => all_unassigned.extend(files),
+                Err(_) => continue,
+            }
+        }
+
+        if !all_unassigned.is_empty() {
+            // Pre-load tags for each unassigned file
+            let unassigned_tags: Vec<HashMap<String, Vec<String>>> = all_unassigned
+                .iter()
+                .map(|(inode, _, _, _)| {
+                    let raw = read_only_db.get_corpus_tags(*inode).unwrap_or_default();
+                    let mut tags: HashMap<String, Vec<String>> = HashMap::new();
+                    for tag in raw {
+                        tags.entry(tag.tag_name).or_default().push(tag.tag_value);
+                    }
+                    tags
+                })
+                .collect();
+
+            // Build cost matrix: composite scoring (duration 0.5, title 0.35, tracknumber 0.15)
+            // Single Hungarian across all unassigned files × all unfilled slots
+            let n_unassigned = all_unassigned.len();
+            let n_unfilled = unfilled.len();
+            let n = n_unassigned.max(n_unfilled);
+            let mut cost = vec![vec![0.0f64; n]; n];
+
+            for (ui, (_, _, _, dur_ms)) in all_unassigned.iter().enumerate() {
+                let tags = &unassigned_tags[ui];
+                for (fi, (_, _, track)) in unfilled.iter().enumerate() {
+                    let mb_dur = track.length.or(track.recording.length);
+                    let duration_match = match (*dur_ms, mb_dur) {
+                        (Some(corpus_dur), Some(mb_d)) if mb_d > 0 => {
+                            let ratio =
+                                (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
+                            if ratio > duration_tolerance_pct {
+                                0.0
+                            } else {
+                                1.0 - (ratio / duration_tolerance_pct)
+                            }
+                        }
+                        _ => 0.5,
+                    };
+
+                    let title_sim = tags
+                        .get("TITLE")
+                        .and_then(|v| v.first())
+                        .map(|t| {
+                            let track_sim =
+                                strsim::normalized_levenshtein(t, &track.title);
+                            let rec_sim = strsim::normalized_levenshtein(
+                                t,
+                                &track.recording.title,
+                            );
+                            track_sim.max(rec_sim)
+                        })
+                        .unwrap_or(0.0);
+
+                    let tracknumber_match = tags
+                        .get("TRACKNUMBER")
+                        .and_then(|v| v.first())
+                        .and_then(|tn| tn.parse::<u32>().ok())
+                        .map(|tn| if tn == track.position { 1.0 } else { 0.0 })
+                        .unwrap_or(0.0);
+
+                    let composite =
+                        0.5 * duration_match + 0.35 * title_sim + 0.15 * tracknumber_match;
+                    cost[ui][fi] = -composite;
+                }
+            }
+
+            const ELIMINATION_SCORE_THRESHOLD: f64 = 0.35;
+
+            let col_to_row = kuhn_munkres(&cost, n);
+            for (j, &row) in col_to_row.iter().enumerate().skip(1) {
+                if row == 0 {
+                    continue;
+                }
+                let ui = row - 1;
+                let fi = j - 1;
+                if ui >= n_unassigned || fi >= n_unfilled {
+                    continue;
+                }
+                let composite = -cost[ui][fi];
+                if composite < ELIMINATION_SCORE_THRESHOLD {
+                    continue;
+                }
+
+                let (inode, _path, fingerprint_hex, dur_ms) = &all_unassigned[ui];
+                let (medium_pos, track_pos, track) = &unfilled[fi];
+                let corpus_tags = &unassigned_tags[ui];
+
+                // Compute full score breakdown for the elimination match
+                let mb_dur = track.length.or(track.recording.length);
+                let duration_match = match (*dur_ms, mb_dur) {
+                    (Some(corpus_dur), Some(mb_d)) if mb_d > 0 => {
+                        let ratio =
+                            (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
+                        if ratio > duration_tolerance_pct {
+                            0.0
+                        } else {
+                            1.0 - (ratio / duration_tolerance_pct)
+                        }
+                    }
+                    _ => 0.5,
+                };
+
+                let title_sim = corpus_tags
+                    .get("TITLE")
+                    .and_then(|v| v.first())
+                    .map(|t| {
+                        let track_sim =
+                            strsim::normalized_levenshtein(t, &track.title);
+                        let rec_sim = strsim::normalized_levenshtein(
+                            t,
+                            &track.recording.title,
+                        );
+                        track_sim.max(rec_sim)
+                    })
+                    .unwrap_or(0.0);
+
+                let artist_sim = corpus_tags
+                    .get("ARTIST")
+                    .and_then(|v| v.first())
+                    .map(|a| strsim::normalized_levenshtein(a, &resolved_artist))
+                    .unwrap_or(0.0);
+
+                let album_sim = corpus_tags
+                    .get("ALBUM")
+                    .and_then(|v| v.first())
+                    .map(|a| strsim::normalized_levenshtein(a, &release.title))
+                    .unwrap_or(0.0);
+
+                let tag_similarity =
+                    0.4 * title_sim + 0.35 * artist_sim + 0.25 * album_sim;
+
+                let track_number_match = corpus_tags
+                    .get("TRACKNUMBER")
+                    .and_then(|v| v.first())
+                    .and_then(|tn| tn.parse::<u32>().ok())
+                    .map(|tn| if tn == *track_pos { 1.0 } else { 0.0 })
+                    .unwrap_or(0.0);
+
+                let breakdown = PackingScoreBreakdown {
+                    acoustid_confidence: 0.0,
+                    duration_match,
+                    tag_similarity,
+                    track_number_match,
+                    directory_cohesion: 1.0,
+                };
+                let score = weighted_composite(&breakdown);
+                let breakdown_bytes = bincode::serialize(&breakdown).unwrap_or_default();
+
+                score_rows.push(PackingScoreRow {
+                    release_id: release_id.to_string(),
+                    inode: *inode,
+                    recording_id: track.recording.id.clone(),
+                    medium_pos: *medium_pos as i32,
+                    track_pos: *track_pos as i32,
+                    track_title: track.title.clone(),
+                    medium_format: release
+                        .media
+                        .iter()
+                        .find(|m| m.position == *medium_pos)
+                        .and_then(|m| m.format.clone()),
+                    track_number: track.number.clone(),
+                    score,
+                    score_breakdown: breakdown_bytes,
+                    is_optimal: true,
+                    match_method: 1,
+                    fingerprint_hex: fingerprint_hex.clone(),
+                    raw_duration_ms: *dur_ms,
+                });
+
+                elimination_count += 1;
+            }
+        }
     }
 
     if !score_rows.is_empty() {
@@ -1026,10 +1508,11 @@ pub fn execute_score_release_candidates(
     }
 
     log_general(format!(
-        "[COMPUTE] ScoreReleaseCandidates {}: {} candidates, {} optimal picks",
+        "[COMPUTE] ScoreReleaseCandidates {}: {} candidates, {} optimal AcoustID picks, {} elimination picks",
         release_id,
         candidates.len(),
-        assigned_inodes.len()
+        assigned_inodes.len(),
+        elimination_count
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
@@ -1039,10 +1522,15 @@ pub fn execute_score_release_candidates(
 // Stage 3: ResolveReleaseConflicts
 // ============================================================================
 
-/// Execute ResolveReleaseConflicts — global conflict resolution.
+/// Execute ResolveReleaseConflicts — release-level priority resolution.
 ///
-/// Reads optimal picks from all releases, resolves cross-release inode conflicts
-/// via greedy global assignment, emits ReleasePackingSignal per assigned inode.
+/// Reads optimal picks from all releases and selects the best non-conflicting
+/// set of complete release packings. Two releases conflict if they share any
+/// optimal inode. Connected components of the conflict graph are solved via
+/// maximum independent set (exhaustive for ≤20 releases, greedy for larger).
+///
+/// Selected releases keep their full Stage 2 Hungarian packings intact.
+/// Non-selected releases receive residual unclaimed inodes.
 pub fn execute_resolve_release_conflicts(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
@@ -1109,7 +1597,7 @@ pub fn execute_resolve_release_conflicts(
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
-    // Count how many releases each inode appears in (alternatives)
+    // Count how many releases each inode appears in (for alternatives_count)
     let mut inode_release_set: HashMap<i64, HashSet<String>> = HashMap::new();
     for row in &optimal_scores {
         inode_release_set
@@ -1118,34 +1606,383 @@ pub fn execute_resolve_release_conflicts(
             .insert(row.release_id.clone());
     }
 
-    // Sort by score descending for greedy assignment
-    let mut sorted_scores = optimal_scores;
-    sorted_scores.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // --- Release-level optimal resolution ---
+    //
+    // Stage 2 produces complete per-release packings via Hungarian. We select
+    // the best packings at the release level, never remixing individual
+    // assignments across releases.
+    //
+    // Resolution uses MIS (Maximum Independent Set) + fullness-aware assignment:
+    //   Phase 1: MIS among full-capable releases (maximize full match count)
+    //   Phase 2a: Iterative MIS on residual-completable releases (maximize additional full matches)
+    //   Phase 2b: Per-inode-best for truly residual AcoustID inodes
+    //   Phase 3: Per-inode-best for elimination gap-fill (order-independent)
+    //   Phase 4: Per-inode-best for singles (order-independent, last priority)
 
-    // Greedy global assignment
+    // Step 1: Build per-release proposals from Stage 2 optimal scores
+    struct ReleaseProposal {
+        rows: Vec<OptimalPackingScoreRow>,
+        total_tracks: i32,
+    }
+
+    let mut proposals_map: HashMap<&str, Vec<OptimalPackingScoreRow>> = HashMap::new();
+    for row in &optimal_scores {
+        proposals_map
+            .entry(&row.release_id)
+            .or_default()
+            .push(row.clone());
+    }
+
+    let mut multi_proposals: Vec<ReleaseProposal> = Vec::new();
+    let mut single_proposals: Vec<ReleaseProposal> = Vec::new();
+
+    for (release_id, rows) in proposals_map {
+        let total_tracks = manifest_map
+            .get(release_id)
+            .map(|&(_, _, t)| t)
+            .unwrap_or(0);
+        let proposal = ReleaseProposal {
+            rows,
+            total_tracks,
+        };
+        if total_tracks <= 1 {
+            single_proposals.push(proposal);
+        } else {
+            multi_proposals.push(proposal);
+        }
+    }
+
+    // Step 2: Optimal assignment via MIS + per-inode-best
+    //
+    // Four phases, none order-dependent:
+    //   Phase 1: Maximum Independent Set among full-capable releases (maximize full matches)
+    //   Phase 2: Per-inode-best-score for residual AcoustID inodes
+    //   Phase 3: Per-inode-best-score for elimination gap-fill
+    //   Phase 4: Per-inode-best-score for singles
     let mut assigned_inodes: HashSet<i64> = HashSet::new();
-    let mut occupied_slots: HashSet<(String, i32, i32)> = HashSet::new();
-    let mut assignments: Vec<_> = Vec::new();
+    let mut assignments: Vec<OptimalPackingScoreRow> = Vec::new();
 
-    for row in &sorted_scores {
-        if assigned_inodes.contains(&row.inode) {
-            continue;
+    // --- Phase 1: Maximum full matches via MIS ---
+    //
+    // Among releases where AcoustID count >= total_tracks ("full-capable"),
+    // find the maximum set that can each get ALL their AcoustID inodes
+    // without sharing any inode with another selected release.
+
+    // Collect per-proposal AcoustID inode sets and scores
+    struct ProposalMeta {
+        idx: usize, // index into multi_proposals
+        acoustid_inodes: HashSet<i64>,
+        acoustid_score: f64,
+    }
+
+    let mut full_capable: Vec<ProposalMeta> = Vec::new();
+    for (idx, prop) in multi_proposals.iter().enumerate() {
+        let acoustid_inodes: HashSet<i64> = prop
+            .rows
+            .iter()
+            .filter(|r| r.match_method == 0)
+            .map(|r| r.inode)
+            .collect();
+        if acoustid_inodes.len() as i32 >= prop.total_tracks && prop.total_tracks > 0 {
+            let acoustid_score: f64 = prop
+                .rows
+                .iter()
+                .filter(|r| r.match_method == 0)
+                .map(|r| r.score)
+                .sum();
+            full_capable.push(ProposalMeta {
+                idx,
+                acoustid_inodes,
+                acoustid_score,
+            });
         }
-        let slot = (
-            row.release_id.clone(),
-            row.medium_pos,
-            row.track_pos,
-        );
-        if occupied_slots.contains(&slot) {
-            continue;
+    }
+
+    let fc_count = full_capable.len();
+    let mis_candidates: Vec<MisCandidate> = full_capable
+        .iter()
+        .map(|meta| MisCandidate {
+            inode_set: meta.acoustid_inodes.clone(),
+            score: meta.acoustid_score,
+        })
+        .collect();
+
+    let mis_result = solve_maximum_independent_set(&mis_candidates);
+
+    // Lock in MIS-selected releases: all their AcoustID inodes
+    for (fi, meta) in full_capable.iter().enumerate() {
+        if mis_result.selected[fi] {
+            for row in &multi_proposals[meta.idx].rows {
+                if row.match_method == 0 {
+                    assigned_inodes.insert(row.inode);
+                    assignments.push(row.clone());
+                }
+            }
         }
-        assigned_inodes.insert(row.inode);
-        occupied_slots.insert(slot);
-        assignments.push(row);
+    }
+
+    log_general(format!(
+        "[COMPUTE] ResolveReleaseConflicts Phase 1: {} full-capable, {} components \
+         (max size {}), {} selected via MIS",
+        fc_count,
+        mis_result.component_count,
+        mis_result.max_component_size,
+        mis_result.selected_count,
+    ));
+
+    // --- Phase 2a: Iterative MIS on residual-completable releases ---
+    //
+    // After Phase 1, some full-capable releases lost optimal inodes to selected
+    // releases. But they may have non-optimal AcoustID candidates that can fill
+    // those track slots. We load ALL AcoustID candidates (not just optimal),
+    // check if unclaimed candidates can cover all tracks, and run MIS to maximize
+    // additional full matches before falling back to per-inode-best.
+    let mut phase2a_total = 0usize;
+    let mut phase2a_iterations = 0usize;
+
+    // Track which full-capable releases have been completed by Phase 2a
+    let mut phase2a_completed: HashSet<usize> = HashSet::new();
+
+    // Identify non-selected full-capable releases that lost inodes
+    let non_selected_fc: Vec<usize> = (0..full_capable.len())
+        .filter(|&fi| !mis_result.selected[fi])
+        .collect();
+
+    // Load all AcoustID candidates (optimal + non-optimal) for non-selected releases
+    let all_candidates_rows = if !non_selected_fc.is_empty() {
+        let release_ids: Vec<&str> = non_selected_fc
+            .iter()
+            .map(|&fi| {
+                multi_proposals[full_capable[fi].idx]
+                    .rows
+                    .first()
+                    .map(|r| r.release_id.as_str())
+                    .unwrap_or("")
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        read_only_db
+            .get_all_acoustid_candidates_for_releases(&release_ids)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // Group all candidates by release_id
+    let mut all_candidates_by_release: HashMap<&str, Vec<&OptimalPackingScoreRow>> =
+        HashMap::new();
+    for row in &all_candidates_rows {
+        all_candidates_by_release
+            .entry(&row.release_id)
+            .or_default()
+            .push(row);
+    }
+
+    loop {
+        // For each non-selected full-capable release, try to build a complete
+        // assignment from unclaimed AcoustID candidates
+        struct ResidualRelease {
+            fc_idx: usize,
+            assigned_rows: Vec<OptimalPackingScoreRow>, // greedy best-per-slot
+            needed_inodes: HashSet<i64>,                // inodes used in assignment
+            total_score: f64,
+        }
+
+        let mut residual: Vec<ResidualRelease> = Vec::new();
+
+        for &fi in &non_selected_fc {
+            if phase2a_completed.contains(&fi) {
+                continue;
+            }
+            let meta = &full_capable[fi];
+            let total_tracks = multi_proposals[meta.idx].total_tracks;
+            let release_id = match multi_proposals[meta.idx].rows.first() {
+                Some(r) => r.release_id.as_str(),
+                None => continue,
+            };
+
+            let candidates = match all_candidates_by_release.get(release_id) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            // Filter to unclaimed inodes only
+            let available: Vec<&&OptimalPackingScoreRow> = candidates
+                .iter()
+                .filter(|r| !assigned_inodes.contains(&r.inode))
+                .collect();
+
+            // Greedy assignment: for each track slot, pick the highest-scoring
+            // available candidate, ensuring each inode is used at most once
+            let mut slots_needed: HashSet<(i32, i32)> = HashSet::new();
+            for row in &multi_proposals[meta.idx].rows {
+                if row.match_method == 0 {
+                    slots_needed.insert((row.medium_pos, row.track_pos));
+                }
+            }
+
+            // Sort available candidates by score descending
+            let mut sorted_available: Vec<&OptimalPackingScoreRow> =
+                available.into_iter().copied().collect();
+            sorted_available.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            let mut used_inodes: HashSet<i64> = HashSet::new();
+            let mut filled_slots: HashSet<(i32, i32)> = HashSet::new();
+            let mut assigned_rows: Vec<OptimalPackingScoreRow> = Vec::new();
+            let mut total_score = 0.0f64;
+
+            for row in &sorted_available {
+                let slot = (row.medium_pos, row.track_pos);
+                if filled_slots.contains(&slot) || used_inodes.contains(&row.inode) {
+                    continue;
+                }
+                if !slots_needed.contains(&slot) {
+                    continue;
+                }
+                filled_slots.insert(slot);
+                used_inodes.insert(row.inode);
+                assigned_rows.push((*row).clone());
+                total_score += row.score;
+            }
+
+            if filled_slots.len() as i32 >= total_tracks {
+                residual.push(ResidualRelease {
+                    fc_idx: fi,
+                    assigned_rows,
+                    needed_inodes: used_inodes,
+                    total_score,
+                });
+            }
+        }
+
+        if residual.is_empty() {
+            break;
+        }
+
+        // Build MIS candidates from residual-completable releases
+        let residual_candidates: Vec<MisCandidate> = residual
+            .iter()
+            .map(|r| MisCandidate {
+                inode_set: r.needed_inodes.clone(),
+                score: r.total_score,
+            })
+            .collect();
+
+        let residual_mis = solve_maximum_independent_set(&residual_candidates);
+
+        if residual_mis.selected_count == 0 {
+            break;
+        }
+
+        // Lock in selected residual releases
+        for (ri, rr) in residual.iter().enumerate() {
+            if residual_mis.selected[ri] {
+                for row in &rr.assigned_rows {
+                    assigned_inodes.insert(row.inode);
+                    assignments.push(row.clone());
+                }
+                phase2a_completed.insert(rr.fc_idx);
+            }
+        }
+
+        phase2a_total += residual_mis.selected_count;
+        phase2a_iterations += 1;
+    }
+
+    if phase2a_total > 0 {
+        log_general(format!(
+            "[COMPUTE] ResolveReleaseConflicts Phase 2a: {} residual releases completed \
+             in {} iteration(s)",
+            phase2a_total, phase2a_iterations,
+        ));
+    }
+
+    // --- Phase 2b: Per-inode AcoustID residual assignment ---
+    //
+    // For AcoustID inodes not locked by Phase 1 or 2a, each inode independently
+    // goes to its highest-scoring claimant. These inodes cannot complete any
+    // release, so per-inode-best is appropriate.
+    {
+        let mut inode_candidates: HashMap<i64, Vec<&OptimalPackingScoreRow>> = HashMap::new();
+        for prop in &multi_proposals {
+            for row in &prop.rows {
+                if row.match_method == 0 && !assigned_inodes.contains(&row.inode) {
+                    inode_candidates.entry(row.inode).or_default().push(row);
+                }
+            }
+        }
+        for candidates in inode_candidates.values() {
+            let best = candidates
+                .iter()
+                .max_by(|a, b| {
+                    a.score
+                        .partial_cmp(&b.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.release_id.cmp(&b.release_id))
+                })
+                .unwrap();
+            assigned_inodes.insert(best.inode);
+            assignments.push((*best).clone());
+        }
+    }
+
+    // --- Phase 3: Per-inode elimination gap-fill ---
+    //
+    // Elimination inodes that are not yet assigned go to their
+    // highest-scoring claimant. Cannot steal AcoustID assignments.
+    {
+        let mut inode_candidates: HashMap<i64, Vec<&OptimalPackingScoreRow>> = HashMap::new();
+        for prop in &multi_proposals {
+            for row in &prop.rows {
+                if row.match_method == 1 && !assigned_inodes.contains(&row.inode) {
+                    inode_candidates.entry(row.inode).or_default().push(row);
+                }
+            }
+        }
+        for candidates in inode_candidates.values() {
+            let best = candidates
+                .iter()
+                .max_by(|a, b| {
+                    a.score
+                        .partial_cmp(&b.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.release_id.cmp(&b.release_id))
+                })
+                .unwrap();
+            assigned_inodes.insert(best.inode);
+            assignments.push((*best).clone());
+        }
+    }
+
+    // --- Phase 4: Per-inode singles ---
+    //
+    // Single-track releases claim remaining inodes. Per-inode-best, last priority.
+    {
+        let mut inode_candidates: HashMap<i64, Vec<&OptimalPackingScoreRow>> = HashMap::new();
+        for prop in &single_proposals {
+            for row in &prop.rows {
+                if !assigned_inodes.contains(&row.inode) {
+                    inode_candidates.entry(row.inode).or_default().push(row);
+                }
+            }
+        }
+        for candidates in inode_candidates.values() {
+            let best = candidates
+                .iter()
+                .max_by(|a, b| {
+                    a.score
+                        .partial_cmp(&b.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.release_id.cmp(&b.release_id))
+                })
+                .unwrap();
+            assigned_inodes.insert(best.inode);
+            assignments.push((*best).clone());
+        }
     }
 
     // Compute per-release coverage
@@ -1154,8 +1991,8 @@ pub fn execute_resolve_release_conflicts(
         *release_filled.entry(&row.release_id).or_default() += 1;
     }
 
-    // Load corpus paths from candidates table (no full corpus scan needed)
-    let corpus_paths: HashMap<i64, String> = match read_only_db.get_candidate_paths() {
+    // Load corpus paths (candidates + elimination-matched inodes from files table)
+    let corpus_paths: HashMap<i64, String> = match read_only_db.get_packing_inode_paths() {
         Ok(rows) => rows.into_iter().collect(),
         Err(e) => {
             return Result::failure(
@@ -1219,7 +2056,11 @@ pub fn execute_resolve_release_conflicts(
                 score_breakdown: breakdown,
                 alternatives_count,
                 release_coverage: filled as f32 / total_tracks.max(1) as f32,
-                match_method: MatchMethod::AcoustId,
+                match_method: if row.match_method == 1 {
+                    MatchMethod::Elimination
+                } else {
+                    MatchMethod::AcoustId
+                },
             },
         };
 
@@ -1233,11 +2074,44 @@ pub fn execute_resolve_release_conflicts(
     let (cleared, new, updated, unchanged) =
         reconcile_corpus_signals::<ReleasePackingSignal>(read_only_db, &sender, computed, witness);
 
+    // Record pending AcoustID submissions for elimination-method winners
+    let mut pending_submissions: Vec<write_thread::PendingAcoustIdSubmission> = Vec::new();
+    for row in &assignments {
+        if row.match_method != 1 {
+            continue;
+        }
+        if let (Some(fp_hex), Some(dur_ms)) = (&row.fingerprint_hex, row.raw_duration_ms) {
+            pending_submissions.push(write_thread::PendingAcoustIdSubmission {
+                fingerprint: fp_hex.clone(),
+                recording_id: row.recording_id.clone(),
+                duration_ms: dur_ms,
+                source: "elimination".to_string(),
+            });
+        }
+    }
+    let submission_count = pending_submissions.len();
+    if !pending_submissions.is_empty() {
+        sender.write_pending_acoustid_submissions(pending_submissions, witness);
+    }
+
     log_general(format!(
-        "[COMPUTE] ResolveReleaseConflicts: {} assigned to {} releases | \
+        "[COMPUTE] ResolveReleaseConflicts: {} inodes assigned to {} releases \
+         ({} multi-track, {} singles) | \
+         Phase 1 MIS: {}/{} full-capable selected, {} components (max {}) | \
+         Phase 2a: {} residual completed ({} iterations) | \
+         {} elimination submissions | \
          signals: cleared={}, new={}, updated={}, unchanged={}",
         assignments.len(),
         unique_releases,
+        multi_proposals.len(),
+        single_proposals.len(),
+        mis_result.selected_count,
+        fc_count,
+        mis_result.component_count,
+        mis_result.max_component_size,
+        phase2a_total,
+        phase2a_iterations,
+        submission_count,
         cleared,
         new,
         updated,
@@ -1247,443 +2121,9 @@ pub fn execute_resolve_release_conflicts(
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }
 
-// ============================================================================
-// Stage 4: EliminateByDirectory
-// ============================================================================
-
-/// Execute EliminateByDirectory — assign unmatched files by elimination in cohesive directories.
-///
-/// For directories where all AcoustID-assigned inodes map to a single release,
-/// finds unassigned audio files and maps them to unfilled track slots.
-/// Records (fingerprint, recording_id) pairs for future AcoustID submission.
-#[allow(clippy::needless_range_loop)] // Hungarian algorithm uses 1-based index arithmetic
-pub fn execute_eliminate_by_directory(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
-    start: Instant,
-) -> Result {
-    let computation = AnalysisComputation::EliminateByDirectory;
-
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
-
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
-    let duration_tolerance_pct = config.opinions.release_packing.duration_tolerance_pct;
-
-    // Read all current assignments from Stage 3
-    let assignments = match read_only_db.get_release_packing_assignments() {
-        Ok(a) => a,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to read packing assignments: {}", e),
-            );
-        }
-    };
-
-    if assignments.is_empty() {
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
-    }
-
-    // Build per-directory state: which inodes assigned, to which release(s), which slots filled
-    let assigned_inodes: HashSet<i64> = assignments.iter().map(|(inode, _, _, _, _)| *inode).collect();
-
-    struct DirState {
-        release_ids: HashSet<String>,
-        assigned_inodes: HashSet<i64>,
-        filled_slots: HashSet<(u32, u32)>,
-    }
-
-    let mut dir_states: HashMap<String, DirState> = HashMap::new();
-
-    for (inode, path, release_id, medium_pos, track_pos) in &assignments {
-        let parent_dir = Path::new(path)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        let state = dir_states.entry(parent_dir).or_insert_with(|| DirState {
-            release_ids: HashSet::new(),
-            assigned_inodes: HashSet::new(),
-            filled_slots: HashSet::new(),
-        });
-        state.release_ids.insert(release_id.clone());
-        state.assigned_inodes.insert(*inode);
-        state.filled_slots.insert((*medium_pos, *track_pos));
-    }
-
-    // Filter to directories mapping to exactly one release
-    let cohesive_dirs: Vec<CohesiveDir> = dir_states
-        .into_iter()
-        .filter(|(_, state)| state.release_ids.len() == 1)
-        .map(|(dir, state)| {
-            let release_id = state.release_ids.into_iter().next().unwrap();
-            (dir, release_id, state.filled_slots)
-        })
-        .collect();
-
-    log_general(format!(
-        "[COMPUTE] EliminateByDirectory: {} cohesive directories to check",
-        cohesive_dirs.len()
-    ));
-
-    // Read manifest for release metadata
-    let manifest = match read_only_db.get_packing_manifest() {
-        Ok(rows) => rows,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to read manifest: {}", e),
-            );
-        }
-    };
-    let manifest_map: HashMap<&str, (&str, &str, i32)> = manifest
-        .iter()
-        .map(|r| (r.release_id.as_str(), (r.release_title.as_str(), r.release_artist.as_str(), r.total_tracks)))
-        .collect();
-
-    let mut total_eliminations = 0u32;
-    let mut total_submissions = 0u32;
-    let mut pending_submissions: Vec<write_thread::PendingAcoustIdSubmission> = Vec::new();
-
-    for (dir, release_id, filled_slots) in &cohesive_dirs {
-        // Load release tracklist to find unfilled slots
-        let release = match read_only_db.get_mb_release_cache(release_id) {
-            Ok(Some((raw_json, _))) => match musicbrainz::parse_release(&raw_json) {
-                Ok(r) => r,
-                Err(_) => continue,
-            },
-            _ => continue,
-        };
-
-        // Enumerate unfilled slots
-        let mut unfilled: Vec<(u32, u32, &musicbrainz::MbTrack)> = Vec::new();
-        for medium in &release.media {
-            for track in &medium.tracks {
-                let slot = (medium.position, track.position);
-                if !filled_slots.contains(&slot) {
-                    unfilled.push((medium.position, track.position, track));
-                }
-            }
-        }
-
-        if unfilled.is_empty() {
-            continue;
-        }
-
-        // Find unassigned audio files in this directory
-        let unassigned = match read_only_db.get_unassigned_audio_in_directory(dir, &assigned_inodes) {
-            Ok(files) => files,
-            Err(_) => continue,
-        };
-
-        if unassigned.is_empty() {
-            continue;
-        }
-
-        // Determine matching strategy
-        let n_unassigned = unassigned.len();
-        let n_unfilled = unfilled.len();
-
-        // Get release metadata for scoring and signal construction
-        let (release_title, release_artist, total_tracks) = match manifest_map.get(release_id.as_str()) {
-            Some(&(title, artist, total)) => (title.to_string(), artist.to_string(), total),
-            None => continue,
-        };
-
-        let filled_count = filled_slots.len() as u32;
-
-        // Build assignment pairs
-        let mut elimination_assignments: Vec<(usize, usize)> = Vec::new(); // (unassigned_idx, unfilled_idx)
-
-        if n_unassigned == n_unfilled {
-            // Exact match: use Hungarian on duration scores if N > 1
-            if n_unassigned == 1 {
-                elimination_assignments.push((0, 0));
-            } else {
-                // Build cost matrix using duration match scores
-                let n = n_unassigned;
-                let inf = f64::MAX / 2.0;
-                let mut u = vec![0.0f64; n + 1];
-                let mut v = vec![0.0f64; n + 1];
-                let mut col_to_row = vec![0usize; n + 1];
-
-                // Build cost matrix (negate duration_match for minimization)
-                let mut cost = vec![vec![0.0f64; n]; n];
-                for (ui, (_, _, _, dur_ms)) in unassigned.iter().enumerate() {
-                    for (fi, (med_pos, trk_pos, track)) in unfilled.iter().enumerate() {
-                        let mb_dur = track.length.or(track.recording.length);
-                        let duration_match = match (*dur_ms, mb_dur) {
-                            (Some(corpus_dur), Some(mb_d)) if mb_d > 0 => {
-                                let ratio = (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
-                                if ratio > duration_tolerance_pct { 0.0 } else { 1.0 - (ratio / duration_tolerance_pct) }
-                            }
-                            _ => 0.5,
-                        };
-                        cost[ui][fi] = -duration_match;
-                        let _ = (med_pos, trk_pos); // used in assignment below
-                    }
-                }
-
-                // Run Hungarian
-                for i in 1..=n {
-                    let mut links = vec![0usize; n + 1];
-                    let mut mins = vec![inf; n + 1];
-                    let mut visited = vec![false; n + 1];
-                    col_to_row[0] = i;
-                    let mut j0 = 0usize;
-
-                    loop {
-                        visited[j0] = true;
-                        let row = col_to_row[j0];
-                        let mut delta = inf;
-                        let mut j1 = 0usize;
-                        for j in 1..=n {
-                            if visited[j] { continue; }
-                            let val = cost[row - 1][j - 1] - u[row] - v[j];
-                            if val < mins[j] { mins[j] = val; links[j] = j0; }
-                            if mins[j] < delta { delta = mins[j]; j1 = j; }
-                        }
-                        for j in 0..=n {
-                            if visited[j] { u[col_to_row[j]] += delta; v[j] -= delta; }
-                            else { mins[j] -= delta; }
-                        }
-                        j0 = j1;
-                        if col_to_row[j0] == 0 { break; }
-                    }
-                    loop {
-                        let prev = links[j0];
-                        col_to_row[j0] = col_to_row[prev];
-                        j0 = prev;
-                        if j0 == 0 { break; }
-                    }
-                }
-
-                for j in 1..=n {
-                    let row = col_to_row[j];
-                    if row > 0 {
-                        elimination_assignments.push((row - 1, j - 1));
-                    }
-                }
-            }
-        } else if n_unassigned > n_unfilled {
-            // More files than slots: pick best duration matches, only if > 0.5
-            // Build all duration scores and use Hungarian on rectangular (pad to square)
-            let n = n_unassigned.max(n_unfilled);
-            let inf = f64::MAX / 2.0;
-            let mut u = vec![0.0f64; n + 1];
-            let mut v = vec![0.0f64; n + 1];
-            let mut col_to_row = vec![0usize; n + 1];
-
-            let mut cost = vec![vec![0.0f64; n]; n];
-            for (ui, (_, _, _, dur_ms)) in unassigned.iter().enumerate() {
-                for (fi, (_, _, track)) in unfilled.iter().enumerate() {
-                    let mb_dur = track.length.or(track.recording.length);
-                    let duration_match = match (*dur_ms, mb_dur) {
-                        (Some(corpus_dur), Some(mb_d)) if mb_d > 0 => {
-                            let ratio = (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
-                            if ratio > duration_tolerance_pct { 0.0 } else { 1.0 - (ratio / duration_tolerance_pct) }
-                        }
-                        _ => 0.5,
-                    };
-                    cost[ui][fi] = -duration_match;
-                }
-                // Dummy columns get 0.0 cost (no penalty for unassigned files)
-            }
-
-            for i in 1..=n {
-                let mut links = vec![0usize; n + 1];
-                let mut mins = vec![inf; n + 1];
-                let mut visited = vec![false; n + 1];
-                col_to_row[0] = i;
-                let mut j0 = 0usize;
-
-                loop {
-                    visited[j0] = true;
-                    let row = col_to_row[j0];
-                    let mut delta = inf;
-                    let mut j1 = 0usize;
-                    for j in 1..=n {
-                        if visited[j] { continue; }
-                        let val = cost[row - 1][j - 1] - u[row] - v[j];
-                        if val < mins[j] { mins[j] = val; links[j] = j0; }
-                        if mins[j] < delta { delta = mins[j]; j1 = j; }
-                    }
-                    for j in 0..=n {
-                        if visited[j] { u[col_to_row[j]] += delta; v[j] -= delta; }
-                        else { mins[j] -= delta; }
-                    }
-                    j0 = j1;
-                    if col_to_row[j0] == 0 { break; }
-                }
-                loop {
-                    let prev = links[j0];
-                    col_to_row[j0] = col_to_row[prev];
-                    j0 = prev;
-                    if j0 == 0 { break; }
-                }
-            }
-
-            for j in 1..=n {
-                let row = col_to_row[j];
-                if row == 0 { continue; }
-                let ui = row - 1;
-                let fi = j - 1;
-                if ui < n_unassigned && fi < n_unfilled {
-                    // Only accept if duration_match > 0.5
-                    if cost[ui][fi] < -0.5 {
-                        elimination_assignments.push((ui, fi));
-                    }
-                }
-            }
-        } else {
-            // More slots than files — skip, not enough evidence
-            continue;
-        }
-
-        // Emit signals and record submissions for each elimination assignment
-        let preferred_locales = &config.opinions.external_matching.preferred_locales;
-        let _ = preferred_locales; // used for artist resolution already done via manifest
-
-        for (ui, fi) in &elimination_assignments {
-            let (inode, path, fingerprint_hex, dur_ms) = &unassigned[*ui];
-            let (medium_pos, track_pos, track) = &unfilled[*fi];
-
-            // Compute score breakdown for elimination match
-            let mb_dur = track.length.or(track.recording.length);
-            let duration_match = match (*dur_ms, mb_dur) {
-                (Some(corpus_dur), Some(mb_d)) if mb_d > 0 => {
-                    let ratio = (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
-                    if ratio > duration_tolerance_pct { 0.0 } else { 1.0 - (ratio / duration_tolerance_pct) }
-                }
-                _ => 0.5,
-            };
-
-            // Load tags for this inode for tag_similarity scoring
-            let raw_tags = read_only_db.get_corpus_tags(*inode).unwrap_or_default();
-            let mut corpus_tags: HashMap<String, Vec<String>> = HashMap::new();
-            for tag in raw_tags {
-                corpus_tags.entry(tag.tag_name).or_default().push(tag.tag_value);
-            }
-
-            let title_sim = corpus_tags
-                .get("TITLE")
-                .and_then(|v| v.first())
-                .map(|t| {
-                    let track_sim = strsim::normalized_levenshtein(t, &track.title);
-                    let rec_sim = strsim::normalized_levenshtein(t, &track.recording.title);
-                    track_sim.max(rec_sim)
-                })
-                .unwrap_or(0.0);
-
-            let artist_sim = corpus_tags
-                .get("ARTIST")
-                .and_then(|v| v.first())
-                .map(|a| strsim::normalized_levenshtein(a, &release_artist))
-                .unwrap_or(0.0);
-
-            let album_sim = corpus_tags
-                .get("ALBUM")
-                .and_then(|v| v.first())
-                .map(|a| strsim::normalized_levenshtein(a, &release_title))
-                .unwrap_or(0.0);
-
-            let tag_similarity = 0.4 * title_sim + 0.35 * artist_sim + 0.25 * album_sim;
-
-            let track_number_match = corpus_tags
-                .get("TRACKNUMBER")
-                .and_then(|v| v.first())
-                .and_then(|tn| tn.parse::<u32>().ok())
-                .map(|tn| if tn == *track_pos { 1.0 } else { 0.0 })
-                .unwrap_or(0.0);
-
-            let breakdown = PackingScoreBreakdown {
-                acoustid_confidence: 0.0,
-                duration_match,
-                tag_similarity,
-                track_number_match,
-                directory_cohesion: 1.0,
-            };
-            let score = weighted_composite(&breakdown);
-
-            let new_filled = filled_count + elimination_assignments.len() as u32;
-
-            let signal = ReleasePackingSignal {
-                inode: *inode,
-                path: path.clone(),
-                data: ReleasePackingData {
-                    release_id: release_id.clone(),
-                    release_title: release_title.clone(),
-                    release_artist: release_artist.clone(),
-                    track_position: *track_pos,
-                    medium_position: *medium_pos,
-                    medium_format: release.media.iter()
-                        .find(|m| m.position == *medium_pos)
-                        .and_then(|m| m.format.clone()),
-                    track_number: track.number.clone(),
-                    recording_id: track.recording.id.clone(),
-                    track_title: track.title.clone(),
-                    score,
-                    score_breakdown: breakdown,
-                    alternatives_count: 1,
-                    release_coverage: new_filled as f32 / total_tracks.max(1) as f32,
-                    match_method: MatchMethod::Elimination,
-                },
-            };
-
-            // Write directly (INSERT OR REPLACE), not reconcile
-            sender.write_typed_signal(TypedSignalWrite::ReleasePacking(signal), witness);
-            total_eliminations += 1;
-
-            // Record pending submission if fingerprint available
-            if let Some(fp_hex) = fingerprint_hex {
-                if let Some(duration) = dur_ms {
-                    pending_submissions.push(write_thread::PendingAcoustIdSubmission {
-                        fingerprint: fp_hex.clone(),
-                        recording_id: track.recording.id.clone(),
-                        duration_ms: *duration,
-                        source: "elimination".to_string(),
-                    });
-                    total_submissions += 1;
-                }
-            }
-        }
-    }
-
-    // Write pending submissions in bulk
-    if !pending_submissions.is_empty() {
-        sender.write_pending_acoustid_submissions(pending_submissions, witness);
-    }
-
-    log_general(format!(
-        "[COMPUTE] EliminateByDirectory: {} eliminations, {} pending AcoustID submissions",
-        total_eliminations, total_submissions
-    ));
-
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
-}
 
 // ============================================================================
-// Stage 5: AnalyzeReleaseGaps
+// Stage 4: AnalyzeReleaseGaps (renumbered from old Stage 5)
 // ============================================================================
 
 /// Execute AnalyzeReleaseGaps — identify unmatched tracks and near-miss patterns.
@@ -1857,19 +2297,53 @@ pub fn execute_analyze_release_gaps(
 
     // === Unfilled release slots ===
     // Build filled_slots from actual assignments (signal_release_packing), which
-    // includes both Stage 3 (AcoustId) and Stage 4 (Elimination) assignments.
+    // includes both AcoustId and Elimination assignments (all resolved in Stage 3).
     // Cannot use optimal_scores: elimination-matched inodes bypass the scoring table.
     let actual_assignments = read_only_db
         .get_release_packing_assignments()
         .unwrap_or_default();
 
     let mut filled_slots: HashMap<String, HashSet<(i32, i32)>> = HashMap::new();
-    for (_inode, _path, release_id, medium_pos, track_pos) in &actual_assignments {
+    let mut release_assigned_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
+    for (inode, _path, release_id, medium_pos, track_pos) in &actual_assignments {
         filled_slots
             .entry(release_id.clone())
             .or_default()
             .insert((*medium_pos as i32, *track_pos as i32));
+        release_assigned_inodes
+            .entry(release_id.clone())
+            .or_default()
+            .insert(*inode);
     }
+
+    // Build full_match_inodes: set of all inodes assigned to full-match releases.
+    // Used to suppress gap signals for releases fully covered by other full matches.
+    let mut full_match_inodes: HashSet<i64> = HashSet::new();
+    for manifest_row in &manifest {
+        let filled_count = filled_slots
+            .get(&manifest_row.release_id)
+            .map(|s| s.len() as i32)
+            .unwrap_or(0);
+        if filled_count >= manifest_row.total_tracks && manifest_row.total_tracks > 0 {
+            if let Some(inodes) = release_assigned_inodes.get(&manifest_row.release_id) {
+                full_match_inodes.extend(inodes);
+            }
+        }
+    }
+
+    // Build per-release candidate inode sets from optimal_scores for coverage checking.
+    // A release is "fully covered" if every inode that could belong to it is already
+    // assigned to a full-match release — meaning it's a cached MB entry we don't
+    // actually possess as a distinct release.
+    let mut release_candidate_inodes: HashMap<&str, HashSet<i64>> = HashMap::new();
+    for row in &optimal_scores {
+        release_candidate_inodes
+            .entry(&row.release_id)
+            .or_default()
+            .insert(row.inode);
+    }
+
+    let mut suppressed_covered = 0usize;
 
     // We need release tracklist info to identify unfilled slots
     let mut unfilled_signals: Vec<ComputedAggregateSignal> = Vec::new();
@@ -1890,10 +2364,25 @@ pub fn execute_analyze_release_gaps(
             .unwrap_or_default();
 
         let filled_count = filled_for_release.len() as u32;
+        let total = manifest_row.total_tracks as u32;
 
         // Only emit unfilled slots for releases that have at least one filled slot
         if filled_count == 0 {
             continue;
+        }
+
+        // Skip fully-covered releases: if every candidate inode for this incomplete
+        // release is already assigned to a full-match release, this release has no
+        // unique files and represents a cached MB entry, not a real gap.
+        if filled_count < total {
+            if let Some(candidate_inodes) = release_candidate_inodes.get(manifest_row.release_id.as_str()) {
+                if !candidate_inodes.is_empty()
+                    && candidate_inodes.iter().all(|i| full_match_inodes.contains(i))
+                {
+                    suppressed_covered += 1;
+                    continue;
+                }
+            }
         }
 
         for medium in &release.media {
@@ -1919,7 +2408,7 @@ pub fn execute_analyze_release_gaps(
                         track_title: track.title.clone(),
                         recording_id: track.recording.id.clone(),
                         filled_count,
-                        total_tracks: manifest_row.total_tracks as u32,
+                        total_tracks: total,
                     },
                 };
 
@@ -1960,6 +2449,14 @@ pub fn execute_analyze_release_gaps(
         } else if filled_count >= total {
             PackedReleaseCategory::FullMatch
         } else {
+            // Suppress fully-covered incomplete releases (same filter as unfilled slots)
+            if let Some(candidate_inodes) = release_candidate_inodes.get(manifest_row.release_id.as_str()) {
+                if !candidate_inodes.is_empty()
+                    && candidate_inodes.iter().all(|i| full_match_inodes.contains(i))
+                {
+                    continue;
+                }
+            }
             PackedReleaseCategory::Incomplete
         };
 
@@ -2141,10 +2638,11 @@ pub fn execute_analyze_release_gaps(
          unmatched_corpus: cleared={}, new={}, updated={}, unchanged={} | \
          unfilled_slots: cleared={}, new={}, updated={}, unchanged={} | \
          packed_release: cleared={}, new={}, updated={}, unchanged={} | \
-         near_miss: cleared={}, new={}, updated={}, unchanged={}",
+         near_miss: cleared={}, new={}, updated={}, unchanged={} | \
+         {} fully-covered releases suppressed",
         uc_cleared, uc_new, uc_updated, uc_unchanged, us_cleared, us_new, us_updated,
         us_unchanged, pr_cleared, pr_new, pr_updated, pr_unchanged, nm_cleared, nm_new,
-        nm_updated, nm_unchanged
+        nm_updated, nm_unchanged, suppressed_covered
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

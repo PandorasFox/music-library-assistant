@@ -102,6 +102,9 @@ pub struct PackingScoreRow {
     pub score: f64,
     pub score_breakdown: Vec<u8>, // bincode-serialized PackingScoreBreakdown
     pub is_optimal: bool,
+    pub match_method: i32,                    // 0=AcoustId, 1=Elimination
+    pub fingerprint_hex: Option<String>,      // For elimination submission recording
+    pub raw_duration_ms: Option<i64>,         // For elimination submission recording
 }
 
 /// A row for the release_packing_candidates intermediate table.
@@ -2030,8 +2033,8 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             with_retry("write_packing_scores", "batch", || {
                 let mut stmt = db.conn().prepare(
                     "INSERT OR REPLACE INTO release_packing_scores \
-                     (release_id, inode, recording_id, medium_pos, track_pos, track_title, medium_format, track_number, score, score_breakdown, is_optimal) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+                     (release_id, inode, recording_id, medium_pos, track_pos, track_title, medium_format, track_number, score, score_breakdown, is_optimal, match_method, fingerprint_hex, raw_duration_ms) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"
                 )?;
                 for row in rows {
                     stmt.execute(rusqlite::params![
@@ -2046,6 +2049,9 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                         row.score,
                         row.score_breakdown,
                         row.is_optimal as i32,
+                        row.match_method,
+                        row.fingerprint_hex,
+                        row.raw_duration_ms,
                     ])?;
                 }
                 Ok(())

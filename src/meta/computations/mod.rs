@@ -69,8 +69,6 @@ use stats::{ensure_thread_id, record_task_stats};
 pub enum PipelineStage {
     /// Global conflict resolution across scored entities.
     Resolve,
-    /// Elimination matching: assign unmatched files in cohesive directories.
-    Elimination,
     /// Post-resolution gap/quality analysis.
     Analyze,
     /// Dependent analysis: spawn computations that read signals written by the
@@ -83,7 +81,6 @@ impl PipelineStage {
     pub fn label(&self) -> &'static str {
         match self {
             PipelineStage::Resolve => "Resolving",
-            PipelineStage::Elimination => "Eliminating",
             PipelineStage::Analyze => "Analyzing",
             PipelineStage::DependentAnalysis => "Dependent analysis",
         }

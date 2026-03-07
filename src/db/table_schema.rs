@@ -713,6 +713,9 @@ pub fn schema_inventory() -> Vec<TableEntry> {
             score REAL NOT NULL,
             score_breakdown BLOB NOT NULL,
             is_optimal INTEGER NOT NULL DEFAULT 0,
+            match_method INTEGER NOT NULL DEFAULT 0,
+            fingerprint_hex TEXT,
+            raw_duration_ms INTEGER,
             PRIMARY KEY (release_id, inode, medium_pos, track_pos)
         )",
         index_sql: &[

@@ -34,6 +34,7 @@ pub struct PackingManifestRow {
 }
 
 /// An optimal packing score row (is_optimal=1 or per-inode query).
+#[derive(Clone)]
 pub struct OptimalPackingScoreRow {
     pub release_id: String,
     pub inode: i64,
@@ -45,6 +46,9 @@ pub struct OptimalPackingScoreRow {
     pub track_number: String,
     pub score: f64,
     pub score_breakdown: Vec<u8>,
+    pub match_method: i32,
+    pub fingerprint_hex: Option<String>,
+    pub raw_duration_ms: Option<i64>,
 }
 
 /// A row from release_packing_candidates (Stage 1 → Stage 2 intermediate).
@@ -409,7 +413,8 @@ impl Database {
     pub fn get_optimal_packing_scores(&self) -> Result<Vec<OptimalPackingScoreRow>> {
         let mut stmt = self.conn().prepare(
             "SELECT release_id, inode, recording_id, medium_pos, track_pos, track_title, \
-             medium_format, track_number, score, score_breakdown \
+             medium_format, track_number, score, score_breakdown, match_method, \
+             fingerprint_hex, raw_duration_ms \
              FROM release_packing_scores WHERE is_optimal = 1 \
              ORDER BY release_id, medium_pos, track_pos",
         )?;
@@ -425,6 +430,9 @@ impl Database {
                 track_number: row.get(7)?,
                 score: row.get(8)?,
                 score_breakdown: row.get(9)?,
+                match_method: row.get(10)?,
+                fingerprint_hex: row.get(11)?,
+                raw_duration_ms: row.get(12)?,
             })
         })?;
         let mut results = Vec::new();
@@ -434,6 +442,53 @@ impl Database {
         Ok(results)
     }
 
+
+    /// Get all AcoustID candidate rows (both optimal and non-optimal) for a set of releases.
+    /// Returns full rows suitable for assignment. Used by Phase 2a to find alternative
+    /// inodes when optimal ones are claimed by Phase 1.
+    pub fn get_all_acoustid_candidates_for_releases(
+        &self,
+        release_ids: &[&str],
+    ) -> Result<Vec<OptimalPackingScoreRow>> {
+        if release_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders: String = release_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT release_id, inode, recording_id, medium_pos, track_pos, track_title, \
+             medium_format, track_number, score, score_breakdown, match_method, \
+             fingerprint_hex, raw_duration_ms \
+             FROM release_packing_scores \
+             WHERE match_method = 0 AND release_id IN ({}) \
+             ORDER BY release_id, score DESC",
+            placeholders
+        );
+        let mut stmt = self.conn().prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            release_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok(OptimalPackingScoreRow {
+                release_id: row.get(0)?,
+                inode: row.get(1)?,
+                recording_id: row.get(2)?,
+                medium_pos: row.get(3)?,
+                track_pos: row.get(4)?,
+                track_title: row.get(5)?,
+                medium_format: row.get(6)?,
+                track_number: row.get(7)?,
+                score: row.get(8)?,
+                score_breakdown: row.get(9)?,
+                match_method: row.get(10)?,
+                fingerprint_hex: row.get(11)?,
+                raw_duration_ms: row.get(12)?,
+            })
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
 
     // =========================================================================
     // Signal Data Reading (for Release Packing Browser)
@@ -562,9 +617,32 @@ impl Database {
         Ok(results)
     }
 
+    /// Get (inode, path) pairs for all inodes that appear in packing scores or candidates.
+    ///
+    /// Union of candidates table (AcoustID-matched) and files table for any
+    /// additional inodes in the scores table (elimination-matched). Used by
+    /// Stages 3-4 to get corpus paths without a full corpus scan.
+    pub fn get_packing_inode_paths(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT DISTINCT inode, path FROM release_packing_candidates \
+             UNION \
+             SELECT DISTINCT s.inode, f.path FROM release_packing_scores s \
+             JOIN files f ON s.inode = f.inode \
+             WHERE f.zone = 'corpus' AND s.match_method = 1",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
     /// Get distinct (inode, path) pairs from the candidates table.
     ///
-    /// Used by Stages 3-4 to get corpus paths without a full corpus scan.
+    /// Used by Stage 4 (AnalyzeReleaseGaps) for corpus paths without a full corpus scan.
     pub fn get_candidate_paths(&self) -> Result<Vec<(i64, String)>> {
         let mut stmt = self.conn().prepare(
             "SELECT DISTINCT inode, path FROM release_packing_candidates",

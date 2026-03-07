@@ -723,6 +723,13 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_optimal_packing_scores()
     }
 
+    pub fn get_all_acoustid_candidates_for_releases(
+        &self,
+        release_ids: &[&str],
+    ) -> Result<Vec<external::OptimalPackingScoreRow>> {
+        self.db.get_all_acoustid_candidates_for_releases(release_ids)
+    }
+
     /// Get cached MusicBrainz release JSON by release ID.
     pub fn get_mb_release_cache(&self, release_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
         self.db.get_mb_release_cache(release_id)
@@ -739,6 +746,11 @@ impl<'a> ReadOnlyDb<'a> {
     /// Get packing candidates for a specific release (indexed lookup).
     pub fn get_packing_candidates_for_release(&self, release_id: &str) -> Result<Vec<external::PackingCandidateRow>> {
         self.db.get_packing_candidates_for_release(release_id)
+    }
+
+    /// Get (inode, path) pairs for all packing-relevant inodes (candidates + elimination).
+    pub fn get_packing_inode_paths(&self) -> Result<Vec<(i64, String)>> {
+        self.db.get_packing_inode_paths()
     }
 
     /// Get distinct (inode, path) pairs from the candidates table.

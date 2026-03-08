@@ -33,17 +33,17 @@
 //! `VerifyTags` which directly emits OutOfBandTagSync, OutOfBandTagConflict,
 //! or MtimeOnlyMismatch signals.
 
-mod schedule;
-mod duplicates;
-mod tags;
 mod deploy;
+mod duplicates;
+mod external_matches;
 mod formats;
 pub(crate) mod image_index;
 mod inbox_matches;
 mod inbox_tags;
 mod path_schema;
-mod external_matches;
 mod release_packing;
+mod schedule;
+mod tags;
 
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -51,17 +51,17 @@ use std::path::PathBuf;
 
 use crate::meta::recomputation::RecomputationScope;
 
-pub use schedule::*;
-pub use duplicates::*;
-pub use tags::*;
 pub use deploy::*;
+pub use duplicates::*;
+pub use external_matches::*;
 pub use formats::*;
 pub use image_index::*;
 pub use inbox_matches::*;
 pub use inbox_tags::*;
 pub use path_schema::*;
-pub use external_matches::*;
 pub use release_packing::*;
+pub use schedule::*;
+pub use tags::*;
 
 // ============================================================================
 // Analysis Computation Enum
@@ -77,9 +77,7 @@ pub enum Computation {
     ///
     /// Orchestrator that spawns detection computations filtered by scope.
     /// None = run all (startup). Some(scope) = filter to dirty domains.
-    ScheduleContentAnalysis {
-        scope: Option<RecomputationScope>,
-    },
+    ScheduleContentAnalysis { scope: Option<RecomputationScope> },
 
     /// Detect fingerprint overlaps across all tracks.
     ///
@@ -229,9 +227,7 @@ pub enum Computation {
     /// audio in directories where this release has AcoustID picks and matches
     /// them to unfilled slots via composite scoring (duration/title/tracknumber).
     /// Writes all results to release_packing_scores table with match_method.
-    ScoreReleaseCandidates {
-        release_id: String,
-    },
+    ScoreReleaseCandidates { release_id: String },
 
     /// Classify release proposals into quality tiers (Stage 3a — orchestrator).
     ///
@@ -255,6 +251,14 @@ pub enum Computation {
         state: release_packing::SharedMappingState,
     },
 
+    /// MIS on NearMiss proposals (Stage 3c½).
+    ///
+    /// Almost complete: (n-1)/n slots filled from a single directory with n files.
+    /// Prioritized over general incompletes.
+    MapNearMissReleases {
+        state: release_packing::SharedMappingState,
+    },
+
     /// MIS on Incomplete proposals (Stage 3d).
     ///
     /// Partial slot coverage. Proposals enter with unclaimed portion of inode set.
@@ -262,7 +266,7 @@ pub enum Computation {
         state: release_packing::SharedMappingState,
     },
 
-    /// Per-inode-best for Singles + signal emission (Stage 3e).
+    /// Per-inode-best for Singles + signal emission (Stage 3f).
     ///
     /// Assigns single-track releases, emits ReleasePacking signals for all
     /// rounds, records pending AcoustID submissions.
@@ -330,6 +334,7 @@ impl Computation {
             Computation::ComputeReleaseMappings => "Classifying release proposals",
             Computation::MapPerfectReleases { .. } => "Mapping perfect releases",
             Computation::MapFullMatchReleases { .. } => "Mapping full-match releases",
+            Computation::MapNearMissReleases { .. } => "Mapping near-miss releases",
             Computation::MapIncompleteReleases { .. } => "Mapping incomplete releases",
             Computation::MapSingleReleases { .. } => "Mapping single-track releases",
             Computation::AnalyzeReleaseGaps => "Analyzing release gaps",
@@ -384,9 +389,18 @@ impl Computation {
             Computation::DetectReleaseOverlaps => {
                 execute_detect_release_overlaps(ctx.read_db, ctx.witness, ctx.start)
             }
-            Computation::DeriveDeployHealthSignals { library_name, library_root, corpus_path_prefixes } => {
-                execute_derive_deploy_health_signals(ctx.read_db, library_name, library_root, corpus_path_prefixes, ctx.witness, ctx.start)
-            }
+            Computation::DeriveDeployHealthSignals {
+                library_name,
+                library_root,
+                corpus_path_prefixes,
+            } => execute_derive_deploy_health_signals(
+                ctx.read_db,
+                library_name,
+                library_root,
+                corpus_path_prefixes,
+                ctx.witness,
+                ctx.start,
+            ),
             Computation::DeriveCorpusDeployStatus => {
                 execute_derive_corpus_deploy_status(ctx.read_db, ctx.witness, ctx.start)
             }
@@ -408,9 +422,7 @@ impl Computation {
             Computation::DetectPathTagMismatches => {
                 execute_detect_path_tag_mismatches(ctx.read_db, ctx.witness, ctx.start)
             }
-            Computation::PackReleases => {
-                execute_pack_releases(ctx.read_db, ctx.witness, ctx.start)
-            }
+            Computation::PackReleases => execute_pack_releases(ctx.read_db, ctx.witness, ctx.start),
             Computation::ScoreReleaseCandidates { ref release_id } => {
                 execute_score_release_candidates(ctx.read_db, release_id, ctx.witness, ctx.start)
             }
@@ -422,6 +434,9 @@ impl Computation {
             }
             Computation::MapFullMatchReleases { ref state } => {
                 execute_map_full_match_releases(state, ctx.witness, ctx.start)
+            }
+            Computation::MapNearMissReleases { ref state } => {
+                execute_map_near_miss_releases(state, ctx.witness, ctx.start)
             }
             Computation::MapIncompleteReleases { ref state } => {
                 execute_map_incomplete_releases(state, ctx.witness, ctx.start)
@@ -436,7 +451,12 @@ impl Computation {
                 execute_derive_external_matches(ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::SeedCompoundTagDirtyInodes { ref new_separators } => {
-                execute_seed_compound_tag_dirty_inodes(ctx.read_db, new_separators, ctx.witness, ctx.start)
+                execute_seed_compound_tag_dirty_inodes(
+                    ctx.read_db,
+                    new_separators,
+                    ctx.witness,
+                    ctx.start,
+                )
             }
             Computation::IndexImageFile => {
                 execute_index_image_file(ctx.read_db, ctx.witness, ctx.start)

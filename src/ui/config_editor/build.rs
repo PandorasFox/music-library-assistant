@@ -4,14 +4,14 @@
 //! used by the editor UI. Each field carries its own applier closure, so
 //! build and apply logic are co-located — no separate match block needed.
 
-use crate::config::{
-    Config, Opinions, StartupView, InboxOrganizeGranularity, SidecarDeployMode,
-    StartupOpinions, QualityResolutionOpinions, CanonicalizationOpinions,
-    HealthDetectionOpinions, PerformanceOpinions, TagSplittingOpinions,
-    DuplicateAnalysisOpinions, ReleasePackingOpinions, PackingWeights, InboxOrganizeOpinions, ExternalMatchingConfig,
-    DiscExtractionOpinions, AlbumArtOpinions, DebugOpinions,
-};
 use super::types::*;
+use crate::config::{
+    AlbumArtOpinions, CanonicalizationOpinions, Config, DebugOpinions, DiscExtractionOpinions,
+    DuplicateAnalysisOpinions, ExternalMatchingConfig, HealthDetectionOpinions,
+    InboxOrganizeGranularity, InboxOrganizeOpinions, Opinions, PackingWeights, PerformanceOpinions,
+    QualityResolutionOpinions, ReleasePackingOpinions, SidecarDeployMode, StartupOpinions,
+    StartupView, TagSplittingOpinions,
+};
 
 /// Construct a ConfigField with original_value/original_source automatically
 /// snapshotted from the initial value/source.
@@ -47,9 +47,7 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
     let ops = &config.opinions;
 
     // Helper: check if a KDL node path exists in the file content
-    let in_kdl = |path: &str| -> bool {
-        kdl_content.is_some_and(|content| content.contains(path))
-    };
+    let in_kdl = |path: &str| -> bool { kdl_content.is_some_and(|content| content.contains(path)) };
 
     // Determine field source: if value differs from default it's Loaded (must be from file),
     // otherwise check if the key exists in KDL content.
@@ -66,34 +64,77 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
         ConfigGroup {
             name: "General",
             collapsed: false,
-            fields: vec![
-                field("Lossy shit formats to FLAC", "Capture lossy formats to FLAC instead of transcoding to Opus",
-                    ConfigValue::Bool(ops.lossy_shit_formats_to_flac),
-                    source_for(ops.lossy_shit_formats_to_flac == defaults.lossy_shit_formats_to_flac, Opinions::KDL_LOSSY_SHIT),
-                    false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.lossy_shit_formats_to_flac = *b; } }),
-            ],
+            fields: vec![field(
+                "Lossy shit formats to FLAC",
+                "Capture lossy formats to FLAC instead of transcoding to Opus",
+                ConfigValue::Bool(ops.lossy_shit_formats_to_flac),
+                source_for(
+                    ops.lossy_shit_formats_to_flac == defaults.lossy_shit_formats_to_flac,
+                    Opinions::KDL_LOSSY_SHIT,
+                ),
+                false,
+                |v, c| {
+                    if let ConfigValue::Bool(b) = v {
+                        c.opinions.lossy_shit_formats_to_flac = *b;
+                    }
+                },
+            )],
         },
         // Startup
         ConfigGroup {
             name: "Startup",
             collapsed: false,
             fields: vec![
-                field("Force check all files at startup", "Bypass mtime optimization, verify all indexed files",
+                field(
+                    "Force check all files at startup",
+                    "Bypass mtime optimization, verify all indexed files",
                     ConfigValue::Bool(ops.startup.force_check_all_files_at_startup),
-                    source_for(ops.startup.force_check_all_files_at_startup == defaults.startup.force_check_all_files_at_startup, StartupOpinions::KDL_FORCE_CHECK),
+                    source_for(
+                        ops.startup.force_check_all_files_at_startup
+                            == defaults.startup.force_check_all_files_at_startup,
+                        StartupOpinions::KDL_FORCE_CHECK,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.startup.force_check_all_files_at_startup = *b; } }),
-                field("Vacuum threshold", "Free-page ratio threshold for DB compaction prompt (0.0 disables)",
+                    |v, c| {
+                        if let ConfigValue::Bool(b) = v {
+                            c.opinions.startup.force_check_all_files_at_startup = *b;
+                        }
+                    },
+                ),
+                field(
+                    "Vacuum threshold",
+                    "Free-page ratio threshold for DB compaction prompt (0.0 disables)",
                     ConfigValue::Float(ops.startup.vacuum_threshold),
-                    source_for((ops.startup.vacuum_threshold - defaults.startup.vacuum_threshold).abs() < f64::EPSILON, StartupOpinions::KDL_VACUUM_THRESHOLD),
+                    source_for(
+                        (ops.startup.vacuum_threshold - defaults.startup.vacuum_threshold).abs()
+                            < f64::EPSILON,
+                        StartupOpinions::KDL_VACUUM_THRESHOLD,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Float(f) = v { c.opinions.startup.vacuum_threshold = *f; } }),
-                field("Default view", "View to open after startup progress completes",
-                    ConfigValue::Enum { selected: startup_view_index(ops.startup.default_view), options: STARTUP_VIEW_OPTIONS.to_vec() },
-                    source_for(ops.startup.default_view == defaults.startup.default_view, StartupOpinions::KDL_DEFAULT_VIEW),
+                    |v, c| {
+                        if let ConfigValue::Float(f) = v {
+                            c.opinions.startup.vacuum_threshold = *f;
+                        }
+                    },
+                ),
+                field(
+                    "Default view",
+                    "View to open after startup progress completes",
+                    ConfigValue::Enum {
+                        selected: startup_view_index(ops.startup.default_view),
+                        options: STARTUP_VIEW_OPTIONS.to_vec(),
+                    },
+                    source_for(
+                        ops.startup.default_view == defaults.startup.default_view,
+                        StartupOpinions::KDL_DEFAULT_VIEW,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Enum { selected, .. } = v { c.opinions.startup.default_view = startup_view_from_index(*selected); } }),
+                    |v, c| {
+                        if let ConfigValue::Enum { selected, .. } = v {
+                            c.opinions.startup.default_view = startup_view_from_index(*selected);
+                        }
+                    },
+                ),
             ],
         },
         // Duplicate Analysis
@@ -101,21 +142,58 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             name: "Duplicate Analysis",
             collapsed: false,
             fields: vec![
-                field("Fingerprint similarity threshold", "Pairs below this similarity (0-100) are not duplicates",
+                field(
+                    "Fingerprint similarity threshold",
+                    "Pairs below this similarity (0-100) are not duplicates",
                     ConfigValue::Float(ops.duplicate_analysis.fingerprint_similarity_threshold),
-                    source_for((ops.duplicate_analysis.fingerprint_similarity_threshold - defaults.duplicate_analysis.fingerprint_similarity_threshold).abs() < f64::EPSILON, DuplicateAnalysisOpinions::KDL_FP_THRESHOLD),
+                    source_for(
+                        (ops.duplicate_analysis.fingerprint_similarity_threshold
+                            - defaults.duplicate_analysis.fingerprint_similarity_threshold)
+                            .abs()
+                            < f64::EPSILON,
+                        DuplicateAnalysisOpinions::KDL_FP_THRESHOLD,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Float(f) = v { c.opinions.duplicate_analysis.fingerprint_similarity_threshold = *f; } }),
-                field("Duration tolerance ms", "Tracks with duration diff above this are clustered separately",
+                    |v, c| {
+                        if let ConfigValue::Float(f) = v {
+                            c.opinions
+                                .duplicate_analysis
+                                .fingerprint_similarity_threshold = *f;
+                        }
+                    },
+                ),
+                field(
+                    "Duration tolerance ms",
+                    "Tracks with duration diff above this are clustered separately",
                     ConfigValue::SignedInt(ops.duplicate_analysis.duration_tolerance_ms),
-                    source_for(ops.duplicate_analysis.duration_tolerance_ms == defaults.duplicate_analysis.duration_tolerance_ms, DuplicateAnalysisOpinions::KDL_DURATION_TOLERANCE),
+                    source_for(
+                        ops.duplicate_analysis.duration_tolerance_ms
+                            == defaults.duplicate_analysis.duration_tolerance_ms,
+                        DuplicateAnalysisOpinions::KDL_DURATION_TOLERANCE,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::SignedInt(n) = v { c.opinions.duplicate_analysis.duration_tolerance_ms = *n; } }),
-                field("Elide variant titles", "Skip dupe pairs where titles differ and contain remix/live/etc.",
+                    |v, c| {
+                        if let ConfigValue::SignedInt(n) = v {
+                            c.opinions.duplicate_analysis.duration_tolerance_ms = *n;
+                        }
+                    },
+                ),
+                field(
+                    "Elide variant titles",
+                    "Skip dupe pairs where titles differ and contain remix/live/etc.",
                     ConfigValue::Bool(ops.duplicate_analysis.elide_variant_titles),
-                    source_for(ops.duplicate_analysis.elide_variant_titles == defaults.duplicate_analysis.elide_variant_titles, DuplicateAnalysisOpinions::KDL_ELIDE_VARIANTS),
+                    source_for(
+                        ops.duplicate_analysis.elide_variant_titles
+                            == defaults.duplicate_analysis.elide_variant_titles,
+                        DuplicateAnalysisOpinions::KDL_ELIDE_VARIANTS,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.duplicate_analysis.elide_variant_titles = *b; } }),
+                    |v, c| {
+                        if let ConfigValue::Bool(b) = v {
+                            c.opinions.duplicate_analysis.elide_variant_titles = *b;
+                        }
+                    },
+                ),
             ],
         },
         // Release Packing
@@ -123,16 +201,42 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             name: "Release Packing",
             collapsed: false,
             fields: vec![
-                field("Duration tolerance %", "Discard recording matches with duration diff above this fraction (0.0-1.0)",
+                field(
+                    "Duration tolerance %",
+                    "Discard recording matches with duration diff above this fraction (0.0-1.0)",
                     ConfigValue::Float(ops.release_packing.duration_tolerance_pct),
-                    source_for((ops.release_packing.duration_tolerance_pct - defaults.release_packing.duration_tolerance_pct).abs() < f64::EPSILON, ReleasePackingOpinions::KDL_DURATION_TOLERANCE_PCT),
+                    source_for(
+                        (ops.release_packing.duration_tolerance_pct
+                            - defaults.release_packing.duration_tolerance_pct)
+                            .abs()
+                            < f64::EPSILON,
+                        ReleasePackingOpinions::KDL_DURATION_TOLERANCE_PCT,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.duration_tolerance_pct = *f; } }),
-                field("Min AcoustID confidence", "Discard recording matches below this confidence (0.0-1.0)",
+                    |v, c| {
+                        if let ConfigValue::Float(f) = v {
+                            c.opinions.release_packing.duration_tolerance_pct = *f;
+                        }
+                    },
+                ),
+                field(
+                    "Min AcoustID confidence",
+                    "Discard recording matches below this confidence (0.0-1.0)",
                     ConfigValue::Float(ops.release_packing.min_confidence),
-                    source_for((ops.release_packing.min_confidence - defaults.release_packing.min_confidence).abs() < f64::EPSILON, ReleasePackingOpinions::KDL_MIN_CONFIDENCE),
+                    source_for(
+                        (ops.release_packing.min_confidence
+                            - defaults.release_packing.min_confidence)
+                            .abs()
+                            < f64::EPSILON,
+                        ReleasePackingOpinions::KDL_MIN_CONFIDENCE,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.min_confidence = *f; } }),
+                    |v, c| {
+                        if let ConfigValue::Float(f) = v {
+                            c.opinions.release_packing.min_confidence = *f;
+                        }
+                    },
+                ),
             ],
         },
         // Candidate Weights (AcoustID-backed scoring)
@@ -143,31 +247,120 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                 let cw = &ops.release_packing.candidate_weights;
                 let cwd = PackingWeights::candidate_defaults();
                 vec![
-                    field("AcoustID confidence", "Weight for fingerprint confidence (0.0-1.0)",
+                    field(
+                        "AcoustID confidence",
+                        "Weight for fingerprint confidence (0.0-1.0)",
                         ConfigValue::Float(cw.acoustid_confidence),
-                        source_for((cw.acoustid_confidence - cwd.acoustid_confidence).abs() < f64::EPSILON, PackingWeights::KDL_ACOUSTID_CONFIDENCE),
+                        source_for(
+                            (cw.acoustid_confidence - cwd.acoustid_confidence).abs() < f64::EPSILON,
+                            PackingWeights::KDL_ACOUSTID_CONFIDENCE,
+                        ),
                         false,
-                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.candidate_weights.acoustid_confidence = *f; } }),
-                    field("Duration match", "Weight for duration match quality (0.0-1.0)",
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions
+                                    .release_packing
+                                    .candidate_weights
+                                    .acoustid_confidence = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Duration match",
+                        "Weight for duration match quality (0.0-1.0)",
                         ConfigValue::Float(cw.duration_match),
-                        source_for((cw.duration_match - cwd.duration_match).abs() < f64::EPSILON, PackingWeights::KDL_DURATION_MATCH),
+                        source_for(
+                            (cw.duration_match - cwd.duration_match).abs() < f64::EPSILON,
+                            PackingWeights::KDL_DURATION_MATCH,
+                        ),
                         false,
-                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.candidate_weights.duration_match = *f; } }),
-                    field("Tag similarity", "Weight for title/artist/album tag similarity (0.0-1.0)",
-                        ConfigValue::Float(cw.tag_similarity),
-                        source_for((cw.tag_similarity - cwd.tag_similarity).abs() < f64::EPSILON, PackingWeights::KDL_TAG_SIMILARITY),
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions.release_packing.candidate_weights.duration_match = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Title match",
+                        "Weight for title similarity (0.0-1.0)",
+                        ConfigValue::Float(cw.title_match),
+                        source_for(
+                            (cw.title_match - cwd.title_match).abs() < f64::EPSILON,
+                            PackingWeights::KDL_TITLE_MATCH,
+                        ),
                         false,
-                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.candidate_weights.tag_similarity = *f; } }),
-                    field("Track number match", "Weight for tracknumber matching slot position (0.0-1.0)",
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions.release_packing.candidate_weights.title_match = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Artist match",
+                        "Weight for artist similarity (0.0-1.0)",
+                        ConfigValue::Float(cw.artist_match),
+                        source_for(
+                            (cw.artist_match - cwd.artist_match).abs() < f64::EPSILON,
+                            PackingWeights::KDL_ARTIST_MATCH,
+                        ),
+                        false,
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions.release_packing.candidate_weights.artist_match = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Album match",
+                        "Weight for album similarity (0.0-1.0)",
+                        ConfigValue::Float(cw.album_match),
+                        source_for(
+                            (cw.album_match - cwd.album_match).abs() < f64::EPSILON,
+                            PackingWeights::KDL_ALBUM_MATCH,
+                        ),
+                        false,
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions.release_packing.candidate_weights.album_match = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Track number match",
+                        "Weight for tracknumber matching slot position (0.0-1.0)",
                         ConfigValue::Float(cw.track_number_match),
-                        source_for((cw.track_number_match - cwd.track_number_match).abs() < f64::EPSILON, PackingWeights::KDL_TRACK_NUMBER_MATCH),
+                        source_for(
+                            (cw.track_number_match - cwd.track_number_match).abs() < f64::EPSILON,
+                            PackingWeights::KDL_TRACK_NUMBER_MATCH,
+                        ),
                         false,
-                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.candidate_weights.track_number_match = *f; } }),
-                    field("Directory cohesion", "Weight for sibling files mapping to same release (0.0-1.0)",
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions
+                                    .release_packing
+                                    .candidate_weights
+                                    .track_number_match = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Directory cohesion",
+                        "Weight for sibling files mapping to same release (0.0-1.0)",
                         ConfigValue::Float(cw.directory_cohesion),
-                        source_for((cw.directory_cohesion - cwd.directory_cohesion).abs() < f64::EPSILON, PackingWeights::KDL_DIRECTORY_COHESION),
+                        source_for(
+                            (cw.directory_cohesion - cwd.directory_cohesion).abs() < f64::EPSILON,
+                            PackingWeights::KDL_DIRECTORY_COHESION,
+                        ),
                         false,
-                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.candidate_weights.directory_cohesion = *f; } }),
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions
+                                    .release_packing
+                                    .candidate_weights
+                                    .directory_cohesion = *f;
+                            }
+                        },
+                    ),
                 ]
             },
         },
@@ -179,31 +372,123 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                 let ew = &ops.release_packing.elimination_weights;
                 let ewd = PackingWeights::elimination_defaults();
                 vec![
-                    field("AcoustID confidence", "Weight for fingerprint confidence — always 0 in elimination (0.0-1.0)",
+                    field(
+                        "AcoustID confidence",
+                        "Weight for fingerprint confidence — always 0 in elimination (0.0-1.0)",
                         ConfigValue::Float(ew.acoustid_confidence),
-                        source_for((ew.acoustid_confidence - ewd.acoustid_confidence).abs() < f64::EPSILON, PackingWeights::KDL_ACOUSTID_CONFIDENCE),
+                        source_for(
+                            (ew.acoustid_confidence - ewd.acoustid_confidence).abs() < f64::EPSILON,
+                            PackingWeights::KDL_ACOUSTID_CONFIDENCE,
+                        ),
                         false,
-                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.elimination_weights.acoustid_confidence = *f; } }),
-                    field("Duration match", "Weight for duration match quality (0.0-1.0)",
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions
+                                    .release_packing
+                                    .elimination_weights
+                                    .acoustid_confidence = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Duration match",
+                        "Weight for duration match quality (0.0-1.0)",
                         ConfigValue::Float(ew.duration_match),
-                        source_for((ew.duration_match - ewd.duration_match).abs() < f64::EPSILON, PackingWeights::KDL_DURATION_MATCH),
+                        source_for(
+                            (ew.duration_match - ewd.duration_match).abs() < f64::EPSILON,
+                            PackingWeights::KDL_DURATION_MATCH,
+                        ),
                         false,
-                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.elimination_weights.duration_match = *f; } }),
-                    field("Tag similarity", "Weight for title/artist/album tag similarity (0.0-1.0)",
-                        ConfigValue::Float(ew.tag_similarity),
-                        source_for((ew.tag_similarity - ewd.tag_similarity).abs() < f64::EPSILON, PackingWeights::KDL_TAG_SIMILARITY),
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions
+                                    .release_packing
+                                    .elimination_weights
+                                    .duration_match = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Title match",
+                        "Weight for title similarity (0.0-1.0)",
+                        ConfigValue::Float(ew.title_match),
+                        source_for(
+                            (ew.title_match - ewd.title_match).abs() < f64::EPSILON,
+                            PackingWeights::KDL_TITLE_MATCH,
+                        ),
                         false,
-                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.elimination_weights.tag_similarity = *f; } }),
-                    field("Track number match", "Weight for tracknumber matching slot position (0.0-1.0)",
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions.release_packing.elimination_weights.title_match = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Artist match",
+                        "Weight for artist similarity — 0 by default in elimination (0.0-1.0)",
+                        ConfigValue::Float(ew.artist_match),
+                        source_for(
+                            (ew.artist_match - ewd.artist_match).abs() < f64::EPSILON,
+                            PackingWeights::KDL_ARTIST_MATCH,
+                        ),
+                        false,
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions.release_packing.elimination_weights.artist_match = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Album match",
+                        "Weight for album similarity (0.0-1.0)",
+                        ConfigValue::Float(ew.album_match),
+                        source_for(
+                            (ew.album_match - ewd.album_match).abs() < f64::EPSILON,
+                            PackingWeights::KDL_ALBUM_MATCH,
+                        ),
+                        false,
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions.release_packing.elimination_weights.album_match = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Track number match",
+                        "Weight for tracknumber matching slot position (0.0-1.0)",
                         ConfigValue::Float(ew.track_number_match),
-                        source_for((ew.track_number_match - ewd.track_number_match).abs() < f64::EPSILON, PackingWeights::KDL_TRACK_NUMBER_MATCH),
+                        source_for(
+                            (ew.track_number_match - ewd.track_number_match).abs() < f64::EPSILON,
+                            PackingWeights::KDL_TRACK_NUMBER_MATCH,
+                        ),
                         false,
-                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.elimination_weights.track_number_match = *f; } }),
-                    field("Directory cohesion", "Weight for directory cohesion — typically 1.0 in elimination (0.0-1.0)",
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions
+                                    .release_packing
+                                    .elimination_weights
+                                    .track_number_match = *f;
+                            }
+                        },
+                    ),
+                    field(
+                        "Directory cohesion",
+                        "Weight for directory cohesion — typically 1.0 in elimination (0.0-1.0)",
                         ConfigValue::Float(ew.directory_cohesion),
-                        source_for((ew.directory_cohesion - ewd.directory_cohesion).abs() < f64::EPSILON, PackingWeights::KDL_DIRECTORY_COHESION),
+                        source_for(
+                            (ew.directory_cohesion - ewd.directory_cohesion).abs() < f64::EPSILON,
+                            PackingWeights::KDL_DIRECTORY_COHESION,
+                        ),
                         false,
-                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.elimination_weights.directory_cohesion = *f; } }),
+                        |v, c| {
+                            if let ConfigValue::Float(f) = v {
+                                c.opinions
+                                    .release_packing
+                                    .elimination_weights
+                                    .directory_cohesion = *f;
+                            }
+                        },
+                    ),
                 ]
             },
         },
@@ -212,16 +497,51 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             name: "Tag Splitting",
             collapsed: false,
             fields: vec![
-                field("Collaboration keywords", "Keywords like feat, ft, vs for artist collabs",
-                    ConfigValue::StringSet(ops.tag_splitting.collaboration_keywords.iter().cloned().collect()),
-                    source_for(ops.tag_splitting.collaboration_keywords == defaults.tag_splitting.collaboration_keywords, TagSplittingOpinions::KDL_COLLAB),
+                field(
+                    "Collaboration keywords",
+                    "Keywords like feat, ft, vs for artist collabs",
+                    ConfigValue::StringSet(
+                        ops.tag_splitting
+                            .collaboration_keywords
+                            .iter()
+                            .cloned()
+                            .collect(),
+                    ),
+                    source_for(
+                        ops.tag_splitting.collaboration_keywords
+                            == defaults.tag_splitting.collaboration_keywords,
+                        TagSplittingOpinions::KDL_COLLAB,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::StringSet(items) = v { c.opinions.tag_splitting.collaboration_keywords = items.iter().cloned().collect(); } }),
-                field("Tag separators", "Per-tag separator strings",
-                    ConfigValue::StringListMap(ops.tag_splitting.tag_separators.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
-                    source_for(ops.tag_splitting.tag_separators == defaults.tag_splitting.tag_separators, Opinions::KDL_BLOCK_TAG_SPLITTING),
+                    |v, c| {
+                        if let ConfigValue::StringSet(items) = v {
+                            c.opinions.tag_splitting.collaboration_keywords =
+                                items.iter().cloned().collect();
+                        }
+                    },
+                ),
+                field(
+                    "Tag separators",
+                    "Per-tag separator strings",
+                    ConfigValue::StringListMap(
+                        ops.tag_splitting
+                            .tag_separators
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                    ),
+                    source_for(
+                        ops.tag_splitting.tag_separators == defaults.tag_splitting.tag_separators,
+                        Opinions::KDL_BLOCK_TAG_SPLITTING,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::StringListMap(items) = v { c.opinions.tag_splitting.tag_separators = items.iter().cloned().collect(); } }),
+                    |v, c| {
+                        if let ConfigValue::StringListMap(items) = v {
+                            c.opinions.tag_splitting.tag_separators =
+                                items.iter().cloned().collect();
+                        }
+                    },
+                ),
             ],
         },
         // External Matching
@@ -229,46 +549,136 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             name: "External Matching",
             collapsed: false,
             fields: vec![
-                field("AcoustID API key", "API key for AcoustID fingerprint lookups (empty = disabled)",
+                field(
+                    "AcoustID API key",
+                    "API key for AcoustID fingerprint lookups (empty = disabled)",
                     ConfigValue::String(ops.external_matching.acoustid_api_key.clone()),
-                    source_for(ops.external_matching.acoustid_api_key == defaults.external_matching.acoustid_api_key, ExternalMatchingConfig::KDL_ACOUSTID_KEY),
+                    source_for(
+                        ops.external_matching.acoustid_api_key
+                            == defaults.external_matching.acoustid_api_key,
+                        ExternalMatchingConfig::KDL_ACOUSTID_KEY,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::String(s) = v { c.opinions.external_matching.acoustid_api_key = s.clone(); } }),
-                field("Requests per second", "Rate limit for AcoustID API calls",
+                    |v, c| {
+                        if let ConfigValue::String(s) = v {
+                            c.opinions.external_matching.acoustid_api_key = s.clone();
+                        }
+                    },
+                ),
+                field(
+                    "Requests per second",
+                    "Rate limit for AcoustID API calls",
                     ConfigValue::UintU32(ops.external_matching.requests_per_second),
-                    source_for(ops.external_matching.requests_per_second == defaults.external_matching.requests_per_second, ExternalMatchingConfig::KDL_REQ_PER_SEC),
+                    source_for(
+                        ops.external_matching.requests_per_second
+                            == defaults.external_matching.requests_per_second,
+                        ExternalMatchingConfig::KDL_REQ_PER_SEC,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.external_matching.requests_per_second = *n; } }),
-                field("Auto-enrich on match", "Auto-trigger MB enrichment when AcoustID matches arrive",
+                    |v, c| {
+                        if let ConfigValue::UintU32(n) = v {
+                            c.opinions.external_matching.requests_per_second = *n;
+                        }
+                    },
+                ),
+                field(
+                    "Auto-enrich on match",
+                    "Auto-trigger MB enrichment when AcoustID matches arrive",
                     ConfigValue::Bool(ops.external_matching.auto_enrich_on_match),
-                    source_for(ops.external_matching.auto_enrich_on_match == defaults.external_matching.auto_enrich_on_match, ExternalMatchingConfig::KDL_AUTO_ENRICH),
+                    source_for(
+                        ops.external_matching.auto_enrich_on_match
+                            == defaults.external_matching.auto_enrich_on_match,
+                        ExternalMatchingConfig::KDL_AUTO_ENRICH,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.external_matching.auto_enrich_on_match = *b; } }),
-                field("MB cache TTL (days)", "Days before re-fetching MusicBrainz cache entries",
+                    |v, c| {
+                        if let ConfigValue::Bool(b) = v {
+                            c.opinions.external_matching.auto_enrich_on_match = *b;
+                        }
+                    },
+                ),
+                field(
+                    "MB cache TTL (days)",
+                    "Days before re-fetching MusicBrainz cache entries",
                     ConfigValue::UintU32(ops.external_matching.mb_cache_ttl_days),
-                    source_for(ops.external_matching.mb_cache_ttl_days == defaults.external_matching.mb_cache_ttl_days, ExternalMatchingConfig::KDL_MB_CACHE_TTL),
+                    source_for(
+                        ops.external_matching.mb_cache_ttl_days
+                            == defaults.external_matching.mb_cache_ttl_days,
+                        ExternalMatchingConfig::KDL_MB_CACHE_TTL,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.external_matching.mb_cache_ttl_days = *n; } }),
-                field("MB requests per second", "Rate limit ceiling for MusicBrainz API (adaptive backoff)",
+                    |v, c| {
+                        if let ConfigValue::UintU32(n) = v {
+                            c.opinions.external_matching.mb_cache_ttl_days = *n;
+                        }
+                    },
+                ),
+                field(
+                    "MB requests per second",
+                    "Rate limit ceiling for MusicBrainz API (adaptive backoff)",
                     ConfigValue::UintU32(ops.external_matching.mb_requests_per_second),
-                    source_for(ops.external_matching.mb_requests_per_second == defaults.external_matching.mb_requests_per_second, ExternalMatchingConfig::KDL_MB_REQ_PER_SEC),
+                    source_for(
+                        ops.external_matching.mb_requests_per_second
+                            == defaults.external_matching.mb_requests_per_second,
+                        ExternalMatchingConfig::KDL_MB_REQ_PER_SEC,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.external_matching.mb_requests_per_second = *n; } }),
-                field("MB base URL", "MusicBrainz API base URL (use a local mirror to bypass rate limits)",
+                    |v, c| {
+                        if let ConfigValue::UintU32(n) = v {
+                            c.opinions.external_matching.mb_requests_per_second = *n;
+                        }
+                    },
+                ),
+                field(
+                    "MB base URL",
+                    "MusicBrainz API base URL (use a local mirror to bypass rate limits)",
                     ConfigValue::String(ops.external_matching.mb_base_url.clone()),
-                    source_for(ops.external_matching.mb_base_url == defaults.external_matching.mb_base_url, ExternalMatchingConfig::KDL_MB_BASE_URL),
+                    source_for(
+                        ops.external_matching.mb_base_url == defaults.external_matching.mb_base_url,
+                        ExternalMatchingConfig::KDL_MB_BASE_URL,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::String(s) = v { c.opinions.external_matching.mb_base_url = s.trim_end_matches('/').to_string(); } }),
-                field("Packing knot ratio", "Proposals/inodes ratio threshold for knot extraction (0 to disable)",
+                    |v, c| {
+                        if let ConfigValue::String(s) = v {
+                            c.opinions.external_matching.mb_base_url =
+                                s.trim_end_matches('/').to_string();
+                        }
+                    },
+                ),
+                field(
+                    "Packing knot ratio",
+                    "Proposals/inodes ratio threshold for knot extraction (0 to disable)",
                     ConfigValue::Float(ops.external_matching.packing_knot_ratio),
-                    source_for(ops.external_matching.packing_knot_ratio == defaults.external_matching.packing_knot_ratio, ExternalMatchingConfig::KDL_PACKING_KNOT_RATIO),
+                    source_for(
+                        ops.external_matching.packing_knot_ratio
+                            == defaults.external_matching.packing_knot_ratio,
+                        ExternalMatchingConfig::KDL_PACKING_KNOT_RATIO,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Float(f) = v { if *f == 0.0 || *f > 1.0 { c.opinions.external_matching.packing_knot_ratio = *f; } } }),
-                field("Packing knot size limit", "Max component size before knot extraction (0 to disable)",
+                    |v, c| {
+                        if let ConfigValue::Float(f) = v {
+                            if *f == 0.0 || *f > 1.0 {
+                                c.opinions.external_matching.packing_knot_ratio = *f;
+                            }
+                        }
+                    },
+                ),
+                field(
+                    "Packing knot size limit",
+                    "Max component size before knot extraction (0 to disable)",
                     ConfigValue::UintU32(ops.external_matching.packing_knot_size_limit as u32),
-                    source_for(ops.external_matching.packing_knot_size_limit == defaults.external_matching.packing_knot_size_limit, ExternalMatchingConfig::KDL_PACKING_KNOT_SIZE_LIMIT),
+                    source_for(
+                        ops.external_matching.packing_knot_size_limit
+                            == defaults.external_matching.packing_knot_size_limit,
+                        ExternalMatchingConfig::KDL_PACKING_KNOT_SIZE_LIMIT,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.external_matching.packing_knot_size_limit = *n as usize; } }),
+                    |v, c| {
+                        if let ConfigValue::UintU32(n) = v {
+                            c.opinions.external_matching.packing_knot_size_limit = *n as usize;
+                        }
+                    },
+                ),
             ],
         },
         // Disc Extraction
@@ -276,103 +686,230 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             name: "Disc Extraction",
             collapsed: false,
             fields: vec![
-                field("Disc tag name", "Tag name to write extracted disc identifier into",
+                field(
+                    "Disc tag name",
+                    "Tag name to write extracted disc identifier into",
                     ConfigValue::String(ops.disc_extraction.disc_tag_name.clone()),
-                    source_for(ops.disc_extraction.disc_tag_name == defaults.disc_extraction.disc_tag_name, DiscExtractionOpinions::KDL_DISC_TAG_NAME),
+                    source_for(
+                        ops.disc_extraction.disc_tag_name == defaults.disc_extraction.disc_tag_name,
+                        DiscExtractionOpinions::KDL_DISC_TAG_NAME,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::String(s) = v { c.opinions.disc_extraction.disc_tag_name = s.clone(); } }),
-                field("Map letters to numbers", "Map letter prefixes to numbers (A\u{2192}1, B\u{2192}2, ...)",
+                    |v, c| {
+                        if let ConfigValue::String(s) = v {
+                            c.opinions.disc_extraction.disc_tag_name = s.clone();
+                        }
+                    },
+                ),
+                field(
+                    "Map letters to numbers",
+                    "Map letter prefixes to numbers (A\u{2192}1, B\u{2192}2, ...)",
                     ConfigValue::Bool(ops.disc_extraction.map_letters_to_numbers),
-                    source_for(ops.disc_extraction.map_letters_to_numbers == defaults.disc_extraction.map_letters_to_numbers, DiscExtractionOpinions::KDL_MAP_LETTERS),
+                    source_for(
+                        ops.disc_extraction.map_letters_to_numbers
+                            == defaults.disc_extraction.map_letters_to_numbers,
+                        DiscExtractionOpinions::KDL_MAP_LETTERS,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.disc_extraction.map_letters_to_numbers = *b; } }),
+                    |v, c| {
+                        if let ConfigValue::Bool(b) = v {
+                            c.opinions.disc_extraction.map_letters_to_numbers = *b;
+                        }
+                    },
+                ),
             ],
         },
         // Album Art
         ConfigGroup {
             name: "Album Art",
             collapsed: false,
-            fields: vec![
-                field("Sidecar deploy mode", "Deploy sidecar cover images alongside audio files to libraries",
-                    ConfigValue::Enum { selected: sidecar_deploy_index(ops.album_art.sidecar_deploy_mode), options: SIDECAR_DEPLOY_OPTIONS.to_vec() },
-                    source_for(ops.album_art.sidecar_deploy_mode == defaults.album_art.sidecar_deploy_mode, AlbumArtOpinions::KDL_SIDECAR_DEPLOY),
-                    false,
-                    |v, c| { if let ConfigValue::Enum { selected, .. } = v { c.opinions.album_art.sidecar_deploy_mode = sidecar_deploy_from_index(*selected); } }),
-            ],
+            fields: vec![field(
+                "Sidecar deploy mode",
+                "Deploy sidecar cover images alongside audio files to libraries",
+                ConfigValue::Enum {
+                    selected: sidecar_deploy_index(ops.album_art.sidecar_deploy_mode),
+                    options: SIDECAR_DEPLOY_OPTIONS.to_vec(),
+                },
+                source_for(
+                    ops.album_art.sidecar_deploy_mode == defaults.album_art.sidecar_deploy_mode,
+                    AlbumArtOpinions::KDL_SIDECAR_DEPLOY,
+                ),
+                false,
+                |v, c| {
+                    if let ConfigValue::Enum { selected, .. } = v {
+                        c.opinions.album_art.sidecar_deploy_mode =
+                            sidecar_deploy_from_index(*selected);
+                    }
+                },
+            )],
         },
         // Quality Resolution
         ConfigGroup {
             name: "Quality Resolution",
             collapsed: false,
-            fields: vec![
-                field("Inbox bitrate fuzz percent", "Inbox-to-corpus bitrate tolerance for equivalence",
-                    ConfigValue::Float(ops.quality_resolution.inbox_bitrate_fuzz_percent),
-                    source_for((ops.quality_resolution.inbox_bitrate_fuzz_percent - defaults.quality_resolution.inbox_bitrate_fuzz_percent).abs() < f64::EPSILON, QualityResolutionOpinions::KDL_BITRATE_FUZZ),
-                    false,
-                    |v, c| { if let ConfigValue::Float(f) = v { c.opinions.quality_resolution.inbox_bitrate_fuzz_percent = *f; } }),
-            ],
+            fields: vec![field(
+                "Inbox bitrate fuzz percent",
+                "Inbox-to-corpus bitrate tolerance for equivalence",
+                ConfigValue::Float(ops.quality_resolution.inbox_bitrate_fuzz_percent),
+                source_for(
+                    (ops.quality_resolution.inbox_bitrate_fuzz_percent
+                        - defaults.quality_resolution.inbox_bitrate_fuzz_percent)
+                        .abs()
+                        < f64::EPSILON,
+                    QualityResolutionOpinions::KDL_BITRATE_FUZZ,
+                ),
+                false,
+                |v, c| {
+                    if let ConfigValue::Float(f) = v {
+                        c.opinions.quality_resolution.inbox_bitrate_fuzz_percent = *f;
+                    }
+                },
+            )],
         },
         // Canonicalization
         ConfigGroup {
             name: "Canonicalization",
             collapsed: false,
-            fields: vec![
-                field("Strip album format suffixes", "Normalize EP/LP suffixes during album collision detection",
-                    ConfigValue::Bool(ops.canonicalization.strip_album_format_suffixes),
-                    source_for(ops.canonicalization.strip_album_format_suffixes == defaults.canonicalization.strip_album_format_suffixes, CanonicalizationOpinions::KDL_STRIP_SUFFIXES),
-                    false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.canonicalization.strip_album_format_suffixes = *b; } }),
-            ],
+            fields: vec![field(
+                "Strip album format suffixes",
+                "Normalize EP/LP suffixes during album collision detection",
+                ConfigValue::Bool(ops.canonicalization.strip_album_format_suffixes),
+                source_for(
+                    ops.canonicalization.strip_album_format_suffixes
+                        == defaults.canonicalization.strip_album_format_suffixes,
+                    CanonicalizationOpinions::KDL_STRIP_SUFFIXES,
+                ),
+                false,
+                |v, c| {
+                    if let ConfigValue::Bool(b) = v {
+                        c.opinions.canonicalization.strip_album_format_suffixes = *b;
+                    }
+                },
+            )],
         },
         // Health Detection
         ConfigGroup {
             name: "Health Detection",
             collapsed: false,
             fields: vec![
-                field("Required tags", "Tags that must be present on every track",
+                field(
+                    "Required tags",
+                    "Tags that must be present on every track",
                     ConfigValue::StringList(ops.health_detection.required_tags.clone()),
-                    source_for(ops.health_detection.required_tags == defaults.health_detection.required_tags, HealthDetectionOpinions::KDL_REQUIRED_TAGS),
+                    source_for(
+                        ops.health_detection.required_tags
+                            == defaults.health_detection.required_tags,
+                        HealthDetectionOpinions::KDL_REQUIRED_TAGS,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::StringList(list) = v { c.opinions.health_detection.required_tags = list.clone(); } }),
-                field("Album artist only if compilation", "Only require album_artist on multi-artist albums",
-                    ConfigValue::Bool(ops.health_detection.album_artist_only_required_if_compilation),
-                    source_for(ops.health_detection.album_artist_only_required_if_compilation == defaults.health_detection.album_artist_only_required_if_compilation, HealthDetectionOpinions::KDL_ALBUM_ARTIST_COMPILATION),
+                    |v, c| {
+                        if let ConfigValue::StringList(list) = v {
+                            c.opinions.health_detection.required_tags = list.clone();
+                        }
+                    },
+                ),
+                field(
+                    "Album artist only if compilation",
+                    "Only require album_artist on multi-artist albums",
+                    ConfigValue::Bool(
+                        ops.health_detection
+                            .album_artist_only_required_if_compilation,
+                    ),
+                    source_for(
+                        ops.health_detection
+                            .album_artist_only_required_if_compilation
+                            == defaults
+                                .health_detection
+                                .album_artist_only_required_if_compilation,
+                        HealthDetectionOpinions::KDL_ALBUM_ARTIST_COMPILATION,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.health_detection.album_artist_only_required_if_compilation = *b; } }),
-                field("Single album suffix", "Suffix appended when tagging as single",
+                    |v, c| {
+                        if let ConfigValue::Bool(b) = v {
+                            c.opinions
+                                .health_detection
+                                .album_artist_only_required_if_compilation = *b;
+                        }
+                    },
+                ),
+                field(
+                    "Single album suffix",
+                    "Suffix appended when tagging as single",
                     ConfigValue::String(ops.health_detection.single_album_suffix.clone()),
-                    source_for(ops.health_detection.single_album_suffix == defaults.health_detection.single_album_suffix, HealthDetectionOpinions::KDL_SINGLE_ALBUM_SUFFIX),
+                    source_for(
+                        ops.health_detection.single_album_suffix
+                            == defaults.health_detection.single_album_suffix,
+                        HealthDetectionOpinions::KDL_SINGLE_ALBUM_SUFFIX,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::String(s) = v { c.opinions.health_detection.single_album_suffix = s.clone(); } }),
+                    |v, c| {
+                        if let ConfigValue::String(s) = v {
+                            c.opinions.health_detection.single_album_suffix = s.clone();
+                        }
+                    },
+                ),
             ],
         },
         // Inbox Organize
         ConfigGroup {
             name: "Inbox Organize",
             collapsed: false,
-            fields: vec![
-                field("Directory granularity", "How to group inbox directories for organize workflow",
-                    ConfigValue::Enum { selected: granularity_index(ops.inbox_organize.directory_granularity), options: GRANULARITY_OPTIONS.to_vec() },
-                    source_for(ops.inbox_organize.directory_granularity == defaults.inbox_organize.directory_granularity, InboxOrganizeOpinions::KDL_DIR_GRANULARITY),
-                    false,
-                    |v, c| { if let ConfigValue::Enum { selected, .. } = v { c.opinions.inbox_organize.directory_granularity = granularity_from_index(*selected); } }),
-            ],
+            fields: vec![field(
+                "Directory granularity",
+                "How to group inbox directories for organize workflow",
+                ConfigValue::Enum {
+                    selected: granularity_index(ops.inbox_organize.directory_granularity),
+                    options: GRANULARITY_OPTIONS.to_vec(),
+                },
+                source_for(
+                    ops.inbox_organize.directory_granularity
+                        == defaults.inbox_organize.directory_granularity,
+                    InboxOrganizeOpinions::KDL_DIR_GRANULARITY,
+                ),
+                false,
+                |v, c| {
+                    if let ConfigValue::Enum { selected, .. } = v {
+                        c.opinions.inbox_organize.directory_granularity =
+                            granularity_from_index(*selected);
+                    }
+                },
+            )],
         },
         // Advanced
         ConfigGroup {
             name: "Advanced",
             collapsed: false,
             fields: vec![
-                field("Idle rescan interval", "Idle time before auto-rescanning corpus/inbox (e.g. 3m, 180s, disabled)",
+                field(
+                    "Idle rescan interval",
+                    "Idle time before auto-rescanning corpus/inbox (e.g. 3m, 180s, disabled)",
                     ConfigValue::Duration(ops.idle_rescan_interval_secs),
-                    source_for(ops.idle_rescan_interval_secs == defaults.idle_rescan_interval_secs, Opinions::KDL_IDLE_RESCAN),
+                    source_for(
+                        ops.idle_rescan_interval_secs == defaults.idle_rescan_interval_secs,
+                        Opinions::KDL_IDLE_RESCAN,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Duration(secs) = v { c.opinions.idle_rescan_interval_secs = *secs; } }),
-                field("Leave transactions open", "Keep one open transaction; adds Transaction tab to view ring",
+                    |v, c| {
+                        if let ConfigValue::Duration(secs) = v {
+                            c.opinions.idle_rescan_interval_secs = *secs;
+                        }
+                    },
+                ),
+                field(
+                    "Leave transactions open",
+                    "Keep one open transaction; adds Transaction tab to view ring",
                     ConfigValue::Bool(ops.leave_transactions_open),
-                    source_for(ops.leave_transactions_open == defaults.leave_transactions_open, Opinions::KDL_LEAVE_TXN_OPEN),
+                    source_for(
+                        ops.leave_transactions_open == defaults.leave_transactions_open,
+                        Opinions::KDL_LEAVE_TXN_OPEN,
+                    ),
                     false,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.leave_transactions_open = *b; } }),
+                    |v, c| {
+                        if let ConfigValue::Bool(b) = v {
+                            c.opinions.leave_transactions_open = *b;
+                        }
+                    },
+                ),
             ],
         },
         // Performance
@@ -380,34 +917,73 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             name: "Performance",
             collapsed: false,
             fields: vec![
-                field("Worker threads", "Number of worker threads (auto = 2x logical cores)",
+                field(
+                    "Worker threads",
+                    "Number of worker threads (auto = 2x logical cores)",
                     ConfigValue::OptionalUint(ops.performance.worker_threads),
-                    source_for(ops.performance.worker_threads == defaults.performance.worker_threads, PerformanceOpinions::KDL_WORKER_THREADS),
+                    source_for(
+                        ops.performance.worker_threads == defaults.performance.worker_threads,
+                        PerformanceOpinions::KDL_WORKER_THREADS,
+                    ),
                     true,
-                    |v, c| { if let ConfigValue::OptionalUint(n) = v { c.opinions.performance.worker_threads = *n; } }),
-                field("DB cache MB", "SQLite page cache size per connection in MB",
+                    |v, c| {
+                        if let ConfigValue::OptionalUint(n) = v {
+                            c.opinions.performance.worker_threads = *n;
+                        }
+                    },
+                ),
+                field(
+                    "DB cache MB",
+                    "SQLite page cache size per connection in MB",
                     ConfigValue::UintU32(ops.performance.db_cache_mb),
-                    source_for(ops.performance.db_cache_mb == defaults.performance.db_cache_mb, PerformanceOpinions::KDL_DB_CACHE),
+                    source_for(
+                        ops.performance.db_cache_mb == defaults.performance.db_cache_mb,
+                        PerformanceOpinions::KDL_DB_CACHE,
+                    ),
                     true,
-                    |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.performance.db_cache_mb = *n; } }),
-                field("Timing instrumentation", "Enable stats display and atomic counter updates",
+                    |v, c| {
+                        if let ConfigValue::UintU32(n) = v {
+                            c.opinions.performance.db_cache_mb = *n;
+                        }
+                    },
+                ),
+                field(
+                    "Timing instrumentation",
+                    "Enable stats display and atomic counter updates",
                     ConfigValue::Bool(ops.performance.timing_instrumentation),
-                    source_for(ops.performance.timing_instrumentation == defaults.performance.timing_instrumentation, PerformanceOpinions::KDL_TIMING),
+                    source_for(
+                        ops.performance.timing_instrumentation
+                            == defaults.performance.timing_instrumentation,
+                        PerformanceOpinions::KDL_TIMING,
+                    ),
                     true,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.performance.timing_instrumentation = *b; } }),
+                    |v, c| {
+                        if let ConfigValue::Bool(b) = v {
+                            c.opinions.performance.timing_instrumentation = *b;
+                        }
+                    },
+                ),
             ],
         },
         // Debug
         ConfigGroup {
             name: "Debug",
             collapsed: false,
-            fields: vec![
-                field("Memory logging", "Log periodic memory snapshots (RSS, SQLite, threads) to general.log",
-                    ConfigValue::Bool(ops.debug.memory_logging),
-                    source_for(ops.debug.memory_logging == defaults.debug.memory_logging, DebugOpinions::KDL_MEMORY_LOGGING),
-                    true,
-                    |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.debug.memory_logging = *b; } }),
-            ],
+            fields: vec![field(
+                "Memory logging",
+                "Log periodic memory snapshots (RSS, SQLite, threads) to general.log",
+                ConfigValue::Bool(ops.debug.memory_logging),
+                source_for(
+                    ops.debug.memory_logging == defaults.debug.memory_logging,
+                    DebugOpinions::KDL_MEMORY_LOGGING,
+                ),
+                true,
+                |v, c| {
+                    if let ConfigValue::Bool(b) = v {
+                        c.opinions.debug.memory_logging = *b;
+                    }
+                },
+            )],
         },
     ]
 }
@@ -512,12 +1088,42 @@ mod tests {
         let rebuilt = apply_groups_to_config(&config, &groups);
 
         // Verify key fields survive the round-trip
-        assert_eq!(rebuilt.opinions.startup.default_view, config.opinions.startup.default_view);
-        assert_eq!(rebuilt.opinions.quality_resolution.inbox_bitrate_fuzz_percent, config.opinions.quality_resolution.inbox_bitrate_fuzz_percent);
-        assert_eq!(rebuilt.opinions.duplicate_analysis.fingerprint_similarity_threshold, config.opinions.duplicate_analysis.fingerprint_similarity_threshold);
-        assert_eq!(rebuilt.opinions.disc_extraction.disc_tag_name, config.opinions.disc_extraction.disc_tag_name);
-        assert_eq!(rebuilt.opinions.disc_extraction.map_letters_to_numbers, config.opinions.disc_extraction.map_letters_to_numbers);
-        assert_eq!(rebuilt.opinions.album_art.sidecar_deploy_mode, config.opinions.album_art.sidecar_deploy_mode);
+        assert_eq!(
+            rebuilt.opinions.startup.default_view,
+            config.opinions.startup.default_view
+        );
+        assert_eq!(
+            rebuilt
+                .opinions
+                .quality_resolution
+                .inbox_bitrate_fuzz_percent,
+            config
+                .opinions
+                .quality_resolution
+                .inbox_bitrate_fuzz_percent
+        );
+        assert_eq!(
+            rebuilt
+                .opinions
+                .duplicate_analysis
+                .fingerprint_similarity_threshold,
+            config
+                .opinions
+                .duplicate_analysis
+                .fingerprint_similarity_threshold
+        );
+        assert_eq!(
+            rebuilt.opinions.disc_extraction.disc_tag_name,
+            config.opinions.disc_extraction.disc_tag_name
+        );
+        assert_eq!(
+            rebuilt.opinions.disc_extraction.map_letters_to_numbers,
+            config.opinions.disc_extraction.map_letters_to_numbers
+        );
+        assert_eq!(
+            rebuilt.opinions.album_art.sidecar_deploy_mode,
+            config.opinions.album_art.sidecar_deploy_mode
+        );
     }
 
     #[test]
@@ -528,8 +1134,13 @@ mod tests {
         // With no KDL content and default values, all sources should be Default
         for group in &groups {
             for field in &group.fields {
-                assert_eq!(field.source, FieldSource::Default,
-                    "Field '{}' in group '{}' should be Default", field.label, group.name);
+                assert_eq!(
+                    field.source,
+                    FieldSource::Default,
+                    "Field '{}' in group '{}' should be Default",
+                    field.label,
+                    group.name
+                );
             }
         }
     }

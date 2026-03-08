@@ -11,8 +11,8 @@
 //! - Corpus file signals are keyed by `inode INTEGER PRIMARY KEY`.
 //! - Aggregate signals are keyed by `key TEXT PRIMARY KEY`.
 
-use std::hash::{Hash, Hasher};
 use serde::{Deserialize, Serialize};
+use std::hash::{Hash, Hasher};
 
 // ============================================================================
 // Corpus File Signals (inode-keyed)
@@ -325,7 +325,9 @@ pub enum PathMismatchKind {
     /// Path doesn't match the schema's expected structure at all.
     StructureMismatch { description: String },
     /// Path matches the structure but extracted values differ from DB tags.
-    ValueMismatch { mismatches: Vec<PathTagValueMismatch> },
+    ValueMismatch {
+        mismatches: Vec<PathTagValueMismatch>,
+    },
 }
 
 /// A single tag value mismatch between path-extracted value and DB value.
@@ -448,14 +450,22 @@ pub struct ReleasePackingData {
 }
 
 /// Breakdown of the composite packing score.
+///
+/// Each tag dimension (title, artist, album) is stored independently rather
+/// than as a single composite, so weights can zero out dimensions that are
+/// unreliable in certain scoring contexts (e.g., artist in elimination).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackingScoreBreakdown {
     /// AcoustID fingerprint confidence (0.0-1.0).
     pub acoustid_confidence: f64,
     /// Duration match quality (1.0 = exact, decays with mismatch).
     pub duration_match: f64,
-    /// String similarity between corpus tags and MB metadata (0.0-1.0).
-    pub tag_similarity: f64,
+    /// Title similarity (max of track title and recording title, 0.0-1.0).
+    pub title_match: f64,
+    /// Artist similarity (corpus ARTIST vs release artist, 0.0-1.0).
+    pub artist_match: f64,
+    /// Album similarity (corpus ALBUM vs release title, 0.0-1.0).
+    pub album_match: f64,
     /// Track number match bonus (1.0 if TRACKNUMBER matches position, 0.0 otherwise).
     pub track_number_match: f64,
     /// Directory cohesion bonus (fraction of sibling files mapping to same release).
@@ -550,6 +560,7 @@ pub struct PackedReleaseSignal {
 pub enum PackedReleaseCategory {
     FullMatch,
     Single,
+    NearMiss,
     Incomplete,
 }
 
@@ -559,6 +570,7 @@ impl PackedReleaseCategory {
         match self {
             Self::FullMatch => "full_match",
             Self::Single => "single",
+            Self::NearMiss => "near_miss",
             Self::Incomplete => "incomplete",
         }
     }
@@ -623,7 +635,7 @@ pub struct CanonicalTagSignal {
 /// Suppresses CrossSourceOverlap signal emission for this source pair.
 #[derive(Debug, Clone)]
 pub struct ExpectedOverlapSignal {
-    pub key: String,        // "source_a|source_b" (sorted, same format as CrossSourceOverlap keys)
+    pub key: String, // "source_a|source_b" (sorted, same format as CrossSourceOverlap keys)
     pub source_a: String,
     pub source_b: String,
     pub created_at: String,
@@ -633,7 +645,7 @@ pub struct ExpectedOverlapSignal {
 /// Suppresses RedundantDuplicate and SubparDuplicate signal emission for this group.
 #[derive(Debug, Clone)]
 pub struct ExpectedDuplicateSignal {
-    pub key: String,        // fingerprint text (same key space as RedundantDuplicate)
+    pub key: String, // fingerprint text (same key space as RedundantDuplicate)
     pub created_at: String,
 }
 
@@ -904,8 +916,8 @@ pub struct InboxCompoundTagSignal {
 /// Aggregate signal keyed by "{tag_name}:{normalized_key}".
 #[derive(Debug, Clone)]
 pub struct InboxTagCanonicitySignal {
-    pub key: String,       // "artist:beyonce"
-    pub tag_name: String,  // "artist"
+    pub key: String,      // "artist:beyonce"
+    pub tag_name: String, // "artist"
     /// Serialized as bincode BLOB.
     pub data: InboxTagCanonicityData,
 }
@@ -961,8 +973,8 @@ pub enum DiscExtractionSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackNumberExtraction {
     pub inode: i64,
-    pub original_value: String,   // "A01"
-    pub cleaned_digits: String,   // "01"
+    pub original_value: String, // "A01"
+    pub cleaned_digits: String, // "01"
 }
 
 /// A pair of tracks from different sources that share a fingerprint.

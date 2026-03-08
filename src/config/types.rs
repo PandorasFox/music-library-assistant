@@ -284,14 +284,23 @@ impl DuplicateAnalysisOpinions {
 /// used by the Hungarian assignment algorithm. Two weight sets exist:
 /// `candidate_weights` for AcoustID-backed scoring and `elimination_weights`
 /// for tag-only gap-filling where no fingerprint match exists.
+///
+/// Each tag dimension (title, artist, album) is an independent weight rather
+/// than being folded into a single `tag_similarity` composite. This lets
+/// elimination scoring zero out `artist_match` when rip artist tags diverge
+/// from MusicBrainz credits (common in game soundtracks).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackingWeights {
     /// AcoustID fingerprint confidence weight.
     pub acoustid_confidence: f64,
     /// Duration match quality weight.
     pub duration_match: f64,
-    /// Tag similarity (title/artist/album) weight.
-    pub tag_similarity: f64,
+    /// Title similarity weight (max of track title and recording title).
+    pub title_match: f64,
+    /// Artist similarity weight (corpus ARTIST vs release artist).
+    pub artist_match: f64,
+    /// Album similarity weight (corpus ALBUM vs release title).
+    pub album_match: f64,
     /// Track number match weight.
     pub track_number_match: f64,
     /// Directory cohesion weight.
@@ -305,19 +314,25 @@ impl PackingWeights {
         Self {
             acoustid_confidence: 0.25,
             duration_match: 0.25,
-            tag_similarity: 0.15,
+            title_match: 0.08,
+            artist_match: 0.05,
+            album_match: 0.02,
             track_number_match: 0.10,
             directory_cohesion: 0.25,
         }
     }
 
     /// Default weights for elimination/gap-filling scoring.
-    /// No fingerprint available; tags and tracknumber are primary evidence.
+    /// No fingerprint available; title and tracknumber are primary evidence.
+    /// Artist weight is zero because rip artist tags often diverge from MB
+    /// release-level credits (e.g., individual composers vs game studio).
     pub fn elimination_defaults() -> Self {
         Self {
             acoustid_confidence: 0.0,
-            duration_match: 0.35,
-            tag_similarity: 0.20,
+            duration_match: 0.25,
+            title_match: 0.25,
+            artist_match: 0.0,
+            album_match: 0.05,
             track_number_match: 0.30,
             directory_cohesion: 0.15,
         }
@@ -325,7 +340,9 @@ impl PackingWeights {
 
     pub const KDL_ACOUSTID_CONFIDENCE: &str = "acoustid-confidence";
     pub const KDL_DURATION_MATCH: &str = "duration-match";
-    pub const KDL_TAG_SIMILARITY: &str = "tag-similarity";
+    pub const KDL_TITLE_MATCH: &str = "title-match";
+    pub const KDL_ARTIST_MATCH: &str = "artist-match";
+    pub const KDL_ALBUM_MATCH: &str = "album-match";
     pub const KDL_TRACK_NUMBER_MATCH: &str = "track-number-match";
     pub const KDL_DIRECTORY_COHESION: &str = "directory-cohesion";
 }
@@ -687,7 +704,8 @@ impl Config {
     /// used for prefix stripping and source identity.
     pub fn resolve_source_config(&self, relative_path: &Path) -> Option<ResolvedSourceConfig> {
         // Collect all matching sources, sorted most specific (longest path) first.
-        let mut matching: Vec<&SourceDir> = self.source_dirs
+        let mut matching: Vec<&SourceDir> = self
+            .source_dirs
             .iter()
             .filter(|sd| relative_path.starts_with(&sd.path))
             .collect();
@@ -701,21 +719,23 @@ impl Config {
         let source_path = matching[0].path.clone();
 
         // Walk chain for each field: first explicit value wins, else system default.
-        let libraries = matching.iter()
+        let libraries = matching
+            .iter()
             .find(|sd| !sd.libraries.is_empty())
             .map(|sd| sd.libraries.clone())
             .unwrap_or_default();
 
-        let can_stash_dupes = matching.iter()
+        let can_stash_dupes = matching
+            .iter()
             .find_map(|sd| sd.can_stash_dupes)
             .unwrap_or(true);
 
-        let interior_dupes = matching.iter()
+        let interior_dupes = matching
+            .iter()
             .find_map(|sd| sd.interior_dupes)
             .unwrap_or(true);
 
-        let path_schema = matching.iter()
-            .find_map(|sd| sd.path_schema.clone());
+        let path_schema = matching.iter().find_map(|sd| sd.path_schema.clone());
 
         Some(ResolvedSourceConfig {
             source_path,
@@ -782,7 +802,11 @@ impl Config {
             .dev();
         device_ids.push(("root", &self.root, root_dev));
 
-        for (name, dir) in [("corpus", &corpus_dir), ("libraries", &libraries_dir), ("stash", &stash_dir)] {
+        for (name, dir) in [
+            ("corpus", &corpus_dir),
+            ("libraries", &libraries_dir),
+            ("stash", &stash_dir),
+        ] {
             if !dir.exists() {
                 anyhow::bail!(
                     "Validation failed: {} directory does not exist\n\
@@ -815,8 +839,12 @@ impl Config {
                      \n\
                      Note: Nested mount points within these directories will be detected\n\
                      at runtime and trigger read-only safety mode.",
-                    first_name, first_dir, first_dev,
-                    name, dir, dev
+                    first_name,
+                    first_dir,
+                    first_dev,
+                    name,
+                    dir,
+                    dev
                 );
             }
         }

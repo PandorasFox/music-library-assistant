@@ -5,6 +5,8 @@
 //! - Top-right (60%): tracks+unfilled for selected release
 //! - Bottom-right (40%): per-track detail with score breakdown
 
+use std::collections::HashMap;
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -60,7 +62,9 @@ fn render_title_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserStat
     let line = Line::from(vec![
         Span::styled(
             format!(" {} ", title),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("({} entries)", count),
@@ -89,7 +93,11 @@ fn render_controls(f: &mut Frame, area: Rect) {
 
 fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
     let focused = matches!(state.focused_pane, FocusedPane::LeftPane);
-    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
+    let border_color = if focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
     let block = Block::default()
         .title(" Releases ")
         .borders(Borders::ALL)
@@ -148,7 +156,9 @@ fn render_left_entry(
         PackingListEntry::Release { idx } => {
             let release = &state.releases[*idx];
             let title_style = if selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -176,7 +186,9 @@ fn render_left_entry(
         PackingListEntry::NearMiss { idx } => {
             let nm = &state.near_misses[*idx];
             let label_style = if selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Yellow)
             };
@@ -197,7 +209,9 @@ fn render_left_entry(
         PackingListEntry::Unmatched { idx } => {
             let um = &state.unmatched[*idx];
             let label_style = if selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
@@ -205,10 +219,7 @@ fn render_left_entry(
 
             Line::from(vec![
                 Span::styled(marker.to_string(), label_style),
-                Span::styled(
-                    truncate_for_width(filename, title_max),
-                    label_style,
-                ),
+                Span::styled(truncate_for_width(filename, title_max), label_style),
             ])
         }
     }
@@ -220,7 +231,11 @@ fn render_left_entry(
 
 fn render_tracks_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
     let focused = matches!(state.focused_pane, FocusedPane::MiddlePane);
-    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
+    let border_color = if focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
     let block = Block::default()
         .title(" Tracks ")
         .borders(Borders::ALL)
@@ -289,10 +304,7 @@ fn render_release_tracks(
                 format!("{:>2} ", track.track_number),
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(
-                truncate_for_width(filename, 30),
-                label_style,
-            ),
+            Span::styled(truncate_for_width(filename, 30), label_style),
             Span::styled(
                 format!("  {:.2}", track.score),
                 Style::default().fg(Color::Yellow),
@@ -358,7 +370,11 @@ fn render_release_tracks(
 
 fn render_detail_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
     let focused = matches!(state.focused_pane, FocusedPane::DetailPane);
-    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
+    let border_color = if focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
     let block = Block::default()
         .title(" Detail ")
         .borders(Borders::ALL)
@@ -372,7 +388,11 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrows
 
     let lines = match state.selected_entry() {
         Some(PackingListEntry::Release { idx }) => {
-            detail_for_release(&state.releases[*idx], state.track_cursor)
+            if matches!(state.focused_pane, FocusedPane::LeftPane) {
+                render_release_overview(&state.releases[*idx])
+            } else {
+                detail_for_release(&state.releases[*idx], state.track_cursor)
+            }
         }
         Some(PackingListEntry::NearMiss { idx }) => {
             render_near_miss_detail(&state.near_misses[*idx])
@@ -413,12 +433,7 @@ fn detail_for_release(release: &ReleaseGroup, track_cursor: usize) -> Vec<Line<'
 
 fn render_scrollable_lines(f: &mut Frame, area: Rect, lines: &[Line<'static>], scroll: usize) {
     let visible = area.height as usize;
-    let visible_lines: Vec<Line> = lines
-        .iter()
-        .skip(scroll)
-        .take(visible)
-        .cloned()
-        .collect();
+    let visible_lines: Vec<Line> = lines.iter().skip(scroll).take(visible).cloned().collect();
     let paragraph = Paragraph::new(visible_lines).wrap(Wrap { trim: false });
     f.render_widget(paragraph, area);
 }
@@ -501,7 +516,9 @@ fn render_track_detail(track: &AssignedTrackInfo, release: &ReleaseGroup) -> Vec
     let scores = [
         ("AcoustID confidence:", breakdown.acoustid_confidence),
         ("Duration match:     ", breakdown.duration_match),
-        ("Tag similarity:     ", breakdown.tag_similarity),
+        ("Title match:        ", breakdown.title_match),
+        ("Artist match:       ", breakdown.artist_match),
+        ("Album match:        ", breakdown.album_match),
         ("Track number match: ", breakdown.track_number_match),
         ("Directory cohesion: ", breakdown.directory_cohesion),
     ];
@@ -512,7 +529,10 @@ fn render_track_detail(track: &AssignedTrackInfo, release: &ReleaseGroup) -> Vec
 
     lines.push(Line::from(Span::raw("")));
     lines.push(Line::from(vec![
-        Span::styled("Alternatives considered: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "Alternatives considered: ",
+            Style::default().fg(Color::DarkGray),
+        ),
         Span::styled(
             format!("{}", track.alternatives_count),
             Style::default().fg(Color::White),
@@ -573,7 +593,9 @@ fn render_unfilled_detail(slot: &UnfilledSlotInfo, release: &ReleaseGroup) -> Ve
     ]
 }
 
-fn render_near_miss_detail(nm: &crate::meta::signals::data::NearMissReleaseData) -> Vec<Line<'static>> {
+fn render_near_miss_detail(
+    nm: &crate::meta::signals::data::NearMissReleaseData,
+) -> Vec<Line<'static>> {
     vec![
         Line::from(Span::styled(
             "Near-Miss Release",
@@ -598,7 +620,10 @@ fn render_near_miss_detail(nm: &crate::meta::signals::data::NearMissReleaseData)
         Line::from(vec![
             Span::styled("Missing slot: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("Disc {}, Track {}", nm.missing_medium_pos, nm.missing_track_pos),
+                format!(
+                    "Disc {}, Track {}",
+                    nm.missing_medium_pos, nm.missing_track_pos
+                ),
                 Style::default().fg(Color::White),
             ),
         ]),
@@ -697,7 +722,10 @@ fn render_score_bar(label: &str, value: f64) -> Line<'static> {
 
     Line::from(vec![
         Span::styled(format!("  {}", label), Style::default().fg(Color::DarkGray)),
-        Span::styled(format!(" {:.2}  ", value), Style::default().fg(Color::White)),
+        Span::styled(
+            format!(" {:.2}  ", value),
+            Style::default().fg(Color::White),
+        ),
         Span::styled(bar, Style::default().fg(Color::Yellow)),
     ])
 }

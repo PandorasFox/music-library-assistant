@@ -24,6 +24,9 @@
 //! Stage 3c: MapFullMatchReleases — MIS on cross-dir/extra-file proposals
 //!     │  ═══════ BARRIER ═══════
 //!     ▼
+//! Stage 3c½: MapNearMissReleases — MIS on (n-1)/n single-dir proposals
+//!     │  ═══════ BARRIER ═══════
+//!     ▼
 //! Stage 3d: MapIncompleteReleases — MIS on partial-coverage proposals
 //!     │  ═══════ BARRIER ═══════
 //!     ▼
@@ -113,7 +116,9 @@ pub(crate) enum ProposalTier {
     Perfect,
     /// Every slot filled, but cross-directory or directory has extra files.
     FullMatch,
-    /// Some slots filled but not all (includes near-misses).
+    /// Almost complete: (n-1)/n slots filled, all from one directory with exactly n files.
+    NearMiss,
+    /// Some slots filled but not all.
     Incomplete,
     /// Single-track release.
     Single,
@@ -134,16 +139,25 @@ pub(crate) struct Proposal {
 /// Clone is cheap (Arc refcount). Serialize/Deserialize skip the inner state
 /// (these variants are transient pipeline state, never persisted).
 #[derive(Clone)]
-pub(crate) struct SharedMappingState(std::sync::Arc<std::sync::Mutex<Option<Box<ReleaseMappingState>>>>);
+pub(crate) struct SharedMappingState(
+    std::sync::Arc<std::sync::Mutex<Option<Box<ReleaseMappingState>>>>,
+);
 
 impl SharedMappingState {
     pub fn new(state: ReleaseMappingState) -> Self {
-        Self(std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(state)))))
+        Self(std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
+            state,
+        )))))
     }
 
     /// Take the state out of the box. Panics if called twice (state already consumed).
     pub fn take(&self) -> ReleaseMappingState {
-        *self.0.lock().unwrap().take().expect("ReleaseMappingState consumed twice")
+        *self
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("ReleaseMappingState consumed twice")
     }
 }
 
@@ -154,14 +168,21 @@ impl std::fmt::Debug for SharedMappingState {
 }
 
 impl serde::Serialize for SharedMappingState {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_unit()
     }
 }
 
 impl<'de> serde::Deserialize<'de> for SharedMappingState {
-    fn deserialize<D: serde::Deserializer<'de>>(_deserializer: D) -> std::result::Result<Self, D::Error> {
-        Err(serde::de::Error::custom("SharedMappingState cannot be deserialized"))
+    fn deserialize<D: serde::Deserializer<'de>>(
+        _deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        Err(serde::de::Error::custom(
+            "SharedMappingState cannot be deserialized",
+        ))
     }
 }
 
@@ -173,6 +194,7 @@ pub(crate) struct ReleaseMappingState {
     /// Proposal pools — each consumed by its corresponding MIS round.
     pub perfect_pool: Vec<Proposal>,
     pub full_match_pool: Vec<Proposal>,
+    pub near_miss_pool: Vec<Proposal>,
     pub incomplete_pool: Vec<Proposal>,
     pub single_pool: Vec<Proposal>,
     /// Inodes assigned so far (accumulated across rounds).
@@ -213,6 +235,27 @@ fn classify_proposal(
         return ProposalTier::Single;
     }
     if (rows.len() as i32) < total_tracks {
+        // Check for near-miss: exactly (n-1)/n filled, all from one directory
+        // with exactly n audio files.
+        if (rows.len() as i32) + 1 == total_tracks {
+            let mut dirs: HashMap<&str, i32> = HashMap::new();
+            for row in rows {
+                if let Some((dir, count)) = inode_dir_map.get(&row.inode) {
+                    *dirs.entry(dir.as_str()).or_insert(0) += 1;
+                    // Single directory check: if we see a second dir, bail
+                    if dirs.len() > 1 {
+                        return ProposalTier::Incomplete;
+                    }
+                    // Directory file count must match total tracks
+                    if *count != total_tracks {
+                        return ProposalTier::Incomplete;
+                    }
+                }
+            }
+            if dirs.len() == 1 {
+                return ProposalTier::NearMiss;
+            }
+        }
         return ProposalTier::Incomplete;
     }
 
@@ -232,8 +275,14 @@ fn classify_proposal(
     for row in rows {
         if let Some((dir, _)) = inode_dir_map.get(&row.inode) {
             dir_inodes.entry(dir.as_str()).or_default().push(row.inode);
-            dir_media.entry(dir.as_str()).or_default().insert(row.medium_pos);
-            medium_dirs.entry(row.medium_pos).or_default().insert(dir.as_str());
+            dir_media
+                .entry(dir.as_str())
+                .or_default()
+                .insert(row.medium_pos);
+            medium_dirs
+                .entry(row.medium_pos)
+                .or_default()
+                .insert(dir.as_str());
         }
     }
 
@@ -397,14 +446,32 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
     // Log component distribution for visibility
     {
         let isolated = components.iter().filter(|c| c.len() == 1).count();
-        let small = components.iter().filter(|c| (2..=5).contains(&c.len())).count();
-        let bitmask = components.iter().filter(|c| (6..=25).contains(&c.len())).count();
+        let small = components
+            .iter()
+            .filter(|c| (2..=5).contains(&c.len()))
+            .count();
+        let bitmask = components
+            .iter()
+            .filter(|c| (6..=25).contains(&c.len()))
+            .count();
         let bnb = components.iter().filter(|c| c.len() > 25).count();
-        let bnb_sizes: Vec<usize> = components.iter().filter(|c| c.len() > 25).map(|c| c.len()).collect();
+        let bnb_sizes: Vec<usize> = components
+            .iter()
+            .filter(|c| c.len() > 25)
+            .map(|c| c.len())
+            .collect();
         log_general(format!(
             "[COMPUTE] MIS: {} components (isolated={}, small={}, bitmask={}, bnb={}{})",
-            components.len(), isolated, small, bitmask, bnb,
-            if bnb_sizes.is_empty() { String::new() } else { format!(" sizes={:?}", bnb_sizes) },
+            components.len(),
+            isolated,
+            small,
+            bitmask,
+            bnb,
+            if bnb_sizes.is_empty() {
+                String::new()
+            } else {
+                format!(" sizes={:?}", bnb_sizes)
+            },
         ));
     }
 
@@ -468,12 +535,17 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
         } else {
             // Branch-and-bound for larger components
             let comp_size = component.len();
-            let comp_edges: usize = component.iter()
+            let comp_edges: usize = component
+                .iter()
                 .map(|&gi| adj[gi].iter().filter(|&&n| component.contains(&n)).count())
-                .sum::<usize>() / 2;
+                .sum::<usize>()
+                / 2;
             log_general(format!(
                 "[COMPUTE] MIS: solving BnB component {}/{} (nodes={}, edges={})",
-                ci + 1, components.len(), comp_size, comp_edges,
+                ci + 1,
+                components.len(),
+                comp_size,
+                comp_edges,
             ));
 
             let mut global_to_local: HashMap<usize, usize> = HashMap::new();
@@ -489,12 +561,15 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
                 }
             }
 
-            let local_scores: Vec<f64> =
-                component.iter().map(|&gi| candidates[gi].score).collect();
-            let local_coverages: Vec<usize> =
-                component.iter().map(|&gi| candidates[gi].inode_set.len()).collect();
-            let local_inode_sets: Vec<&HashSet<i64>> =
-                component.iter().map(|&gi| &candidates[gi].inode_set).collect();
+            let local_scores: Vec<f64> = component.iter().map(|&gi| candidates[gi].score).collect();
+            let local_coverages: Vec<usize> = component
+                .iter()
+                .map(|&gi| candidates[gi].inode_set.len())
+                .collect();
+            let local_inode_sets: Vec<&HashSet<i64>> = component
+                .iter()
+                .map(|&gi| &candidates[gi].inode_set)
+                .collect();
 
             let mut best_coverage: usize = 0;
             let mut best_score: f64 = f64::NEG_INFINITY;
@@ -578,10 +653,12 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
 
                 // Branch A: INCLUDE pivot
                 {
-                    let neighbors: HashSet<usize> =
-                        local_adj[pivot].iter().copied().collect();
+                    let neighbors: HashSet<usize> = local_adj[pivot].iter().copied().collect();
                     let pivot_inodes = local_inode_sets[pivot];
-                    if !pivot_inodes.iter().any(|i| state.claimed_inodes.contains(i)) {
+                    if !pivot_inodes
+                        .iter()
+                        .any(|i| state.claimed_inodes.contains(i))
+                    {
                         let new_candidates: Vec<usize> = state
                             .candidates
                             .iter()
@@ -661,8 +738,7 @@ fn compute_score(
         .and_then(|v| v.first())
         .map(|corpus_title| {
             let track_sim = strsim::normalized_levenshtein(corpus_title, &track.title);
-            let rec_sim =
-                strsim::normalized_levenshtein(corpus_title, &track.recording.title);
+            let rec_sim = strsim::normalized_levenshtein(corpus_title, &track.recording.title);
             track_sim.max(rec_sim)
         })
         .unwrap_or(0.0);
@@ -679,8 +755,6 @@ fn compute_score(
         .map(|corpus_album| strsim::normalized_levenshtein(corpus_album, release_title))
         .unwrap_or(0.0);
 
-    let tag_similarity = 0.4 * title_sim + 0.35 * artist_sim + 0.25 * album_sim;
-
     // Track number match
     let track_number_match = corpus
         .and_then(|c| c.tags.get("TRACKNUMBER"))
@@ -692,7 +766,9 @@ fn compute_score(
     let breakdown = PackingScoreBreakdown {
         acoustid_confidence,
         duration_match,
-        tag_similarity,
+        title_match: title_sim,
+        artist_match: artist_sim,
+        album_match: album_sim,
         track_number_match,
         directory_cohesion: 0.0, // Set later by caller
     };
@@ -705,7 +781,9 @@ fn compute_score(
 fn weighted_composite(b: &PackingScoreBreakdown, w: &PackingWeights) -> f64 {
     w.acoustid_confidence * b.acoustid_confidence
         + w.duration_match * b.duration_match
-        + w.tag_similarity * b.tag_similarity
+        + w.title_match * b.title_match
+        + w.artist_match * b.artist_match
+        + w.album_match * b.album_match
         + w.track_number_match * b.track_number_match
         + w.directory_cohesion * b.directory_cohesion
 }
@@ -788,12 +866,17 @@ fn hungarian_assignment(candidates: &[CandidateAssignment]) -> HashSet<(i64, (u3
     let mut inode_set: Vec<i64> = candidates.iter().map(|c| c.inode).collect();
     inode_set.sort();
     inode_set.dedup();
-    let inode_idx: HashMap<i64, usize> = inode_set.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+    let inode_idx: HashMap<i64, usize> =
+        inode_set.iter().enumerate().map(|(i, &v)| (v, i)).collect();
 
-    let mut slot_set: Vec<(u32, u32)> = candidates.iter().map(|c| (c.medium_pos, c.track_pos)).collect();
+    let mut slot_set: Vec<(u32, u32)> = candidates
+        .iter()
+        .map(|c| (c.medium_pos, c.track_pos))
+        .collect();
     slot_set.sort();
     slot_set.dedup();
-    let slot_idx: HashMap<(u32, u32), usize> = slot_set.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+    let slot_idx: HashMap<(u32, u32), usize> =
+        slot_set.iter().enumerate().map(|(i, &v)| (v, i)).collect();
 
     let n_rows = inode_set.len();
     let n_cols = slot_set.len();
@@ -1140,12 +1223,7 @@ pub fn execute_pack_releases(
                 release_id,
                 &preferred_locales,
             );
-            (
-                release_id.clone(),
-                total,
-                release.title.clone(),
-                artist,
-            )
+            (release_id.clone(), total, release.title.clone(), artist)
         })
         .collect();
     sender.write_packing_manifest(manifest_rows, witness);
@@ -1169,9 +1247,7 @@ pub fn execute_pack_releases(
     for (inode, rec_matches) in &inode_recordings {
         let corpus = corpus_info.get(inode);
         let inode_path = inode_paths.get(inode).cloned().unwrap_or_default();
-        let parent_dir = corpus
-            .map(|c| c.parent_dir.clone())
-            .unwrap_or_default();
+        let parent_dir = corpus.map(|c| c.parent_dir.clone()).unwrap_or_default();
         let dir_file_count = dir_total_files.get(&parent_dir).copied().unwrap_or(1);
 
         for rec_match in rec_matches {
@@ -1235,8 +1311,7 @@ pub fn execute_pack_releases(
     for (release_id, _) in deduped.keys() {
         releases_with_candidates.insert(release_id.clone());
     }
-    let candidate_rows: Vec<write_thread::PackingCandidateRow> =
-        deduped.into_values().collect();
+    let candidate_rows: Vec<write_thread::PackingCandidateRow> = deduped.into_values().collect();
 
     // Write candidates to intermediate table for Stage 2 consumption
     if !candidate_rows.is_empty() {
@@ -1263,14 +1338,12 @@ pub fn execute_pack_releases(
     ));
 
     // === Defer Stage 3 (ComputeReleaseMappings orchestrates the rest) ===
-    let deferred_phases = vec![
-        (
-            PipelineStage::Resolve,
-            vec![Computation::Analysis(
-                AnalysisComputation::ComputeReleaseMappings,
-            )],
-        ),
-    ];
+    let deferred_phases = vec![(
+        PipelineStage::Resolve,
+        vec![Computation::Analysis(
+            AnalysisComputation::ComputeReleaseMappings,
+        )],
+    )];
 
     Result::pipeline(
         computation,
@@ -1401,10 +1474,12 @@ pub fn execute_score_release_candidates(
     let mut corpus_info: HashMap<i64, CorpusFileInfo> = HashMap::new();
 
     for row in &candidate_rows {
-        candidate_inodes.entry(row.inode).or_insert_with(|| RecordingMatch {
-            recording_id: row.recording_id.clone(),
-            confidence: row.confidence,
-        });
+        candidate_inodes
+            .entry(row.inode)
+            .or_insert_with(|| RecordingMatch {
+                recording_id: row.recording_id.clone(),
+                confidence: row.confidence,
+            });
 
         corpus_info.entry(row.inode).or_insert_with(|| {
             let mut tags = HashMap::new();
@@ -1479,7 +1554,9 @@ pub fn execute_score_release_candidates(
         }
     }
     for row in &candidate_rows {
-        dir_total.entry(row.parent_dir.clone()).or_insert(row.dir_file_count);
+        dir_total
+            .entry(row.parent_dir.clone())
+            .or_insert(row.dir_file_count);
     }
 
     for candidate in &mut candidates {
@@ -1494,8 +1571,7 @@ pub fn execute_score_release_candidates(
                 .unwrap_or(1)
                 .max(1);
 
-            candidate.breakdown.directory_cohesion =
-                unique_candidates as f64 / total_files as f64;
+            candidate.breakdown.directory_cohesion = unique_candidates as f64 / total_files as f64;
             candidate.score = weighted_composite(&candidate.breakdown, &candidate_weights);
         }
     }
@@ -1596,21 +1672,174 @@ pub fn execute_score_release_candidates(
                 })
                 .collect();
 
-            // Build cost matrix using configurable elimination weights.
-            // Single Hungarian across all unassigned files × all unfilled slots.
-            let n_unassigned = all_unassigned.len();
-            let n_unfilled = unfilled.len();
+            // =============================================================
+            // Phase 1: High-confidence title pre-assignment
+            // =============================================================
+            // Before the full Hungarian, lock in files where title similarity
+            // is unambiguously high (>0.95) and the match is 1:1. This prevents
+            // tracknumber from stealing slots that have clear title matches
+            // when the rip's track ordering diverges from MB.
+
+            const TITLE_PREASSIGN_THRESHOLD: f64 = 0.95;
+
+            // Compute title similarity for every file × slot pair
+            let title_sims: Vec<Vec<f64>> = unassigned_tags
+                .iter()
+                .map(|tags| {
+                    unfilled
+                        .iter()
+                        .map(|(_, _, track)| {
+                            tags.get("TITLE")
+                                .and_then(|v| v.first())
+                                .map(|t| {
+                                    let track_sim = strsim::normalized_levenshtein(t, &track.title);
+                                    let rec_sim =
+                                        strsim::normalized_levenshtein(t, &track.recording.title);
+                                    track_sim.max(rec_sim)
+                                })
+                                .unwrap_or(0.0)
+                        })
+                        .collect()
+                })
+                .collect();
+
+            // Find unambiguous 1:1 matches above threshold
+            let mut preassigned_files: HashSet<usize> = HashSet::new();
+            let mut preassigned_slots: HashSet<usize> = HashSet::new();
+
+            // For each file, find slots above threshold; for each slot, find files above threshold
+            let n_files = all_unassigned.len();
+            let n_slots = unfilled.len();
+
+            // file_candidates[ui] = list of slot indices with sim > threshold
+            let file_candidates: Vec<Vec<usize>> = (0..n_files)
+                .map(|ui| {
+                    (0..n_slots)
+                        .filter(|&fi| title_sims[ui][fi] > TITLE_PREASSIGN_THRESHOLD)
+                        .collect()
+                })
+                .collect();
+
+            // slot_candidates[fi] = list of file indices with sim > threshold
+            let slot_candidates: Vec<Vec<usize>> = (0..n_slots)
+                .map(|fi| {
+                    (0..n_files)
+                        .filter(|&ui| title_sims[ui][fi] > TITLE_PREASSIGN_THRESHOLD)
+                        .collect()
+                })
+                .collect();
+
+            // Assign where both sides have exactly one candidate (unambiguous 1:1)
+            for ui in 0..n_files {
+                if file_candidates[ui].len() != 1 {
+                    continue;
+                }
+                let fi = file_candidates[ui][0];
+                if slot_candidates[fi].len() != 1 {
+                    continue;
+                }
+                // Unambiguous: this file matches exactly one slot, that slot matches exactly one file
+                preassigned_files.insert(ui);
+                preassigned_slots.insert(fi);
+
+                let (inode, _path, fingerprint_hex, dur_ms) = &all_unassigned[ui];
+                let (medium_pos, track_pos, track) = &unfilled[fi];
+                let tags = &unassigned_tags[ui];
+
+                // Build full breakdown for the pre-assigned match
+                let mb_dur = track.length.or(track.recording.length);
+                let duration_match = match (*dur_ms, mb_dur) {
+                    (Some(corpus_dur), Some(mb_d)) if mb_d > 0 => {
+                        let ratio = (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
+                        if ratio > duration_tolerance_pct {
+                            0.0
+                        } else {
+                            1.0 - (ratio / duration_tolerance_pct)
+                        }
+                    }
+                    _ => 0.5,
+                };
+
+                let artist_sim = tags
+                    .get("ARTIST")
+                    .and_then(|v| v.first())
+                    .map(|a| strsim::normalized_levenshtein(a, &resolved_artist))
+                    .unwrap_or(0.0);
+
+                let album_sim = tags
+                    .get("ALBUM")
+                    .and_then(|v| v.first())
+                    .map(|a| strsim::normalized_levenshtein(a, &release.title))
+                    .unwrap_or(0.0);
+
+                let track_number_match = tags
+                    .get("TRACKNUMBER")
+                    .and_then(|v| v.first())
+                    .and_then(|tn| tn.parse::<u32>().ok())
+                    .map(|tn| if tn == *track_pos { 1.0 } else { 0.0 })
+                    .unwrap_or(0.0);
+
+                let breakdown = PackingScoreBreakdown {
+                    acoustid_confidence: 0.0,
+                    duration_match,
+                    title_match: title_sims[ui][fi],
+                    artist_match: artist_sim,
+                    album_match: album_sim,
+                    track_number_match,
+                    directory_cohesion: 1.0,
+                };
+                let score = weighted_composite(&breakdown, &elimination_weights);
+                let breakdown_bytes = bincode::serialize(&breakdown).unwrap_or_default();
+
+                score_rows.push(PackingScoreRow {
+                    release_id: release_id.to_string(),
+                    inode: *inode,
+                    recording_id: track.recording.id.clone(),
+                    medium_pos: *medium_pos as i32,
+                    track_pos: *track_pos as i32,
+                    track_title: track.title.clone(),
+                    medium_format: release
+                        .media
+                        .iter()
+                        .find(|m| m.position == *medium_pos)
+                        .and_then(|m| m.format.clone()),
+                    track_number: track.number.clone(),
+                    score,
+                    score_breakdown: breakdown_bytes,
+                    is_optimal: true,
+                    match_method: 1,
+                    fingerprint_hex: fingerprint_hex.clone(),
+                    raw_duration_ms: *dur_ms,
+                });
+
+                elimination_count += 1;
+            }
+
+            // Filter out pre-assigned entries for the Hungarian pass
+            let remaining_unassigned: Vec<usize> = (0..n_files)
+                .filter(|ui| !preassigned_files.contains(ui))
+                .collect();
+            let remaining_unfilled: Vec<usize> = (0..n_slots)
+                .filter(|fi| !preassigned_slots.contains(fi))
+                .collect();
+
+            // =============================================================
+            // Phase 2: Hungarian assignment on remaining files × slots
+            // =============================================================
+            let n_unassigned = remaining_unassigned.len();
+            let n_unfilled = remaining_unfilled.len();
             let n = n_unassigned.max(n_unfilled);
             let mut cost = vec![vec![0.0f64; n]; n];
 
-            for (ui, (_, _, _, dur_ms)) in all_unassigned.iter().enumerate() {
+            for (ri, &ui) in remaining_unassigned.iter().enumerate() {
                 let tags = &unassigned_tags[ui];
-                for (fi, (_, _, track)) in unfilled.iter().enumerate() {
+                let dur_ms = &all_unassigned[ui].3;
+                for (rj, &fi) in remaining_unfilled.iter().enumerate() {
+                    let (_, _, track) = &unfilled[fi];
                     let mb_dur = track.length.or(track.recording.length);
                     let duration_match = match (*dur_ms, mb_dur) {
                         (Some(corpus_dur), Some(mb_d)) if mb_d > 0 => {
-                            let ratio =
-                                (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
+                            let ratio = (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
                             if ratio > duration_tolerance_pct {
                                 0.0
                             } else {
@@ -1624,12 +1853,8 @@ pub fn execute_score_release_candidates(
                         .get("TITLE")
                         .and_then(|v| v.first())
                         .map(|t| {
-                            let track_sim =
-                                strsim::normalized_levenshtein(t, &track.title);
-                            let rec_sim = strsim::normalized_levenshtein(
-                                t,
-                                &track.recording.title,
-                            );
+                            let track_sim = strsim::normalized_levenshtein(t, &track.title);
+                            let rec_sim = strsim::normalized_levenshtein(t, &track.recording.title);
                             track_sim.max(rec_sim)
                         })
                         .unwrap_or(0.0);
@@ -1646,8 +1871,6 @@ pub fn execute_score_release_candidates(
                         .map(|a| strsim::normalized_levenshtein(a, &release.title))
                         .unwrap_or(0.0);
 
-                    let tag_similarity = 0.4 * title_sim + 0.35 * artist_sim + 0.25 * album_sim;
-
                     let track_number_match = tags
                         .get("TRACKNUMBER")
                         .and_then(|v| v.first())
@@ -1658,30 +1881,40 @@ pub fn execute_score_release_candidates(
                     let elim_breakdown = PackingScoreBreakdown {
                         acoustid_confidence: 0.0,
                         duration_match,
-                        tag_similarity,
+                        title_match: title_sim,
+                        artist_match: artist_sim,
+                        album_match: album_sim,
                         track_number_match,
                         directory_cohesion: 1.0, // same directory by construction
                     };
-                    cost[ui][fi] = -weighted_composite(&elim_breakdown, &elimination_weights);
+                    cost[ri][rj] = -weighted_composite(&elim_breakdown, &elimination_weights);
                 }
             }
 
             const ELIMINATION_SCORE_THRESHOLD: f64 = 0.35;
 
-            let col_to_row = kuhn_munkres(&cost, n);
+            let col_to_row = if n > 0 {
+                kuhn_munkres(&cost, n)
+            } else {
+                Vec::new()
+            };
             for (j, &row) in col_to_row.iter().enumerate().skip(1) {
                 if row == 0 {
                     continue;
                 }
-                let ui = row - 1;
-                let fi = j - 1;
-                if ui >= n_unassigned || fi >= n_unfilled {
+                let ri = row - 1;
+                let rj = j - 1;
+                if ri >= n_unassigned || rj >= n_unfilled {
                     continue;
                 }
-                let composite = -cost[ui][fi];
+                let composite = -cost[ri][rj];
                 if composite < ELIMINATION_SCORE_THRESHOLD {
                     continue;
                 }
+
+                // Map back to original indices
+                let ui = remaining_unassigned[ri];
+                let fi = remaining_unfilled[rj];
 
                 let (inode, _path, fingerprint_hex, dur_ms) = &all_unassigned[ui];
                 let (medium_pos, track_pos, track) = &unfilled[fi];
@@ -1691,8 +1924,7 @@ pub fn execute_score_release_candidates(
                 let mb_dur = track.length.or(track.recording.length);
                 let duration_match = match (*dur_ms, mb_dur) {
                     (Some(corpus_dur), Some(mb_d)) if mb_d > 0 => {
-                        let ratio =
-                            (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
+                        let ratio = (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
                         if ratio > duration_tolerance_pct {
                             0.0
                         } else {
@@ -1706,12 +1938,8 @@ pub fn execute_score_release_candidates(
                     .get("TITLE")
                     .and_then(|v| v.first())
                     .map(|t| {
-                        let track_sim =
-                            strsim::normalized_levenshtein(t, &track.title);
-                        let rec_sim = strsim::normalized_levenshtein(
-                            t,
-                            &track.recording.title,
-                        );
+                        let track_sim = strsim::normalized_levenshtein(t, &track.title);
+                        let rec_sim = strsim::normalized_levenshtein(t, &track.recording.title);
                         track_sim.max(rec_sim)
                     })
                     .unwrap_or(0.0);
@@ -1728,9 +1956,6 @@ pub fn execute_score_release_candidates(
                     .map(|a| strsim::normalized_levenshtein(a, &release.title))
                     .unwrap_or(0.0);
 
-                let tag_similarity =
-                    0.4 * title_sim + 0.35 * artist_sim + 0.25 * album_sim;
-
                 let track_number_match = corpus_tags
                     .get("TRACKNUMBER")
                     .and_then(|v| v.first())
@@ -1741,7 +1966,9 @@ pub fn execute_score_release_candidates(
                 let breakdown = PackingScoreBreakdown {
                     acoustid_confidence: 0.0,
                     duration_match,
-                    tag_similarity,
+                    title_match: title_sim,
+                    artist_match: artist_sim,
+                    album_match: album_sim,
                     track_number_match,
                     directory_cohesion: 1.0,
                 };
@@ -1822,7 +2049,9 @@ fn run_mis_round(pool: &[Proposal], assigned_inodes: &HashSet<i64>) -> MisRoundR
     let eligible: Vec<usize> = pool
         .iter()
         .enumerate()
-        .filter(|(_, p)| !p.inode_set.is_empty() && p.inode_set.iter().all(|i| !assigned_inodes.contains(i)))
+        .filter(|(_, p)| {
+            !p.inode_set.is_empty() && p.inode_set.iter().all(|i| !assigned_inodes.contains(i))
+        })
         .map(|(i, _)| i)
         .collect();
 
@@ -1879,7 +2108,12 @@ fn run_mis_round(pool: &[Proposal], assigned_inodes: &HashSet<i64>) -> MisRoundR
 ///    are too tangled for MIS (many releases over few files). The best-scoring
 ///    non-conflicting proposals from each knot are auto-selected greedily.
 /// 4. **MIS** on the remaining (well-structured) conflict graph.
-fn run_mis_round_partial(pool: &[Proposal], assigned_inodes: &HashSet<i64>, knot_ratio: f64, knot_size_limit: usize) -> MisRoundResult {
+fn run_mis_round_partial(
+    pool: &[Proposal],
+    assigned_inodes: &HashSet<i64>,
+    knot_ratio: f64,
+    knot_size_limit: usize,
+) -> MisRoundResult {
     let pool_size = pool.len();
 
     // --- Step 1: Cull tainted proposals ---
@@ -1889,7 +2123,10 @@ fn run_mis_round_partial(pool: &[Proposal], assigned_inodes: &HashSet<i64>, knot
         .iter()
         .enumerate()
         .filter_map(|(i, p)| {
-            if p.inode_set.iter().any(|inode| assigned_inodes.contains(inode)) {
+            if p.inode_set
+                .iter()
+                .any(|inode| assigned_inodes.contains(inode))
+            {
                 None
             } else {
                 Some((i, &p.inode_set))
@@ -1909,7 +2146,9 @@ fn run_mis_round_partial(pool: &[Proposal], assigned_inodes: &HashSet<i64>, knot
         sig.sort_unstable();
         let score = pool[idx].total_score;
         match sig_best.entry(sig) {
-            std::collections::hash_map::Entry::Vacant(e) => { e.insert((idx, score)); }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert((idx, score));
+            }
             std::collections::hash_map::Entry::Occupied(mut e) => {
                 if score > e.get().1 {
                     e.insert((idx, score));
@@ -1997,7 +2236,7 @@ fn run_mis_round_partial(pool: &[Proposal], assigned_inodes: &HashSet<i64>, knot
 
     // Classify components: knot vs clean
     let mut knot_selected: Vec<usize> = Vec::new(); // local indices
-    let mut clean_locals: Vec<usize> = Vec::new();  // local indices entering MIS
+    let mut clean_locals: Vec<usize> = Vec::new(); // local indices entering MIS
     let mut knot_component_count = 0usize;
     let mut knot_proposal_count = 0usize;
 
@@ -2020,7 +2259,9 @@ fn run_mis_round_partial(pool: &[Proposal], assigned_inodes: &HashSet<i64>, knot
             // Sort by score descending, greedily pick non-conflicting
             let mut sorted: Vec<usize> = component.clone();
             sorted.sort_by(|&a, &b| {
-                pool[deduped[b].0].total_score.partial_cmp(&pool[deduped[a].0].total_score)
+                pool[deduped[b].0]
+                    .total_score
+                    .partial_cmp(&pool[deduped[a].0].total_score)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
             let mut knot_claimed: HashSet<i64> = HashSet::new();
@@ -2055,10 +2296,8 @@ fn run_mis_round_partial(pool: &[Proposal], assigned_inodes: &HashSet<i64>, knot
 
     // --- Step 4: MIS on clean components ---
     if !clean_locals.is_empty() {
-        let clean_deduped: Vec<(usize, &HashSet<i64>)> = clean_locals
-            .iter()
-            .map(|&local| deduped[local])
-            .collect();
+        let clean_deduped: Vec<(usize, &HashSet<i64>)> =
+            clean_locals.iter().map(|&local| deduped[local]).collect();
 
         let mis_candidates: Vec<MisCandidate> = clean_deduped
             .iter()
@@ -2118,7 +2357,6 @@ fn lock_in_round(
         }
     }
 }
-
 
 // ============================================================================
 // Stage 3: ComputeReleaseMappings
@@ -2205,7 +2443,10 @@ pub fn execute_compute_release_mappings(
 
     // Load directory metadata for tier classification
     let inode_dir_map: HashMap<i64, (String, i32)> = match read_only_db.get_candidate_inode_dirs() {
-        Ok(rows) => rows.into_iter().map(|(inode, dir, count)| (inode, (dir, count))).collect(),
+        Ok(rows) => rows
+            .into_iter()
+            .map(|(inode, dir, count)| (inode, (dir, count)))
+            .collect(),
         Err(e) => {
             return Result::failure(
                 computation,
@@ -2226,6 +2467,7 @@ pub fn execute_compute_release_mappings(
 
     let mut perfect_pool: Vec<Proposal> = Vec::new();
     let mut full_match_pool: Vec<Proposal> = Vec::new();
+    let mut near_miss_pool: Vec<Proposal> = Vec::new();
     let mut incomplete_pool: Vec<Proposal> = Vec::new();
     let mut single_pool: Vec<Proposal> = Vec::new();
 
@@ -2257,6 +2499,7 @@ pub fn execute_compute_release_mappings(
         match proposal.tier {
             ProposalTier::Perfect => perfect_pool.push(proposal),
             ProposalTier::FullMatch => full_match_pool.push(proposal),
+            ProposalTier::NearMiss => near_miss_pool.push(proposal),
             ProposalTier::Incomplete => incomplete_pool.push(proposal),
             ProposalTier::Single => single_pool.push(proposal),
         }
@@ -2268,20 +2511,31 @@ pub fn execute_compute_release_mappings(
     };
     let (p_count, p_tracks) = tier_summary(&perfect_pool);
     let (f_count, f_tracks) = tier_summary(&full_match_pool);
+    let (n_count, n_tracks) = tier_summary(&near_miss_pool);
     let (i_count, i_tracks) = tier_summary(&incomplete_pool);
     let (s_count, _) = tier_summary(&single_pool);
 
     log_general(format!(
         "[COMPUTE] ComputeReleaseMappings: {} proposals classified — \
-         {} Perfect ({} tracks), {} FullMatch ({} tracks), {} Incomplete ({} tracks), {} Single",
-        p_count + f_count + i_count + s_count,
-        p_count, p_tracks, f_count, f_tracks, i_count, i_tracks, s_count,
+         {} Perfect ({} tracks), {} FullMatch ({} tracks), \
+         {} NearMiss ({} tracks), {} Incomplete ({} tracks), {} Single",
+        p_count + f_count + n_count + i_count + s_count,
+        p_count,
+        p_tracks,
+        f_count,
+        f_tracks,
+        n_count,
+        n_tracks,
+        i_count,
+        i_tracks,
+        s_count,
     ));
 
     // Package state and defer Round 1
     let state = SharedMappingState::new(ReleaseMappingState {
         perfect_pool,
         full_match_pool,
+        near_miss_pool,
         incomplete_pool,
         single_pool,
         assigned_inodes: HashSet::new(),
@@ -2296,10 +2550,17 @@ pub fn execute_compute_release_mappings(
 
     let deferred = vec![(
         PipelineStage::Resolve,
-        vec![Computation::Analysis(AnalysisComputation::MapPerfectReleases { state })],
+        vec![Computation::Analysis(
+            AnalysisComputation::MapPerfectReleases { state },
+        )],
     )];
 
-    Result::pipeline(computation, start.elapsed().as_millis() as u64, Vec::new(), deferred)
+    Result::pipeline(
+        computation,
+        start.elapsed().as_millis() as u64,
+        Vec::new(),
+        deferred,
+    )
 }
 
 /// Execute MapPerfectReleases — Stage 3b MIS on Perfect proposals.
@@ -2314,22 +2575,33 @@ pub(crate) fn execute_map_perfect_releases(
     let mut state = shared.take();
 
     let r = run_mis_round(&state.perfect_pool, &state.assigned_inodes);
-    lock_in_round(&r, &state.perfect_pool, &mut state.assigned_inodes, &mut state.assignments);
+    lock_in_round(
+        &r,
+        &state.perfect_pool,
+        &mut state.assigned_inodes,
+        &mut state.assignments,
+    );
 
     log_general(format!(
         "[COMPUTE] MapPerfectReleases: {} eligible, {} selected, \
          coverage={} inodes, {} components (max {})",
-        r.eligible_count, r.selected_count, r.coverage,
-        r.component_count, r.max_component_size,
+        r.eligible_count, r.selected_count, r.coverage, r.component_count, r.max_component_size,
     ));
 
     let next_state = SharedMappingState::new(state);
     let deferred = vec![(
         PipelineStage::Resolve,
-        vec![Computation::Analysis(AnalysisComputation::MapFullMatchReleases { state: next_state })],
+        vec![Computation::Analysis(
+            AnalysisComputation::MapFullMatchReleases { state: next_state },
+        )],
     )];
 
-    Result::pipeline(computation, start.elapsed().as_millis() as u64, Vec::new(), deferred)
+    Result::pipeline(
+        computation,
+        start.elapsed().as_millis() as u64,
+        Vec::new(),
+        deferred,
+    )
 }
 
 /// Execute MapFullMatchReleases — Stage 3c MIS on FullMatch proposals.
@@ -2343,25 +2615,104 @@ pub(crate) fn execute_map_full_match_releases(
     };
     let mut state = shared.take();
 
-    let r = run_mis_round_partial(&state.full_match_pool, &state.assigned_inodes, state.knot_ratio, state.knot_size_limit);
-    lock_in_round(&r, &state.full_match_pool, &mut state.assigned_inodes, &mut state.assignments);
+    let r = run_mis_round_partial(
+        &state.full_match_pool,
+        &state.assigned_inodes,
+        state.knot_ratio,
+        state.knot_size_limit,
+    );
+    lock_in_round(
+        &r,
+        &state.full_match_pool,
+        &mut state.assigned_inodes,
+        &mut state.assignments,
+    );
 
     log_general(format!(
         "[COMPUTE] MapFullMatchReleases: {} eligible, {} selected, \
          coverage={} inodes, {} components (max {}), \
          dedup_removed={}, knots={} ({} proposals)",
-        r.eligible_count, r.selected_count, r.coverage,
-        r.component_count, r.max_component_size,
-        r.dedup_removed, r.knot_components, r.knot_proposals,
+        r.eligible_count,
+        r.selected_count,
+        r.coverage,
+        r.component_count,
+        r.max_component_size,
+        r.dedup_removed,
+        r.knot_components,
+        r.knot_proposals,
     ));
 
     let next_state = SharedMappingState::new(state);
     let deferred = vec![(
         PipelineStage::Resolve,
-        vec![Computation::Analysis(AnalysisComputation::MapIncompleteReleases { state: next_state })],
+        vec![Computation::Analysis(
+            AnalysisComputation::MapNearMissReleases { state: next_state },
+        )],
     )];
 
-    Result::pipeline(computation, start.elapsed().as_millis() as u64, Vec::new(), deferred)
+    Result::pipeline(
+        computation,
+        start.elapsed().as_millis() as u64,
+        Vec::new(),
+        deferred,
+    )
+}
+
+/// Execute MapNearMissReleases — Stage 3c½ MIS on NearMiss proposals.
+///
+/// Near-misses are (n-1)/n proposals from a single directory with exactly n files.
+/// They run before general incompletes to prioritize almost-complete releases.
+pub(crate) fn execute_map_near_miss_releases(
+    shared: &SharedMappingState,
+    _witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = AnalysisComputation::MapNearMissReleases {
+        state: shared.clone(),
+    };
+    let mut state = shared.take();
+
+    let r = run_mis_round_partial(
+        &state.near_miss_pool,
+        &state.assigned_inodes,
+        state.knot_ratio,
+        state.knot_size_limit,
+    );
+    lock_in_round(
+        &r,
+        &state.near_miss_pool,
+        &mut state.assigned_inodes,
+        &mut state.assignments,
+    );
+
+    log_general(format!(
+        "[COMPUTE] MapNearMissReleases: {} eligible, {} selected, \
+         coverage={} inodes, {} components (max {}), \
+         deduped={}, knots={} ({} proposals)",
+        r.eligible_count,
+        r.selected_count,
+        r.coverage,
+        r.component_count,
+        r.max_component_size,
+        r.dedup_removed,
+        r.knot_components,
+        r.knot_proposals,
+    ));
+
+    let next_state = SharedMappingState::new(state);
+    let deferred = vec![(
+        PipelineStage::Resolve,
+        vec![Computation::Analysis(
+            AnalysisComputation::MapIncompleteReleases { state: next_state },
+        )],
+    )];
+
+    Result::pipeline(
+        computation,
+        start.elapsed().as_millis() as u64,
+        Vec::new(),
+        deferred,
+    )
 }
 
 /// Execute MapIncompleteReleases — Stage 3d MIS on Incomplete proposals.
@@ -2375,25 +2726,47 @@ pub(crate) fn execute_map_incomplete_releases(
     };
     let mut state = shared.take();
 
-    let r = run_mis_round_partial(&state.incomplete_pool, &state.assigned_inodes, state.knot_ratio, state.knot_size_limit);
-    lock_in_round(&r, &state.incomplete_pool, &mut state.assigned_inodes, &mut state.assignments);
+    let r = run_mis_round_partial(
+        &state.incomplete_pool,
+        &state.assigned_inodes,
+        state.knot_ratio,
+        state.knot_size_limit,
+    );
+    lock_in_round(
+        &r,
+        &state.incomplete_pool,
+        &mut state.assigned_inodes,
+        &mut state.assignments,
+    );
 
     log_general(format!(
         "[COMPUTE] MapIncompleteReleases: {} eligible, {} selected, \
          coverage={} inodes, {} components (max {}), \
          deduped={}, knots={} ({} proposals)",
-        r.eligible_count, r.selected_count, r.coverage,
-        r.component_count, r.max_component_size,
-        r.dedup_removed, r.knot_components, r.knot_proposals,
+        r.eligible_count,
+        r.selected_count,
+        r.coverage,
+        r.component_count,
+        r.max_component_size,
+        r.dedup_removed,
+        r.knot_components,
+        r.knot_proposals,
     ));
 
     let next_state = SharedMappingState::new(state);
     let deferred = vec![(
         PipelineStage::Resolve,
-        vec![Computation::Analysis(AnalysisComputation::MapSingleReleases { state: next_state })],
+        vec![Computation::Analysis(
+            AnalysisComputation::MapSingleReleases { state: next_state },
+        )],
     )];
 
-    Result::pipeline(computation, start.elapsed().as_millis() as u64, Vec::new(), deferred)
+    Result::pipeline(
+        computation,
+        start.elapsed().as_millis() as u64,
+        Vec::new(),
+        deferred,
+    )
 }
 
 /// Execute MapSingleReleases — Stage 3e per-inode-best + signal emission.
@@ -2453,7 +2826,8 @@ pub(crate) fn execute_map_single_releases(
     // --- Signal emission for ALL rounds ---
 
     // Build manifest lookup
-    let manifest_map: HashMap<&str, (&str, &str, i32)> = state.manifest
+    let manifest_map: HashMap<&str, (&str, &str, i32)> = state
+        .manifest
         .iter()
         .map(|r| {
             (
@@ -2496,9 +2870,7 @@ pub(crate) fn execute_map_single_releases(
 
         let (release_title, release_artist, total_tracks): (String, String, i32) =
             match manifest_map.get(row.release_id.as_str()) {
-                Some(&(title, artist, total)) => {
-                    (title.to_string(), artist.to_string(), total)
-                }
+                Some(&(title, artist, total)) => (title.to_string(), artist.to_string(), total),
                 None => continue,
             };
 
@@ -2507,16 +2879,19 @@ pub(crate) fn execute_map_single_releases(
             .copied()
             .unwrap_or(0);
 
-        let alternatives_count = state.inode_release_set
+        let alternatives_count = state
+            .inode_release_set
             .get(&row.inode)
             .map(|s| s.len() as u16)
             .unwrap_or(1);
 
-        let breakdown: PackingScoreBreakdown =
-            bincode::deserialize(&row.score_breakdown).unwrap_or(PackingScoreBreakdown {
+        let breakdown: PackingScoreBreakdown = bincode::deserialize(&row.score_breakdown)
+            .unwrap_or(PackingScoreBreakdown {
                 acoustid_confidence: 0.0,
                 duration_match: 0.0,
-                tag_similarity: 0.0,
+                title_match: 0.0,
+                artist_match: 0.0,
+                album_match: 0.0,
                 track_number_match: 0.0,
                 directory_cohesion: 0.0,
             });
@@ -2592,12 +2967,18 @@ pub(crate) fn execute_map_single_releases(
     // Defer AnalyzeReleaseGaps as final stage
     let deferred = vec![(
         PipelineStage::Analyze,
-        vec![Computation::Analysis(AnalysisComputation::AnalyzeReleaseGaps)],
+        vec![Computation::Analysis(
+            AnalysisComputation::AnalyzeReleaseGaps,
+        )],
     )];
 
-    Result::pipeline(computation, start.elapsed().as_millis() as u64, Vec::new(), deferred)
+    Result::pipeline(
+        computation,
+        start.elapsed().as_millis() as u64,
+        Vec::new(),
+        deferred,
+    )
 }
-
 
 // ============================================================================
 // Stage 4: AnalyzeReleaseGaps (renumbered from old Stage 5)
@@ -2660,7 +3041,10 @@ pub fn execute_analyze_release_gaps(
     match read_only_db.get_candidate_inode_recordings() {
         Ok(rows) => {
             for (inode, recording_id) in rows {
-                inode_recordings.entry(inode).or_default().push(recording_id);
+                inode_recordings
+                    .entry(inode)
+                    .or_default()
+                    .push(recording_id);
             }
         }
         Err(e) => {
@@ -2852,9 +3236,13 @@ pub fn execute_analyze_release_gaps(
         // release is already assigned to a full-match release, this release has no
         // unique files and represents a cached MB entry, not a real gap.
         if filled_count < total {
-            if let Some(candidate_inodes) = release_candidate_inodes.get(manifest_row.release_id.as_str()) {
+            if let Some(candidate_inodes) =
+                release_candidate_inodes.get(manifest_row.release_id.as_str())
+            {
                 if !candidate_inodes.is_empty()
-                    && candidate_inodes.iter().all(|i| full_match_inodes.contains(i))
+                    && candidate_inodes
+                        .iter()
+                        .all(|i| full_match_inodes.contains(i))
                 {
                     suppressed_covered += 1;
                     continue;
@@ -2925,11 +3313,29 @@ pub fn execute_analyze_release_gaps(
             PackedReleaseCategory::Single
         } else if filled_count >= total {
             PackedReleaseCategory::FullMatch
+        } else if filled_count + 1 == total {
+            // Suppress fully-covered near-miss releases (same filter as unfilled slots)
+            if let Some(candidate_inodes) =
+                release_candidate_inodes.get(manifest_row.release_id.as_str())
+            {
+                if !candidate_inodes.is_empty()
+                    && candidate_inodes
+                        .iter()
+                        .all(|i| full_match_inodes.contains(i))
+                {
+                    continue;
+                }
+            }
+            PackedReleaseCategory::NearMiss
         } else {
             // Suppress fully-covered incomplete releases (same filter as unfilled slots)
-            if let Some(candidate_inodes) = release_candidate_inodes.get(manifest_row.release_id.as_str()) {
+            if let Some(candidate_inodes) =
+                release_candidate_inodes.get(manifest_row.release_id.as_str())
+            {
                 if !candidate_inodes.is_empty()
-                    && candidate_inodes.iter().all(|i| full_match_inodes.contains(i))
+                    && candidate_inodes
+                        .iter()
+                        .all(|i| full_match_inodes.contains(i))
                 {
                     continue;
                 }
@@ -3062,7 +3468,12 @@ pub fn execute_analyze_release_gaps(
             for track in &medium.tracks {
                 let slot = (medium.position as i32, track.position as i32);
                 if !filled_for_release.contains(&slot) {
-                    missing_slot = Some((medium.position, track.position, track.title.clone(), track.recording.id.clone()));
+                    missing_slot = Some((
+                        medium.position,
+                        track.position,
+                        track.title.clone(),
+                        track.recording.id.clone(),
+                    ));
                     break;
                 }
             }
@@ -3071,11 +3482,10 @@ pub fn execute_analyze_release_gaps(
             }
         }
 
-        let (missing_medium, missing_track, missing_title, missing_recording) =
-            match missing_slot {
-                Some(s) => s,
-                None => continue,
-            };
+        let (missing_medium, missing_track, missing_title, missing_recording) = match missing_slot {
+            Some(s) => s,
+            None => continue,
+        };
 
         let key = format!("{}:{}", manifest_row.release_id, directory);
         let signal = NearMissReleaseSignal {
@@ -3117,9 +3527,23 @@ pub fn execute_analyze_release_gaps(
          packed_release: cleared={}, new={}, updated={}, unchanged={} | \
          near_miss: cleared={}, new={}, updated={}, unchanged={} | \
          {} fully-covered releases suppressed",
-        uc_cleared, uc_new, uc_updated, uc_unchanged, us_cleared, us_new, us_updated,
-        us_unchanged, pr_cleared, pr_new, pr_updated, pr_unchanged, nm_cleared, nm_new,
-        nm_updated, nm_unchanged, suppressed_covered
+        uc_cleared,
+        uc_new,
+        uc_updated,
+        uc_unchanged,
+        us_cleared,
+        us_new,
+        us_updated,
+        us_unchanged,
+        pr_cleared,
+        pr_new,
+        pr_updated,
+        pr_unchanged,
+        nm_cleared,
+        nm_new,
+        nm_updated,
+        nm_unchanged,
+        suppressed_covered
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

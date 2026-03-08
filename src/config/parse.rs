@@ -1,8 +1,8 @@
 //! config.kdl parsing: parse_kdl_config + all parse_*_opinions + parse_size_mb.
 
+use super::types::*;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use super::types::*;
 
 /// Parse a human-readable size string like "256mb", "1gb", "512" into MB.
 /// Accepts: plain numbers (interpreted as MB), or suffixed with kb/mb/gb (case-insensitive).
@@ -23,7 +23,10 @@ fn parse_size_mb(s: &str) -> Option<u32> {
 }
 
 /// Parse quality-resolution opinions from KDL node
-fn parse_quality_resolution_opinions(node: &kdl::KdlNode, opinions: &mut QualityResolutionOpinions) {
+fn parse_quality_resolution_opinions(
+    node: &kdl::KdlNode,
+    opinions: &mut QualityResolutionOpinions,
+) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
             if child.name().value() == QualityResolutionOpinions::KDL_BITRATE_FUZZ {
@@ -239,7 +242,9 @@ fn parse_packing_weights(node: &kdl::KdlNode, weights: &mut PackingWeights) {
                 match child.name().value() {
                     PackingWeights::KDL_ACOUSTID_CONFIDENCE => weights.acoustid_confidence = v,
                     PackingWeights::KDL_DURATION_MATCH => weights.duration_match = v,
-                    PackingWeights::KDL_TAG_SIMILARITY => weights.tag_similarity = v,
+                    PackingWeights::KDL_TITLE_MATCH => weights.title_match = v,
+                    PackingWeights::KDL_ARTIST_MATCH => weights.artist_match = v,
+                    PackingWeights::KDL_ALBUM_MATCH => weights.album_match = v,
                     PackingWeights::KDL_TRACK_NUMBER_MATCH => weights.track_number_match = v,
                     PackingWeights::KDL_DIRECTORY_COHESION => weights.directory_cohesion = v,
                     _ => {}
@@ -280,7 +285,10 @@ fn parse_release_packing_opinions(node: &kdl::KdlNode, opinions: &mut ReleasePac
 }
 
 /// Parse duplicate-analysis opinions from KDL node
-fn parse_duplicate_analysis_opinions(node: &kdl::KdlNode, opinions: &mut DuplicateAnalysisOpinions) {
+fn parse_duplicate_analysis_opinions(
+    node: &kdl::KdlNode,
+    opinions: &mut DuplicateAnalysisOpinions,
+) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
@@ -366,7 +374,8 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                 }
                 ExternalMatchingConfig::KDL_PREFERRED_LOCALES => {
                     // Multi-value node: preferred-locales "en" "ja"
-                    let locales: Vec<String> = child.entries()
+                    let locales: Vec<String> = child
+                        .entries()
                         .iter()
                         .filter_map(|e| e.value().as_string().map(|s| s.to_string()))
                         .collect();
@@ -453,8 +462,12 @@ fn parse_inbox_organize_opinions(node: &kdl::KdlNode, opinions: &mut InboxOrgani
                 if let Some(entry) = child.entries().first() {
                     if let Some(val) = entry.value().as_string() {
                         match val {
-                            "leaf" => opinions.directory_granularity = InboxOrganizeGranularity::Leaf,
-                            "top-level" => opinions.directory_granularity = InboxOrganizeGranularity::TopLevel,
+                            "leaf" => {
+                                opinions.directory_granularity = InboxOrganizeGranularity::Leaf
+                            }
+                            "top-level" => {
+                                opinions.directory_granularity = InboxOrganizeGranularity::TopLevel
+                            }
                             _ => {}
                         }
                     }
@@ -505,41 +518,64 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                                 }
                             }
                             Opinions::KDL_BLOCK_QUALITY_RESOLUTION => {
-                                parse_quality_resolution_opinions(child, &mut config.opinions.quality_resolution);
+                                parse_quality_resolution_opinions(
+                                    child,
+                                    &mut config.opinions.quality_resolution,
+                                );
                             }
                             Opinions::KDL_BLOCK_CANONICALIZATION => {
-                                parse_canonicalization_opinions(child, &mut config.opinions.canonicalization);
+                                parse_canonicalization_opinions(
+                                    child,
+                                    &mut config.opinions.canonicalization,
+                                );
                             }
                             Opinions::KDL_BLOCK_STARTUP => {
                                 parse_startup_opinions(child, &mut config.opinions.startup);
                             }
                             Opinions::KDL_BLOCK_HEALTH_DETECTION => {
-                                parse_health_detection_opinions(child, &mut config.opinions.health_detection);
+                                parse_health_detection_opinions(
+                                    child,
+                                    &mut config.opinions.health_detection,
+                                );
                             }
                             Opinions::KDL_BLOCK_PERFORMANCE => {
                                 parse_performance_opinions(child, &mut config.opinions.performance);
                             }
                             Opinions::KDL_BLOCK_TAG_SPLITTING => {
-                                parse_tag_splitting_opinions(child, &mut config.opinions.tag_splitting);
+                                parse_tag_splitting_opinions(
+                                    child,
+                                    &mut config.opinions.tag_splitting,
+                                );
                             }
                             Opinions::KDL_BLOCK_DUPLICATE_ANALYSIS => {
-                                parse_duplicate_analysis_opinions(child, &mut config.opinions.duplicate_analysis);
+                                parse_duplicate_analysis_opinions(
+                                    child,
+                                    &mut config.opinions.duplicate_analysis,
+                                );
                             }
                             Opinions::KDL_BLOCK_RELEASE_PACKING => {
-                                parse_release_packing_opinions(child, &mut config.opinions.release_packing);
+                                parse_release_packing_opinions(
+                                    child,
+                                    &mut config.opinions.release_packing,
+                                );
                             }
                             Opinions::KDL_BLOCK_INBOX_ORGANIZE => {
-                                parse_inbox_organize_opinions(child, &mut config.opinions.inbox_organize);
+                                parse_inbox_organize_opinions(
+                                    child,
+                                    &mut config.opinions.inbox_organize,
+                                );
                             }
                             Opinions::KDL_IDLE_RESCAN => {
                                 if let Some(entry) = child.entries().first() {
                                     if let Some(s) = entry.value().as_string() {
                                         if let Ok(dur) = humantime::parse_duration(s) {
-                                            config.opinions.idle_rescan_interval_secs = dur.as_secs();
+                                            config.opinions.idle_rescan_interval_secs =
+                                                dur.as_secs();
                                         }
                                     } else if let Some(val) = entry.value().as_i64() {
                                         // Legacy: bare integer seconds
-                                        config.opinions.idle_rescan_interval_secs = val.max(0) as u64;
+                                        config.opinions.idle_rescan_interval_secs =
+                                            val.max(0) as u64;
                                     }
                                 }
                             }
@@ -551,10 +587,16 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                                 }
                             }
                             Opinions::KDL_BLOCK_EXTERNAL_MATCHING => {
-                                parse_external_matching_opinions(child, &mut config.opinions.external_matching);
+                                parse_external_matching_opinions(
+                                    child,
+                                    &mut config.opinions.external_matching,
+                                );
                             }
                             Opinions::KDL_BLOCK_DISC_EXTRACTION => {
-                                parse_disc_extraction_opinions(child, &mut config.opinions.disc_extraction);
+                                parse_disc_extraction_opinions(
+                                    child,
+                                    &mut config.opinions.disc_extraction,
+                                );
                             }
                             Opinions::KDL_BLOCK_ALBUM_ART => {
                                 parse_album_art_opinions(child, &mut config.opinions.album_art);
@@ -592,9 +634,18 @@ legacy-library true
 
         let config = parse_kdl_config(kdl).unwrap();
         assert_eq!(config.root, PathBuf::from("/Volumes/cerberus/archive"));
-        assert_eq!(config.corpus_dir(), PathBuf::from("/Volumes/cerberus/archive/corpus"));
-        assert_eq!(config.libraries_dir(), PathBuf::from("/Volumes/cerberus/archive/libraries"));
-        assert_eq!(config.stash_dir(), PathBuf::from("/Volumes/cerberus/archive/stash"));
+        assert_eq!(
+            config.corpus_dir(),
+            PathBuf::from("/Volumes/cerberus/archive/corpus")
+        );
+        assert_eq!(
+            config.libraries_dir(),
+            PathBuf::from("/Volumes/cerberus/archive/libraries")
+        );
+        assert_eq!(
+            config.stash_dir(),
+            PathBuf::from("/Volumes/cerberus/archive/stash")
+        );
         assert!(config.legacy_enabled);
         assert!(config.source_dirs.is_empty());
     }
@@ -639,7 +690,13 @@ opinions {
 
         let config = parse_kdl_config(kdl).unwrap();
 
-        assert_eq!(config.opinions.quality_resolution.inbox_bitrate_fuzz_percent, 3.0);
+        assert_eq!(
+            config
+                .opinions
+                .quality_resolution
+                .inbox_bitrate_fuzz_percent,
+            3.0
+        );
         assert!(!config.opinions.canonicalization.strip_album_format_suffixes);
     }
 
@@ -652,7 +709,13 @@ root "/archive"
         let config = parse_kdl_config(kdl).unwrap();
 
         assert!(!config.opinions.lossy_shit_formats_to_flac);
-        assert_eq!(config.opinions.quality_resolution.inbox_bitrate_fuzz_percent, 5.0);
+        assert_eq!(
+            config
+                .opinions
+                .quality_resolution
+                .inbox_bitrate_fuzz_percent,
+            5.0
+        );
         assert!(!config.opinions.canonicalization.strip_album_format_suffixes);
     }
 
@@ -688,7 +751,8 @@ root "/archive"
 "#;
 
         let mut config = parse_kdl_config(kdl).unwrap();
-        config.source_dirs = super::super::dirs::parse_dirs_kdl(r#"
+        config.source_dirs = super::super::dirs::parse_dirs_kdl(
+            r#"
 dir "web/releases/bandcamp" {
     library "music"
 }
@@ -696,7 +760,9 @@ dir "web/releases/bandcamp" {
 dir "web/releases/steam" {
     library "soundtracks"
 }
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         // Relative paths (as stored in DB) should match
         assert!(config.is_path_in_source(std::path::Path::new(

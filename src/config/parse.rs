@@ -246,7 +246,7 @@ fn parse_packing_weights(node: &kdl::KdlNode, weights: &mut PackingWeights) {
                     PackingWeights::KDL_ARTIST_MATCH => weights.artist_match = v,
                     PackingWeights::KDL_ALBUM_MATCH => weights.album_match = v,
                     PackingWeights::KDL_TRACK_NUMBER_MATCH => weights.track_number_match = v,
-                    PackingWeights::KDL_DIRECTORY_COHESION => weights.directory_cohesion = v,
+                    // "directory-cohesion" silently ignored for backwards compatibility
                     _ => {}
                 }
             }

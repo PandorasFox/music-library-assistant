@@ -10,8 +10,14 @@ use std::path::Path;
 
 use super::Database;
 
-/// A release packing assignment row: (inode, path, release_id, medium_position, track_position).
-pub type PackingAssignment = (i64, String, String, u32, u32);
+/// A release packing assignment row.
+pub struct PackingAssignment {
+    pub inode: i64,
+    pub release_id: String,
+    pub medium_position: u32,
+    pub track_position: u32,
+    pub match_method: crate::meta::signals::data::MatchMethod,
+}
 
 /// An unassigned corpus audio file in a directory: (inode, path, fingerprint_hex, duration_ms).
 pub type UnassignedAudioFile = (i64, String, Option<String>, Option<i64>);
@@ -516,27 +522,6 @@ impl Database {
         Ok(results)
     }
 
-    /// Read all NearMissReleaseSignal rows with deserialized data.
-    pub fn get_near_miss_release_signal_data(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::NearMissReleaseData>> {
-        let mut stmt = self
-            .conn()
-            .prepare("SELECT data FROM signal_near_miss_release")?;
-        let rows = stmt.query_map([], |row| {
-            let blob: Vec<u8> = row.get(0)?;
-            Ok(blob)
-        })?;
-        let mut results = Vec::new();
-        for row in rows {
-            let blob = row?;
-            if let Ok(data) = bincode::deserialize(&blob) {
-                results.push(data);
-            }
-        }
-        Ok(results)
-    }
-
     // =========================================================================
     // Release Packing Candidates Queries
     // =========================================================================
@@ -652,33 +637,32 @@ impl Database {
         Ok(results)
     }
 
-    /// Read all release packing signal assignments: (inode, path, release_id, medium_pos, track_pos).
+    /// Read all release packing signal assignments.
     ///
-    /// Deserializes the bincode blob to extract release_id and slot positions.
-    /// Used by elimination matching to understand current assignments.
+    /// Deserializes the bincode blob to extract release_id, slot positions, and match method.
+    /// Used by elimination matching and gap analysis.
     pub fn get_release_packing_assignments(&self) -> Result<Vec<PackingAssignment>> {
         let mut stmt = self
             .conn()
-            .prepare("SELECT inode, path, data FROM signal_release_packing")?;
+            .prepare("SELECT inode, data FROM signal_release_packing")?;
         let rows = stmt.query_map([], |row| {
             let inode: i64 = row.get(0)?;
-            let path: String = row.get(1)?;
-            let data_blob: Vec<u8> = row.get(2)?;
-            Ok((inode, path, data_blob))
+            let data_blob: Vec<u8> = row.get(1)?;
+            Ok((inode, data_blob))
         })?;
         let mut results = Vec::new();
         for row in rows {
-            let (inode, path, data_blob) = row?;
+            let (inode, data_blob) = row?;
             if let Ok(data) =
                 bincode::deserialize::<crate::meta::signals::data::ReleasePackingData>(&data_blob)
             {
-                results.push((
+                results.push(PackingAssignment {
                     inode,
-                    path,
-                    data.release_id,
-                    data.medium_position,
-                    data.track_position,
-                ));
+                    release_id: data.release_id,
+                    medium_position: data.medium_position,
+                    track_position: data.track_position,
+                    match_method: data.match_method,
+                });
             }
         }
         Ok(results)

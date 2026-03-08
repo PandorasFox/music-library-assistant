@@ -135,19 +135,20 @@ impl ExternalMatchesViewState {
                 entries.push(NavigableEntry::ConfidenceBucket(bucket.tier));
             }
             // Release packing categories (only visible when data exists)
+            // Ordering: Perfect → Full matches → Incomplete → Singles → Unmatched
+            if data.packing_perfect_count > 0 {
+                entries.push(NavigableEntry::PackingCategory(PackingCategory::Perfect));
+            }
             if data.packing_full_match_count > 0 {
                 entries.push(NavigableEntry::PackingCategory(
                     PackingCategory::FullMatches,
                 ));
             }
-            if data.packing_singles_count > 0 {
-                entries.push(NavigableEntry::PackingCategory(PackingCategory::Singles));
-            }
             if data.packing_incomplete_count > 0 {
                 entries.push(NavigableEntry::PackingCategory(PackingCategory::Incomplete));
             }
-            if data.packing_near_miss_count > 0 {
-                entries.push(NavigableEntry::PackingCategory(PackingCategory::NearMisses));
+            if data.packing_singles_count > 0 {
+                entries.push(NavigableEntry::PackingCategory(PackingCategory::Singles));
             }
             if data.packing_unmatched_count > 0 {
                 entries.push(NavigableEntry::PackingCategory(PackingCategory::Unmatched));

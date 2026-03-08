@@ -11,8 +11,7 @@ pub mod types;
 use std::collections::HashMap;
 
 use crate::meta::signals::data::{
-    NearMissReleaseData, PackedReleaseData, ReleasePackingData, UnfilledReleaseSlotData,
-    UnmatchedCorpusTrackData,
+    PackedReleaseData, ReleasePackingData, UnfilledReleaseSlotData, UnmatchedCorpusTrackData,
 };
 use crate::ui::input::InputAction;
 use crate::ui::widgets::ListClickTargets;
@@ -55,7 +54,6 @@ pub(crate) struct ReleasePackingBrowserState {
 
     // Source data (only the category being viewed is populated)
     pub releases: Vec<ReleaseGroup>,
-    pub near_misses: Vec<NearMissReleaseData>,
     pub unmatched: Vec<UnmatchedEntry>,
 }
 
@@ -170,27 +168,6 @@ impl ReleasePackingBrowserState {
             focused_pane: FocusedPane::LeftPane,
             click_targets: Default::default(),
             releases,
-            near_misses: Vec::new(),
-            unmatched: Vec::new(),
-        };
-        state.rebuild_entries();
-        state
-    }
-
-    /// Build browser state for near-miss releases.
-    pub fn build_near_misses(near_miss_rows: Vec<NearMissReleaseData>) -> Self {
-        let mut state = Self {
-            category: PackingCategory::NearMisses,
-            entries: Vec::new(),
-            cursor: 0,
-            scroll: 0,
-            track_cursor: 0,
-            track_scroll: 0,
-            detail_scroll: 0,
-            focused_pane: FocusedPane::LeftPane,
-            click_targets: Default::default(),
-            releases: Vec::new(),
-            near_misses: near_miss_rows,
             unmatched: Vec::new(),
         };
         state.rebuild_entries();
@@ -215,7 +192,6 @@ impl ReleasePackingBrowserState {
             focused_pane: FocusedPane::LeftPane,
             click_targets: Default::default(),
             releases: Vec::new(),
-            near_misses: Vec::new(),
             unmatched,
         };
         state.rebuild_entries();
@@ -227,16 +203,12 @@ impl ReleasePackingBrowserState {
         let mut entries = Vec::new();
 
         match self.category {
-            PackingCategory::FullMatches
+            PackingCategory::Perfect
+            | PackingCategory::FullMatches
             | PackingCategory::Singles
             | PackingCategory::Incomplete => {
                 for idx in 0..self.releases.len() {
                     entries.push(PackingListEntry::Release { idx });
-                }
-            }
-            PackingCategory::NearMisses => {
-                for idx in 0..self.near_misses.len() {
-                    entries.push(PackingListEntry::NearMiss { idx });
                 }
             }
             PackingCategory::Unmatched => {

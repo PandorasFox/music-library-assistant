@@ -959,13 +959,6 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_unfilled_release_slot_signal_data()
     }
 
-    /// Read all NearMissReleaseSignal rows with deserialized data.
-    pub fn get_near_miss_release_signal_data(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::NearMissReleaseData>> {
-        self.db.get_near_miss_release_signal_data()
-    }
-
     /// Get all fingerprinted corpus file inodes and paths.
     pub fn get_fingerprinted_corpus_inodes(&self) -> Result<Vec<(i64, String)>> {
         self.db.get_fingerprinted_corpus_inodes()

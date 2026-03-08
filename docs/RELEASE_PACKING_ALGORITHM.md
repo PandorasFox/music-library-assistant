@@ -1,0 +1,245 @@
+# Release Packing Algorithm Reference
+
+The release packing pipeline assigns corpus audio files to MusicBrainz release track slots via a 4-stage process: candidate identification, directory-constrained scoring, tiered conflict resolution, and gap analysis. All packing is constrained to a single directory (or sibling directories for multi-medium releases).
+
+Source: `src/meta/computations/analysis/release_packing.rs`
+
+---
+
+## Pipeline Overview
+
+| Stage | Computation | Purpose |
+|-------|------------|---------|
+| 1 | PackReleases | Identify candidates, write manifest, spawn per-release scorers |
+| 2 | ScoreReleaseCandidates (×N) | Directory selection, AcoustID scoring, elimination matching |
+| 3a | ComputeReleaseMappings | Classify proposals into quality tiers |
+| 3b–3e | Map{Perfect,FullMatch,NearMiss,Incomplete,Single}Releases | Tiered MIS conflict resolution |
+| 4 | AnalyzeReleaseGaps | Emit signals for gaps, unmatched files, and per-release categories |
+
+Stages are barrier-separated: each defers the next via `SharedMappingState`, ensuring serial execution managed by the Witch's computation scheduler.
+
+---
+
+## Stage 1: PackReleases (Orchestrator)
+
+**Trigger:** Manual only (operator requests release packing).
+
+1. Load all AcoustID external matches for corpus files
+2. Filter recordings by `min_confidence` and `duration_tolerance_pct` (from config)
+3. Parse release tracklists from MB cache (locale-resolved artist names)
+4. Write manifest rows (`release_id`, `total_tracks`, `title`, `artist`) to `packing_manifest` table
+5. Deduplicate candidates per `(release_id, inode)` — keep highest-confidence recording
+6. Write candidate rows to `release_packing_candidates` intermediate table
+7. Spawn N `ScoreReleaseCandidates` computations (one per release with candidates)
+8. Defer `ComputeReleaseMappings` via barrier
+
+**Key data:**
+- `CorpusFileInfo`: `parent_dir`, tags (`TITLE`/`ARTIST`/`ALBUM`/`TRACKNUMBER`), `duration_ms`
+- `dir_file_count`: total audio files per directory (written to candidates table)
+
+---
+
+## Stage 2: ScoreReleaseCandidates (Parallel)
+
+Each instance handles one release. Four phases execute sequentially.
+
+### Phase 1: Directory Selection
+
+All packing is constrained to target directory(ies) selected by `select_target_directory()`. This structural constraint replaces the former `directory_cohesion` scoring dimension.
+
+**Single-medium** (`media.len() <= 1`):
+- Per directory, compute: `(exact_match: bool, candidate_count: usize, score_sum: f64)`
+  - `exact_match`: directory's file count equals release's total track count
+  - `candidate_count`: number of AcoustID candidate inodes in this directory
+  - `score_sum`: sum of candidate scores in this directory
+- Sort descending by `(exact_match, candidate_count, score_sum)`
+- Select the top directory
+
+**Multi-medium** (`media.len() > 1`):
+1. Try `find_sibling_dir_bijection()`: backtracking search for a 1:1 mapping of directories to media where:
+   - Each medium's track count matches the directory's file count
+   - All directories share the same parent (are siblings)
+   - At least one AcoustID candidate exists across the sibling directories
+2. If bijection found: return all sibling directories as target set
+3. Fallback: treat like single-medium (pick one best directory)
+
+After selection, all candidates are filtered to the target directory set:
+```
+candidates.retain(|c| target_dirs.contains(&corpus_info[c.inode].parent_dir))
+```
+
+### Phase 2: AcoustID Scoring (Hungarian)
+
+Each `CandidateAssignment` is a `(inode, track_slot)` pair scored across 6 dimensions (see [Scoring Dimensions](#scoring-dimensions)). The Hungarian algorithm (Kuhn-Munkres) finds the optimal bipartite matching maximizing total composite score.
+
+- Input: directory-filtered candidates with scores computed via `candidate_weights`
+- Output: optimal 1:1 assignment of inodes to track slots
+- All candidates written to `release_packing_scores` with `is_optimal` flag
+
+### Phase 3: Title Pre-assignment (Elimination Phase 1)
+
+Scans unassigned audio files in the target directory(ies). For each `(file, unfilled_slot)` pair, computes title similarity.
+
+**Assignment rule:** Lock in a match only when both the file and the slot have exactly one candidate above the threshold (0.95). This prevents track-number ordering from stealing slots with clear title matches when rip numbering diverges from MB.
+
+### Phase 4: Elimination Matching (Elimination Phase 2)
+
+Runs Hungarian on remaining `(unassigned_files × unfilled_slots)` using `elimination_weights`. Matches with composite score below 0.35 are discarded.
+
+Elimination winners record `(fingerprint_hex, recording_id)` for the pending AcoustID submission queue.
+
+---
+
+## Scoring Dimensions
+
+Six independent dimensions, each normalized to `[0.0, 1.0]`:
+
+| Dimension | Candidate Default | Elimination Default | Description |
+|-----------|:-:|:-:|-------------|
+| `acoustid_confidence` | 0.30 | 0.00 | Direct AcoustID match confidence |
+| `duration_match` | 0.30 | 0.25 | Duration ratio within tolerance → linear scale; 0.5 if either duration missing |
+| `title_match` | 0.10 | 0.30 | Normalized Levenshtein of corpus TITLE vs MB track/recording title (max of both) |
+| `artist_match` | 0.05 | 0.00 | Normalized Levenshtein of corpus ARTIST vs release artist. Zero in elimination: rip tags diverge from MB release-level credits |
+| `album_match` | 0.05 | 0.05 | Normalized Levenshtein of corpus ALBUM vs release title |
+| `track_number_match` | 0.20 | 0.40 | Exact match of corpus TRACKNUMBER to MB track position (1.0 or 0.0) |
+
+**Composite score:**
+```
+score = Σ(weight_i × dimension_i)
+```
+
+Both weight sets are configurable under `release-packing` in `config.kdl`.
+
+---
+
+## Stage 3: Tiered MIS Conflict Resolution
+
+### 3a: ComputeReleaseMappings
+
+Loads optimal picks from scoring table. Groups into per-release `Proposal` objects. Classifies each by `classify_proposal()`:
+
+| ProposalTier | Criteria |
+|-------------|----------|
+| Perfect | All slots filled, single-directory purity (per-medium for multi-medium), no leftover files in directory |
+| FullMatch | All slots filled but directory has extra files or minor purity issues |
+| NearMiss | (n-1)/n slots filled, all from one directory with exactly n files |
+| Incomplete | Some but not all slots filled |
+| Single | Single-track release |
+
+Proposals are sorted into 5 pools and processed in priority order.
+
+### 3b–3e: MIS Rounds
+
+Each round selects non-conflicting (inode-disjoint) proposals to maximize corpus coverage.
+
+**Round flow (FullMatch, NearMiss, Incomplete):**
+1. **Cull:** Discard proposals that lost any inode to prior rounds
+2. **Dedup:** Group by sorted inode signature, keep best-scorer per group
+3. **Knot extraction:** Build conflict graph (proposals sharing inodes are adjacent). Connected components with `proposals/inodes >= knot_ratio` (default 3.0) or `size > knot_size_limit` (default 50) are resolved greedily (best score first, skip conflicting)
+4. **MIS solve:** Remaining clean components enter exact MIS:
+   - Components ≤25 proposals: exhaustive bitmask enumeration (2^k subsets)
+   - Components >25: branch-and-bound with coverage/score objective
+
+**Perfect round** skips cull/dedup/knots — proposals are strict (all inodes must be unclaimed).
+
+**Single round** (3e): per-inode best score, no MIS needed. Also emits `ReleasePacking` signals for all rounds combined.
+
+---
+
+## Stage 4: AnalyzeReleaseGaps
+
+Post-resolution analysis producing 4 signal types:
+
+### UnmatchedCorpusTrack
+Emitted for inodes with AcoustID recording matches but no release assignment. Also covers fingerprinted files with no AcoustID match at all.
+
+### UnfilledReleaseSlot
+Empty track slots in partially-assigned releases. Only emitted for releases with `filled_count > 0`.
+
+### PackedRelease (Categories)
+
+| PackedReleaseCategory | Key Prefix | Criteria |
+|-----------------------|------------|----------|
+| Perfect | `perfect:` | All slots filled, all via AcoustID |
+| FullMatch | `full_match:` | All slots filled, at least one via elimination |
+| Single | `single:` | Single-track release |
+| Incomplete | `incomplete:` | Partial coverage |
+
+**Coverage filtering:** Suppresses incomplete `PackedRelease` and `UnfilledReleaseSlot` signals for releases where every candidate inode is already assigned to a full-match release (cached MB entries, not real gaps).
+
+### NearMissRelease
+Criteria: `filled_count + 1 == total_tracks` AND all assigned files from a single directory containing exactly `total_tracks` audio files. Identifies the unmatched file and missing track slot.
+
+---
+
+## ProposalTier vs PackedReleaseCategory
+
+These are distinct classification systems used at different stages:
+
+- **ProposalTier** (Stage 3a): Input classification determining which MIS round pool a proposal enters. Based on slot coverage, directory structure, and leftover file counts. A ProposalTier::FullMatch with all-AcoustID matches can become PackedReleaseCategory::Perfect.
+
+- **PackedReleaseCategory** (Stage 4): Output classification for the final signal. Based solely on whether all slots are filled and the match methods used. This is what the UI displays.
+
+---
+
+## Key Constants
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `TITLE_PREASSIGN_THRESHOLD` | 0.95 | Title pre-assignment: high confidence, 1:1 only |
+| `ELIMINATION_SCORE_THRESHOLD` | 0.35 | Elimination Hungarian: minimum composite score |
+| `DEFAULT_KNOT_RATIO` | 3.0 | Knot extraction: proposals/inodes threshold |
+| `DEFAULT_KNOT_SIZE_LIMIT` | 50 | Max component size before forced knot extraction |
+
+---
+
+## Data Flow
+
+```
+AcoustID matches (signal_external_match)
+        │
+        ▼
+  ┌─────────────┐     ┌──────────────────────┐
+  │ Stage 1:    │────▶│ release_packing_      │
+  │ PackReleases│     │ candidates + manifest │
+  └─────────────┘     └──────────┬───────────┘
+                                 │
+                    ┌────────────┼────────────┐
+                    ▼            ▼            ▼
+              ┌──────────┐ ┌──────────┐ ┌──────────┐
+              │ Stage 2  │ │ Stage 2  │ │ Stage 2  │  (× N releases)
+              │ Score +  │ │ Score +  │ │ Score +  │
+              │ Eliminate │ │ Eliminate │ │ Eliminate │
+              └────┬─────┘ └────┬─────┘ └────┬─────┘
+                   │            │            │
+                   └────────────┼────────────┘
+                                ▼
+                   ┌────────────────────────┐
+                   │ release_packing_scores │
+                   └───────────┬────────────┘
+                               ▼
+                   ┌────────────────────────┐
+                   │ Stage 3a: Classify     │
+                   │ into proposal tiers    │
+                   └───────────┬────────────┘
+                               │
+              ┌────────┬───────┼───────┬────────┐
+              ▼        ▼       ▼       ▼        ▼
+          Perfect  FullMatch NearMiss Incomplete Single
+           (3b)     (3c)     (3c½)    (3d)      (3e)
+              │        │       │       │        │
+              └────────┴───────┼───────┴────────┘
+                               ▼
+                   ┌────────────────────────┐
+                   │ Stage 3e: Emit         │
+                   │ ReleasePacking signals │
+                   └───────────┬────────────┘
+                               ▼
+                   ┌────────────────────────┐
+                   │ Stage 4: Gap analysis  │
+                   │ → PackedRelease        │
+                   │ → UnmatchedCorpusTrack │
+                   │ → UnfilledReleaseSlot  │
+                   │ → NearMissRelease      │
+                   └────────────────────────┘
+```

@@ -219,6 +219,7 @@ When modifying computations (`meta::computations`), mutations (`meta::mutations`
 | Computation logic, spawn behavior, signal emission | `docs/COMPUTATION_REFERENCE.md` |
 | Mutation behavior, spawned computations, signal effects | `docs/MUTATION_REFERENCE.md` |
 | Signal types, emitters, clearers | `docs/SIGNAL_REFERENCE.md` |
+| Release packing algorithms, scoring, classification | `docs/RELEASE_PACKING_ALGORITHM.md` |
 
 **Requirements:**
 1. Update the relevant reference doc before or alongside code changes

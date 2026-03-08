@@ -313,15 +313,17 @@ impl App {
         use crate::ui::release_packing_browser::ReleasePackingBrowserState;
 
         let state = match category {
-            PackingCategory::FullMatches
+            PackingCategory::Perfect
+            | PackingCategory::FullMatches
             | PackingCategory::Singles
             | PackingCategory::Incomplete => {
                 // Map UI category to signal category prefix
                 let prefix = match category {
+                    PackingCategory::Perfect => PackedReleaseCategory::Perfect.key_prefix(),
                     PackingCategory::FullMatches => PackedReleaseCategory::FullMatch.key_prefix(),
                     PackingCategory::Singles => PackedReleaseCategory::Single.key_prefix(),
                     PackingCategory::Incomplete => PackedReleaseCategory::Incomplete.key_prefix(),
-                    _ => unreachable!(),
+                    PackingCategory::Unmatched => unreachable!(),
                 };
                 let prefix_owned = prefix.to_string();
 
@@ -347,19 +349,6 @@ impl App {
                 }
 
                 ReleasePackingBrowserState::build_releases(category, packed, packing, unfilled)
-            }
-            PackingCategory::NearMisses => {
-                let near_misses = self
-                    .cache
-                    .query(|db| db.get_near_miss_release_signal_data().unwrap_or_default())
-                    .recv();
-
-                if near_misses.is_empty() {
-                    self.status_message = Some("No near-miss releases".to_string());
-                    return;
-                }
-
-                ReleasePackingBrowserState::build_near_misses(near_misses)
             }
             PackingCategory::Unmatched => {
                 let unmatched = self

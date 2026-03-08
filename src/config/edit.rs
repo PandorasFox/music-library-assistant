@@ -464,11 +464,10 @@ fn serialize_packing_weights(doc: &mut kdl::KdlDocument, name: &str, weights: &P
         PackingWeights::KDL_TRACK_NUMBER_MATCH,
         weights.track_number_match,
     );
-    set_or_create_float_node(
-        block,
-        PackingWeights::KDL_DIRECTORY_COHESION,
-        weights.directory_cohesion,
-    );
+    // Remove stale directory-cohesion node if present (dimension removed)
+    block
+        .nodes_mut()
+        .retain(|n| n.name().value() != "directory-cohesion");
 }
 
 // KDL modification helpers

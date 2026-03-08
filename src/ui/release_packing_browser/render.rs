@@ -1,7 +1,7 @@
 //! Rendering for the Release Packing Browser.
 //!
 //! Three-pane layout:
-//! - Left (25%): flat release/near-miss/unmatched list
+//! - Left (25%): flat release/unmatched list
 //! - Top-right (60%): tracks+unfilled for selected release
 //! - Bottom-right (40%): per-track detail with score breakdown
 
@@ -52,10 +52,10 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState)
 
 fn render_title_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserState) {
     let title = match state.category {
+        PackingCategory::Perfect => "Perfect Matches",
         PackingCategory::FullMatches => "Full Matches",
         PackingCategory::Singles => "Singles",
         PackingCategory::Incomplete => "Incomplete Releases",
-        PackingCategory::NearMisses => "Near-Misses",
         PackingCategory::Unmatched => "Unmatched Files",
     };
     let count = state.entries.len();
@@ -183,29 +183,6 @@ fn render_left_entry(
             ])
         }
 
-        PackingListEntry::NearMiss { idx } => {
-            let nm = &state.near_misses[*idx];
-            let label_style = if selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Yellow)
-            };
-
-            Line::from(vec![
-                Span::styled(marker.to_string(), label_style),
-                Span::styled(
-                    truncate_for_width(&nm.release_title, title_max.saturating_sub(2)),
-                    label_style,
-                ),
-                Span::styled(
-                    format!(" {}/{}", nm.filled_count, nm.total_tracks),
-                    Style::default().fg(Color::Yellow),
-                ),
-            ])
-        }
-
         PackingListEntry::Unmatched { idx } => {
             let um = &state.unmatched[*idx];
             let label_style = if selected {
@@ -250,10 +227,6 @@ fn render_tracks_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrows
     match state.selected_entry() {
         Some(PackingListEntry::Release { idx }) => {
             render_release_tracks(f, inner, state, *idx);
-        }
-        Some(PackingListEntry::NearMiss { idx }) => {
-            let lines = render_near_miss_detail(&state.near_misses[*idx]);
-            render_scrollable_lines(f, inner, &lines, 0);
         }
         Some(PackingListEntry::Unmatched { idx }) => {
             let lines = render_unmatched_detail(&state.unmatched[*idx]);
@@ -393,9 +366,6 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrows
             } else {
                 detail_for_release(&state.releases[*idx], state.track_cursor)
             }
-        }
-        Some(PackingListEntry::NearMiss { idx }) => {
-            render_near_miss_detail(&state.near_misses[*idx])
         }
         Some(PackingListEntry::Unmatched { idx }) => {
             render_unmatched_detail(&state.unmatched[*idx])
@@ -633,7 +603,6 @@ fn render_track_detail(track: &AssignedTrackInfo, release: &ReleaseGroup) -> Vec
         ("Artist match:       ", breakdown.artist_match),
         ("Album match:        ", breakdown.album_match),
         ("Track number match: ", breakdown.track_number_match),
-        ("Directory cohesion: ", breakdown.directory_cohesion),
     ];
 
     for (label, value) in &scores {
@@ -703,45 +672,6 @@ fn render_unfilled_detail(slot: &UnfilledSlotInfo, release: &ReleaseGroup) -> Ve
             ),
             Style::default().fg(Color::DarkGray),
         )),
-    ]
-}
-
-fn render_near_miss_detail(
-    nm: &crate::meta::signals::data::NearMissReleaseData,
-) -> Vec<Line<'static>> {
-    vec![
-        Line::from(Span::styled(
-            "Near-Miss Release",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::raw("")),
-        kv_line("Release:", &nm.release_title),
-        kv_line("Artist:", &nm.release_artist),
-        kv_line("Directory:", &nm.directory),
-        Line::from(vec![
-            Span::styled("Coverage:  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{}/{} tracks", nm.filled_count, nm.total_tracks),
-                Style::default().fg(Color::Yellow),
-            ),
-        ]),
-        Line::from(Span::raw("")),
-        kv_line("Candidate file:", &nm.candidate_path),
-        Line::from(Span::raw("")),
-        Line::from(vec![
-            Span::styled("Missing slot: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!(
-                    "Disc {}, Track {}",
-                    nm.missing_medium_pos, nm.missing_track_pos
-                ),
-                Style::default().fg(Color::White),
-            ),
-        ]),
-        kv_line("Expected:", &nm.missing_track_title),
-        kv_line("Recording:", &nm.missing_recording_id),
     ]
 }
 

@@ -1,5 +1,8 @@
 //! Release bin-packing staged pipeline.
 //!
+//! See `docs/RELEASE_PACKING_ALGORITHM.md` for the full algorithm reference.
+//! Keep that document in sync with any changes to scoring, staging, or classification logic.
+//!
 //! Multi-stage pipeline for assigning corpus files to MusicBrainz releases:
 //!
 //! ```text
@@ -770,7 +773,6 @@ fn compute_score(
         artist_match: artist_sim,
         album_match: album_sim,
         track_number_match,
-        directory_cohesion: 0.0, // Set later by caller
     };
 
     let score = weighted_composite(&breakdown, weights);
@@ -785,7 +787,6 @@ fn weighted_composite(b: &PackingScoreBreakdown, w: &PackingWeights) -> f64 {
         + w.artist_match * b.artist_match
         + w.album_match * b.album_match
         + w.track_number_match * b.track_number_match
-        + w.directory_cohesion * b.directory_cohesion
 }
 
 /// Kuhn-Munkres (Hungarian) algorithm on an n×n cost matrix.
@@ -911,6 +912,166 @@ fn hungarian_assignment(candidates: &[CandidateAssignment]) -> HashSet<(i64, (u3
     }
 
     result
+}
+
+/// Select the best target directory (or sibling directories for multi-medium) for packing.
+///
+/// All packing is constrained to one directory (or sibling dirs). This replaces the
+/// old `directory_cohesion` scoring gradient with a structural constraint.
+///
+/// **Single-medium** (`media.len() <= 1`):
+/// - Prefer: directory where `dir_file_count == total_tracks` with most AcoustID candidates
+/// - Fallback: directory with the most AcoustID candidates
+/// - Tiebreaker: highest sum of candidate scores
+///
+/// **Multi-medium** (`media.len() > 1`):
+/// - Look for sibling directories (same parent) that biject to media: each dir's
+///   file_count == medium.tracks.len(), at least 1 AcoustID candidate across siblings
+/// - Fallback: treat like single-medium (pick one dir with most candidates)
+///
+/// Returns the set of target directories.
+fn select_target_directory(
+    candidates: &[CandidateAssignment],
+    corpus_info: &HashMap<i64, CorpusFileInfo>,
+    dir_candidate_inodes: &HashMap<String, HashSet<i64>>,
+    dir_total: &HashMap<String, i32>,
+    media: &[musicbrainz::MbMedium],
+) -> HashSet<String> {
+    let total_tracks: usize = media.iter().map(|m| m.tracks.len()).sum();
+    let media_count = media.len();
+
+    if total_tracks == 0 || dir_candidate_inodes.is_empty() {
+        return HashSet::new();
+    }
+
+    // Multi-medium: try sibling directory bijection first
+    if media_count > 1 {
+        if let Some(dirs) = find_sibling_dir_bijection(dir_candidate_inodes, dir_total, media) {
+            return dirs;
+        }
+        // Fallback: treat like single-medium below
+    }
+
+    // Single-medium (or multi-medium fallback): pick best single directory
+    // Score each directory: (exact_file_count_match, candidate_count, score_sum)
+    let mut dir_scores: Vec<(&str, bool, usize, f64)> = dir_candidate_inodes
+        .iter()
+        .map(|(dir, inodes)| {
+            let file_count = dir_total.get(dir).copied().unwrap_or(0);
+            let exact_match = file_count == total_tracks as i32;
+            let candidate_count = inodes.len();
+            let score_sum: f64 = candidates
+                .iter()
+                .filter(|c| {
+                    corpus_info
+                        .get(&c.inode)
+                        .map(|ci| ci.parent_dir == *dir)
+                        .unwrap_or(false)
+                })
+                .map(|c| c.score)
+                .sum();
+            (dir.as_str(), exact_match, candidate_count, score_sum)
+        })
+        .collect();
+
+    // Sort: exact match first, then most candidates, then highest score sum
+    dir_scores.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then(b.2.cmp(&a.2))
+            .then(
+                b.3.partial_cmp(&a.3)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+
+    if let Some((dir, _, _, _)) = dir_scores.first() {
+        let mut result = HashSet::new();
+        result.insert(dir.to_string());
+        result
+    } else {
+        HashSet::new()
+    }
+}
+
+/// Try to find sibling directories (same parent) that biject to media.
+/// Each dir's file_count must match its medium's track count, and at least
+/// one AcoustID candidate must exist across the sibling dirs.
+fn find_sibling_dir_bijection(
+    dir_candidate_inodes: &HashMap<String, HashSet<i64>>,
+    dir_total: &HashMap<String, i32>,
+    media: &[musicbrainz::MbMedium],
+) -> Option<HashSet<String>> {
+    // For each medium, collect viable directories (file count matches track count)
+    let mut medium_viable_dirs: Vec<(u32, Vec<String>)> = Vec::new();
+
+    for medium in media {
+        let track_count = medium.tracks.len() as i32;
+        let viable: Vec<String> = dir_candidate_inodes
+            .keys()
+            .filter(|dir| dir_total.get(*dir).copied().unwrap_or(0) == track_count)
+            .cloned()
+            .collect();
+        if viable.is_empty() {
+            return None;
+        }
+        medium_viable_dirs.push((medium.position, viable));
+    }
+
+    // Backtracking search for a valid bijection
+    let mut assignment: Vec<(u32, String)> = Vec::new();
+    let mut used_dirs: HashSet<String> = HashSet::new();
+
+    if !backtrack_bijection(&medium_viable_dirs, 0, &mut assignment, &mut used_dirs) {
+        return None;
+    }
+
+    // Check sibling constraint: all directories must share the same parent
+    let parents: HashSet<&str> = assignment
+        .iter()
+        .filter_map(|(_, dir)| Path::new(dir).parent()?.to_str())
+        .collect();
+    if parents.len() != 1 {
+        return None;
+    }
+
+    // Verify at least 1 AcoustID candidate exists across the sibling dirs
+    let dirs: HashSet<String> = assignment.into_iter().map(|(_, d)| d).collect();
+    let has_candidate = dirs
+        .iter()
+        .any(|d| dir_candidate_inodes.get(d).map(|s| !s.is_empty()).unwrap_or(false));
+    if !has_candidate {
+        return None;
+    }
+
+    Some(dirs)
+}
+
+/// Backtracking search for a 1:1 bijection of media to directories.
+fn backtrack_bijection(
+    medium_viable_dirs: &[(u32, Vec<String>)],
+    idx: usize,
+    assignment: &mut Vec<(u32, String)>,
+    used_dirs: &mut HashSet<String>,
+) -> bool {
+    if idx == medium_viable_dirs.len() {
+        return true;
+    }
+
+    let (medium_pos, ref dirs) = medium_viable_dirs[idx];
+    for dir in dirs {
+        if used_dirs.contains(dir) {
+            continue;
+        }
+        used_dirs.insert(dir.clone());
+        assignment.push((medium_pos, dir.clone()));
+        if backtrack_bijection(medium_viable_dirs, idx + 1, assignment, used_dirs) {
+            return true;
+        }
+        assignment.pop();
+        used_dirs.remove(dir);
+    }
+
+    false
 }
 
 /// Resolve a release's artist credit string using locale preferences.
@@ -1539,9 +1700,12 @@ pub fn execute_score_release_candidates(
         }
     }
 
-    // Compute directory cohesion for this release's candidates.
-    // cohesion = (unique candidate inodes from this dir for this release) / (total audio files in dir)
-    // dir_file_count comes from the candidates table (computed in Stage 1).
+    // --- Directory-constrained packing ---
+    // All packing is constrained to a single directory (or sibling dirs for multi-medium).
+    // Step 1: Select target directory based on file count match and candidate density.
+    // Step 2: Filter candidates to target directory only.
+    // Step 3: Run Hungarian on the filtered candidates.
+
     let mut dir_candidate_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
     let mut dir_total: HashMap<String, i32> = HashMap::new();
 
@@ -1559,24 +1723,22 @@ pub fn execute_score_release_candidates(
             .or_insert(row.dir_file_count);
     }
 
-    for candidate in &mut candidates {
-        if let Some(corpus) = corpus_info.get(&candidate.inode) {
-            let unique_candidates = dir_candidate_inodes
-                .get(&corpus.parent_dir)
-                .map(|s| s.len())
-                .unwrap_or(0);
-            let total_files = dir_total
-                .get(&corpus.parent_dir)
-                .copied()
-                .unwrap_or(1)
-                .max(1);
+    let target_dirs = select_target_directory(
+        &candidates,
+        &corpus_info,
+        &dir_candidate_inodes,
+        &dir_total,
+        &release.media,
+    );
 
-            candidate.breakdown.directory_cohesion = unique_candidates as f64 / total_files as f64;
-            candidate.score = weighted_composite(&candidate.breakdown, &candidate_weights);
-        }
-    }
+    // Filter candidates to target directory only
+    candidates.retain(|c| {
+        corpus_info
+            .get(&c.inode)
+            .map(|ci| target_dirs.contains(&ci.parent_dir))
+            .unwrap_or(false)
+    });
 
-    // Optimal per-release assignment via Hungarian algorithm
     let optimal_pairs = hungarian_assignment(&candidates);
 
     // Write all candidates to scoring table, marking optimal ones
@@ -1612,11 +1774,10 @@ pub fn execute_score_release_candidates(
     }
 
     // =====================================================================
-    // Per-release elimination: fill unfilled slots with unassigned directory files
+    // Per-release elimination: fill unfilled slots from target directory only
     // =====================================================================
-    // For each directory where this release has optimal AcoustID picks, find
-    // unassigned audio files and match them to unfilled track slots. Each release
-    // packs independently — we only exclude THIS release's AcoustID inodes.
+    // Scan ONLY the target dir(s) for unassigned audio files to fill remaining slots.
+    // This is the key constraint: elimination never reaches outside the selected directory.
 
     let mut elimination_count = 0u32;
 
@@ -1637,7 +1798,7 @@ pub fn execute_score_release_candidates(
         }
     }
 
-    // Enumerate unfilled slots ONCE (global across all directories)
+    // Enumerate unfilled slots ONCE
     let mut unfilled: Vec<(u32, u32, &musicbrainz::MbTrack)> = Vec::new();
     for medium in &release.media {
         for track in &medium.tracks {
@@ -1649,10 +1810,11 @@ pub fn execute_score_release_candidates(
     }
 
     if !unfilled.is_empty() {
-        // Collect ALL unassigned audio files across all directories with AcoustID picks
+        // Collect unassigned audio files from target dirs only
         let mut all_unassigned: Vec<(i64, String, Option<String>, Option<i64>)> = Vec::new();
-        for (dir, acoustid_inodes) in &dir_acoustid_inodes {
-            match read_only_db.get_unassigned_audio_in_directory(dir, acoustid_inodes) {
+        for dir in &target_dirs {
+            let acoustid_inodes = dir_acoustid_inodes.get(dir).cloned().unwrap_or_default();
+            match read_only_db.get_unassigned_audio_in_directory(dir, &acoustid_inodes) {
                 Ok(files) => all_unassigned.extend(files),
                 Err(_) => continue,
             }
@@ -1786,7 +1948,6 @@ pub fn execute_score_release_candidates(
                     artist_match: artist_sim,
                     album_match: album_sim,
                     track_number_match,
-                    directory_cohesion: 1.0,
                 };
                 let score = weighted_composite(&breakdown, &elimination_weights);
                 let breakdown_bytes = bincode::serialize(&breakdown).unwrap_or_default();
@@ -1885,7 +2046,6 @@ pub fn execute_score_release_candidates(
                         artist_match: artist_sim,
                         album_match: album_sim,
                         track_number_match,
-                        directory_cohesion: 1.0, // same directory by construction
                     };
                     cost[ri][rj] = -weighted_composite(&elim_breakdown, &elimination_weights);
                 }
@@ -1970,7 +2130,6 @@ pub fn execute_score_release_candidates(
                     artist_match: artist_sim,
                     album_match: album_sim,
                     track_number_match,
-                    directory_cohesion: 1.0,
                 };
                 let score = weighted_composite(&breakdown, &elimination_weights);
                 let breakdown_bytes = bincode::serialize(&breakdown).unwrap_or_default();
@@ -2893,7 +3052,6 @@ pub(crate) fn execute_map_single_releases(
                 artist_match: 0.0,
                 album_match: 0.0,
                 track_number_match: 0.0,
-                directory_cohesion: 0.0,
             });
 
         let signal = ReleasePackingSignal {
@@ -3166,15 +3324,20 @@ pub fn execute_analyze_release_gaps(
 
     let mut filled_slots: HashMap<String, HashSet<(i32, i32)>> = HashMap::new();
     let mut release_assigned_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
-    for (inode, _path, release_id, medium_pos, track_pos) in &actual_assignments {
+    let mut release_match_methods: HashMap<String, Vec<MatchMethod>> = HashMap::new();
+    for a in &actual_assignments {
         filled_slots
-            .entry(release_id.clone())
+            .entry(a.release_id.clone())
             .or_default()
-            .insert((*medium_pos as i32, *track_pos as i32));
+            .insert((a.medium_position as i32, a.track_position as i32));
         release_assigned_inodes
-            .entry(release_id.clone())
+            .entry(a.release_id.clone())
             .or_default()
-            .insert(*inode);
+            .insert(a.inode);
+        release_match_methods
+            .entry(a.release_id.clone())
+            .or_default()
+            .push(a.match_method);
     }
 
     // Build full_match_inodes: set of all inodes assigned to full-match releases.
@@ -3312,21 +3475,17 @@ pub fn execute_analyze_release_gaps(
         let category = if total == 1 {
             PackedReleaseCategory::Single
         } else if filled_count >= total {
-            PackedReleaseCategory::FullMatch
-        } else if filled_count + 1 == total {
-            // Suppress fully-covered near-miss releases (same filter as unfilled slots)
-            if let Some(candidate_inodes) =
-                release_candidate_inodes.get(manifest_row.release_id.as_str())
-            {
-                if !candidate_inodes.is_empty()
-                    && candidate_inodes
-                        .iter()
-                        .all(|i| full_match_inodes.contains(i))
-                {
-                    continue;
-                }
+            // All slots filled — classify by confidence level.
+            let all_acoustid = release_match_methods
+                .get(&manifest_row.release_id)
+                .map(|methods| methods.iter().all(|m| *m == MatchMethod::AcoustId))
+                .unwrap_or(false);
+
+            if all_acoustid {
+                PackedReleaseCategory::Perfect
+            } else {
+                PackedReleaseCategory::FullMatch
             }
-            PackedReleaseCategory::NearMiss
         } else {
             // Suppress fully-covered incomplete releases (same filter as unfilled slots)
             if let Some(candidate_inodes) =
@@ -3396,8 +3555,8 @@ pub fn execute_analyze_release_gaps(
         // which includes both AcoustId and Elimination matches)
         let release_inodes: Vec<i64> = actual_assignments
             .iter()
-            .filter(|(_, _, rid, _, _)| rid == &manifest_row.release_id)
-            .map(|(inode, _, _, _, _)| *inode)
+            .filter(|a| a.release_id == manifest_row.release_id)
+            .map(|a| a.inode)
             .collect();
 
         // Check directory cohesion: all assigned inodes from same directory

@@ -818,6 +818,14 @@ impl Database {
             .collect();
 
         // Packing per-category counts from PackedRelease aggregate signals
+        let packing_perfect_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'perfect:%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
         let packing_full_match_count: usize = self
             .conn
             .query_row(
@@ -842,13 +850,6 @@ impl Database {
                 |row| row.get(0),
             )
             .unwrap_or(0);
-
-        let packing_near_miss_count: usize = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM signal_near_miss_release", [], |row| {
-                row.get(0)
-            })
-            .unwrap_or(0);
         let packing_unmatched_count: usize = self
             .conn
             .query_row(
@@ -861,10 +862,10 @@ impl Database {
         Ok(ExternalMatchesData {
             untagged_entries,
             confidence_buckets,
+            packing_perfect_count,
             packing_full_match_count,
             packing_singles_count,
             packing_incomplete_count,
-            packing_near_miss_count,
             packing_unmatched_count,
         })
     }

@@ -468,8 +468,6 @@ pub struct PackingScoreBreakdown {
     pub album_match: f64,
     /// Track number match bonus (1.0 if TRACKNUMBER matches position, 0.0 otherwise).
     pub track_number_match: f64,
-    /// Directory cohesion bonus (fraction of sibling files mapping to same release).
-    pub directory_cohesion: f64,
 }
 
 // ============================================================================
@@ -558,9 +556,13 @@ pub struct PackedReleaseSignal {
 /// Category of a packed release in the optimal solution.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PackedReleaseCategory {
+    /// Every track matched via AcoustID fingerprint (highest confidence).
+    Perfect,
+    /// All slots filled, but some tracks matched via elimination/scoring.
     FullMatch,
+    /// Single-track release.
     Single,
-    NearMiss,
+    /// Some but not all slots filled (includes former near-misses).
     Incomplete,
 }
 
@@ -568,9 +570,9 @@ impl PackedReleaseCategory {
     /// Key prefix for SQL LIKE filtering.
     pub fn key_prefix(&self) -> &'static str {
         match self {
+            Self::Perfect => "perfect",
             Self::FullMatch => "full_match",
             Self::Single => "single",
-            Self::NearMiss => "near_miss",
             Self::Incomplete => "incomplete",
         }
     }

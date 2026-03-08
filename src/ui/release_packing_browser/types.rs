@@ -5,16 +5,16 @@ use crate::meta::signals::data::{PackingScoreBreakdown, UnmatchedCorpusTrackData
 /// Which category of packing results to display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackingCategory {
+    Perfect,
     FullMatches,
     Singles,
     Incomplete,
-    NearMisses,
     Unmatched,
 }
 
 /// Which pane currently has focus.
 pub enum FocusedPane {
-    /// Left pane: release/near-miss/unmatched list.
+    /// Left pane: release/unmatched list.
     LeftPane,
     /// Middle pane: tracks list for selected release.
     MiddlePane,
@@ -64,10 +64,8 @@ pub struct UnmatchedEntry {
 /// An entry in the flat left-pane navigable list.
 /// Tracks are shown in the middle pane, not inline here.
 pub enum PackingListEntry {
-    /// A release row (full match, single, or incomplete).
+    /// A release row (perfect, full match, single, scattered, or incomplete).
     Release { idx: usize },
-    /// A near-miss release entry.
-    NearMiss { idx: usize },
     /// An unmatched corpus file.
     Unmatched { idx: usize },
 }

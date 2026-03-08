@@ -212,10 +212,10 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                 nav_index += 1;
             }
             // Release Packing categories (after confidence tiers)
-            let has_packing = data.packing_full_match_count > 0
+            let has_packing = data.packing_perfect_count > 0
+                || data.packing_full_match_count > 0
                 || data.packing_singles_count > 0
                 || data.packing_incomplete_count > 0
-                || data.packing_near_miss_count > 0
                 || data.packing_unmatched_count > 0;
 
             if has_packing {
@@ -227,24 +227,24 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
 
                 let packing_entries: Vec<(&str, &str, usize, Color)> = vec![
                     (
+                        "★",
+                        "Perfect",
+                        data.packing_perfect_count,
+                        Color::Green,
+                    ),
+                    (
                         "✓",
                         "Full matches",
                         data.packing_full_match_count,
                         Color::Green,
                     ),
-                    ("♪", "Singles", data.packing_singles_count, Color::Cyan),
                     (
                         "◐",
                         "Incomplete",
                         data.packing_incomplete_count,
                         Color::Yellow,
                     ),
-                    (
-                        "!",
-                        "Near-misses",
-                        data.packing_near_miss_count,
-                        Color::Yellow,
-                    ),
+                    ("♪", "Singles", data.packing_singles_count, Color::Cyan),
                     (
                         "?",
                         "Unmatched",
@@ -709,9 +709,13 @@ fn render_untagged_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>
 
 fn render_packing_category_detail(cat: PackingCategory) -> Vec<Line<'static>> {
     let (title, description) = match cat {
+        PackingCategory::Perfect => (
+            "Perfect Matches",
+            "Releases where every track was matched via AcoustID fingerprint.",
+        ),
         PackingCategory::FullMatches => (
             "Full Matches",
-            "Releases where every track has been matched to a corpus file.",
+            "Releases where every track has been matched, some via elimination scoring.",
         ),
         PackingCategory::Singles => (
             "Singles",
@@ -720,10 +724,6 @@ fn render_packing_category_detail(cat: PackingCategory) -> Vec<Line<'static>> {
         PackingCategory::Incomplete => (
             "Incomplete Releases",
             "Releases with some but not all tracks matched to corpus files.",
-        ),
-        PackingCategory::NearMisses => (
-            "Near-Misses",
-            "Releases that nearly matched a directory but had one missing slot.",
         ),
         PackingCategory::Unmatched => (
             "Unmatched Files",

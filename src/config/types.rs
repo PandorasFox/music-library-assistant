@@ -303,22 +303,19 @@ pub struct PackingWeights {
     pub album_match: f64,
     /// Track number match weight.
     pub track_number_match: f64,
-    /// Directory cohesion weight.
-    pub directory_cohesion: f64,
 }
 
 impl PackingWeights {
     /// Default weights for AcoustID-backed candidate scoring.
-    /// Fingerprint confidence and directory cohesion are strong anchors.
+    /// Fingerprint confidence and duration are strong anchors.
     pub fn candidate_defaults() -> Self {
         Self {
-            acoustid_confidence: 0.25,
-            duration_match: 0.25,
-            title_match: 0.08,
+            acoustid_confidence: 0.30,
+            duration_match: 0.30,
+            title_match: 0.10,
             artist_match: 0.05,
-            album_match: 0.02,
-            track_number_match: 0.10,
-            directory_cohesion: 0.25,
+            album_match: 0.05,
+            track_number_match: 0.20,
         }
     }
 
@@ -330,11 +327,10 @@ impl PackingWeights {
         Self {
             acoustid_confidence: 0.0,
             duration_match: 0.25,
-            title_match: 0.25,
+            title_match: 0.30,
             artist_match: 0.0,
             album_match: 0.05,
-            track_number_match: 0.30,
-            directory_cohesion: 0.15,
+            track_number_match: 0.40,
         }
     }
 
@@ -344,7 +340,6 @@ impl PackingWeights {
     pub const KDL_ARTIST_MATCH: &str = "artist-match";
     pub const KDL_ALBUM_MATCH: &str = "album-match";
     pub const KDL_TRACK_NUMBER_MATCH: &str = "track-number-match";
-    pub const KDL_DIRECTORY_COHESION: &str = "directory-cohesion";
 }
 
 /// Opinions for MusicBrainz release bin-packing.

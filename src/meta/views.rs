@@ -183,14 +183,14 @@ pub struct ExternalMatchesData {
     pub confidence_buckets: Vec<ConfidenceBucket>,
 
     // Release packing per-category counts
-    /// Full-match releases (all tracks assigned, multi-track).
+    /// Perfect releases (all tracks matched via AcoustID).
+    pub packing_perfect_count: usize,
+    /// Full-match releases (all tracks assigned, some via elimination).
     pub packing_full_match_count: usize,
     /// Single-track releases.
     pub packing_singles_count: usize,
     /// Incomplete releases (some but not all tracks assigned).
     pub packing_incomplete_count: usize,
-    /// Near-miss releases.
-    pub packing_near_miss_count: usize,
     /// Unmatched corpus tracks.
     pub packing_unmatched_count: usize,
 }

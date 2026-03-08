@@ -343,24 +343,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                             }
                         },
                     ),
-                    field(
-                        "Directory cohesion",
-                        "Weight for sibling files mapping to same release (0.0-1.0)",
-                        ConfigValue::Float(cw.directory_cohesion),
-                        source_for(
-                            (cw.directory_cohesion - cwd.directory_cohesion).abs() < f64::EPSILON,
-                            PackingWeights::KDL_DIRECTORY_COHESION,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions
-                                    .release_packing
-                                    .candidate_weights
-                                    .directory_cohesion = *f;
-                            }
-                        },
-                    ),
                 ]
             },
         },
@@ -468,24 +450,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                                     .release_packing
                                     .elimination_weights
                                     .track_number_match = *f;
-                            }
-                        },
-                    ),
-                    field(
-                        "Directory cohesion",
-                        "Weight for directory cohesion — typically 1.0 in elimination (0.0-1.0)",
-                        ConfigValue::Float(ew.directory_cohesion),
-                        source_for(
-                            (ew.directory_cohesion - ewd.directory_cohesion).abs() < f64::EPSILON,
-                            PackingWeights::KDL_DIRECTORY_COHESION,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions
-                                    .release_packing
-                                    .elimination_weights
-                                    .directory_cohesion = *f;
                             }
                         },
                     ),

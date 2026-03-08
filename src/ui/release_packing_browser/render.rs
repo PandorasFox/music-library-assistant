@@ -529,7 +529,7 @@ fn render_release_overview(release: &ReleaseGroup) -> Vec<Line<'static>> {
 
     // Format file types inline: "37 flac, 2 png"
     let mut ext_pairs: Vec<_> = ext_counts.into_iter().collect();
-    ext_pairs.sort_by(|a, b| b.1.cmp(&a.1));
+    ext_pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let ext_summary: String = ext_pairs
         .iter()
         .map(|(ext, count)| format!("{} {}", count, ext))
@@ -567,7 +567,7 @@ fn render_release_overview(release: &ReleaseGroup) -> Vec<Line<'static>> {
     lines.push(Line::from(Span::raw("")));
 
     let mut dir_pairs: Vec<_> = dir_counts.into_iter().collect();
-    dir_pairs.sort_by(|a, b| b.1.cmp(&a.1));
+    dir_pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     for (dir, count) in &dir_pairs {
         lines.push(Line::from(vec![

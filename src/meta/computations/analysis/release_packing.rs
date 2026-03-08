@@ -923,31 +923,65 @@ fn hungarian_assignment(candidates: &[CandidateAssignment]) -> HashSet<(i64, (u3
 /// - Prefer: directory where `dir_file_count == total_tracks` with most AcoustID candidates
 /// - Fallback: directory with the most AcoustID candidates
 /// - Tiebreaker: highest sum of candidate scores
+/// - Returns `TargetDirs::Single(dir)`.
 ///
 /// **Multi-medium** (`media.len() > 1`):
-/// - Look for sibling directories (same parent) that biject to media: each dir's
-///   file_count == medium.tracks.len(), at least 1 AcoustID candidate across siblings
-/// - Fallback: treat like single-medium (pick one dir with most candidates)
-///
-/// Returns the set of target directories.
+/// - Find sibling directories (same parent) with candidates, assign each medium to
+///   the sibling dir where most of its AcoustID candidates live.
+/// - Returns `TargetDirs::PerMedium(mapping)` with per-medium directory affinity.
+/// - Fallback: treat like single-medium (pick one dir with most candidates).
+enum TargetDirs {
+    /// One directory for all media (single-medium or multi-medium fallback).
+    Single(String),
+    /// Per-medium directory assignments from sibling group detection.
+    PerMedium(HashMap<u32, String>),
+    /// No valid target directory found.
+    Empty,
+}
+
+impl TargetDirs {
+    /// Check if a candidate (inode in a given dir, targeting a given medium) belongs.
+    fn contains(&self, parent_dir: &str, medium_pos: u32) -> bool {
+        match self {
+            TargetDirs::Single(d) => d == parent_dir,
+            TargetDirs::PerMedium(m) => m
+                .get(&medium_pos)
+                .map(|d| d == parent_dir)
+                .unwrap_or(false),
+            TargetDirs::Empty => false,
+        }
+    }
+
+    /// Get the target directory for a specific medium (for elimination scanning).
+    fn dir_for_medium(&self, medium_pos: u32) -> Option<&str> {
+        match self {
+            TargetDirs::Single(d) => Some(d.as_str()),
+            TargetDirs::PerMedium(m) => m.get(&medium_pos).map(|d| d.as_str()),
+            TargetDirs::Empty => None,
+        }
+    }
+}
+
 fn select_target_directory(
     candidates: &[CandidateAssignment],
     corpus_info: &HashMap<i64, CorpusFileInfo>,
     dir_candidate_inodes: &HashMap<String, HashSet<i64>>,
     dir_total: &HashMap<String, i32>,
     media: &[musicbrainz::MbMedium],
-) -> HashSet<String> {
+) -> TargetDirs {
     let total_tracks: usize = media.iter().map(|m| m.tracks.len()).sum();
     let media_count = media.len();
 
     if total_tracks == 0 || dir_candidate_inodes.is_empty() {
-        return HashSet::new();
+        return TargetDirs::Empty;
     }
 
-    // Multi-medium: try sibling directory bijection first
+    // Multi-medium: try sibling directory group detection first
     if media_count > 1 {
-        if let Some(dirs) = find_sibling_dir_bijection(dir_candidate_inodes, dir_total, media) {
-            return dirs;
+        if let Some(mapping) =
+            find_sibling_dir_mapping(candidates, corpus_info, dir_candidate_inodes)
+        {
+            return TargetDirs::PerMedium(mapping);
         }
         // Fallback: treat like single-medium below
     }
@@ -985,93 +1019,75 @@ fn select_target_directory(
     });
 
     if let Some((dir, _, _, _)) = dir_scores.first() {
-        let mut result = HashSet::new();
-        result.insert(dir.to_string());
-        result
+        TargetDirs::Single(dir.to_string())
     } else {
-        HashSet::new()
+        TargetDirs::Empty
     }
 }
 
-/// Try to find sibling directories (same parent) that biject to media.
-/// Each dir's file_count must match its medium's track count, and at least
-/// one AcoustID candidate must exist across the sibling dirs.
-fn find_sibling_dir_bijection(
+/// Find sibling directories (same parent) with AcoustID candidates for a multi-medium
+/// release, then assign each medium to the sibling dir where most of its candidates live.
+///
+/// Returns `medium_pos → dir` mapping if a valid sibling group is found.
+fn find_sibling_dir_mapping(
+    candidates: &[CandidateAssignment],
+    corpus_info: &HashMap<i64, CorpusFileInfo>,
     dir_candidate_inodes: &HashMap<String, HashSet<i64>>,
-    dir_total: &HashMap<String, i32>,
-    media: &[musicbrainz::MbMedium],
-) -> Option<HashSet<String>> {
-    // For each medium, collect viable directories (file count matches track count)
-    let mut medium_viable_dirs: Vec<(u32, Vec<String>)> = Vec::new();
-
-    for medium in media {
-        let track_count = medium.tracks.len() as i32;
-        let viable: Vec<String> = dir_candidate_inodes
-            .keys()
-            .filter(|dir| dir_total.get(*dir).copied().unwrap_or(0) == track_count)
-            .cloned()
-            .collect();
-        if viable.is_empty() {
-            return None;
+) -> Option<HashMap<u32, String>> {
+    // Group directories by parent
+    let mut parent_groups: HashMap<String, Vec<String>> = HashMap::new();
+    for dir in dir_candidate_inodes.keys() {
+        if let Some(parent) = Path::new(dir).parent().and_then(|p| p.to_str()) {
+            parent_groups
+                .entry(parent.to_string())
+                .or_default()
+                .push(dir.clone());
         }
-        medium_viable_dirs.push((medium.position, viable));
     }
 
-    // Backtracking search for a valid bijection
-    let mut assignment: Vec<(u32, String)> = Vec::new();
-    let mut used_dirs: HashSet<String> = HashSet::new();
+    // Pick the parent group with the most total candidates, requiring ≥2 sibling dirs
+    let best_group = parent_groups
+        .into_iter()
+        .filter(|(_, dirs)| dirs.len() >= 2)
+        .max_by_key(|(_, dirs)| {
+            dirs.iter()
+                .map(|d| dir_candidate_inodes.get(d).map(|s| s.len()).unwrap_or(0))
+                .sum::<usize>()
+        });
 
-    if !backtrack_bijection(&medium_viable_dirs, 0, &mut assignment, &mut used_dirs) {
+    let (_, sibling_dirs) = best_group?;
+    let sibling_set: HashSet<&str> = sibling_dirs.iter().map(|s| s.as_str()).collect();
+
+    // For each candidate in a sibling dir, tally which medium it belongs to
+    // medium_pos → dir → candidate_count
+    let mut medium_dir_counts: HashMap<u32, HashMap<&str, usize>> = HashMap::new();
+    for c in candidates {
+        if let Some(ci) = corpus_info.get(&c.inode) {
+            if sibling_set.contains(ci.parent_dir.as_str()) {
+                *medium_dir_counts
+                    .entry(c.medium_pos)
+                    .or_default()
+                    .entry(&ci.parent_dir)
+                    .or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Assign each medium to its highest-count sibling dir
+    let mut mapping: HashMap<u32, String> = HashMap::new();
+    for (medium_pos, dir_counts) in &medium_dir_counts {
+        if let Some((&best_dir, _)) = dir_counts.iter().max_by_key(|(_, &count)| count) {
+            mapping.insert(*medium_pos, best_dir.to_string());
+        }
+    }
+
+    // Must have at least 2 distinct dirs mapped to be worth using as sibling group
+    let distinct_dirs: HashSet<&str> = mapping.values().map(|s| s.as_str()).collect();
+    if distinct_dirs.len() < 2 {
         return None;
     }
 
-    // Check sibling constraint: all directories must share the same parent
-    let parents: HashSet<&str> = assignment
-        .iter()
-        .filter_map(|(_, dir)| Path::new(dir).parent()?.to_str())
-        .collect();
-    if parents.len() != 1 {
-        return None;
-    }
-
-    // Verify at least 1 AcoustID candidate exists across the sibling dirs
-    let dirs: HashSet<String> = assignment.into_iter().map(|(_, d)| d).collect();
-    let has_candidate = dirs
-        .iter()
-        .any(|d| dir_candidate_inodes.get(d).map(|s| !s.is_empty()).unwrap_or(false));
-    if !has_candidate {
-        return None;
-    }
-
-    Some(dirs)
-}
-
-/// Backtracking search for a 1:1 bijection of media to directories.
-fn backtrack_bijection(
-    medium_viable_dirs: &[(u32, Vec<String>)],
-    idx: usize,
-    assignment: &mut Vec<(u32, String)>,
-    used_dirs: &mut HashSet<String>,
-) -> bool {
-    if idx == medium_viable_dirs.len() {
-        return true;
-    }
-
-    let (medium_pos, ref dirs) = medium_viable_dirs[idx];
-    for dir in dirs {
-        if used_dirs.contains(dir) {
-            continue;
-        }
-        used_dirs.insert(dir.clone());
-        assignment.push((medium_pos, dir.clone()));
-        if backtrack_bijection(medium_viable_dirs, idx + 1, assignment, used_dirs) {
-            return true;
-        }
-        assignment.pop();
-        used_dirs.remove(dir);
-    }
-
-    false
+    Some(mapping)
 }
 
 /// Resolve a release's artist credit string using locale preferences.
@@ -1731,11 +1747,11 @@ pub fn execute_score_release_candidates(
         &release.media,
     );
 
-    // Filter candidates to target directory only
+    // Filter candidates to target directory only (per-medium aware)
     candidates.retain(|c| {
         corpus_info
             .get(&c.inode)
-            .map(|ci| target_dirs.contains(&ci.parent_dir))
+            .map(|ci| target_dirs.contains(&ci.parent_dir, c.medium_pos))
             .unwrap_or(false)
     });
 
@@ -1810,15 +1826,47 @@ pub fn execute_score_release_candidates(
     }
 
     if !unfilled.is_empty() {
-        // Collect unassigned audio files from target dirs only
+        // Collect unassigned audio files from target dirs only.
+        // For per-medium dirs, only include files from the dir assigned to a medium
+        // that still has unfilled slots (prevents cross-medium contamination).
         let mut all_unassigned: Vec<(i64, String, Option<String>, Option<i64>)> = Vec::new();
-        for dir in &target_dirs {
-            let acoustid_inodes = dir_acoustid_inodes.get(dir).cloned().unwrap_or_default();
-            match read_only_db.get_unassigned_audio_in_directory(dir, &acoustid_inodes) {
-                Ok(files) => all_unassigned.extend(files),
-                Err(_) => continue,
+        let unfilled_media: HashSet<u32> = unfilled.iter().map(|(m, _, _)| *m).collect();
+        let mut scanned_dirs: HashSet<String> = HashSet::new();
+        for &medium_pos in &unfilled_media {
+            if let Some(dir) = target_dirs.dir_for_medium(medium_pos) {
+                if scanned_dirs.insert(dir.to_string()) {
+                    let acoustid_inodes =
+                        dir_acoustid_inodes.get(dir).cloned().unwrap_or_default();
+                    match read_only_db.get_unassigned_audio_in_directory(dir, &acoustid_inodes) {
+                        Ok(files) => all_unassigned.extend(files),
+                        Err(_) => continue,
+                    }
+                }
             }
         }
+
+        // For PerMedium targets, map each file to its medium based on parent dir.
+        // This prevents cross-medium contamination in elimination: Disc 1 files
+        // can only fill Medium 1 slots, Disc 2 files only Medium 2 slots.
+        let dir_to_medium: HashMap<String, u32> = match &target_dirs {
+            TargetDirs::PerMedium(mapping) => {
+                mapping.iter().map(|(mp, d)| (d.clone(), *mp)).collect()
+            }
+            _ => HashMap::new(),
+        };
+        let file_medium: Vec<Option<u32>> = all_unassigned
+            .iter()
+            .map(|(_, path, _, _)| {
+                if dir_to_medium.is_empty() {
+                    None // Single target — no per-medium constraint
+                } else {
+                    Path::new(path)
+                        .parent()
+                        .and_then(|p| p.to_str())
+                        .and_then(|parent| dir_to_medium.get(parent).copied())
+                }
+            })
+            .collect();
 
         if !all_unassigned.is_empty() {
             // Pre-load tags for each unassigned file
@@ -1874,10 +1922,15 @@ pub fn execute_score_release_candidates(
             let n_slots = unfilled.len();
 
             // file_candidates[ui] = list of slot indices with sim > threshold
+            // For PerMedium targets, only consider slots from the file's medium
             let file_candidates: Vec<Vec<usize>> = (0..n_files)
                 .map(|ui| {
                     (0..n_slots)
-                        .filter(|&fi| title_sims[ui][fi] > TITLE_PREASSIGN_THRESHOLD)
+                        .filter(|&fi| {
+                            title_sims[ui][fi] > TITLE_PREASSIGN_THRESHOLD
+                                && file_medium[ui]
+                                    .map_or(true, |fm| unfilled[fi].0 == fm)
+                        })
                         .collect()
                 })
                 .collect();
@@ -1886,7 +1939,11 @@ pub fn execute_score_release_candidates(
             let slot_candidates: Vec<Vec<usize>> = (0..n_slots)
                 .map(|fi| {
                     (0..n_files)
-                        .filter(|&ui| title_sims[ui][fi] > TITLE_PREASSIGN_THRESHOLD)
+                        .filter(|&ui| {
+                            title_sims[ui][fi] > TITLE_PREASSIGN_THRESHOLD
+                                && file_medium[ui]
+                                    .map_or(true, |fm| unfilled[fi].0 == fm)
+                        })
                         .collect()
                 })
                 .collect();
@@ -1996,6 +2053,13 @@ pub fn execute_score_release_candidates(
                 let tags = &unassigned_tags[ui];
                 let dur_ms = &all_unassigned[ui].3;
                 for (rj, &fi) in remaining_unfilled.iter().enumerate() {
+                    // Per-medium affinity: prohibit cross-medium assignment
+                    if let Some(fm) = file_medium[ui] {
+                        if unfilled[fi].0 != fm {
+                            cost[ri][rj] = 1e9;
+                            continue;
+                        }
+                    }
                     let (_, _, track) = &unfilled[fi];
                     let mb_dur = track.length.or(track.recording.length);
                     let duration_match = match (*dur_ms, mb_dur) {
@@ -2051,8 +2115,6 @@ pub fn execute_score_release_candidates(
                 }
             }
 
-            const ELIMINATION_SCORE_THRESHOLD: f64 = 0.35;
-
             let col_to_row = if n > 0 {
                 kuhn_munkres(&cost, n)
             } else {
@@ -2065,10 +2127,6 @@ pub fn execute_score_release_candidates(
                 let ri = row - 1;
                 let rj = j - 1;
                 if ri >= n_unassigned || rj >= n_unfilled {
-                    continue;
-                }
-                let composite = -cost[ri][rj];
-                if composite < ELIMINATION_SCORE_THRESHOLD {
                     continue;
                 }
 

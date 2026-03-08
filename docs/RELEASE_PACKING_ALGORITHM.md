@@ -80,11 +80,15 @@ Each `CandidateAssignment` is a `(inode, track_slot)` pair scored across 6 dimen
 
 Scans unassigned audio files in the target directory(ies). For each `(file, unfilled_slot)` pair, computes title similarity.
 
+**Per-medium affinity:** For `PerMedium` targets, only file-slot pairs where the file's parent directory matches the slot's medium's assigned directory are considered. This prevents cross-medium contamination (e.g., Disc 1 files stealing Medium 2 slots).
+
 **Assignment rule:** Lock in a match only when both the file and the slot have exactly one candidate above the threshold (0.95). This prevents track-number ordering from stealing slots with clear title matches when rip numbering diverges from MB.
 
 ### Phase 4: Elimination Matching (Elimination Phase 2)
 
-Runs Hungarian on remaining `(unassigned_files × unfilled_slots)` using `elimination_weights`. Matches with composite score below 0.35 are discarded.
+Runs Hungarian on remaining `(unassigned_files × unfilled_slots)` using `elimination_weights`. All Hungarian-assigned pairs are accepted — no score threshold is applied, since the directory constraint already guarantees files are from the correct directory. Hungarian picks the optimal assignment; rejecting low-scoring pairs would only create gaps.
+
+**Per-medium affinity:** For `PerMedium` targets, cross-medium file-slot pairs receive a prohibitive cost (`1e9`) in the Hungarian matrix, ensuring each medium's slots are only filled by files from that medium's assigned directory.
 
 Elimination winners record `(fingerprint_hex, recording_id)` for the pending AcoustID submission queue.
 
@@ -187,7 +191,7 @@ These are distinct classification systems used at different stages:
 | Constant | Value | Purpose |
 |----------|-------|---------|
 | `TITLE_PREASSIGN_THRESHOLD` | 0.95 | Title pre-assignment: high confidence, 1:1 only |
-| `ELIMINATION_SCORE_THRESHOLD` | 0.35 | Elimination Hungarian: minimum composite score |
+| ~~`ELIMINATION_SCORE_THRESHOLD`~~ | Removed | No threshold — directory constraint provides the quality gate |
 | `DEFAULT_KNOT_RATIO` | 3.0 | Knot extraction: proposals/inodes threshold |
 | `DEFAULT_KNOT_SIZE_LIMIT` | 50 | Max component size before forced knot extraction |
 

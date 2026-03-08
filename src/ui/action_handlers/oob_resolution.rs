@@ -2,11 +2,14 @@
 //!
 //! Handles OOB sync, OOB conflict inspection, and moved file acknowledgement modals.
 
+use super::super::App;
+use super::witness;
 use crate::corpus::paths;
 use crate::meta::decisions::DecisionKey;
-use crate::ui::{filter_popup, moved_file_modal, oob_sync_modal, oob_conflict_modal, ActiveView, FilterOverlay, FilterPopupContext};
-use super::witness;
-use super::super::App;
+use crate::ui::{
+    filter_popup, moved_file_modal, oob_conflict_modal, oob_sync_modal, ActiveView, FilterOverlay,
+    FilterPopupContext,
+};
 
 impl App {
     // ========================================================================
@@ -15,9 +18,10 @@ impl App {
 
     /// Start OOB tag sync resolution from Insights view.
     pub(in crate::ui) fn start_oob_sync_resolution(&mut self) {
-        let files = self.cache.query(|db| {
-            db.get_oob_sync_files().unwrap_or_default()
-        }).recv();
+        let files = self
+            .cache
+            .query(|db| db.get_oob_sync_files().unwrap_or_default())
+            .recv();
 
         // Start transaction for the sync resolution
         let _ = self.witch.start_transaction("OOB tag sync");
@@ -27,7 +31,11 @@ impl App {
     }
 
     /// Handle OOB sync resolution actions.
-    pub(super) fn handle_oob_sync_action(&mut self, action: oob_sync_modal::OobSyncAction, witness: Option<&witness::ConfirmationGesture>) {
+    pub(super) fn handle_oob_sync_action(
+        &mut self,
+        action: oob_sync_modal::OobSyncAction,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
         match action {
             oob_sync_modal::OobSyncAction::None => {}
             oob_sync_modal::OobSyncAction::AcceptDisk => {
@@ -63,11 +71,17 @@ impl App {
     /// Uses the dedicated batch mutations which properly handle multi-value tags:
     /// - IndexToDisk: ApplyDbTagsToDisk (writes DB tags to disk files)
     /// - DiskToIndex: AssimilateDiskTagsToDb (reads disk tags into DB index)
-    fn stage_oob_sync_mutations(&mut self, direction: crate::meta::views::OobSyncDirection, gesture: &witness::ConfirmationGesture) {
-        use crate::meta::views::OobSyncDirection;
+    fn stage_oob_sync_mutations(
+        &mut self,
+        direction: crate::meta::views::OobSyncDirection,
+        gesture: &witness::ConfirmationGesture,
+    ) {
         use crate::db::types::Zone;
+        use crate::meta::mutations::indexing::{
+            ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation,
+        };
         use crate::meta::mutations::Mutation;
-        use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
+        use crate::meta::views::OobSyncDirection;
 
         let (selected_indices, files_ref) = match &self.view {
             ActiveView::OobSyncResolution(ref state) => {
@@ -77,7 +91,8 @@ impl App {
                     (0..state.files.len()).collect()
                 };
                 // Collect the data we need before dropping the borrow
-                let files: Vec<_> = indices.iter()
+                let files: Vec<_> = indices
+                    .iter()
                     .filter_map(|&idx| state.files.get(idx))
                     .filter(|file| file.direction == direction)
                     .map(|file| (file.inode, file.path.clone()))
@@ -107,19 +122,39 @@ impl App {
         let (label, mutations): (&str, Vec<Mutation>) = match direction {
             OobSyncDirection::IndexToDisk => (
                 "Sync index tags \u{2192} disk",
-                tracks.into_iter()
-                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation { inode, path, zone: Zone::Corpus }))
+                tracks
+                    .into_iter()
+                    .map(|(inode, path)| {
+                        Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation {
+                            inode,
+                            path,
+                            zone: Zone::Corpus,
+                        })
+                    })
                     .collect(),
             ),
             OobSyncDirection::DiskToIndex => (
                 "Sync disk tags \u{2192} index",
-                tracks.into_iter()
-                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path, zone: None }))
+                tracks
+                    .into_iter()
+                    .map(|(inode, path)| {
+                        Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation {
+                            inode,
+                            path,
+                            zone: None,
+                        })
+                    })
                     .collect(),
             ),
         };
 
-        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::OobSync, label, mutations, gesture);
+        let _ = super::super::operator_decisions::stage_decision(
+            &mut self.witch,
+            DecisionKey::OobSync,
+            label,
+            mutations,
+            gesture,
+        );
     }
 
     // ========================================================================
@@ -132,9 +167,10 @@ impl App {
     /// transaction for potential resolution, and computes the initial diff.
     pub(in crate::ui) fn start_oob_conflict_inspection(&mut self) {
         // Query bucketed files via cache thread
-        let files = self.cache.query(|db| {
-            db.get_oob_files_bucketed().unwrap_or_default()
-        }).recv();
+        let files = self
+            .cache
+            .query(|db| db.get_oob_files_bucketed().unwrap_or_default())
+            .recv();
 
         // Start transaction for potential resolution
         let _ = self.witch.start_transaction("OOB tag resolution");
@@ -147,16 +183,21 @@ impl App {
             let path = file.path.clone();
             let resolver = paths::get_resolver();
             let abs_path = resolver.resolve(std::path::Path::new(&path));
-            state.current_diff = self.cache.query(move |db| {
-                oob_conflict_modal::types::compute_tag_diff(db, inode, &abs_path)
-            }).recv();
+            state.current_diff = self
+                .cache
+                .query(move |db| oob_conflict_modal::types::compute_tag_diff(db, inode, &abs_path))
+                .recv();
         }
 
         self.view = ActiveView::OobConflictInspection(state);
     }
 
     /// Handle OOB conflict inspection actions.
-    pub(super) fn handle_oob_conflict_action(&mut self, action: oob_conflict_modal::OobConflictAction, witness: Option<&witness::ConfirmationGesture>) {
+    pub(super) fn handle_oob_conflict_action(
+        &mut self,
+        action: oob_conflict_modal::OobConflictAction,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
         match action {
             oob_conflict_modal::OobConflictAction::None => {}
             oob_conflict_modal::OobConflictAction::Navigate => {
@@ -201,9 +242,9 @@ impl App {
 
         let resolver = paths::get_resolver();
         let abs_path = resolver.resolve(std::path::Path::new(&path));
-        self.cache.query(move |db| {
-            oob_conflict_modal::types::compute_tag_diff(db, inode, &abs_path)
-        }).recv()
+        self.cache
+            .query(move |db| oob_conflict_modal::types::compute_tag_diff(db, inode, &abs_path))
+            .recv()
     }
 
     /// Stage resolution mutations for files in the active bucket.
@@ -216,8 +257,10 @@ impl App {
     /// - AssimilateDiskTagsToDb: reads disk tags into DB index
     fn stage_oob_bucket_resolution(&mut self, gesture: &witness::ConfirmationGesture) {
         use crate::db::types::Zone;
+        use crate::meta::mutations::indexing::{
+            ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation,
+        };
         use crate::meta::mutations::Mutation;
-        use crate::meta::mutations::indexing::{ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation};
         use crate::ui::oob_conflict_modal::types::ResolutionButton;
 
         let (files_data, button) = match &self.view {
@@ -262,19 +305,39 @@ impl App {
         let (label, mutations): (&str, Vec<Mutation>) = match button {
             ResolutionButton::ApplyDb => (
                 "Apply DB tags \u{2192} files",
-                tracks.into_iter()
-                    .map(|(inode, path)| Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation { inode, path, zone: Zone::Corpus }))
+                tracks
+                    .into_iter()
+                    .map(|(inode, path)| {
+                        Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation {
+                            inode,
+                            path,
+                            zone: Zone::Corpus,
+                        })
+                    })
                     .collect(),
             ),
             ResolutionButton::AssimilateDisk => (
                 "Assimilate file tags \u{2192} DB",
-                tracks.into_iter()
-                    .map(|(inode, path)| Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation { inode, path, zone: None }))
+                tracks
+                    .into_iter()
+                    .map(|(inode, path)| {
+                        Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation {
+                            inode,
+                            path,
+                            zone: None,
+                        })
+                    })
                     .collect(),
             ),
         };
 
-        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::OobConflict, label, mutations, gesture);
+        let _ = super::super::operator_decisions::stage_decision(
+            &mut self.witch,
+            DecisionKey::OobConflict,
+            label,
+            mutations,
+            gesture,
+        );
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
         self.after_staging_decisions();
@@ -285,8 +348,8 @@ impl App {
     /// If selection is active, only selected files are included.
     /// Otherwise, all files in the bucket are included.
     fn stage_oob_mtime_acknowledgement(&mut self, gesture: &witness::ConfirmationGesture) {
-        use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::AcknowledgeMtimeOnlyMutation;
+        use crate::meta::mutations::Mutation;
 
         let resolver = paths::get_resolver();
 
@@ -320,7 +383,9 @@ impl App {
         }
 
         // Create single mutation with all files as (inode, path) pairs
-        let mutations = vec![Mutation::AcknowledgeMtimeOnly(AcknowledgeMtimeOnlyMutation { tracks })];
+        let mutations = vec![Mutation::AcknowledgeMtimeOnly(
+            AcknowledgeMtimeOnlyMutation { tracks },
+        )];
 
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
@@ -341,9 +406,10 @@ impl App {
     /// Start moved file acknowledgement modal.
     pub(in crate::ui) fn start_moved_file_acknowledge(&mut self) {
         // Query files with moved_file signals
-        let files = self.cache.query(|db| {
-            db.get_moved_files().unwrap_or_default()
-        }).recv();
+        let files = self
+            .cache
+            .query(|db| db.get_moved_files().unwrap_or_default())
+            .recv();
 
         crate::logging::log_general(format!(
             "Starting moved file acknowledgement: {} files",
@@ -358,7 +424,11 @@ impl App {
     }
 
     /// Handle moved file acknowledgement actions.
-    pub(super) fn handle_moved_file_action(&mut self, action: moved_file_modal::MovedFileAction, witness: Option<&witness::ConfirmationGesture>) {
+    pub(super) fn handle_moved_file_action(
+        &mut self,
+        action: moved_file_modal::MovedFileAction,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
         match action {
             moved_file_modal::MovedFileAction::None => {}
             moved_file_modal::MovedFileAction::Acknowledge => {
@@ -375,8 +445,8 @@ impl App {
 
     /// Stage mutations for moved file acknowledgement.
     fn stage_moved_file_acknowledge(&mut self, gesture: &witness::ConfirmationGesture) {
-        use crate::meta::mutations::Mutation;
         use crate::meta::mutations::indexing::UpdateFilePathMutation;
+        use crate::meta::mutations::Mutation;
         use std::path::PathBuf;
 
         let (mutations, label) = match &self.view {
@@ -388,7 +458,11 @@ impl App {
                 // Create UpdateFilePath mutations for each moved file
                 let mut mutations = Vec::new();
                 for (inode, new_path, old_zone, new_zone) in state.files_for_mutation() {
-                    let cross_zone = if old_zone != new_zone { Some(new_zone) } else { None };
+                    let cross_zone = if old_zone != new_zone {
+                        Some(new_zone)
+                    } else {
+                        None
+                    };
                     mutations.push(Mutation::UpdateFilePath(UpdateFilePathMutation {
                         zone: old_zone,
                         inode,
@@ -408,6 +482,12 @@ impl App {
         };
 
         // Stage the UpdateFilePath mutations
-        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::MovedFile, &label, mutations, gesture);
+        let _ = super::super::operator_decisions::stage_decision(
+            &mut self.witch,
+            DecisionKey::MovedFile,
+            &label,
+            mutations,
+            gesture,
+        );
     }
 }

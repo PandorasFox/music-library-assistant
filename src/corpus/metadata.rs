@@ -10,8 +10,8 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 use crate::config::is_audio_extension;
-use crate::meta::mutations::ExtractedMetadata;
 use crate::corpus::tags::TagSet;
+use crate::meta::mutations::ExtractedMetadata;
 
 pub struct AudioMetadata {
     pub duration_ms: Option<i64>,
@@ -207,7 +207,11 @@ pub fn generate_fingerprint(path: &Path) -> Result<Vec<u32>> {
     use rusty_chromaprint::{Configuration, Fingerprinter};
 
     let crate::corpus::codecs::AudioSource {
-        mut format, mut decoder, sample_rate, channels, ..
+        mut format,
+        mut decoder,
+        sample_rate,
+        channels,
+        ..
     } = crate::corpus::codecs::open_audio_source(path)?;
 
     // Initialize chromaprint fingerprinter
@@ -408,8 +412,8 @@ pub fn verify_audio_integrity(path: &Path) -> Result<()> {
     use symphonia::core::errors::Error as SymphoniaError;
 
     // Open audio file with symphonia
-    let file = File::open(path)
-        .with_context(|| format!("Failed to open file: {}", path.display()))?;
+    let file =
+        File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -433,15 +437,15 @@ pub fn verify_audio_integrity(path: &Path) -> Result<()> {
     let track_id = track.id;
 
     // TODO: Revert to symphonia::default::get_codecs() when symphonia adds native opus
-    let mut decoder = match crate::corpus::codecs::make_decoder(&track.codec_params, &Default::default())
-    {
-        Ok(d) => d,
-        Err(symphonia_core::errors::Error::Unsupported(_)) => {
-            // Codec not supported - can't verify, but not corrupt
-            return Ok(());
-        }
-        Err(e) => return Err(e).context("Failed to create decoder"),
-    };
+    let mut decoder =
+        match crate::corpus::codecs::make_decoder(&track.codec_params, &Default::default()) {
+            Ok(d) => d,
+            Err(symphonia_core::errors::Error::Unsupported(_)) => {
+                // Codec not supported - can't verify, but not corrupt
+                return Ok(());
+            }
+            Err(e) => return Err(e).context("Failed to create decoder"),
+        };
 
     // Decode ALL packets to the end
     // Be careful: normal EOF can manifest as various error types depending on format
@@ -460,12 +464,11 @@ pub fn verify_audio_integrity(path: &Path) -> Result<()> {
                     }
                     Err(SymphoniaError::DecodeError(msg)) => {
                         // Actual decode error - audio data is corrupt
-                        return Err(anyhow::anyhow!(
-                            "Audio decode error at packet: {}",
-                            msg
-                        ));
+                        return Err(anyhow::anyhow!("Audio decode error at packet: {}", msg));
                     }
-                    Err(SymphoniaError::IoError(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    Err(SymphoniaError::IoError(ref e))
+                        if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                    {
                         // Unexpected EOF during decode - file is truncated
                         return Err(anyhow::anyhow!(
                             "Unexpected EOF during decode - file appears truncated"
@@ -487,7 +490,9 @@ pub fn verify_audio_integrity(path: &Path) -> Result<()> {
                 }
             }
             // End of stream conditions - these are NORMAL, not errors
-            Err(SymphoniaError::IoError(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Err(SymphoniaError::IoError(ref e))
+                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
                 // For most formats, UnexpectedEof from next_packet() means we've reached
                 // the end of the file. Only treat as truncation if we haven't decoded
                 // any packets yet (would indicate a truly truncated file).
@@ -497,8 +502,10 @@ pub fn verify_audio_integrity(path: &Path) -> Result<()> {
             Err(SymphoniaError::IoError(ref e)) => {
                 // Check if this is a normal EOF condition
                 let err_str = format!("{:?}", e);
-                if err_str.contains("end of file") || err_str.contains("EOF")
-                   || e.kind() == std::io::ErrorKind::Other {
+                if err_str.contains("end of file")
+                    || err_str.contains("EOF")
+                    || e.kind() == std::io::ErrorKind::Other
+                {
                     // Many formats signal EOF this way
                     break;
                 }
@@ -515,10 +522,7 @@ pub fn verify_audio_integrity(path: &Path) -> Result<()> {
                 if msg_lower.contains("end of stream") || msg_lower.contains("eof") {
                     break;
                 }
-                return Err(anyhow::anyhow!(
-                    "Stream decode error: {}",
-                    msg
-                ));
+                return Err(anyhow::anyhow!("Stream decode error: {}", msg));
             }
             Err(symphonia::core::errors::Error::ResetRequired) => {
                 // End of stream (normal termination for some formats)
@@ -527,8 +531,11 @@ pub fn verify_audio_integrity(path: &Path) -> Result<()> {
             Err(e) => {
                 // Check if this is a normal end-of-stream
                 let err_str = format!("{:?}", e);
-                if err_str.contains("end of stream") || err_str.contains("EndOfStream")
-                   || err_str.contains("end of file") || err_str.contains("EOF") {
+                if err_str.contains("end of stream")
+                    || err_str.contains("EndOfStream")
+                    || err_str.contains("end of file")
+                    || err_str.contains("EOF")
+                {
                     break;
                 }
                 // Unknown error - log but don't fail (might be format-specific EOF)
@@ -549,4 +556,3 @@ pub fn verify_audio_integrity(path: &Path) -> Result<()> {
 // =============================================================================
 // All tag reading, writing, and comparison now goes through corpus::tags module.
 // See corpus/tags.rs for TagSet and write_file_tags().
-

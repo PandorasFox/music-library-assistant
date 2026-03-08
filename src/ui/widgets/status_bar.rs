@@ -15,12 +15,7 @@ use crate::ui::helpers::truncate_left;
 ///
 /// Both lines are optional. Line 1 is left-truncated to fit the available
 /// width (useful for long paths). Line 2 is rendered as-is.
-pub fn render(
-    f: &mut Frame,
-    area: Rect,
-    line1: Option<&str>,
-    line2: Option<&str>,
-) {
+pub fn render(f: &mut Frame, area: Rect, line1: Option<&str>, line2: Option<&str>) {
     let style = Style::default().fg(Color::DarkGray);
 
     let line1 = if let Some(text) = line1 {

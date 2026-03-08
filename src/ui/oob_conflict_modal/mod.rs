@@ -9,8 +9,8 @@
 //! Resolvable buckets offer bulk "Apply DB → Files" or
 //! "Assimilate Files → DB" resolution via TransactionReview.
 
-pub mod types;
 pub mod render;
+pub mod types;
 
-pub use types::{OobConflictState, OobConflictAction};
 pub use render::render;
+pub use types::{OobConflictAction, OobConflictState};

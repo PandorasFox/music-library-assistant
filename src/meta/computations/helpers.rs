@@ -10,10 +10,10 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::paths;
-use crate::meta::signals::data::TypedSignalWrite;
-use crate::meta::signals::store::{CorpusSignalStore, AggregateSignalStore};
-use crate::db::ReadOnlyDb;
 use crate::db::write_thread::{self, SignalWitness};
+use crate::db::ReadOnlyDb;
+use crate::meta::signals::data::TypedSignalWrite;
+use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
 
 use super::types::ComputationWitness;
 
@@ -112,7 +112,11 @@ pub(super) fn enumerate_all_directories(root: &Path) -> (Vec<PathBuf>, usize) {
 /// If a directory is on a different filesystem (different st_dev) than the expected
 /// root filesystem, reports a mount violation via the global flag. The Witch will
 /// pick this up on next tick() and latch into read-only mode.
-pub(super) fn enumerate_directories_recursive(dir: &Path, directories: &mut Vec<PathBuf>, symlink_count: &mut usize) {
+pub(super) fn enumerate_directories_recursive(
+    dir: &Path,
+    directories: &mut Vec<PathBuf>,
+    symlink_count: &mut usize,
+) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -226,7 +230,6 @@ pub(crate) fn drop_stale_corpus_signal<S: CorpusSignalStore>(
 // Signal Emission Helpers (Aggregate - Semantic Keys)
 // ============================================================================
 
-
 // ============================================================================
 // Aggregate Signal Set Logic
 // ============================================================================
@@ -244,7 +247,11 @@ impl ComputedAggregateSignal {
     /// Create a new computed signal, auto-computing the content hash.
     pub fn new(key: String, typed_data: TypedSignalWrite) -> Self {
         let content_hash = typed_data.content_hash() as i64;
-        Self { key, typed_data, content_hash }
+        Self {
+            key,
+            typed_data,
+            content_hash,
+        }
     }
 }
 
@@ -261,7 +268,11 @@ impl ComputedCorpusSignal {
     /// Create a new computed corpus signal, auto-computing the content hash.
     pub fn new(inode: i64, typed_data: TypedSignalWrite) -> Self {
         let content_hash = typed_data.content_hash() as i64;
-        Self { inode, typed_data, content_hash }
+        Self {
+            inode,
+            typed_data,
+            content_hash,
+        }
     }
 }
 
@@ -345,7 +356,9 @@ pub(super) fn reconcile_corpus_signals<S: CorpusSignalStore>(
     // Detect this by also fetching the inode list. If there are inodes but
     // no hashes, we're dealing with a scalar type.
     let existing_inodes_vec: Vec<i64> = if existing_hashes.is_empty() {
-        read_only_db.corpus_signal_all_inodes::<S>().unwrap_or_default()
+        read_only_db
+            .corpus_signal_all_inodes::<S>()
+            .unwrap_or_default()
     } else {
         Vec::new() // not needed when we have hashes
     };

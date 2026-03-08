@@ -28,11 +28,11 @@ use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
-use crate::meta::computations::ComputationWitness;
-use crate::db::Database;
-use crate::corpus::tags::TagSet;
-use crate::witch::MutationExecutionWitness;
 use crate::config;
+use crate::corpus::tags::TagSet;
+use crate::db::Database;
+use crate::meta::computations::ComputationWitness;
+use crate::witch::MutationExecutionWitness;
 
 // ============================================================================
 // Index Signal Data Types
@@ -44,7 +44,7 @@ use crate::config;
 #[derive(Debug, Clone)]
 pub struct FileData {
     pub inode: i64,
-    pub zone: String,       // 'corpus', 'library', 'inbox'
+    pub zone: String, // 'corpus', 'library', 'inbox'
     pub _is_dir: bool,
     pub mtime_secs: i64,
     pub mtime_nanos: i64,
@@ -102,9 +102,9 @@ pub struct PackingScoreRow {
     pub score: f64,
     pub score_breakdown: Vec<u8>, // bincode-serialized PackingScoreBreakdown
     pub is_optimal: bool,
-    pub match_method: i32,                    // 0=AcoustId, 1=Elimination
-    pub fingerprint_hex: Option<String>,      // For elimination submission recording
-    pub raw_duration_ms: Option<i64>,         // For elimination submission recording
+    pub match_method: i32,               // 0=AcoustId, 1=Elimination
+    pub fingerprint_hex: Option<String>, // For elimination submission recording
+    pub raw_duration_ms: Option<i64>,    // For elimination submission recording
 }
 
 /// A row for the release_packing_candidates intermediate table.
@@ -194,12 +194,14 @@ pub fn wait_for_queue_drain() -> bool {
 /// Blocks the caller until VACUUM completes. Called during startup before
 /// any read-only connections exist, so the write connection has exclusive access.
 pub fn execute_vacuum() -> Result<(), String> {
-    let sender = SIGNAL_SENDER.get()
+    let sender = SIGNAL_SENDER
+        .get()
         .ok_or_else(|| "db_thread not initialized".to_string())?;
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     sender.mark_enqueued();
     let _ = sender.tx.send(DbWriteOp::ExecuteVacuum { result_tx: tx });
-    rx.recv().map_err(|_| "db_thread disconnected during VACUUM".to_string())?
+    rx.recv()
+        .map_err(|_| "db_thread disconnected during VACUUM".to_string())?
 }
 
 /// Apply schema reconciliation on the db_thread's write connection.
@@ -207,12 +209,16 @@ pub fn execute_vacuum() -> Result<(), String> {
 /// Blocks the caller until reconciliation completes. Runs on the db_thread
 /// which owns the write connection.
 pub fn execute_reconciliation() -> Result<(), String> {
-    let sender = SIGNAL_SENDER.get()
+    let sender = SIGNAL_SENDER
+        .get()
         .ok_or_else(|| "db_thread not initialized".to_string())?;
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     sender.mark_enqueued();
-    let _ = sender.tx.send(DbWriteOp::ApplyReconciliation { result_tx: tx });
-    rx.recv().map_err(|_| "db_thread disconnected during reconciliation".to_string())?
+    let _ = sender
+        .tx
+        .send(DbWriteOp::ApplyReconciliation { result_tx: tx });
+    rx.recv()
+        .map_err(|_| "db_thread disconnected during reconciliation".to_string())?
 }
 
 /// Signal the DB thread to close its connection and exit.
@@ -236,7 +242,6 @@ enum DbWriteOp {
     // =========================================================================
     // Signal Clear Operations (function-pointer dispatch)
     // =========================================================================
-
     /// Clear a single corpus signal by inode (function pointer resolved at send time).
     ClearCorpusSignalByInode {
         clear_fn: fn(&rusqlite::Connection, i64) -> rusqlite::Result<()>,
@@ -267,7 +272,6 @@ enum DbWriteOp {
     // =========================================================================
     // Library File Operations (Awakening phase - reconciliation)
     // =========================================================================
-
     /// Upsert a library file during reconciliation (new or changed).
     UpsertLibraryFile {
         stored_path: String,
@@ -284,7 +288,6 @@ enum DbWriteOp {
     // =========================================================================
     // Bulk Operations (Awake phase content analysis)
     // =========================================================================
-
     /// Write a typed signal directly to its per-signal table.
     ///
     /// Bypasses JSON serialization entirely — the typed data struct is sent
@@ -310,7 +313,6 @@ enum DbWriteOp {
     // =========================================================================
     // File/Audio Index Operations (Mutation execution)
     // =========================================================================
-
     /// Index an audio file (files + audio_info + corpus_tags).
     /// Atomically: insert/replace files row, upsert audio_info, set tags.
     IndexAudioFile {
@@ -358,7 +360,6 @@ enum DbWriteOp {
     // =========================================================================
     // File Entry Operations (for mutations)
     // =========================================================================
-
     /// Upsert file entry in files table.
     UpsertFileEntry {
         path: String,
@@ -431,7 +432,6 @@ enum DbWriteOp {
     // =========================================================================
     // Inbox State Operations (Awakening phase cascade cleanup)
     // =========================================================================
-
     /// Drop all inbox state for an inode no longer observed on disk.
     ///
     /// Cascade-deletes inbox_tags, files (zone='inbox'), and all per-inode
@@ -444,7 +444,6 @@ enum DbWriteOp {
     // =========================================================================
     // Dirty Inode Operations (for incremental computations)
     // =========================================================================
-
     /// Clear dirty flag for an inode after successful computation.
     ClearDirtyInode {
         inode: i64,
@@ -460,7 +459,6 @@ enum DbWriteOp {
     // =========================================================================
     // External Matching Operations (AcoustID fetch thread results)
     // =========================================================================
-
     /// Insert an external match result.
     InsertExternalMatch {
         inode: i64,
@@ -501,7 +499,6 @@ enum DbWriteOp {
     // =========================================================================
     // MusicBrainz Cache Operations (MB fetch thread results — no witness needed)
     // =========================================================================
-
     /// Upsert a MusicBrainz recording cache entry.
     UpsertMbRecordingCache {
         recording_id: String,
@@ -534,7 +531,6 @@ enum DbWriteOp {
     // =========================================================================
     // Edit History Purge Operations (operator-confirmed UI action)
     // =========================================================================
-
     /// Delete all rows from tag_edit_history.
     ClearTagEditHistory,
 
@@ -546,7 +542,6 @@ enum DbWriteOp {
     // =========================================================================
     // Shutdown
     // =========================================================================
-
     /// Execute VACUUM on the write connection. Handled in main loop (like Shutdown).
     ExecuteVacuum {
         result_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
@@ -872,11 +867,7 @@ impl SignalWriteSender {
     }
 
     /// Delete a stale library file during reconciliation.
-    pub fn delete_library_file(
-        &self,
-        stored_path: &str,
-        _witness: &ComputationWitness,
-    ) {
+    pub fn delete_library_file(&self, stored_path: &str, _witness: &ComputationWitness) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::DeleteLibraryFile {
             stored_path: stored_path.to_string(),
@@ -1124,17 +1115,12 @@ impl SignalWriteSender {
     }
 
     /// Clear all tag mismatches for a track.
-    pub fn clear_tag_mismatches_for_track(
-        &self,
-        path: &str,
-        _witness: &MutationExecutionWitness,
-    ) {
+    pub fn clear_tag_mismatches_for_track(&self, path: &str, _witness: &MutationExecutionWitness) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::ClearTagMismatchesForTrack {
             path: path.to_string(),
         });
     }
-
 
     /// Set the needs_disk_flush flag for a track.
     ///
@@ -1164,11 +1150,7 @@ impl SignalWriteSender {
     /// Cascade-deletes inbox_tags, files (zone='inbox'), and all per-inode
     /// inbox signals (FileInInbox, InboxUnindexed, InboxHealthy, InboxCorpusMatch)
     /// plus MovedFile. Does NOT touch audio_info or corpus signals.
-    pub fn drop_inbox_file_state(
-        &self,
-        inode: i64,
-        _witness: &impl SignalWitness,
-    ) {
+    pub fn drop_inbox_file_state(&self, inode: i64, _witness: &impl SignalWitness) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::DropInboxFileState { inode });
     }
@@ -1208,7 +1190,9 @@ impl SignalWriteSender {
         computation_type: &str,
         _witness: &impl SignalWitness,
     ) {
-        if inodes.is_empty() { return; }
+        if inodes.is_empty() {
+            return;
+        }
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::MarkDirtyInodes {
             inodes,
@@ -1248,12 +1232,7 @@ impl SignalWriteSender {
     }
 
     /// Insert a no-match result for a fingerprint.
-    pub fn insert_external_no_match(
-        &self,
-        fingerprint: Vec<u8>,
-        source: i64,
-        queried_at: i64,
-    ) {
+    pub fn insert_external_no_match(&self, fingerprint: Vec<u8>, source: i64, queried_at: i64) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::InsertExternalNoMatch {
             fingerprint,
@@ -1280,24 +1259,15 @@ impl SignalWriteSender {
     }
 
     /// Delete an external retry entry (after successful lookup).
-    pub fn delete_external_retry(
-        &self,
-        inode: i64,
-        source: i64,
-    ) {
+    pub fn delete_external_retry(&self, inode: i64, source: i64) {
         self.mark_enqueued();
-        let _ = self.tx.send(DbWriteOp::DeleteExternalRetry {
-            inode,
-            source,
-        });
+        let _ = self
+            .tx
+            .send(DbWriteOp::DeleteExternalRetry { inode, source });
     }
 
     /// Drop all external match data for an inode.
-    pub fn drop_external_match(
-        &self,
-        inode: i64,
-        _witness: &MutationExecutionWitness,
-    ) {
+    pub fn drop_external_match(&self, inode: i64, _witness: &MutationExecutionWitness) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::DropExternalMatch { inode });
     }
@@ -1322,12 +1292,7 @@ impl SignalWriteSender {
     }
 
     /// Upsert a MusicBrainz artist cache entry.
-    pub fn upsert_mb_artist_cache(
-        &self,
-        artist_id: &str,
-        raw_json: Vec<u8>,
-        fetched_at: i64,
-    ) {
+    pub fn upsert_mb_artist_cache(&self, artist_id: &str, raw_json: Vec<u8>, fetched_at: i64) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::UpsertMbArtistCache {
             artist_id: artist_id.to_string(),
@@ -1337,12 +1302,7 @@ impl SignalWriteSender {
     }
 
     /// Upsert a MusicBrainz release cache entry.
-    pub fn upsert_mb_release_cache(
-        &self,
-        release_id: &str,
-        raw_json: Vec<u8>,
-        fetched_at: i64,
-    ) {
+    pub fn upsert_mb_release_cache(&self, release_id: &str, raw_json: Vec<u8>, fetched_at: i64) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::UpsertMbReleaseCache {
             release_id: release_id.to_string(),
@@ -1410,11 +1370,7 @@ impl SignalWriteSender {
     }
 
     /// Write a batch of scored candidates to release_packing_scores.
-    pub fn write_packing_scores(
-        &self,
-        rows: Vec<PackingScoreRow>,
-        _witness: &impl SignalWitness,
-    ) {
+    pub fn write_packing_scores(&self, rows: Vec<PackingScoreRow>, _witness: &impl SignalWitness) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::WritePackingScores { rows });
     }
@@ -1436,7 +1392,9 @@ impl SignalWriteSender {
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
-        let _ = self.tx.send(DbWriteOp::WritePendingAcoustIdSubmissions { rows });
+        let _ = self
+            .tx
+            .send(DbWriteOp::WritePendingAcoustIdSubmissions { rows });
     }
 }
 
@@ -1479,10 +1437,7 @@ pub fn spawn() -> DbThreadHandle {
 }
 
 /// Main loop for the DB write thread.
-fn run_db_thread(
-    signal_rx: Receiver<DbWriteOp>,
-    stats: Arc<SharedStats>,
-) {
+fn run_db_thread(signal_rx: Receiver<DbWriteOp>, stats: Arc<SharedStats>) {
     // Open database connection (this thread owns the write connection)
     let db = match config::get_db_path().and_then(|p| Database::open(&p)) {
         Ok(db) => db,
@@ -1502,7 +1457,9 @@ fn run_db_thread(
         match signal_rx.recv() {
             Ok(DbWriteOp::ExecuteVacuum { result_tx }) => {
                 crate::logging::log_general("[DB_THREAD] Executing VACUUM");
-                let result = db.conn().execute_batch("VACUUM")
+                let result = db
+                    .conn()
+                    .execute_batch("VACUUM")
                     .map_err(|e| format!("{}", e));
                 if result.is_ok() {
                     crate::logging::log_general("[DB_THREAD] VACUUM completed");
@@ -1544,7 +1501,9 @@ fn run_db_thread(
                     // Update timing stats
                     stats.total_writes.fetch_add(1, Ordering::Relaxed);
                     stats.signal_writes.fetch_add(1, Ordering::Relaxed);
-                    stats.total_db_time_us.fetch_add(elapsed_us, Ordering::Relaxed);
+                    stats
+                        .total_db_time_us
+                        .fetch_add(elapsed_us, Ordering::Relaxed);
                 } else {
                     execute_signal_op(&db, &op);
                 }
@@ -1590,12 +1549,18 @@ fn retryable_sqlite_error(e: &anyhow::Error) -> Option<String> {
         if let Some(sqlite_err) = cause.downcast_ref::<rusqlite::Error>() {
             match sqlite_err {
                 rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error { code: rusqlite::ffi::ErrorCode::DatabaseBusy, extended_code },
-                    msg
+                    rusqlite::ffi::Error {
+                        code: rusqlite::ffi::ErrorCode::DatabaseBusy,
+                        extended_code,
+                    },
+                    msg,
                 ) => Some(format!("SQLITE_BUSY (ext={}): {:?}", extended_code, msg)),
                 rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error { code: rusqlite::ffi::ErrorCode::DatabaseLocked, extended_code },
-                    msg
+                    rusqlite::ffi::Error {
+                        code: rusqlite::ffi::ErrorCode::DatabaseLocked,
+                        extended_code,
+                    },
+                    msg,
                 ) => Some(format!("SQLITE_LOCKED (ext={}): {:?}", extended_code, msg)),
                 _ => None,
             }
@@ -1619,7 +1584,12 @@ where
                         let delay = BASE_DELAY_MS * (1 << attempt);
                         crate::logging::log_error(format!(
                             "[DB_THREAD] {} retry {}/{} after {}ms: {} | {}",
-                            op_name, attempt + 1, MAX_RETRIES, delay, reason, context
+                            op_name,
+                            attempt + 1,
+                            MAX_RETRIES,
+                            delay,
+                            reason,
+                            context
                         ));
                         std::thread::sleep(std::time::Duration::from_millis(delay));
                     } else {
@@ -1703,10 +1673,15 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
 
     match op {
         // Signal clear operations (function-pointer dispatch)
-        DbWriteOp::ClearCorpusSignalByInode { clear_fn, inode, label } => {
+        DbWriteOp::ClearCorpusSignalByInode {
+            clear_fn,
+            inode,
+            label,
+        } => {
             if let Err(e) = clear_fn(db.conn(), *inode) {
                 crate::logging::log_error(format!(
-                    "[DB_THREAD] clear {} by inode {} failed: {}", label, inode, e
+                    "[DB_THREAD] clear {} by inode {} failed: {}",
+                    label, inode, e
                 ));
             }
         }
@@ -1716,17 +1691,27 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::ClearMutableCorpusSignals { inode } => {
             typed_clear_mutable_corpus_signals(db, *inode);
         }
-        DbWriteOp::ClearAggregateSignalByKey { clear_fn, key, label } => {
+        DbWriteOp::ClearAggregateSignalByKey {
+            clear_fn,
+            key,
+            label,
+        } => {
             if let Err(e) = clear_fn(db.conn(), key) {
                 crate::logging::log_error(format!(
-                    "[DB_THREAD] clear {} by key '{}' failed: {}", label, key, e
+                    "[DB_THREAD] clear {} by key '{}' failed: {}",
+                    label, key, e
                 ));
             }
         }
-        DbWriteOp::ClearAggregateByKeyPrefix { clear_fn, prefix, label } => {
+        DbWriteOp::ClearAggregateByKeyPrefix {
+            clear_fn,
+            prefix,
+            label,
+        } => {
             if let Err(e) = clear_fn(db.conn(), prefix) {
                 crate::logging::log_error(format!(
-                    "[DB_THREAD] clear {} by prefix '{}' failed: {}", label, prefix, e
+                    "[DB_THREAD] clear {} by prefix '{}' failed: {}",
+                    label, prefix, e
                 ));
             }
         }
@@ -1740,7 +1725,14 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             file_size,
         } => {
             with_retry("upsert_library_file", stored_path, || {
-                execute_upsert_library_file(db, stored_path, *inode, *mtime_secs, *mtime_nanos, *file_size)
+                execute_upsert_library_file(
+                    db,
+                    stored_path,
+                    *inode,
+                    *mtime_secs,
+                    *mtime_nanos,
+                    *file_size,
+                )
             });
         }
         DbWriteOp::DeleteLibraryFile { stored_path } => {
@@ -1751,16 +1743,15 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
 
         DbWriteOp::WriteTypedSignal { signal } => {
             if let Err(e) = signal.clone().insert(db.conn()) {
-                crate::logging::log_error(format!(
-                    "[DB_THREAD] write_typed_signal failed: {}", e
-                ));
+                crate::logging::log_error(format!("[DB_THREAD] write_typed_signal failed: {}", e));
             }
         }
         DbWriteOp::WriteTypedSignalBatch { signals } => {
             for signal in signals {
                 if let Err(e) = signal.clone().insert(db.conn()) {
                     crate::logging::log_error(format!(
-                        "[DB_THREAD] write_typed_signal_batch item failed: {}", e
+                        "[DB_THREAD] write_typed_signal_batch item failed: {}",
+                        e
                     ));
                 }
             }
@@ -1792,7 +1783,6 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         // =====================================================================
         // File/Audio Index Operations (Mutation execution)
         // =====================================================================
-
         DbWriteOp::IndexAudioFile {
             path,
             file_data,
@@ -1811,13 +1801,23 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
-        DbWriteOp::SetIndexTrackTags { path, tags, tag_table, session_id } => {
+        DbWriteOp::SetIndexTrackTags {
+            path,
+            tags,
+            tag_table,
+            session_id,
+        } => {
             with_retry("set_index_track_tags", path, || {
                 execute_set_index_track_tags(db, path, tags, tag_table, session_id)
             });
         }
 
-        DbWriteOp::ApplyIndexTagOps { path, ops, tag_table, session_id } => {
+        DbWriteOp::ApplyIndexTagOps {
+            path,
+            ops,
+            tag_table,
+            session_id,
+        } => {
             with_retry("apply_index_tag_ops", path, || {
                 execute_apply_index_tag_ops(db, path, ops, tag_table, session_id)
             });
@@ -1832,12 +1832,21 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         } => {
             with_retry("update_track_path_with_metadata", old_path, || {
                 execute_update_track_path_with_metadata(
-                    db, old_path, new_path, *new_inode, *new_file_size, new_file_type,
+                    db,
+                    old_path,
+                    new_path,
+                    *new_inode,
+                    *new_file_size,
+                    new_file_type,
                 )
             });
         }
 
-        DbWriteOp::UpsertFileEntry { path, zone, file_entry } => {
+        DbWriteOp::UpsertFileEntry {
+            path,
+            zone,
+            file_entry,
+        } => {
             with_retry("upsert_file_entry", path, || {
                 execute_upsert_file_entry(db, path, zone, file_entry)
             });
@@ -1845,11 +1854,17 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
 
         DbWriteOp::DropFileIndexByInode { zone, inode } => {
             with_retry("drop_file_index_by_inode", zone, || {
-                db.drop_file_index_by_inode(zone, *inode, &witness).map(|_| ())
+                db.drop_file_index_by_inode(zone, *inode, &witness)
+                    .map(|_| ())
             });
         }
 
-        DbWriteOp::UpdateFilePath { zone, inode, new_path, new_zone } => {
+        DbWriteOp::UpdateFilePath {
+            zone,
+            inode,
+            new_path,
+            new_zone,
+        } => {
             with_retry("update_file_path", new_path, || {
                 db.update_file_path(zone, *inode, new_path, &witness)
             });
@@ -1884,7 +1899,15 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             file_size,
         } => {
             with_retry("index_image_file", path, || {
-                execute_index_image_file(db, path, zone, *inode, *mtime_secs, *mtime_nanos, *file_size)
+                execute_index_image_file(
+                    db,
+                    path,
+                    zone,
+                    *inode,
+                    *mtime_secs,
+                    *mtime_nanos,
+                    *file_size,
+                )
             });
         }
 
@@ -1918,33 +1941,63 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
-        DbWriteOp::ClearDirtyInode { inode, computation_type } => {
+        DbWriteOp::ClearDirtyInode {
+            inode,
+            computation_type,
+        } => {
             with_retry("clear_dirty_inode", computation_type, || {
                 execute_clear_dirty_inode(db, *inode, computation_type)
             });
         }
 
-        DbWriteOp::MarkDirtyInodes { inodes, computation_type } => {
+        DbWriteOp::MarkDirtyInodes {
+            inodes,
+            computation_type,
+        } => {
             with_retry("mark_dirty_inodes", computation_type, || {
                 execute_mark_dirty_inodes(db, inodes, computation_type)
             });
         }
 
         DbWriteOp::InsertExternalMatch {
-            inode, fingerprint, source, recording_id, confidence, raw_response, fetched_at,
+            inode,
+            fingerprint,
+            source,
+            recording_id,
+            confidence,
+            raw_response,
+            fetched_at,
         } => {
             with_retry("insert_external_match", recording_id, || {
-                execute_insert_external_match(db, *inode, fingerprint, *source, recording_id, *confidence, raw_response.as_deref(), *fetched_at)
+                execute_insert_external_match(
+                    db,
+                    *inode,
+                    fingerprint,
+                    *source,
+                    recording_id,
+                    *confidence,
+                    raw_response.as_deref(),
+                    *fetched_at,
+                )
             });
         }
 
-        DbWriteOp::InsertExternalNoMatch { fingerprint, source, queried_at } => {
+        DbWriteOp::InsertExternalNoMatch {
+            fingerprint,
+            source,
+            queried_at,
+        } => {
             with_retry("insert_external_no_match", &source.to_string(), || {
                 execute_insert_external_no_match(db, fingerprint, *source, *queried_at)
             });
         }
 
-        DbWriteOp::UpsertExternalRetry { inode, fingerprint, source, error } => {
+        DbWriteOp::UpsertExternalRetry {
+            inode,
+            fingerprint,
+            source,
+            error,
+        } => {
             with_retry("upsert_external_retry", error, || {
                 execute_upsert_external_retry(db, *inode, fingerprint, *source, error)
             });
@@ -1962,33 +2015,57 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
-        DbWriteOp::UpsertMbRecordingCache { recording_id, raw_json, fetched_at } => {
+        DbWriteOp::UpsertMbRecordingCache {
+            recording_id,
+            raw_json,
+            fetched_at,
+        } => {
             with_retry("upsert_mb_recording_cache", recording_id, || {
                 execute_upsert_mb_recording_cache(db, recording_id, raw_json, *fetched_at)
             });
         }
 
-        DbWriteOp::UpsertMbArtistCache { artist_id, raw_json, fetched_at } => {
+        DbWriteOp::UpsertMbArtistCache {
+            artist_id,
+            raw_json,
+            fetched_at,
+        } => {
             with_retry("upsert_mb_artist_cache", artist_id, || {
                 execute_upsert_mb_artist_cache(db, artist_id, raw_json, *fetched_at)
             });
         }
 
-        DbWriteOp::UpsertMbReleaseCache { release_id, raw_json, fetched_at } => {
+        DbWriteOp::UpsertMbReleaseCache {
+            release_id,
+            raw_json,
+            fetched_at,
+        } => {
             with_retry("upsert_mb_release_cache", release_id, || {
                 execute_upsert_mb_release_cache(db, release_id, raw_json, *fetched_at)
             });
         }
 
-        DbWriteOp::InsertMbKnownEntity { mbid, entity_type, discovered_from, discovered_at } => {
+        DbWriteOp::InsertMbKnownEntity {
+            mbid,
+            entity_type,
+            discovered_from,
+            discovered_at,
+        } => {
             with_retry("insert_mb_known_entity", mbid, || {
-                execute_insert_mb_known_entity(db, mbid, entity_type, discovered_from.as_deref(), *discovered_at)
+                execute_insert_mb_known_entity(
+                    db,
+                    mbid,
+                    entity_type,
+                    discovered_from.as_deref(),
+                    *discovered_at,
+                )
             });
         }
 
         DbWriteOp::ClearTagEditHistory => {
             with_retry("clear_tag_edit_history", "all", || {
-                db.conn().execute("DELETE FROM tag_edit_history", [])
+                db.conn()
+                    .execute("DELETE FROM tag_edit_history", [])
                     .map(|_| ())
                     .map_err(Into::into)
             });
@@ -1996,18 +2073,23 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
 
         DbWriteOp::ClearTagEditHistorySession { session_id } => {
             with_retry("clear_tag_edit_history_session", session_id, || {
-                db.conn().execute(
-                    "DELETE FROM tag_edit_history WHERE session_id = ?1",
-                    rusqlite::params![session_id],
-                )
-                .map(|_| ())
-                .map_err(Into::into)
+                db.conn()
+                    .execute(
+                        "DELETE FROM tag_edit_history WHERE session_id = ?1",
+                        rusqlite::params![session_id],
+                    )
+                    .map(|_| ())
+                    .map_err(Into::into)
             });
         }
 
         // ExecuteVacuum, ApplyReconciliation, and Shutdown are handled in the run_db_thread loop, never reach here
-        DbWriteOp::ExecuteVacuum { .. } => unreachable!("ExecuteVacuum handled in run_db_thread loop"),
-        DbWriteOp::ApplyReconciliation { .. } => unreachable!("ApplyReconciliation handled in run_db_thread loop"),
+        DbWriteOp::ExecuteVacuum { .. } => {
+            unreachable!("ExecuteVacuum handled in run_db_thread loop")
+        }
+        DbWriteOp::ApplyReconciliation { .. } => {
+            unreachable!("ApplyReconciliation handled in run_db_thread loop")
+        }
         DbWriteOp::TruncatePackingTables => {
             with_retry("truncate_packing_tables", "all", || {
                 db.conn().execute_batch(
@@ -2064,7 +2146,7 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                     "INSERT OR REPLACE INTO release_packing_candidates \
                      (release_id, inode, recording_id, confidence, path, parent_dir, duration_ms, \
                       tag_title, tag_artist, tag_album, tag_tracknumber, dir_file_count) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 )?;
                 for row in rows {
                     stmt.execute(rusqlite::params![
@@ -2091,7 +2173,7 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                 let mut stmt = db.conn().prepare(
                     "INSERT OR REPLACE INTO pending_acoustid_submissions \
                      (fingerprint, recording_id, duration_ms, source) \
-                     VALUES (?1, ?2, ?3, ?4)"
+                     VALUES (?1, ?2, ?3, ?4)",
                 )?;
                 for row in rows {
                     stmt.execute(rusqlite::params![
@@ -2219,10 +2301,14 @@ fn apply_tagset_to_inode(
     let diff = existing.diff(new_tags);
 
     // Collect for result before consuming
-    let removed: Vec<(String, String)> = diff.only_left.iter()
+    let removed: Vec<(String, String)> = diff
+        .only_left
+        .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    let added: Vec<(String, String)> = diff.only_right.iter()
+    let added: Vec<(String, String)> = diff
+        .only_right
+        .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
 
@@ -2315,7 +2401,10 @@ fn execute_index_audio_file(
     )?;
 
     // Convert fingerprint to BLOB if present
-    let fp_blob: Option<Vec<u8>> = audio_data.fingerprint.as_ref().map(|fp| fingerprint_to_blob(fp));
+    let fp_blob: Option<Vec<u8>> = audio_data
+        .fingerprint
+        .as_ref()
+        .map(|fp| fingerprint_to_blob(fp));
 
     // Upsert audio_info row.
     // IMPORTANT: Must use ON CONFLICT DO UPDATE (not INSERT OR REPLACE) because
@@ -2384,10 +2473,8 @@ fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
     )?;
 
     // Delete the file entry (audio_info, corpus_tags/inbox_tags cascade automatically)
-    db.conn().execute(
-        "DELETE FROM files WHERE path = ?1",
-        params![path],
-    )?;
+    db.conn()
+        .execute("DELETE FROM files WHERE path = ?1", params![path])?;
 
     // If no other paths reference this inode, clean up audio_info
     // (FK CASCADE should handle this, but be explicit)
@@ -2397,10 +2484,8 @@ fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
         |row| row.get(0),
     )?;
     if count == 0 {
-        db.conn().execute(
-            "DELETE FROM audio_info WHERE inode = ?1",
-            params![inode],
-        )?;
+        db.conn()
+            .execute("DELETE FROM audio_info WHERE inode = ?1", params![inode])?;
     }
 
     // Clear all corpus signals for this inode from typed tables
@@ -2415,10 +2500,15 @@ fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Result<()> {
 /// Writes tag edit history for all changes (this IS an edit, not discovery).
 ///
 /// Used by AssimilateDiskTagsToDb when accepting disk changes.
-fn execute_set_index_track_tags(db: &Database, path: &str, tags: &TagSet, tag_table: &str, session_id: &str) -> anyhow::Result<()> {
-
-    let inode = get_inode_by_path(db, path)?
-        .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
+fn execute_set_index_track_tags(
+    db: &Database,
+    path: &str,
+    tags: &TagSet,
+    tag_table: &str,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let inode =
+        get_inode_by_path(db, path)?.ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
 
     let tx = db.conn().unchecked_transaction()?;
 
@@ -2455,8 +2545,8 @@ fn execute_apply_index_tag_ops(
 ) -> anyhow::Result<()> {
     use rusqlite::params;
 
-    let inode = get_inode_by_path(db, path)?
-        .ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
+    let inode =
+        get_inode_by_path(db, path)?.ok_or_else(|| anyhow::anyhow!("File not found: {}", path))?;
 
     // Filter to non-nop operations
     let effective_ops: Vec<_> = ops.iter().filter(|op| !op.is_nop()).collect();
@@ -2492,7 +2582,10 @@ fn execute_apply_index_tag_ops(
             (None, Some(new)) => {
                 // Add: INSERT OR IGNORE (idempotent - won't fail if already exists)
                 tx.execute(
-                    &format!("INSERT OR IGNORE INTO {} (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)", tag_table),
+                    &format!(
+                        "INSERT OR IGNORE INTO {} (inode, tag_name, tag_value) VALUES (?1, ?2, ?3)",
+                        tag_table
+                    ),
                     params![inode, &tag_name, new],
                 )?;
             }
@@ -2502,11 +2595,7 @@ fn execute_apply_index_tag_ops(
         }
 
         // Collect history entry for this operation
-        history_entries.push((
-            tag_name,
-            op.old_value.clone(),
-            op.new_value.clone(),
-        ));
+        history_entries.push((tag_name, op.old_value.clone(), op.new_value.clone()));
     }
 
     // Write history entries using the caller-provided session identifier
@@ -2597,8 +2686,14 @@ fn execute_update_track_path_with_metadata(
             |row| row.get(0),
         )?;
         if count == 0 {
-            tx.execute("DELETE FROM audio_info WHERE inode = ?1", params![old_inode])?;
-            tx.execute("DELETE FROM corpus_tags WHERE inode = ?1", params![old_inode])?;
+            tx.execute(
+                "DELETE FROM audio_info WHERE inode = ?1",
+                params![old_inode],
+            )?;
+            tx.execute(
+                "DELETE FROM corpus_tags WHERE inode = ?1",
+                params![old_inode],
+            )?;
         }
     }
 
@@ -2680,14 +2775,7 @@ fn execute_index_directory(
         (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
         VALUES (?1, ?2, ?3, 1, ?4, ?5, 0, ?6)
         "#,
-        params![
-            inode,
-            zone,
-            path,
-            mtime_secs,
-            mtime_nanos,
-            scanned_at,
-        ],
+        params![inode, zone, path, mtime_secs, mtime_nanos, scanned_at,],
     )?;
 
     Ok(())
@@ -2816,7 +2904,11 @@ fn execute_drop_inbox_file_state(db: &Database, inode: i64) -> anyhow::Result<()
 }
 
 /// Execute ClearDirtyInode: remove dirty flag after successful computation.
-fn execute_clear_dirty_inode(db: &Database, inode: i64, computation_type: &str) -> anyhow::Result<()> {
+fn execute_clear_dirty_inode(
+    db: &Database,
+    inode: i64,
+    computation_type: &str,
+) -> anyhow::Result<()> {
     use rusqlite::params;
 
     db.conn().execute(
@@ -2828,11 +2920,18 @@ fn execute_clear_dirty_inode(db: &Database, inode: i64, computation_type: &str) 
 }
 
 /// Execute MarkDirtyInodes: mark a batch of inodes dirty for a computation type.
-fn execute_mark_dirty_inodes(db: &Database, inodes: &[i64], computation_type: &str) -> anyhow::Result<()> {
+fn execute_mark_dirty_inodes(
+    db: &Database,
+    inodes: &[i64],
+    computation_type: &str,
+) -> anyhow::Result<()> {
     use rusqlite::params;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     for inode in inodes {
         db.conn().execute(
             "INSERT OR IGNORE INTO dirty_inodes (inode, computation_type, dirtied_at) VALUES (?1, ?2, ?3)",
@@ -2864,17 +2963,21 @@ fn execute_upsert_library_file(
         "INSERT OR REPLACE INTO files
          (inode, zone, path, is_dir, mtime_secs, mtime_nanos, file_size, scanned_at)
          VALUES (?1, 'library', ?2, 0, ?3, ?4, ?5, ?6)",
-        params![inode, stored_path, mtime_secs, mtime_nanos, file_size, scanned_at],
+        params![
+            inode,
+            stored_path,
+            mtime_secs,
+            mtime_nanos,
+            file_size,
+            scanned_at
+        ],
     )?;
 
     Ok(())
 }
 
 /// Execute DeleteLibraryFile: remove a stale library file from the files table.
-fn execute_delete_library_file(
-    db: &Database,
-    stored_path: &str,
-) -> anyhow::Result<()> {
+fn execute_delete_library_file(db: &Database, stored_path: &str) -> anyhow::Result<()> {
     use rusqlite::params;
 
     db.conn().execute(
@@ -2903,7 +3006,15 @@ fn execute_insert_external_match(
         r#"INSERT OR REPLACE INTO external_matches
            (inode, fingerprint, source, recording_id, confidence, raw_response, fetched_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
-        params![inode, fingerprint, source, recording_id, confidence, raw_response, fetched_at],
+        params![
+            inode,
+            fingerprint,
+            source,
+            recording_id,
+            confidence,
+            raw_response,
+            fetched_at
+        ],
     )?;
 
     Ok(())
@@ -2958,11 +3069,7 @@ fn execute_upsert_external_retry(
 }
 
 /// Execute DeleteExternalRetry: remove retry entry after successful lookup.
-fn execute_delete_external_retry(
-    db: &Database,
-    inode: i64,
-    source: i64,
-) -> anyhow::Result<()> {
+fn execute_delete_external_retry(db: &Database, inode: i64, source: i64) -> anyhow::Result<()> {
     use rusqlite::params;
 
     db.conn().execute(
@@ -2973,10 +3080,7 @@ fn execute_delete_external_retry(
     Ok(())
 }
 
-fn execute_drop_external_match(
-    db: &Database,
-    inode: i64,
-) -> anyhow::Result<()> {
+fn execute_drop_external_match(db: &Database, inode: i64) -> anyhow::Result<()> {
     use rusqlite::params;
 
     db.conn().execute(

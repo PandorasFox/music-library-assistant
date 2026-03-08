@@ -137,5 +137,4 @@ impl TreeEntry {
     pub fn is_file(&self) -> bool {
         matches!(self.kind, EntryKind::AudioFile | EntryKind::ImageFile)
     }
-
 }

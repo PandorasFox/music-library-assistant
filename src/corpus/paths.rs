@@ -179,7 +179,10 @@ mod tests {
 
         let rel = Path::new("libraries/music/Artist/Album/track.mp3");
         let abs = resolver.resolve(rel);
-        assert_eq!(abs, PathBuf::from("/archive/libraries/music/Artist/Album/track.mp3"));
+        assert_eq!(
+            abs,
+            PathBuf::from("/archive/libraries/music/Artist/Album/track.mp3")
+        );
     }
 
     #[test]
@@ -211,7 +214,10 @@ mod tests {
 
         assert_eq!(resolver.root(), Path::new("/archive"));
         assert_eq!(resolver.corpus_dir(), PathBuf::from("/archive/corpus"));
-        assert_eq!(resolver.libraries_dir(), PathBuf::from("/archive/libraries"));
+        assert_eq!(
+            resolver.libraries_dir(),
+            PathBuf::from("/archive/libraries")
+        );
         assert_eq!(resolver.stash_dir(), PathBuf::from("/archive/stash"));
     }
 }

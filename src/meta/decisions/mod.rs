@@ -21,15 +21,26 @@ pub(crate) use crate::ui::action_handlers::witness::ConfirmationGesture;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DecisionKey {
     // === Zone-scoped file signal decisions ===
-
     /// Tag canonicity resolution (cluster index within tag_name)
-    TagCanonicity { tag_name: String, cluster_index: usize },
+    TagCanonicity {
+        tag_name: String,
+        cluster_index: usize,
+    },
     /// Compound tag split — safe (all parts exist in corpus)
-    CompoundSplitSafe { tag_name: String, cluster_index: usize },
+    CompoundSplitSafe {
+        tag_name: String,
+        cluster_index: usize,
+    },
     /// Compound tag split — review (some parts new to corpus)
-    CompoundSplitReview { tag_name: String, cluster_index: usize },
+    CompoundSplitReview {
+        tag_name: String,
+        cluster_index: usize,
+    },
     /// Compound tag split — inbox
-    CompoundSplitInbox { tag_name: String, cluster_index: usize },
+    CompoundSplitInbox {
+        tag_name: String,
+        cluster_index: usize,
+    },
     /// Deploy operations (single decision per transaction)
     Deploy,
     /// Deploy sidecar images (cover art alongside audio)
@@ -72,7 +83,6 @@ pub enum DecisionKey {
     EditReversal { session_label: String },
 
     // === Meta-level decisions (not file-scoped) ===
-
     /// Config edit (app-level config change)
     ConfigEdit,
     /// Directory config edit (per source dir path)
@@ -105,14 +115,22 @@ impl DecisionKey {
 impl std::fmt::Display for DecisionKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DecisionKey::TagCanonicity { tag_name, cluster_index } =>
-                write!(f, "Tag Canonicity:{}:{}", tag_name, cluster_index),
-            DecisionKey::CompoundSplitSafe { tag_name, cluster_index } =>
-                write!(f, "Compound Split Safe:{}:{}", tag_name, cluster_index),
-            DecisionKey::CompoundSplitReview { tag_name, cluster_index } =>
-                write!(f, "Compound Split Review:{}:{}", tag_name, cluster_index),
-            DecisionKey::CompoundSplitInbox { tag_name, cluster_index } =>
-                write!(f, "Compound Split Inbox:{}:{}", tag_name, cluster_index),
+            DecisionKey::TagCanonicity {
+                tag_name,
+                cluster_index,
+            } => write!(f, "Tag Canonicity:{}:{}", tag_name, cluster_index),
+            DecisionKey::CompoundSplitSafe {
+                tag_name,
+                cluster_index,
+            } => write!(f, "Compound Split Safe:{}:{}", tag_name, cluster_index),
+            DecisionKey::CompoundSplitReview {
+                tag_name,
+                cluster_index,
+            } => write!(f, "Compound Split Review:{}:{}", tag_name, cluster_index),
+            DecisionKey::CompoundSplitInbox {
+                tag_name,
+                cluster_index,
+            } => write!(f, "Compound Split Inbox:{}:{}", tag_name, cluster_index),
             DecisionKey::Deploy => write!(f, "Deploy"),
             DecisionKey::DeploySidecars => write!(f, "Deploy Sidecars"),
             DecisionKey::TagEdit { key_item } => write!(f, "Tag Edit:{}", key_item),
@@ -125,22 +143,24 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::CorruptFile => write!(f, "Corrupt File"),
             DecisionKey::ShitFormat => write!(f, "Format Conversion"),
             DecisionKey::SubparDuplicate => write!(f, "Subpar Duplicate"),
-            DecisionKey::DirectoryCluster { cluster_index } =>
-                write!(f, "Directory Cluster:{}", cluster_index),
+            DecisionKey::DirectoryCluster { cluster_index } => {
+                write!(f, "Directory Cluster:{}", cluster_index)
+            }
             DecisionKey::InboxCorpusMatch => write!(f, "Inbox Corpus Match"),
             DecisionKey::InboxOrganize => write!(f, "Inbox Organize"),
-            DecisionKey::MissingAlbum { group_index } =>
-                write!(f, "Missing Album:{}", group_index),
-            DecisionKey::ManualReview { group_index } =>
-                write!(f, "Manual Review:{}", group_index),
+            DecisionKey::MissingAlbum { group_index } => write!(f, "Missing Album:{}", group_index),
+            DecisionKey::ManualReview { group_index } => write!(f, "Manual Review:{}", group_index),
             DecisionKey::IntakeIndex => write!(f, "Intake Index"),
-            DecisionKey::DiscExtraction { group_index } =>
-                write!(f, "Disc Extraction:{}", group_index),
-            DecisionKey::EditReversal { session_label } =>
-                write!(f, "Edit Reversal:{}", session_label),
+            DecisionKey::DiscExtraction { group_index } => {
+                write!(f, "Disc Extraction:{}", group_index)
+            }
+            DecisionKey::EditReversal { session_label } => {
+                write!(f, "Edit Reversal:{}", session_label)
+            }
             DecisionKey::ConfigEdit => write!(f, "Config Edit"),
-            DecisionKey::DirConfigEdit { source_path } =>
-                write!(f, "Dir Config Edit:{}", source_path.display()),
+            DecisionKey::DirConfigEdit { source_path } => {
+                write!(f, "Dir Config Edit:{}", source_path.display())
+            }
         }
     }
 }
@@ -184,7 +204,11 @@ pub struct WitnessedDecision {
 }
 
 impl WitnessedDecision {
-    pub fn new(label: impl Into<String>, mutations: Vec<Mutation>, gesture: &ConfirmationGesture) -> Self {
+    pub fn new(
+        label: impl Into<String>,
+        mutations: Vec<Mutation>,
+        gesture: &ConfirmationGesture,
+    ) -> Self {
         Self {
             label: label.into(),
             mutations,
@@ -254,7 +278,6 @@ impl PendingTransaction {
     pub fn remove_decision(&mut self, key: &DecisionKey) -> Option<WitnessedDecision> {
         self.decisions.remove(key)
     }
-
 }
 
 /// Errors that can occur during transaction operations.
@@ -274,7 +297,10 @@ impl std::fmt::Display for TransactionError {
         match self {
             TransactionError::AlreadyActive => write!(f, "Transaction already active"),
             TransactionError::NoActiveTransaction => write!(f, "No active transaction"),
-            TransactionError::NotAcceptingMutations => write!(f, "Not accepting mutations (eyeballing incomplete or read-only mode)"),
+            TransactionError::NotAcceptingMutations => write!(
+                f,
+                "Not accepting mutations (eyeballing incomplete or read-only mode)"
+            ),
         }
     }
 }

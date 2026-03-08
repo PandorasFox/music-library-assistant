@@ -14,8 +14,8 @@ use ratatui::Frame;
 use crate::meta::views::OobSyncDirection;
 use crate::ui::helpers::render_pane;
 use crate::ui::widgets::{
-    render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout,
-    ThreeColTable, StyledCell,
+    render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout, StyledCell,
+    ThreeColTable,
 };
 
 use super::types::{OobSyncButton, OobSyncState};
@@ -79,7 +79,11 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobSyncState) {
 
 fn render_file_list(f: &mut Frame, area: Rect, state: &OobSyncState) {
     let is_focused = state.focus_pane == FocusPane::List;
-    let border_color = if is_focused { Color::Yellow } else { Color::DarkGray };
+    let border_color = if is_focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
 
     // Build title with selection count if active
     let title = if state.selection.is_active() {
@@ -96,7 +100,8 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobSyncState) {
 
     let selection_active = state.selection.is_active();
 
-    let entries: Vec<PathEntry> = state.files
+    let entries: Vec<PathEntry> = state
+        .files
         .iter()
         .enumerate()
         .map(|(idx, file)| {
@@ -156,7 +161,10 @@ fn render_mismatch_details(f: &mut Frame, area: Rect, state: &OobSyncState) {
 
     let dir_line = Line::from(vec![
         Span::raw("Direction: "),
-        Span::styled(dir_label, Style::default().fg(dir_color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            dir_label,
+            Style::default().fg(dir_color).add_modifier(Modifier::BOLD),
+        ),
     ]);
 
     // Render direction line at top
@@ -164,7 +172,12 @@ fn render_mismatch_details(f: &mut Frame, area: Rect, state: &OobSyncState) {
         f.render_widget(Paragraph::new(dir_line), inner);
         return;
     }
-    let dir_area = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
+    let dir_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 1,
+    };
     f.render_widget(Paragraph::new(dir_line), dir_area);
 
     // Table area below direction + blank line
@@ -178,21 +191,42 @@ fn render_mismatch_details(f: &mut Frame, area: Rect, state: &OobSyncState) {
     let bold = Modifier::BOLD;
     let table = ThreeColTable {
         headers: [
-            ("Field".into(), Style::default().fg(Color::DarkGray).add_modifier(bold)),
-            ("DB Value".into(), Style::default().fg(Color::Green).add_modifier(bold)),
-            ("Disk Value".into(), Style::default().fg(Color::Cyan).add_modifier(bold)),
+            (
+                "Field".into(),
+                Style::default().fg(Color::DarkGray).add_modifier(bold),
+            ),
+            (
+                "DB Value".into(),
+                Style::default().fg(Color::Green).add_modifier(bold),
+            ),
+            (
+                "Disk Value".into(),
+                Style::default().fg(Color::Cyan).add_modifier(bold),
+            ),
         ],
-        rows: file.mismatches.iter().map(|m| {
-            let db_text = m.db_value.as_deref().unwrap_or("\u{2014}");
-            let disk_text = m.disk_value.as_deref().unwrap_or("\u{2014}");
-            let db_color = if m.db_value.is_some() { Color::Green } else { Color::DarkGray };
-            let disk_color = if m.disk_value.is_some() { Color::Cyan } else { Color::DarkGray };
-            [
-                StyledCell::new(&m.field, Style::default().fg(Color::White)),
-                StyledCell::new(db_text, Style::default().fg(db_color)),
-                StyledCell::new(disk_text, Style::default().fg(disk_color)),
-            ]
-        }).collect(),
+        rows: file
+            .mismatches
+            .iter()
+            .map(|m| {
+                let db_text = m.db_value.as_deref().unwrap_or("\u{2014}");
+                let disk_text = m.disk_value.as_deref().unwrap_or("\u{2014}");
+                let db_color = if m.db_value.is_some() {
+                    Color::Green
+                } else {
+                    Color::DarkGray
+                };
+                let disk_color = if m.disk_value.is_some() {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                };
+                [
+                    StyledCell::new(&m.field, Style::default().fg(Color::White)),
+                    StyledCell::new(db_text, Style::default().fg(db_color)),
+                    StyledCell::new(disk_text, Style::default().fg(disk_color)),
+                ]
+            })
+            .collect(),
         col_ratio: [20, 40, 40],
         scroll: 0,
         separator_style: Style::default().fg(Color::DarkGray),
@@ -203,7 +237,11 @@ fn render_mismatch_details(f: &mut Frame, area: Rect, state: &OobSyncState) {
 
 fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobSyncState) {
     let is_focused = state.focus_pane == FocusPane::Buttons;
-    let border_color = if is_focused { Color::Yellow } else { Color::DarkGray };
+    let border_color = if is_focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
 
     let block = Block::default()
         .borders(Borders::TOP)

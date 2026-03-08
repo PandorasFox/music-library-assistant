@@ -16,14 +16,14 @@ use std::path::Path;
 /// Maps inode → list of (tag_name, old_value, new_value) triples.
 pub type PendingTagEdits = HashMap<i64, Vec<(String, String, String)>>;
 
-use crate::db::types::Zone;
-use crate::meta::signals::data::CompoundGroup;
-use crate::db::ReadOnlyDb;
-use crate::meta::mutations::{Mutation, TagOp};
-use crate::meta::mutations::indexing::EmitCanonicalTagMutation;
-use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
+use crate::db::types::Zone;
+use crate::db::ReadOnlyDb;
+use crate::meta::mutations::indexing::EmitCanonicalTagMutation;
+use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
+use crate::meta::mutations::{Mutation, TagOp};
+use crate::meta::signals::data::CompoundGroup;
 use crate::ui::widgets::TextInputState;
 
 // ============================================================================
@@ -78,18 +78,29 @@ impl CompoundSplitDataV2 {
     /// Loads the compound entry from the first inode's signal data, then
     /// loads file info for ALL inodes in the group. This lets the operator
     /// decide once per unique compound value, seeing all affected files.
-    pub fn from_compound_group(group: &CompoundGroup, read_db: &ReadOnlyDb, zone: Zone) -> Option<Self> {
+    pub fn from_compound_group(
+        group: &CompoundGroup,
+        read_db: &ReadOnlyDb,
+        zone: Zone,
+    ) -> Option<Self> {
         if group.inodes.is_empty() {
             return None;
         }
 
         // Load compound entry from the first inode's signal (dispatch by zone)
         let first_compounds = if zone == Zone::Inbox {
-            read_db.get_inbox_compound_tag_signal(group.inodes[0]).ok()??.compounds
+            read_db
+                .get_inbox_compound_tag_signal(group.inodes[0])
+                .ok()??
+                .compounds
         } else {
-            read_db.get_compound_tag_signal(group.inodes[0]).ok()??.compounds
+            read_db
+                .get_compound_tag_signal(group.inodes[0])
+                .ok()??
+                .compounds
         };
-        let c = first_compounds.iter()
+        let c = first_compounds
+            .iter()
             .find(|c| c.tag_name == group.tag_name && c.compound_value == group.compound_value)?;
         let compound = CompoundEntry {
             tag_name: c.tag_name.clone(),
@@ -103,9 +114,7 @@ impl CompoundSplitDataV2 {
         let mut files = Vec::new();
 
         for &inode in &group.inodes {
-            if let Ok(Some(audio_file)) =
-                read_db.get_audio_file_by_inode(inode, zone)
-            {
+            if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, zone) {
                 let path = audio_file.path();
                 let filename = Path::new(path)
                     .file_name()
@@ -133,10 +142,7 @@ impl CompoundSplitDataV2 {
         // Sort files alphabetically by filename for consistent display
         files.sort_by(|a, b| a.filename.cmp(&b.filename));
 
-        Some(Self {
-            compound,
-            files,
-        })
+        Some(Self { compound, files })
     }
 
     /// Create a CanonicalTag signal emission mutation.
@@ -228,7 +234,10 @@ pub struct CompoundSplitStateV2 {
 impl CompoundSplitStateV2 {
     /// Path of the currently selected file (for status bar).
     pub fn selected_path(&self) -> Option<&str> {
-        self.data.files.get(self.file_cursor).map(|f| f.path.as_str())
+        self.data
+            .files
+            .get(self.file_cursor)
+            .map(|f| f.path.as_str())
     }
 
     /// Create a new state from data.
@@ -322,7 +331,10 @@ impl CompoundSplitStateV2 {
                 _ => None,
             })
             .flatten()
-            .filter(|op| op.tag_name.eq_ignore_ascii_case(&self.data.compound.tag_name))
+            .filter(|op| {
+                op.tag_name
+                    .eq_ignore_ascii_case(&self.data.compound.tag_name)
+            })
             .collect();
 
         if ops.is_empty() {
@@ -335,9 +347,10 @@ impl CompoundSplitStateV2 {
         let mut parts: Vec<String> = Vec::new();
 
         // First: find the replace operation (has old_value matching compound value)
-        if let Some(replace_op) = ops.iter().find(|op| {
-            op.old_value.as_ref() == Some(&self.data.compound.compound_value)
-        }) {
+        if let Some(replace_op) = ops
+            .iter()
+            .find(|op| op.old_value.as_ref() == Some(&self.data.compound.compound_value))
+        {
             if let Some(ref new_val) = replace_op.new_value {
                 parts.push(new_val.clone());
             }
@@ -418,7 +431,8 @@ impl CompoundSplitStateV2 {
         }
         if self.part_cursor < self.edited_parts.len() {
             self.editing_part_index = Some(self.part_cursor);
-            self.part_input.set_value(self.edited_parts[self.part_cursor].clone());
+            self.part_input
+                .set_value(self.edited_parts[self.part_cursor].clone());
             self.part_input.focused = true;
         }
     }
@@ -473,7 +487,10 @@ impl CompoundSplitStateV2 {
             };
 
             // Verify file still has the compound value
-            if !current_tagset.contains(&self.data.compound.tag_name, &self.data.compound.compound_value) {
+            if !current_tagset.contains(
+                &self.data.compound.tag_name,
+                &self.data.compound.compound_value,
+            ) {
                 continue;
             }
 
@@ -500,7 +517,10 @@ impl CompoundSplitStateV2 {
         if ops.is_empty() {
             Vec::new()
         } else {
-            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: self.zone })]
+            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                ops,
+                zone: self.zone,
+            })]
         }
     }
 }
@@ -550,10 +570,7 @@ pub struct CompoundSplitClustersV2 {
 
 impl CompoundSplitClustersV2 {
     pub fn new(groups: Vec<CompoundGroup>) -> Self {
-        Self {
-            groups,
-            current: 0,
-        }
+        Self { groups, current: 0 }
     }
 
     pub fn current_group(&self) -> Option<&CompoundGroup> {

@@ -12,11 +12,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use crate::ui::active_view::{VacuumPhase, VacuumPromptState};
 
 /// Render the vacuum prompt view based on current phase.
-pub fn render_vacuum_view(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    state: &VacuumPromptState,
-) {
+pub fn render_vacuum_view(f: &mut ratatui::Frame, area: Rect, state: &VacuumPromptState) {
     match state.phase {
         VacuumPhase::Prompt => render_vacuum_prompt(f, area, state.pct, state.free_mb),
         VacuumPhase::Compacting => render_vacuum_progress(f, area),
@@ -46,9 +42,8 @@ fn render_vacuum_prompt(f: &mut ratatui::Frame, area: Rect, pct: u64, free_mb: f
             pct, free_mb
         ))
         .style(Style::default().fg(Color::White)),
-        ratatui::text::Line::from("Compacting takes a moment but reduces disk usage.").style(
-            Style::default().fg(Color::DarkGray),
-        ),
+        ratatui::text::Line::from("Compacting takes a moment but reduces disk usage.")
+            .style(Style::default().fg(Color::DarkGray)),
         ratatui::text::Line::from(""),
         ratatui::text::Line::from("[Enter] Compact    [Esc] Skip")
             .style(Style::default().fg(Color::Cyan)),
@@ -82,8 +77,7 @@ fn render_vacuum_progress(f: &mut ratatui::Frame, area: Rect) {
 
     let lines = vec![
         ratatui::text::Line::from(""),
-        ratatui::text::Line::from("Compacting database...")
-            .style(Style::default().fg(Color::Cyan)),
+        ratatui::text::Line::from("Compacting database...").style(Style::default().fg(Color::Cyan)),
         ratatui::text::Line::from(""),
         ratatui::text::Line::from("This may take a moment.")
             .style(Style::default().fg(Color::DarkGray)),

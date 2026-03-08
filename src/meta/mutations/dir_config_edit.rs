@@ -7,11 +7,11 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::traits::{MutationContext, MutationExecutor};
 use crate::config::{Config, SourceDir};
 use crate::meta::computations::Computation;
 use crate::meta::mutations::types::{DiffEntry, MutationResult, SignalClearScope, SignalToClear};
 use crate::meta::recomputation::RecomputationScope;
-use super::traits::{MutationContext, MutationExecutor};
 
 /// Mutation that applies a single source directory config edit to dirs.kdl.
 ///
@@ -39,7 +39,9 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
     fn label(&self) -> &'static str {
         "Dir config update"
     }
-    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::Config) }
+    fn staging(&self) -> super::traits::MutationStaging {
+        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::Config)
+    }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         let result = (|| -> anyhow::Result<bool> {
@@ -90,10 +92,7 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
                 }
             }
             Err(e) => {
-                crate::logging::log_error(format!(
-                    "[DIR CONFIG] Config write failed: {:#}",
-                    e
-                ));
+                crate::logging::log_error(format!("[DIR CONFIG] Config write failed: {:#}", e));
                 MutationResult {
                     _mutation: super::Mutation::ApplyDirConfigEdit(Box::new(self.clone())),
                     success: false,
@@ -157,14 +156,18 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
                 format_opt_bool(new.interior_dupes),
             ));
         }
-        let old_schema = old.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or("(none)");
-        let new_schema = new.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or("(none)");
+        let old_schema = old
+            .path_schema
+            .as_ref()
+            .map(|s| s.template.as_str())
+            .unwrap_or("(none)");
+        let new_schema = new
+            .path_schema
+            .as_ref()
+            .map(|s| s.template.as_str())
+            .unwrap_or("(none)");
         if old_schema != new_schema {
-            diffs.push(DiffEntry::new(
-                "Path schema",
-                old_schema,
-                new_schema,
-            ));
+            diffs.push(DiffEntry::new("Path schema", old_schema, new_schema));
         }
         if old.enable_acoustid != new.enable_acoustid {
             diffs.push(DiffEntry::new(
@@ -212,7 +215,11 @@ pub struct ApplyBatchDirConfigEditsMutation {
 impl PartialEq for ApplyBatchDirConfigEditsMutation {
     fn eq(&self, other: &Self) -> bool {
         self.edits.len() == other.edits.len()
-            && self.edits.iter().zip(other.edits.iter()).all(|(a, b)| a.source_path == b.source_path)
+            && self
+                .edits
+                .iter()
+                .zip(other.edits.iter())
+                .all(|(a, b)| a.source_path == b.source_path)
     }
 }
 
@@ -348,8 +355,16 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
                     format_opt_bool(new.interior_dupes),
                 ));
             }
-            let old_schema = old.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or("(none)");
-            let new_schema = new.path_schema.as_ref().map(|s| s.template.as_str()).unwrap_or("(none)");
+            let old_schema = old
+                .path_schema
+                .as_ref()
+                .map(|s| s.template.as_str())
+                .unwrap_or("(none)");
+            let new_schema = new
+                .path_schema
+                .as_ref()
+                .map(|s| s.template.as_str())
+                .unwrap_or("(none)");
             if old_schema != new_schema {
                 diffs.push(DiffEntry::new(
                     format!("{}: Path schema", prefix),

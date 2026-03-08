@@ -105,7 +105,8 @@ pub struct DirectoryClusterPreviewState {
 impl DirectoryClusterPreviewState {
     /// Path of the current cluster's first directory (for status bar).
     pub fn selected_path(&self) -> Option<&str> {
-        self.cached_data.clusters
+        self.cached_data
+            .clusters
             .get(self.current_cluster_index)
             .and_then(|c| c.directories.first())
             .map(|d| d.path_suffix.as_str())
@@ -134,7 +135,12 @@ impl DirectoryClusterPreviewState {
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<DirectoryClusterPreviewAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<DirectoryClusterPreviewAction> {
         // Check inline button rects (covers directory rows AND actions row)
         for &(rect, row, btn) in &self.button_rects {
             if rect_contains(rect, x, y) {
@@ -182,7 +188,8 @@ impl DirectoryClusterPreviewState {
     /// Recompute the stash file list from the currently selected option.
     fn recompute_stash_files(&mut self) {
         self.stash_files = if let Some(option) = self.selected_option() {
-            self.cached_data.stash_files_for_option(self.current_cluster_index, &option)
+            self.cached_data
+                .stash_files_for_option(self.current_cluster_index, &option)
         } else {
             Vec::new()
         };
@@ -270,7 +277,9 @@ impl DirectoryClusterPreviewState {
         }
 
         // Only offer if worst-format directories can all be stashed
-        let stashable = cluster.directories.iter()
+        let stashable = cluster
+            .directories
+            .iter()
             .filter(|d| d.format_summary.starts_with(*worst_format))
             .all(|d| d.can_stash_dupes);
 
@@ -310,7 +319,8 @@ impl DirectoryClusterPreviewState {
 
     /// The row index of the actions row (after all directory rows).
     fn actions_row_index(&self) -> usize {
-        self.cached_data.clusters
+        self.cached_data
+            .clusters
             .get(self.current_cluster_index)
             .map(|c| c.directories.len())
             .unwrap_or(0)
@@ -323,7 +333,8 @@ impl DirectoryClusterPreviewState {
 
     /// Whether the given directory row can stash.
     fn can_stash_row(&self, row: usize) -> bool {
-        self.cached_data.clusters
+        self.cached_data
+            .clusters
             .get(self.current_cluster_index)
             .and_then(|c| c.directories.get(row))
             .map(|d| d.can_stash_dupes)
@@ -332,7 +343,11 @@ impl DirectoryClusterPreviewState {
 
     /// Number of navigable buttons on the actions row.
     fn actions_row_button_count(&self) -> usize {
-        if self.auto_quality_format().is_some() { 2 } else { 1 }
+        if self.auto_quality_format().is_some() {
+            2
+        } else {
+            1
+        }
     }
 
     /// Clamp selected_button so it doesn't land on a disabled or nonexistent button.
@@ -451,10 +466,10 @@ impl DirectoryClusterPreviewState {
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),     // Title
+                Constraint::Length(3),      // Title
                 Constraint::Percentage(25), // Directory table with inline buttons
-                Constraint::Min(5),        // Stash file preview
-                Constraint::Length(2),     // Hints bar
+                Constraint::Min(5),         // Stash file preview
+                Constraint::Length(2),      // Hints bar
             ])
             .split(area);
 
@@ -492,16 +507,27 @@ impl DirectoryClusterPreviewState {
         let title = match self.cached_data.clusters.get(cluster_idx) {
             Some(c) => {
                 let plural = if c.overlap_count == 1 { "" } else { "s" };
-                format!(" {} \u{2014} {} overlap{} ", c.cluster_key, c.overlap_count, plural)
+                format!(
+                    " {} \u{2014} {} overlap{} ",
+                    c.cluster_key, c.overlap_count, plural
+                )
             }
             None => " Overlapping Directories ".to_string(),
         };
 
         let block = Block::default()
             .title(title)
-            .title_style(Style::default().fg(if dir_focused { Color::Cyan } else { Color::DarkGray }))
+            .title_style(Style::default().fg(if dir_focused {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            }))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(if dir_focused { Color::Cyan } else { Color::DarkGray }));
+            .border_style(Style::default().fg(if dir_focused {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            }));
 
         let inner = render_pane(f, area, block);
         self.dir_pane_rect = Some(area);
@@ -519,9 +545,9 @@ impl DirectoryClusterPreviewState {
         // Compute column widths from available space
         // Layout: path | tracks | format | [edit tags] [stash dir]
         let avail_w = inner.width as usize;
-        let tracks_w = 10;  // " 23 tracks"
-        let format_w = 12;  // "FLAC (23)   "
-        let btn_w = 24;     // "[edit tags] [stash dir]"
+        let tracks_w = 10; // " 23 tracks"
+        let format_w = 12; // "FLAC (23)   "
+        let btn_w = 24; // "[edit tags] [stash dir]"
         let path_w = avail_w.saturating_sub(tracks_w + format_w + btn_w + 2);
 
         let mut y = inner.y;
@@ -535,9 +561,15 @@ impl DirectoryClusterPreviewState {
             // Build the row content: path | tracks | format
             let row_line = Line::from(vec![
                 Span::styled(
-                    format!(" {:<width$}", truncate_left(&dir.path_suffix, path_w.saturating_sub(1)), width = path_w),
+                    format!(
+                        " {:<width$}",
+                        truncate_left(&dir.path_suffix, path_w.saturating_sub(1)),
+                        width = path_w
+                    ),
                     if is_selected_row {
-                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
                     },
@@ -547,7 +579,11 @@ impl DirectoryClusterPreviewState {
                     Style::default().fg(Color::Yellow),
                 ),
                 Span::styled(
-                    format!("  {:<width$}", truncate_right(&dir.format_summary, format_w.saturating_sub(2)), width = format_w),
+                    format!(
+                        "  {:<width$}",
+                        truncate_right(&dir.format_summary, format_w.saturating_sub(2)),
+                        width = format_w
+                    ),
                     Style::default().fg(Color::Cyan),
                 ),
             ]);
@@ -568,7 +604,10 @@ impl DirectoryClusterPreviewState {
             } else {
                 Style::default().fg(Color::Green)
             };
-            f.render_widget(Paragraph::new(Span::styled(edit_btn_text, edit_btn_style)), edit_btn_rect);
+            f.render_widget(
+                Paragraph::new(Span::styled(edit_btn_text, edit_btn_style)),
+                edit_btn_rect,
+            );
             self.button_rects.push((edit_btn_rect, row_idx, 0));
 
             // [stash dir] button
@@ -582,7 +621,10 @@ impl DirectoryClusterPreviewState {
             } else {
                 Style::default().fg(Color::Yellow)
             };
-            f.render_widget(Paragraph::new(Span::styled(stash_btn_text, stash_btn_style)), stash_btn_rect);
+            f.render_widget(
+                Paragraph::new(Span::styled(stash_btn_text, stash_btn_style)),
+                stash_btn_rect,
+            );
             if dir.can_stash_dupes {
                 self.button_rects.push((stash_btn_rect, row_idx, 1));
             }
@@ -605,7 +647,10 @@ impl DirectoryClusterPreviewState {
                 } else {
                     Style::default().fg(Color::Yellow)
                 };
-                f.render_widget(Paragraph::new(Span::styled(&auto_q_text, auto_q_style)), auto_q_rect);
+                f.render_widget(
+                    Paragraph::new(Span::styled(&auto_q_text, auto_q_style)),
+                    auto_q_rect,
+                );
                 self.button_rects.push((auto_q_rect, dir_count, 0));
                 btn_x += auto_q_w + 1; // gap
             }
@@ -619,7 +664,10 @@ impl DirectoryClusterPreviewState {
             } else {
                 Style::default().fg(Color::Magenta)
             };
-            f.render_widget(Paragraph::new(Span::styled(mark_text, mark_style)), mark_rect);
+            f.render_widget(
+                Paragraph::new(Span::styled(mark_text, mark_style)),
+                mark_rect,
+            );
             self.button_rects.push((mark_rect, dir_count, mark_btn_idx));
         }
     }
@@ -647,10 +695,7 @@ impl DirectoryClusterPreviewState {
             // Split 66/34: file list on left, detail pane on right
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(66),
-                    Constraint::Percentage(34),
-                ])
+                .constraints([Constraint::Percentage(66), Constraint::Percentage(34)])
                 .split(area);
 
             // File list pane (focused)
@@ -701,13 +746,14 @@ impl DirectoryClusterPreviewState {
     }
 
     fn render_empty_stash(&self, f: &mut Frame, area: Rect) {
-        let msg = if self.selected_row >= self.actions_row_index() && self.selected_option() == Some(ClusterResolutionOption::MarkExpected) {
+        let msg = if self.selected_row >= self.actions_row_index()
+            && self.selected_option() == Some(ClusterResolutionOption::MarkExpected)
+        {
             "Mark expected does not stash files"
         } else {
             "Select a stash button to preview files"
         };
-        let empty = Paragraph::new(msg)
-            .style(Style::default().fg(Color::DarkGray));
+        let empty = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
         f.render_widget(empty, area);
     }
 
@@ -718,18 +764,22 @@ impl DirectoryClusterPreviewState {
         self.file_click_targets.set_list_area(area);
         let visible_height = area.height as usize;
         for (vis_idx, entry_idx) in (self.file_scroll..).take(visible_height).enumerate() {
-            if entry_idx >= self.stash_files.len() { break; }
-            self.file_click_targets.add_row(entry_idx.to_string(), area.y + vis_idx as u16);
+            if entry_idx >= self.stash_files.len() {
+                break;
+            }
+            self.file_click_targets
+                .add_row(entry_idx.to_string(), area.y + vis_idx as u16);
         }
 
         if self.stash_files.is_empty() {
-            let empty = Paragraph::new("No files to stash")
-                .style(Style::default().fg(Color::DarkGray));
+            let empty =
+                Paragraph::new("No files to stash").style(Style::default().fg(Color::DarkGray));
             f.render_widget(empty, area);
             return;
         }
 
-        let entries: Vec<PathEntry> = self.stash_files
+        let entries: Vec<PathEntry> = self
+            .stash_files
             .iter()
             .map(|sf| PathEntry::plain(&sf.corpus_path))
             .collect();
@@ -839,7 +889,9 @@ impl DirectoryClusterPreviewState {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "Tags:",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
 
                 let tag_budget = max_lines.saturating_sub(lines.len());
@@ -869,7 +921,10 @@ impl DirectoryClusterPreviewState {
             Span::styled(" select ", Style::default().fg(Color::DarkGray)),
             Span::styled(" \u{2190}\u{2192}", Style::default().fg(Color::Cyan)),
             Span::styled(" button ", Style::default().fg(Color::DarkGray)),
-            Span::styled(" \u{21e7}\u{2191}\u{2193}", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                " \u{21e7}\u{2191}\u{2193}",
+                Style::default().fg(Color::Cyan),
+            ),
             Span::styled(" pane ", Style::default().fg(Color::DarkGray)),
             Span::styled(" Tab", Style::default().fg(Color::Cyan)),
             Span::styled(" next ", Style::default().fg(Color::DarkGray)),

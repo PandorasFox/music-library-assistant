@@ -122,7 +122,10 @@ impl ExternalMatchesViewState {
 
     /// Build the navigable entry list from cached data.
     pub fn navigable_entries(&self) -> Vec<NavigableEntry> {
-        let mut entries = vec![NavigableEntry::FetchAction, NavigableEntry::PackReleasesAction];
+        let mut entries = vec![
+            NavigableEntry::FetchAction,
+            NavigableEntry::PackReleasesAction,
+        ];
 
         if let Some(ref data) = self.cached_data {
             if !data.untagged_entries.is_empty() {
@@ -133,7 +136,9 @@ impl ExternalMatchesViewState {
             }
             // Release packing categories (only visible when data exists)
             if data.packing_full_match_count > 0 {
-                entries.push(NavigableEntry::PackingCategory(PackingCategory::FullMatches));
+                entries.push(NavigableEntry::PackingCategory(
+                    PackingCategory::FullMatches,
+                ));
             }
             if data.packing_singles_count > 0 {
                 entries.push(NavigableEntry::PackingCategory(PackingCategory::Singles));
@@ -190,37 +195,35 @@ impl ExternalMatchesViewState {
                 }
                 ExternalMatchesAction::None
             }
-            InputAction::Confirm => {
-                match entries.get(self.cursor) {
-                    Some(NavigableEntry::FetchAction) => {
-                        if self.has_api_key && !self.fetch_active {
-                            ExternalMatchesAction::RequestFetch
-                        } else {
-                            ExternalMatchesAction::None
-                        }
+            InputAction::Confirm => match entries.get(self.cursor) {
+                Some(NavigableEntry::FetchAction) => {
+                    if self.has_api_key && !self.fetch_active {
+                        ExternalMatchesAction::RequestFetch
+                    } else {
+                        ExternalMatchesAction::None
                     }
-                    Some(NavigableEntry::PackReleasesAction) => {
-                        let has_data = self.cached_data.as_ref().is_some_and(|d| {
-                            !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty()
-                        });
-                        if !self.fetch_active && has_data {
-                            ExternalMatchesAction::RequestReleasePacking
-                        } else {
-                            ExternalMatchesAction::None
-                        }
-                    }
-                    Some(NavigableEntry::UntaggedMatches) => {
-                        ExternalMatchesAction::LaunchUntaggedReview
-                    }
-                    Some(NavigableEntry::ConfidenceBucket(tier)) => {
-                        ExternalMatchesAction::LaunchTierReview(*tier)
-                    }
-                    Some(NavigableEntry::PackingCategory(cat)) => {
-                        ExternalMatchesAction::LaunchPackingCategory(*cat)
-                    }
-                    None => ExternalMatchesAction::None,
                 }
-            }
+                Some(NavigableEntry::PackReleasesAction) => {
+                    let has_data = self.cached_data.as_ref().is_some_and(|d| {
+                        !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty()
+                    });
+                    if !self.fetch_active && has_data {
+                        ExternalMatchesAction::RequestReleasePacking
+                    } else {
+                        ExternalMatchesAction::None
+                    }
+                }
+                Some(NavigableEntry::UntaggedMatches) => {
+                    ExternalMatchesAction::LaunchUntaggedReview
+                }
+                Some(NavigableEntry::ConfidenceBucket(tier)) => {
+                    ExternalMatchesAction::LaunchTierReview(*tier)
+                }
+                Some(NavigableEntry::PackingCategory(cat)) => {
+                    ExternalMatchesAction::LaunchPackingCategory(*cat)
+                }
+                None => ExternalMatchesAction::None,
+            },
             InputAction::CycleNext => ExternalMatchesAction::CycleNext,
             InputAction::CyclePrev => ExternalMatchesAction::CyclePrev,
             InputAction::Cancel => ExternalMatchesAction::RequestQuit,

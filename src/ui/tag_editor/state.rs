@@ -15,9 +15,9 @@ use super::mutations::{
     compute_changes,
 };
 use super::types::{
-    AggregatedTagField, AggregatedValue, FieldEditState, GroupContext, TagChange,
-    TagEditContext, TagEditorButton, TagEditorLaunchMode, TagEditorMode, TagEditorSource,
-    TagField, UnifiedTagEditorFocus, UnifiedTagEditorModal,
+    AggregatedTagField, AggregatedValue, FieldEditState, GroupContext, TagChange, TagEditContext,
+    TagEditorButton, TagEditorLaunchMode, TagEditorMode, TagEditorSource, TagField,
+    UnifiedTagEditorFocus, UnifiedTagEditorModal,
 };
 
 // ============================================================================
@@ -32,7 +32,6 @@ pub struct UnifiedTagEditorState {
     // ========================================================================
     // Context & Mode
     // ========================================================================
-
     /// The context (SingleFile or BulkEdit) determines behavior
     pub context: TagEditContext,
 
@@ -42,7 +41,6 @@ pub struct UnifiedTagEditorState {
     // ========================================================================
     // Item Navigation (within current transaction)
     // ========================================================================
-
     /// Current item index (track in SingleFile, file in BulkEdit)
     pub current_item_idx: usize,
 
@@ -52,7 +50,6 @@ pub struct UnifiedTagEditorState {
     // ========================================================================
     // Field Navigation & Editing
     // ========================================================================
-
     /// Current field index
     pub current_field_idx: usize,
 
@@ -77,7 +74,6 @@ pub struct UnifiedTagEditorState {
     // ========================================================================
     // Tag Data
     // ========================================================================
-
     /// SingleFile: tag fields per track; BulkEdit: aggregated fields (single Vec)
     ///
     /// For SingleFile: outer Vec is tracks, inner Vec is fields per track
@@ -93,7 +89,6 @@ pub struct UnifiedTagEditorState {
     // ========================================================================
     // UI State
     // ========================================================================
-
     /// Which pane currently has focus
     pub focus: UnifiedTagEditorFocus,
 
@@ -109,7 +104,6 @@ pub struct UnifiedTagEditorState {
     // ========================================================================
     // Context List Scrolling (BulkEdit file list)
     // ========================================================================
-
     /// Scroll offset for the file list in BulkEdit mode
     pub context_list_scroll_offset: usize,
 
@@ -119,7 +113,6 @@ pub struct UnifiedTagEditorState {
     // ========================================================================
     // Staged Mutations Tracking (for skipping redundant confirmations)
     // ========================================================================
-
     /// Number of decisions staged in the current transaction
     pub staged_decision_count: usize,
 
@@ -130,14 +123,12 @@ pub struct UnifiedTagEditorState {
     // ========================================================================
     // Launch Mode
     // ========================================================================
-
     /// Whether this editor is standalone (owns transaction) or embedded (parent owns transaction).
     pub launch_mode: TagEditorLaunchMode,
 
     // ========================================================================
     // Click Targets (set during render)
     // ========================================================================
-
     /// Click targets for tag field list items.
     pub field_click_targets: crate::ui::widgets::ListClickTargets,
     /// Click targets for action buttons.
@@ -176,14 +167,17 @@ impl UnifiedTagEditorState {
     ) -> Self {
         // All files must belong to the same zone — tag mutations are per-zone.
         debug_assert!(
-            audio_files.windows(2).all(|w| w[0].entry.zone == w[1].entry.zone),
+            audio_files
+                .windows(2)
+                .all(|w| w[0].entry.zone == w[1].entry.zone),
             "Tag editor opened with files from mixed zones"
         );
 
         let total_items = audio_files.len();
 
         // Load per-file tag fields from disk
-        let tag_fields: Vec<Vec<TagField>> = audio_files.iter().map(audio_file_to_tag_fields).collect();
+        let tag_fields: Vec<Vec<TagField>> =
+            audio_files.iter().map(audio_file_to_tag_fields).collect();
         let original_tag_fields = tag_fields.clone();
 
         // For Aggregated mode, also build aggregated view
@@ -240,8 +234,17 @@ impl UnifiedTagEditorState {
     }
 
     /// Create a new unified state for single-file editing (convenience wrapper).
-    pub fn single_file(audio_file: AudioFile, source: TagEditorSource, group_context: Option<GroupContext>) -> Self {
-        Self::new(TagEditorMode::Individual, vec![audio_file], source, group_context)
+    pub fn single_file(
+        audio_file: AudioFile,
+        source: TagEditorSource,
+        group_context: Option<GroupContext>,
+    ) -> Self {
+        Self::new(
+            TagEditorMode::Individual,
+            vec![audio_file],
+            source,
+            group_context,
+        )
     }
 
     /// Create a new unified state for bulk editing from pre-loaded audio files (convenience wrapper).
@@ -252,31 +255,43 @@ impl UnifiedTagEditorState {
         source: TagEditorSource,
         group_context: Option<GroupContext>,
     ) -> Self {
-        Self::new(TagEditorMode::Individual, audio_files, source, group_context)
+        Self::new(
+            TagEditorMode::Individual,
+            audio_files,
+            source,
+            group_context,
+        )
     }
 
     /// Create a new unified state for aggregated bulk editing (convenience wrapper).
     ///
     /// Uses Aggregated mode - shows unified view, changes apply to all files at once.
-    pub fn aggregated_bulk(
-        audio_files: Vec<AudioFile>,
-        source: TagEditorSource,
-    ) -> Self {
+    pub fn aggregated_bulk(audio_files: Vec<AudioFile>, source: TagEditorSource) -> Self {
         Self::new(TagEditorMode::Aggregated, audio_files, source, None)
     }
 
     /// Create a new unified state for directory editing with aggregated tags (convenience wrapper).
     ///
     /// Uses Aggregated mode - shows unified view, changes apply to all files.
-    pub fn directory_aggregated(
-        audio_files: Vec<AudioFile>,
-    ) -> Self {
-        Self::new(TagEditorMode::Aggregated, audio_files, TagEditorSource::DirectoryEdit, None)
+    pub fn directory_aggregated(audio_files: Vec<AudioFile>) -> Self {
+        Self::new(
+            TagEditorMode::Aggregated,
+            audio_files,
+            TagEditorSource::DirectoryEdit,
+            None,
+        )
     }
 
     /// Builder method to set embedded mode (called after construction).
-    pub fn with_embedded_mode(mut self, decision_key: crate::meta::decisions::DecisionKey, decision_label: String) -> Self {
-        self.launch_mode = TagEditorLaunchMode::Embedded { decision_key, decision_label };
+    pub fn with_embedded_mode(
+        mut self,
+        decision_key: crate::meta::decisions::DecisionKey,
+        decision_label: String,
+    ) -> Self {
+        self.launch_mode = TagEditorLaunchMode::Embedded {
+            decision_key,
+            decision_label,
+        };
         self
     }
 
@@ -317,14 +332,13 @@ impl UnifiedTagEditorState {
             }
         }
 
-        let inode_part: String = inodes.iter()
+        let inode_part: String = inodes
+            .iter()
             .map(|i| i.to_string())
             .collect::<Vec<_>>()
             .join(",");
 
-        let tags_part: String = tag_names.into_iter()
-            .collect::<Vec<_>>()
-            .join(",");
+        let tags_part: String = tag_names.into_iter().collect::<Vec<_>>().join(",");
 
         if tags_part.is_empty() {
             inode_part
@@ -336,12 +350,10 @@ impl UnifiedTagEditorState {
     /// Get a label for the current item (for transaction decision labels)
     pub fn current_item_label(&self) -> String {
         match &self.context {
-            TagEditContext::SingleFile { audio_file, .. } => {
-                Path::new(audio_file.path())
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "Unknown".to_string())
-            }
+            TagEditContext::SingleFile { audio_file, .. } => Path::new(audio_file.path())
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Unknown".to_string()),
             TagEditContext::BulkEdit { audio_files, .. } => {
                 if let Some(audio_file) = audio_files.first() {
                     Path::new(audio_file.path())
@@ -379,7 +391,9 @@ impl UnifiedTagEditorState {
     /// Check if any aggregated fields have been edited
     fn has_aggregated_changes(&self) -> bool {
         if let Some(ref agg_fields) = self.aggregated_fields {
-            agg_fields.iter().any(|f| matches!(f.value, AggregatedValue::Edited(_)))
+            agg_fields
+                .iter()
+                .any(|f| matches!(f.value, AggregatedValue::Edited(_)))
         } else {
             false
         }
@@ -400,10 +414,12 @@ impl UnifiedTagEditorState {
                 // This field was edited - create a change for each track
                 for track_idx in 0..num_tracks {
                     // Get the original value for this track
-                    let old_value = self.original_tag_fields
+                    let old_value = self
+                        .original_tag_fields
                         .get(track_idx)
                         .and_then(|fields| {
-                            fields.iter()
+                            fields
+                                .iter()
                                 .find(|f| f.name.eq_ignore_ascii_case(&field.name))
                                 .map(|f| f.value.clone())
                         })
@@ -613,7 +629,10 @@ impl UnifiedTagEditorState {
                 let total = if let Some(ref agg) = self.aggregated_fields {
                     agg.len()
                 } else {
-                    self.tag_fields.get(self.current_item_idx).map(|f| f.len()).unwrap_or(0)
+                    self.tag_fields
+                        .get(self.current_item_idx)
+                        .map(|f| f.len())
+                        .unwrap_or(0)
                 };
                 if idx < total {
                     self.current_field_idx = idx;

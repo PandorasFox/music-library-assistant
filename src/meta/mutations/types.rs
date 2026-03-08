@@ -10,22 +10,25 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::corpus::tags::{PictureInfo, TagSet};
 use crate::meta::computations::Computation;
 use crate::meta::signals::data::TypedSignalWrite;
-use crate::corpus::tags::{TagSet, PictureInfo};
 
-use super::file_ops::{MoveMutation, StashFromZoneMutation, StashLeftoversMutation, HardLinkMutation, LibraryMoveMutation, InboxToCorpusMutation, InboxDirToCorpusMutation};
+use super::config_edit::ApplyConfigEditsMutation;
+use super::dir_config_edit::{ApplyBatchDirConfigEditsMutation, ApplyDirConfigEditMutation};
+use super::file_ops::{
+    HardLinkMutation, InboxDirToCorpusMutation, InboxToCorpusMutation, LibraryMoveMutation,
+    MoveMutation, StashFromZoneMutation, StashLeftoversMutation,
+};
 use super::indexing::{
-    IndexFileFromPathMutation, UpdateFilePathMutation, DropFromIndexMutation,
-    DropDirectoryFromIndexMutation, AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation,
-    FlushTagsToDiskMutation, AssimilateDiskTagsToDbMutation, EmitCanonicalTagMutation,
-    EmitExpectedOverlapMutation, EmitExpectedDuplicateMutation,
-    EmitExpectedMissingTagMutation, DropExternalMatchMutation,
+    AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation,
+    DropDirectoryFromIndexMutation, DropExternalMatchMutation, DropFromIndexMutation,
+    EmitCanonicalTagMutation, EmitExpectedDuplicateMutation, EmitExpectedMissingTagMutation,
+    EmitExpectedOverlapMutation, FlushTagsToDiskMutation, IndexFileFromPathMutation,
+    UpdateFilePathMutation,
 };
 use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
-use super::config_edit::ApplyConfigEditsMutation;
-use super::dir_config_edit::{ApplyDirConfigEditMutation, ApplyBatchDirConfigEditsMutation};
 
 // ============================================================================
 // TagOp - Incremental Tag Operations
@@ -110,7 +113,11 @@ pub struct DiffEntry {
 }
 
 impl DiffEntry {
-    pub fn new(label: impl Into<String>, old_value: impl ToString, new_value: impl ToString) -> Self {
+    pub fn new(
+        label: impl Into<String>,
+        old_value: impl ToString,
+        new_value: impl ToString,
+    ) -> Self {
         Self {
             label: label.into(),
             old_value: old_value.to_string(),
@@ -384,10 +391,9 @@ impl Mutation {
                 | Mutation::EmitExpectedOverlap(_)
                 | Mutation::EmitExpectedDuplicate(_)
                 | Mutation::EmitExpectedMissingTag(_)
-                | Mutation::DropExternalMatch(_)
-            // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
-            // Note: InboxToCorpus moves files + updates DB, so NOT db-only
-            // Note: ApplyBatchDirConfigEdits writes to disk, so NOT db-only
+                | Mutation::DropExternalMatch(_) // Note: ApplyDbTagsToDisk writes to disk, so NOT db-only
+                                                 // Note: InboxToCorpus moves files + updates DB, so NOT db-only
+                                                 // Note: ApplyBatchDirConfigEdits writes to disk, so NOT db-only
         )
     }
 
@@ -456,7 +462,5 @@ mod tests {
             destination: PathBuf::from("/b"),
         });
         assert_eq!(file_move.label(), "File move");
-
     }
-
 }

@@ -14,8 +14,8 @@ use ratatui::Frame;
 use crate::meta::views::ConflictBucket;
 use crate::ui::helpers::render_pane;
 use crate::ui::widgets::{
-    render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout,
-    ThreeColTable, StyledCell,
+    render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout, StyledCell,
+    ThreeColTable,
 };
 
 use super::types::{OobConflictState, ResolutionButton};
@@ -81,7 +81,10 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
         let label = format!(" {} ({}) ", bucket.label(), count);
 
         let style = if is_active {
-            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else if count > 0 {
             Style::default().fg(Color::White)
         } else {
@@ -109,13 +112,21 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
 
 fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
     let is_focused = state.focus_pane == FocusPane::List;
-    let border_color = if is_focused { Color::Yellow } else { Color::DarkGray };
+    let border_color = if is_focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
 
     let bucket_state = state.active_bucket_state();
 
     // Build title with selection count if active
     let title = if bucket_state.selection.is_active() {
-        format!("Files ({}, {} selected)", bucket_state.files.len(), bucket_state.selection.selection_count())
+        format!(
+            "Files ({}, {} selected)",
+            bucket_state.files.len(),
+            bucket_state.selection.selection_count()
+        )
     } else {
         format!("Files ({})", bucket_state.files.len())
     };
@@ -137,7 +148,8 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
     // Show selection indicators by default for resolvable buckets
     let show_selection = state.active_bucket.is_resolvable() || bucket_state.selection.is_active();
 
-    let entries: Vec<PathEntry> = bucket_state.files
+    let entries: Vec<PathEntry> = bucket_state
+        .files
         .iter()
         .enumerate()
         .map(|(idx, file)| {
@@ -177,8 +189,8 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &OobConflictState) {
     }
 
     if state.current_diff.is_empty() {
-        let empty = Paragraph::new("No tag differences found")
-            .style(Style::default().fg(Color::DarkGray));
+        let empty =
+            Paragraph::new("No tag differences found").style(Style::default().fg(Color::DarkGray));
         f.render_widget(empty, inner);
         return;
     }
@@ -186,21 +198,42 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &OobConflictState) {
     let bold = Modifier::BOLD;
     let table = ThreeColTable {
         headers: [
-            ("Field".into(), Style::default().fg(Color::DarkGray).add_modifier(bold)),
-            ("DB Value".into(), Style::default().fg(Color::Green).add_modifier(bold)),
-            ("Disk Value".into(), Style::default().fg(Color::Cyan).add_modifier(bold)),
+            (
+                "Field".into(),
+                Style::default().fg(Color::DarkGray).add_modifier(bold),
+            ),
+            (
+                "DB Value".into(),
+                Style::default().fg(Color::Green).add_modifier(bold),
+            ),
+            (
+                "Disk Value".into(),
+                Style::default().fg(Color::Cyan).add_modifier(bold),
+            ),
         ],
-        rows: state.current_diff.iter().map(|m| {
-            let db_text = m.db_value.as_deref().unwrap_or("\u{2014}");
-            let disk_text = m.disk_value.as_deref().unwrap_or("\u{2014}");
-            let db_color = if m.db_value.is_some() { Color::Green } else { Color::DarkGray };
-            let disk_color = if m.disk_value.is_some() { Color::Cyan } else { Color::DarkGray };
-            [
-                StyledCell::new(&m.field, Style::default().fg(Color::White)),
-                StyledCell::new(db_text, Style::default().fg(db_color)),
-                StyledCell::new(disk_text, Style::default().fg(disk_color)),
-            ]
-        }).collect(),
+        rows: state
+            .current_diff
+            .iter()
+            .map(|m| {
+                let db_text = m.db_value.as_deref().unwrap_or("\u{2014}");
+                let disk_text = m.disk_value.as_deref().unwrap_or("\u{2014}");
+                let db_color = if m.db_value.is_some() {
+                    Color::Green
+                } else {
+                    Color::DarkGray
+                };
+                let disk_color = if m.disk_value.is_some() {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                };
+                [
+                    StyledCell::new(&m.field, Style::default().fg(Color::White)),
+                    StyledCell::new(db_text, Style::default().fg(db_color)),
+                    StyledCell::new(disk_text, Style::default().fg(disk_color)),
+                ]
+            })
+            .collect(),
         col_ratio: [20, 40, 40],
         scroll: 0,
         separator_style: Style::default().fg(Color::DarkGray),
@@ -211,7 +244,11 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &OobConflictState) {
 
 fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
     let is_focused = state.focus_pane == FocusPane::Buttons;
-    let border_color = if is_focused { Color::Yellow } else { Color::DarkGray };
+    let border_color = if is_focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
 
     let block = Block::default()
         .borders(Borders::TOP)
@@ -229,7 +266,8 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
             let has_files = !state.active_bucket_state().files.is_empty();
 
             // Calculate button positions for click detection
-            let total_width = apply_label.len() + 3 + assimilate_label.len() + 3 + cancel_label.len();
+            let total_width =
+                apply_label.len() + 3 + assimilate_label.len() + 3 + cancel_label.len();
             let start_x = inner.x + (inner.width.saturating_sub(total_width as u16)) / 2;
 
             let mut x = start_x;
@@ -248,15 +286,19 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
             let cancel_rect = Rect::new(x, inner.y, cancel_label.len() as u16, 1);
             state.button_rects.set("cancel", cancel_rect);
 
-            let apply_style = if state.selected_button == ResolutionButton::ApplyDb && is_focused && has_files {
-                Style::default().fg(Color::Black).bg(Color::Green)
-            } else if has_files {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
+            let apply_style =
+                if state.selected_button == ResolutionButton::ApplyDb && is_focused && has_files {
+                    Style::default().fg(Color::Black).bg(Color::Green)
+                } else if has_files {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
 
-            let assimilate_style = if state.selected_button == ResolutionButton::AssimilateDisk && is_focused && has_files {
+            let assimilate_style = if state.selected_button == ResolutionButton::AssimilateDisk
+                && is_focused
+                && has_files
+            {
                 Style::default().fg(Color::Black).bg(Color::Cyan)
             } else if has_files {
                 Style::default().fg(Color::Cyan)

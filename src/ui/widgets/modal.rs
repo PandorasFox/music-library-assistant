@@ -135,7 +135,10 @@ impl<'a> Modal<'a> {
         Self {
             title: String::new(),
             content: Vec::new(),
-            sizing: ModalSizing::Percent { width: 50, height: 30 },
+            sizing: ModalSizing::Percent {
+                width: 50,
+                height: 30,
+            },
             style: ModalStyle::default(),
             alignment: Alignment::Left,
         }
@@ -260,7 +263,11 @@ impl ModalButton {
     /// Render as a span with indicator prefix
     pub fn render_with_indicator(&self) -> Vec<Span<'static>> {
         let indicator = if self.show_indicator {
-            if self.is_selected { " > " } else { "   " }
+            if self.is_selected {
+                " > "
+            } else {
+                "   "
+            }
         } else {
             ""
         };
@@ -442,9 +449,11 @@ impl<'a> ConfirmationModal<'a> {
 
         // Hint
         if let Some(hint_text) = self.hint {
-            let hint = Paragraph::new(
-                Line::from(Span::styled(hint_text, Style::default().fg(Color::DarkGray)))
-            ).alignment(Alignment::Center);
+            let hint = Paragraph::new(Line::from(Span::styled(
+                hint_text,
+                Style::default().fg(Color::DarkGray),
+            )))
+            .alignment(Alignment::Center);
             f.render_widget(hint, chunks[2]);
         }
     }

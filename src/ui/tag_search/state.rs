@@ -8,7 +8,9 @@ use crate::db::types::AudioFile;
 // TODO: Re-enable when corpus::deploy is available
 // use crate::corpus::deploy::compute_deployment_path_with_tags;
 
-use super::types::{ConditionType, LogicalOperator, SearchCondition, TagSearchModal, TagSearchMode, SEARCHABLE_TAGS};
+use super::types::{
+    ConditionType, LogicalOperator, SearchCondition, TagSearchModal, TagSearchMode, SEARCHABLE_TAGS,
+};
 use super::QueryFieldFocus;
 
 /// An audio file with its associated tags (for display and filtering).
@@ -202,7 +204,9 @@ impl TagSearchState {
 
     /// Move focus right.
     pub fn move_focus_right(&mut self) {
-        let condition_type = self.conditions.get(self.focused_condition)
+        let condition_type = self
+            .conditions
+            .get(self.focused_condition)
             .map(|c| c.condition_type)
             .unwrap_or_default();
 
@@ -219,7 +223,9 @@ impl TagSearchState {
                     ConditionType::FileType => {
                         self.field_focus = QueryFieldFocus::FileTypeCategory;
                     }
-                    ConditionType::SampleRate | ConditionType::Bitrate | ConditionType::Duration => {
+                    ConditionType::SampleRate
+                    | ConditionType::Bitrate
+                    | ConditionType::Duration => {
                         self.field_focus = QueryFieldFocus::RangeMin;
                     }
                 }
@@ -276,7 +282,10 @@ impl TagSearchState {
         use crate::ui::input::InputAction;
 
         // Range fields: only allow digits for Char input
-        if matches!(self.field_focus, QueryFieldFocus::RangeMin | QueryFieldFocus::RangeMax) {
+        if matches!(
+            self.field_focus,
+            QueryFieldFocus::RangeMin | QueryFieldFocus::RangeMax
+        ) {
             if let InputAction::Char(c) = action {
                 if !c.is_ascii_digit() {
                     return true; // consume but don't insert
@@ -375,7 +384,11 @@ impl TagSearchState {
     }
 
     /// Evaluate a single condition against a track with tags.
-    fn evaluate_single_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
+    fn evaluate_single_condition(
+        &self,
+        aft: &AudioFileWithTags,
+        condition: &SearchCondition,
+    ) -> bool {
         match condition.condition_type {
             ConditionType::Tag => self.evaluate_tag_condition(aft, condition),
             ConditionType::FileType => self.evaluate_file_type_condition(aft, condition),
@@ -421,36 +434,67 @@ impl TagSearchState {
             ComparisonOperator::Like => {
                 // LIKE pattern: any value matches
                 values
-                    .map(|vals| vals.iter().any(|v| {
-                        Self::match_like_pattern(&v.to_lowercase(), &query)
-                    }))
+                    .map(|vals| {
+                        vals.iter()
+                            .any(|v| Self::match_like_pattern(&v.to_lowercase(), &query))
+                    })
                     .unwrap_or(false)
             }
         }
     }
 
     /// Evaluate a file type condition.
-    fn evaluate_file_type_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
-        condition.file_type_category.matches(&aft.audio_file.audio.file_type)
+    fn evaluate_file_type_condition(
+        &self,
+        aft: &AudioFileWithTags,
+        condition: &SearchCondition,
+    ) -> bool {
+        condition
+            .file_type_category
+            .matches(&aft.audio_file.audio.file_type)
     }
 
     /// Evaluate a sample rate range condition.
-    fn evaluate_sample_rate_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
+    fn evaluate_sample_rate_condition(
+        &self,
+        aft: &AudioFileWithTags,
+        condition: &SearchCondition,
+    ) -> bool {
         let sample_rate = aft.audio_file.audio.sample_rate.unwrap_or(0);
-        self.evaluate_range(sample_rate as i64, condition.range_min.value(), condition.range_max.value())
+        self.evaluate_range(
+            sample_rate as i64,
+            condition.range_min.value(),
+            condition.range_max.value(),
+        )
     }
 
     /// Evaluate a bitrate range condition (kbps).
-    fn evaluate_bitrate_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
+    fn evaluate_bitrate_condition(
+        &self,
+        aft: &AudioFileWithTags,
+        condition: &SearchCondition,
+    ) -> bool {
         let bitrate = aft.audio_file.audio.bitrate_kbps.unwrap_or(0);
-        self.evaluate_range(bitrate as i64, condition.range_min.value(), condition.range_max.value())
+        self.evaluate_range(
+            bitrate as i64,
+            condition.range_min.value(),
+            condition.range_max.value(),
+        )
     }
 
     /// Evaluate a duration range condition (seconds).
-    fn evaluate_duration_condition(&self, aft: &AudioFileWithTags, condition: &SearchCondition) -> bool {
+    fn evaluate_duration_condition(
+        &self,
+        aft: &AudioFileWithTags,
+        condition: &SearchCondition,
+    ) -> bool {
         // duration_ms is in milliseconds, convert to seconds for user-friendly input
         let duration_secs = aft.audio_file.audio.duration_ms.unwrap_or(0) / 1000;
-        self.evaluate_range(duration_secs, condition.range_min.value(), condition.range_max.value())
+        self.evaluate_range(
+            duration_secs,
+            condition.range_min.value(),
+            condition.range_max.value(),
+        )
     }
 
     /// Evaluate a range condition (min <= value <= max).
@@ -532,6 +576,9 @@ impl TagSearchState {
 
     /// Get all result audio files (without tags, for passing to tag editor).
     pub fn all_result_audio_files(&self) -> Vec<AudioFile> {
-        self.results.iter().map(|aft| aft.audio_file.clone()).collect()
+        self.results
+            .iter()
+            .map(|aft| aft.audio_file.clone())
+            .collect()
     }
 }

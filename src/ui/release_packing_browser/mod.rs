@@ -73,8 +73,7 @@ impl ReleasePackingBrowserState {
         unfilled_rows: Vec<UnfilledReleaseSlotData>,
     ) -> Self {
         // Group packing rows by release_id
-        let mut track_map: HashMap<String, Vec<(i64, String, ReleasePackingData)>> =
-            HashMap::new();
+        let mut track_map: HashMap<String, Vec<(i64, String, ReleasePackingData)>> = HashMap::new();
         for row in packing_rows {
             track_map
                 .entry(row.2.release_id.clone())
@@ -199,9 +198,7 @@ impl ReleasePackingBrowserState {
     }
 
     /// Build browser state for unmatched corpus files.
-    pub fn build_unmatched(
-        unmatched_rows: Vec<(i64, String, UnmatchedCorpusTrackData)>,
-    ) -> Self {
+    pub fn build_unmatched(unmatched_rows: Vec<(i64, String, UnmatchedCorpusTrackData)>) -> Self {
         let unmatched: Vec<UnmatchedEntry> = unmatched_rows
             .into_iter()
             .map(|(_inode, path, data)| UnmatchedEntry { path, data })

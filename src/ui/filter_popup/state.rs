@@ -102,13 +102,7 @@ pub enum FilterPopupAction {
 }
 
 /// Searchable tag field names for filter popup.
-pub const FILTER_SEARCHABLE_TAGS: &[&str] = &[
-    "artist",
-    "album",
-    "album_artist",
-    "title",
-    "genre",
-];
+pub const FILTER_SEARCHABLE_TAGS: &[&str] = &["artist", "album", "album_artist", "title", "genre"];
 
 /// State for a single filter condition.
 #[derive(Debug, Clone, Default)]
@@ -138,7 +132,7 @@ impl FilterCondition {
     pub fn new() -> Self {
         Self {
             condition_type: FilterConditionType::Path, // Default to path for corpus browser
-            tag_name: "artist".to_string(), // Default tag name
+            tag_name: "artist".to_string(),            // Default tag name
             ..Default::default()
         }
     }
@@ -148,7 +142,9 @@ impl FilterCondition {
         match self.condition_type {
             FilterConditionType::Path => !self.path_substring.is_empty(),
             FilterConditionType::FileType => self.file_type_category != FileTypeCategory::Any,
-            FilterConditionType::SampleRate | FilterConditionType::Bitrate | FilterConditionType::Duration => {
+            FilterConditionType::SampleRate
+            | FilterConditionType::Bitrate
+            | FilterConditionType::Duration => {
                 !self.range_min.is_empty() || !self.range_max.is_empty()
             }
             FilterConditionType::Tag => !self.tag_value.is_empty(),
@@ -203,7 +199,8 @@ impl FilterCondition {
         if self.path_substring.is_empty() {
             return true;
         }
-        path.to_lowercase().contains(&self.path_substring.value().to_lowercase())
+        path.to_lowercase()
+            .contains(&self.path_substring.value().to_lowercase())
     }
 
     /// Check if tags match the tag condition (checks all values for multi-value tags).
@@ -216,34 +213,33 @@ impl FilterCondition {
         let query = self.tag_value.value().to_lowercase();
 
         match self.tag_comparison {
-            ComparisonOperator::Is => {
-                values
-                    .map(|vals| vals.iter().any(|v| v.to_lowercase() == query))
-                    .unwrap_or(false)
-            }
+            ComparisonOperator::Is => values
+                .map(|vals| vals.iter().any(|v| v.to_lowercase() == query))
+                .unwrap_or(false),
             ComparisonOperator::Not => {
                 values
                     .map(|vals| vals.iter().all(|v| v.to_lowercase() != query))
                     .unwrap_or(true) // Missing tag != query
             }
-            ComparisonOperator::Contains => {
-                values
-                    .map(|vals| vals.iter().any(|v| v.to_lowercase().contains(&query)))
-                    .unwrap_or(false)
-            }
-            ComparisonOperator::Like => {
-                values
-                    .map(|vals| vals.iter().any(|v| Self::match_like_pattern(&v.to_lowercase(), &query)))
-                    .unwrap_or(false)
-            }
+            ComparisonOperator::Contains => values
+                .map(|vals| vals.iter().any(|v| v.to_lowercase().contains(&query)))
+                .unwrap_or(false),
+            ComparisonOperator::Like => values
+                .map(|vals| {
+                    vals.iter()
+                        .any(|v| Self::match_like_pattern(&v.to_lowercase(), &query))
+                })
+                .unwrap_or(false),
         }
     }
 
     /// Match a LIKE pattern (% = any chars, _ = single char).
     fn match_like_pattern(text: &str, pattern: &str) -> bool {
         // Simple recursive LIKE pattern matching without regex
-        Self::like_match_recursive(text.chars().collect::<Vec<_>>().as_slice(),
-                                   pattern.chars().collect::<Vec<_>>().as_slice())
+        Self::like_match_recursive(
+            text.chars().collect::<Vec<_>>().as_slice(),
+            pattern.chars().collect::<Vec<_>>().as_slice(),
+        )
     }
 
     fn like_match_recursive(text: &[char], pattern: &[char]) -> bool {
@@ -258,13 +254,9 @@ impl FilterCondition {
                 || (!text.is_empty() && Self::like_match_recursive(&text[1..], pattern))
             }
             // Pattern has _, match exactly one char
-            (Some(_), Some('_')) => {
-                Self::like_match_recursive(&text[1..], &pattern[1..])
-            }
+            (Some(_), Some('_')) => Self::like_match_recursive(&text[1..], &pattern[1..]),
             // Literal match
-            (Some(t), Some(p)) if *t == *p => {
-                Self::like_match_recursive(&text[1..], &pattern[1..])
-            }
+            (Some(t), Some(p)) if *t == *p => Self::like_match_recursive(&text[1..], &pattern[1..]),
             // Pattern empty but text not, or chars don't match
             _ => false,
         }
@@ -386,16 +378,14 @@ impl FilterPopupState {
     /// Move focus to the next field.
     fn focus_next(&mut self) {
         self.focus = match self.focus {
-            FilterFieldFocus::ConditionType => {
-                match self.condition.condition_type {
-                    FilterConditionType::Path => FilterFieldFocus::PathSubstring,
-                    FilterConditionType::FileType => FilterFieldFocus::FileTypeCategory,
-                    FilterConditionType::SampleRate | FilterConditionType::Bitrate | FilterConditionType::Duration => {
-                        FilterFieldFocus::RangeMin
-                    }
-                    FilterConditionType::Tag => FilterFieldFocus::TagName,
-                }
-            }
+            FilterFieldFocus::ConditionType => match self.condition.condition_type {
+                FilterConditionType::Path => FilterFieldFocus::PathSubstring,
+                FilterConditionType::FileType => FilterFieldFocus::FileTypeCategory,
+                FilterConditionType::SampleRate
+                | FilterConditionType::Bitrate
+                | FilterConditionType::Duration => FilterFieldFocus::RangeMin,
+                FilterConditionType::Tag => FilterFieldFocus::TagName,
+            },
             FilterFieldFocus::PathSubstring => FilterFieldFocus::ApplyButton,
             FilterFieldFocus::FileTypeCategory => FilterFieldFocus::ApplyButton,
             FilterFieldFocus::RangeMin => FilterFieldFocus::RangeMax,
@@ -419,16 +409,14 @@ impl FilterPopupState {
             FilterFieldFocus::TagName => FilterFieldFocus::ConditionType,
             FilterFieldFocus::TagComparison => FilterFieldFocus::TagName,
             FilterFieldFocus::TagValue => FilterFieldFocus::TagComparison,
-            FilterFieldFocus::ApplyButton => {
-                match self.condition.condition_type {
-                    FilterConditionType::Path => FilterFieldFocus::PathSubstring,
-                    FilterConditionType::FileType => FilterFieldFocus::FileTypeCategory,
-                    FilterConditionType::SampleRate | FilterConditionType::Bitrate | FilterConditionType::Duration => {
-                        FilterFieldFocus::RangeMax
-                    }
-                    FilterConditionType::Tag => FilterFieldFocus::TagValue,
-                }
-            }
+            FilterFieldFocus::ApplyButton => match self.condition.condition_type {
+                FilterConditionType::Path => FilterFieldFocus::PathSubstring,
+                FilterConditionType::FileType => FilterFieldFocus::FileTypeCategory,
+                FilterConditionType::SampleRate
+                | FilterConditionType::Bitrate
+                | FilterConditionType::Duration => FilterFieldFocus::RangeMax,
+                FilterConditionType::Tag => FilterFieldFocus::TagValue,
+            },
             FilterFieldFocus::ClearButton => FilterFieldFocus::ApplyButton,
         };
     }
@@ -467,7 +455,10 @@ impl FilterPopupState {
     /// Handle a text editing action on the focused field.
     fn handle_text_action(&mut self, action: &InputAction) {
         // Range fields: only allow digits for Char input
-        if matches!(self.focus, FilterFieldFocus::RangeMin | FilterFieldFocus::RangeMax) {
+        if matches!(
+            self.focus,
+            FilterFieldFocus::RangeMin | FilterFieldFocus::RangeMax
+        ) {
             if let InputAction::Char(c) = action {
                 if !c.is_ascii_digit() {
                     return; // reject non-digit

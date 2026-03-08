@@ -36,11 +36,31 @@ impl DeploymentPreviewState {
     pub fn selected_path(&self) -> Option<&str> {
         let scroll = self.tab_scroll[self.active_tab.index()];
         match self.active_tab {
-            DeployTab::Healthy => self.cached_data.healthy.get(scroll).map(|f| f.corpus_path.as_str()),
-            DeployTab::New => self.cached_data.new_by_dir.get(scroll).map(|d| d.directory.as_str()),
-            DeployTab::Conflicts => self.cached_data.conflicts.get(scroll).map(|c| c.deploy_path.as_str()),
-            DeployTab::Leftover => self.cached_data.leftover_by_dir.get(scroll).map(|d| d.directory.as_str()),
-            DeployTab::Stale => self.cached_data.stale.get(scroll).map(|f| f.library_path.as_str()),
+            DeployTab::Healthy => self
+                .cached_data
+                .healthy
+                .get(scroll)
+                .map(|f| f.corpus_path.as_str()),
+            DeployTab::New => self
+                .cached_data
+                .new_by_dir
+                .get(scroll)
+                .map(|d| d.directory.as_str()),
+            DeployTab::Conflicts => self
+                .cached_data
+                .conflicts
+                .get(scroll)
+                .map(|c| c.deploy_path.as_str()),
+            DeployTab::Leftover => self
+                .cached_data
+                .leftover_by_dir
+                .get(scroll)
+                .map(|d| d.directory.as_str()),
+            DeployTab::Stale => self
+                .cached_data
+                .stale
+                .get(scroll)
+                .map(|f| f.library_path.as_str()),
         }
     }
 
@@ -82,7 +102,11 @@ impl DeploymentPreviewState {
         f.render_widget(Clear, area);
 
         // Title height: 3 normally, 4 with per-library subtitle
-        let title_height = if self.cached_data.per_library.is_empty() { 3 } else { 4 };
+        let title_height = if self.cached_data.per_library.is_empty() {
+            3
+        } else {
+            4
+        };
 
         // Layout: title + main content + controls
         let main_chunks = Layout::default()
@@ -119,7 +143,9 @@ impl DeploymentPreviewState {
         if !data.leftover.is_empty() {
             if data.replaced_count > 0 {
                 summary_parts.push(format!(
-                    "{} leftover ({} replaced)", data.leftover.len(), data.replaced_count
+                    "{} leftover ({} replaced)",
+                    data.leftover.len(),
+                    data.replaced_count
                 ));
             } else {
                 summary_parts.push(format!("{} leftover", data.leftover.len()));
@@ -139,36 +165,42 @@ impl DeploymentPreviewState {
             format!("({} — {})", total_ops, summary_parts.join(", "))
         };
 
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled(
-                    " Deploy Preview ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(" {}", summary_str),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]),
-        ];
+        let mut lines = vec![Line::from(vec![
+            Span::styled(
+                " Deploy Preview ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {}", summary_str),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])];
 
         // Per-library subtitle when multiple libraries
         if !data.per_library.is_empty() {
-            let lib_parts: Vec<String> = data.per_library.iter().map(|lib| {
-                let mut parts = Vec::new();
-                if lib.new_count > 0 { parts.push(format!("{}n", lib.new_count)); }
-                if lib.leftover_count > 0 {
-                    if lib.replaced_count > 0 {
-                        parts.push(format!("{}l({}r)", lib.leftover_count, lib.replaced_count));
-                    } else {
-                        parts.push(format!("{}l", lib.leftover_count));
+            let lib_parts: Vec<String> = data
+                .per_library
+                .iter()
+                .map(|lib| {
+                    let mut parts = Vec::new();
+                    if lib.new_count > 0 {
+                        parts.push(format!("{}n", lib.new_count));
                     }
-                }
-                if lib.stale_count > 0 { parts.push(format!("{}s", lib.stale_count)); }
-                format!("{}: {}", lib.library_name, parts.join(", "))
-            }).collect();
+                    if lib.leftover_count > 0 {
+                        if lib.replaced_count > 0 {
+                            parts.push(format!("{}l({}r)", lib.leftover_count, lib.replaced_count));
+                        } else {
+                            parts.push(format!("{}l", lib.leftover_count));
+                        }
+                    }
+                    if lib.stale_count > 0 {
+                        parts.push(format!("{}s", lib.stale_count));
+                    }
+                    format!("{}: {}", lib.library_name, parts.join(", "))
+                })
+                .collect();
 
             lines.push(Line::from(Span::styled(
                 format!(" {}", lib_parts.join("  |  ")),
@@ -176,8 +208,7 @@ impl DeploymentPreviewState {
             )));
         }
 
-        let paragraph = Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL));
+        let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL));
 
         f.render_widget(paragraph, area);
     }
@@ -222,11 +253,18 @@ impl DeploymentPreviewState {
                 })
                 .collect(),
             DeployTab::Conflicts => {
-                let mut items: Vec<String> = self.cached_data.conflicts.iter()
+                let mut items: Vec<String> = self
+                    .cached_data
+                    .conflicts
+                    .iter()
                     .map(|g| g.deploy_path.clone())
                     .collect();
-                items.extend(self.cached_data.sidecar_conflicts.iter()
-                    .map(|g| format!("[img] {}/{}", g.library_name, g.deploy_path)));
+                items.extend(
+                    self.cached_data
+                        .sidecar_conflicts
+                        .iter()
+                        .map(|g| format!("[img] {}/{}", g.library_name, g.deploy_path)),
+                );
                 items
             }
             DeployTab::Leftover => self
@@ -259,15 +297,21 @@ impl DeploymentPreviewState {
 
         let info = match self.active_tab {
             DeployTab::Healthy => {
-                self.cached_data.healthy.get(scroll).map(|file| SignalInfo::Healthy {
-                    corpus_path: file.corpus_path.clone(),
-                    library_path: file.deploy_path.clone(),
-                })
+                self.cached_data
+                    .healthy
+                    .get(scroll)
+                    .map(|file| SignalInfo::Healthy {
+                        corpus_path: file.corpus_path.clone(),
+                        library_path: file.deploy_path.clone(),
+                    })
             }
             DeployTab::New => {
                 self.cached_data.new_by_dir.get(scroll).map(|dir| {
                     // Find sidecars matching this directory
-                    let sidecars: Vec<SidecarSummary> = self.cached_data.sidecars.iter()
+                    let sidecars: Vec<SidecarSummary> = self
+                        .cached_data
+                        .sidecars
+                        .iter()
                         .filter(|s| {
                             Path::new(&s.corpus_image_path)
                                 .parent()
@@ -293,37 +337,45 @@ impl DeploymentPreviewState {
             DeployTab::Conflicts => {
                 let audio_len = self.cached_data.conflicts.len();
                 if scroll < audio_len {
-                    self.cached_data.conflicts.get(scroll).map(|group| SignalInfo::Conflict {
-                        deploy_path: group.deploy_path.clone(),
-                        conflicting_files: group
-                            .conflicting_files
-                            .iter()
-                            .map(|(path, _)| path.clone())
-                            .collect(),
-                    })
+                    self.cached_data
+                        .conflicts
+                        .get(scroll)
+                        .map(|group| SignalInfo::Conflict {
+                            deploy_path: group.deploy_path.clone(),
+                            conflicting_files: group
+                                .conflicting_files
+                                .iter()
+                                .map(|(path, _)| path.clone())
+                                .collect(),
+                        })
                 } else {
-                    self.cached_data.sidecar_conflicts.get(scroll - audio_len).map(|group| SignalInfo::Conflict {
-                        deploy_path: format!("{}/{}", group.library_name, group.deploy_path),
-                        conflicting_files: group
-                            .conflicting_files
-                            .iter()
-                            .map(|(path, _)| path.clone())
-                            .collect(),
-                    })
+                    self.cached_data
+                        .sidecar_conflicts
+                        .get(scroll - audio_len)
+                        .map(|group| SignalInfo::Conflict {
+                            deploy_path: format!("{}/{}", group.library_name, group.deploy_path),
+                            conflicting_files: group
+                                .conflicting_files
+                                .iter()
+                                .map(|(path, _)| path.clone())
+                                .collect(),
+                        })
                 }
             }
-            DeployTab::Leftover => {
-                self.cached_data.leftover_by_dir.get(scroll).map(|dir| SignalInfo::LeftoverDirectory {
+            DeployTab::Leftover => self.cached_data.leftover_by_dir.get(scroll).map(|dir| {
+                SignalInfo::LeftoverDirectory {
                     directory: dir.directory.clone(),
                     file_count: dir.count,
-                })
-            }
-            DeployTab::Stale => {
-                self.cached_data.stale.get(scroll).map(|file| SignalInfo::Stale {
+                }
+            }),
+            DeployTab::Stale => self
+                .cached_data
+                .stale
+                .get(scroll)
+                .map(|file| SignalInfo::Stale {
                     library_path: file.library_path.clone(),
                     expected_path: file.expected_path.clone(),
-                })
-            }
+                }),
         };
 
         let info = info.unwrap_or(SignalInfo::None);
@@ -332,7 +384,8 @@ impl DeploymentPreviewState {
     }
 
     fn render_controls(&self, f: &mut Frame, area: Rect) {
-        let controls = "[Tab/Arrows] Switch Tab  [Up/Down] Scroll  [Enter] Stage & Review  [Esc] Cancel";
+        let controls =
+            "[Tab/Arrows] Switch Tab  [Up/Down] Scroll  [Enter] Stage & Review  [Esc] Cancel";
 
         let paragraph = Paragraph::new(controls)
             .style(Style::default().fg(Color::DarkGray))

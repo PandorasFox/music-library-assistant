@@ -68,7 +68,9 @@ pub struct MovedFileState {
 impl MovedFileState {
     /// Path of the currently selected file (for status bar).
     pub fn selected_path(&self) -> Option<&str> {
-        self.files.get(self.current_file).map(|f| f.new_path.as_str())
+        self.files
+            .get(self.current_file)
+            .map(|f| f.new_path.as_str())
     }
 
     pub fn new(files: Vec<MovedFileInfo>) -> Self {
@@ -88,18 +90,34 @@ impl MovedFileState {
     pub fn files_for_mutation(&self) -> Vec<(i64, String, String, String)> {
         self.files
             .iter()
-            .map(|f| (f.inode, f.new_path.clone(), f.old_zone.clone(), f.new_zone.clone()))
+            .map(|f| {
+                (
+                    f.inode,
+                    f.new_path.clone(),
+                    f.old_zone.clone(),
+                    f.new_zone.clone(),
+                )
+            })
             .collect()
     }
 
     /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<MovedFileAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<MovedFileAction> {
         if let Some(button_name) = self.button_rects.hit_test(x, y) {
             self.focus_pane = FocusPane::Buttons;
             return match button_name {
                 "acknowledge" => {
                     self.selected_button = MovedFileButton::Acknowledge;
-                    if !self.files.is_empty() { Some(MovedFileAction::Acknowledge) } else { None }
+                    if !self.files.is_empty() {
+                        Some(MovedFileAction::Acknowledge)
+                    } else {
+                        None
+                    }
                 }
                 "cancel" => {
                     self.selected_button = MovedFileButton::Cancel;

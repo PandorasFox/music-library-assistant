@@ -8,11 +8,11 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use crate::corpus::paths;
 use crate::db::ReadOnlyDb;
-use crate::meta::mutations::Mutation;
 use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
-use crate::corpus::paths;
+use crate::meta::mutations::Mutation;
 
 /// A subpar duplicate file ready for stashing.
 #[derive(Debug, Clone)]

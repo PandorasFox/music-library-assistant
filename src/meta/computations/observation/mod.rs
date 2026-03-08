@@ -72,19 +72,13 @@ pub enum Computation {
     /// Verify tags on disk match database.
     ///
     /// Compares the actual file tags to what's stored in the index.
-    VerifyTags {
-        inode: i64,
-        path: PathBuf,
-    },
+    VerifyTags { inode: i64, path: PathBuf },
 
     /// Verify audio stream integrity by decoding the entire file.
     ///
     /// Catches truncated files, corrupt streams, and other audio-level issues
     /// that tag verification wouldn't detect. Emits CorruptFile if decode fails.
-    VerifyAudio {
-        inode: i64,
-        path: PathBuf,
-    },
+    VerifyAudio { inode: i64, path: PathBuf },
 }
 
 impl Computation {
@@ -102,15 +96,36 @@ impl Computation {
     /// Execute this computation.
     pub fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
         match self {
-            Computation::WalkCorpus { root, zone, force_check } => {
-                execute_walk_corpus(ctx.read_db, root, zone, *force_check, ctx.start)
-            }
-            Computation::ScanCorpusDirectory { directory, zone, force_check } => {
-                execute_scan_corpus_directory(ctx.read_db, directory, zone, *force_check, ctx.witness, ctx.start)
-            }
-            Computation::VerifyMtime { inode, path, expected_mtime_secs, expected_mtime_nanos } => {
-                execute_verify_mtime(ctx.read_db, *inode, path, *expected_mtime_secs, *expected_mtime_nanos, ctx.start)
-            }
+            Computation::WalkCorpus {
+                root,
+                zone,
+                force_check,
+            } => execute_walk_corpus(ctx.read_db, root, zone, *force_check, ctx.start),
+            Computation::ScanCorpusDirectory {
+                directory,
+                zone,
+                force_check,
+            } => execute_scan_corpus_directory(
+                ctx.read_db,
+                directory,
+                zone,
+                *force_check,
+                ctx.witness,
+                ctx.start,
+            ),
+            Computation::VerifyMtime {
+                inode,
+                path,
+                expected_mtime_secs,
+                expected_mtime_nanos,
+            } => execute_verify_mtime(
+                ctx.read_db,
+                *inode,
+                path,
+                *expected_mtime_secs,
+                *expected_mtime_nanos,
+                ctx.start,
+            ),
             Computation::VerifyTags { inode, path } => {
                 execute_verify_tags(ctx.read_db, *inode, path, ctx.witness, ctx.start)
             }

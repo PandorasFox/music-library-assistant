@@ -69,8 +69,10 @@ impl SharedWorkerStats {
     /// Record a completed task result. Called from main thread's tick().
     pub(super) fn record_result(&self, result: &TaskResult) {
         self.tasks_completed.fetch_add(1, Ordering::Relaxed);
-        self.total_task_duration_ms.fetch_add(result.duration_ms, Ordering::Relaxed);
-        self.total_queue_wait_ms.fetch_add(result.queue_wait_ms, Ordering::Relaxed);
+        self.total_task_duration_ms
+            .fetch_add(result.duration_ms, Ordering::Relaxed);
+        self.total_queue_wait_ms
+            .fetch_add(result.queue_wait_ms, Ordering::Relaxed);
 
         // Atomic max update for task duration
         if Self::update_max(&self.max_task_ms, result.duration_ms) {
@@ -86,7 +88,9 @@ impl SharedWorkerStats {
         // Thread stats under mutex
         if let Some(ref thread_stats) = result.thread_stats {
             if let Ok(mut inner) = self.inner.lock() {
-                inner.thread_stats_map.insert(thread_stats.thread_id, thread_stats.clone());
+                inner
+                    .thread_stats_map
+                    .insert(thread_stats.thread_id, thread_stats.clone());
             }
         }
     }

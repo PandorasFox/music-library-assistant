@@ -15,8 +15,7 @@ use ratatui::Frame;
 use crate::ui::widgets::control_colors;
 use crate::ui::widgets::CURSOR_STYLE;
 use crate::ui::widgets::{
-    AlbumArtCache, AlbumArtPicker, ArtCacheKey,
-    render_album_art_preview, render_no_art_placeholder,
+    render_album_art_preview, render_no_art_placeholder, AlbumArtCache, AlbumArtPicker, ArtCacheKey,
 };
 
 use crate::ui::widgets::ListClickTargets;
@@ -68,8 +67,7 @@ fn render_corpus_browser(
     // Determine if we should show art preview:
     // - Config panel NOT open
     // - Selected entry is a file (not directory)
-    let show_art = v.config_panel.is_none()
-        && nav.current_entry().is_some_and(|e| e.is_file());
+    let show_art = v.config_panel.is_none() && nav.current_entry().is_some_and(|e| e.is_file());
 
     // Check if config panel is open for horizontal split
     if v.config_panel.is_some() {
@@ -79,7 +77,15 @@ fn render_corpus_browser(
             .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
             .split(content_area);
 
-        render_corpus_tree(f, h_chunks[0], nav, variant, &pending_edit_paths, &corpus_dir, click_targets);
+        render_corpus_tree(
+            f,
+            h_chunks[0],
+            nav,
+            variant,
+            &pending_edit_paths,
+            &corpus_dir,
+            click_targets,
+        );
 
         // Render config panel
         let BrowserVariant::CorpusBrowser(ref v) = variant;
@@ -93,15 +99,38 @@ fn render_corpus_browser(
             .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
             .split(content_area);
 
-        render_corpus_tree(f, h_chunks[0], nav, variant, &pending_edit_paths, &corpus_dir, click_targets);
+        render_corpus_tree(
+            f,
+            h_chunks[0],
+            nav,
+            variant,
+            &pending_edit_paths,
+            &corpus_dir,
+            click_targets,
+        );
 
         // Render art preview for selected file
         let selected_entry = nav.current_entry();
         let selected_path = selected_entry.map(|e| e.path.clone());
         let is_image = selected_entry.is_some_and(|e| e.kind == EntryKind::ImageFile);
-        render_file_art_preview(f, h_chunks[1], selected_path.as_deref(), is_image, art_picker, art_cache);
+        render_file_art_preview(
+            f,
+            h_chunks[1],
+            selected_path.as_deref(),
+            is_image,
+            art_picker,
+            art_cache,
+        );
     } else {
-        render_corpus_tree(f, content_area, nav, variant, &pending_edit_paths, &corpus_dir, click_targets);
+        render_corpus_tree(
+            f,
+            content_area,
+            nav,
+            variant,
+            &pending_edit_paths,
+            &corpus_dir,
+            click_targets,
+        );
     }
 
     // Render control hints
@@ -155,26 +184,44 @@ fn render_file_art_preview(
     } else {
         // Split into image + metadata
         if inner.height > 3 {
-            let meta_height = if !cached.role.is_empty() && cached.role != "other" { 3 } else { 2 };
+            let meta_height = if !cached.role.is_empty() && cached.role != "other" {
+                3
+            } else {
+                2
+            };
             let split = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(2),
-                    Constraint::Length(meta_height),
-                ])
+                .constraints([Constraint::Min(2), Constraint::Length(meta_height)])
                 .split(inner);
 
             render_album_art_preview(f, split[0], cached);
 
             // Metadata lines: filename, dimensions, and optional role
-            let filename = cached.path.file_name()
+            let filename = cached
+                .path
+                .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
             let dim_info = if !cached.role.is_empty() && cached.role != "other" {
-                let role_label = if cached.role == "cover_front" { "front" } else { "back" };
-                format!("{}x{} {} [{}]", cached.width, cached.height, cached.format.to_uppercase(), role_label)
+                let role_label = if cached.role == "cover_front" {
+                    "front"
+                } else {
+                    "back"
+                };
+                format!(
+                    "{}x{} {} [{}]",
+                    cached.width,
+                    cached.height,
+                    cached.format.to_uppercase(),
+                    role_label
+                )
             } else {
-                format!("{}x{} {}", cached.width, cached.height, cached.format.to_uppercase())
+                format!(
+                    "{}x{} {}",
+                    cached.width,
+                    cached.height,
+                    cached.format.to_uppercase()
+                )
             };
             let lines = vec![
                 Line::from(Span::styled(filename, Style::default().fg(Color::DarkGray))),
@@ -202,7 +249,7 @@ fn render_corpus_tree(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Filter bar (3 lines: border + content + border)
-            Constraint::Min(5),   // Tree browser
+            Constraint::Min(5),    // Tree browser
         ])
         .split(area);
 
@@ -210,7 +257,14 @@ fn render_corpus_tree(
     render_filter_bar(f, main_chunks[0], nav);
 
     // Tree pane at full width
-    render_tree_pane(f, main_chunks[1], nav, pending_edit_paths, corpus_dir, click_targets);
+    render_tree_pane(
+        f,
+        main_chunks[1],
+        nav,
+        pending_edit_paths,
+        corpus_dir,
+        click_targets,
+    );
 
     // Overlays (match selection modal)
     variant.render_overlays(f, area);
@@ -222,7 +276,10 @@ fn render_filter_bar(f: &mut Frame, area: Rect, nav: &TreeNavigator) {
         // Active filter - show count and hint to clear
         let count = nav.filtered_file_count().unwrap_or(0);
         (
-            format!("Filtered: {} files  (Ctrl+/ to change, Esc to clear)", count),
+            format!(
+                "Filtered: {} files  (Ctrl+/ to change, Esc to clear)",
+                count
+            ),
             Style::default().fg(Color::Green),
         )
     } else {
@@ -268,7 +325,9 @@ fn render_tree_pane(
     click_targets.clear();
     click_targets.set_list_area(inner_area);
     for (vis_idx, entry_idx) in (scroll..).take(inner_height).enumerate() {
-        if entry_idx >= entries.len() { break; }
+        if entry_idx >= entries.len() {
+            break;
+        }
         click_targets.add_row(entry_idx.to_string(), inner_area.y + vis_idx as u16);
     }
 
@@ -280,7 +339,9 @@ fn render_tree_pane(
         .map(|(idx, entry)| {
             let is_pending = if entry.is_directory() && !pending_edit_paths.is_empty() {
                 // Compute relative path from corpus dir to check against pending edits
-                entry.path.strip_prefix(corpus_dir)
+                entry
+                    .path
+                    .strip_prefix(corpus_dir)
                     .ok()
                     .map(|rel| pending_edit_paths.contains(rel))
                     .unwrap_or(false)

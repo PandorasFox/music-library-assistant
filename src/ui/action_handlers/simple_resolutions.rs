@@ -4,10 +4,13 @@
 //! subpar duplicate, and directory overlap resolution modals.
 //! These flows share a common pattern: load data, show preview, stage mutations.
 
-use crate::meta::decisions::DecisionKey;
-use crate::ui::{corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal, subpar_duplicate_modal, ActiveView};
-use super::witness;
 use super::super::App;
+use super::witness;
+use crate::meta::decisions::DecisionKey;
+use crate::ui::{
+    corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal,
+    subpar_duplicate_modal, ActiveView,
+};
 
 impl App {
     // =========================================================================
@@ -17,9 +20,14 @@ impl App {
     /// Start missing file resolution modal from Insights view.
     pub(in crate::ui) fn start_missing_file_resolution(&mut self) {
         // Load categorized missing file data
-        let data = self.cache.query(|db| {
-            missing_file_modal::MissingFileModalData::load(db).ok().unwrap_or_default()
-        }).recv();
+        let data = self
+            .cache
+            .query(|db| {
+                missing_file_modal::MissingFileModalData::load(db)
+                    .ok()
+                    .unwrap_or_default()
+            })
+            .recv();
 
         // Create preview state with cached data
         let preview = missing_file_modal::MissingFilePreviewState::new(data);
@@ -27,18 +35,29 @@ impl App {
     }
 
     /// Handle missing file preview actions.
-    pub(super) fn handle_missing_file_preview_action(&mut self, action: missing_file_modal::MissingFilePreviewAction, witness: Option<&witness::ConfirmationGesture>) {
+    pub(super) fn handle_missing_file_preview_action(
+        &mut self,
+        action: missing_file_modal::MissingFilePreviewAction,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
         match action {
             missing_file_modal::MissingFilePreviewAction::None => {}
             missing_file_modal::MissingFilePreviewAction::ConfirmRestore => {
                 let Some(w) = witness else { return };
                 // Generate restore mutations (HardLink) and stage for review
                 let mutations = match &self.view {
-                    ActiveView::MissingFileResolution(ref preview) => preview.cached_data.restore_mutations(),
+                    ActiveView::MissingFileResolution(ref preview) => {
+                        preview.cached_data.restore_mutations()
+                    }
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Restore missing files", DecisionKey::MissingFile, w);
+                    self.stage_mutations_with_transaction(
+                        mutations,
+                        "Restore missing files",
+                        DecisionKey::MissingFile,
+                        w,
+                    );
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.after_staging_decisions();
                 } else {
@@ -49,11 +68,18 @@ impl App {
                 let Some(w) = witness else { return };
                 // Generate drop mutations for ALL missing files (restorable + non-restorable)
                 let mutations = match &self.view {
-                    ActiveView::MissingFileResolution(ref preview) => preview.cached_data.drop_all_missing(),
+                    ActiveView::MissingFileResolution(ref preview) => {
+                        preview.cached_data.drop_all_missing()
+                    }
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Drop missing files", DecisionKey::MissingFile, w);
+                    self.stage_mutations_with_transaction(
+                        mutations,
+                        "Drop missing files",
+                        DecisionKey::MissingFile,
+                        w,
+                    );
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.after_staging_decisions();
                 } else {
@@ -73,9 +99,14 @@ impl App {
     /// Start missing directory resolution modal from Insights view.
     pub(in crate::ui) fn start_missing_directory_resolution(&mut self) {
         // Load missing directory data
-        let data = self.cache.query(|db| {
-            missing_directory_modal::MissingDirectoryModalData::load(db).ok().unwrap_or_default()
-        }).recv();
+        let data = self
+            .cache
+            .query(|db| {
+                missing_directory_modal::MissingDirectoryModalData::load(db)
+                    .ok()
+                    .unwrap_or_default()
+            })
+            .recv();
 
         // Create preview state with cached data
         let preview = missing_directory_modal::MissingDirectoryPreviewState::new(data);
@@ -83,18 +114,29 @@ impl App {
     }
 
     /// Handle missing directory preview actions.
-    pub(super) fn handle_missing_directory_preview_action(&mut self, action: missing_directory_modal::MissingDirectoryPreviewAction, witness: Option<&witness::ConfirmationGesture>) {
+    pub(super) fn handle_missing_directory_preview_action(
+        &mut self,
+        action: missing_directory_modal::MissingDirectoryPreviewAction,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
         match action {
             missing_directory_modal::MissingDirectoryPreviewAction::None => {}
             missing_directory_modal::MissingDirectoryPreviewAction::ConfirmDrop => {
                 let Some(w) = witness else { return };
                 // Generate drop mutations (DropDirectoryFromIndex) and stage for review
                 let mutations = match &self.view {
-                    ActiveView::MissingDirectoryResolution(ref preview) => preview.cached_data.drop_mutations(),
+                    ActiveView::MissingDirectoryResolution(ref preview) => {
+                        preview.cached_data.drop_mutations()
+                    }
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Drop missing directories", DecisionKey::MissingDirectory, w);
+                    self.stage_mutations_with_transaction(
+                        mutations,
+                        "Drop missing directories",
+                        DecisionKey::MissingDirectory,
+                        w,
+                    );
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.after_staging_decisions();
                 } else {
@@ -114,9 +156,14 @@ impl App {
     /// Start corrupt file resolution modal from Insights view.
     pub(in crate::ui) fn start_corrupt_file_resolution(&mut self) {
         // Load corrupt file data
-        let data = self.cache.query(|db| {
-            corrupt_file_modal::CorruptFileModalData::load(db).ok().unwrap_or_default()
-        }).recv();
+        let data = self
+            .cache
+            .query(|db| {
+                corrupt_file_modal::CorruptFileModalData::load(db)
+                    .ok()
+                    .unwrap_or_default()
+            })
+            .recv();
 
         // Create preview state with cached data
         let preview = corrupt_file_modal::CorruptFilePreviewState::new(data);
@@ -124,18 +171,29 @@ impl App {
     }
 
     /// Handle corrupt file preview actions.
-    pub(super) fn handle_corrupt_file_preview_action(&mut self, action: corrupt_file_modal::CorruptFilePreviewAction, witness: Option<&witness::ConfirmationGesture>) {
+    pub(super) fn handle_corrupt_file_preview_action(
+        &mut self,
+        action: corrupt_file_modal::CorruptFilePreviewAction,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
         match action {
             corrupt_file_modal::CorruptFilePreviewAction::None => {}
             corrupt_file_modal::CorruptFilePreviewAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
                 // Generate stash + drop mutations and stage for review
                 let mutations = match &self.view {
-                    ActiveView::CorruptFileResolution(ref preview) => preview.cached_data.stash_and_drop_mutations(),
+                    ActiveView::CorruptFileResolution(ref preview) => {
+                        preview.cached_data.stash_and_drop_mutations()
+                    }
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Stash corrupt files", DecisionKey::CorruptFile, w);
+                    self.stage_mutations_with_transaction(
+                        mutations,
+                        "Stash corrupt files",
+                        DecisionKey::CorruptFile,
+                        w,
+                    );
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.after_staging_decisions();
                 } else {
@@ -155,9 +213,14 @@ impl App {
     /// Start shit format resolution modal from Insights view.
     pub(in crate::ui) fn start_shit_format_resolution(&mut self) {
         // Load shit format file data
-        let mut data = self.cache.query(|db| {
-            shit_format_modal::ShitFormatModalData::load(db).ok().unwrap_or_default()
-        }).recv();
+        let mut data = self
+            .cache
+            .query(|db| {
+                shit_format_modal::ShitFormatModalData::load(db)
+                    .ok()
+                    .unwrap_or_default()
+            })
+            .recv();
 
         // Thread opinion: lossy files -> FLAC capture instead of Opus transcode
         data.lossy_to_flac = self.config().opinions.lossy_shit_formats_to_flac;
@@ -168,18 +231,29 @@ impl App {
     }
 
     /// Handle shit format preview actions.
-    pub(super) fn handle_shit_format_preview_action(&mut self, action: shit_format_modal::ShitFormatPreviewAction, witness: Option<&witness::ConfirmationGesture>) {
+    pub(super) fn handle_shit_format_preview_action(
+        &mut self,
+        action: shit_format_modal::ShitFormatPreviewAction,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
         match action {
             shit_format_modal::ShitFormatPreviewAction::None => {}
             shit_format_modal::ShitFormatPreviewAction::ConfirmRemuxLossless => {
                 let Some(w) = witness else { return };
                 // Generate FLAC remux mutations for lossless files only
                 let mutations = match &self.view {
-                    ActiveView::ShitFormatResolution(ref preview) => preview.cached_data.lossless_mutations(),
+                    ActiveView::ShitFormatResolution(ref preview) => {
+                        preview.cached_data.lossless_mutations()
+                    }
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Remux to FLAC", DecisionKey::ShitFormat, w);
+                    self.stage_mutations_with_transaction(
+                        mutations,
+                        "Remux to FLAC",
+                        DecisionKey::ShitFormat,
+                        w,
+                    );
                     self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No lossless files to remux".to_string());
@@ -188,14 +262,24 @@ impl App {
             shit_format_modal::ShitFormatPreviewAction::ConfirmTranscodeLossy => {
                 let Some(w) = witness else { return };
                 let (mutations, lossy_to_flac) = match &self.view {
-                    ActiveView::ShitFormatResolution(ref preview) => {
-                        (preview.cached_data.lossy_mutations(), preview.cached_data.lossy_to_flac)
-                    }
+                    ActiveView::ShitFormatResolution(ref preview) => (
+                        preview.cached_data.lossy_mutations(),
+                        preview.cached_data.lossy_to_flac,
+                    ),
                     _ => (Vec::new(), false),
                 };
                 if !mutations.is_empty() {
-                    let label = if lossy_to_flac { "Capture lossy to FLAC" } else { "Transcode to Opus" };
-                    self.stage_mutations_with_transaction(mutations, label, DecisionKey::ShitFormat, w);
+                    let label = if lossy_to_flac {
+                        "Capture lossy to FLAC"
+                    } else {
+                        "Transcode to Opus"
+                    };
+                    self.stage_mutations_with_transaction(
+                        mutations,
+                        label,
+                        DecisionKey::ShitFormat,
+                        w,
+                    );
                     self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No lossy files to transcode".to_string());
@@ -204,14 +288,24 @@ impl App {
             shit_format_modal::ShitFormatPreviewAction::ConfirmConvertAll => {
                 let Some(w) = witness else { return };
                 let (mutations, lossy_to_flac) = match &self.view {
-                    ActiveView::ShitFormatResolution(ref preview) => {
-                        (preview.cached_data.all_mutations(), preview.cached_data.lossy_to_flac)
-                    }
+                    ActiveView::ShitFormatResolution(ref preview) => (
+                        preview.cached_data.all_mutations(),
+                        preview.cached_data.lossy_to_flac,
+                    ),
                     _ => (Vec::new(), false),
                 };
                 if !mutations.is_empty() {
-                    let label = if lossy_to_flac { "Remux and capture all to FLAC" } else { "Convert all formats" };
-                    self.stage_mutations_with_transaction(mutations, label, DecisionKey::ShitFormat, w);
+                    let label = if lossy_to_flac {
+                        "Remux and capture all to FLAC"
+                    } else {
+                        "Convert all formats"
+                    };
+                    self.stage_mutations_with_transaction(
+                        mutations,
+                        label,
+                        DecisionKey::ShitFormat,
+                        w,
+                    );
                     self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to convert".to_string());
@@ -230,9 +324,14 @@ impl App {
     /// Start subpar duplicate resolution modal from Insights view.
     pub(in crate::ui) fn start_subpar_duplicate_resolution(&mut self) {
         // Load subpar duplicate file data
-        let data = self.cache.query(|db| {
-            subpar_duplicate_modal::SubparDuplicateModalData::load(db).ok().unwrap_or_default()
-        }).recv();
+        let data = self
+            .cache
+            .query(|db| {
+                subpar_duplicate_modal::SubparDuplicateModalData::load(db)
+                    .ok()
+                    .unwrap_or_default()
+            })
+            .recv();
 
         // Create preview state with cached data
         let preview = subpar_duplicate_modal::SubparDuplicatePreviewState::new(data);
@@ -240,18 +339,29 @@ impl App {
     }
 
     /// Handle subpar duplicate preview actions.
-    pub(super) fn handle_subpar_duplicate_preview_action(&mut self, action: subpar_duplicate_modal::SubparDuplicatePreviewAction, witness: Option<&witness::ConfirmationGesture>) {
+    pub(super) fn handle_subpar_duplicate_preview_action(
+        &mut self,
+        action: subpar_duplicate_modal::SubparDuplicatePreviewAction,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
         match action {
             subpar_duplicate_modal::SubparDuplicatePreviewAction::None => {}
             subpar_duplicate_modal::SubparDuplicatePreviewAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
                 // Generate stash + drop mutations and stage for review
                 let mutations = match &self.view {
-                    ActiveView::SubparDuplicateResolution(ref preview) => preview.cached_data.stash_and_drop_mutations(),
+                    ActiveView::SubparDuplicateResolution(ref preview) => {
+                        preview.cached_data.stash_and_drop_mutations()
+                    }
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Stash subpar duplicates", DecisionKey::SubparDuplicate, w);
+                    self.stage_mutations_with_transaction(
+                        mutations,
+                        "Stash subpar duplicates",
+                        DecisionKey::SubparDuplicate,
+                        w,
+                    );
                     // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
                     self.after_staging_decisions();
                 } else {
@@ -273,9 +383,14 @@ impl App {
         use super::super::directory_cluster_modal;
 
         // Load directory overlap cluster data
-        let data = self.cache.query(|db| {
-            directory_cluster_modal::DirectoryClusterModalData::load(db).ok().unwrap_or_default()
-        }).recv();
+        let data = self
+            .cache
+            .query(|db| {
+                directory_cluster_modal::DirectoryClusterModalData::load(db)
+                    .ok()
+                    .unwrap_or_default()
+            })
+            .recv();
 
         // Create preview state with cached data
         let preview = directory_cluster_modal::DirectoryClusterPreviewState::new(data);
@@ -326,12 +441,16 @@ impl App {
 
                 if let Some(inodes) = edit_tags_inodes {
                     if !inodes.is_empty() {
-                        let audio_files = self.cache.query(move |db| {
-                            db.get_audio_files_by_inodes(
-                                &inodes,
-                                crate::db::types::Zone::Corpus,
-                            ).unwrap_or_default()
-                        }).recv();
+                        let audio_files = self
+                            .cache
+                            .query(move |db| {
+                                db.get_audio_files_by_inodes(
+                                    &inodes,
+                                    crate::db::types::Zone::Corpus,
+                                )
+                                .unwrap_or_default()
+                            })
+                            .recv();
                         if !audio_files.is_empty() {
                             self.open_unified_tag_editor_bulk(
                                 audio_files,
@@ -347,10 +466,9 @@ impl App {
                 let (cluster_index, mutations) = match &self.view {
                     ActiveView::DirectoryClusterResolution(ref preview) => {
                         if let Some(option) = preview.selected_option() {
-                            let mutations = preview.cached_data.mutations_for_resolution(
-                                preview.current_cluster_index,
-                                &option,
-                            );
+                            let mutations = preview
+                                .cached_data
+                                .mutations_for_resolution(preview.current_cluster_index, &option);
                             (preview.current_cluster_index, mutations)
                         } else {
                             (0, Vec::new())
@@ -359,14 +477,20 @@ impl App {
                     _ => (0, Vec::new()),
                 };
                 if !mutations.is_empty() {
-                    self.stage_directory_cluster_mutations(cluster_index, mutations, "Resolve directory overlap", w);
+                    self.stage_directory_cluster_mutations(
+                        cluster_index,
+                        mutations,
+                        "Resolve directory overlap",
+                        w,
+                    );
                 }
                 // Navigate to next cluster
-                let at_last = if let ActiveView::DirectoryClusterResolution(ref mut preview) = self.view {
-                    !preview.navigate_next()
-                } else {
-                    true
-                };
+                let at_last =
+                    if let ActiveView::DirectoryClusterResolution(ref mut preview) = self.view {
+                        !preview.navigate_next()
+                    } else {
+                        true
+                    };
                 if at_last {
                     // Last cluster - go to review
                     self.after_staging_decisions();
@@ -394,7 +518,9 @@ impl App {
                 if let Some(mutation) = mutation {
                     self.stage_directory_cluster_mutations(
                         match &self.view {
-                            ActiveView::DirectoryClusterResolution(ref preview) => preview.current_cluster_index,
+                            ActiveView::DirectoryClusterResolution(ref preview) => {
+                                preview.current_cluster_index
+                            }
                             _ => 0,
                         },
                         vec![mutation],
@@ -403,11 +529,12 @@ impl App {
                     );
                 }
                 // Navigate to next cluster
-                let at_last = if let ActiveView::DirectoryClusterResolution(ref mut preview) = self.view {
-                    !preview.navigate_next()
-                } else {
-                    true
-                };
+                let at_last =
+                    if let ActiveView::DirectoryClusterResolution(ref mut preview) = self.view {
+                        !preview.navigate_next()
+                    } else {
+                        true
+                    };
                 if at_last {
                     self.after_staging_decisions();
                 }
@@ -444,9 +571,14 @@ impl App {
         use super::super::directory_cluster_modal;
 
         // Load release overlap data
-        let data = self.cache.query(|db| {
-            directory_cluster_modal::DirectoryClusterModalData::load_release_overlaps(db).ok().unwrap_or_default()
-        }).recv();
+        let data = self
+            .cache
+            .query(|db| {
+                directory_cluster_modal::DirectoryClusterModalData::load_release_overlaps(db)
+                    .ok()
+                    .unwrap_or_default()
+            })
+            .recv();
 
         // Create preview state with cached data
         let preview = directory_cluster_modal::DirectoryClusterPreviewState::new(data);
@@ -454,7 +586,13 @@ impl App {
     }
 
     /// Stage directory cluster mutations for transaction review.
-    fn stage_directory_cluster_mutations(&mut self, cluster_index: usize, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, gesture: &witness::ConfirmationGesture) {
+    fn stage_directory_cluster_mutations(
+        &mut self,
+        cluster_index: usize,
+        mutations: Vec<crate::meta::mutations::Mutation>,
+        label: &str,
+        gesture: &witness::ConfirmationGesture,
+    ) {
         // Start transaction if not already started
         if !self.witch.has_transaction() {
             let _ = self.witch.start_transaction("Directory overlap resolution");

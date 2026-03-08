@@ -27,7 +27,7 @@
 //! }
 //! ```
 
-use crate::witch::{WorkStateSnapshot, Witch};
+use crate::witch::{Witch, WorkStateSnapshot};
 
 /// Helper for waiting on Witch work completion.
 ///

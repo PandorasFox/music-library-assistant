@@ -46,10 +46,16 @@ fn sanitize_path_component(s: &str) -> String {
 /// Tags should be provided as a HashMap with UPPERCASE keys (as stored in DB).
 /// All lookups use `find_tag_in_map` for normalized matching so compound tag
 /// name variants are handled: ALBUMARTIST ≈ ALBUM_ARTIST, TRACKNUMBER ≈ TRACK_NUMBER.
-pub fn compute_deployment_path_with_tags(file_path: &str, tags: &HashMap<String, String>) -> PathBuf {
+pub fn compute_deployment_path_with_tags(
+    file_path: &str,
+    tags: &HashMap<String, String>,
+) -> PathBuf {
     // Get extension from original path, preserving compound .LOSSY.flac extension
     let ext = if let Some(without_lossy) = file_path.strip_suffix(".LOSSY.flac") {
-        match Path::new(without_lossy).extension().and_then(|e| e.to_str()) {
+        match Path::new(without_lossy)
+            .extension()
+            .and_then(|e| e.to_str())
+        {
             Some(orig_ext) => format!("{}.LOSSY.flac", orig_ext),
             None => "LOSSY.flac".to_string(),
         }
@@ -222,7 +228,10 @@ mod tests {
     fn test_compute_deployment_path_with_disc_number() {
         let tags: HashMap<String, String> = [
             ("ALBUM_ARTIST".to_string(), "Hiro".to_string()),
-            ("ALBUM".to_string(), "OutRun 20th Anniversary Box".to_string()),
+            (
+                "ALBUM".to_string(),
+                "OutRun 20th Anniversary Box".to_string(),
+            ),
             ("TITLE".to_string(), "MAGICAL SOUND SHOWER".to_string()),
             ("TRACK_NUMBER".to_string(), "1".to_string()),
             ("DISC_NUMBER".to_string(), "1".to_string()),
@@ -263,10 +272,7 @@ mod tests {
         let path10 = compute_deployment_path_with_tags("/corpus/d10.opus", &tags_disc10);
 
         assert_ne!(path1, path10, "Different discs must not collide");
-        assert_eq!(
-            path1,
-            PathBuf::from("Hiro/OutRun Box/1-01. Radiation.opus")
-        );
+        assert_eq!(path1, PathBuf::from("Hiro/OutRun Box/1-01. Radiation.opus"));
         assert_eq!(
             path10,
             PathBuf::from("Hiro/OutRun Box/10-01. Radiation.opus")
@@ -286,10 +292,7 @@ mod tests {
 
         let path =
             compute_deployment_path_with_tags("/corpus/Artist/Album/track.mp3.LOSSY.flac", &tags);
-        assert_eq!(
-            path,
-            PathBuf::from("Artist/Album/01. Track.mp3.LOSSY.flac")
-        );
+        assert_eq!(path, PathBuf::from("Artist/Album/01. Track.mp3.LOSSY.flac"));
     }
 
     #[test]
@@ -301,8 +304,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let path =
-            compute_deployment_path_with_tags("/corpus/Artist/single.m4a.LOSSY.flac", &tags);
+        let path = compute_deployment_path_with_tags("/corpus/Artist/single.m4a.LOSSY.flac", &tags);
         assert_eq!(path, PathBuf::from("Artist/Single.m4a.LOSSY.flac"));
     }
 
@@ -320,10 +322,7 @@ mod tests {
         .collect();
 
         let path = compute_deployment_path_with_tags("/corpus/test.flac", &tags);
-        assert_eq!(
-            path,
-            PathBuf::from("Artist/Album/2-03. Track.flac")
-        );
+        assert_eq!(path, PathBuf::from("Artist/Album/2-03. Track.flac"));
     }
 }
 

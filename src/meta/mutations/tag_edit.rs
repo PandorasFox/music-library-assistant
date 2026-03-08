@@ -15,10 +15,10 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::corpus::paths;
+use crate::db::types::Zone;
 use crate::db::write_thread;
+use crate::db::ReadOnlyDb;
 use crate::meta::recomputation::RecomputationScope;
 use crate::witch::{MutationExecutionWitness, SpawnedMutation};
 
@@ -48,12 +48,22 @@ pub struct ApplyTagOpsMutation {
 }
 
 impl MutationExecutor for ApplyTagOpsMutation {
-    fn label(&self) -> &'static str { "Tag edit" }
-    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
+    fn label(&self) -> &'static str {
+        "Tag edit"
+    }
+    fn staging(&self) -> super::traits::MutationStaging {
+        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
+    }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let (result, spawn_mutations) = match execute_apply_tag_ops(ctx.read_db, &self.ops, self.zone, ctx.session_id, ctx.witness) {
+        let (result, spawn_mutations) = match execute_apply_tag_ops(
+            ctx.read_db,
+            &self.ops,
+            self.zone,
+            ctx.session_id,
+            ctx.witness,
+        ) {
             Ok(spawned) => (Ok(()), spawned),
             Err(e) => (Err(e), Vec::new()),
         };
@@ -90,7 +100,9 @@ impl MutationExecutor for ApplyTagOpsMutation {
             _ => SignalClearScope::None,
         }
     }
-    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
+    fn affected_inodes(&self) -> Vec<i64> {
+        Vec::new()
+    }
 
     fn recomputation_scope(&self) -> RecomputationScope {
         match self.zone {
@@ -106,7 +118,9 @@ impl MutationExecutor for ApplyTagOpsMutation {
         let mut groups: BTreeMap<(String, String, String), usize> = BTreeMap::new();
 
         for op in &self.ops {
-            if op.is_nop() { continue; }
+            if op.is_nop() {
+                continue;
+            }
 
             let (old, new) = match (&op.old_value, &op.new_value) {
                 (Some(old), Some(new)) => (old.clone(), new.clone()),
@@ -118,14 +132,17 @@ impl MutationExecutor for ApplyTagOpsMutation {
             *groups.entry((op.tag_name.clone(), old, new)).or_insert(0) += 1;
         }
 
-        groups.into_iter().map(|((tag_name, old, new), count)| {
-            let display_new = if count > 1 {
-                format!("{} (\u{00d7}{})", new, count)
-            } else {
-                new
-            };
-            DiffEntry::new(tag_name, old, display_new)
-        }).collect()
+        groups
+            .into_iter()
+            .map(|((tag_name, old, new), count)| {
+                let display_new = if count > 1 {
+                    format!("{} (\u{00d7}{})", new, count)
+                } else {
+                    new
+                };
+                DiffEntry::new(tag_name, old, display_new)
+            })
+            .collect()
     }
 }
 
@@ -246,12 +263,14 @@ fn execute_apply_tag_ops(
         // Spawn disk flush — carries expected_tags for post-drain validation
         let resolver = paths::get_resolver();
         let abs_path = resolver.resolve(std::path::Path::new(file_path));
-        spawned.push(witness.spawn_mutation(Mutation::FlushTagsToDisk(FlushTagsToDiskMutation {
-            inode,
-            path: abs_path,
-            expected_tags,
-            zone,
-        })));
+        spawned.push(
+            witness.spawn_mutation(Mutation::FlushTagsToDisk(FlushTagsToDiskMutation {
+                inode,
+                path: abs_path,
+                expected_tags,
+                zone,
+            })),
+        );
     }
 
     // Report errors but don't fail entire mutation (partial success)
@@ -264,8 +283,8 @@ fn execute_apply_tag_ops(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::file_ops::MoveMutation;
+    use super::*;
     use std::path::PathBuf;
 
     #[test]

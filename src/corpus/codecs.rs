@@ -14,7 +14,7 @@
 //! Tracking: https://github.com/pdeljanov/Symphonia/issues/8
 
 use std::sync::OnceLock;
-use symphonia_core::codecs::{CodecRegistry, Decoder, DecoderOptions, CodecParameters};
+use symphonia_core::codecs::{CodecParameters, CodecRegistry, Decoder, DecoderOptions};
 use symphonia_core::errors::Result;
 
 /// Global codec registry with opus support.
@@ -104,7 +104,12 @@ pub fn open_audio_source(path: &std::path::Path) -> anyhow::Result<AudioSource> 
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .with_context(|| format!("Failed to probe audio: {}", path.display()))?;
 
     let mut format = probed.format;
@@ -126,16 +131,19 @@ pub fn open_audio_source(path: &std::path::Path) -> anyhow::Result<AudioSource> 
         _ => {
             // Container metadata incomplete — decode first packet to discover
             // the actual audio spec from the decoder output.
-            let packet = format.next_packet()
+            let packet = format
+                .next_packet()
                 .context("No packets in source to determine audio spec")?;
-            let decoded = decoder.decode(&packet)
+            let decoded = decoder
+                .decode(&packet)
                 .context("Failed to decode first packet for audio spec discovery")?;
             let spec = decoded.spec();
             let sr = sample_rate_opt.unwrap_or(spec.rate);
             let ch = channels_opt.unwrap_or_else(|| spec.channels.count());
 
             // Seek back to start so callers get the full stream
-            format.seek(SeekMode::Coarse, SeekTo::TimeStamp { ts: 0, track_id })
+            format
+                .seek(SeekMode::Coarse, SeekTo::TimeStamp { ts: 0, track_id })
                 .context("Failed to seek back after audio spec discovery")?;
             decoder.reset();
 

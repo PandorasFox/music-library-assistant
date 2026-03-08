@@ -19,9 +19,8 @@ use super::startup;
 use super::widgets::{status_bar, Modal, ModalButton, ModalStyle, UnifiedTitleBar};
 use super::{
     compound_split_v2, config_editor, external_match_modal, filter_popup, inbox_view,
-    insights_view, manual_review_modal,
-    oob_conflict_modal, oob_sync_modal, progressive_worker, tag_canonicity_v2,
-    tabbed_transaction_review, transaction_review,
+    insights_view, manual_review_modal, oob_conflict_modal, oob_sync_modal, progressive_worker,
+    tabbed_transaction_review, tag_canonicity_v2, transaction_review,
 };
 
 /// Main render entry point - dispatches to sub-renderers based on ActiveView.
@@ -33,7 +32,11 @@ pub fn render_app(
     status_line_2: Option<String>,
 ) {
     // Progress screen takes the whole screen (startup, content analysis, signal refresh)
-    if let ActiveView::Progress { ref screen, ref eye } = app.view {
+    if let ActiveView::Progress {
+        ref screen,
+        ref eye,
+    } = app.view
+    {
         // For non-eyeballing phases, provide animated eye frame
         let eye_frame = if screen.uses_closed_eye() {
             None // Uses its own closed/derivation eye
@@ -72,12 +75,14 @@ pub fn render_app(
             .split(f.area());
 
         // Read deploy_needs_action from locally cached deploy status
-        let deploy_needs_action = app.cached_deploy
-            .as_ref()
-            .is_some_and(|s| s.needs_action);
+        let deploy_needs_action = app.cached_deploy.as_ref().is_some_and(|s| s.needs_action);
 
         let transactions_open = app.config().opinions.leave_transactions_open;
-        let transaction_has_decisions = app.witch.has_transaction() && app.witch.transaction_summary().is_some_and(|(_, d, _)| d > 0);
+        let transaction_has_decisions = app.witch.has_transaction()
+            && app
+                .witch
+                .transaction_summary()
+                .is_some_and(|(_, d, _)| d > 0);
 
         let titlebar = UnifiedTitleBar::new(lv)
             .with_deploy_needs_action(deploy_needs_action)
@@ -91,7 +96,12 @@ pub fn render_app(
         let content_time = start.elapsed();
 
         let start = Instant::now();
-        render_status_bar(f, chunks[2], status_line_1.as_deref(), status_line_2.as_deref());
+        render_status_bar(
+            f,
+            chunks[2],
+            status_line_1.as_deref(),
+            status_line_2.as_deref(),
+        );
         let footer_time = start.elapsed();
 
         if content_time.as_millis() > 16 || footer_time.as_millis() > 16 {
@@ -122,10 +132,18 @@ pub fn render_app(
         let content_time = start.elapsed();
 
         let start = Instant::now();
-        render_status_bar(f, chunks[2], status_line_1.as_deref(), status_line_2.as_deref());
+        render_status_bar(
+            f,
+            chunks[2],
+            status_line_1.as_deref(),
+            status_line_2.as_deref(),
+        );
         let footer_time = start.elapsed();
 
-        if header_time.as_millis() > 16 || content_time.as_millis() > 16 || footer_time.as_millis() > 16 {
+        if header_time.as_millis() > 16
+            || content_time.as_millis() > 16
+            || footer_time.as_millis() > 16
+        {
             crate::logging::log_perf(format!(
                 "[RENDER DEBUG] view={} header={}ms content={}ms footer={}ms",
                 view_name(&app.view),
@@ -146,7 +164,11 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, view: &ActiveView) 
     };
 
     let header = Paragraph::new(title)
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .alignment(Alignment::Center)
         .block(Block::default().borders(Borders::ALL));
 
@@ -336,18 +358,14 @@ fn render_exit_confirm_modal(
     // Build buttons with appropriate styles
     let (yes_btn, no_btn) = if has_operations {
         // Warning modal: Yes is red (dangerous), No is green (safe)
-        let yes_btn = ModalButton::new("Yes", "")
-            .with_indicator()
-            .styles(
-                Style::default().fg(Color::Black).bg(Color::Red),
-                Style::default().fg(Color::White),
-            );
-        let no_btn = ModalButton::new("No", "")
-            .with_indicator()
-            .styles(
-                Style::default().fg(Color::Black).bg(Color::Green),
-                Style::default().fg(Color::White),
-            );
+        let yes_btn = ModalButton::new("Yes", "").with_indicator().styles(
+            Style::default().fg(Color::Black).bg(Color::Red),
+            Style::default().fg(Color::White),
+        );
+        let no_btn = ModalButton::new("No", "").with_indicator().styles(
+            Style::default().fg(Color::Black).bg(Color::Green),
+            Style::default().fg(Color::White),
+        );
         if selected_no {
             (yes_btn, no_btn.selected())
         } else {
@@ -355,18 +373,14 @@ fn render_exit_confirm_modal(
         }
     } else {
         // Simple exit: neutral styles
-        let confirm_btn = ModalButton::new("Confirm", "")
-            .with_indicator()
-            .styles(
-                Style::default().fg(Color::Black).bg(Color::Cyan),
-                Style::default().fg(Color::White),
-            );
-        let cancel_btn = ModalButton::new("Cancel", "")
-            .with_indicator()
-            .styles(
-                Style::default().fg(Color::Black).bg(Color::Gray),
-                Style::default().fg(Color::White),
-            );
+        let confirm_btn = ModalButton::new("Confirm", "").with_indicator().styles(
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+            Style::default().fg(Color::White),
+        );
+        let cancel_btn = ModalButton::new("Cancel", "").with_indicator().styles(
+            Style::default().fg(Color::Black).bg(Color::Gray),
+            Style::default().fg(Color::White),
+        );
         if selected_no {
             (confirm_btn, cancel_btn.selected())
         } else {
@@ -396,12 +410,18 @@ fn render_exit_confirm_modal(
     // First button: " > " (3 chars) + label
     let first_label_len = if has_operations { 3u16 } else { 7u16 }; // "Yes" / "Confirm"
     let first_width = 3 + first_label_len;
-    state.button_rects.set("yes", ratatui::layout::Rect::new(bx, button_row, first_width, 1));
+    state.button_rects.set(
+        "yes",
+        ratatui::layout::Rect::new(bx, button_row, first_width, 1),
+    );
     bx += first_width + 5; // 5-char gap
-    // Second button: " > " (3 chars) + label
+                           // Second button: " > " (3 chars) + label
     let second_label_len = if has_operations { 2u16 } else { 6u16 }; // "No" / "Cancel"
     let second_width = 3 + second_label_len;
-    state.button_rects.set("no", ratatui::layout::Rect::new(bx, button_row, second_width, 1));
+    state.button_rects.set(
+        "no",
+        ratatui::layout::Rect::new(bx, button_row, second_width, 1),
+    );
 
     if has_operations {
         // Warning modal for operations in progress
@@ -409,7 +429,9 @@ fn render_exit_confirm_modal(
             Line::from(""),
             Line::from(Span::styled(
                 "Operation In Progress",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from("An operation is currently running."),

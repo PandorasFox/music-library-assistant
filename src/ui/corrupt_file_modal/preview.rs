@@ -51,7 +51,10 @@ pub struct CorruptFilePreviewState {
 impl CorruptFilePreviewState {
     /// Path of the currently selected file (for status bar).
     pub fn selected_path(&self) -> Option<&str> {
-        self.cached_data.files.get(self.scroll).map(|f| f.corpus_path.as_str())
+        self.cached_data
+            .files
+            .get(self.scroll)
+            .map(|f| f.corpus_path.as_str())
     }
 
     /// Create a new preview state with cached data.
@@ -66,7 +69,12 @@ impl CorruptFilePreviewState {
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<CorruptFilePreviewAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<CorruptFilePreviewAction> {
         // Check buttons first
         if let Some(button_name) = self.button_rects.hit_test(x, y) {
             match button_name {
@@ -133,9 +141,7 @@ impl CorruptFilePreviewState {
 
             // Execute selected button
             InputAction::Confirm => match self.selected_button {
-                SelectedButton::StashAll if has_files => {
-                    CorruptFilePreviewAction::ConfirmStashAll
-                }
+                SelectedButton::StashAll if has_files => CorruptFilePreviewAction::ConfirmStashAll,
                 SelectedButton::Cancel => CorruptFilePreviewAction::Cancel,
                 _ => CorruptFilePreviewAction::None,
             },
@@ -173,9 +179,7 @@ impl CorruptFilePreviewState {
         let title = Paragraph::new(Line::from(vec![
             Span::styled(
                 " Corrupt File Resolution ",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!(" ({} files)", total),
@@ -192,7 +196,11 @@ impl CorruptFilePreviewState {
 
         let block = Block::default()
             .title(format!(" Corrupt Files ({}) ", count))
-            .title_style(Style::default().fg(if count > 0 { Color::Red } else { Color::DarkGray }))
+            .title_style(Style::default().fg(if count > 0 {
+                Color::Red
+            } else {
+                Color::DarkGray
+            }))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Red));
 
@@ -225,8 +233,11 @@ impl CorruptFilePreviewState {
         self.click_targets.set_list_area(list_area);
         let visible_height = list_area.height as usize;
         for (vis_idx, entry_idx) in (self.scroll..).take(visible_height).enumerate() {
-            if entry_idx >= self.cached_data.files.len() { break; }
-            self.click_targets.add_row(entry_idx.to_string(), list_area.y + vis_idx as u16);
+            if entry_idx >= self.cached_data.files.len() {
+                break;
+            }
+            self.click_targets
+                .add_row(entry_idx.to_string(), list_area.y + vis_idx as u16);
         }
 
         let description = Paragraph::new(vec![
@@ -266,7 +277,10 @@ impl CorruptFilePreviewState {
         let stash_style = if !has_files {
             Style::default().fg(Color::DarkGray)
         } else if self.selected_button == SelectedButton::StashAll {
-            Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Red)
         };
@@ -277,7 +291,10 @@ impl CorruptFilePreviewState {
 
         // Cancel button
         let cancel_style = if self.selected_button == SelectedButton::Cancel {
-            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };

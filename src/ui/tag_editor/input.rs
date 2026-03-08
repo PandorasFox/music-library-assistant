@@ -4,13 +4,12 @@
 //! Dispatches key events to appropriate handlers based on focus state.
 
 use super::state::UnifiedTagEditorState;
+use super::types::{
+    FieldEditState, NavigationDirection, StageChangesButton, TagEditorButton, TagEditorLaunchMode,
+    UnifiedTagEditorAction, UnifiedTagEditorFocus, UnifiedTagEditorModal, UnsavedChangesButton,
+};
 use crate::meta::decisions::DecisionKey;
 use crate::ui::input::InputAction;
-use super::types::{
-    FieldEditState, NavigationDirection, StageChangesButton, TagEditorButton,
-    TagEditorLaunchMode, UnifiedTagEditorAction, UnifiedTagEditorFocus,
-    UnifiedTagEditorModal, UnsavedChangesButton,
-};
 
 impl UnifiedTagEditorState {
     /// Handle a semantic input action.
@@ -98,7 +97,8 @@ impl UnifiedTagEditorState {
                             // Commit edit
                             if *current_value_idx < num_values {
                                 values[*current_value_idx] = edit_input.value().to_string();
-                            } else if *current_value_idx == add_entry_idx && !edit_input.is_empty() {
+                            } else if *current_value_idx == add_entry_idx && !edit_input.is_empty()
+                            {
                                 // Adding new value
                                 values.push(edit_input.value().to_string());
                             }
@@ -145,7 +145,10 @@ impl UnifiedTagEditorState {
                     _ => UnifiedTagEditorAction::None,
                 }
             }
-            Some(UnifiedTagEditorModal::StageChangesConfirm { direction, selected_button }) => {
+            Some(UnifiedTagEditorModal::StageChangesConfirm {
+                direction,
+                selected_button,
+            }) => {
                 match action {
                     InputAction::Confirm => {
                         let direction = *direction;
@@ -238,15 +241,24 @@ impl UnifiedTagEditorState {
                     self.commit_field_buffer();
                 }
                 let max_fields = if self.is_aggregated_mode() {
-                    self.aggregated_fields.as_ref().map(|f| f.len()).unwrap_or(0)
+                    self.aggregated_fields
+                        .as_ref()
+                        .map(|f| f.len())
+                        .unwrap_or(0)
                 } else {
-                    self.tag_fields.get(self.current_item_idx).map(|f| f.len()).unwrap_or(0)
+                    self.tag_fields
+                        .get(self.current_item_idx)
+                        .map(|f| f.len())
+                        .unwrap_or(0)
                 };
                 if self.current_field_idx < max_fields.saturating_sub(1) {
                     self.current_field_idx += 1;
-                    let visible_end = self.field_scroll_offset + self.field_visible_height.saturating_sub(1);
+                    let visible_end =
+                        self.field_scroll_offset + self.field_visible_height.saturating_sub(1);
                     if self.current_field_idx >= visible_end {
-                        self.field_scroll_offset = self.current_field_idx.saturating_sub(self.field_visible_height.saturating_sub(2));
+                        self.field_scroll_offset = self
+                            .current_field_idx
+                            .saturating_sub(self.field_visible_height.saturating_sub(2));
                     }
                 }
                 self.load_field_buffer();
@@ -345,7 +357,10 @@ impl UnifiedTagEditorState {
 
     fn handle_actions_input(&mut self, action: &InputAction) -> UnifiedTagEditorAction {
         let buttons = self.available_buttons();
-        let current_idx = buttons.iter().position(|b| *b == self.selected_button).unwrap_or(0);
+        let current_idx = buttons
+            .iter()
+            .position(|b| *b == self.selected_button)
+            .unwrap_or(0);
 
         match action {
             InputAction::NavLeft | InputAction::Cancel => {
@@ -372,7 +387,11 @@ impl UnifiedTagEditorState {
                             let mutations = self.collect_all_mutations();
                             if mutations.is_empty() {
                                 UnifiedTagEditorAction::CloseEmbedded
-                            } else if let TagEditorLaunchMode::Embedded { ref decision_key, ref decision_label } = self.launch_mode {
+                            } else if let TagEditorLaunchMode::Embedded {
+                                ref decision_key,
+                                ref decision_label,
+                            } = self.launch_mode
+                            {
                                 UnifiedTagEditorAction::StageAndCloseEmbedded {
                                     decision_key: decision_key.clone(),
                                     decision_label: decision_label.clone(),
@@ -382,8 +401,8 @@ impl UnifiedTagEditorState {
                                 unreachable!()
                             }
                         } else {
-                            let current_unstaged = self.has_changes_for_current_item()
-                                && !self.changes_match_staged();
+                            let current_unstaged =
+                                self.has_changes_for_current_item() && !self.changes_match_staged();
                             let has_anything = current_unstaged || self.staged_decision_count > 0;
 
                             if current_unstaged {
@@ -398,7 +417,9 @@ impl UnifiedTagEditorState {
                                 // Already-staged decisions exist, go straight to review
                                 UnifiedTagEditorAction::RequestTransactionReview
                             } else {
-                                UnifiedTagEditorAction::StatusMessage("No changes to review".to_string())
+                                UnifiedTagEditorAction::StatusMessage(
+                                    "No changes to review".to_string(),
+                                )
                             }
                         }
                     }
@@ -408,7 +429,9 @@ impl UnifiedTagEditorState {
                     }
                     TagEditorButton::FillFromDisk => {
                         self.fill_from_disk();
-                        UnifiedTagEditorAction::StatusMessage("Tags refreshed from disk".to_string())
+                        UnifiedTagEditorAction::StatusMessage(
+                            "Tags refreshed from disk".to_string(),
+                        )
                     }
                     TagEditorButton::FillFromDb => {
                         // Return action for UI layer to handle (requires DB access)

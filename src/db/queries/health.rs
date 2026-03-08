@@ -15,13 +15,12 @@ impl Database {
     // Health Issue Operations
     // ========================================================================
 
-
     /// Count total signals across all typed tables.
     ///
     /// More efficient than loading all signals into memory with get_signals(None).
     pub fn count_all_signals(&self) -> usize {
         use crate::meta::signals::data::*;
-        use crate::meta::signals::store::{CorpusSignalStore, AggregateSignalStore};
+        use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
 
         let mut total: usize = 0;
         // Corpus signal tables
@@ -65,67 +64,98 @@ impl Database {
     // Typed Signal Queries (direct struct access, no JSON)
     // ========================================================================
 
-    pub fn get_unindexed_file_signals(&self) -> Result<Vec<crate::meta::signals::data::UnindexedFileSignal>> {
+    pub fn get_unindexed_file_signals(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::UnindexedFileSignal>> {
         crate::meta::signals::data::UnindexedFileSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query unindexed file signals: {}", e))
     }
 
-    pub fn get_healthy_file_signals(&self) -> Result<Vec<crate::meta::signals::data::HealthyFileSignal>> {
+    pub fn get_healthy_file_signals(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::HealthyFileSignal>> {
         crate::meta::signals::data::HealthyFileSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query healthy file signals: {}", e))
     }
 
-    pub fn get_tag_canonicity_signal(&self, key: &str) -> Result<Option<crate::meta::signals::data::TagCanonicitySignal>> {
+    pub fn get_tag_canonicity_signal(
+        &self,
+        key: &str,
+    ) -> Result<Option<crate::meta::signals::data::TagCanonicitySignal>> {
         crate::meta::signals::data::TagCanonicitySignal::query_by_key(&self.conn, key)
             .map_err(|e| anyhow::anyhow!("Failed to query tag canonicity signal: {}", e))
     }
 
-    pub fn get_inconsistent_album_artist_signal(&self, key: &str) -> Result<Option<crate::meta::signals::data::InconsistentAlbumArtistSignal>> {
+    pub fn get_inconsistent_album_artist_signal(
+        &self,
+        key: &str,
+    ) -> Result<Option<crate::meta::signals::data::InconsistentAlbumArtistSignal>> {
         crate::meta::signals::data::InconsistentAlbumArtistSignal::query_by_key(&self.conn, key)
             .map_err(|e| anyhow::anyhow!("Failed to query inconsistent album artist signal: {}", e))
     }
 
-    pub fn get_compound_tag_signal(&self, inode: i64) -> Result<Option<crate::meta::signals::data::CompoundTagSignal>> {
+    pub fn get_compound_tag_signal(
+        &self,
+        inode: i64,
+    ) -> Result<Option<crate::meta::signals::data::CompoundTagSignal>> {
         crate::meta::signals::data::CompoundTagSignal::query_by_inode(&self.conn, inode)
             .map_err(|e| anyhow::anyhow!("Failed to query compound tag signal: {}", e))
     }
 
-    pub fn get_inbox_compound_tag_signal(&self, inode: i64) -> Result<Option<crate::meta::signals::data::InboxCompoundTagSignal>> {
+    pub fn get_inbox_compound_tag_signal(
+        &self,
+        inode: i64,
+    ) -> Result<Option<crate::meta::signals::data::InboxCompoundTagSignal>> {
         crate::meta::signals::data::InboxCompoundTagSignal::query_by_inode(&self.conn, inode)
             .map_err(|e| anyhow::anyhow!("Failed to query inbox compound tag signal: {}", e))
     }
 
-    pub fn get_cross_source_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::CrossSourceOverlapSignal>> {
+    pub fn get_cross_source_overlap_signals(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::CrossSourceOverlapSignal>> {
         crate::meta::signals::data::CrossSourceOverlapSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query cross source overlap signals: {}", e))
     }
 
-    pub fn get_release_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::ReleaseOverlapSignal>> {
+    pub fn get_release_overlap_signals(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::ReleaseOverlapSignal>> {
         crate::meta::signals::data::ReleaseOverlapSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query release overlap signals: {}", e))
     }
 
-    pub fn get_fingerprint_overlap_signals(&self) -> Result<Vec<crate::meta::signals::data::FingerprintOverlapSignal>> {
+    pub fn get_fingerprint_overlap_signals(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::FingerprintOverlapSignal>> {
         crate::meta::signals::data::FingerprintOverlapSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query fingerprint overlap signals: {}", e))
     }
 
-    pub fn get_missing_tag_signals(&self) -> Result<Vec<crate::meta::signals::data::MissingTagSignal>> {
+    pub fn get_missing_tag_signals(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::MissingTagSignal>> {
         crate::meta::signals::data::MissingTagSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query missing tag signals: {}", e))
     }
 
-    pub fn get_missing_album_single_signals(&self) -> Result<Vec<crate::meta::signals::data::MissingAlbumSingleSignal>> {
+    pub fn get_missing_album_single_signals(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::MissingAlbumSingleSignal>> {
         crate::meta::signals::data::MissingAlbumSingleSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query missing album single signals: {}", e))
     }
 
-    pub fn get_disc_extraction_signals(&self) -> Result<Vec<crate::meta::signals::data::DiscExtractionSignal>> {
+    pub fn get_disc_extraction_signals(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::DiscExtractionSignal>> {
         crate::meta::signals::data::DiscExtractionSignal::query_all(&self.conn)
             .map_err(|e| anyhow::anyhow!("Failed to query disc extraction signals: {}", e))
     }
 
-    pub fn get_inbox_tag_canonicity_signal(&self, key: &str) -> Result<Option<crate::meta::signals::data::InboxTagCanonicitySignal>> {
+    pub fn get_inbox_tag_canonicity_signal(
+        &self,
+        key: &str,
+    ) -> Result<Option<crate::meta::signals::data::InboxTagCanonicitySignal>> {
         crate::meta::signals::data::InboxTagCanonicitySignal::query_by_key(&self.conn, key)
             .map_err(|e| anyhow::anyhow!("Failed to query inbox tag canonicity signal: {}", e))
     }
@@ -145,12 +175,12 @@ impl Database {
         safe_only: bool,
         tag_filter: Option<&str>,
     ) -> Result<Vec<crate::meta::signals::data::CompoundGroup>> {
+        use crate::meta::signals::data::{CompoundGroup, CompoundTagEntry as TypedEntry};
         use std::collections::HashMap;
-        use crate::meta::signals::data::{CompoundTagEntry as TypedEntry, CompoundGroup};
 
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, data FROM signal_compound_tag ORDER BY discovered_at DESC"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode, data FROM signal_compound_tag ORDER BY discovered_at DESC")?;
 
         let rows = stmt.query_map(params![], |row| {
             let inode: i64 = row.get(0)?;
@@ -177,7 +207,10 @@ impl Database {
 
             for compound in &compounds {
                 // Skip canonical values
-                if self.is_canonical_tag(&compound.tag_name, &compound.compound_value).unwrap_or(false) {
+                if self
+                    .is_canonical_tag(&compound.tag_name, &compound.compound_value)
+                    .unwrap_or(false)
+                {
                     continue;
                 }
 
@@ -233,11 +266,11 @@ impl Database {
     pub fn get_inbox_compound_signal_groups(
         &self,
     ) -> Result<Vec<crate::meta::signals::data::CompoundGroup>> {
+        use crate::meta::signals::data::{CompoundGroup, CompoundTagEntry as TypedEntry};
         use std::collections::HashMap;
-        use crate::meta::signals::data::{CompoundTagEntry as TypedEntry, CompoundGroup};
 
         let mut stmt = self.conn.prepare(
-            "SELECT inode, data FROM signal_inbox_compound_tag ORDER BY discovered_at DESC"
+            "SELECT inode, data FROM signal_inbox_compound_tag ORDER BY discovered_at DESC",
         )?;
 
         let rows = stmt.query_map(params![], |row| {
@@ -263,7 +296,10 @@ impl Database {
 
             for compound in &compounds {
                 // Skip canonical values
-                if self.is_canonical_tag(&compound.tag_name, &compound.compound_value).unwrap_or(false) {
+                if self
+                    .is_canonical_tag(&compound.tag_name, &compound.compound_value)
+                    .unwrap_or(false)
+                {
                     continue;
                 }
 
@@ -313,7 +349,7 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             r#"SELECT path, inode FROM files
-               WHERE is_dir = 1 AND zone = 'corpus'"#
+               WHERE is_dir = 1 AND zone = 'corpus'"#,
         )?;
         let rows = stmt.query_map(params![], |row| {
             let path: String = row.get(0)?;
@@ -331,9 +367,9 @@ impl Database {
 
     /// Get missing directory signal paths (for UI resolution modal).
     pub fn get_missing_directory_paths(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT path FROM signal_missing_directory ORDER BY path"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM signal_missing_directory ORDER BY path")?;
         let results = stmt
             .query_map(params![], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
@@ -344,9 +380,9 @@ impl Database {
     ///
     /// Returns HashMap<inode, path> for set comparison operations.
     pub fn get_file_in_corpus_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path FROM signal_file_in_corpus"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode, path FROM signal_file_in_corpus")?;
 
         let rows = stmt.query_map(params![], |row| {
             let inode: i64 = row.get(0)?;
@@ -365,9 +401,9 @@ impl Database {
 
     /// Get all FileInInbox signal inodes with their paths.
     pub fn get_file_in_inbox_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path FROM signal_file_in_inbox"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode, path FROM signal_file_in_inbox")?;
 
         let rows = stmt.query_map(params![], |row| {
             let inode: i64 = row.get(0)?;
@@ -386,13 +422,12 @@ impl Database {
 
     /// Get all inbox unindexed files as (inode, path) pairs.
     pub fn get_inbox_unindexed_files(&self) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path FROM signal_inbox_unindexed ORDER BY path"
-        )?;
-        let rows = stmt.query_map(params![], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode, path FROM signal_inbox_unindexed ORDER BY path")?;
+        let rows = stmt.query_map(params![], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     // ========================================================================
@@ -418,20 +453,20 @@ impl Database {
              WHERE h.inode NOT IN (
                  SELECT inode FROM signal_inbox_corpus_match
                  WHERE classification != 'better'
-             )"
+             )",
         )?;
-        let candidates: Vec<(i64, String)> = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let candidates: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         // Step 2: Load tag canonicity inodes from bincode blobs
         let mut tag_canon_inodes = std::collections::HashSet::new();
-        let mut canon_stmt = self.conn.prepare(
-            "SELECT data FROM signal_inbox_tag_canonicity"
-        )?;
-        let blobs: Vec<Vec<u8>> = canon_stmt.query_map([], |row| {
-            row.get(0)
-        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut canon_stmt = self
+            .conn
+            .prepare("SELECT data FROM signal_inbox_tag_canonicity")?;
+        let blobs: Vec<Vec<u8>> = canon_stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         for blob in blobs {
             if let Ok(data) = bincode::deserialize::<InboxTagCanonicityData>(&blob) {
@@ -445,7 +480,8 @@ impl Database {
         let result = if tag_canon_inodes.is_empty() {
             candidates
         } else {
-            candidates.into_iter()
+            candidates
+                .into_iter()
                 .filter(|(inode, _)| !tag_canon_inodes.contains(inode))
                 .collect()
         };
@@ -558,27 +594,30 @@ impl Database {
         let redundant_duplicate_count = self.count_signal_type("redundant_duplicate")?;
 
         // Count inconsistent_album_artist signals
-        let inconsistent_album_artist_count = self.count_signal_type("inconsistent_album_artist")?;
+        let inconsistent_album_artist_count =
+            self.count_signal_type("inconsistent_album_artist")?;
 
         // Group compound_tag signals by tag name with safety classification
         let compound_tags = self.count_compound_signals_by_tag()?;
 
         // Group tag_canonicity signals by tag_name column
         // Sum inodes from bincode BLOB data
-        let mut tag_map: std::collections::HashMap<String, (usize, usize)> = std::collections::HashMap::new();
+        let mut tag_map: std::collections::HashMap<String, (usize, usize)> =
+            std::collections::HashMap::new();
         {
-            let mut stmt = self.conn.prepare(
-                "SELECT tag_name, data FROM signal_tag_canonicity"
-            )?;
+            let mut stmt = self
+                .conn
+                .prepare("SELECT tag_name, data FROM signal_tag_canonicity")?;
             let rows = stmt.query_map(params![], |row| {
                 let tag_name: String = row.get(0)?;
                 let blob: Vec<u8> = row.get(1)?;
                 Ok((tag_name, blob))
             })?;
             for (tag_name, blob) in rows.flatten() {
-                let inode_count = bincode::deserialize::<crate::meta::signals::data::TagCanonicityData>(&blob)
-                    .map(|d| d.inodes.len())
-                    .unwrap_or(0);
+                let inode_count =
+                    bincode::deserialize::<crate::meta::signals::data::TagCanonicityData>(&blob)
+                        .map(|d| d.inodes.len())
+                        .unwrap_or(0);
                 let entry = tag_map.entry(tag_name).or_insert((0, 0));
                 entry.0 += 1; // cluster_count
                 entry.1 += inode_count; // total_tracks
@@ -621,13 +660,11 @@ impl Database {
     /// so the insights view shows how many distinct compound values need resolution.
     /// Returns entries grouped by tag name, sorted by total count descending.
     fn count_compound_signals_by_tag(&self) -> Result<Vec<crate::meta::views::CompoundTagEntry>> {
-        use std::collections::{HashMap, HashSet};
-        use crate::meta::views::CompoundTagEntry;
         use crate::meta::signals::data::CompoundTagEntry as TypedEntry;
+        use crate::meta::views::CompoundTagEntry;
+        use std::collections::{HashMap, HashSet};
 
-        let mut stmt = self.conn.prepare(
-            "SELECT data FROM signal_compound_tag"
-        )?;
+        let mut stmt = self.conn.prepare("SELECT data FROM signal_compound_tag")?;
 
         // Track unique (tag_name, compound_value) per safety bucket
         let mut safe_seen: HashSet<(String, String)> = HashSet::new();
@@ -723,16 +760,15 @@ impl Database {
     /// Reads `signal_external_match`, skips ExactMatch, buckets everything else
     /// by AcoustID confidence tier.
     pub fn get_external_matches_data(&self) -> Result<crate::meta::views::ExternalMatchesData> {
-        use crate::meta::views::{
-            ExternalMatchReviewEntry,
-            ExternalMatchesData, ConfidenceTier, ConfidenceBucket,
-        };
         use crate::meta::signals::data::{ExternalMatchData, MatchClassification};
+        use crate::meta::views::{
+            ConfidenceBucket, ConfidenceTier, ExternalMatchReviewEntry, ExternalMatchesData,
+        };
         use std::collections::HashMap;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path, data FROM signal_external_match ORDER BY path"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode, path, data FROM signal_external_match ORDER BY path")?;
 
         let mut tier_map: HashMap<ConfidenceTier, Vec<ExternalMatchReviewEntry>> = HashMap::new();
         let mut untagged_entries: Vec<ExternalMatchReviewEntry> = Vec::new();
@@ -768,7 +804,8 @@ impl Database {
             }
         }
 
-        let confidence_buckets: Vec<ConfidenceBucket> = ConfidenceTier::ALL.iter()
+        let confidence_buckets: Vec<ConfidenceBucket> = ConfidenceTier::ALL
+            .iter()
             .filter_map(|&tier| {
                 let entries = tier_map.remove(&tier)?;
                 let total = entries.len();
@@ -781,25 +818,45 @@ impl Database {
             .collect();
 
         // Packing per-category counts from PackedRelease aggregate signals
-        let packing_full_match_count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'full_match:%'",
-            [], |row| row.get(0),
-        ).unwrap_or(0);
-        let packing_singles_count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'single:%'",
-            [], |row| row.get(0),
-        ).unwrap_or(0);
-        let packing_incomplete_count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'incomplete:%'",
-            [], |row| row.get(0),
-        ).unwrap_or(0);
+        let packing_full_match_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'full_match:%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let packing_singles_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'single:%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let packing_incomplete_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'incomplete:%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
 
-        let packing_near_miss_count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM signal_near_miss_release", [], |row| row.get(0),
-        ).unwrap_or(0);
-        let packing_unmatched_count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM signal_unmatched_corpus_track", [], |row| row.get(0),
-        ).unwrap_or(0);
+        let packing_near_miss_count: usize = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM signal_near_miss_release", [], |row| {
+                row.get(0)
+            })
+            .unwrap_or(0);
+        let packing_unmatched_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_unmatched_corpus_track",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
 
         Ok(ExternalMatchesData {
             untagged_entries,
@@ -815,7 +872,7 @@ impl Database {
     /// Count signals of a specific type using typed tables.
     fn count_signal_type(&self, signal_type: &str) -> Result<usize> {
         use crate::meta::signals::data::*;
-        use crate::meta::signals::store::{CorpusSignalStore, AggregateSignalStore};
+        use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
         let count = match signal_type {
             "file_in_corpus" => FileInCorpusSignal::count(&self.conn)?,
             "unindexed_file" => UnindexedFileSignal::count(&self.conn)?,
@@ -902,19 +959,23 @@ impl Database {
                JOIN audio_info a ON f.inode = a.inode
                WHERE f.zone = 'corpus' AND f.is_dir = 0
                GROUP BY a.file_type
-               ORDER BY cnt DESC"#
+               ORDER BY cnt DESC"#,
         )?;
 
-        let results = stmt.query_map(params![], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let results = stmt
+            .query_map(params![], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     }
 
     /// Get directory breakdown for a signal type.
-    fn get_directory_breakdown(&self, signal_type: &str) -> Result<crate::meta::views::DirectoryBreakdown> {
+    fn get_directory_breakdown(
+        &self,
+        signal_type: &str,
+    ) -> Result<crate::meta::views::DirectoryBreakdown> {
         use crate::meta::views::*;
 
         // Map signal type to its typed table name
@@ -923,7 +984,11 @@ impl Database {
             "unindexed_file" => "signal_unindexed_file",
             "healthy_file" => "signal_healthy_file",
             "missing_file" => "signal_missing_file",
-            _ => return Ok(DirectoryBreakdown { _entries: Vec::new() }),
+            _ => {
+                return Ok(DirectoryBreakdown {
+                    _entries: Vec::new(),
+                })
+            }
         };
 
         // Extract parent directory from path column
@@ -944,13 +1009,14 @@ impl Database {
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let entries = stmt.query_map(params![], |row| {
-            Ok(DirectoryBreakdownEntry {
-                _directory: row.get(0)?,
-                _count: row.get(1)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let entries = stmt
+            .query_map(params![], |row| {
+                Ok(DirectoryBreakdownEntry {
+                    _directory: row.get(0)?,
+                    _count: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(DirectoryBreakdown { _entries: entries })
     }
@@ -958,7 +1024,6 @@ impl Database {
     // ========================================================================
     // Row Conversion Helpers
     // ========================================================================
-
 
     // ========================================================================
     // Deploy Modal Queries
@@ -971,18 +1036,19 @@ impl Database {
     pub fn get_deploy_ready_files(&self) -> Result<Vec<crate::meta::views::DeploySignalFile>> {
         use crate::meta::views::DeploySignalFile;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT path, deploy_path FROM signal_deploy_ready ORDER BY path"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, deploy_path FROM signal_deploy_ready ORDER BY path")?;
 
-        let results = stmt.query_map(params![], |row| {
-            Ok(DeploySignalFile {
-                library_name: String::new(), // populated by caller via config lookup
-                corpus_path: row.get(0)?,
-                deploy_path: row.get(1)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let results = stmt
+            .query_map(params![], |row| {
+                Ok(DeploySignalFile {
+                    library_name: String::new(), // populated by caller via config lookup
+                    corpus_path: row.get(0)?,
+                    deploy_path: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     }
@@ -994,21 +1060,22 @@ impl Database {
     pub fn get_deployed_healthy_files(&self) -> Result<Vec<crate::meta::views::DeploySignalFile>> {
         use crate::meta::views::DeploySignalFile;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT path, library_path FROM signal_deployed_healthy ORDER BY path"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, library_path FROM signal_deployed_healthy ORDER BY path")?;
 
-        let results = stmt.query_map(params![], |row| {
-            let library_path: String = row.get(1)?;
-            // library_path is "{library_name}/relative/path" — extract library_name
-            let library_name = library_path.split('/').next().unwrap_or("").to_string();
-            Ok(DeploySignalFile {
-                library_name,
-                corpus_path: row.get(0)?,
-                deploy_path: library_path,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let results = stmt
+            .query_map(params![], |row| {
+                let library_path: String = row.get(1)?;
+                // library_path is "{library_name}/relative/path" — extract library_name
+                let library_name = library_path.split('/').next().unwrap_or("").to_string();
+                Ok(DeploySignalFile {
+                    library_name,
+                    corpus_path: row.get(0)?,
+                    deploy_path: library_path,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     }
@@ -1016,26 +1083,34 @@ impl Database {
     /// Get all sidecar images ready for deployment.
     ///
     /// Reads precomputed signals emitted by DeriveCorpusDeployStatus.
-    pub fn get_sidecar_deploy_ready_signals(&self) -> Result<Vec<crate::meta::signals::data::SidecarDeployReadySignal>> {
-        use crate::meta::signals::data::{SidecarDeployReadySignal, SidecarDeployReadyData};
+    pub fn get_sidecar_deploy_ready_signals(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::SidecarDeployReadySignal>> {
+        use crate::meta::signals::data::{SidecarDeployReadyData, SidecarDeployReadySignal};
 
         let mut stmt = self.conn.prepare(
             "SELECT inode, path, deploy_path, library_name, data FROM signal_sidecar_deploy_ready ORDER BY path"
         )?;
 
-        let results = stmt.query_map(params![], |row| {
-            let blob: Vec<u8> = row.get(4)?;
-            let data: SidecarDeployReadyData = bincode::deserialize(&blob)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Blob, Box::new(e)))?;
-            Ok(SidecarDeployReadySignal {
-                inode: row.get(0)?,
-                path: row.get(1)?,
-                deploy_path: row.get(2)?,
-                library_name: row.get(3)?,
-                data,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let results = stmt
+            .query_map(params![], |row| {
+                let blob: Vec<u8> = row.get(4)?;
+                let data: SidecarDeployReadyData = bincode::deserialize(&blob).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
+                    )
+                })?;
+                Ok(SidecarDeployReadySignal {
+                    inode: row.get(0)?,
+                    path: row.get(1)?,
+                    deploy_path: row.get(2)?,
+                    library_name: row.get(3)?,
+                    data,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     }
@@ -1048,20 +1123,21 @@ impl Database {
         use crate::meta::views::StaleSignalFile;
 
         let mut stmt = self.conn.prepare(
-            "SELECT library_path, expected_path FROM signal_library_stale ORDER BY library_path"
+            "SELECT library_path, expected_path FROM signal_library_stale ORDER BY library_path",
         )?;
 
-        let results = stmt.query_map(params![], |row| {
-            let library_path: String = row.get(0)?;
-            // library_path is "{library_name}/relative/path" — extract library_name
-            let library_name = library_path.split('/').next().unwrap_or("").to_string();
-            Ok(StaleSignalFile {
-                library_name,
-                library_path,
-                expected_path: row.get(1)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let results = stmt
+            .query_map(params![], |row| {
+                let library_path: String = row.get(0)?;
+                // library_path is "{library_name}/relative/path" — extract library_name
+                let library_name = library_path.split('/').next().unwrap_or("").to_string();
+                Ok(StaleSignalFile {
+                    library_name,
+                    library_path,
+                    expected_path: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     }
@@ -1069,22 +1145,29 @@ impl Database {
     /// Get all leftover library files (no corpus backing).
     ///
     /// Sorted by library_path for consistent display.
-    pub fn get_library_leftover_files(&self) -> Result<Vec<crate::meta::views::LeftoverSignalFile>> {
+    pub fn get_library_leftover_files(
+        &self,
+    ) -> Result<Vec<crate::meta::views::LeftoverSignalFile>> {
         use crate::meta::views::LeftoverSignalFile;
 
         // key = "library_leftover:{library_name}:{library_name}/path/..."
-        let mut stmt = self.conn.prepare(
-            "SELECT key FROM signal_library_leftover ORDER BY key"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key FROM signal_library_leftover ORDER BY key")?;
 
-        let results = stmt.query_map(params![], |row| {
-            let key: String = row.get(0)?;
-            let (library_name, library_path) = crate::meta::signals::data::LibraryLeftoverSignal::parse_key(&key)
-                .map(|(n, p)| (n.to_string(), p.to_string()))
-                .unwrap_or_else(|| (String::new(), key.clone()));
-            Ok(LeftoverSignalFile { library_name, library_path })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let results = stmt
+            .query_map(params![], |row| {
+                let key: String = row.get(0)?;
+                let (library_name, library_path) =
+                    crate::meta::signals::data::LibraryLeftoverSignal::parse_key(&key)
+                        .map(|(n, p)| (n.to_string(), p.to_string()))
+                        .unwrap_or_else(|| (String::new(), key.clone()));
+                Ok(LeftoverSignalFile {
+                    library_name,
+                    library_path,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     }
@@ -1095,9 +1178,9 @@ impl Database {
     pub fn get_deploy_conflict_groups(&self) -> Result<Vec<crate::meta::views::ConflictGroup>> {
         use crate::meta::views::ConflictGroup;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT deploy_path, data FROM signal_deploy_conflict ORDER BY deploy_path"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT deploy_path, data FROM signal_deploy_conflict ORDER BY deploy_path")?;
 
         let mut results = Vec::new();
         let rows = stmt.query_map(params![], |row| {
@@ -1129,7 +1212,9 @@ impl Database {
     /// Get all sidecar deploy conflict groups (multiple corpus images → same library path).
     ///
     /// Sorted by library_name/deploy_path for consistent display.
-    pub fn get_sidecar_conflict_groups(&self) -> Result<Vec<crate::meta::views::SidecarConflictGroup>> {
+    pub fn get_sidecar_conflict_groups(
+        &self,
+    ) -> Result<Vec<crate::meta::views::SidecarConflictGroup>> {
         use crate::meta::views::SidecarConflictGroup;
 
         let mut stmt = self.conn.prepare(
@@ -1175,9 +1260,9 @@ impl Database {
     /// Used by the missing file resolution modal to categorize files.
     /// MissingFile signals are keyed by inode with path in metadata.
     pub fn get_missing_file_paths(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT path FROM signal_missing_file ORDER BY path"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM signal_missing_file ORDER BY path")?;
 
         let results = stmt
             .query_map(params![], |row| row.get(0))?
@@ -1196,9 +1281,9 @@ impl Database {
     /// Used by the corrupt file resolution modal.
     /// CorruptFile signals are keyed by inode with path in metadata.
     pub fn get_corrupt_file_paths(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT path FROM signal_corrupt_file ORDER BY path"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM signal_corrupt_file ORDER BY path")?;
 
         let results = stmt
             .query_map(params![], |row| row.get(0))?
@@ -1217,13 +1302,17 @@ impl Database {
     /// The signal_path may be stale if files were reorganized after signal emission;
     /// callers should look up the current path via inode from the files table.
     pub fn get_shit_format_files(&self) -> Result<Vec<(i64, String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path, file_type FROM signal_shit_format ORDER BY path"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode, path, file_type FROM signal_shit_format ORDER BY path")?;
 
         let results = stmt
             .query_map(params![], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
             })?
             .collect::<rusqlite::Result<Vec<(i64, String, String)>>>()?;
 
@@ -1255,20 +1344,22 @@ impl Database {
     ///
     /// Returns (corpus_path, reason, superior_path) for each subpar_duplicate signal.
     /// Used by the subpar duplicate resolution modal.
-    pub fn get_subpar_duplicate_files(&self) -> Result<Vec<crate::meta::views::SubparDuplicateEntry>> {
-        use crate::meta::views::SubparDuplicateEntry;
+    pub fn get_subpar_duplicate_files(
+        &self,
+    ) -> Result<Vec<crate::meta::views::SubparDuplicateEntry>> {
         use crate::meta::signals::data::SubparDuplicateData;
+        use crate::meta::views::SubparDuplicateEntry;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT path, data FROM signal_subpar_duplicate ORDER BY path"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, data FROM signal_subpar_duplicate ORDER BY path")?;
 
         let results = stmt
             .query_map(params![], |row| {
                 let path: String = row.get(0)?;
                 let blob: Vec<u8> = row.get(1)?;
-                let data: SubparDuplicateData = bincode::deserialize(&blob)
-                    .unwrap_or_else(|_| SubparDuplicateData {
+                let data: SubparDuplicateData =
+                    bincode::deserialize(&blob).unwrap_or_else(|_| SubparDuplicateData {
                         reason: "unknown".to_string(),
                         superior_inode: 0,
                         superior_path: String::new(),
@@ -1339,12 +1430,16 @@ impl Database {
     ///
     /// Used by EmitCanonicalTag mutation to find and clear stale CompoundTag signals
     /// after a value has been marked as canonical.
-    pub fn get_inodes_with_compound_value(&self, tag_name: &str, compound_value: &str) -> Result<Vec<i64>> {
+    pub fn get_inodes_with_compound_value(
+        &self,
+        tag_name: &str,
+        compound_value: &str,
+    ) -> Result<Vec<i64>> {
         use crate::meta::signals::data::CompoundTagEntry as TypedEntry;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, data FROM signal_compound_tag"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode, data FROM signal_compound_tag")?;
 
         let rows = stmt.query_map(params![], |row| {
             let inode: i64 = row.get(0)?;
@@ -1360,7 +1455,10 @@ impl Database {
                 Err(_) => continue,
             };
             let normalized = mm_utils::tag_names::normalize_tag_name(tag_name);
-            if compounds.iter().any(|c| mm_utils::tag_names::normalize_tag_name(&c.tag_name) == normalized && c.compound_value == compound_value) {
+            if compounds.iter().any(|c| {
+                mm_utils::tag_names::normalize_tag_name(&c.tag_name) == normalized
+                    && c.compound_value == compound_value
+            }) {
                 inodes.push(inode);
             }
         }
@@ -1381,13 +1479,16 @@ impl Database {
     /// `bitrate_fuzz_percent` is no longer used for classification (now
     /// pre-computed at signal emission time) but kept in the signature
     /// for API compatibility.
-    pub fn get_inbox_corpus_match_entries(&self, _bitrate_fuzz_percent: f64) -> Result<Vec<crate::meta::views::InboxCorpusMatchEntry>> {
-        use crate::meta::views::{InboxCorpusMatchEntry, CorpusMatchDetail, MatchClassification};
-        use crate::meta::signals::data::{InboxCorpusMatchData, CorpusMatchQuality};
+    pub fn get_inbox_corpus_match_entries(
+        &self,
+        _bitrate_fuzz_percent: f64,
+    ) -> Result<Vec<crate::meta::views::InboxCorpusMatchEntry>> {
+        use crate::meta::signals::data::{CorpusMatchQuality, InboxCorpusMatchData};
+        use crate::meta::views::{CorpusMatchDetail, InboxCorpusMatchEntry, MatchClassification};
 
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path, data FROM signal_inbox_corpus_match ORDER BY path"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode, path, data FROM signal_inbox_corpus_match ORDER BY path")?;
 
         let mut results = Vec::new();
         let rows = stmt.query_map(params![], |row| {
@@ -1419,14 +1520,16 @@ impl Database {
             // Look up quality strings for display only
             let inbox_quality = self.get_quality_string(inbox_inode);
 
-            let corpus_details: Vec<CorpusMatchDetail> = match_data.corpus_matches.iter().map(|cm| {
-                CorpusMatchDetail {
+            let corpus_details: Vec<CorpusMatchDetail> = match_data
+                .corpus_matches
+                .iter()
+                .map(|cm| CorpusMatchDetail {
                     _corpus_inode: cm.corpus_inode,
                     corpus_path: cm.corpus_path.clone(),
                     corpus_quality: self.get_quality_string(cm.corpus_inode),
                     similarity: cm.similarity,
-                }
-            }).collect();
+                })
+                .collect();
 
             results.push(InboxCorpusMatchEntry {
                 inbox_inode,
@@ -1442,9 +1545,10 @@ impl Database {
 
     /// Get a human-readable quality string for an inode from audio_info.
     fn get_quality_string(&self, inode: i64) -> String {
-        let mut stmt = match self.conn.prepare(
-            "SELECT file_type, bitrate_kbps, sample_rate FROM audio_info WHERE inode = ?1"
-        ) {
+        let mut stmt = match self
+            .conn
+            .prepare("SELECT file_type, bitrate_kbps, sample_rate FROM audio_info WHERE inode = ?1")
+        {
             Ok(s) => s,
             Err(_) => return "Unknown".to_string(),
         };
@@ -1477,12 +1581,14 @@ impl Database {
     /// Returns (signal_key, data) pairs for each group. Each group contains
     /// files with identical fingerprints and identical quality scores that
     /// require operator choice to resolve.
-    pub fn get_redundant_duplicate_groups(&self) -> Result<Vec<(String, crate::meta::signals::data::RedundantDuplicateData)>> {
+    pub fn get_redundant_duplicate_groups(
+        &self,
+    ) -> Result<Vec<(String, crate::meta::signals::data::RedundantDuplicateData)>> {
         use crate::meta::signals::data::RedundantDuplicateData;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT key, data FROM signal_redundant_duplicate ORDER BY key"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key, data FROM signal_redundant_duplicate ORDER BY key")?;
 
         let mut results = Vec::new();
         let rows = stmt.query_map(params![], |row| {
@@ -1510,12 +1616,14 @@ impl Database {
     /// Returns (signal_key, data) pairs for each group. Each group contains
     /// files with identical tag signatures (artist/album/title) that may need
     /// tag editing or stashing to resolve.
-    pub fn get_metadata_duplicate_groups(&self) -> Result<Vec<(String, crate::meta::signals::data::MetadataDuplicateData)>> {
+    pub fn get_metadata_duplicate_groups(
+        &self,
+    ) -> Result<Vec<(String, crate::meta::signals::data::MetadataDuplicateData)>> {
         use crate::meta::signals::data::MetadataDuplicateData;
 
-        let mut stmt = self.conn.prepare(
-            "SELECT key, data FROM signal_metadata_duplicate ORDER BY key"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key, data FROM signal_metadata_duplicate ORDER BY key")?;
 
         let mut results = Vec::new();
         let rows = stmt.query_map(params![], |row| {
@@ -1559,7 +1667,7 @@ impl Database {
             FROM files
             WHERE zone = 'library'
             GROUP BY library_name
-            ORDER BY library_name"
+            ORDER BY library_name",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -1577,4 +1685,3 @@ impl Database {
         })
     }
 }
-

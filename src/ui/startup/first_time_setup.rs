@@ -11,7 +11,7 @@
 //!    an already-initialized terminal (called from `run_menu`).
 
 use anyhow::Result;
-use crossterm::event::{self, EnableMouseCapture, DisableMouseCapture, Event, KeyCode};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -253,7 +253,7 @@ fn render_directory_picker(f: &mut ratatui::Frame, state: &mut DirectoryPickerSt
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(7), // Description
-            Constraint::Min(5),   // Tree browser
+            Constraint::Min(5),    // Tree browser
             Constraint::Length(1), // Controls hint
         ])
         .split(inner);
@@ -357,10 +357,7 @@ fn render_tree(f: &mut ratatui::Frame, area: Rect, state: &mut DirectoryPickerSt
                 Span::raw(format!("{}  ", indent)),
                 Span::styled("Name: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(before, Style::default().fg(Color::White)),
-                Span::styled(
-                    at_cursor,
-                    Style::default().fg(Color::Black).bg(Color::Cyan),
-                ),
+                Span::styled(at_cursor, Style::default().fg(Color::Black).bg(Color::Cyan)),
                 Span::styled(after, Style::default().fg(Color::White)),
             ]));
         } else {
@@ -552,17 +549,13 @@ pub fn handle_first_time_setup<B: Backend>(
                         .add_modifier(Modifier::BOLD),
                 ),
                 Line::from(""),
-                Line::from("No database found. MM will create a new one at:").style(
-                    Style::default().fg(Color::White),
-                ),
+                Line::from("No database found. MM will create a new one at:")
+                    .style(Style::default().fg(Color::White)),
                 Line::from(""),
-                Line::from(format!("  {}", db_display)).style(
-                    Style::default().fg(Color::Yellow),
-                ),
+                Line::from(format!("  {}", db_display)).style(Style::default().fg(Color::Yellow)),
                 Line::from(""),
-                Line::from("After setup, your corpus will be scanned.").style(
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Line::from("After setup, your corpus will be scanned.")
+                    .style(Style::default().fg(Color::DarkGray)),
                 Line::from(""),
                 Line::from("[Enter] Create Database    [Esc] Exit")
                     .style(Style::default().fg(Color::Cyan)),

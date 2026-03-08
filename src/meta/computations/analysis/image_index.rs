@@ -10,8 +10,8 @@ use std::time::Instant;
 
 use crate::corpus::paths;
 use crate::corpus::tags;
-use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
+use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
 
@@ -60,11 +60,7 @@ pub fn execute_index_image_file(
     };
 
     if dirty_inodes.is_empty() {
-        return Result::success(
-            computation,
-            start.elapsed().as_millis() as u64,
-            Vec::new(),
-        );
+        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
     let resolver = paths::get_resolver();
@@ -83,7 +79,8 @@ pub fn execute_index_image_file(
                 }
 
                 // Determine format from extension
-                let ext = abs_path.extension()
+                let ext = abs_path
+                    .extension()
                     .and_then(|e| e.to_str())
                     .map(|s| s.to_lowercase())
                     .unwrap_or_default();
@@ -97,7 +94,8 @@ pub fn execute_index_image_file(
                 };
 
                 // Determine role from filename stem
-                let stem = abs_path.file_stem()
+                let stem = abs_path
+                    .file_stem()
                     .and_then(|s| s.to_str())
                     .map(|s| s.to_lowercase())
                     .unwrap_or_default();
@@ -126,7 +124,9 @@ pub fn execute_index_image_file(
 
     log_general(format!(
         "[COMPUTE] IndexImageFile: {} dirty inodes, indexed={}, skipped={}",
-        dirty_inodes.len(), indexed, skipped
+        dirty_inodes.len(),
+        indexed,
+        skipped
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

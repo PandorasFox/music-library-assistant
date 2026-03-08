@@ -3,22 +3,19 @@
 //! Tick functions run each frame for views that need continuous updates
 //! (progress screen, tag search, progressive worker).
 
-use std::time::{Duration, Instant};
 use crossterm::event;
+use std::time::{Duration, Instant};
 
+use super::eye::Eye;
+use super::insights_view;
+use super::App;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::{
     compound_split_v2,
     progress_screen::{ProgressPhase, ProgressScreen},
     progressive_worker::{OnComplete, ProgressiveWorkerState, WorkItem, WorkSummary},
-    startup,
-    transaction_review,
-    ActiveView,
-    SchemaUpdatePhase, VacuumPhase,
+    startup, transaction_review, ActiveView, SchemaUpdatePhase, VacuumPhase,
 };
-use super::App;
-use super::eye::Eye;
-use super::insights_view;
 
 impl App {
     /// Tick the schema update view.
@@ -98,11 +95,15 @@ impl App {
     fn query_db_size_mb(db_path: &std::path::Path) -> Option<f64> {
         let conn = rusqlite::Connection::open_with_flags(
             db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ).ok()?;
-        let page_count: u64 = conn.pragma_query_value(None, "page_count", |row| row.get(0)).ok()?;
-        let page_size: u64 = conn.pragma_query_value(None, "page_size", |row| row.get(0)).ok()?;
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .ok()?;
+        let page_count: u64 = conn
+            .pragma_query_value(None, "page_count", |row| row.get(0))
+            .ok()?;
+        let page_size: u64 = conn
+            .pragma_query_value(None, "page_size", |row| row.get(0))
+            .ok()?;
         Some((page_count * page_size) as f64 / (1024.0 * 1024.0))
     }
 
@@ -115,14 +116,22 @@ impl App {
     ///
     /// Also drives the eye animation (moved here from run_app, scoped to Progress).
     pub(super) fn tick_progress_screen(&mut self) {
-        if !matches!(self.view, ActiveView::Progress { .. }) { return; }
+        if !matches!(self.view, ActiveView::Progress { .. }) {
+            return;
+        }
 
         // Take the progress view out temporarily via replace with a throwaway Insights.
         let old = std::mem::replace(
             &mut self.view,
             ActiveView::Insights(insights_view::InsightsViewState::new()),
         );
-        let ActiveView::Progress { mut screen, mut eye } = old else { unreachable!() };
+        let ActiveView::Progress {
+            mut screen,
+            mut eye,
+        } = old
+        else {
+            unreachable!()
+        };
 
         let phase = screen.phase();
 
@@ -222,24 +231,26 @@ impl App {
             reasoning
         ));
 
-        self.cache.query(move |db| {
-            let signals_start = std::time::Instant::now();
-            let signal_count = db.count_all_signals();
-            crate::logging::log_general(format!(
-                "[TRANSITION] count_all_signals took {}ms, {} signals",
-                signals_start.elapsed().as_millis(),
-                signal_count
-            ));
+        self.cache
+            .query(move |db| {
+                let signals_start = std::time::Instant::now();
+                let signal_count = db.count_all_signals();
+                crate::logging::log_general(format!(
+                    "[TRANSITION] count_all_signals took {}ms, {} signals",
+                    signals_start.elapsed().as_millis(),
+                    signal_count
+                ));
 
-            let gather_start = std::time::Instant::now();
-            let result = startup::IntakeConfirmationState::gather_startup(db, &corpus_root);
-            crate::logging::log_general(format!(
-                "[TRANSITION] IntakeConfirmationState::gather_startup took {}ms",
-                gather_start.elapsed().as_millis()
-            ));
+                let gather_start = std::time::Instant::now();
+                let result = startup::IntakeConfirmationState::gather_startup(db, &corpus_root);
+                crate::logging::log_general(format!(
+                    "[TRANSITION] IntakeConfirmationState::gather_startup took {}ms",
+                    gather_start.elapsed().as_millis()
+                ));
 
-            result
-        }).recv()
+                result
+            })
+            .recv()
     }
 
     // =========================================================================
@@ -252,14 +263,18 @@ impl App {
     /// until the time budget (~50ms) is exhausted, then returns to allow render.
     /// On completion, drains input buffer and invokes the completion handler.
     pub(super) fn tick_progressive_worker(&mut self) {
-        if !matches!(self.view, ActiveView::ProgressiveWork(_)) { return; }
+        if !matches!(self.view, ActiveView::ProgressiveWork(_)) {
+            return;
+        }
 
         // Take the progressive work view out temporarily
         let old = std::mem::replace(
             &mut self.view,
             ActiveView::Insights(insights_view::InsightsViewState::new()),
         );
-        let ActiveView::ProgressiveWork(mut worker) = old else { unreachable!() };
+        let ActiveView::ProgressiveWork(mut worker) = old else {
+            unreachable!()
+        };
 
         let start = Instant::now();
         let time_budget = Duration::from_millis(50);
@@ -308,9 +323,17 @@ impl App {
         // Load compound split data from the group via cache thread
         // Progressive worker only used for corpus compound splits (Ctrl+A in safe mode)
         let group_clone = group.clone();
-        let data = match self.cache.query(move |db| {
-            compound_split_v2::CompoundSplitDataV2::from_compound_group(&group_clone, db, crate::db::types::Zone::Corpus)
-        }).recv() {
+        let data = match self
+            .cache
+            .query(move |db| {
+                compound_split_v2::CompoundSplitDataV2::from_compound_group(
+                    &group_clone,
+                    db,
+                    crate::db::types::Zone::Corpus,
+                )
+            })
+            .recv()
+        {
             Some(d) => d,
             None => {
                 worker.nops_elided += 1;
@@ -321,8 +344,7 @@ impl App {
         // Update current label for display
         worker.current_label = Some(format!(
             "Split \"{}\" in {}",
-            data.compound.compound_value,
-            data.compound.tag_name,
+            data.compound.compound_value, data.compound.tag_name,
         ));
 
         // Create temporary state to generate mutations
@@ -350,11 +372,23 @@ impl App {
 
         let tag_name = data.compound.tag_name.clone();
         let key = if is_safe_mode {
-            DecisionKey::CompoundSplitSafe { tag_name, cluster_index: idx }
+            DecisionKey::CompoundSplitSafe {
+                tag_name,
+                cluster_index: idx,
+            }
         } else {
-            DecisionKey::CompoundSplitReview { tag_name, cluster_index: idx }
+            DecisionKey::CompoundSplitReview {
+                tag_name,
+                cluster_index: idx,
+            }
         };
-        let _ = super::operator_decisions::stage_decision(&mut self.witch, key, &description, mutations, &worker.gesture);
+        let _ = super::operator_decisions::stage_decision(
+            &mut self.witch,
+            key,
+            &description,
+            mutations,
+            &worker.gesture,
+        );
         worker.mutations_generated += 1;
     }
 
@@ -362,18 +396,13 @@ impl App {
     ///
     /// The view stack already holds the suspended view from the earlier
     /// push_and_switch, so we just set the active view to TransactionReview.
-    fn handle_progressive_complete(
-        &mut self,
-        on_complete: OnComplete,
-        summary: WorkSummary,
-    ) {
+    fn handle_progressive_complete(&mut self, on_complete: OnComplete, summary: WorkSummary) {
         match on_complete {
             OnComplete::CompoundSplitStaging => {
                 if summary.nops_elided > 0 {
                     self.status_message = Some(format!(
                         "Staged {} compound tag splits ({} skipped)",
-                        summary.mutations_generated,
-                        summary.nops_elided,
+                        summary.mutations_generated, summary.nops_elided,
                     ));
                 } else {
                     self.status_message = Some(format!(
@@ -391,7 +420,6 @@ impl App {
             }
         }
     }
-
 }
 
 /// Drain any pending input events from the terminal buffer.

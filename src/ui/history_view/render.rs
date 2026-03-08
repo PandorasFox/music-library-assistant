@@ -8,7 +8,9 @@ use ratatui::{
     Frame,
 };
 
-use super::{ConflictDisposition, HistoryPhase, HistoryViewState, JettisonAllState, JettisonSessionState};
+use super::{
+    ConflictDisposition, HistoryPhase, HistoryViewState, JettisonAllState, JettisonSessionState,
+};
 use crate::ui::helpers::truncate_right;
 use crate::ui::widgets::control_colors as cc;
 use crate::ui::widgets::{ConfirmationButton, ConfirmationModal};
@@ -22,14 +24,20 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
             render_session_list(f, area, state);
             // Overlays
             match &state.phase {
-                HistoryPhase::ConfirmJettisonSession(js) => render_confirm_jettison_session(f, area, js),
+                HistoryPhase::ConfirmJettisonSession(js) => {
+                    render_confirm_jettison_session(f, area, js)
+                }
                 HistoryPhase::ConfirmJettisonAll(ja) => render_confirm_jettison_all(f, area, ja),
-                HistoryPhase::ConfirmJettisonAllFinal(ja) => render_confirm_jettison_all_final(f, area, ja),
+                HistoryPhase::ConfirmJettisonAllFinal(ja) => {
+                    render_confirm_jettison_all_final(f, area, ja)
+                }
                 _ => {}
             }
         }
         HistoryPhase::SessionDetail => render_session_detail(f, area, state),
-        HistoryPhase::ConflictResolution(ref mut cr) => render_conflict_resolution(f, area, &mut state.click_targets, cr),
+        HistoryPhase::ConflictResolution(ref mut cr) => {
+            render_conflict_resolution(f, area, &mut state.click_targets, cr)
+        }
     }
 }
 
@@ -69,12 +77,22 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) 
         state.click_targets.clear();
         state.click_targets.set_list_area(inner);
         for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-            if entry_idx >= state.sessions.len() { break; }
-            state.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+            if entry_idx >= state.sessions.len() {
+                break;
+            }
+            state
+                .click_targets
+                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
         }
 
         let mut lines = Vec::new();
-        for (i, session) in state.sessions.iter().enumerate().skip(scroll).take(visible_height) {
+        for (i, session) in state
+            .sessions
+            .iter()
+            .enumerate()
+            .skip(scroll)
+            .take(visible_height)
+        {
             let is_selected = i == state.cursor;
 
             let timestamp = truncate_right(&session.earliest_at, 19);
@@ -95,7 +113,9 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) 
             );
 
             let style = if is_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -108,8 +128,8 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) 
 
         // Scrollbar
         if state.sessions.len() > visible_height {
-            let mut scrollbar_state = ScrollbarState::new(state.sessions.len())
-                .position(state.cursor);
+            let mut scrollbar_state =
+                ScrollbarState::new(state.sessions.len()).position(state.cursor);
             f.render_stateful_widget(
                 Scrollbar::new(ScrollbarOrientation::VerticalRight),
                 chunks[0],
@@ -176,18 +196,30 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState
     state.click_targets.clear();
     state.click_targets.set_list_area(inner);
     for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-        if entry_idx >= detail.edits.len() { break; }
-        state.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        if entry_idx >= detail.edits.len() {
+            break;
+        }
+        state
+            .click_targets
+            .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
     }
 
     let mut lines = Vec::new();
-    for (i, edit) in detail.edits.iter().enumerate().skip(scroll).take(visible_height) {
+    for (i, edit) in detail
+        .edits
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(visible_height)
+    {
         let is_cursor = i == detail.detail_cursor;
         let is_selected = detail.selected.contains(&i);
 
         let checkbox = if is_selected { "[x]" } else { "[ ]" };
 
-        let path = detail.inode_paths.get(&edit.inode)
+        let path = detail
+            .inode_paths
+            .get(&edit.inode)
             .map(|s| s.as_str())
             .unwrap_or("?");
         let path_short = if path.len() > 25 {
@@ -206,7 +238,9 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState
         );
 
         let style = if is_cursor {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else if is_selected {
             Style::default().fg(Color::Yellow)
         } else {
@@ -221,8 +255,8 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState
 
     // Scrollbar
     if detail.edits.len() > visible_height {
-        let mut scrollbar_state = ScrollbarState::new(detail.edits.len())
-            .position(detail.detail_cursor);
+        let mut scrollbar_state =
+            ScrollbarState::new(detail.edits.len()).position(detail.detail_cursor);
         f.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
             chunks[0],
@@ -248,7 +282,12 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState
 // Conflict Resolution
 // ============================================================================
 
-fn render_conflict_resolution(f: &mut Frame, area: Rect, click_targets: &mut crate::ui::widgets::ListClickTargets, state: &super::ConflictResolutionState) {
+fn render_conflict_resolution(
+    f: &mut Frame,
+    area: Rect,
+    click_targets: &mut crate::ui::widgets::ListClickTargets,
+    state: &super::ConflictResolutionState,
+) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -262,15 +301,25 @@ fn render_conflict_resolution(f: &mut Frame, area: Rect, click_targets: &mut cra
     let header_text = format!(
         " {} clean reversal{}, {} conflict{} ",
         state.clean_reversals.len(),
-        if state.clean_reversals.len() == 1 { "" } else { "s" },
+        if state.clean_reversals.len() == 1 {
+            ""
+        } else {
+            "s"
+        },
         state.conflicts.len(),
         if state.conflicts.len() == 1 { "" } else { "s" },
     );
     let header = Paragraph::new(Line::from(Span::styled(
         header_text,
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
     )))
-    .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow)));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow)),
+    );
     f.render_widget(header, chunks[0]);
 
     // Conflict list
@@ -296,12 +345,20 @@ fn render_conflict_resolution(f: &mut Frame, area: Rect, click_targets: &mut cra
         click_targets.clear();
         click_targets.set_list_area(inner);
         for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-            if entry_idx >= state.conflicts.len() { break; }
+            if entry_idx >= state.conflicts.len() {
+                break;
+            }
             click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
         }
 
         let mut lines = Vec::new();
-        for (i, conflict) in state.conflicts.iter().enumerate().skip(scroll).take(visible_height) {
+        for (i, conflict) in state
+            .conflicts
+            .iter()
+            .enumerate()
+            .skip(scroll)
+            .take(visible_height)
+        {
             let is_cursor = i == state.conflict_cursor;
 
             let disposition_label = match conflict.disposition {
@@ -315,16 +372,13 @@ fn render_conflict_resolution(f: &mut Frame, area: Rect, click_targets: &mut cra
 
             let text = format!(
                 " [{}] #{} {} │ was {} → set {} → now {}",
-                disposition_label,
-                conflict.edit.id,
-                conflict.edit.field_name,
-                old,
-                new,
-                current,
+                disposition_label, conflict.edit.id, conflict.edit.field_name, old, new, current,
             );
 
             let style = if is_cursor {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 match conflict.disposition {
                     ConflictDisposition::RevertAnyway => Style::default().fg(Color::Yellow),

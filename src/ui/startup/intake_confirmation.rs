@@ -19,13 +19,13 @@ use ratatui::Frame;
 use crate::ui::input::InputAction;
 use crate::ui::widgets::centered_rect_fixed;
 
-use crate::meta::signals::data::UnindexedFileSignal;
-use crate::db::ReadOnlyDb;
-use crate::db::types::Zone;
-use crate::meta::mutations::Mutation;
-use crate::meta::mutations::indexing::IndexFileFromPathMutation;
 use crate::corpus::paths;
+use crate::db::types::Zone;
+use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
+use crate::meta::mutations::indexing::IndexFileFromPathMutation;
+use crate::meta::mutations::Mutation;
+use crate::meta::signals::data::UnindexedFileSignal;
 
 /// Where the intake confirmation was triggered from.
 ///
@@ -100,7 +100,11 @@ impl IntakeConfirmationState {
     /// (matching the signal key) with paths for display and mutation creation.
     ///
     /// Returns None if there are no unindexed files.
-    pub fn gather(read_db: &ReadOnlyDb<'_>, _corpus_root: &std::path::Path, source: IntakeSource) -> Option<Self> {
+    pub fn gather(
+        read_db: &ReadOnlyDb<'_>,
+        _corpus_root: &std::path::Path,
+        source: IntakeSource,
+    ) -> Option<Self> {
         // Get all UnindexedFile signals - these are pre-computed during Awakening
         let signals: Vec<UnindexedFileSignal> = match read_db.get_unindexed_file_signals() {
             Ok(s) => s,
@@ -206,7 +210,8 @@ impl IntakeConfirmationState {
             Ok(u) => u,
             Err(e) => {
                 crate::logging::log_error(format!(
-                    "IntakeConfirmation::gather_inbox: query failed: {:?}", e
+                    "IntakeConfirmation::gather_inbox: query failed: {:?}",
+                    e
                 ));
                 return None;
             }
@@ -246,7 +251,10 @@ impl IntakeConfirmationState {
                     dir_to_files.entry(dir_str).or_default().push(file_str);
                 }
 
-                files.push(UnindexedFileEntry { abs_path, zone: Zone::Inbox });
+                files.push(UnindexedFileEntry {
+                    abs_path,
+                    zone: Zone::Inbox,
+                });
             }
         }
 
@@ -258,13 +266,19 @@ impl IntakeConfirmationState {
             .into_iter()
             .map(|(dir, mut filenames)| {
                 filenames.sort();
-                DirectoryGroup { display_path: dir, filenames, zone: Zone::Inbox }
+                DirectoryGroup {
+                    display_path: dir,
+                    filenames,
+                    zone: Zone::Inbox,
+                }
             })
             .collect();
 
         log_general(format!(
             "IntakeConfirmation (inbox): gathered {} files ({} bytes) from {} directories",
-            files.len(), total_bytes, directories.len()
+            files.len(),
+            total_bytes,
+            directories.len()
         ));
 
         Some(Self {
@@ -332,7 +346,8 @@ impl IntakeConfirmationState {
 
     /// Compute total number of lines in the file list display
     fn total_list_lines(&self) -> usize {
-        let group_lines: usize = self.grouped_files
+        let group_lines: usize = self
+            .grouped_files
             .iter()
             .map(|g| 1 + g.filenames.len()) // 1 for directory header + files
             .sum();
@@ -354,7 +369,11 @@ impl IntakeConfirmationState {
     }
 
     /// Handle semantic input action.
-    pub fn handle_input(&mut self, action: &InputAction, visible_height: usize) -> IntakeConfirmationAction {
+    pub fn handle_input(
+        &mut self,
+        action: &InputAction,
+        visible_height: usize,
+    ) -> IntakeConfirmationAction {
         match action {
             InputAction::Confirm => IntakeConfirmationAction::Confirmed,
             InputAction::Cancel => IntakeConfirmationAction::Skipped,
@@ -381,10 +400,12 @@ impl IntakeConfirmationState {
         let mutations: Vec<Mutation> = self
             .files
             .iter()
-            .map(|entry| Mutation::IndexFileFromPath(IndexFileFromPathMutation {
-                path: entry.abs_path.clone(),
-                zone: entry.zone.as_str().to_string(),
-            }))
+            .map(|entry| {
+                Mutation::IndexFileFromPath(IndexFileFromPathMutation {
+                    path: entry.abs_path.clone(),
+                    zone: entry.zone.as_str().to_string(),
+                })
+            })
             .collect();
 
         log_general(format!(
@@ -455,10 +476,15 @@ pub fn render(f: &mut Frame, area: Rect, state: &IntakeConfirmationState) {
         Line::from(vec![
             Span::styled(
                 format!("{} files", state.file_count),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" to index  "),
-            Span::styled(format!("({})", size_str), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("({})", size_str),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]),
         Line::from(""),
     ];
@@ -480,14 +506,18 @@ pub fn render(f: &mut Frame, area: Rect, state: &IntakeConfirmationState) {
             };
             list_lines.push(Line::from(Span::styled(
                 zone_label,
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )));
             last_zone = Some(group.zone);
         }
         // Directory header
         list_lines.push(Line::from(Span::styled(
             format!("{}/", group.display_path),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )));
         // Files within directory
         for filename in &group.filenames {
@@ -519,10 +549,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &IntakeConfirmationState) {
         Block::default()
     };
 
-    f.render_widget(
-        Paragraph::new(visible_lines).block(list_block),
-        chunks[1],
-    );
+    f.render_widget(Paragraph::new(visible_lines).block(list_block), chunks[1]);
 
     // Footer
     let footer_lines = vec![

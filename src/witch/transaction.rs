@@ -4,14 +4,16 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::db::types::Zone;
 use crate::meta::decisions::{
     ConfirmationGesture, DecisionKey, DiscardSummary, PendingTransaction, TransactionError,
     WitnessedDecision,
 };
-use crate::db::types::Zone;
-use crate::meta::mutations::{Mutation, MutationExecutionStage, MutationStaging, TagOp};
+use crate::meta::mutations::dir_config_edit::{
+    ApplyBatchDirConfigEditsMutation, DirConfigEditEntry,
+};
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
-use crate::meta::mutations::dir_config_edit::{ApplyBatchDirConfigEditsMutation, DirConfigEditEntry};
+use crate::meta::mutations::{Mutation, MutationExecutionStage, MutationStaging, TagOp};
 
 /// Coalesce ApplyTagOps mutations into per-zone mutations.
 ///
@@ -64,7 +66,10 @@ fn coalesce_tag_ops(mutations: Vec<Mutation>) -> Vec<Mutation> {
             .collect();
 
         if !final_ops.is_empty() {
-            result.push(Mutation::ApplyTagOps(ApplyTagOpsMutation { ops: final_ops, zone }));
+            result.push(Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                ops: final_ops,
+                zone,
+            }));
         }
     }
 
@@ -82,7 +87,8 @@ fn coalesce_tag_ops(mutations: Vec<Mutation>) -> Vec<Mutation> {
 ///
 /// With only 0-1 dir config edits, returns mutations unchanged.
 fn coalesce_dir_config_edits(mutations: Vec<Mutation>) -> Vec<Mutation> {
-    let mut dir_edits: Vec<crate::meta::mutations::dir_config_edit::ApplyDirConfigEditMutation> = Vec::new();
+    let mut dir_edits: Vec<crate::meta::mutations::dir_config_edit::ApplyDirConfigEditMutation> =
+        Vec::new();
     let mut other: Vec<Mutation> = Vec::new();
 
     for mutation in mutations {
@@ -143,7 +149,10 @@ impl super::Witch {
     // -------------------------------------------------------------------------
 
     /// Require an active transaction, returning error if none exists.
-    pub(super) fn require_active_transaction(&self, operation: &str) -> Result<(), TransactionError> {
+    pub(super) fn require_active_transaction(
+        &self,
+        operation: &str,
+    ) -> Result<(), TransactionError> {
         if self.pending_transaction.is_none() {
             crate::logging::log_mutation(format!(
                 "[TRANSACTION] {} REJECTED: no active transaction",
@@ -174,10 +183,7 @@ impl super::Witch {
             return Err(TransactionError::AlreadyActive);
         }
 
-        crate::logging::log_mutation(format!(
-            "[TRANSACTION] start_transaction({:?}) OK",
-            label
-        ));
+        crate::logging::log_mutation(format!("[TRANSACTION] start_transaction({:?}) OK", label));
         self.pending_transaction = Some(PendingTransaction::new(label));
         self.sync_handled_sources();
         Ok(())
@@ -193,7 +199,11 @@ impl super::Witch {
     /// Returns None if no transaction is active.
     pub fn transaction_summary(&self) -> Option<(&str, usize, usize)> {
         self.pending_transaction.as_ref().map(|txn| {
-            (txn.label.as_str(), txn.decision_count(), txn.mutation_count())
+            (
+                txn.label.as_str(),
+                txn.decision_count(),
+                txn.mutation_count(),
+            )
         })
     }
 
@@ -225,10 +235,7 @@ impl super::Witch {
 
         // Log each mutation for debugging
         for (i, m) in decision.mutations.iter().enumerate() {
-            crate::logging::log_mutation(format!(
-                "[TRANSACTION]   mutation[{}]: {:?}",
-                i, m
-            ));
+            crate::logging::log_mutation(format!("[TRANSACTION]   mutation[{}]: {:?}", i, m));
         }
 
         txn.decisions.insert(key, decision);
@@ -266,7 +273,8 @@ impl super::Witch {
         if txn.remove_decision(key).is_some() {
             crate::logging::log_mutation(format!(
                 "[TRANSACTION] remove_decision(key={}) OK - txn now has {} decisions",
-                key, txn.decision_count()
+                key,
+                txn.decision_count()
             ));
         }
         self.sync_handled_sources();
@@ -321,7 +329,7 @@ impl super::Witch {
 
         if all_mutations.is_empty() {
             crate::logging::log_mutation(
-                "[TRANSACTION] confirm_transaction: no mutations to queue (empty transaction)"
+                "[TRANSACTION] confirm_transaction: no mutations to queue (empty transaction)",
             );
             return Ok(());
         }
@@ -349,7 +357,10 @@ impl super::Witch {
         crate::logging::log_mutation(format!(
             "[TRANSACTION] Staged execution: {} phase(s): {:?}",
             phases.len(),
-            phases.iter().map(|(s, m)| format!("{:?}({})", s, m.len())).collect::<Vec<_>>()
+            phases
+                .iter()
+                .map(|(s, m)| format!("{:?}({})", s, m.len()))
+                .collect::<Vec<_>>()
         ));
 
         // Generate a timestamped session label so tag_edit_history rows from this
@@ -364,7 +375,8 @@ impl super::Witch {
         if let Some((stage, mutations)) = phases.pop_front() {
             crate::logging::log_mutation(format!(
                 "[TRANSACTION] Queueing first phase: {:?} ({} mutations)",
-                stage, mutations.len()
+                stage,
+                mutations.len()
             ));
             self.pending_mutation_phases = phases;
             self.queue_mutations_internal(mutations, Some(session_label));
@@ -379,9 +391,7 @@ impl super::Witch {
     /// Any code that has access to the Witch can discard (cancel handlers, etc.).
     ///
     /// Returns summary of what was discarded.
-    pub fn discard_transaction(
-        &mut self,
-    ) -> Result<DiscardSummary, TransactionError> {
+    pub fn discard_transaction(&mut self) -> Result<DiscardSummary, TransactionError> {
         self.require_active_transaction("discard_transaction")?;
 
         let txn = self.pending_transaction.take().unwrap();
@@ -389,7 +399,8 @@ impl super::Witch {
 
         crate::logging::log_mutation(format!(
             "[TRANSACTION] discard_transaction OK - discarded {} decisions, {} mutations",
-            txn.decision_count(), txn.mutation_count()
+            txn.decision_count(),
+            txn.mutation_count()
         ));
 
         Ok(DiscardSummary)

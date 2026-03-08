@@ -53,7 +53,11 @@ impl ConfigValue {
                 }
             }
             ConfigValue::String(s) => {
-                if s.is_empty() { "(empty)".to_string() } else { s.clone() }
+                if s.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    s.clone()
+                }
             }
             ConfigValue::StringList(v) => v.join(", "),
             ConfigValue::Enum { selected, options } => {
@@ -87,7 +91,9 @@ impl ConfigValue {
             (ConfigValue::Duration(a), ConfigValue::Duration(b)) => a == b,
             (ConfigValue::String(a), ConfigValue::String(b)) => a == b,
             (ConfigValue::StringList(a), ConfigValue::StringList(b)) => a == b,
-            (ConfigValue::Enum { selected: a, .. }, ConfigValue::Enum { selected: b, .. }) => a == b,
+            (ConfigValue::Enum { selected: a, .. }, ConfigValue::Enum { selected: b, .. }) => {
+                a == b
+            }
             (ConfigValue::StringSet(a), ConfigValue::StringSet(b)) => a == b,
             (ConfigValue::StringListMap(a), ConfigValue::StringListMap(b)) => a == b,
             _ => false,
@@ -117,4 +123,3 @@ pub struct ConfigGroup {
     pub fields: Vec<ConfigField>,
     pub collapsed: bool,
 }
-

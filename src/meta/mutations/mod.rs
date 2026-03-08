@@ -26,14 +26,14 @@
 //!     └── Each struct's MutationExecutor::execute() impl
 //! ```
 //!
-mod types;
-pub mod traits;
-pub mod tag_edit;
-pub mod indexing;
-pub mod file_ops;
-pub mod transcode;
 pub mod config_edit;
 pub mod dir_config_edit;
+pub mod file_ops;
+pub mod indexing;
+pub mod tag_edit;
+pub mod traits;
+pub mod transcode;
+mod types;
 
 pub use types::*;
 // MutationContext and MutationExecutor accessible via crate::meta::mutations::traits::{...}
@@ -93,7 +93,10 @@ mod tests {
         ];
 
         // Create a single ApplyTagOps mutation containing all ops
-        let mutation = Mutation::ApplyTagOps(tag_edit::ApplyTagOpsMutation { ops, zone: crate::db::types::Zone::Corpus });
+        let mutation = Mutation::ApplyTagOps(tag_edit::ApplyTagOpsMutation {
+            ops,
+            zone: crate::db::types::Zone::Corpus,
+        });
 
         // Verify ApplyTagOps mutation
         assert_eq!(mutation.label(), "Tag edit");

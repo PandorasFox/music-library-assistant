@@ -65,7 +65,11 @@ impl LateralView {
             LateralView::Search => LateralView::Files,
             LateralView::Files => LateralView::Health,
             LateralView::Health => {
-                if transactions_open { LateralView::Transaction } else { LateralView::Inbox }
+                if transactions_open {
+                    LateralView::Transaction
+                } else {
+                    LateralView::Inbox
+                }
             }
             LateralView::Transaction => LateralView::Inbox,
             LateralView::Inbox => LateralView::Deploy,
@@ -84,7 +88,11 @@ impl LateralView {
             LateralView::Health => LateralView::Files,
             LateralView::Transaction => LateralView::Health,
             LateralView::Inbox => {
-                if transactions_open { LateralView::Transaction } else { LateralView::Health }
+                if transactions_open {
+                    LateralView::Transaction
+                } else {
+                    LateralView::Health
+                }
             }
             LateralView::Deploy => LateralView::Inbox,
             LateralView::History => LateralView::Deploy,
@@ -170,7 +178,7 @@ impl UnifiedTitleBar {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Min(20),                // Tab switcher (fills remaining)
+                Constraint::Min(20),                  // Tab switcher (fills remaining)
                 Constraint::Length(TITLE_PANE_WIDTH), // Title (fixed)
             ])
             .split(area);
@@ -194,10 +202,7 @@ impl UnifiedTitleBar {
         // Same horizontal split as render()
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Min(20),
-                Constraint::Length(TITLE_PANE_WIDTH),
-            ])
+            .constraints([Constraint::Min(20), Constraint::Length(TITLE_PANE_WIDTH)])
             .split(area);
 
         let tab_area = chunks[0];
@@ -247,8 +252,8 @@ impl UnifiedTitleBar {
             spans.push(Span::styled(label, style));
         }
 
-        let paragraph = Paragraph::new(Line::from(spans))
-            .block(Block::default().borders(Borders::ALL));
+        let paragraph =
+            Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::ALL));
 
         f.render_widget(paragraph, area);
     }
@@ -257,7 +262,11 @@ impl UnifiedTitleBar {
         let paragraph = Paragraph::new(TITLE_TEXT)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            );
 
         f.render_widget(paragraph, area);
     }
@@ -273,18 +282,61 @@ mod tests {
         let view = LateralView::Config;
         assert_eq!(view.next(false), LateralView::Search);
         assert_eq!(view.next(false).next(false), LateralView::Files);
-        assert_eq!(view.next(false).next(false).next(false), LateralView::Health);
-        assert_eq!(view.next(false).next(false).next(false).next(false), LateralView::Inbox);
-        assert_eq!(view.next(false).next(false).next(false).next(false).next(false), LateralView::Deploy);
-        assert_eq!(view.next(false).next(false).next(false).next(false).next(false).next(false), LateralView::History);
-        assert_eq!(view.next(false).next(false).next(false).next(false).next(false).next(false).next(false), LateralView::ExternalMatches);
-        assert_eq!(view.next(false).next(false).next(false).next(false).next(false).next(false).next(false).next(false), LateralView::Config);
+        assert_eq!(
+            view.next(false).next(false).next(false),
+            LateralView::Health
+        );
+        assert_eq!(
+            view.next(false).next(false).next(false).next(false),
+            LateralView::Inbox
+        );
+        assert_eq!(
+            view.next(false)
+                .next(false)
+                .next(false)
+                .next(false)
+                .next(false),
+            LateralView::Deploy
+        );
+        assert_eq!(
+            view.next(false)
+                .next(false)
+                .next(false)
+                .next(false)
+                .next(false)
+                .next(false),
+            LateralView::History
+        );
+        assert_eq!(
+            view.next(false)
+                .next(false)
+                .next(false)
+                .next(false)
+                .next(false)
+                .next(false)
+                .next(false),
+            LateralView::ExternalMatches
+        );
+        assert_eq!(
+            view.next(false)
+                .next(false)
+                .next(false)
+                .next(false)
+                .next(false)
+                .next(false)
+                .next(false)
+                .next(false),
+            LateralView::Config
+        );
 
         // Test backward cycling from Search
         let view = LateralView::Search;
         assert_eq!(view.prev(false), LateralView::Config);
         assert_eq!(view.prev(false).prev(false), LateralView::ExternalMatches);
-        assert_eq!(view.prev(false).prev(false).prev(false), LateralView::History);
+        assert_eq!(
+            view.prev(false).prev(false).prev(false),
+            LateralView::History
+        );
 
         // Test forward cycling with transactions: Health → Transaction → Inbox
         assert_eq!(LateralView::Health.next(true), LateralView::Transaction);

@@ -7,12 +7,12 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use crate::corpus::paths;
 use crate::db::ReadOnlyDb;
-use crate::meta::views::{InboxCorpusMatchEntry, MatchClassification};
-use crate::meta::mutations::Mutation;
 use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
-use crate::corpus::paths;
+use crate::meta::mutations::Mutation;
+use crate::meta::views::{InboxCorpusMatchEntry, MatchClassification};
 
 /// Cached data for the inbox corpus match resolution modal.
 ///
@@ -48,9 +48,15 @@ impl InboxCorpusMatchModalData {
 
     /// Count of entries safe to stash (Equivalent + Subpar).
     pub fn stashable_count(&self) -> usize {
-        self.entries.iter().filter(|e| {
-            matches!(e.classification, MatchClassification::Equivalent | MatchClassification::Subpar)
-        }).count()
+        self.entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.classification,
+                    MatchClassification::Equivalent | MatchClassification::Subpar
+                )
+            })
+            .count()
     }
 
     /// Count by classification: (better, equivalent, subpar).
@@ -73,7 +79,12 @@ impl InboxCorpusMatchModalData {
     /// Only Equivalent and Subpar entries are stashed. Better entries
     /// (inbox is higher quality) are left alone.
     pub fn stash_and_drop_mutations(&self) -> Vec<Mutation> {
-        self.stash_mutations_for(|c| matches!(c, MatchClassification::Equivalent | MatchClassification::Subpar))
+        self.stash_mutations_for(|c| {
+            matches!(
+                c,
+                MatchClassification::Equivalent | MatchClassification::Subpar
+            )
+        })
     }
 
     /// Generate StashFromZone + DropFromIndex mutations for ALL entries,
@@ -82,7 +93,10 @@ impl InboxCorpusMatchModalData {
         self.stash_mutations_for(|_| true)
     }
 
-    fn stash_mutations_for(&self, predicate: impl Fn(MatchClassification) -> bool) -> Vec<Mutation> {
+    fn stash_mutations_for(
+        &self,
+        predicate: impl Fn(MatchClassification) -> bool,
+    ) -> Vec<Mutation> {
         let resolver = paths::get_resolver();
         let mut mutations = Vec::new();
 

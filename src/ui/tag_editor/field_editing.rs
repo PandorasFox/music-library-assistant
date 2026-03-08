@@ -51,7 +51,8 @@ impl UnifiedTagEditorState {
                         }
                         FieldEditState::EditingValue => {
                             // Mark as Edited with new value
-                            field.value = AggregatedValue::Edited(self.value_input.value().to_string());
+                            field.value =
+                                AggregatedValue::Edited(self.value_input.value().to_string());
                         }
                         FieldEditState::NonEditable => {}
                     }
@@ -103,7 +104,11 @@ impl UnifiedTagEditorState {
     }
 
     fn handle_aggregated_field_enter(&mut self) {
-        let field = match self.aggregated_fields.as_ref().and_then(|f| f.get(self.current_field_idx)) {
+        let field = match self
+            .aggregated_fields
+            .as_ref()
+            .and_then(|f| f.get(self.current_field_idx))
+        {
             Some(f) => f.clone(),
             None => return,
         };
@@ -176,11 +181,14 @@ impl UnifiedTagEditorState {
         let insert_pos = if self.is_aggregated_mode() {
             if let Some(ref mut agg_fields) = self.aggregated_fields {
                 let pos = agg_fields.len().saturating_sub(1);
-                agg_fields.insert(pos, AggregatedTagField {
-                    name: "new_tag".to_string(),
-                    value: AggregatedValue::Edited(String::new()),
-                    original_value: AggregatedValue::Consistent(String::new()),
-                });
+                agg_fields.insert(
+                    pos,
+                    AggregatedTagField {
+                        name: "new_tag".to_string(),
+                        value: AggregatedValue::Edited(String::new()),
+                        original_value: AggregatedValue::Consistent(String::new()),
+                    },
+                );
                 Some(pos)
             } else {
                 None
@@ -205,9 +213,12 @@ impl UnifiedTagEditorState {
             self.current_field_idx = pos;
             // Scroll to show the new tag
             if self.field_visible_height > 0 {
-                let visible_end = self.field_scroll_offset + self.field_visible_height.saturating_sub(1);
+                let visible_end =
+                    self.field_scroll_offset + self.field_visible_height.saturating_sub(1);
                 if self.current_field_idx >= visible_end {
-                    self.field_scroll_offset = self.current_field_idx.saturating_sub(self.field_visible_height.saturating_sub(2));
+                    self.field_scroll_offset = self
+                        .current_field_idx
+                        .saturating_sub(self.field_visible_height.saturating_sub(2));
                 }
             }
         }

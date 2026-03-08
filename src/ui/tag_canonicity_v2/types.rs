@@ -17,15 +17,15 @@ use std::path::{Path, PathBuf};
 /// Maps inode → list of (tag_name, old_value, new_value) triples.
 pub type PendingTagEdits = HashMap<i64, Vec<(String, String, String)>>;
 
-use crate::db::types::Zone;
-use crate::meta::signals::data::{
-    InconsistentAlbumArtistSignal, InboxTagCanonicitySignal, TagCanonicitySignal,
-};
-use crate::db::ReadOnlyDb;
-use crate::meta::mutations::{Mutation, TagOp};
-use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
+use crate::db::types::Zone;
+use crate::db::ReadOnlyDb;
+use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
+use crate::meta::mutations::{Mutation, TagOp};
+use crate::meta::signals::data::{
+    InboxTagCanonicitySignal, InconsistentAlbumArtistSignal, TagCanonicitySignal,
+};
 use crate::ui::widgets::TextInputState;
 
 /// A tag variant with its occurrence count.
@@ -167,11 +167,8 @@ impl TagCanonicalityModalDataV2 {
         let files = Self::load_file_info_for_zone(&inodes, read_db, Zone::Inbox);
 
         // Pre-fill with the top corpus variant (sorted DESC by count), not the inbox variant
-        let default_canonical_override = signal
-            .data
-            .corpus_variants
-            .first()
-            .map(|(v, _)| v.clone());
+        let default_canonical_override =
+            signal.data.corpus_variants.first().map(|(v, _)| v.clone());
 
         Some(Self {
             tag_name,
@@ -189,14 +186,16 @@ impl TagCanonicalityModalDataV2 {
     }
 
     /// Load file info for a specific zone.
-    fn load_file_info_for_zone(inodes: &[i64], read_db: &ReadOnlyDb, zone: Zone) -> Vec<FileTagInfo> {
+    fn load_file_info_for_zone(
+        inodes: &[i64],
+        read_db: &ReadOnlyDb,
+        zone: Zone,
+    ) -> Vec<FileTagInfo> {
         let resolver = paths::get_resolver();
         let mut files = Vec::new();
 
         for &inode in inodes {
-            if let Ok(Some(audio_file)) =
-                read_db.get_audio_file_by_inode(inode, zone)
-            {
+            if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, zone) {
                 let path = audio_file.path();
                 let filename = Path::new(path)
                     .file_name()
@@ -299,7 +298,10 @@ pub struct TagCanonicalityStateV2 {
 impl TagCanonicalityStateV2 {
     /// Path of the currently selected file (for status bar).
     pub fn selected_path(&self) -> Option<&str> {
-        self.data.files.get(self.file_cursor).map(|f| f.path.as_str())
+        self.data
+            .files
+            .get(self.file_cursor)
+            .map(|f| f.path.as_str())
     }
 
     /// Create a new state from data.
@@ -430,7 +432,9 @@ impl TagCanonicalityStateV2 {
 
         // Also check for add_tag ops (old_value=None, new_value=Some) which
         // correspond to the "" (missing) variant being selected.
-        let has_add_ops = ops.iter().any(|op| op.old_value.is_none() && op.new_value.is_some());
+        let has_add_ops = ops
+            .iter()
+            .any(|op| op.old_value.is_none() && op.new_value.is_some());
 
         // Map old_values back to variant indices, plus:
         // - The canonical-value variant itself (no TagOp is generated for it, since
@@ -621,7 +625,10 @@ impl TagCanonicalityStateV2 {
         if ops.is_empty() {
             Vec::new()
         } else {
-            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: self.zone })]
+            vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                ops,
+                zone: self.zone,
+            })]
         }
     }
 }

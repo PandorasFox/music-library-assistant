@@ -80,9 +80,9 @@ impl ReconciliationPlan {
             .context("Failed to open in-memory DB for schema introspection")?;
 
         for entry in &inventory {
-            mem_db
-                .execute_batch(entry.create_sql)
-                .with_context(|| format!("Failed to create expected table '{}' in memory", entry.name))?;
+            mem_db.execute_batch(entry.create_sql).with_context(|| {
+                format!("Failed to create expected table '{}' in memory", entry.name)
+            })?;
         }
 
         // Get actual tables in the real database
@@ -185,7 +185,8 @@ impl ReconciliationPlan {
         }
         for i in &self.new_indices {
             // Extract a short label from the SQL
-            let label = i.create_sql
+            let label = i
+                .create_sql
                 .split("IF NOT EXISTS ")
                 .nth(1)
                 .and_then(|s| s.split(' ').next())
@@ -253,12 +254,13 @@ impl ReconciliationPlan {
                 c.table, c.column
             ));
             conn.execute(
-                &format!("ALTER TABLE {} ADD COLUMN {} {}", c.table, c.column, c.column_def),
+                &format!(
+                    "ALTER TABLE {} ADD COLUMN {} {}",
+                    c.table, c.column, c.column_def
+                ),
                 [],
             )
-            .with_context(|| {
-                format!("Failed to add column '{}.{}'", c.table, c.column)
-            })?;
+            .with_context(|| format!("Failed to add column '{}.{}'", c.table, c.column))?;
         }
 
         // 3. Drop+recreate computed signal tables, seed dirty inodes
@@ -530,7 +532,9 @@ mod tests {
         let plan = ReconciliationPlan::compute(&conn).unwrap();
         assert!(!plan.is_empty(), "Should detect missing column");
         assert!(
-            plan.new_columns.iter().any(|c| c.table == "audio_info" && c.column == "pic_count"),
+            plan.new_columns
+                .iter()
+                .any(|c| c.table == "audio_info" && c.column == "pic_count"),
             "Should detect missing pic_count column"
         );
     }

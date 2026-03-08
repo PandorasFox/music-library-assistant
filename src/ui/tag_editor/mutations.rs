@@ -6,10 +6,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::db::types::{AudioFile, Zone};
-use crate::meta::mutations::{Mutation, TagOp};
-use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::corpus::paths;
+use crate::db::types::{AudioFile, Zone};
+use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
+use crate::meta::mutations::{Mutation, TagOp};
 
 use super::types::{AggregatedTagField, AggregatedValue, TagChange, TagField};
 
@@ -32,7 +32,8 @@ pub fn audio_file_to_tag_fields(audio_file: &AudioFile) -> Vec<TagField> {
         Err(e) => {
             crate::logging::log_error(format!(
                 "Could not read tags from {}: {}",
-                disk_path.display(), e
+                disk_path.display(),
+                e
             ));
             TagSet::empty()
         }
@@ -101,8 +102,14 @@ pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) ->
         all_names.extend(curr_values.keys().cloned());
 
         for normalized_name in all_names {
-            let orig = orig_values.get(&normalized_name).map(|v| v.as_slice()).unwrap_or(&[]);
-            let curr = curr_values.get(&normalized_name).map(|v| v.as_slice()).unwrap_or(&[]);
+            let orig = orig_values
+                .get(&normalized_name)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            let curr = curr_values
+                .get(&normalized_name)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
 
             // Get display name from current or original
             let display_name = curr
@@ -159,7 +166,8 @@ pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) ->
             for field in orig {
                 if !curr_value_set.contains(&field.value) {
                     // Check if it's not already covered by a deletion flag
-                    let is_deleted_explicitly = curr.iter().any(|c| c.value == field.value && c.deleted);
+                    let is_deleted_explicitly =
+                        curr.iter().any(|c| c.value == field.value && c.deleted);
                     if !is_deleted_explicitly {
                         changes.push(TagChange {
                             track_idx,
@@ -187,7 +195,11 @@ pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) ->
 /// when track state changed since staging.
 ///
 /// Returns a single ApplyTagOps mutation containing all ops.
-pub fn changes_to_mutations(changes: &[TagChange], audio_files: &[AudioFile], _all_tag_fields: &[Vec<TagField>]) -> Vec<Mutation> {
+pub fn changes_to_mutations(
+    changes: &[TagChange],
+    audio_files: &[AudioFile],
+    _all_tag_fields: &[Vec<TagField>],
+) -> Vec<Mutation> {
     let mut ops = Vec::new();
 
     for change in changes {
@@ -203,7 +215,11 @@ pub fn changes_to_mutations(changes: &[TagChange], audio_files: &[AudioFile], _a
             }
             (false, true) => {
                 // Old has value, new empty → drop
-                ops.push(TagOp::drop_tag(inode, &change.field_name, &change.old_value));
+                ops.push(TagOp::drop_tag(
+                    inode,
+                    &change.field_name,
+                    &change.old_value,
+                ));
             }
             (false, false) => {
                 // Both have values → replace
@@ -223,7 +239,10 @@ pub fn changes_to_mutations(changes: &[TagChange], audio_files: &[AudioFile], _a
     if ops.is_empty() {
         Vec::new()
     } else {
-        let zone = audio_files.first().map(|f| f.entry.zone).unwrap_or(Zone::Corpus);
+        let zone = audio_files
+            .first()
+            .map(|f| f.entry.zone)
+            .unwrap_or(Zone::Corpus);
         vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone })]
     }
 }

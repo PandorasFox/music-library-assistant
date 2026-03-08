@@ -13,21 +13,24 @@
 
 mod compound_split;
 mod deploy;
+mod external_match;
+mod history;
 mod inbox;
 mod manual_review;
 mod oob_resolution;
 mod simple_resolutions;
-mod external_match;
-mod history;
 mod tag_canonicity;
 pub(crate) mod witness;
 
-use crate::meta::decisions::DecisionKey;
-use crate::ui::{filter_popup, insights_view, progress_screen, tag_search, transaction_review, tree_browser, tag_editor, startup, widgets};
-use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext, ViewAction};
-use crate::ui::suspended_views::SuspendTarget;
-use crate::ui::eye::Eye;
 use super::App;
+use crate::meta::decisions::DecisionKey;
+use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext, ViewAction};
+use crate::ui::eye::Eye;
+use crate::ui::suspended_views::SuspendTarget;
+use crate::ui::{
+    filter_popup, insights_view, progress_screen, startup, tag_editor, tag_search,
+    transaction_review, tree_browser, widgets,
+};
 
 impl App {
     // =========================================================================
@@ -55,32 +58,68 @@ impl App {
             ViewAction::CorpusBrowser(a) => self.handle_tree_browser_action(a, witness.as_ref()),
             ViewAction::TagSearch(a) => self.handle_tag_search_action(a),
             ViewAction::Inbox(a) => self.handle_inbox_action(a, witness.as_ref()),
-            ViewAction::TabbedTransactionReview(a) => self.handle_tabbed_transaction_review_action(a, witness.as_ref()),
+            ViewAction::TabbedTransactionReview(a) => {
+                self.handle_tabbed_transaction_review_action(a, witness.as_ref())
+            }
             ViewAction::ExitConfirm(a) => self.handle_exit_confirm_action(a),
-            ViewAction::IntakeConfirmation(a) => self.handle_intake_confirmation_action(a, witness.as_ref()),
-            ViewAction::UnifiedTagEditor(a) => self.handle_unified_tag_editor_action(a, witness.as_ref()),
+            ViewAction::IntakeConfirmation(a) => {
+                self.handle_intake_confirmation_action(a, witness.as_ref())
+            }
+            ViewAction::UnifiedTagEditor(a) => {
+                self.handle_unified_tag_editor_action(a, witness.as_ref())
+            }
             ViewAction::Deploy(a) => self.handle_deploy_action(a, witness.as_ref()),
             ViewAction::ExternalMatches(a) => self.handle_external_matches_action(a),
-            ViewAction::MissingFileResolution(a) => self.handle_missing_file_preview_action(a, witness.as_ref()),
-            ViewAction::MissingDirectoryResolution(a) => self.handle_missing_directory_preview_action(a, witness.as_ref()),
-            ViewAction::CorruptFileResolution(a) => self.handle_corrupt_file_preview_action(a, witness.as_ref()),
-            ViewAction::ShitFormatResolution(a) => self.handle_shit_format_preview_action(a, witness.as_ref()),
-            ViewAction::SubparDuplicateResolution(a) => self.handle_subpar_duplicate_preview_action(a, witness.as_ref()),
-            ViewAction::InboxCorpusMatchResolution(a) => self.handle_inbox_corpus_match_preview_action(a, witness.as_ref()),
+            ViewAction::MissingFileResolution(a) => {
+                self.handle_missing_file_preview_action(a, witness.as_ref())
+            }
+            ViewAction::MissingDirectoryResolution(a) => {
+                self.handle_missing_directory_preview_action(a, witness.as_ref())
+            }
+            ViewAction::CorruptFileResolution(a) => {
+                self.handle_corrupt_file_preview_action(a, witness.as_ref())
+            }
+            ViewAction::ShitFormatResolution(a) => {
+                self.handle_shit_format_preview_action(a, witness.as_ref())
+            }
+            ViewAction::SubparDuplicateResolution(a) => {
+                self.handle_subpar_duplicate_preview_action(a, witness.as_ref())
+            }
+            ViewAction::InboxCorpusMatchResolution(a) => {
+                self.handle_inbox_corpus_match_preview_action(a, witness.as_ref())
+            }
             ViewAction::InboxOrganize(a) => self.handle_inbox_organize_action(a, witness.as_ref()),
-            ViewAction::DirectoryClusterResolution(a) => self.handle_directory_cluster_preview_action(a, witness.as_ref()),
-            ViewAction::MovedFileAcknowledge(a) => self.handle_moved_file_action(a, witness.as_ref()),
+            ViewAction::DirectoryClusterResolution(a) => {
+                self.handle_directory_cluster_preview_action(a, witness.as_ref())
+            }
+            ViewAction::MovedFileAcknowledge(a) => {
+                self.handle_moved_file_action(a, witness.as_ref())
+            }
             ViewAction::OobSyncResolution(a) => self.handle_oob_sync_action(a, witness.as_ref()),
-            ViewAction::OobConflictInspection(a) => self.handle_oob_conflict_action(a, witness.as_ref()),
-            ViewAction::TagCanonicityResolution(a) => self.handle_tag_canonicity_action(a, witness.as_ref()),
-            ViewAction::CompoundTagSplit(a) => self.handle_compound_split_action(a, witness.as_ref()),
-            ViewAction::MissingAlbumSingleResolution(a) => self.handle_missing_album_single_action(a, witness.as_ref()),
-            ViewAction::DiscExtractionResolution(a) => self.handle_disc_extraction_action(a, witness.as_ref()),
+            ViewAction::OobConflictInspection(a) => {
+                self.handle_oob_conflict_action(a, witness.as_ref())
+            }
+            ViewAction::TagCanonicityResolution(a) => {
+                self.handle_tag_canonicity_action(a, witness.as_ref())
+            }
+            ViewAction::CompoundTagSplit(a) => {
+                self.handle_compound_split_action(a, witness.as_ref())
+            }
+            ViewAction::MissingAlbumSingleResolution(a) => {
+                self.handle_missing_album_single_action(a, witness.as_ref())
+            }
+            ViewAction::DiscExtractionResolution(a) => {
+                self.handle_disc_extraction_action(a, witness.as_ref())
+            }
             ViewAction::ManualReview(a) => self.handle_manual_review_action(a, witness.as_ref()),
-            ViewAction::ExternalMatchReview(a) => self.handle_external_match_review_action(a, witness.as_ref()),
+            ViewAction::ExternalMatchReview(a) => {
+                self.handle_external_match_review_action(a, witness.as_ref())
+            }
             ViewAction::ReleasePackingBrowser(a) => self.handle_release_packing_browser_action(a),
             ViewAction::History(a) => self.handle_history_action(a, witness.as_ref()),
-            ViewAction::TransactionReview(a) => self.handle_transaction_review_action(a, witness.as_ref()),
+            ViewAction::TransactionReview(a) => {
+                self.handle_transaction_review_action(a, witness.as_ref())
+            }
         }
     }
 
@@ -89,13 +128,24 @@ impl App {
     // =========================================================================
 
     /// Stage a tag editor decision to the Witch's transaction and update editor state.
-    fn stage_tag_editor_decision(&mut self, key: DecisionKey, mutations: Vec<crate::meta::mutations::Mutation>, gesture: &witness::ConfirmationGesture) {
+    fn stage_tag_editor_decision(
+        &mut self,
+        key: DecisionKey,
+        mutations: Vec<crate::meta::mutations::Mutation>,
+        gesture: &witness::ConfirmationGesture,
+    ) {
         let label = if let ActiveView::UnifiedTagEditor(ref editor) = self.view {
             editor.current_item_label()
         } else {
             "Tag edit".to_string()
         };
-        let _ = super::operator_decisions::stage_decision(&mut self.witch, key, &label, mutations.clone(), gesture);
+        let _ = super::operator_decisions::stage_decision(
+            &mut self.witch,
+            key,
+            &label,
+            mutations.clone(),
+            gesture,
+        );
         if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
             editor.set_staged_mutations(mutations);
             editor.staged_decision_count += 1;
@@ -111,12 +161,24 @@ impl App {
     ///
     /// In open-txn mode, skips `start_transaction` since the persistent transaction
     /// is already active.
-    fn stage_mutations_with_transaction(&mut self, mutations: Vec<crate::meta::mutations::Mutation>, label: &str, key: DecisionKey, gesture: &witness::ConfirmationGesture) {
+    fn stage_mutations_with_transaction(
+        &mut self,
+        mutations: Vec<crate::meta::mutations::Mutation>,
+        label: &str,
+        key: DecisionKey,
+        gesture: &witness::ConfirmationGesture,
+    ) {
         let open_txn = self.open_txn_mode();
         if !open_txn {
             let _ = self.witch.start_transaction(label);
         }
-        let _ = super::operator_decisions::stage_decision(&mut self.witch, key, label, mutations, gesture);
+        let _ = super::operator_decisions::stage_decision(
+            &mut self.witch,
+            key,
+            label,
+            mutations,
+            gesture,
+        );
     }
 
     /// Cancel the current modal and return to the source view.
@@ -156,15 +218,23 @@ impl App {
     ///
     /// - `ContentAnalysis`: For intake indexing (triggers metadata extraction)
     /// - `SignalRefresh`: For file operations (health signals need update)
-    pub(super) fn transition_to_progress_after_mutations(&mut self, phase: progress_screen::ProgressPhase) {
+    pub(super) fn transition_to_progress_after_mutations(
+        &mut self,
+        phase: progress_screen::ProgressPhase,
+    ) {
         use progress_screen::ProgressPhase;
 
         let screen = match phase {
             ProgressPhase::Eyeballing => progress_screen::ProgressScreen::new_eyeballing(),
-            ProgressPhase::ContentAnalysis => progress_screen::ProgressScreen::new_content_analysis(),
+            ProgressPhase::ContentAnalysis => {
+                progress_screen::ProgressScreen::new_content_analysis()
+            }
             ProgressPhase::SignalRefresh => progress_screen::ProgressScreen::new_signal_refresh(),
         };
-        self.view = ActiveView::Progress { screen, eye: Eye::default() };
+        self.view = ActiveView::Progress {
+            screen,
+            eye: Eye::default(),
+        };
     }
 
     // =========================================================================
@@ -181,7 +251,9 @@ impl App {
         match action {
             super::SchemaUpdateAction::None => {}
             super::SchemaUpdateAction::Approve => {
-                if let (super::ActiveView::SchemaUpdate(ref mut state), Some(gesture)) = (&mut self.view, witness) {
+                if let (super::ActiveView::SchemaUpdate(ref mut state), Some(gesture)) =
+                    (&mut self.view, witness)
+                {
                     if state.phase == SchemaUpdatePhase::Approval {
                         self.witch.queue_schema_reconciliation(gesture);
                         state.phase = SchemaUpdatePhase::Running;
@@ -204,7 +276,9 @@ impl App {
         match action {
             super::VacuumAction::None => {}
             super::VacuumAction::Compact => {
-                if let (super::ActiveView::VacuumPrompt(ref mut state), Some(gesture)) = (&mut self.view, witness) {
+                if let (super::ActiveView::VacuumPrompt(ref mut state), Some(gesture)) =
+                    (&mut self.view, witness)
+                {
                     if state.phase == VacuumPhase::Prompt {
                         self.witch.queue_vacuum(gesture);
                         state.phase = VacuumPhase::Compacting;
@@ -221,9 +295,13 @@ impl App {
     // View Action Handlers
     // =========================================================================
 
-    fn handle_config_editor_action(&mut self, action: super::config_editor::ConfigEditorAction, gesture: Option<&witness::ConfirmationGesture>) {
-        use crate::meta::mutations::Mutation;
+    fn handle_config_editor_action(
+        &mut self,
+        action: super::config_editor::ConfigEditorAction,
+        gesture: Option<&witness::ConfirmationGesture>,
+    ) {
         use crate::meta::mutations::config_edit::ApplyConfigEditsMutation;
+        use crate::meta::mutations::Mutation;
 
         match action {
             super::config_editor::ConfigEditorAction::None => {}
@@ -256,7 +334,11 @@ impl App {
                         let _ = self.witch.start_transaction("Config update");
                     }
                     let _ = super::operator_decisions::stage_decision(
-                        &mut self.witch, DecisionKey::ConfigEdit, "Apply config changes", vec![mutation], g,
+                        &mut self.witch,
+                        DecisionKey::ConfigEdit,
+                        "Apply config changes",
+                        vec![mutation],
+                        g,
                     );
 
                     self.after_staging_decisions();
@@ -269,10 +351,14 @@ impl App {
                 self.start_health_view();
             }
             super::config_editor::ConfigEditorAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::Config.next(self.transactions_open()));
+                self.start_lateral_view(
+                    widgets::LateralView::Config.next(self.transactions_open()),
+                );
             }
             super::config_editor::ConfigEditorAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::Config.prev(self.transactions_open()));
+                self.start_lateral_view(
+                    widgets::LateralView::Config.prev(self.transactions_open()),
+                );
             }
         }
     }
@@ -283,17 +369,22 @@ impl App {
             insights_view::InsightsAction::RequestQuit => {
                 // Check if operations are pending
                 if self.has_pending_operations() {
-                    self.status_message = Some("Cannot quit while operations are pending".to_string());
+                    self.status_message =
+                        Some("Cannot quit while operations are pending".to_string());
                 } else {
                     // Show exit confirmation modal
                     self.view = ActiveView::ExitConfirm(super::ExitConfirmModalState::default());
                 }
             }
             insights_view::InsightsAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::Health.next(self.transactions_open()));
+                self.start_lateral_view(
+                    widgets::LateralView::Health.next(self.transactions_open()),
+                );
             }
             insights_view::InsightsAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::Health.prev(self.transactions_open()));
+                self.start_lateral_view(
+                    widgets::LateralView::Health.prev(self.transactions_open()),
+                );
             }
             insights_view::InsightsAction::Launch => {
                 // Use selected_action() to dispatch to appropriate modal
@@ -312,11 +403,12 @@ impl App {
                     Some(insights_view::InsightAction::LaunchCompoundTagSplitSafe) => {
                         // Extract tag name from selected insight type
                         let tag_name = if let ActiveView::Insights(ref v) = self.view {
-                            v.selected_insight_type()
-                                .and_then(|t| match t {
-                                    insights_view::InsightType::CompoundTagValueSafe { tag_name } => Some(tag_name),
-                                    _ => None,
-                                })
+                            v.selected_insight_type().and_then(|t| match t {
+                                insights_view::InsightType::CompoundTagValueSafe { tag_name } => {
+                                    Some(tag_name)
+                                }
+                                _ => None,
+                            })
                         } else {
                             None
                         };
@@ -325,11 +417,12 @@ impl App {
                     Some(insights_view::InsightAction::LaunchCompoundTagSplitReview) => {
                         // Extract tag name from selected insight type
                         let tag_name = if let ActiveView::Insights(ref v) = self.view {
-                            v.selected_insight_type()
-                                .and_then(|t| match t {
-                                    insights_view::InsightType::CompoundTagValueReview { tag_name } => Some(tag_name),
-                                    _ => None,
-                                })
+                            v.selected_insight_type().and_then(|t| match t {
+                                insights_view::InsightType::CompoundTagValueReview { tag_name } => {
+                                    Some(tag_name)
+                                }
+                                _ => None,
+                            })
                         } else {
                             None
                         };
@@ -422,9 +515,16 @@ impl App {
     /// Gathers unindexed files and opens the intake confirmation modal.
     fn start_intake_confirmation_from_health(&mut self) {
         let corpus_root = self.config().corpus_dir();
-        let intake_state = self.cache.query(move |db| {
-            startup::IntakeConfirmationState::gather(db, &corpus_root, startup::IntakeSource::Health)
-        }).recv();
+        let intake_state = self
+            .cache
+            .query(move |db| {
+                startup::IntakeConfirmationState::gather(
+                    db,
+                    &corpus_root,
+                    startup::IntakeSource::Health,
+                )
+            })
+            .recv();
 
         if let Some(state) = intake_state {
             self.view = ActiveView::IntakeConfirmation(state);
@@ -439,19 +539,23 @@ impl App {
         use crate::db::types::Zone;
         use std::collections::BTreeSet;
 
-        let audio_files = self.cache.query(|db| {
-            let signals = db.get_missing_tag_signals().unwrap_or_default();
+        let audio_files = self
+            .cache
+            .query(|db| {
+                let signals = db.get_missing_tag_signals().unwrap_or_default();
 
-            // Collect all unique inodes across all signal groups
-            let all_inodes: Vec<i64> = signals.iter()
-                .flat_map(|s| s.data.inodes.iter().copied())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
+                // Collect all unique inodes across all signal groups
+                let all_inodes: Vec<i64> = signals
+                    .iter()
+                    .flat_map(|s| s.data.inodes.iter().copied())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
 
-            db.get_audio_files_by_inodes(&all_inodes, Zone::Corpus)
-                .unwrap_or_default()
-        }).recv();
+                db.get_audio_files_by_inodes(&all_inodes, Zone::Corpus)
+                    .unwrap_or_default()
+            })
+            .recv();
 
         if audio_files.is_empty() {
             return;
@@ -471,12 +575,18 @@ impl App {
     fn start_missing_album_single_resolution(&mut self) {
         use crate::ui::missing_album_modal;
 
-        let signals = self.cache.query(|db| {
-            db.get_missing_album_single_signals().unwrap_or_default()
-        }).recv();
+        let signals = self
+            .cache
+            .query(|db| db.get_missing_album_single_signals().unwrap_or_default())
+            .recv();
 
         let data = missing_album_modal::MissingAlbumData::from_signals(signals);
-        let suffix = self.config().opinions.health_detection.single_album_suffix.clone();
+        let suffix = self
+            .config()
+            .opinions
+            .health_detection
+            .single_album_suffix
+            .clone();
 
         // Start transaction for the resolution session
         let _ = self.witch.start_transaction("Missing album singles");
@@ -492,8 +602,11 @@ impl App {
         witness: Option<&witness::ConfirmationGesture>,
     ) {
         use crate::db::types::Zone;
-        use crate::meta::mutations::{Mutation, TagOp, tag_edit::ApplyTagOpsMutation, indexing::EmitExpectedMissingTagMutation};
-        use crate::ui::missing_album_modal::{MissingAlbumAction, AlbumResolution};
+        use crate::meta::mutations::{
+            indexing::EmitExpectedMissingTagMutation, tag_edit::ApplyTagOpsMutation, Mutation,
+            TagOp,
+        };
+        use crate::ui::missing_album_modal::{AlbumResolution, MissingAlbumAction};
 
         match action {
             MissingAlbumAction::None => {}
@@ -506,52 +619,104 @@ impl App {
                 let Some(g) = witness else { return };
 
                 let group_idx = {
-                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else {
+                        return;
+                    };
                     state.current_group
                 };
 
                 match resolution {
                     AlbumResolution::PerTrackTitle => {
                         let ops: Vec<TagOp> = {
-                            let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
-                            let Some(group) = state.current_group_data() else { return };
-                            group.tracks.iter().map(|t| {
-                                TagOp::add_tag(t.inode, "ALBUM", format!("{}{}", t.title, state.suffix))
-                            }).collect()
+                            let ActiveView::MissingAlbumSingleResolution(ref state) = self.view
+                            else {
+                                return;
+                            };
+                            let Some(group) = state.current_group_data() else {
+                                return;
+                            };
+                            group
+                                .tracks
+                                .iter()
+                                .map(|t| {
+                                    TagOp::add_tag(
+                                        t.inode,
+                                        "ALBUM",
+                                        format!("{}{}", t.title, state.suffix),
+                                    )
+                                })
+                                .collect()
                         };
                         if !ops.is_empty() {
-                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
+                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                                ops,
+                                zone: Zone::Corpus,
+                            });
                             let _ = super::operator_decisions::stage_decision(
-                                &mut self.witch, DecisionKey::MissingAlbum { group_index: group_idx }, "Tag as singles", vec![mutation], g,
+                                &mut self.witch,
+                                DecisionKey::MissingAlbum {
+                                    group_index: group_idx,
+                                },
+                                "Tag as singles",
+                                vec![mutation],
+                                g,
                             );
                         }
                     }
 
                     AlbumResolution::AllSingles => {
                         let ops: Vec<TagOp> = {
-                            let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
-                            let Some(group) = state.current_group_data() else { return };
-                            group.tracks.iter().map(|t| {
-                                TagOp::add_tag(t.inode, "ALBUM", "Singles")
-                            }).collect()
+                            let ActiveView::MissingAlbumSingleResolution(ref state) = self.view
+                            else {
+                                return;
+                            };
+                            let Some(group) = state.current_group_data() else {
+                                return;
+                            };
+                            group
+                                .tracks
+                                .iter()
+                                .map(|t| TagOp::add_tag(t.inode, "ALBUM", "Singles"))
+                                .collect()
                         };
                         if !ops.is_empty() {
-                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
+                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                                ops,
+                                zone: Zone::Corpus,
+                            });
                             let _ = super::operator_decisions::stage_decision(
-                                &mut self.witch, DecisionKey::MissingAlbum { group_index: group_idx }, "Tag all as Singles", vec![mutation], g,
+                                &mut self.witch,
+                                DecisionKey::MissingAlbum {
+                                    group_index: group_idx,
+                                },
+                                "Tag all as Singles",
+                                vec![mutation],
+                                g,
                             );
                         }
                     }
 
                     AlbumResolution::Suppress => {
                         let inodes: Vec<i64> = {
-                            let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                            let ActiveView::MissingAlbumSingleResolution(ref state) = self.view
+                            else {
+                                return;
+                            };
                             state.current_group_inodes()
                         };
                         if !inodes.is_empty() {
-                            let mutation = Mutation::EmitExpectedMissingTag(EmitExpectedMissingTagMutation { inodes });
+                            let mutation =
+                                Mutation::EmitExpectedMissingTag(EmitExpectedMissingTagMutation {
+                                    inodes,
+                                });
                             let _ = super::operator_decisions::stage_decision(
-                                &mut self.witch, DecisionKey::MissingAlbum { group_index: group_idx }, "Suppress missing album", vec![mutation], g,
+                                &mut self.witch,
+                                DecisionKey::MissingAlbum {
+                                    group_index: group_idx,
+                                },
+                                "Suppress missing album",
+                                vec![mutation],
+                                g,
                             );
                         }
                     }
@@ -592,25 +757,30 @@ impl App {
 
             MissingAlbumAction::EditTracks => {
                 let (inodes, decision_key, label) = {
-                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else {
+                        return;
+                    };
                     let group = match state.current_group_data() {
                         Some(g) => g,
                         None => return,
                     };
                     // Use a distinct key to avoid colliding with resolution decisions
-                    let key = DecisionKey::TagEdit { key_item: format!("missing_album_{}", state.current_group) };
+                    let key = DecisionKey::TagEdit {
+                        key_item: format!("missing_album_{}", state.current_group),
+                    };
                     let label = format!("Manual tag edits: {}", group.artist);
                     (state.current_group_inodes(), key, label)
                 };
                 if inodes.is_empty() {
                     return;
                 }
-                let audio_files = self.cache.query(move |db| {
-                    db.get_audio_files_by_inodes(
-                        &inodes,
-                        crate::db::types::Zone::Corpus,
-                    ).unwrap_or_default()
-                }).recv();
+                let audio_files = self
+                    .cache
+                    .query(move |db| {
+                        db.get_audio_files_by_inodes(&inodes, crate::db::types::Zone::Corpus)
+                            .unwrap_or_default()
+                    })
+                    .recv();
                 if !audio_files.is_empty() {
                     self.open_embedded_tag_editor(
                         tag_editor::TagEditorMode::Individual,
@@ -623,24 +793,29 @@ impl App {
 
             MissingAlbumAction::EditTracksAggregated => {
                 let (inodes, decision_key, label) = {
-                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else { return };
+                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else {
+                        return;
+                    };
                     let group = match state.current_group_data() {
                         Some(g) => g,
                         None => return,
                     };
-                    let key = DecisionKey::TagEdit { key_item: format!("missing_album_{}", state.current_group) };
+                    let key = DecisionKey::TagEdit {
+                        key_item: format!("missing_album_{}", state.current_group),
+                    };
                     let label = format!("Manual tag edits: {}", group.artist);
                     (state.current_group_inodes(), key, label)
                 };
                 if inodes.is_empty() {
                     return;
                 }
-                let audio_files = self.cache.query(move |db| {
-                    db.get_audio_files_by_inodes(
-                        &inodes,
-                        crate::db::types::Zone::Corpus,
-                    ).unwrap_or_default()
-                }).recv();
+                let audio_files = self
+                    .cache
+                    .query(move |db| {
+                        db.get_audio_files_by_inodes(&inodes, crate::db::types::Zone::Corpus)
+                            .unwrap_or_default()
+                    })
+                    .recv();
                 if !audio_files.is_empty() {
                     self.open_embedded_tag_editor(
                         tag_editor::TagEditorMode::Aggregated,
@@ -662,16 +837,21 @@ impl App {
 
         let config = self.config().opinions.disc_extraction.clone();
 
-        let (signals, path_map) = self.cache.query(|db| {
-            let sigs = db.get_disc_extraction_signals().unwrap_or_default();
-            // Collect all inodes for path lookup
-            let all_inodes: Vec<i64> = sigs.iter()
-                .flat_map(|s| s.data.inodes.iter().copied())
-                .collect();
-            let paths = db.get_file_paths_batch(crate::db::types::Zone::Corpus, &all_inodes)
-                .unwrap_or_default();
-            (sigs, paths)
-        }).recv();
+        let (signals, path_map) = self
+            .cache
+            .query(|db| {
+                let sigs = db.get_disc_extraction_signals().unwrap_or_default();
+                // Collect all inodes for path lookup
+                let all_inodes: Vec<i64> = sigs
+                    .iter()
+                    .flat_map(|s| s.data.inodes.iter().copied())
+                    .collect();
+                let paths = db
+                    .get_file_paths_batch(crate::db::types::Zone::Corpus, &all_inodes)
+                    .unwrap_or_default();
+                (sigs, paths)
+            })
+            .recv();
 
         if signals.is_empty() {
             self.status_message = Some("No disc extraction signals found".to_string());
@@ -680,7 +860,12 @@ impl App {
 
         let data = disc_extraction_modal::DiscExtractionData::from_signals(
             signals,
-            |inode| path_map.get(&inode).cloned().unwrap_or_else(|| format!("<inode {}>", inode)),
+            |inode| {
+                path_map
+                    .get(&inode)
+                    .cloned()
+                    .unwrap_or_else(|| format!("<inode {}>", inode))
+            },
             config.map_letters_to_numbers,
         );
 
@@ -698,7 +883,7 @@ impl App {
         witness: Option<&witness::ConfirmationGesture>,
     ) {
         use crate::db::types::Zone;
-        use crate::meta::mutations::{Mutation, TagOp, tag_edit::ApplyTagOpsMutation};
+        use crate::meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation, TagOp};
         use crate::ui::disc_extraction_modal::{DiscExtractionAction, DiscResolution};
 
         match action {
@@ -712,15 +897,21 @@ impl App {
                 let Some(g) = witness else { return };
 
                 let group_idx = {
-                    let ActiveView::DiscExtractionResolution(ref state) = self.view else { return };
+                    let ActiveView::DiscExtractionResolution(ref state) = self.view else {
+                        return;
+                    };
                     state.current_group
                 };
 
                 match resolution {
                     DiscResolution::Apply => {
                         let ops: Vec<TagOp> = {
-                            let ActiveView::DiscExtractionResolution(ref state) = self.view else { return };
-                            let Some(group) = state.current_group_data() else { return };
+                            let ActiveView::DiscExtractionResolution(ref state) = self.view else {
+                                return;
+                            };
+                            let Some(group) = state.current_group_data() else {
+                                return;
+                            };
                             let mut ops = Vec::new();
                             for file in &group.files {
                                 // Replace source tag value
@@ -740,10 +931,18 @@ impl App {
                             ops
                         };
                         if !ops.is_empty() {
-                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: Zone::Corpus });
+                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                                ops,
+                                zone: Zone::Corpus,
+                            });
                             let _ = super::operator_decisions::stage_decision(
-                                &mut self.witch, DecisionKey::DiscExtraction { group_index: group_idx },
-                                "Extract disc value", vec![mutation], g,
+                                &mut self.witch,
+                                DecisionKey::DiscExtraction {
+                                    group_index: group_idx,
+                                },
+                                "Extract disc value",
+                                vec![mutation],
+                                g,
                             );
                         }
                     }
@@ -786,24 +985,29 @@ impl App {
 
             DiscExtractionAction::EditTracks => {
                 let (inodes, decision_key, label) = {
-                    let ActiveView::DiscExtractionResolution(ref state) = self.view else { return };
+                    let ActiveView::DiscExtractionResolution(ref state) = self.view else {
+                        return;
+                    };
                     let group = match state.current_group_data() {
                         Some(g) => g,
                         None => return,
                     };
-                    let key = DecisionKey::TagEdit { key_item: format!("disc_extraction_{}", state.current_group) };
+                    let key = DecisionKey::TagEdit {
+                        key_item: format!("disc_extraction_{}", state.current_group),
+                    };
                     let label = format!("Manual tag edits: {}", group.description);
                     (state.current_group_inodes(), key, label)
                 };
                 if inodes.is_empty() {
                     return;
                 }
-                let audio_files = self.cache.query(move |db| {
-                    db.get_audio_files_by_inodes(
-                        &inodes,
-                        crate::db::types::Zone::Corpus,
-                    ).unwrap_or_default()
-                }).recv();
+                let audio_files = self
+                    .cache
+                    .query(move |db| {
+                        db.get_audio_files_by_inodes(&inodes, crate::db::types::Zone::Corpus)
+                            .unwrap_or_default()
+                    })
+                    .recv();
                 if !audio_files.is_empty() {
                     self.open_embedded_tag_editor(
                         tag_editor::TagEditorMode::Individual,
@@ -816,24 +1020,29 @@ impl App {
 
             DiscExtractionAction::EditTracksAggregated => {
                 let (inodes, decision_key, label) = {
-                    let ActiveView::DiscExtractionResolution(ref state) = self.view else { return };
+                    let ActiveView::DiscExtractionResolution(ref state) = self.view else {
+                        return;
+                    };
                     let group = match state.current_group_data() {
                         Some(g) => g,
                         None => return,
                     };
-                    let key = DecisionKey::TagEdit { key_item: format!("disc_extraction_{}", state.current_group) };
+                    let key = DecisionKey::TagEdit {
+                        key_item: format!("disc_extraction_{}", state.current_group),
+                    };
                     let label = format!("Manual tag edits: {}", group.description);
                     (state.current_group_inodes(), key, label)
                 };
                 if inodes.is_empty() {
                     return;
                 }
-                let audio_files = self.cache.query(move |db| {
-                    db.get_audio_files_by_inodes(
-                        &inodes,
-                        crate::db::types::Zone::Corpus,
-                    ).unwrap_or_default()
-                }).recv();
+                let audio_files = self
+                    .cache
+                    .query(move |db| {
+                        db.get_audio_files_by_inodes(&inodes, crate::db::types::Zone::Corpus)
+                            .unwrap_or_default()
+                    })
+                    .recv();
                 if !audio_files.is_empty() {
                     self.open_embedded_tag_editor(
                         tag_editor::TagEditorMode::Aggregated,
@@ -855,18 +1064,25 @@ impl App {
                 self.start_health_view();
             }
             tag_search::TagSearchAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::Search.next(self.transactions_open()));
+                self.start_lateral_view(
+                    widgets::LateralView::Search.next(self.transactions_open()),
+                );
             }
             tag_search::TagSearchAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::Search.prev(self.transactions_open()));
+                self.start_lateral_view(
+                    widgets::LateralView::Search.prev(self.transactions_open()),
+                );
             }
             tag_search::TagSearchAction::ExecuteSearch => {
                 // Execute search via cache thread (blocking — fast single query)
                 if let ActiveView::TagSearch(ref mut search) = self.view {
-                    let all_files = self.cache.query(|db| {
-                        db.get_all_audio_files_with_tags(crate::db::types::Zone::Corpus, false)
-                            .unwrap_or_default()
-                    }).recv();
+                    let all_files = self
+                        .cache
+                        .query(|db| {
+                            db.get_all_audio_files_with_tags(crate::db::types::Zone::Corpus, false)
+                                .unwrap_or_default()
+                        })
+                        .recv();
                     search.execute_search(all_files);
                 }
             }
@@ -878,7 +1094,11 @@ impl App {
     }
 
     /// Handle intake confirmation dialog actions.
-    fn handle_intake_confirmation_action(&mut self, action: startup::IntakeConfirmationAction, gesture: Option<&witness::ConfirmationGesture>) {
+    fn handle_intake_confirmation_action(
+        &mut self,
+        action: startup::IntakeConfirmationAction,
+        gesture: Option<&witness::ConfirmationGesture>,
+    ) {
         use super::operator_decisions;
 
         // Determine source before matching (used for post-action routing)
@@ -958,7 +1178,11 @@ impl App {
         }
     }
 
-    pub(super) fn handle_tree_browser_action(&mut self, action: tree_browser::TreeBrowserAction, witness: Option<&witness::ConfirmationGesture>) {
+    pub(super) fn handle_tree_browser_action(
+        &mut self,
+        action: tree_browser::TreeBrowserAction,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
         match action {
             tree_browser::TreeBrowserAction::None => {}
             tree_browser::TreeBrowserAction::Cancel => {
@@ -1020,10 +1244,13 @@ impl App {
         // We show what THIS dir explicitly sets, not the resolved/inherited values.
         let (libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid) =
             match config.get_raw_source_dir(&relative) {
-                Some(sd) => {
-                    (sd.libraries.clone(), sd.can_stash_dupes, sd.interior_dupes,
-                     sd.path_schema.as_ref().map(|s| s.template.clone()), sd.enable_acoustid)
-                }
+                Some(sd) => (
+                    sd.libraries.clone(),
+                    sd.can_stash_dupes,
+                    sd.interior_dupes,
+                    sd.path_schema.as_ref().map(|s| s.template.clone()),
+                    sd.enable_acoustid,
+                ),
                 None => {
                     // Defaults for a new (unconfigured) directory
                     (vec![], None, None, None, None)
@@ -1080,7 +1307,9 @@ impl App {
                 libraries: panel.orig_libraries.clone(),
                 can_stash_dupes: panel.orig_can_stash_dupes,
                 interior_dupes: panel.orig_interior_dupes,
-                path_schema: panel.orig_path_schema.as_ref()
+                path_schema: panel
+                    .orig_path_schema
+                    .as_ref()
                     .and_then(|t| crate::config::parse_path_schema(t).ok()),
                 enable_acoustid: panel.orig_enable_acoustid,
             };
@@ -1089,7 +1318,9 @@ impl App {
                 libraries: panel.libraries.clone(),
                 can_stash_dupes: panel.can_stash_dupes,
                 interior_dupes: panel.interior_dupes,
-                path_schema: panel.path_schema.as_ref()
+                path_schema: panel
+                    .path_schema
+                    .as_ref()
                     .and_then(|t| crate::config::parse_path_schema(t).ok()),
                 enable_acoustid: panel.enable_acoustid,
             };
@@ -1169,16 +1400,25 @@ impl App {
         }
     }
 
-    fn handle_unified_tag_editor_action(&mut self, action: tag_editor::UnifiedTagEditorAction, witness: Option<&witness::ConfirmationGesture>) {
+    fn handle_unified_tag_editor_action(
+        &mut self,
+        action: tag_editor::UnifiedTagEditorAction,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
         use tag_editor::UnifiedTagEditorAction;
 
         match action {
             UnifiedTagEditorAction::None => {}
             UnifiedTagEditorAction::CloseModal => {}
 
-            UnifiedTagEditorAction::StageDecisionAndNavigate { key, mutations, direction } => {
+            UnifiedTagEditorAction::StageDecisionAndNavigate {
+                key,
+                mutations,
+                direction,
+            } => {
                 use crate::ui::tag_editor::types::NavigationDirection;
-                let is_embedded = matches!(&self.view, ActiveView::UnifiedTagEditor(ref e) if e.is_embedded());
+                let is_embedded =
+                    matches!(&self.view, ActiveView::UnifiedTagEditor(ref e) if e.is_embedded());
 
                 if is_embedded {
                     // Embedded mode: track locally, don't stage to transaction
@@ -1257,27 +1497,29 @@ impl App {
                 self.status_message = Some(msg);
             }
 
-            UnifiedTagEditorAction::RequestFillFromDb { inode } => {
-                match inode {
-                    Some(inode) => {
-                        let tag_pairs = self.cache.query(move |db| {
+            UnifiedTagEditorAction::RequestFillFromDb { inode } => match inode {
+                Some(inode) => {
+                    let tag_pairs = self
+                        .cache
+                        .query(move |db| {
                             db.get_corpus_tags(inode)
                                 .unwrap_or_default()
                                 .into_iter()
                                 .map(|t| (t.tag_name, t.tag_value))
                                 .collect::<Vec<(String, String)>>()
-                        }).recv();
+                        })
+                        .recv();
 
-                        if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
-                            editor.fill_from_db_result(tag_pairs);
-                        }
-                        self.status_message = Some("Tags loaded from database".to_string());
+                    if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
+                        editor.fill_from_db_result(tag_pairs);
                     }
-                    None => {
-                        self.status_message = Some("Track not indexed - no database tags available".to_string());
-                    }
+                    self.status_message = Some("Tags loaded from database".to_string());
                 }
-            }
+                None => {
+                    self.status_message =
+                        Some("Track not indexed - no database tags available".to_string());
+                }
+            },
 
             UnifiedTagEditorAction::CloseEmbedded => {
                 // Return to parent health modal without staging
@@ -1286,11 +1528,19 @@ impl App {
                 }
             }
 
-            UnifiedTagEditorAction::StageAndCloseEmbedded { decision_key, decision_label, mutations } => {
+            UnifiedTagEditorAction::StageAndCloseEmbedded {
+                decision_key,
+                decision_label,
+                mutations,
+            } => {
                 let Some(g) = witness else { return };
                 // Stage collected mutations at parent's decision key
                 let _ = super::operator_decisions::stage_decision(
-                    &mut self.witch, decision_key, &decision_label, mutations, g,
+                    &mut self.witch,
+                    decision_key,
+                    &decision_label,
+                    mutations,
+                    g,
                 );
                 // Return to parent health modal
                 if !self.pop_and_restore() {
@@ -1316,7 +1566,11 @@ impl App {
     /// - Cancel: pop view stack to restore source view
     /// - Discard: discard transaction, clear view stack, return to Insights
     /// - Confirm: commit transaction, clear view stack, go to Progress
-    fn handle_transaction_review_action(&mut self, action: transaction_review::TransactionReviewAction, gesture: Option<&witness::ConfirmationGesture>) {
+    fn handle_transaction_review_action(
+        &mut self,
+        action: transaction_review::TransactionReviewAction,
+        gesture: Option<&witness::ConfirmationGesture>,
+    ) {
         use transaction_review::TransactionReviewAction;
 
         match action {
@@ -1326,9 +1580,11 @@ impl App {
                 if self.witch.decision_keys().is_empty() {
                     // Empty transaction — treat Esc as exit request
                     if self.has_pending_operations() {
-                        self.status_message = Some("Cannot quit while operations are pending".to_string());
+                        self.status_message =
+                            Some("Cannot quit while operations are pending".to_string());
                     } else {
-                        self.view = ActiveView::ExitConfirm(super::ExitConfirmModalState::default());
+                        self.view =
+                            ActiveView::ExitConfirm(super::ExitConfirmModalState::default());
                     }
                 } else {
                     // Pop the view stack to restore the parent view
@@ -1350,7 +1606,8 @@ impl App {
                 let Some(g) = gesture else { return };
 
                 // Determine progress phase before clearing state
-                let post_commit_phase = if let ActiveView::TransactionReview(ref review) = self.view {
+                let post_commit_phase = if let ActiveView::TransactionReview(ref review) = self.view
+                {
                     review.post_commit_phase
                 } else {
                     transaction_review::PostCommitPhase::default()
@@ -1360,7 +1617,8 @@ impl App {
                 self.clear_view_stack();
 
                 // Commit transaction
-                let commit_result = super::operator_decisions::commit_transaction(&mut self.witch, g);
+                let commit_result =
+                    super::operator_decisions::commit_transaction(&mut self.witch, g);
 
                 match commit_result {
                     Ok(()) => {
@@ -1441,14 +1699,19 @@ impl App {
 
         match action {
             TabbedTransactionReviewAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::Transaction.next(self.transactions_open()));
+                self.start_lateral_view(
+                    widgets::LateralView::Transaction.next(self.transactions_open()),
+                );
             }
             TabbedTransactionReviewAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::Transaction.prev(self.transactions_open()));
+                self.start_lateral_view(
+                    widgets::LateralView::Transaction.prev(self.transactions_open()),
+                );
             }
             TabbedTransactionReviewAction::RequestQuit => {
                 if self.has_pending_operations() {
-                    self.status_message = Some("Cannot quit while operations are pending".to_string());
+                    self.status_message =
+                        Some("Cannot quit while operations are pending".to_string());
                 } else {
                     self.view = ActiveView::ExitConfirm(super::ExitConfirmModalState::default());
                 }
@@ -1487,7 +1750,8 @@ impl App {
                     self.sync_browser_pending_edits();
                     // Clamp cursor
                     if let ActiveView::TabbedTransactionReview(ref mut state) = self.view {
-                        let remaining = transaction_review::fetch_decision_summaries(&self.witch).len();
+                        let remaining =
+                            transaction_review::fetch_decision_summaries(&self.witch).len();
                         if state.review.cursor >= remaining && remaining > 0 {
                             state.review.cursor = remaining - 1;
                         }
@@ -1515,8 +1779,7 @@ impl App {
         phase: transaction_review::PostCommitPhase,
     ) {
         self.push_and_switch(SuspendTarget::TransactionReview(
-            transaction_review::TransactionReviewState::new()
-                .with_post_commit_phase(phase),
+            transaction_review::TransactionReviewState::new().with_post_commit_phase(phase),
         ));
     }
 
@@ -1561,45 +1824,45 @@ impl App {
                     None
                 }
             }
-            ActiveView::OobSyncResolution(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::OobSyncResolution)
-            }
-            ActiveView::OobConflictInspection(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::OobConflictInspection)
-            }
-            ActiveView::ExternalMatchReview(state) => {
-                state.handle_click(x, y).map(ViewAction::ExternalMatchReview)
-            }
-            ActiveView::MovedFileAcknowledge(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::MovedFileAcknowledge)
-            }
-            ActiveView::SubparDuplicateResolution(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::SubparDuplicateResolution)
-            }
-            ActiveView::InboxCorpusMatchResolution(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::InboxCorpusMatchResolution)
-            }
-            ActiveView::MissingAlbumSingleResolution(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::MissingAlbumSingleResolution)
-            }
-            ActiveView::DiscExtractionResolution(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::DiscExtractionResolution)
-            }
-            ActiveView::CorruptFileResolution(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::CorruptFileResolution)
-            }
-            ActiveView::MissingDirectoryResolution(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::MissingDirectoryResolution)
-            }
-            ActiveView::MissingFileResolution(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::MissingFileResolution)
-            }
-            ActiveView::ShitFormatResolution(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::ShitFormatResolution)
-            }
-            ActiveView::DirectoryClusterResolution(state) => {
-                state.handle_click(x, y, &gesture).map(ViewAction::DirectoryClusterResolution)
-            }
+            ActiveView::OobSyncResolution(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::OobSyncResolution),
+            ActiveView::OobConflictInspection(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::OobConflictInspection),
+            ActiveView::ExternalMatchReview(state) => state
+                .handle_click(x, y)
+                .map(ViewAction::ExternalMatchReview),
+            ActiveView::MovedFileAcknowledge(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::MovedFileAcknowledge),
+            ActiveView::SubparDuplicateResolution(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::SubparDuplicateResolution),
+            ActiveView::InboxCorpusMatchResolution(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::InboxCorpusMatchResolution),
+            ActiveView::MissingAlbumSingleResolution(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::MissingAlbumSingleResolution),
+            ActiveView::DiscExtractionResolution(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::DiscExtractionResolution),
+            ActiveView::CorruptFileResolution(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::CorruptFileResolution),
+            ActiveView::MissingDirectoryResolution(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::MissingDirectoryResolution),
+            ActiveView::MissingFileResolution(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::MissingFileResolution),
+            ActiveView::ShitFormatResolution(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::ShitFormatResolution),
+            ActiveView::DirectoryClusterResolution(state) => state
+                .handle_click(x, y, &gesture)
+                .map(ViewAction::DirectoryClusterResolution),
             ActiveView::Insights(state) => {
                 state.handle_click(x, y);
                 None

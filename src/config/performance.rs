@@ -1,7 +1,7 @@
 //! Global performance config (OnceLock + accessor functions).
 
-use std::sync::OnceLock;
 use super::types::PerformanceOpinions;
+use std::sync::OnceLock;
 
 static PERFORMANCE_CONFIG: OnceLock<PerformanceOpinions> = OnceLock::new();
 

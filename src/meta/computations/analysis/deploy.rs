@@ -6,21 +6,24 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::logging::{log_general, log_error};
-use crate::meta::computations::types::ComputationWitness;
-use crate::meta::computations::helpers::{ComputedAggregateSignal, ComputedCorpusSignal, reconcile_aggregate_signals, reconcile_corpus_signals};
-use crate::meta::computations::helpers::is_image_file;
-use crate::meta::signals::data::{
-    TypedSignalWrite, DeployConflictSignal, DeployReadySignal, DeployedHealthySignal,
-    DeployLifecyclePhase,
-    LibraryLeftoverSignal, LibraryStaleSignal,
-    ReleaseOverlapSignal, ReleaseOverlapData, ReleaseOverlapEntry,
-    SidecarDeployReadySignal, SidecarDeployReadyData,
-    SidecarDeployConflictSignal,
+use crate::corpus::deploy::{
+    compute_deployment_path_with_tags, deploy_album_directory, extract_release_directory,
 };
-use crate::corpus::deploy::{compute_deployment_path_with_tags, deploy_album_directory, extract_release_directory};
-use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
+use crate::db::ReadOnlyDb;
+use crate::logging::{log_error, log_general};
+use crate::meta::computations::helpers::is_image_file;
+use crate::meta::computations::helpers::{
+    reconcile_aggregate_signals, reconcile_corpus_signals, ComputedAggregateSignal,
+    ComputedCorpusSignal,
+};
+use crate::meta::computations::types::ComputationWitness;
+use crate::meta::signals::data::{
+    DeployConflictSignal, DeployLifecyclePhase, DeployReadySignal, DeployedHealthySignal,
+    LibraryLeftoverSignal, LibraryStaleSignal, ReleaseOverlapData, ReleaseOverlapEntry,
+    ReleaseOverlapSignal, SidecarDeployConflictSignal, SidecarDeployReadyData,
+    SidecarDeployReadySignal, TypedSignalWrite,
+};
 
 use super::{Computation, Result};
 
@@ -61,9 +64,14 @@ pub fn execute_detect_deploy_conflicts(
         Ok(v) => v,
         Err(e) => {
             log_error(format!(
-                "[COMPUTE] DetectDeployConflicts: get_healthy_file_signals failed: {}", e
+                "[COMPUTE] DetectDeployConflicts: get_healthy_file_signals failed: {}",
+                e
             ));
-            return Result::failure(computation, start.elapsed().as_millis() as u64, format!("get_healthy_file_signals: {}", e));
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("get_healthy_file_signals: {}", e),
+            );
         }
     };
 
@@ -74,7 +82,8 @@ pub fn execute_detect_deploy_conflicts(
             Ok(v) => v,
             Err(e) => {
                 log_error(format!(
-                    "[COMPUTE] DetectDeployConflicts: get_corpus_tags failed for inode {}: {}", signal.inode, e
+                    "[COMPUTE] DetectDeployConflicts: get_corpus_tags failed for inode {}: {}",
+                    signal.inode, e
                 ));
                 Vec::new()
             }
@@ -170,9 +179,14 @@ pub fn execute_detect_release_overlaps(
         Ok(v) => v,
         Err(e) => {
             log_error(format!(
-                "[COMPUTE] DetectReleaseOverlaps: get_healthy_file_signals failed: {}", e
+                "[COMPUTE] DetectReleaseOverlaps: get_healthy_file_signals failed: {}",
+                e
             ));
-            return Result::failure(computation, start.elapsed().as_millis() as u64, format!("get_healthy_file_signals: {}", e));
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("get_healthy_file_signals: {}", e),
+            );
         }
     };
 
@@ -223,13 +237,16 @@ pub fn execute_detect_release_overlaps(
         let source_dir = resolved.source_path.to_string_lossy().to_string();
         let release_dir = extract_release_directory(relative_path, &resolved.source_path);
 
-        album_dir_files.entry(album_dir).or_default().push(FileInfo {
-            inode: signal.inode,
-            corpus_path: signal.path.clone(),
-            source_dir,
-            release_dir,
-            can_stash: resolved.can_stash_dupes,
-        });
+        album_dir_files
+            .entry(album_dir)
+            .or_default()
+            .push(FileInfo {
+                inode: signal.inode,
+                corpus_path: signal.path.clone(),
+                source_dir,
+                release_dir,
+                can_stash: resolved.can_stash_dupes,
+            });
     }
 
     // Build signals: for each album directory with 2+ distinct (source, release) pairs.
@@ -260,7 +277,8 @@ pub fn execute_detect_release_overlaps(
 
         for ((source_dir, release_dir), group_files) in &release_groups {
             let inodes: Vec<i64> = group_files.iter().map(|f| f.inode).collect();
-            let corpus_paths: Vec<String> = group_files.iter().map(|f| f.corpus_path.clone()).collect();
+            let corpus_paths: Vec<String> =
+                group_files.iter().map(|f| f.corpus_path.clone()).collect();
             let can_stash = group_files.first().map(|f| f.can_stash).unwrap_or(false);
             total_files += inodes.len();
 
@@ -274,7 +292,8 @@ pub fn execute_detect_release_overlaps(
         }
 
         // Sort releases for deterministic ordering
-        releases.sort_by(|a, b| (&a.source_dir, &a.release_dir).cmp(&(&b.source_dir, &b.release_dir)));
+        releases
+            .sort_by(|a, b| (&a.source_dir, &a.release_dir).cmp(&(&b.source_dir, &b.release_dir)));
 
         let signal = TypedSignalWrite::ReleaseOverlap(ReleaseOverlapSignal {
             key: album_dir.clone(),
@@ -314,9 +333,9 @@ pub fn execute_detect_release_overlaps(
         vec![],
         vec![(
             super::super::PipelineStage::DependentAnalysis,
-            vec![
-                super::super::Computation::Analysis(Computation::DeriveCorpusDeployStatus),
-            ],
+            vec![super::super::Computation::Analysis(
+                Computation::DeriveCorpusDeployStatus,
+            )],
         )],
     )
 }
@@ -380,7 +399,8 @@ pub fn execute_derive_deploy_health_signals(
 
     log_general(format!(
         "[COMPUTE] DeriveDeployHealthSignals '{}': got {} library scan entries from DB",
-        library_name, library_scan_entries.len(),
+        library_name,
+        library_scan_entries.len(),
     ));
 
     // Log first few entries for debugging
@@ -402,15 +422,21 @@ pub fn execute_derive_deploy_health_signals(
         Ok(v) => v,
         Err(e) => {
             log_error(format!(
-                "[COMPUTE] DeriveDeployHealthSignals '{}': get_all_corpus_inodes failed: {}", library_name, e
+                "[COMPUTE] DeriveDeployHealthSignals '{}': get_all_corpus_inodes failed: {}",
+                library_name, e
             ));
-            return Result::failure(computation, start.elapsed().as_millis() as u64, format!("get_all_corpus_inodes: {}", e));
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("get_all_corpus_inodes: {}", e),
+            );
         }
     };
 
     log_general(format!(
         "[COMPUTE] DeriveDeployHealthSignals '{}': {} corpus inodes loaded",
-        library_name, corpus_inodes.len(),
+        library_name,
+        corpus_inodes.len(),
     ));
 
     // Build path→inode index for conflict detection.
@@ -479,7 +505,8 @@ pub fn execute_derive_deploy_health_signals(
                 );
                 if let Some(expected_path) = expected_with_prefix {
                     let is_image = is_image_file(Path::new(corpus_path));
-                    let stale_key = LibraryStaleSignal::make_key(library_name, &library_path_display);
+                    let stale_key =
+                        LibraryStaleSignal::make_key(library_name, &library_path_display);
                     sender.write_typed_signal(
                         TypedSignalWrite::LibraryStale(LibraryStaleSignal {
                             key: stale_key,
@@ -501,11 +528,10 @@ pub fn execute_derive_deploy_health_signals(
             }
             DeployLifecyclePhase::Leftover => {
                 leftover_count += 1;
-                let leftover_key = LibraryLeftoverSignal::make_key(library_name, &library_path_display);
+                let leftover_key =
+                    LibraryLeftoverSignal::make_key(library_name, &library_path_display);
                 sender.write_typed_signal(
-                    TypedSignalWrite::LibraryLeftover(LibraryLeftoverSignal {
-                        key: leftover_key,
-                    }),
+                    TypedSignalWrite::LibraryLeftover(LibraryLeftoverSignal { key: leftover_key }),
                     witness,
                 );
             }
@@ -680,9 +706,7 @@ fn check_sidecar_stale(
     // Lazily populate album_dir for this corpus directory
     let album_dir = dir_to_album_dir
         .entry(corpus_dir.clone())
-        .or_insert_with(|| {
-            lookup_album_dir_from_sibling(read_only_db, &corpus_dir)
-        })
+        .or_insert_with(|| lookup_album_dir_from_sibling(read_only_db, &corpus_dir))
         .clone();
 
     let album_dir = match album_dir {
@@ -829,9 +853,14 @@ pub fn execute_derive_corpus_deploy_status(
         Ok(v) => v,
         Err(e) => {
             log_error(format!(
-                "[COMPUTE] DeriveCorpusDeployStatus: get_healthy_file_signals failed: {}", e
+                "[COMPUTE] DeriveCorpusDeployStatus: get_healthy_file_signals failed: {}",
+                e
             ));
-            return Result::failure(computation, start.elapsed().as_millis() as u64, format!("get_healthy_file_signals: {}", e));
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("get_healthy_file_signals: {}", e),
+            );
         }
     };
 
@@ -882,9 +911,14 @@ pub fn execute_derive_corpus_deploy_status(
         Ok(v) => v,
         Err(e) => {
             log_error(format!(
-                "[COMPUTE] DeriveCorpusDeployStatus: get_all_corpus_inodes failed: {}", e
+                "[COMPUTE] DeriveCorpusDeployStatus: get_all_corpus_inodes failed: {}",
+                e
             ));
-            return Result::failure(computation, start.elapsed().as_millis() as u64, format!("get_all_corpus_inodes: {}", e));
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("get_all_corpus_inodes: {}", e),
+            );
         }
     };
 
@@ -947,10 +981,14 @@ pub fn execute_derive_corpus_deploy_status(
         let mut path_groups: HashMap<&str, Vec<&PrecomputedFile>> = HashMap::new();
         for file in &precomputed {
             if conflict_paths.contains(file.deploy_path.as_str()) {
-                path_groups.entry(file.deploy_path.as_str()).or_default().push(file);
+                path_groups
+                    .entry(file.deploy_path.as_str())
+                    .or_default()
+                    .push(file);
             }
         }
-        path_groups.values()
+        path_groups
+            .values()
             .filter_map(|group| group.iter().min_by_key(|f| &f.corpus_path))
             .map(|winner| winner.inode)
             .collect()
@@ -977,16 +1015,19 @@ pub fn execute_derive_corpus_deploy_status(
         match phase {
             DeployLifecyclePhase::Healthy => {
                 // Correctly deployed — find the matching library path for the signal
-                let lib_path = library_inode_to_paths.get(&file.inode)
-                    .and_then(|paths| paths.iter().find(|lp| {
-                        let components: Vec<_> = lp.components().collect();
-                        if components.len() > 1 {
-                            let suffix: PathBuf = components[1..].iter().collect();
-                            suffix == Path::new(&file.deploy_path)
-                        } else {
-                            false
-                        }
-                    }))
+                let lib_path = library_inode_to_paths
+                    .get(&file.inode)
+                    .and_then(|paths| {
+                        paths.iter().find(|lp| {
+                            let components: Vec<_> = lp.components().collect();
+                            if components.len() > 1 {
+                                let suffix: PathBuf = components[1..].iter().collect();
+                                suffix == Path::new(&file.deploy_path)
+                            } else {
+                                false
+                            }
+                        })
+                    })
                     .expect("Healthy implies matching library path");
                 let signal = TypedSignalWrite::DeployedHealthy(DeployedHealthySignal {
                     inode: file.inode,
@@ -1042,7 +1083,8 @@ pub fn execute_derive_corpus_deploy_status(
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let newly_deployed_healthy: HashSet<i64> = computed_deployed_healthy.iter().map(|s| s.inode).collect();
+    let newly_deployed_healthy: HashSet<i64> =
+        computed_deployed_healthy.iter().map(|s| s.inode).collect();
     let newly_deploy_ready: HashSet<i64> = computed_deploy_ready.iter().map(|s| s.inode).collect();
     for &inode in &existing_deployed_healthy {
         if !newly_deployed_healthy.contains(&inode) {
@@ -1052,7 +1094,8 @@ pub fn execute_derive_corpus_deploy_status(
                 "dropped entirely (not in configured sources, or not healthy)"
             };
             // Find the path from precomputed if available
-            let path = precomputed.iter()
+            let path = precomputed
+                .iter()
                 .find(|f| f.inode == inode)
                 .map(|f| f.corpus_path.as_str())
                 .unwrap_or("<unknown>");
@@ -1063,18 +1106,20 @@ pub fn execute_derive_corpus_deploy_status(
         }
     }
 
-    let (dr_cleared, dr_new, dr_updated, dr_unchanged) = reconcile_corpus_signals::<DeployReadySignal>(
-        read_only_db,
-        &sender,
-        computed_deploy_ready,
-        witness,
-    );
-    let (dh_cleared, dh_new, dh_updated, dh_unchanged) = reconcile_corpus_signals::<DeployedHealthySignal>(
-        read_only_db,
-        &sender,
-        computed_deployed_healthy,
-        witness,
-    );
+    let (dr_cleared, dr_new, dr_updated, dr_unchanged) =
+        reconcile_corpus_signals::<DeployReadySignal>(
+            read_only_db,
+            &sender,
+            computed_deploy_ready,
+            witness,
+        );
+    let (dh_cleared, dh_new, dh_updated, dh_unchanged) =
+        reconcile_corpus_signals::<DeployedHealthySignal>(
+            read_only_db,
+            &sender,
+            computed_deployed_healthy,
+            witness,
+        );
 
     // ====================================================================
     // Phase 4: Sidecar image deployment discovery
@@ -1156,7 +1201,8 @@ fn derive_sidecar_deploy_signals(
         );
         if cleared > 0 {
             log_general(format!(
-                "[COMPUTE] Sidecar deploy disabled, cleared {} stale signals", cleared,
+                "[COMPUTE] Sidecar deploy disabled, cleared {} stale signals",
+                cleared,
             ));
         }
         return 0;
@@ -1207,8 +1253,7 @@ fn derive_sidecar_deploy_signals(
         .get_dirty_inodes(SIDECAR_DEPLOY_COMPUTATION)
         .unwrap_or_default();
 
-    let existing_signal_count = read_only_db
-        .corpus_signal_count::<SidecarDeployReadySignal>();
+    let existing_signal_count = read_only_db.corpus_signal_count::<SidecarDeployReadySignal>();
 
     if dirty_inodes.is_empty() && existing_signal_count > 0 {
         // Nothing changed, existing signals are fresh — skip entirely
@@ -1240,10 +1285,15 @@ fn derive_sidecar_deploy_signals(
     let mut candidates_by_deploy: HashMap<DeployKey, Vec<&CorpusImageEntry>> = HashMap::new();
 
     for (_corpus_dir, (library_name, album_dir)) in &dir_targets {
-        let images = images_by_dir.get(_corpus_dir.as_str()).map(|v| v.as_slice()).unwrap_or(&[]);
+        let images = images_by_dir
+            .get(_corpus_dir.as_str())
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
 
         for img in images {
-            if let Some((key, _filename)) = sidecar_candidate_key(img, mode, library_name, album_dir) {
+            if let Some((key, _filename)) =
+                sidecar_candidate_key(img, mode, library_name, album_dir)
+            {
                 candidates_by_deploy.entry(key).or_default().push(img);
             }
         }
@@ -1259,11 +1309,13 @@ fn derive_sidecar_deploy_signals(
         // Also check if the destination path is already occupied by a different file
         // (e.g., an image from another corpus directory deployed to the same album dir).
         let any_deployed = group.iter().any(|img| library_inodes.contains(&img.inode));
-        let path_occupied = library_paths.contains(Path::new(library_name).join(deploy_path).as_path());
+        let path_occupied =
+            library_paths.contains(Path::new(library_name).join(deploy_path).as_path());
         if any_deployed || path_occupied {
             // Still emit conflict signal if 2+ non-deployed images also target this path,
             // so the operator knows about the duplicate corpus images.
-            let non_deployed: Vec<&&CorpusImageEntry> = group.iter()
+            let non_deployed: Vec<&&CorpusImageEntry> = group
+                .iter()
                 .filter(|img| !library_inodes.contains(&img.inode))
                 .collect();
             if non_deployed.len() >= 2 {
@@ -1310,27 +1362,36 @@ fn derive_sidecar_deploy_signals(
     // when nothing has changed.
     let sidecar_count = computed_sidecars.len();
 
-    let (sc_cleared, sc_new, sc_updated, sc_unchanged) = reconcile_corpus_signals::<SidecarDeployReadySignal>(
-        read_only_db,
-        sender,
-        computed_sidecars,
-        witness,
-    );
+    let (sc_cleared, sc_new, sc_updated, sc_unchanged) =
+        reconcile_corpus_signals::<SidecarDeployReadySignal>(
+            read_only_db,
+            sender,
+            computed_sidecars,
+            witness,
+        );
 
-    let (cc_cleared, cc_new, cc_updated, cc_unchanged) = reconcile_aggregate_signals::<SidecarDeployConflictSignal>(
-        read_only_db,
-        sender,
-        computed_conflicts,
-        witness,
-    );
+    let (cc_cleared, cc_new, cc_updated, cc_unchanged) =
+        reconcile_aggregate_signals::<SidecarDeployConflictSignal>(
+            read_only_db,
+            sender,
+            computed_conflicts,
+            witness,
+        );
 
     log_general(format!(
         "[COMPUTE] DeriveCorpusDeployStatus sidecar reconcile: {} dirs, {} images, \
          SidecarDeployReady({} cleared, {} new, {} updated, {} unchanged), \
          SidecarDeployConflict({} cleared, {} new, {} updated, {} unchanged)",
-        dir_targets.len(), all_images.len(),
-        sc_cleared, sc_new, sc_updated, sc_unchanged,
-        cc_cleared, cc_new, cc_updated, cc_unchanged,
+        dir_targets.len(),
+        all_images.len(),
+        sc_cleared,
+        sc_new,
+        sc_updated,
+        sc_unchanged,
+        cc_cleared,
+        cc_new,
+        cc_updated,
+        cc_unchanged,
     ));
 
     // Clear all dirty inodes after recompute

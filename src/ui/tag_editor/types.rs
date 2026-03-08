@@ -104,9 +104,16 @@ pub enum UnifiedTagEditorAction {
     /// No action
     None,
     /// Stage decision AND navigate (confirmation modal approved staging)
-    StageDecisionAndNavigate { key: DecisionKey, mutations: Vec<Mutation>, direction: NavigationDirection },
+    StageDecisionAndNavigate {
+        key: DecisionKey,
+        mutations: Vec<Mutation>,
+        direction: NavigationDirection,
+    },
     /// Stage decision AND show transaction review (for aggregated mode or single-item contexts)
-    StageDecisionAndReview { key: DecisionKey, mutations: Vec<Mutation> },
+    StageDecisionAndReview {
+        key: DecisionKey,
+        mutations: Vec<Mutation>,
+    },
     /// Discard all staged decisions and exit
     DiscardTransaction,
     /// Navigate to next item (within current transaction)
@@ -165,7 +172,6 @@ pub enum UnifiedTagEditorModal {
     },
 }
 
-
 /// Buttons on the unsaved changes modal
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UnsavedChangesButton {
@@ -194,7 +200,6 @@ pub enum StageChangesButton {
     /// Cancel - stay on current file
     Cancel,
 }
-
 
 // ============================================================================
 // Legacy Types (to be removed after refactoring)
@@ -254,4 +259,3 @@ pub struct AggregatedTagField {
     pub value: AggregatedValue,
     pub original_value: AggregatedValue,
 }
-

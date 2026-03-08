@@ -69,7 +69,10 @@ pub struct MissingDirectoryPreviewState {
 impl MissingDirectoryPreviewState {
     /// Path of the currently selected directory (for status bar).
     pub fn selected_path(&self) -> Option<&str> {
-        self.cached_data.directories.get(self.scroll).map(|s| s.as_str())
+        self.cached_data
+            .directories
+            .get(self.scroll)
+            .map(|s| s.as_str())
     }
 
     /// Create a new preview state with cached data.
@@ -90,7 +93,12 @@ impl MissingDirectoryPreviewState {
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<MissingDirectoryPreviewAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<MissingDirectoryPreviewAction> {
         if let Some(button_name) = self.button_rects.hit_test(x, y) {
             match button_name {
                 "drop" => {
@@ -217,7 +225,11 @@ impl MissingDirectoryPreviewState {
         let title = format!(" Deleted Directories ({}) ", count);
         let block = Block::default()
             .title(title)
-            .title_style(Style::default().fg(if count > 0 { Color::Yellow } else { Color::DarkGray }))
+            .title_style(Style::default().fg(if count > 0 {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            }))
             .borders(Borders::ALL)
             .border_style(border_style);
 
@@ -256,8 +268,11 @@ impl MissingDirectoryPreviewState {
         self.click_targets.set_list_area(list_area);
         let visible_lines = list_area.height as usize;
         for (vis_idx, entry_idx) in (self.scroll..).take(visible_lines).enumerate() {
-            if entry_idx >= self.cached_data.count() { break; }
-            self.click_targets.add_row(entry_idx.to_string(), list_area.y + vis_idx as u16);
+            if entry_idx >= self.cached_data.count() {
+                break;
+            }
+            self.click_targets
+                .add_row(entry_idx.to_string(), list_area.y + vis_idx as u16);
         }
 
         let items: Vec<ListItem> = self
@@ -296,7 +311,10 @@ impl MissingDirectoryPreviewState {
         let drop_style = if !has_directories {
             Style::default().fg(Color::DarkGray)
         } else if self.selected_button == SelectedButton::Drop {
-            Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Yellow)
         };
@@ -307,7 +325,10 @@ impl MissingDirectoryPreviewState {
 
         // Cancel button
         let cancel_style = if self.selected_button == SelectedButton::Cancel {
-            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };

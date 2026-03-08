@@ -14,4 +14,3 @@ impl Default for CorpusBrowserConfig {
         Self { show_files: true }
     }
 }
-

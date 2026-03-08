@@ -89,7 +89,11 @@ impl Database {
 
         let mut result = HashMap::new();
         let rows = stmt.query_map(&params_vec[..], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })?;
 
         for row in rows {
@@ -121,11 +125,7 @@ impl Database {
     }
 
     /// Get paths for files by inode (for move detection).
-    pub fn get_file_paths_batch(
-        &self,
-        zone: Zone,
-        inodes: &[i64],
-    ) -> Result<HashMap<i64, String>> {
+    pub fn get_file_paths_batch(&self, zone: Zone, inodes: &[i64]) -> Result<HashMap<i64, String>> {
         if inodes.is_empty() {
             return Ok(HashMap::new());
         }
@@ -203,15 +203,25 @@ impl Database {
     /// Pass `with_fingerprints: false` if the caller does not need the fingerprint
     /// blob — this avoids transferring ~7KB per file (307MB total for the corpus)
     /// from SQLite into process memory needlessly.
-    pub fn get_all_audio_files(&self, zone: Zone, with_fingerprints: bool) -> Result<Vec<AudioFile>> {
-        let fp_col = if with_fingerprints { "a.fingerprint" } else { "NULL" };
-        let sql = format!(r#"SELECT
+    pub fn get_all_audio_files(
+        &self,
+        zone: Zone,
+        with_fingerprints: bool,
+    ) -> Result<Vec<AudioFile>> {
+        let fp_col = if with_fingerprints {
+            "a.fingerprint"
+        } else {
+            "NULL"
+        };
+        let sql = format!(
+            r#"SELECT
                 f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
                 a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, {fp_col}, a.needs_tag_flush
             FROM files f
             JOIN audio_info a ON f.inode = a.inode
             WHERE f.zone = ?1 AND f.is_dir = 0
-            ORDER BY f.path"#);
+            ORDER BY f.path"#
+        );
 
         let mut stmt = self.conn.prepare(&sql)?;
         let files = stmt.query_map(params![zone.as_str()], Self::row_to_audio_file)?;
@@ -247,11 +257,7 @@ impl Database {
     /// Zone is REQUIRED - querying by inode alone is incorrect because
     /// the primary key is (path, zone, inode). The same inode can exist
     /// in multiple zones (corpus and library for hard-linked files).
-    pub fn get_audio_files_by_inodes(
-        &self,
-        inodes: &[i64],
-        zone: Zone,
-    ) -> Result<Vec<AudioFile>> {
+    pub fn get_audio_files_by_inodes(&self, inodes: &[i64], zone: Zone) -> Result<Vec<AudioFile>> {
         if inodes.is_empty() {
             return Ok(Vec::new());
         }
@@ -303,7 +309,10 @@ impl Database {
     }
 
     /// Get all audio files in a directory tree for tag editing.
-    pub fn get_audio_files_for_tag_editing(&self, dir_path: &std::path::Path) -> Result<Vec<AudioFile>> {
+    pub fn get_audio_files_for_tag_editing(
+        &self,
+        dir_path: &std::path::Path,
+    ) -> Result<Vec<AudioFile>> {
         let pattern = super::dir_like_pattern(dir_path);
 
         let mut stmt = self.conn.prepare(
@@ -350,7 +359,18 @@ impl Database {
     /// Get audio files with their present tag names (for missing tag detection, corpus only).
     /// Returns: Vec<(inode, path, album_or_none, comma_separated_uppercase_tags, artist_or_none, title_or_none)>
     #[allow(clippy::type_complexity)]
-    pub fn get_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>> {
+    pub fn get_audio_files_with_tag_presence(
+        &self,
+    ) -> Result<
+        Vec<(
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )>,
+    > {
         // Only check missing tags for corpus files
         let query = r#"
             SELECT f.inode, f.path,
@@ -448,9 +468,9 @@ impl Database {
 
     /// Get all corpus audio file inodes mapped to their paths.
     pub fn get_all_corpus_inodes(&self) -> Result<HashMap<i64, String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path FROM files WHERE zone = 'corpus' AND is_dir = 0"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode, path FROM files WHERE zone = 'corpus' AND is_dir = 0")?;
 
         let mut result = HashMap::new();
         let rows = stmt.query_map(params![], |row| {
@@ -467,9 +487,9 @@ impl Database {
 
     /// Get all inbox audio file inodes mapped to their paths.
     pub fn get_all_inbox_inodes(&self) -> Result<HashMap<i64, String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, path FROM files WHERE zone = 'inbox' AND is_dir = 0"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode, path FROM files WHERE zone = 'inbox' AND is_dir = 0")?;
 
         let mut result = HashMap::new();
         let rows = stmt.query_map(params![], |row| {
@@ -501,7 +521,7 @@ impl Database {
     /// Get the corpus path for a single inode.
     pub fn get_corpus_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path FROM files WHERE inode = ?1 AND zone = 'corpus' AND is_dir = 0 LIMIT 1"
+            "SELECT path FROM files WHERE inode = ?1 AND zone = 'corpus' AND is_dir = 0 LIMIT 1",
         )?;
 
         let mut rows = stmt.query(params![inode])?;
@@ -516,7 +536,18 @@ impl Database {
     ///
     /// Mirrors `get_audio_files_with_tag_presence()` but uses `inbox_tags` and `zone = 'inbox'`.
     #[allow(clippy::type_complexity)]
-    pub fn get_inbox_audio_files_with_tag_presence(&self) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>> {
+    pub fn get_inbox_audio_files_with_tag_presence(
+        &self,
+    ) -> Result<
+        Vec<(
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )>,
+    > {
         let query = r#"
             SELECT f.inode, f.path,
                    (SELECT tag_value FROM inbox_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) as album,
@@ -552,7 +583,7 @@ impl Database {
     /// Get the inbox path for a single inode.
     pub fn get_inbox_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path FROM files WHERE inode = ?1 AND zone = 'inbox' AND is_dir = 0 LIMIT 1"
+            "SELECT path FROM files WHERE inode = ?1 AND zone = 'inbox' AND is_dir = 0 LIMIT 1",
         )?;
 
         let mut rows = stmt.query(params![inode])?;
@@ -577,13 +608,7 @@ impl Database {
         "#;
 
         let mut stmt = self.conn.prepare(query)?;
-        let rows = stmt.query_map(params![], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-            ))
-        })?;
+        let rows = stmt.query_map(params![], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
 
         let mut results = Vec::new();
         for row in rows {
@@ -595,7 +620,9 @@ impl Database {
     /// Get album/artist/album_artist data for all audio files (for inconsistent album artist detection, corpus only).
     /// Returns: Vec<(inode, album, artist, album_artist, catalog_number, isrc, year, flag_compilation)>
     #[allow(clippy::type_complexity)]
-    pub fn get_album_artist_data(&self) -> Result<Vec<(i64, String, String, String, String, String, String, String)>> {
+    pub fn get_album_artist_data(
+        &self,
+    ) -> Result<Vec<(i64, String, String, String, String, String, String, String)>> {
         use mm_utils::tag_names::compound_tag_sql_in;
 
         let album_artist_in = compound_tag_sql_in("ALBUM", "ARTIST");
@@ -605,7 +632,8 @@ impl Database {
         // GROUP BY f.inode to collapse multi-value tags (e.g. a file with two
         // artist tags) into one row per inode, preventing cross-product blowup
         // that would make a single file appear as multiple "tracks".
-        let sql = format!(r#"
+        let sql = format!(
+            r#"
             SELECT
                 f.inode,
                 COALESCE(MIN(album.tag_value), '') as album,
@@ -633,7 +661,8 @@ impl Database {
                 ON f.inode = flagcomp.inode AND UPPER(flagcomp.tag_name) = 'COMPILATION'
             WHERE f.is_dir = 0 AND f.zone = 'corpus' AND album.tag_value IS NOT NULL AND album.tag_value != ''
             GROUP BY f.inode
-        "#);
+        "#
+        );
 
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![], |row| {
@@ -666,14 +695,15 @@ impl Database {
             "SELECT inode, tag_name, tag_value FROM corpus_tags WHERE inode = ?1 ORDER BY tag_name, tag_value"
         )?;
 
-        let tags = stmt.query_map(params![inode], |row| {
-            Ok(AudioTag {
-                inode: row.get(0)?,
-                tag_name: row.get(1)?,
-                tag_value: row.get(2)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let tags = stmt
+            .query_map(params![inode], |row| {
+                Ok(AudioTag {
+                    inode: row.get(0)?,
+                    tag_name: row.get(1)?,
+                    tag_value: row.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(tags)
     }
@@ -682,22 +712,23 @@ impl Database {
     ///
     /// Corpus → corpus_tags, Inbox → inbox_tags, Library → error (no tags).
     pub fn get_tags_for_zone(&self, inode: i64, zone: Zone) -> Result<Vec<AudioTag>> {
-        let table = zone.tag_table().ok_or_else(|| {
-            anyhow::anyhow!("zone {:?} has no tag table", zone)
-        })?;
+        let table = zone
+            .tag_table()
+            .ok_or_else(|| anyhow::anyhow!("zone {:?} has no tag table", zone))?;
         let sql = format!(
             "SELECT inode, tag_name, tag_value FROM {} WHERE inode = ?1 ORDER BY tag_name, tag_value",
             table
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let tags = stmt.query_map(params![inode], |row| {
-            Ok(AudioTag {
-                inode: row.get(0)?,
-                tag_name: row.get(1)?,
-                tag_value: row.get(2)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        let tags = stmt
+            .query_map(params![inode], |row| {
+                Ok(AudioTag {
+                    inode: row.get(0)?,
+                    tag_name: row.get(1)?,
+                    tag_value: row.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(tags)
     }
 
@@ -707,14 +738,21 @@ impl Database {
     ///
     /// Pass `with_fingerprints: false` if the caller does not need fingerprint
     /// data — see `get_all_audio_files` for the rationale.
-    pub fn get_all_audio_files_with_tags(&self, zone: Zone, with_fingerprints: bool) -> Result<Vec<AudioFileWithTags>> {
+    pub fn get_all_audio_files_with_tags(
+        &self,
+        zone: Zone,
+        with_fingerprints: bool,
+    ) -> Result<Vec<AudioFileWithTags>> {
         let files = self.get_all_audio_files(zone, with_fingerprints)?;
         let mut results = Vec::new();
         for file in files {
             let tags = self.get_corpus_tags(file.inode())?;
             let mut tag_map: HashMap<String, Vec<String>> = HashMap::new();
             for t in tags {
-                tag_map.entry(t.tag_name.to_uppercase()).or_default().push(t.tag_value);
+                tag_map
+                    .entry(t.tag_name.to_uppercase())
+                    .or_default()
+                    .push(t.tag_value);
             }
             results.push((file, tag_map));
         }
@@ -925,9 +963,9 @@ impl Database {
     /// Used by per-inode computations (e.g., compound tag detection) to query
     /// only the inodes that need reprocessing instead of the entire corpus.
     pub fn get_dirty_inodes(&self, computation_type: &str) -> Result<Vec<i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode FROM dirty_inodes WHERE computation_type = ?1"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode FROM dirty_inodes WHERE computation_type = ?1")?;
 
         let rows = stmt.query_map(params![computation_type], |row| row.get(0))?;
 
@@ -955,7 +993,7 @@ impl Database {
              JOIN files f ON ct.inode = f.inode
              WHERE f.zone = 'corpus'
                AND UPPER(ct.tag_name) = UPPER(?1)
-               AND ct.tag_value LIKE ?2"
+               AND ct.tag_value LIKE ?2",
         )?;
 
         let rows = stmt.query_map(params![tag_name, like_pattern], |row| row.get(0))?;
@@ -976,7 +1014,10 @@ impl Database {
     ///
     /// Used by `DeriveDeployHealthSignals` to determine the expected deploy path
     /// for sidecar images when the image itself has no audio_info row.
-    pub fn get_any_audio_sibling_in_directory(&self, corpus_dir: &str) -> Result<Option<(i64, String)>> {
+    pub fn get_any_audio_sibling_in_directory(
+        &self,
+        corpus_dir: &str,
+    ) -> Result<Option<(i64, String)>> {
         let pattern = super::dir_like_pattern_str(corpus_dir);
 
         let result = self.conn.query_row(
@@ -1016,10 +1057,8 @@ impl Database {
 
         let mut stmt = self.conn.prepare(&query)?;
 
-        let params_vec: Vec<&dyn rusqlite::ToSql> = inodes
-            .iter()
-            .map(|i| i as &dyn rusqlite::ToSql)
-            .collect();
+        let params_vec: Vec<&dyn rusqlite::ToSql> =
+            inodes.iter().map(|i| i as &dyn rusqlite::ToSql).collect();
 
         let rows = stmt.query_map(&params_vec[..], |row| row.get::<_, i64>(0))?;
 
@@ -1064,7 +1103,6 @@ impl Database {
         }
         Ok(result)
     }
-
 }
 
 /// A corpus image file with its inode (for batch sidecar deploy processing).

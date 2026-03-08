@@ -200,7 +200,12 @@ impl HistoryViewState {
     }
 
     /// Set detail after one-shot DB query.
-    pub fn set_detail(&mut self, session_id: String, edits: Vec<EditRecord>, inode_paths: HashMap<i64, String>) {
+    pub fn set_detail(
+        &mut self,
+        session_id: String,
+        edits: Vec<EditRecord>,
+        inode_paths: HashMap<i64, String>,
+    ) {
         let edit_count = edits.len();
         let all_selected: HashSet<usize> = (0..edit_count).collect();
         self.detail = Some(SessionDetail {
@@ -215,7 +220,11 @@ impl HistoryViewState {
     }
 
     /// Enter conflict resolution phase.
-    pub fn set_conflict_resolution(&mut self, clean: Vec<ReversalItem>, conflicts: Vec<ConflictItem>) {
+    pub fn set_conflict_resolution(
+        &mut self,
+        clean: Vec<ReversalItem>,
+        conflicts: Vec<ConflictItem>,
+    ) {
         self.phase = HistoryPhase::ConflictResolution(ConflictResolutionState {
             clean_reversals: clean,
             conflicts,
@@ -361,7 +370,10 @@ impl HistoryViewState {
 }
 
 /// Shared input handler for all jettison confirmation phases.
-fn handle_jettison_confirm_input(action: &InputAction, confirm_action: HistoryAction) -> HistoryAction {
+fn handle_jettison_confirm_input(
+    action: &InputAction,
+    confirm_action: HistoryAction,
+) -> HistoryAction {
     match action {
         InputAction::Confirm => confirm_action,
         InputAction::Cancel => HistoryAction::CancelJettison,
@@ -369,7 +381,10 @@ fn handle_jettison_confirm_input(action: &InputAction, confirm_action: HistoryAc
     }
 }
 
-fn handle_conflict_resolution_input(state: &mut ConflictResolutionState, action: &InputAction) -> HistoryAction {
+fn handle_conflict_resolution_input(
+    state: &mut ConflictResolutionState,
+    action: &InputAction,
+) -> HistoryAction {
     match action {
         InputAction::NavUp => {
             if state.conflict_cursor > 0 {
@@ -383,9 +398,7 @@ fn handle_conflict_resolution_input(state: &mut ConflictResolutionState, action:
             }
             HistoryAction::None
         }
-        InputAction::Toggle => {
-            HistoryAction::ToggleConflictDisposition(state.conflict_cursor)
-        }
+        InputAction::Toggle => HistoryAction::ToggleConflictDisposition(state.conflict_cursor),
         InputAction::Confirm => HistoryAction::ConfirmReversal,
         InputAction::Cancel => HistoryAction::CancelConflictResolution,
         _ => HistoryAction::None,

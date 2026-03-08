@@ -137,8 +137,12 @@ fn render_parts_pane(f: &mut Frame, area: Rect, state: &mut CompoundSplitStateV2
 
     // Register click target rows
     for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-        if entry_idx >= state.edited_parts.len() { break; }
-        state.part_click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        if entry_idx >= state.edited_parts.len() {
+            break;
+        }
+        state
+            .part_click_targets
+            .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
     }
 
     let items: Vec<ListItem> = state
@@ -159,12 +163,10 @@ fn render_parts_pane(f: &mut Frame, area: Rect, state: &mut CompoundSplitStateV2
             let part_max = max_width.saturating_sub(indicator.len() + 3);
             let display_part = truncate_right(part, part_max);
 
-            let mut spans = vec![
-                Span::styled(
-                    format!("{} ", indicator),
-                    Style::default().fg(indicator_color),
-                ),
-            ];
+            let mut spans = vec![Span::styled(
+                format!("{} ", indicator),
+                Style::default().fg(indicator_color),
+            )];
 
             let text_style = if is_cursor && is_focused {
                 Style::default()
@@ -223,8 +225,12 @@ fn render_files_pane(f: &mut Frame, area: Rect, state: &mut CompoundSplitStateV2
 
     // Register click target rows
     for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-        if entry_idx >= state.data.files.len() { break; }
-        state.file_click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        if entry_idx >= state.data.files.len() {
+            break;
+        }
+        state
+            .file_click_targets
+            .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
     }
 
     let items: Vec<ListItem> = state
@@ -289,7 +295,8 @@ fn render_tags_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
                     let display = truncate_right(&text, max_width);
 
                     // Highlight the tag being split
-                    let style = if name.to_uppercase() == state.data.compound.tag_name.to_uppercase()
+                    let style = if name.to_uppercase()
+                        == state.data.compound.tag_name.to_uppercase()
                         && value == &state.data.compound.compound_value
                     {
                         Style::default().fg(Color::Yellow)
@@ -388,17 +395,11 @@ fn render_controls(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
     } else {
         // Normal mode controls
         if state.focus_pane == FocusPaneV2::Files {
-            hints.extend([
-                cc::toggle("[Space]"),
-                cc::text(" toggle  "),
-            ]);
+            hints.extend([cc::toggle("[Space]"), cc::text(" toggle  ")]);
         }
 
         if !state.is_safe_mode && state.focus_pane == FocusPaneV2::Parts {
-            hints.extend([
-                cc::edit("[E]"),
-                cc::text(" edit  "),
-            ]);
+            hints.extend([cc::edit("[E]"), cc::text(" edit  ")]);
         }
 
         hints.extend([
@@ -411,10 +412,7 @@ fn render_controls(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
         ]);
 
         if state.is_safe_mode {
-            hints.extend([
-                cc::confirm("[^A]"),
-                cc::text(" all  "),
-            ]);
+            hints.extend([cc::confirm("[^A]"), cc::text(" all  ")]);
         }
 
         hints.extend([

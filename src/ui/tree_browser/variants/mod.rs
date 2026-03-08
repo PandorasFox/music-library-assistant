@@ -7,8 +7,8 @@ pub mod corpus;
 
 pub use corpus::CorpusBrowserVariant;
 
-use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::Frame;
 
 use crate::ui::input::InputAction;
 
@@ -46,7 +46,11 @@ impl BrowserVariant {
     }
 
     /// Handle variant-specific input action.
-    pub fn handle_input(&mut self, action: &InputAction, nav: &mut TreeNavigator) -> TreeBrowserAction {
+    pub fn handle_input(
+        &mut self,
+        action: &InputAction,
+        nav: &mut TreeNavigator,
+    ) -> TreeBrowserAction {
         match self {
             BrowserVariant::CorpusBrowser(v) => v.handle_input(action, nav),
         }

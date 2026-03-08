@@ -169,7 +169,9 @@ pub struct OobConflictState {
 impl OobConflictState {
     /// Path of the currently selected file (for status bar).
     pub fn selected_path(&self) -> Option<&str> {
-        self.active_bucket_state().current_file().map(|f| f.path.as_str())
+        self.active_bucket_state()
+            .current_file()
+            .map(|f| f.path.as_str())
     }
 
     pub fn new(files: Vec<BucketedOobFile>) -> Self {
@@ -236,7 +238,12 @@ impl OobConflictState {
     }
 
     /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<OobConflictAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<OobConflictAction> {
         if let Some(button_name) = self.button_rects.hit_test(x, y) {
             self.focus_pane = FocusPane::Buttons;
             match button_name {
@@ -384,9 +391,7 @@ pub fn compute_tag_diff(
         Ok(tags) => tags,
         Err(_) => return Vec::new(),
     };
-    let db_tagset = TagSet::new(
-        db_tags.into_iter().map(|t| (t.tag_name, t.tag_value))
-    );
+    let db_tagset = TagSet::new(db_tags.into_iter().map(|t| (t.tag_name, t.tag_value)));
 
     // Read disk tags as TagSet
     let disk_tagset = match TagSet::from_file(abs_path) {

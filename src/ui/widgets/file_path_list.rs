@@ -106,9 +106,7 @@ pub fn render_file_path_list(
     };
 
     // Build list items
-    let mut items: Vec<ListItem> = Vec::with_capacity(
-        visible_height + balloon_line_count,
-    );
+    let mut items: Vec<ListItem> = Vec::with_capacity(visible_height + balloon_line_count);
 
     for (visible_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
         let Some(entry) = entries.get(entry_idx) else {
@@ -121,7 +119,11 @@ pub fn render_file_path_list(
         let path_budget = total_width.saturating_sub(prefix_width + suffix_width);
 
         let truncated = truncate_right(entry.path, path_budget);
-        let path_style = if is_cursor { CURSOR_STYLE } else { LIST_ITEM_STYLE };
+        let path_style = if is_cursor {
+            CURSOR_STYLE
+        } else {
+            LIST_ITEM_STYLE
+        };
 
         let mut spans = Vec::with_capacity(entry.prefix.len() + 1 + entry.suffix.len());
 
@@ -174,7 +176,11 @@ pub fn render_file_path_list(
 ///
 /// Uses `wrap_path` to split the hidden portion at `/` boundaries so the
 /// full path is always visible across multiple balloon lines.
-fn build_balloon_lines(full_path: &str, path_budget: usize, total_width: usize) -> Vec<Line<'static>> {
+fn build_balloon_lines(
+    full_path: &str,
+    path_budget: usize,
+    total_width: usize,
+) -> Vec<Line<'static>> {
     // The part that was truncated away (the tail that got replaced by "...")
     let visible_chars = path_budget.saturating_sub(3); // "..." takes 3
     let hidden_part: String = full_path.chars().skip(visible_chars).collect();
@@ -231,10 +237,7 @@ mod tests {
 
     #[test]
     fn test_span_char_width_with_spans() {
-        let spans = vec![
-            Span::raw("[WAV] "),
-            Span::raw(" ->I"),
-        ];
+        let spans = vec![Span::raw("[WAV] "), Span::raw(" ->I")];
         assert_eq!(span_char_width(&spans), 10);
     }
 

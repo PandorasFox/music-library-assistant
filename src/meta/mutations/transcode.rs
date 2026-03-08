@@ -16,10 +16,10 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::corpus::paths;
 use crate::corpus::transcode::{self, TranscodeTarget};
+use crate::db::types::Zone;
+use crate::db::ReadOnlyDb;
 use crate::witch::MutationExecutionWitness;
 
 use crate::meta::recomputation::RecomputationScope;
@@ -27,7 +27,7 @@ use crate::meta::recomputation::RecomputationScope;
 use super::file_ops;
 use super::indexing::AssimilateDiskTagsToDbMutation;
 use super::traits::{MutationContext, MutationExecutor};
-use super::types::{DiffEntry, Mutation, MutationResult, SignalClearScope, path_filename};
+use super::types::{path_filename, DiffEntry, Mutation, MutationResult, SignalClearScope};
 
 /// Transcode a file to a different container/codec format.
 ///
@@ -42,8 +42,12 @@ pub struct TranscodeMutation {
 }
 
 impl MutationExecutor for TranscodeMutation {
-    fn label(&self) -> &'static str { "Transcode" }
-    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
+    fn label(&self) -> &'static str {
+        "Transcode"
+    }
+    fn staging(&self) -> super::traits::MutationStaging {
+        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush)
+    }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -64,11 +68,13 @@ impl MutationExecutor for TranscodeMutation {
                 // and update the index. This picks up the tags copied by the
                 // native transcode pipeline's tag-copy step.
                 let new_path = self.target_format.dest_path(&self.source_path);
-                let spawn = vec![ctx.witness.spawn_mutation(Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation {
-                    inode: self.inode,
-                    path: new_path,
-                    zone: Some(source),
-                }))];
+                let spawn = vec![ctx.witness.spawn_mutation(Mutation::AssimilateDiskTagsToDb(
+                    AssimilateDiskTagsToDbMutation {
+                        inode: self.inode,
+                        path: new_path,
+                        zone: Some(source),
+                    },
+                ))];
                 (true, None, spawn)
             }
             Err(e) => (false, Some(format!("{:#}", e)), Vec::new()),
@@ -85,10 +91,16 @@ impl MutationExecutor for TranscodeMutation {
         }
     }
 
-    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
+    fn signal_clear_scope(&self) -> SignalClearScope {
+        SignalClearScope::All
+    }
 
-    fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
-    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::TAGS }
+    fn affected_inodes(&self) -> Vec<i64> {
+        vec![self.inode]
+    }
+    fn recomputation_scope(&self) -> RecomputationScope {
+        RecomputationScope::FILES | RecomputationScope::TAGS
+    }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         // Transcode: only spawn for NEW path (source is stashed, would race)
@@ -96,7 +108,8 @@ impl MutationExecutor for TranscodeMutation {
     }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
-        let source_ext = self.source_path
+        let source_ext = self
+            .source_path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("?")
@@ -106,7 +119,11 @@ impl MutationExecutor for TranscodeMutation {
             TranscodeTarget::Flac => "FLAC".to_string(),
             TranscodeTarget::FlacLossyCapture => "FLAC (lossy capture)".to_string(),
         };
-        vec![DiffEntry::new(path_filename(&self.source_path), source_ext, target_label)]
+        vec![DiffEntry::new(
+            path_filename(&self.source_path),
+            source_ext,
+            target_label,
+        )]
     }
 }
 
@@ -130,7 +147,9 @@ fn execute_transcode_impl(
 ) -> Result<String> {
     // Validate stash is configured
     let stash_root = stash_root.ok_or_else(|| {
-        anyhow::anyhow!("Stash directory not configured. Cannot transcode without stash for originals.")
+        anyhow::anyhow!(
+            "Stash directory not configured. Cannot transcode without stash for originals."
+        )
     })?;
 
     // Validate source exists
@@ -166,34 +185,34 @@ fn execute_transcode_impl(
             "[TRANSCODE] Target already exists, stashing old file: {}",
             dest_path.display()
         ));
-        file_ops::execute_move_to_stash(&dest_path, stash_name, stash_root)
-            .with_context(|| format!(
+        file_ops::execute_move_to_stash(&dest_path, stash_name, stash_root).with_context(|| {
+            format!(
                 "Failed to stash existing target file: {}",
                 dest_path.display()
-            ))?;
+            )
+        })?;
     }
 
     // Transcode via native pipeline
-    transcode::transcode(source_path, &dest_path, target_format, witness)
-        .with_context(|| format!(
+    transcode::transcode(source_path, &dest_path, target_format, witness).with_context(|| {
+        format!(
             "Transcode failed: {} -> {}",
             source_path.display(),
             dest_path.display()
-        ))?;
+        )
+    })?;
 
     // Stash the original file
     file_ops::execute_move_to_stash(source_path, stash_name, stash_root)
-        .with_context(|| format!(
-            "Failed to stash original file: {}",
-            source_path.display()
-        ))?;
+        .with_context(|| format!("Failed to stash original file: {}", source_path.display()))?;
 
     // Get new file's filesystem metadata
-    let fs_metadata = std::fs::metadata(&dest_path)
-        .with_context(|| format!(
+    let fs_metadata = std::fs::metadata(&dest_path).with_context(|| {
+        format!(
             "Failed to read metadata of transcoded file: {}",
             dest_path.display()
-        ))?;
+        )
+    })?;
 
     let new_inode = fs_metadata.ino() as i64;
     let new_file_size = fs_metadata.len() as i64;
@@ -201,17 +220,18 @@ fn execute_transcode_impl(
 
     // Get the existing audio file to preserve fields we don't want to change
     // Transcode only operates on corpus files
-    let existing_file = db.get_audio_file_by_inode(inode, Zone::Corpus)?
+    let existing_file = db
+        .get_audio_file_by_inode(inode, Zone::Corpus)?
         .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
 
     // Convert new absolute path to relative for storage
     let resolver = paths::get_resolver();
-    let relative_new_path = resolver
-        .to_relative(&dest_path)
-        .with_context(|| format!(
+    let relative_new_path = resolver.to_relative(&dest_path).with_context(|| {
+        format!(
             "Path {} does not match any configured root. Check config.kdl roots.",
             dest_path.display(),
-        ))?;
+        )
+    })?;
 
     // Get signal_sender for DB writes
     use crate::db::write_thread::{self, FileEntryData};
@@ -228,8 +248,8 @@ fn execute_transcode_impl(
     // Update audio_info record: path, inode, file_size, file_type
     // Use old path for lookup, update to new path
     sender.update_track_path_with_metadata(
-        old_path,              // Old path (already relative in DB)
-        &relative_path_str,    // New path
+        old_path,           // Old path (already relative in DB)
+        &relative_path_str, // New path
         new_inode,
         new_file_size,
         &new_file_type,
@@ -246,12 +266,7 @@ fn execute_transcode_impl(
         mtime_nanos,
         file_size: new_file_size,
     };
-    sender.upsert_file_entry(
-        &relative_path_str,
-        zone_str,
-        file_entry,
-        witness,
-    );
+    sender.upsert_file_entry(&relative_path_str, zone_str, file_entry, witness);
 
     // Delete old files table entry if inode changed (which it will, since it's a new file)
     if old_inode != new_inode {

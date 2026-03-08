@@ -9,5 +9,5 @@
 pub mod preview;
 pub mod types;
 
-pub use preview::{ManualReviewAction, ManualReviewState, render};
+pub use preview::{render, ManualReviewAction, ManualReviewState};
 pub use types::ReviewKind;

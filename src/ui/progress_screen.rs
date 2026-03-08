@@ -32,11 +32,11 @@ use ratatui::{
     Frame,
 };
 
-use std::collections::HashMap;
-use crate::witch::{WorkStateSnapshot, WorkStatus, ReasoningLevel, Witch, WorkerStats};
-use crate::db::write_thread::DbThreadStats;
 use super::eye::{EYE_CLOSED, EYE_CLOSING};
 use super::wait_state::WaitState;
+use crate::db::write_thread::DbThreadStats;
+use crate::witch::{ReasoningLevel, Witch, WorkStateSnapshot, WorkStatus, WorkerStats};
+use std::collections::HashMap;
 
 // ============================================================================
 // Progress Phase
@@ -203,7 +203,8 @@ impl ProgressScreen {
 
     /// Get the status message.
     pub fn status_message(&self) -> &'static str {
-        self.phase.status_message(self.reasoning_level, self.complete)
+        self.phase
+            .status_message(self.reasoning_level, self.complete)
     }
 
     /// Update DB thread stats for display.
@@ -293,10 +294,11 @@ impl ProgressScreen {
                 } else {
                     // Safety valve: if the Witch has been idle for 3 consecutive ticks,
                     // assume work already completed before we started watching
-                    let is_idle = status.pending == 0 && matches!(
-                        status.state,
-                        WorkStateSnapshot::Idle | WorkStateSnapshot::Done
-                    );
+                    let is_idle = status.pending == 0
+                        && matches!(
+                            status.state,
+                            WorkStateSnapshot::Idle | WorkStateSnapshot::Done
+                        );
                     if is_idle {
                         self.consecutive_idle_ticks = self.consecutive_idle_ticks.saturating_add(1);
                         if self.consecutive_idle_ticks >= 3 {
@@ -336,9 +338,7 @@ impl ProgressScreen {
 
         // Sort by count descending, then alphabetically for ties
         let mut entries: Vec<_> = self.pending_counts.iter().collect();
-        entries.sort_by(|a, b| {
-            b.1.cmp(a.1).then_with(|| a.0.cmp(b.0))
-        });
+        entries.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
 
         // Build summary, limiting to 64 chars for display (matches eye art width)
         let mut parts = Vec::new();
@@ -400,9 +400,9 @@ fn animated_progress_color(tick: u32) -> Color {
     // Sinusoidal shifts with different periods for variety
     // (slowed 10% and tightened 10% from initial values)
     let tick_f = tick as f32;
-    let hue_shift = (tick_f * 0.285).sin() * 24.3;      // ±24° (~7% of 360), period ~22 ticks
-    let sat_shift = (tick_f * 0.190).sin() * 0.036;     // ±3.6%, period ~33 ticks
-    let light_shift = (tick_f * 0.115).sin() * 0.018;   // ±1.8%, period ~55 ticks
+    let hue_shift = (tick_f * 0.285).sin() * 24.3; // ±24° (~7% of 360), period ~22 ticks
+    let sat_shift = (tick_f * 0.190).sin() * 0.036; // ±3.6%, period ~33 ticks
+    let light_shift = (tick_f * 0.115).sin() * 0.018; // ±1.8%, period ~55 ticks
 
     let h = (base_h + hue_shift).rem_euclid(360.0);
     let s = (base_s + sat_shift).clamp(0.0, 1.0);
@@ -457,7 +457,14 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     let show_worker_stats = show_stats && screen.worker_stats.is_some();
     let db_stats_height = if show_db_stats { 1 } else { 0 };
     let worker_stats_height = if show_worker_stats { 2 } else { 0 };
-    let total_height = 2 + eye_height + eye_progress_spacing + progress_height + task_summary_height + queue_depth_height + db_stats_height + worker_stats_height;
+    let total_height = 2
+        + eye_height
+        + eye_progress_spacing
+        + progress_height
+        + task_summary_height
+        + queue_depth_height
+        + db_stats_height
+        + worker_stats_height;
 
     // Calculate vertical centering
     let v_margin = area.height.saturating_sub(total_height as u16) / 2;
@@ -470,17 +477,17 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(v_margin),                        // 0: Top margin
-            Constraint::Length(1),                               // 1: Message
-            Constraint::Length(1),                               // 2: Spacing
-            Constraint::Length(eye_height as u16),               // 3: Eye
-            Constraint::Length(eye_progress_spacing as u16),     // 4: Blank line above progress
-            Constraint::Length(progress_height as u16),          // 5: Progress bar
-            Constraint::Length(task_summary_height as u16),      // 6: Task summary
-            Constraint::Length(queue_depth_height as u16),       // 7: Queue depth
-            Constraint::Length(db_stats_height as u16),          // 8: DB stats
-            Constraint::Length(worker_stats_height as u16),      // 9: Worker stats
-            Constraint::Min(0),                                  // 10: Bottom margin
+            Constraint::Length(v_margin),                    // 0: Top margin
+            Constraint::Length(1),                           // 1: Message
+            Constraint::Length(1),                           // 2: Spacing
+            Constraint::Length(eye_height as u16),           // 3: Eye
+            Constraint::Length(eye_progress_spacing as u16), // 4: Blank line above progress
+            Constraint::Length(progress_height as u16),      // 5: Progress bar
+            Constraint::Length(task_summary_height as u16),  // 6: Task summary
+            Constraint::Length(queue_depth_height as u16),   // 7: Queue depth
+            Constraint::Length(db_stats_height as u16),      // 8: DB stats
+            Constraint::Length(worker_stats_height as u16),  // 9: Worker stats
+            Constraint::Min(0),                              // 10: Bottom margin
         ])
         .split(area);
 
@@ -501,13 +508,9 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     // Use provided eye frame or phase-appropriate frame
     let eye_art = eye_frame.unwrap_or_else(|| screen.eye_art());
 
-    let eye_lines: Vec<Line> = eye_art
-        .lines()
-        .map(Line::from)
-        .collect();
+    let eye_lines: Vec<Line> = eye_art.lines().map(Line::from).collect();
 
-    let eye_widget = Paragraph::new(eye_lines)
-        .style(Style::default().fg(Color::DarkGray));
+    let eye_widget = Paragraph::new(eye_lines).style(Style::default().fg(Color::DarkGray));
     f.render_widget(eye_widget, eye_area);
 
     // Render progress bar if present
@@ -567,15 +570,13 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     if let Some(summary) = task_summary {
         let summary_area = chunks[6];
 
-        let summary_line = Line::from(Span::styled(
-            summary,
-            Style::default().fg(Color::DarkGray),
-        ));
-        let summary_widget = Paragraph::new(summary_line)
-            .alignment(Alignment::Center);
+        let summary_line = Line::from(Span::styled(summary, Style::default().fg(Color::DarkGray)));
+        let summary_widget = Paragraph::new(summary_line).alignment(Alignment::Center);
 
         let centered_summary = Rect {
-            x: summary_area.x.saturating_add((summary_area.width.saturating_sub(64)) / 2),
+            x: summary_area
+                .x
+                .saturating_add((summary_area.width.saturating_sub(64)) / 2),
             y: summary_area.y,
             width: 64.min(summary_area.width),
             height: summary_area.height,
@@ -588,15 +589,12 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
         let queue_area = chunks[7]; // Index shifted due to task summary row
         let label_color = Color::Rgb(245, 28, 153); // Magenta
 
-        let queue_line = Line::from(vec![
-            Span::styled(
-                format!("[{} pending DB writes queued]", screen.db_queue_depth),
-                Style::default().fg(label_color),
-            ),
-        ]);
+        let queue_line = Line::from(vec![Span::styled(
+            format!("[{} pending DB writes queued]", screen.db_queue_depth),
+            Style::default().fg(label_color),
+        )]);
 
-        let queue_widget = Paragraph::new(queue_line)
-            .alignment(Alignment::Center);
+        let queue_widget = Paragraph::new(queue_line).alignment(Alignment::Center);
         f.render_widget(queue_widget, queue_area);
     }
 
@@ -615,15 +613,23 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
 
             let stats_line = Line::from(vec![
                 Span::styled("Writes: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}", stats.total_writes), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{}", stats.total_writes),
+                    Style::default().fg(Color::Cyan),
+                ),
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{:.1}/s", stats.writes_per_sec), Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!("{:.1}/s", stats.writes_per_sec),
+                    Style::default().fg(Color::Green),
+                ),
                 Span::styled(" | Q: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}", stats.queue_depth), Style::default().fg(queue_color)),
+                Span::styled(
+                    format!("{}", stats.queue_depth),
+                    Style::default().fg(queue_color),
+                ),
             ]);
 
-            let stats_widget = Paragraph::new(stats_line)
-                .alignment(Alignment::Center);
+            let stats_widget = Paragraph::new(stats_line).alignment(Alignment::Center);
             f.render_widget(stats_widget, stats_area);
         }
     }
@@ -652,40 +658,73 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
 
             let line1 = Line::from(vec![
                 Span::styled("Tasks: ", Style::default().fg(label_color)),
-                Span::styled(format!("{}", stats.tasks_completed), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{}", stats.tasks_completed),
+                    Style::default().fg(Color::Cyan),
+                ),
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
                 Span::styled("Avg: ", Style::default().fg(label_color)),
-                Span::styled(format!("{}ms", stats.avg_task_ms), Style::default().fg(avg_task_color)),
+                Span::styled(
+                    format!("{}ms", stats.avg_task_ms),
+                    Style::default().fg(avg_task_color),
+                ),
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
                 Span::styled("Max: ", Style::default().fg(label_color)),
-                Span::styled(format!("{}ms", stats.max_task_ms), Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("{}ms", stats.max_task_ms),
+                    Style::default().fg(Color::White),
+                ),
                 if !stats.max_task_label.is_empty() {
-                    Span::styled(format!(" ({})", stats.max_task_label), Style::default().fg(Color::DarkGray))
+                    Span::styled(
+                        format!(" ({})", stats.max_task_label),
+                        Style::default().fg(Color::DarkGray),
+                    )
                 } else {
                     Span::raw("")
                 },
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
                 Span::styled("Threads: ", Style::default().fg(label_color)),
-                Span::styled(format!("{}", stats.active_threads), Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("{}", stats.active_threads),
+                    Style::default().fg(Color::White),
+                ),
             ]);
 
             let line2 = Line::from(vec![
                 Span::styled("Q Wait: ", Style::default().fg(label_color)),
-                Span::styled(format!("{}avg", stats.queue_wait_avg_ms), Style::default().fg(queue_wait_color)),
+                Span::styled(
+                    format!("{}avg", stats.queue_wait_avg_ms),
+                    Style::default().fg(queue_wait_color),
+                ),
                 Span::styled("/", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}max ms", stats.queue_wait_max_ms), Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("{}max ms", stats.queue_wait_max_ms),
+                    Style::default().fg(Color::White),
+                ),
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
                 Span::styled("Reads: ", Style::default().fg(label_color)),
-                Span::styled(format!("{}", stats.avg_db_read_us), Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!("{}", stats.avg_db_read_us),
+                    Style::default().fg(Color::Green),
+                ),
                 Span::styled("/", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}", stats.median_db_read_us), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{}", stats.median_db_read_us),
+                    Style::default().fg(Color::Cyan),
+                ),
                 Span::styled("/", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}µs", stats.max_db_read_us), Style::default().fg(Color::White)),
-                Span::styled(format!(" ({})", stats.total_db_reads), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{}µs", stats.max_db_read_us),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" ({})", stats.total_db_reads),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]);
 
-            let worker_stats_widget = Paragraph::new(vec![line1, line2])
-                .alignment(Alignment::Center);
+            let worker_stats_widget =
+                Paragraph::new(vec![line1, line2]).alignment(Alignment::Center);
             f.render_widget(worker_stats_widget, stats_area);
         }
     }

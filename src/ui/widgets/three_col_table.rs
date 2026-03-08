@@ -74,7 +74,12 @@ impl ThreeColTable {
             ),
         ]);
 
-        let header_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
+        let header_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
         f.render_widget(Paragraph::new(header_line), header_area);
 
         // Body
@@ -114,7 +119,11 @@ impl ThreeColTable {
                 break;
             }
 
-            let first_line = if row_idx == start_row { start_line_in_row } else { 0 };
+            let first_line = if row_idx == start_row {
+                start_line_in_row
+            } else {
+                0
+            };
 
             for line_idx in first_line..*row_height {
                 if y_offset >= body_height {
@@ -190,10 +199,7 @@ impl ThreeColTable {
         (widths, used)
     }
 
-    fn compute_wrapped_rows(
-        &self,
-        col_widths: [usize; 3],
-    ) -> Vec<WrappedRow> {
+    fn compute_wrapped_rows(&self, col_widths: [usize; 3]) -> Vec<WrappedRow> {
         self.rows
             .iter()
             .map(|row| {

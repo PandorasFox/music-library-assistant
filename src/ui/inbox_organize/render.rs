@@ -29,7 +29,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut InboxOrganizeState) {
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Header
+            Constraint::Length(3), // Header
             Constraint::Min(5),    // Content (side-by-side panes)
             Constraint::Length(1), // Controls hint
         ])
@@ -79,14 +79,18 @@ fn render_inbox_pane(f: &mut Frame, area: Rect, state: &InboxOrganizeState) {
         None => " (done) ".to_string(),
     };
 
-    let lines: Vec<Line> = state.current_dir()
+    let lines: Vec<Line> = state
+        .current_dir()
         .map(|dir| {
-            dir.files.iter().map(|file| {
-                Line::from(Span::styled(
-                    format!("  {}", file.filename),
-                    Style::default().fg(Color::White),
-                ))
-            }).collect()
+            dir.files
+                .iter()
+                .map(|file| {
+                    Line::from(Span::styled(
+                        format!("  {}", file.filename),
+                        Style::default().fg(Color::White),
+                    ))
+                })
+                .collect()
         })
         .unwrap_or_default();
 
@@ -124,7 +128,10 @@ fn render_corpus_pane(f: &mut Frame, area: Rect, state: &mut InboxOrganizeState)
 }
 
 /// Render a single corpus tree entry line.
-fn render_corpus_entry(entry: &crate::ui::tree_browser::TreeEntry, is_cursor: bool) -> Line<'static> {
+fn render_corpus_entry(
+    entry: &crate::ui::tree_browser::TreeEntry,
+    is_cursor: bool,
+) -> Line<'static> {
     let indent = "  ".repeat(entry.depth);
 
     if entry.is_synthetic {
@@ -132,7 +139,9 @@ fn render_corpus_entry(entry: &crate::ui::tree_browser::TreeEntry, is_cursor: bo
         let style = if is_cursor {
             CURSOR_STYLE
         } else {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::ITALIC)
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::ITALIC)
         };
         return Line::from(vec![
             Span::raw(indent),
@@ -143,7 +152,11 @@ fn render_corpus_entry(entry: &crate::ui::tree_browser::TreeEntry, is_cursor: bo
 
     let expand_indicator = if entry.is_directory() {
         if entry.has_children {
-            if entry.is_expanded { "▽ " } else { "▷ " }
+            if entry.is_expanded {
+                "▽ "
+            } else {
+                "▷ "
+            }
         } else {
             "  "
         }
@@ -190,12 +203,14 @@ fn render_emplace_popup(f: &mut Frame, area: Rect, state: &InboxOrganizeState) {
     let popup = centered_popup(area, 50, 10);
     f.render_widget(Clear, popup);
 
-    let source_display = state.current_dir()
+    let source_display = state
+        .current_dir()
         .map(|d| d.dir_path.to_string_lossy().to_string())
         .unwrap_or_else(|| "?".to_string());
 
     let root = state.corpus_navigator.root_path();
-    let root_name = root.file_name()
+    let root_name = root
+        .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "corpus".to_string());
     let dest_display = match state.selected_dest.strip_prefix(root) {
@@ -249,18 +264,24 @@ fn render_emplace_popup(f: &mut Frame, area: Rect, state: &InboxOrganizeState) {
         EmplaceOption::Cancel,
     ];
 
-    let option_spans: Vec<Span> = options.iter().flat_map(|opt| {
-        let is_selected = *opt == state.popup_selection;
-        let style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        vec![
-            Span::styled(format!(" [{}] ", opt.label()), style),
-            Span::raw(" "),
-        ]
-    }).collect();
+    let option_spans: Vec<Span> = options
+        .iter()
+        .flat_map(|opt| {
+            let is_selected = *opt == state.popup_selection;
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            vec![
+                Span::styled(format!(" [{}] ", opt.label()), style),
+                Span::raw(" "),
+            ]
+        })
+        .collect();
 
     f.render_widget(
         Paragraph::new(Line::from(option_spans)).alignment(Alignment::Center),
@@ -276,7 +297,8 @@ fn render_emplace_popup(f: &mut Frame, area: Rect, state: &InboxOrganizeState) {
             cc::text(" confirm  "),
             cc::cancel("[Esc]"),
             cc::text(" back"),
-        ])).alignment(Alignment::Center),
+        ]))
+        .alignment(Alignment::Center),
         content_chunks[4],
     );
 }
@@ -286,7 +308,9 @@ fn render_new_dir_input(f: &mut Frame, area: Rect, state: &InboxOrganizeState) {
     let popup = centered_popup(area, 50, 7);
     f.render_widget(Clear, popup);
 
-    let parent_name = state.selected_dest.file_name()
+    let parent_name = state
+        .selected_dest
+        .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "corpus".to_string());
 
@@ -309,7 +333,10 @@ fn render_new_dir_input(f: &mut Frame, area: Rect, state: &InboxOrganizeState) {
         .split(inner);
 
     f.render_widget(
-        Paragraph::new(Span::styled("  Directory name:", Style::default().fg(Color::DarkGray))),
+        Paragraph::new(Span::styled(
+            "  Directory name:",
+            Style::default().fg(Color::DarkGray),
+        )),
         chunks[0],
     );
 
@@ -318,15 +345,27 @@ fn render_new_dir_input(f: &mut Frame, area: Rect, state: &InboxOrganizeState) {
     let cursor_pos = state.new_dir_input.cursor;
     let mut spans = vec![Span::raw("  ")];
     if value.is_empty() {
-        spans.push(Span::styled("_", Style::default().fg(Color::Cyan).add_modifier(Modifier::SLOW_BLINK)));
+        spans.push(Span::styled(
+            "_",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::SLOW_BLINK),
+        ));
     } else {
         let chars: Vec<char> = value.chars().collect();
         let before: String = chars[..cursor_pos].iter().collect();
         let cursor_char = chars.get(cursor_pos).copied().unwrap_or(' ');
-        let after: String = if cursor_pos < chars.len() { chars[cursor_pos + 1..].iter().collect() } else { String::new() };
+        let after: String = if cursor_pos < chars.len() {
+            chars[cursor_pos + 1..].iter().collect()
+        } else {
+            String::new()
+        };
 
         spans.push(Span::styled(before, Style::default().fg(Color::White)));
-        spans.push(Span::styled(cursor_char.to_string(), Style::default().fg(Color::Black).bg(Color::White)));
+        spans.push(Span::styled(
+            cursor_char.to_string(),
+            Style::default().fg(Color::Black).bg(Color::White),
+        ));
         spans.push(Span::styled(after, Style::default().fg(Color::White)));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), chunks[1]);

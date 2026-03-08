@@ -85,7 +85,8 @@ impl BulkSelectionState {
             }
         } else {
             // Select all filtered items
-            self.selected_indices.extend(filtered_indices.iter().copied());
+            self.selected_indices
+                .extend(filtered_indices.iter().copied());
         }
 
         // Update mode based on result
@@ -101,7 +102,11 @@ impl BulkSelectionState {
     /// Activates selection mode and selects indices 0..count.
     pub fn select_all(&mut self, count: usize) {
         self.selected_indices = (0..count).collect();
-        self.mode = if count > 0 { SelectionMode::Active } else { SelectionMode::None };
+        self.mode = if count > 0 {
+            SelectionMode::Active
+        } else {
+            SelectionMode::None
+        };
     }
 
     /// Get all selected indices as a sorted vector.

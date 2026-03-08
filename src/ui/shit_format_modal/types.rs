@@ -7,12 +7,12 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::db::ReadOnlyDb;
-use crate::db::types::Zone;
-use crate::meta::mutations::Mutation;
-use crate::meta::mutations::transcode::TranscodeMutation;
 use crate::corpus::paths;
 use crate::corpus::transcode::TranscodeTarget;
+use crate::db::types::Zone;
+use crate::db::ReadOnlyDb;
+use crate::meta::mutations::transcode::TranscodeMutation;
+use crate::meta::mutations::Mutation;
 
 /// Default Opus bitrate in kbps.
 const DEFAULT_OPUS_BITRATE: u32 = 128;
@@ -174,7 +174,9 @@ impl ShitFormatModalData {
 
     /// Adjust bitrate (within bounds).
     pub fn adjust_bitrate(&mut self, delta: i32) {
-        let new_bitrate = (self.opus_bitrate_kbps as i32 + delta).max(MIN_OPUS_BITRATE as i32).min(MAX_OPUS_BITRATE as i32);
+        let new_bitrate = (self.opus_bitrate_kbps as i32 + delta)
+            .max(MIN_OPUS_BITRATE as i32)
+            .min(MAX_OPUS_BITRATE as i32);
         self.opus_bitrate_kbps = new_bitrate as u32;
     }
 

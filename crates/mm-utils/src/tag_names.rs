@@ -107,10 +107,14 @@ pub fn levenshtein_distance(a: &str, b: &str) -> usize {
     for i in 1..=m {
         curr[0] = i;
         for j in 1..=n {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j] + 1)              // deletion
-                .min(curr[j - 1] + 1)            // insertion
-                .min(prev[j - 1] + cost);        // substitution
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
+            curr[j] = (prev[j] + 1) // deletion
+                .min(curr[j - 1] + 1) // insertion
+                .min(prev[j - 1] + cost); // substitution
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -409,7 +413,10 @@ mod tests {
 
         // Verify stability across many calls (HashMap iteration order can vary)
         for _ in 0..100 {
-            assert_eq!(find_tag_in_map(&tag_map, "albumartist"), Some("RAWRDCORE RECORDS"));
+            assert_eq!(
+                find_tag_in_map(&tag_map, "albumartist"),
+                Some("RAWRDCORE RECORDS")
+            );
         }
     }
 
@@ -417,10 +424,7 @@ mod tests {
     fn test_find_tag_value_tiebreak_by_value() {
         // When keys are identical after normalization and one is an exact string match,
         // it should still be deterministic. If keys are the same string, tiebreak by value.
-        let tags = vec![
-            ("ARTIST", "Zebra"),
-            ("ARTIST", "Alpha"),
-        ];
+        let tags = vec![("ARTIST", "Zebra"), ("ARTIST", "Alpha")];
 
         // Same key name: tiebreak by value, "Alpha" < "Zebra"
         let result = find_tag_value(tags.iter().copied(), "artist");

@@ -31,12 +31,12 @@ mod titlebar;
 // Layout widgets
 pub use layout::{PaneConfig, ThreePaneLayout};
 pub use list_click_targets::ListClickTargets;
-pub use resolution_layout::{ButtonRects, FocusPane, ResolutionLayout, rect_contains};
+pub use resolution_layout::{rect_contains, ButtonRects, FocusPane, ResolutionLayout};
 
 // Modal widgets
 pub use modal::{
-    centered_rect_fixed, ConfirmationButton, ConfirmationModal, Modal, ModalButton, ModalStyle,
-    render_button_row,
+    centered_rect_fixed, render_button_row, ConfirmationButton, ConfirmationModal, Modal,
+    ModalButton, ModalStyle,
 };
 
 // Title bar widgets
@@ -54,8 +54,7 @@ pub use path_display::PathField;
 
 // Album art preview
 pub use album_art_preview::{
-    AlbumArtCache, AlbumArtPicker, ArtCacheKey,
-    render_album_art_preview, render_no_art_placeholder,
+    render_album_art_preview, render_no_art_placeholder, AlbumArtCache, AlbumArtPicker, ArtCacheKey,
 };
 
 // File path list + selection styles
@@ -63,4 +62,4 @@ pub use file_path_list::{render_file_path_list, PathEntry};
 pub use selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 
 // Three-column table
-pub use three_col_table::{ThreeColTable, StyledCell};
+pub use three_col_table::{StyledCell, ThreeColTable};

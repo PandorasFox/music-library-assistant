@@ -36,22 +36,22 @@
 //! - `analysis/` - Analysis phase computations
 
 // Module declarations
-mod types;
-pub mod traits;
-mod stats;
+pub mod analysis;
+pub mod derivation;
 pub(crate) mod helpers;
 pub mod observation;
-pub mod derivation;
-pub mod analysis;
+mod stats;
+pub mod traits;
+mod types;
 
 // Public re-exports
-pub use types::ComputationWitness;
 pub use stats::{close_thread_local_connection, get_thread_stats, with_read_only_db, ThreadStats};
+pub use types::ComputationWitness;
 
 // Internal imports for execute functions
-use std::collections::{HashMap, VecDeque};
 use crate::config;
 use stats::{ensure_thread_id, record_task_stats};
+use std::collections::{HashMap, VecDeque};
 
 // ============================================================================
 // Pipeline Stages (multi-phase computation barriers)

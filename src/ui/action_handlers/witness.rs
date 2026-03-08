@@ -18,7 +18,9 @@
 pub(crate) struct ConfirmationGesture(());
 
 impl ConfirmationGesture {
-    pub(in crate::ui::action_handlers) fn new() -> Self { Self(()) }
+    pub(in crate::ui::action_handlers) fn new() -> Self {
+        Self(())
+    }
 }
 
 impl std::fmt::Debug for ConfirmationGesture {

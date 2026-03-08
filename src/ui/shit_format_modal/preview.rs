@@ -20,7 +20,7 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{ShitFormatModalData, SelectedButton};
+use super::types::{SelectedButton, ShitFormatModalData};
 use crate::ui::helpers::render_pane;
 use crate::ui::widgets::{render_file_path_list, ButtonRects, ListClickTargets, PathEntry};
 
@@ -59,9 +59,15 @@ impl ShitFormatPreviewState {
     pub fn selected_path(&self) -> Option<&str> {
         let lossless_len = self.cached_data.lossless_files.len();
         if self.scroll < lossless_len {
-            self.cached_data.lossless_files.get(self.scroll).map(|f| f.corpus_path.as_str())
+            self.cached_data
+                .lossless_files
+                .get(self.scroll)
+                .map(|f| f.corpus_path.as_str())
         } else {
-            self.cached_data.lossy_files.get(self.scroll - lossless_len).map(|f| f.corpus_path.as_str())
+            self.cached_data
+                .lossy_files
+                .get(self.scroll - lossless_len)
+                .map(|f| f.corpus_path.as_str())
         }
     }
 
@@ -86,7 +92,12 @@ impl ShitFormatPreviewState {
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<ShitFormatPreviewAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<ShitFormatPreviewAction> {
         let has_lossless = self.cached_data.has_lossless();
         let has_lossy = self.cached_data.has_lossy();
 
@@ -282,8 +293,16 @@ impl ShitFormatPreviewState {
     }
 
     fn render_lossless_section(&self, f: &mut Frame, area: Rect, has_files: bool) {
-        let border_color = if has_files { Color::Green } else { Color::DarkGray };
-        let title_color = if has_files { Color::Green } else { Color::DarkGray };
+        let border_color = if has_files {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+        let title_color = if has_files {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
 
         let block = Block::default()
             .title(" Lossless → FLAC ")
@@ -294,8 +313,8 @@ impl ShitFormatPreviewState {
         let inner = render_pane(f, area, block);
 
         if !has_files {
-            let empty = Paragraph::new("No lossless files")
-                .style(Style::default().fg(Color::DarkGray));
+            let empty =
+                Paragraph::new("No lossless files").style(Style::default().fg(Color::DarkGray));
             f.render_widget(empty, inner);
             return;
         }
@@ -307,8 +326,8 @@ impl ShitFormatPreviewState {
             .split(inner);
 
         // Description
-        let desc = Paragraph::new("Remux to FLAC (lossless)")
-            .style(Style::default().fg(Color::DarkGray));
+        let desc =
+            Paragraph::new("Remux to FLAC (lossless)").style(Style::default().fg(Color::DarkGray));
         f.render_widget(desc, chunks[0]);
 
         // Type breakdown
@@ -327,8 +346,16 @@ impl ShitFormatPreviewState {
 
     fn render_lossy_section(&self, f: &mut Frame, area: Rect, has_files: bool) {
         let lossy_to_flac = self.cached_data.lossy_to_flac;
-        let border_color = if has_files { Color::Cyan } else { Color::DarkGray };
-        let title_color = if has_files { Color::Cyan } else { Color::DarkGray };
+        let border_color = if has_files {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
+        let title_color = if has_files {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
 
         let title = if lossy_to_flac {
             " Lossy \u{2192} FLAC (lossy capture) "
@@ -345,8 +372,8 @@ impl ShitFormatPreviewState {
         let inner = render_pane(f, area, block);
 
         if !has_files {
-            let empty = Paragraph::new("No lossy files")
-                .style(Style::default().fg(Color::DarkGray));
+            let empty =
+                Paragraph::new("No lossy files").style(Style::default().fg(Color::DarkGray));
             f.render_widget(empty, inner);
             return;
         }
@@ -383,7 +410,11 @@ impl ShitFormatPreviewState {
             let ratio = (bitrate as f64 - 32.0) / (512.0 - 32.0);
             let bitrate_label = format!("{} kbps", bitrate);
             let gauge = Gauge::default()
-                .block(Block::default().title("Opus Bitrate").borders(Borders::NONE))
+                .block(
+                    Block::default()
+                        .title("Opus Bitrate")
+                        .borders(Borders::NONE),
+                )
                 .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
                 .ratio(ratio)
                 .label(bitrate_label);
@@ -409,7 +440,11 @@ impl ShitFormatPreviewState {
 
         let block = Block::default()
             .title(format!(" Files ({}) ", total))
-            .title_style(Style::default().fg(if total > 0 { Color::Yellow } else { Color::DarkGray }))
+            .title_style(Style::default().fg(if total > 0 {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            }))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow));
 
@@ -420,8 +455,11 @@ impl ShitFormatPreviewState {
         self.click_targets.set_list_area(inner);
         let visible_height = inner.height as usize;
         for (vis_idx, entry_idx) in (self.scroll..).take(visible_height).enumerate() {
-            if entry_idx >= total { break; }
-            self.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+            if entry_idx >= total {
+                break;
+            }
+            self.click_targets
+                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
         }
 
         if total == 0 {
@@ -432,7 +470,10 @@ impl ShitFormatPreviewState {
         }
 
         // Combine lossless and lossy files for display
-        let all_files: Vec<_> = self.cached_data.lossless_files.iter()
+        let all_files: Vec<_> = self
+            .cached_data
+            .lossless_files
+            .iter()
             .chain(self.cached_data.lossy_files.iter())
             .collect();
 
@@ -440,7 +481,11 @@ impl ShitFormatPreviewState {
             .iter()
             .map(|file| {
                 let type_tag = format!("[{}] ", file.file_type);
-                let tag_color = if file.is_lossless() { Color::Green } else { Color::Cyan };
+                let tag_color = if file.is_lossless() {
+                    Color::Green
+                } else {
+                    Color::Cyan
+                };
                 PathEntry {
                     path: &file.corpus_path,
                     prefix: vec![Span::styled(type_tag, Style::default().fg(tag_color))],
@@ -460,22 +505,32 @@ impl ShitFormatPreviewState {
         let block = Block::default().borders(Borders::TOP);
         let inner = render_pane(f, area, block);
 
-        if inner.height < 2 { return; }
+        if inner.height < 2 {
+            return;
+        }
 
         let button_area = Rect { height: 1, ..inner };
-        let hint_area = Rect { y: inner.y + inner.height - 1, height: 1, ..inner };
+        let hint_area = Rect {
+            y: inner.y + inner.height - 1,
+            height: 1,
+            ..inner
+        };
 
         // Build button constraints and names dynamically
         let mut button_names: Vec<&str> = Vec::new();
-        if has_lossless { button_names.push("remux_lossless"); }
-        if has_lossy { button_names.push("transcode_lossy"); }
-        if has_both { button_names.push("convert_all"); }
+        if has_lossless {
+            button_names.push("remux_lossless");
+        }
+        if has_lossy {
+            button_names.push("transcode_lossy");
+        }
+        if has_both {
+            button_names.push("convert_all");
+        }
         button_names.push("cancel");
 
         let n = button_names.len();
-        let constraints: Vec<Constraint> = (0..n)
-            .map(|_| Constraint::Ratio(1, n as u32))
-            .collect();
+        let constraints: Vec<Constraint> = (0..n).map(|_| Constraint::Ratio(1, n as u32)).collect();
 
         let button_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -489,9 +544,13 @@ impl ShitFormatPreviewState {
 
             let (label, style) = match name {
                 "remux_lossless" => {
-                    let label = format!(" Remux {} to FLAC ", self.cached_data.lossless_files.len());
+                    let label =
+                        format!(" Remux {} to FLAC ", self.cached_data.lossless_files.len());
                     let style = if self.selected_button == SelectedButton::RemuxLossless {
-                        Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Green)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::Green)
                     };
@@ -501,12 +560,17 @@ impl ShitFormatPreviewState {
                     let label = if self.cached_data.lossy_to_flac {
                         format!(" Capture {} to FLAC ", self.cached_data.lossy_files.len())
                     } else {
-                        format!(" Transcode {} to Opus ({} kbps) ",
+                        format!(
+                            " Transcode {} to Opus ({} kbps) ",
                             self.cached_data.lossy_files.len(),
-                            self.cached_data.opus_bitrate_kbps)
+                            self.cached_data.opus_bitrate_kbps
+                        )
                     };
                     let style = if self.selected_button == SelectedButton::TranscodeLossy {
-                        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::Cyan)
                     };
@@ -515,7 +579,10 @@ impl ShitFormatPreviewState {
                 "convert_all" => {
                     let label = " Convert All ".to_string();
                     let style = if self.selected_button == SelectedButton::ConvertAll {
-                        Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::Yellow)
                     };
@@ -524,7 +591,10 @@ impl ShitFormatPreviewState {
                 "cancel" => {
                     let label = " Cancel ".to_string();
                     let style = if self.selected_button == SelectedButton::Cancel {
-                        Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::White)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -556,8 +626,8 @@ impl ShitFormatPreviewState {
             Style::default().fg(Color::DarkGray),
         ));
 
-        let hint_para = Paragraph::new(Line::from(hints))
-            .alignment(ratatui::layout::Alignment::Center);
+        let hint_para =
+            Paragraph::new(Line::from(hints)).alignment(ratatui::layout::Alignment::Center);
         f.render_widget(hint_para, hint_area);
     }
 }

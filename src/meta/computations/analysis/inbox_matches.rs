@@ -7,16 +7,16 @@
 
 use std::time::Instant;
 
-use crate::logging::log_general;
-use crate::meta::computations::helpers::{ComputedCorpusSignal, reconcile_corpus_signals};
-use crate::meta::computations::types::ComputationWitness;
 use crate::db::types::Zone;
-use crate::meta::signals::data::{
-    TypedSignalWrite, InboxCorpusMatchSignal, InboxCorpusMatchData, InboxCorpusMatch,
-    CorpusMatchQuality,
-};
-use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
+use crate::db::ReadOnlyDb;
+use crate::logging::log_general;
+use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpusSignal};
+use crate::meta::computations::types::ComputationWitness;
+use crate::meta::signals::data::{
+    CorpusMatchQuality, InboxCorpusMatch, InboxCorpusMatchData, InboxCorpusMatchSignal,
+    TypedSignalWrite,
+};
 
 use super::duplicates::{fingerprint_similarity, quality_tier_of};
 use super::{Computation, Result};
@@ -57,9 +57,15 @@ pub fn execute_detect_inbox_corpus_matches(
         }
     };
 
-    let similarity_threshold = config.opinions.duplicate_analysis.fingerprint_similarity_threshold;
+    let similarity_threshold = config
+        .opinions
+        .duplicate_analysis
+        .fingerprint_similarity_threshold;
     let duration_tolerance_ms = config.opinions.duplicate_analysis.duration_tolerance_ms;
-    let bitrate_fuzz_percent = config.opinions.quality_resolution.inbox_bitrate_fuzz_percent;
+    let bitrate_fuzz_percent = config
+        .opinions
+        .quality_resolution
+        .inbox_bitrate_fuzz_percent;
 
     // Get all inbox audio files with fingerprints
     let inbox_audio = match read_only_db.get_all_audio_files(Zone::Inbox, true) {
@@ -81,8 +87,12 @@ pub fn execute_detect_inbox_corpus_matches(
     if inbox_fingerprinted.is_empty() {
         log_general("[COMPUTE] DetectInboxCorpusMatches: no fingerprinted inbox files");
         // Reconcile with empty set to clear any stale signals
-        let (cleared, _, _, _) =
-            reconcile_corpus_signals::<InboxCorpusMatchSignal>(read_only_db, &sender, Vec::new(), witness);
+        let (cleared, _, _, _) = reconcile_corpus_signals::<InboxCorpusMatchSignal>(
+            read_only_db,
+            &sender,
+            Vec::new(),
+            witness,
+        );
         if cleared > 0 {
             log_general(format!(
                 "[COMPUTE] DetectInboxCorpusMatches: cleared {} stale signals",
@@ -111,8 +121,12 @@ pub fn execute_detect_inbox_corpus_matches(
 
     if corpus_fingerprinted.is_empty() {
         log_general("[COMPUTE] DetectInboxCorpusMatches: no fingerprinted corpus files");
-        let (cleared, _, _, _) =
-            reconcile_corpus_signals::<InboxCorpusMatchSignal>(read_only_db, &sender, Vec::new(), witness);
+        let (cleared, _, _, _) = reconcile_corpus_signals::<InboxCorpusMatchSignal>(
+            read_only_db,
+            &sender,
+            Vec::new(),
+            witness,
+        );
         if cleared > 0 {
             log_general(format!(
                 "[COMPUTE] DetectInboxCorpusMatches: cleared {} stale signals",
@@ -145,8 +159,8 @@ pub fn execute_detect_inbox_corpus_matches(
         let min_duration = inbox_duration - duration_tolerance_ms;
         let max_duration = inbox_duration + duration_tolerance_ms;
 
-        let start_idx = corpus_sorted
-            .partition_point(|af| af.audio.duration_ms.unwrap_or(0) < min_duration);
+        let start_idx =
+            corpus_sorted.partition_point(|af| af.audio.duration_ms.unwrap_or(0) < min_duration);
 
         // Scan forward through the duration window
         for corpus_file in corpus_sorted[start_idx..].iter() {
@@ -177,16 +191,20 @@ pub fn execute_detect_inbox_corpus_matches(
                 inbox_file.audio.sample_rate,
             );
 
-            let best_corpus_tier = corpus_matches.iter()
+            let best_corpus_tier = corpus_matches
+                .iter()
                 .filter_map(|cm| {
                     // Look up the corpus file's audio info from the sorted vec
-                    corpus_fingerprinted.iter()
+                    corpus_fingerprinted
+                        .iter()
                         .find(|cf| cf.inode() == cm.corpus_inode)
-                        .map(|cf| quality_tier_of(
-                            &cf.audio.file_type,
-                            cf.audio.bitrate_kbps,
-                            cf.audio.sample_rate,
-                        ))
+                        .map(|cf| {
+                            quality_tier_of(
+                                &cf.audio.file_type,
+                                cf.audio.bitrate_kbps,
+                                cf.audio.sample_rate,
+                            )
+                        })
                 })
                 .max();
 
@@ -226,15 +244,22 @@ pub fn execute_detect_inbox_corpus_matches(
                     inode,
                     path: inbox_file.path().to_string(),
                     classification,
-                    data: InboxCorpusMatchData { corpus_matches, classification },
+                    data: InboxCorpusMatchData {
+                        corpus_matches,
+                        classification,
+                    },
                 }),
             ));
         }
     }
 
     let match_count = computed.len();
-    let (cleared, new_count, updated, unchanged) =
-        reconcile_corpus_signals::<InboxCorpusMatchSignal>(read_only_db, &sender, computed, witness);
+    let (cleared, new_count, updated, unchanged) = reconcile_corpus_signals::<InboxCorpusMatchSignal>(
+        read_only_db,
+        &sender,
+        computed,
+        witness,
+    );
 
     log_general(format!(
         "[COMPUTE] DetectInboxCorpusMatches: {} inbox files matched corpus (cleared={}, new={}, updated={}, unchanged={})",

@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use rusqlite::params;
 
 use super::queries::Database;
-use super::table_schema::{schema_inventory, schema_fingerprint, FINGERPRINT_KEY};
+use super::table_schema::{schema_fingerprint, schema_inventory, FINGERPRINT_KEY};
 
 impl Database {
     /// Create the full current schema from scratch (new databases only).

@@ -67,8 +67,12 @@ fn render_file_list(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
     state.click_targets.clear();
     state.click_targets.set_list_area(inner);
     for (vis_idx, entry_idx) in (0..state.files.len()).enumerate() {
-        if vis_idx >= inner.height as usize { break; }
-        state.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        if vis_idx >= inner.height as usize {
+            break;
+        }
+        state
+            .click_targets
+            .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
     }
 
     if state.files.is_empty() {
@@ -84,10 +88,17 @@ fn render_file_list(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
         .map(|(idx, file)| {
             let is_selected = idx == state.current_file;
             let indicator = if is_selected { "▶ " } else { "  " };
-            let style = if is_selected { CURSOR_STYLE } else { LIST_ITEM_STYLE };
+            let style = if is_selected {
+                CURSOR_STYLE
+            } else {
+                LIST_ITEM_STYLE
+            };
 
             // Show the new path (current location)
-            ListItem::new(Line::styled(format!("{}{}", indicator, file.new_path), style))
+            ListItem::new(Line::styled(
+                format!("{}{}", indicator, file.new_path),
+                style,
+            ))
         })
         .collect();
 

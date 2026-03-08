@@ -17,8 +17,8 @@
 
 use std::hash::{Hash, Hasher};
 
-use crate::meta::signals::store;
 use crate::meta::signals::data::*;
+use crate::meta::signals::store;
 
 /// Classification of a table for reconciliation purposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,9 +179,7 @@ pub fn schema_inventory() -> Vec<TableEntry> {
             height INTEGER NOT NULL DEFAULT 0,
             role TEXT NOT NULL DEFAULT 'other'
         )",
-        index_sql: &[
-            "CREATE INDEX IF NOT EXISTS idx_image_info_role ON image_info(role)",
-        ],
+        index_sql: &["CREATE INDEX IF NOT EXISTS idx_image_info_role ON image_info(role)"],
     });
 
     tables.push(TableEntry {

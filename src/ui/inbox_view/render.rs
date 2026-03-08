@@ -35,13 +35,16 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
     state.click_targets.clear();
     state.click_targets.set_list_area(inner);
     for (i, _) in state.entries.iter().enumerate() {
-        if i >= inner.height as usize { break; }
-        state.click_targets.add_row(i.to_string(), inner.y + i as u16);
+        if i >= inner.height as usize {
+            break;
+        }
+        state
+            .click_targets
+            .add_row(i.to_string(), inner.y + i as u16);
     }
 
     if state.entries.is_empty() {
-        let empty = Paragraph::new("No files in inbox")
-            .style(Style::default().fg(Color::DarkGray));
+        let empty = Paragraph::new("No files in inbox").style(Style::default().fg(Color::DarkGray));
         f.render_widget(empty, inner);
         return;
     }
@@ -56,16 +59,14 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
             let count_str = format!("{:>6}", entry.count);
 
             let (entry_color, label_style, arrow) = if busy {
-                (
-                    Color::DarkGray,
-                    Style::default().fg(Color::DarkGray),
-                    " ",
-                )
+                (Color::DarkGray, Style::default().fg(Color::DarkGray), " ")
             } else {
                 (
                     entry.color,
                     if is_selected {
-                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::Gray)
                     },
@@ -87,19 +88,15 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
             };
 
             let line = Line::from(vec![
-                Span::styled(
-                    format!("  {} ", arrow),
-                    Style::default().fg(entry_color),
-                ),
+                Span::styled(format!("  {} ", arrow), Style::default().fg(entry_color)),
                 Span::styled(
                     format!("{} ", count_str),
-                    Style::default().fg(entry_color).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(entry_color)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(&entry.label, label_style),
-                Span::styled(
-                    action_indicator,
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(action_indicator, Style::default().fg(Color::DarkGray)),
             ]);
 
             ListItem::new(line)
@@ -109,4 +106,3 @@ fn render_inbox_content(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
     let list = List::new(items);
     f.render_widget(list, inner);
 }
-

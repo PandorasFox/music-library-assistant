@@ -97,16 +97,26 @@ fn bucket_header(title: &str, focused: bool, busy: bool) -> ListItem<'static> {
     let style = if busy {
         Style::default().fg(Color::DarkGray)
     } else if focused {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
     };
 
     ListItem::new(Line::from(Span::styled(format!("── {} ──", title), style)))
 }
 
 /// Create an insight line item
-fn insight_line(label: &str, count: usize, selected: bool, busy: bool, color: Color) -> ListItem<'static> {
+fn insight_line(
+    label: &str,
+    count: usize,
+    selected: bool,
+    busy: bool,
+    color: Color,
+) -> ListItem<'static> {
     let base_color = if busy { Color::DarkGray } else { color };
 
     let style = if selected && !busy {
@@ -125,7 +135,12 @@ fn insight_line(label: &str, count: usize, selected: bool, busy: bool, color: Co
 }
 
 /// Create an insight line with no count (for placeholder)
-fn insight_line_no_count(label: &str, selected: bool, busy: bool, color: Color) -> ListItem<'static> {
+fn insight_line_no_count(
+    label: &str,
+    selected: bool,
+    busy: bool,
+    color: Color,
+) -> ListItem<'static> {
     let base_color = if busy { Color::DarkGray } else { color };
 
     let style = if selected && !busy {
@@ -171,8 +186,19 @@ fn bucket_items_with_targets(
     for (idx, entry) in entries.iter().enumerate() {
         let selected = focused && selected_idx == idx;
         match entry.count {
-            Some(count) => items.push(insight_line(&entry.label, count, selected, busy, entry.color)),
-            None => items.push(insight_line_no_count(&entry.label, selected, busy, entry.color)),
+            Some(count) => items.push(insight_line(
+                &entry.label,
+                count,
+                selected,
+                busy,
+                entry.color,
+            )),
+            None => items.push(insight_line_no_count(
+                &entry.label,
+                selected,
+                busy,
+                entry.color,
+            )),
         }
         // Add click target for this item
         click_targets.add_item(bucket, idx, y);
@@ -216,8 +242,19 @@ fn bucket_items_other_with_targets(
         for (idx, entry) in entries.iter().enumerate() {
             let selected = focused && selected_idx == idx;
             match entry.count {
-                Some(count) => items.push(insight_line(&entry.label, count, selected, busy, entry.color)),
-                None => items.push(insight_line_no_count(&entry.label, selected, busy, entry.color)),
+                Some(count) => items.push(insight_line(
+                    &entry.label,
+                    count,
+                    selected,
+                    busy,
+                    entry.color,
+                )),
+                None => items.push(insight_line_no_count(
+                    &entry.label,
+                    selected,
+                    busy,
+                    entry.color,
+                )),
             }
             // Add click target for this item
             click_targets.add_item(FocusedBucket::Other, idx, y);
@@ -253,7 +290,11 @@ fn render_insight_details(f: &mut Frame, area: Rect, state: &InsightsViewState) 
 }
 
 /// Generate detail lines for a bucket entry, matching on InsightType
-fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: bool) -> Vec<Line<'static>> {
+fn detail_lines_for_entry(
+    entry: &BucketEntry,
+    state: &InsightsViewState,
+    busy: bool,
+) -> Vec<Line<'static>> {
     let text_color = if busy { Color::DarkGray } else { Color::White };
     let header_color = if busy { Color::DarkGray } else { Color::Cyan };
 
@@ -264,7 +305,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusMtimeOnly => {
             lines.push(Line::from(Span::styled(
                 "Mtime-Only Changes",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -283,7 +326,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusOobTagSync => {
             lines.push(Line::from(Span::styled(
                 "Tags Syncable (Out-of-Band)",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -307,7 +352,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusOobTagConflict => {
             lines.push(Line::from(Span::styled(
                 "Tag Conflicts (Out-of-Band)",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -331,7 +378,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusCorruptFiles => {
             lines.push(Line::from(Span::styled(
                 "Corrupt Files",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -351,7 +400,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusShitFormatFiles => {
             lines.push(Line::from(Span::styled(
                 "Shit Format Files",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -371,7 +422,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusFilesInCorpus => {
             lines.push(Line::from(Span::styled(
                 "Files in Corpus",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
 
@@ -403,7 +456,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusFilesIndexed => {
             lines.push(Line::from(Span::styled(
                 "Files Indexed",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -418,7 +473,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusImagesInCorpus => {
             lines.push(Line::from(Span::styled(
                 "Images in Corpus",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -433,7 +490,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusFilesUnindexed => {
             lines.push(Line::from(Span::styled(
                 "Files Unindexed",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -448,7 +507,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusFilesMissing => {
             lines.push(Line::from(Span::styled(
                 "Files Missing",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -467,7 +528,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusDirectoriesMissing => {
             lines.push(Line::from(Span::styled(
                 "Directories Missing",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -491,7 +554,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CorpusFilesRelocated => {
             lines.push(Line::from(Span::styled(
                 "Files Relocated (Moved)",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -517,7 +582,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CrossSourceOverlaps => {
             lines.push(Line::from(Span::styled(
                 "Cross-Source Overlaps",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -538,7 +605,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::ReleaseOverlaps => {
             lines.push(Line::from(Span::styled(
                 "Release Overlaps",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -563,7 +632,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::SubparDuplicates => {
             lines.push(Line::from(Span::styled(
                 "Subpar Duplicates",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -584,7 +655,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::RedundantDuplicates => {
             lines.push(Line::from(Span::styled(
                 "Redundant Duplicates",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -604,7 +677,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::InconsistentAlbumArtist => {
             lines.push(Line::from(Span::styled(
                 "Inconsistent Album Artist",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -625,7 +700,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::TagCanonicity { ref tag_name } => {
             lines.push(Line::from(Span::styled(
                 format!("{} Canonicity", tag_name),
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -646,7 +723,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CompoundTagValueSafe { ref tag_name } => {
             lines.push(Line::from(Span::styled(
                 format!("{} Compound Splits (Safe)", tag_name),
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -667,7 +746,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::CompoundTagValueReview { ref tag_name } => {
             lines.push(Line::from(Span::styled(
                 format!("{} Compound Splits (Review)", tag_name),
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -688,7 +769,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::MissingAlbumSingle => {
             lines.push(Line::from(Span::styled(
                 "Missing Album Singles",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -709,7 +792,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::DiscExtraction => {
             lines.push(Line::from(Span::styled(
                 "Disc Extractions",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -734,7 +819,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
         InsightType::PathTagMismatch => {
             lines.push(Line::from(Span::styled(
                 "Filename Tag Schema Issues",
-                Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(header_color)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -758,7 +845,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
                 if let Some(signal_entry) = data.bucket_other.entries.get(index) {
                     lines.push(Line::from(Span::styled(
                         signal_entry.display_label.clone(),
-                        Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(header_color)
+                            .add_modifier(Modifier::BOLD),
                     )));
                     lines.push(Line::from(""));
                     lines.push(Line::from(Span::styled(
@@ -778,7 +867,9 @@ fn detail_lines_for_entry(entry: &BucketEntry, state: &InsightsViewState, busy: 
             if lines.is_empty() {
                 lines.push(Line::from(Span::styled(
                     entry.label.clone(),
-                    Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(header_color)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
                 if let Some(count) = entry.count {

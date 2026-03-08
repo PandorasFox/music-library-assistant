@@ -6,8 +6,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::meta::views::{ConflictGroup, SidecarConflictGroup, DeploySignalFile, LeftoverSignalFile, StaleSignalFile};
 use crate::db::ReadOnlyDb;
+use crate::meta::views::{
+    ConflictGroup, DeploySignalFile, LeftoverSignalFile, SidecarConflictGroup, StaleSignalFile,
+};
 use anyhow::Result;
 
 /// Directory aggregate for grouped file display.
@@ -57,7 +59,10 @@ pub struct SidecarDeployEntry {
 
 impl SidecarDeployEntry {
     /// Produce a HardLink mutation to deploy this sidecar image.
-    pub fn to_mutation(&self, resolver: &crate::corpus::paths::PathResolver) -> crate::meta::mutations::Mutation {
+    pub fn to_mutation(
+        &self,
+        resolver: &crate::corpus::paths::PathResolver,
+    ) -> crate::meta::mutations::Mutation {
         let source = resolver.resolve(std::path::Path::new(&self.corpus_image_path));
         let dest_rel = std::path::Path::new("libraries")
             .join(&self.library_name)
@@ -65,7 +70,10 @@ impl SidecarDeployEntry {
             .join(&self.filename);
         let destination = resolver.resolve(&dest_rel);
         crate::meta::mutations::Mutation::HardLink(
-            crate::meta::mutations::file_ops::HardLinkMutation { source, destination },
+            crate::meta::mutations::file_ops::HardLinkMutation {
+                source,
+                destination,
+            },
         )
     }
 }
@@ -128,8 +136,10 @@ impl DeployModalData {
         // Assign library_name to deploy-ready files via config lookup
         if let Some(cfg) = config {
             for file in &mut new {
-                if let Some(lib) = cfg.resolve_source_config_for_db_path(&file.corpus_path)
-                    .and_then(|r| r.libraries.into_iter().next()) {
+                if let Some(lib) = cfg
+                    .resolve_source_config_for_db_path(&file.corpus_path)
+                    .and_then(|r| r.libraries.into_iter().next())
+                {
                     file.library_name = lib;
                 }
             }
@@ -145,30 +155,35 @@ impl DeployModalData {
         ));
 
         // Aggregate new files by directory (using corpus_path), then merge sidecar counts
-        let mut new_by_dir = Self::aggregate_by_directory(
-            new.iter().map(|f| f.corpus_path.as_str())
-        );
+        let mut new_by_dir =
+            Self::aggregate_by_directory(new.iter().map(|f| f.corpus_path.as_str()));
         Self::merge_sidecar_counts(&mut new_by_dir, &sidecars);
 
         // Aggregate leftover files by directory (using library_path)
-        let leftover_by_dir = Self::aggregate_by_directory(
-            leftover.iter().map(|f| f.library_path.as_str())
-        );
+        let leftover_by_dir =
+            Self::aggregate_by_directory(leftover.iter().map(|f| f.library_path.as_str()));
 
         // Compute "replaced" leftovers: leftovers whose library_path matches a new deployment
         // New files deploy to "{library_name}/{deploy_path}", which matches leftover library_path format
-        let new_destinations: HashSet<String> = new.iter()
+        let new_destinations: HashSet<String> = new
+            .iter()
             .filter(|f| !f.library_name.is_empty())
             .map(|f| format!("{}/{}", f.library_name, f.deploy_path))
             .collect();
 
-        let replaced_count = leftover.iter()
+        let replaced_count = leftover
+            .iter()
             .filter(|f| new_destinations.contains(&f.library_path))
             .count();
 
         // Build per-library breakdown
         let per_library = Self::compute_per_library(
-            &healthy, &new, &leftover, &stale, &conflicts, &new_destinations,
+            &healthy,
+            &new,
+            &leftover,
+            &stale,
+            &conflicts,
+            &new_destinations,
         );
 
         Ok(Self {
@@ -198,36 +213,60 @@ impl DeployModalData {
         let mut libs: HashMap<String, LibrarySummary> = HashMap::new();
 
         for f in healthy {
-            let entry = libs.entry(f.library_name.clone()).or_insert_with(|| LibrarySummary {
-                library_name: f.library_name.clone(), healthy_count: 0, new_count: 0,
-                leftover_count: 0, stale_count: 0, replaced_count: 0,
-            });
+            let entry = libs
+                .entry(f.library_name.clone())
+                .or_insert_with(|| LibrarySummary {
+                    library_name: f.library_name.clone(),
+                    healthy_count: 0,
+                    new_count: 0,
+                    leftover_count: 0,
+                    stale_count: 0,
+                    replaced_count: 0,
+                });
             entry.healthy_count += 1;
         }
         for f in new {
             if !f.library_name.is_empty() {
-                let entry = libs.entry(f.library_name.clone()).or_insert_with(|| LibrarySummary {
-                    library_name: f.library_name.clone(), healthy_count: 0, new_count: 0,
-                    leftover_count: 0, stale_count: 0, replaced_count: 0,
-                });
+                let entry = libs
+                    .entry(f.library_name.clone())
+                    .or_insert_with(|| LibrarySummary {
+                        library_name: f.library_name.clone(),
+                        healthy_count: 0,
+                        new_count: 0,
+                        leftover_count: 0,
+                        stale_count: 0,
+                        replaced_count: 0,
+                    });
                 entry.new_count += 1;
             }
         }
         for f in leftover {
-            let entry = libs.entry(f.library_name.clone()).or_insert_with(|| LibrarySummary {
-                library_name: f.library_name.clone(), healthy_count: 0, new_count: 0,
-                leftover_count: 0, stale_count: 0, replaced_count: 0,
-            });
+            let entry = libs
+                .entry(f.library_name.clone())
+                .or_insert_with(|| LibrarySummary {
+                    library_name: f.library_name.clone(),
+                    healthy_count: 0,
+                    new_count: 0,
+                    leftover_count: 0,
+                    stale_count: 0,
+                    replaced_count: 0,
+                });
             entry.leftover_count += 1;
             if new_destinations.contains(&f.library_path) {
                 entry.replaced_count += 1;
             }
         }
         for f in stale {
-            let entry = libs.entry(f.library_name.clone()).or_insert_with(|| LibrarySummary {
-                library_name: f.library_name.clone(), healthy_count: 0, new_count: 0,
-                leftover_count: 0, stale_count: 0, replaced_count: 0,
-            });
+            let entry = libs
+                .entry(f.library_name.clone())
+                .or_insert_with(|| LibrarySummary {
+                    library_name: f.library_name.clone(),
+                    healthy_count: 0,
+                    new_count: 0,
+                    leftover_count: 0,
+                    stale_count: 0,
+                    replaced_count: 0,
+                });
             entry.stale_count += 1;
         }
 
@@ -250,27 +289,30 @@ impl DeployModalData {
             Err(_) => return Vec::new(),
         };
 
-        signals.into_iter().map(|s| {
-            let filename = Path::new(&s.path)
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let library_album_dir = Path::new(&s.deploy_path)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
+        signals
+            .into_iter()
+            .map(|s| {
+                let filename = Path::new(&s.path)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let library_album_dir = Path::new(&s.deploy_path)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
 
-            SidecarDeployEntry {
-                corpus_image_path: s.path,
-                library_name: s.library_name,
-                library_album_dir,
-                filename,
-                format: s.data.format,
-                width: s.data.width,
-                height: s.data.height,
-                role: s.data.role,
-            }
-        }).collect()
+                SidecarDeployEntry {
+                    corpus_image_path: s.path,
+                    library_name: s.library_name,
+                    library_album_dir,
+                    filename,
+                    format: s.data.format,
+                    width: s.data.width,
+                    height: s.data.height,
+                    role: s.data.role,
+                }
+            })
+            .collect()
     }
 
     /// Merge sidecar image counts into directory aggregates.
@@ -278,7 +320,10 @@ impl DeployModalData {
     /// For directories that already have audio files, increments sidecar_count.
     /// For directories with only sidecars (no audio), creates new entries.
     /// Re-sorts by total count (audio + sidecar) descending.
-    fn merge_sidecar_counts(new_by_dir: &mut Vec<DirectoryAggregate>, sidecars: &[SidecarDeployEntry]) {
+    fn merge_sidecar_counts(
+        new_by_dir: &mut Vec<DirectoryAggregate>,
+        sidecars: &[SidecarDeployEntry],
+    ) {
         if sidecars.is_empty() {
             return;
         }
@@ -310,9 +355,7 @@ impl DeployModalData {
         }
 
         // Re-sort by total count descending
-        new_by_dir.sort_by(|a, b| {
-            (b.count + b.sidecar_count).cmp(&(a.count + a.sidecar_count))
-        });
+        new_by_dir.sort_by(|a, b| (b.count + b.sidecar_count).cmp(&(a.count + a.sidecar_count)));
     }
 
     /// Aggregate paths by their parent directory, sorted by count descending.
@@ -328,7 +371,11 @@ impl DeployModalData {
 
         let mut aggregates: Vec<_> = counts
             .into_iter()
-            .map(|(directory, count)| DirectoryAggregate { directory, count, sidecar_count: 0 })
+            .map(|(directory, count)| DirectoryAggregate {
+                directory,
+                count,
+                sidecar_count: 0,
+            })
             .collect();
 
         // Sort by count descending
@@ -380,10 +427,16 @@ impl DeployModalData {
         }
 
         // 4. Sidecars: separate decision
-        let sidecars: Vec<_> = self.sidecars.iter()
+        let sidecars: Vec<_> = self
+            .sidecars
+            .iter()
             .map(|s| s.to_mutation(resolver))
             .collect();
 
-        DeployMutationSet { deploy, sidecars, skipped }
+        DeployMutationSet {
+            deploy,
+            sidecars,
+            skipped,
+        }
     }
 }

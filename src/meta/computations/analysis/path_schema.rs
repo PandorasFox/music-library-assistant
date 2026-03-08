@@ -9,14 +9,14 @@ use std::time::Instant;
 
 use crate::config::path_schema::PathSchemaMatchResult;
 use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
+use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
-use crate::meta::computations::helpers::{ComputedCorpusSignal, reconcile_corpus_signals};
+use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpusSignal};
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
-    PathMismatchKind, PathTagMismatchData, PathTagMismatchSignal,
-    PathTagValueMismatch, TypedSignalWrite,
+    PathMismatchKind, PathTagMismatchData, PathTagMismatchSignal, PathTagValueMismatch,
+    TypedSignalWrite,
 };
 
 use super::{Computation, Result};
@@ -55,8 +55,12 @@ pub fn execute_detect_path_tag_mismatches(
     let has_any_schema = config.source_dirs.iter().any(|sd| sd.path_schema.is_some());
     if !has_any_schema {
         // No schemas configured — reconcile with empty set to clear stale signals.
-        let (cleared, _, _, _) =
-            reconcile_corpus_signals::<PathTagMismatchSignal>(read_only_db, &sender, Vec::new(), witness);
+        let (cleared, _, _, _) = reconcile_corpus_signals::<PathTagMismatchSignal>(
+            read_only_db,
+            &sender,
+            Vec::new(),
+            witness,
+        );
         if cleared > 0 {
             log_general(format!(
                 "[COMPUTE] DetectPathTagMismatches: cleared {} stale signals (no schemas configured)",

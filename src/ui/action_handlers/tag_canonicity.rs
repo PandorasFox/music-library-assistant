@@ -3,14 +3,14 @@
 //! Handles the tag canonicity modal: loading signals, navigating between
 //! clusters, staging canonicalization decisions.
 
+use super::super::App;
+use super::witness;
 use crate::db::types::Zone;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::{
-    helpers, insights_view, tag_canonicity_v2, tag_editor, ActiveView,
-    CanonicitySignalKind, TagCanonicityClusters,
+    helpers, insights_view, tag_canonicity_v2, tag_editor, ActiveView, CanonicitySignalKind,
+    TagCanonicityClusters,
 };
-use super::witness;
-use super::super::App;
 
 impl App {
     /// Start tag canonicity resolution from Insights view.
@@ -39,21 +39,29 @@ impl App {
         // Determine signal kind and load keys via cache thread
         let (signal_keys, kind) = match &insight_type {
             insights_view::InsightType::InconsistentAlbumArtist => {
-                let keys = self.cache.query(|db| {
-                    db.aggregate_signal_keys::<InconsistentAlbumArtistSignal>()
-                        .unwrap_or_default()
-                }).recv();
+                let keys = self
+                    .cache
+                    .query(|db| {
+                        db.aggregate_signal_keys::<InconsistentAlbumArtistSignal>()
+                            .unwrap_or_default()
+                    })
+                    .recv();
                 (keys, CanonicitySignalKind::InconsistentAlbumArtist)
             }
             insights_view::InsightType::TagCanonicity { tag_name } => {
                 let tag_prefix = format!("{}:", tag_name);
-                let keys = self.cache.query(move |db| {
-                    let all_keys = db.aggregate_signal_keys::<TagCanonicitySignal>()
-                        .unwrap_or_default();
-                    all_keys.into_iter()
-                        .filter(|k| k.starts_with(&tag_prefix))
-                        .collect::<Vec<String>>()
-                }).recv();
+                let keys = self
+                    .cache
+                    .query(move |db| {
+                        let all_keys = db
+                            .aggregate_signal_keys::<TagCanonicitySignal>()
+                            .unwrap_or_default();
+                        all_keys
+                            .into_iter()
+                            .filter(|k| k.starts_with(&tag_prefix))
+                            .collect::<Vec<String>>()
+                    })
+                    .recv();
                 (keys, CanonicitySignalKind::TagCanonicity)
             }
             _ => {
@@ -80,7 +88,11 @@ impl App {
     }
 
     /// Handle tag canonicity modal actions (three-pane layout).
-    pub(super) fn handle_tag_canonicity_action(&mut self, action: tag_canonicity_v2::TagCanonicalityActionV2, witness: Option<&witness::ConfirmationGesture>) {
+    pub(super) fn handle_tag_canonicity_action(
+        &mut self,
+        action: tag_canonicity_v2::TagCanonicalityActionV2,
+        witness: Option<&witness::ConfirmationGesture>,
+    ) {
         match action {
             tag_canonicity_v2::TagCanonicalityActionV2::None => {}
             tag_canonicity_v2::TagCanonicalityActionV2::Confirmed => {
@@ -127,22 +139,31 @@ impl App {
     fn launch_tag_editor_from_canonicity(&mut self, mode: tag_editor::TagEditorMode) {
         // Extract data from current view
         let (inodes, decision_key, decision_label, file_cursor_inode, zone) =
-            if let ActiveView::TagCanonicityResolution { ref state, ref clusters } = self.view {
+            if let ActiveView::TagCanonicityResolution {
+                ref state,
+                ref clusters,
+            } = self.view
+            {
                 let inodes: Vec<i64> = state.data.inodes.clone();
-                let decision_key = DecisionKey::TagCanonicity { tag_name: state.data.tag_name.clone(), cluster_index: clusters.current_index };
+                let decision_key = DecisionKey::TagCanonicity {
+                    tag_name: state.data.tag_name.clone(),
+                    cluster_index: clusters.current_index,
+                };
                 let label = format!("Tag edit: {} canonicity", state.data.tag_name);
-                let cursor_inode = state.data.files.get(state.file_cursor)
-                    .map(|f| f.inode);
+                let cursor_inode = state.data.files.get(state.file_cursor).map(|f| f.inode);
                 (inodes, decision_key, label, cursor_inode, state.zone)
             } else {
                 return;
             };
 
         // Query audio files by inodes
-        let audio_files = self.cache.query(move |db| {
-            db.get_audio_files_by_inodes(&inodes, zone)
-                .unwrap_or_default()
-        }).recv();
+        let audio_files = self
+            .cache
+            .query(move |db| {
+                db.get_audio_files_by_inodes(&inodes, zone)
+                    .unwrap_or_default()
+            })
+            .recv();
 
         if audio_files.is_empty() {
             self.status_message = Some("No indexed files found for this group".to_string());
@@ -155,8 +176,12 @@ impl App {
         // Position editor cursor on the file matching the health modal's selection
         if let Some(target_inode) = file_cursor_inode {
             if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
-                if let tag_editor::types::TagEditContext::BulkEdit { ref audio_files, .. } = editor.context {
-                    if let Some(idx) = audio_files.iter().position(|af| af.inode() == target_inode) {
+                if let tag_editor::types::TagEditContext::BulkEdit {
+                    ref audio_files, ..
+                } = editor.context
+                {
+                    if let Some(idx) = audio_files.iter().position(|af| af.inode() == target_inode)
+                    {
                         editor.current_item_idx = idx;
                     }
                 }
@@ -186,8 +211,15 @@ impl App {
         }
 
         // Normal navigation
-        let moved = if let ActiveView::TagCanonicityResolution { ref mut clusters, .. } = self.view {
-            if forward { clusters.next() } else { clusters.prev() }
+        let moved = if let ActiveView::TagCanonicityResolution {
+            ref mut clusters, ..
+        } = self.view
+        {
+            if forward {
+                clusters.next()
+            } else {
+                clusters.prev()
+            }
         } else {
             false
         };
@@ -211,7 +243,10 @@ impl App {
             // At last cluster - show review screen
             self.show_transaction_review_for_canonicity();
         } else {
-            let advanced = if let ActiveView::TagCanonicityResolution { ref mut clusters, .. } = self.view {
+            let advanced = if let ActiveView::TagCanonicityResolution {
+                ref mut clusters, ..
+            } = self.view
+            {
                 clusters.next()
             } else {
                 false
@@ -241,12 +276,19 @@ impl App {
     /// The transaction is confirmed when the user completes the review screen.
     fn stage_canonicity_decision(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, cluster_idx, tag_name) = match &self.view {
-            ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
+            ActiveView::TagCanonicityResolution {
+                ref state,
+                ref clusters,
+            } => {
                 let mutations = state.mutations();
                 if mutations.is_empty() {
                     return;
                 }
-                (mutations, clusters.current_index, state.data.tag_name.clone())
+                (
+                    mutations,
+                    clusters.current_index,
+                    state.data.tag_name.clone(),
+                )
             }
             _ => return,
         };
@@ -254,7 +296,16 @@ impl App {
         let label = format!("Canonicalize {}", tag_name);
 
         // Add decision to existing transaction via sealed operator decision handler
-        let _ = super::super::operator_decisions::stage_decision(&mut self.witch, DecisionKey::TagCanonicity { tag_name, cluster_index: cluster_idx }, &label, mutations, gesture);
+        let _ = super::super::operator_decisions::stage_decision(
+            &mut self.witch,
+            DecisionKey::TagCanonicity {
+                tag_name,
+                cluster_index: cluster_idx,
+            },
+            &label,
+            mutations,
+            gesture,
+        );
     }
 
     /// Stage a "flag as non-compilation" decision for the current cluster.
@@ -263,11 +314,17 @@ impl App {
     /// suppress this group in future inconsistent album artist detection runs.
     fn stage_flag_non_compilation(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, cluster_idx, tag_name) = match &self.view {
-            ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
-                use crate::meta::mutations::{Mutation, TagOp};
+            ActiveView::TagCanonicityResolution {
+                ref state,
+                ref clusters,
+            } => {
                 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
+                use crate::meta::mutations::{Mutation, TagOp};
 
-                let ops: Vec<TagOp> = state.data.inodes.iter()
+                let ops: Vec<TagOp> = state
+                    .data
+                    .inodes
+                    .iter()
                     .map(|&inode| TagOp::add_tag(inode, "COMPILATION", "0"))
                     .collect();
 
@@ -275,15 +332,25 @@ impl App {
                     return;
                 }
 
-                let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation { ops, zone: state.zone })];
-                (mutations, clusters.current_index, state.data.tag_name.clone())
+                let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                    ops,
+                    zone: state.zone,
+                })];
+                (
+                    mutations,
+                    clusters.current_index,
+                    state.data.tag_name.clone(),
+                )
             }
             _ => return,
         };
 
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
-            DecisionKey::TagCanonicity { tag_name, cluster_index: cluster_idx },
+            DecisionKey::TagCanonicity {
+                tag_name,
+                cluster_index: cluster_idx,
+            },
             "Flag non-compilation",
             mutations,
             gesture,
@@ -296,29 +363,44 @@ impl App {
     /// which will suppress this collision in future DetectTagCanonicalizations runs.
     fn stage_flag_canonical(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, cluster_idx, tag_name) = match &self.view {
-            ActiveView::TagCanonicityResolution { ref state, ref clusters } => {
-                use crate::meta::mutations::Mutation;
+            ActiveView::TagCanonicityResolution {
+                ref state,
+                ref clusters,
+            } => {
                 use crate::meta::mutations::indexing::EmitCanonicalTagMutation;
+                use crate::meta::mutations::Mutation;
 
-                let mutations: Vec<Mutation> = state.data.variants.iter()
-                    .map(|variant| Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
-                        tag_name: state.data.tag_name.clone(),
-                        canonical_value: variant.value.clone(),
-                    }))
+                let mutations: Vec<Mutation> = state
+                    .data
+                    .variants
+                    .iter()
+                    .map(|variant| {
+                        Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
+                            tag_name: state.data.tag_name.clone(),
+                            canonical_value: variant.value.clone(),
+                        })
+                    })
                     .collect();
 
                 if mutations.is_empty() {
                     return;
                 }
 
-                (mutations, clusters.current_index, state.data.tag_name.clone())
+                (
+                    mutations,
+                    clusters.current_index,
+                    state.data.tag_name.clone(),
+                )
             }
             _ => return,
         };
 
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
-            DecisionKey::TagCanonicity { tag_name, cluster_index: cluster_idx },
+            DecisionKey::TagCanonicity {
+                tag_name,
+                cluster_index: cluster_idx,
+            },
             "Flag canonical",
             mutations,
             gesture,
@@ -353,21 +435,27 @@ impl App {
     ///
     /// Sets the view to `TagCanonicityLoading` with the pending query.
     /// The tick handler will poll for completion and transition to Resolution.
-    pub(in crate::ui) fn load_current_cluster_signal_with_clusters(&mut self, clusters: TagCanonicityClusters) -> bool {
+    pub(in crate::ui) fn load_current_cluster_signal_with_clusters(
+        &mut self,
+        clusters: TagCanonicityClusters,
+    ) -> bool {
         self.start_async_cluster_load(clusters)
     }
 
     /// Common helper: fire the cache query and transition to loading state.
-    pub(in crate::ui) fn start_async_cluster_load(&mut self, clusters: TagCanonicityClusters) -> bool {
+    pub(in crate::ui) fn start_async_cluster_load(
+        &mut self,
+        clusters: TagCanonicityClusters,
+    ) -> bool {
         let signal_key = match clusters.current_signal_key() {
             Some(key) => key.to_string(),
             None => return false,
         };
 
         let kind = clusters.kind;
-        let pending = self.cache.query(move |db| {
-            Self::load_typed_signal_data(&signal_key, kind, db)
-        });
+        let pending = self
+            .cache
+            .query(move |db| Self::load_typed_signal_data(&signal_key, kind, db));
 
         self.view = ActiveView::TagCanonicityLoading { pending, clusters };
         true
@@ -411,7 +499,12 @@ impl App {
                 let zone = Self::zone_for_kind(kind);
                 let tag_name_for_key = data.tag_name.clone();
                 let mut state = tag_canonicity_v2::TagCanonicalityStateV2::new(
-                    data, pre_fill, current_index, total, is_album_artist, zone,
+                    data,
+                    pre_fill,
+                    current_index,
+                    total,
+                    is_album_artist,
+                    zone,
                 );
 
                 // Back-fill UI state from staged decision if one exists for this cluster
@@ -442,11 +535,15 @@ impl App {
             }
             CanonicitySignalKind::InconsistentAlbumArtist => {
                 let signal = read_db.get_inconsistent_album_artist_signal(key).ok()??;
-                tag_canonicity_v2::TagCanonicalityModalDataV2::from_inconsistent_album_artist(&signal, read_db)
+                tag_canonicity_v2::TagCanonicalityModalDataV2::from_inconsistent_album_artist(
+                    &signal, read_db,
+                )
             }
             CanonicitySignalKind::InboxTagCanonicity => {
                 let signal = read_db.get_inbox_tag_canonicity_signal(key).ok()??;
-                tag_canonicity_v2::TagCanonicalityModalDataV2::from_inbox_tag_canonicity(&signal, read_db)
+                tag_canonicity_v2::TagCanonicalityModalDataV2::from_inbox_tag_canonicity(
+                    &signal, read_db,
+                )
             }
         }
     }
@@ -454,8 +551,9 @@ impl App {
     /// Map signal kind to zone for mutations and file queries.
     fn zone_for_kind(kind: CanonicitySignalKind) -> Zone {
         match kind {
-            CanonicitySignalKind::TagCanonicity
-            | CanonicitySignalKind::InconsistentAlbumArtist => Zone::Corpus,
+            CanonicitySignalKind::TagCanonicity | CanonicitySignalKind::InconsistentAlbumArtist => {
+                Zone::Corpus
+            }
             CanonicitySignalKind::InboxTagCanonicity => Zone::Inbox,
         }
     }

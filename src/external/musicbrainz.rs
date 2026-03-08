@@ -45,7 +45,10 @@ impl MusicBrainzClient {
             .timeout(std::time::Duration::from_secs(15))
             .user_agent("MusicMagic/0.1 (https://github.com/example/musicmagic)")
             .build();
-        Self { agent, base_url: base_url.trim_end_matches('/').to_string() }
+        Self {
+            agent,
+            base_url: base_url.trim_end_matches('/').to_string(),
+        }
     }
 
     /// Returns the configured base URL.
@@ -64,10 +67,7 @@ impl MusicBrainzClient {
 
     /// Fetch an artist by MBID with aliases.
     pub fn fetch_artist(&self, mbid: &str) -> Result<MbLookupOutcome> {
-        let url = format!(
-            "{}/artist/{}?inc=aliases&fmt=json",
-            self.base_url, mbid
-        );
+        let url = format!("{}/artist/{}?inc=aliases&fmt=json", self.base_url, mbid);
         self.fetch_entity(&url)
     }
 
@@ -86,26 +86,19 @@ impl MusicBrainzClient {
 
         match response {
             Ok(resp) => {
-                let body = resp.into_string()
+                let body = resp
+                    .into_string()
                     .context("Failed to read MusicBrainz response body")?;
                 Ok(MbLookupOutcome::Found(body.into_bytes()))
             }
-            Err(ureq::Error::Status(404, _)) => {
-                Ok(MbLookupOutcome::NotFound)
-            }
-            Err(ureq::Error::Status(429, _)) => {
-                Ok(MbLookupOutcome::RateLimited)
-            }
-            Err(ureq::Error::Status(503, _)) => {
-                Ok(MbLookupOutcome::ServiceUnavailable)
-            }
+            Err(ureq::Error::Status(404, _)) => Ok(MbLookupOutcome::NotFound),
+            Err(ureq::Error::Status(429, _)) => Ok(MbLookupOutcome::RateLimited),
+            Err(ureq::Error::Status(503, _)) => Ok(MbLookupOutcome::ServiceUnavailable),
             Err(ureq::Error::Status(code, resp)) => {
                 let body = resp.into_string().unwrap_or_default();
                 anyhow::bail!("MusicBrainz API returned HTTP {}: {}", code, body);
             }
-            Err(e) => {
-                Err(anyhow::anyhow!("MusicBrainz network error: {}", e))
-            }
+            Err(e) => Err(anyhow::anyhow!("MusicBrainz network error: {}", e)),
         }
     }
 }
@@ -328,7 +321,11 @@ pub fn join_artist_credits_localized(
 
     let mut result = String::new();
     for (i, credit) in credits.iter().enumerate() {
-        let resolved = resolve_artist_name(credit, artist_map.get(credit.artist.id.as_str()).copied(), locales);
+        let resolved = resolve_artist_name(
+            credit,
+            artist_map.get(credit.artist.id.as_str()).copied(),
+            locales,
+        );
         result.push_str(&resolved);
         if i < credits.len() - 1 {
             if credit.joinphrase.is_empty() {
@@ -347,18 +344,15 @@ pub fn join_artist_credits_localized(
 
 /// Parse cached recording JSON into typed struct.
 pub fn parse_recording(raw_json: &[u8]) -> Result<MbRecording> {
-    serde_json::from_slice(raw_json)
-        .context("Failed to parse cached MusicBrainz recording JSON")
+    serde_json::from_slice(raw_json).context("Failed to parse cached MusicBrainz recording JSON")
 }
 
 /// Parse cached artist JSON into typed struct.
 pub fn parse_artist(raw_json: &[u8]) -> Result<MbArtist> {
-    serde_json::from_slice(raw_json)
-        .context("Failed to parse cached MusicBrainz artist JSON")
+    serde_json::from_slice(raw_json).context("Failed to parse cached MusicBrainz artist JSON")
 }
 
 /// Parse cached release JSON into typed struct.
 pub fn parse_release(raw_json: &[u8]) -> Result<MbRelease> {
-    serde_json::from_slice(raw_json)
-        .context("Failed to parse cached MusicBrainz release JSON")
+    serde_json::from_slice(raw_json).context("Failed to parse cached MusicBrainz release JSON")
 }

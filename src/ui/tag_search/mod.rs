@@ -220,13 +220,22 @@ impl TagSearchState {
                         Line::raw(""),
                         Line::styled("No results found", Style::default().fg(Color::White)),
                         Line::raw(""),
-                        Line::styled("[ OK ]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        Line::styled(
+                            "[ OK ]",
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                     ])
                     .centered()
                     .render(f, area);
             }
             types::TagSearchModal::GatheringTags => {
-                let track_count = self.pending_bulk_edit.as_ref().map(|t| t.len()).unwrap_or(0);
+                let track_count = self
+                    .pending_bulk_edit
+                    .as_ref()
+                    .map(|t| t.len())
+                    .unwrap_or(0);
                 Modal::new()
                     .title("Bulk Edit")
                     .fixed_size(42, 7)
@@ -272,19 +281,27 @@ impl TagSearchState {
         // Add condition button
         if y < inner.y + inner.height - 2 {
             let add_style = if self.is_on_add_condition() {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
             let add_line = Line::from(Span::styled("[+ Add another condition]", add_style));
-            f.render_widget(Paragraph::new(add_line), Rect::new(inner.x + 2, y, inner.width - 2, 1));
+            f.render_widget(
+                Paragraph::new(add_line),
+                Rect::new(inner.x + 2, y, inner.width - 2, 1),
+            );
             y += 2;
         }
 
         // Search button
         if y < inner.y + inner.height {
             let search_style = if self.is_on_search_button() {
-                Style::default().bg(Color::Cyan).fg(Color::Black).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .bg(Color::Cyan)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Cyan)
             };
@@ -294,7 +311,14 @@ impl TagSearchState {
         }
     }
 
-    fn render_condition_row(&self, f: &mut Frame, area: Rect, idx: usize, condition: &SearchCondition, is_focused: bool) {
+    fn render_condition_row(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        idx: usize,
+        condition: &SearchCondition,
+        is_focused: bool,
+    ) {
         use types::ConditionType;
 
         let mut spans = Vec::new();
@@ -307,7 +331,10 @@ impl TagSearchState {
             } else {
                 Style::default().fg(Color::Yellow)
             };
-            spans.push(Span::styled(format!("{:<4}", condition.operator.label()), op_style));
+            spans.push(Span::styled(
+                format!("{:<4}", condition.operator.label()),
+                op_style,
+            ));
         } else {
             spans.push(Span::raw("    ")); // Align with operators (4 chars: "AND ")
         }
@@ -319,7 +346,10 @@ impl TagSearchState {
         } else {
             Style::default().fg(Color::Blue)
         };
-        spans.push(Span::styled(format!("[{:<4}]", condition.condition_type.label()), type_style));
+        spans.push(Span::styled(
+            format!("[{:<4}]", condition.condition_type.label()),
+            type_style,
+        ));
         spans.push(Span::raw(" "));
 
         // Render fields based on condition type
@@ -343,7 +373,10 @@ impl TagSearchState {
                 } else {
                     name_display
                 };
-                spans.push(Span::styled(format!("{:<12}", name_with_cursor), name_style));
+                spans.push(Span::styled(
+                    format!("{:<12}", name_with_cursor),
+                    name_style,
+                ));
                 spans.push(Span::raw(" "));
 
                 // Comparison operator
@@ -353,7 +386,10 @@ impl TagSearchState {
                 } else {
                     Style::default().fg(Color::Magenta)
                 };
-                spans.push(Span::styled(format!("{:<8}", condition.comparison.label()), comp_style));
+                spans.push(Span::styled(
+                    format!("{:<8}", condition.comparison.label()),
+                    comp_style,
+                ));
                 spans.push(Span::raw(" "));
 
                 // Value field
@@ -378,13 +414,17 @@ impl TagSearchState {
             }
             ConditionType::FileType => {
                 // File type category selector
-                let cat_focused = is_focused && self.field_focus == QueryFieldFocus::FileTypeCategory;
+                let cat_focused =
+                    is_focused && self.field_focus == QueryFieldFocus::FileTypeCategory;
                 let cat_style = if cat_focused {
                     Style::default().bg(Color::Green).fg(Color::Black)
                 } else {
                     Style::default().fg(Color::Green)
                 };
-                spans.push(Span::styled(format!("[{}]", condition.file_type_category.label()), cat_style));
+                spans.push(Span::styled(
+                    format!("[{}]", condition.file_type_category.label()),
+                    cat_style,
+                ));
             }
             ConditionType::SampleRate | ConditionType::Bitrate | ConditionType::Duration => {
                 // Range min field
@@ -435,7 +475,10 @@ impl TagSearchState {
                     ConditionType::Duration => "sec",
                     _ => "",
                 };
-                spans.push(Span::styled(format!(" {}", unit), Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    format!(" {}", unit),
+                    Style::default().fg(Color::DarkGray),
+                ));
             }
         }
 
@@ -467,11 +510,15 @@ impl TagSearchState {
         self.click_targets.clear();
         self.click_targets.set_list_area(inner);
         for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-            if entry_idx >= self.results.len() { break; }
-            self.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+            if entry_idx >= self.results.len() {
+                break;
+            }
+            self.click_targets
+                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
         }
 
-        let lines: Vec<Line> = self.results
+        let lines: Vec<Line> = self
+            .results
             .iter()
             .enumerate()
             .skip(scroll)
@@ -483,7 +530,10 @@ impl TagSearchState {
 
                 let indicator = if is_selected { "▶ " } else { "  " };
                 let style = if is_selected {
-                    Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .bg(Color::DarkGray)
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
@@ -515,7 +565,10 @@ impl TagSearchState {
                 ]),
                 Line::from(vec![
                     Span::styled("Album Artist: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(twt.get_tag_display("album_artist").unwrap_or_else(|| "-".into())),
+                    Span::raw(
+                        twt.get_tag_display("album_artist")
+                            .unwrap_or_else(|| "-".into()),
+                    ),
                 ]),
                 Line::from(vec![
                     Span::styled("Genre: ", Style::default().fg(Color::DarkGray)),
@@ -533,7 +586,10 @@ impl TagSearchState {
                 ),
             ]
         } else {
-            vec![Line::styled("No track selected", Style::default().fg(Color::DarkGray))]
+            vec![Line::styled(
+                "No track selected",
+                Style::default().fg(Color::DarkGray),
+            )]
         };
 
         f.render_widget(Paragraph::new(lines), inner);

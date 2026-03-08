@@ -23,7 +23,9 @@ impl MemoryDiagnostics {
 
     /// Called each frame. Logs a snapshot if enough time has elapsed.
     pub fn tick(&mut self) {
-        if !crate::config::is_memory_logging_enabled() { return; }
+        if !crate::config::is_memory_logging_enabled() {
+            return;
+        }
         if self.last_snapshot.elapsed() >= SNAPSHOT_INTERVAL {
             self.last_snapshot = Instant::now();
             log_memory_snapshot();
@@ -32,7 +34,9 @@ impl MemoryDiagnostics {
 
     /// Force an immediate snapshot (e.g., on startup, on view transition).
     pub fn snapshot_now(&mut self) {
-        if !crate::config::is_memory_logging_enabled() { return; }
+        if !crate::config::is_memory_logging_enabled() {
+            return;
+        }
         self.last_snapshot = Instant::now();
         log_memory_snapshot();
     }
@@ -60,9 +64,7 @@ fn log_memory_snapshot() {
 
     // 2. SQLite global memory (all connections combined)
     let sqlite_used = unsafe { rusqlite::ffi::sqlite3_memory_used() };
-    let sqlite_highwater = unsafe {
-        rusqlite::ffi::sqlite3_memory_highwater(0)
-    };
+    let sqlite_highwater = unsafe { rusqlite::ffi::sqlite3_memory_highwater(0) };
     parts.push(format!(
         "SQLite={:.1}MB (highwater={:.1}MB)",
         sqlite_used as f64 / (1024.0 * 1024.0),
@@ -73,8 +75,7 @@ fn log_memory_snapshot() {
     if let Some(smaps) = read_smaps_rollup() {
         parts.push(format!(
             "PSS={:.1}MB Swap={:.1}MB",
-            smaps.pss_mb,
-            smaps.swap_mb,
+            smaps.pss_mb, smaps.swap_mb,
         ));
     }
 
@@ -141,7 +142,9 @@ fn read_thread_count() -> Option<u32> {
 fn parse_kb_line(line: &str, prefix: &str) -> Option<f64> {
     let rest = line.strip_prefix(prefix)?;
     let rest = rest.trim();
-    let rest = rest.strip_suffix("kB").or_else(|| rest.strip_suffix("KB"))?;
+    let rest = rest
+        .strip_suffix("kB")
+        .or_else(|| rest.strip_suffix("KB"))?;
     rest.trim().parse::<f64>().ok()
 }
 

@@ -5,6 +5,8 @@
 //! - Enter on "Corpus matches" bucket: launch inbox corpus match resolution
 //! - Enter on "Organize" bucket: launch inbox organize workflow
 
+use super::witness;
+use super::App;
 use crate::meta::decisions::DecisionKey;
 use crate::meta::signals::data::InboxTagCanonicitySignal;
 use crate::ui::active_view::ActiveView;
@@ -12,33 +14,47 @@ use crate::ui::inbox_corpus_match_modal;
 use crate::ui::inbox_organize;
 use crate::ui::startup;
 use crate::ui::{CanonicitySignalKind, TagCanonicityClusters};
-use super::witness;
-use super::App;
 
 impl App {
-    pub(super) fn handle_inbox_action(&mut self, action: super::super::inbox_view::InboxAction, _witness: Option<&witness::ConfirmationGesture>) {
+    pub(super) fn handle_inbox_action(
+        &mut self,
+        action: super::super::inbox_view::InboxAction,
+        _witness: Option<&witness::ConfirmationGesture>,
+    ) {
         use super::super::inbox_view::InboxAction;
 
         match action {
             InboxAction::None => {}
             InboxAction::RequestQuit => {
                 if self.has_pending_operations() {
-                    self.status_message = Some("Cannot quit while operations are pending".to_string());
+                    self.status_message =
+                        Some("Cannot quit while operations are pending".to_string());
                 } else {
-                    self.view = ActiveView::ExitConfirm(super::super::ExitConfirmModalState::default());
+                    self.view =
+                        ActiveView::ExitConfirm(super::super::ExitConfirmModalState::default());
                 }
             }
             InboxAction::CycleNext => {
-                self.start_lateral_view(crate::ui::widgets::LateralView::Inbox.next(self.transactions_open()));
+                self.start_lateral_view(
+                    crate::ui::widgets::LateralView::Inbox.next(self.transactions_open()),
+                );
             }
             InboxAction::CyclePrev => {
-                self.start_lateral_view(crate::ui::widgets::LateralView::Inbox.prev(self.transactions_open()));
+                self.start_lateral_view(
+                    crate::ui::widgets::LateralView::Inbox.prev(self.transactions_open()),
+                );
             }
             InboxAction::LaunchIntake => {
                 // Gather inbox unindexed files and show intake confirmation
-                let intake_state = self.cache.query(|db| {
-                    startup::IntakeConfirmationState::gather_inbox(db, startup::IntakeSource::Inbox)
-                }).recv();
+                let intake_state = self
+                    .cache
+                    .query(|db| {
+                        startup::IntakeConfirmationState::gather_inbox(
+                            db,
+                            startup::IntakeSource::Inbox,
+                        )
+                    })
+                    .recv();
 
                 if let Some(state) = intake_state {
                     self.view = ActiveView::IntakeConfirmation(state);
@@ -54,7 +70,11 @@ impl App {
                 self.start_inbox_organize();
             }
             InboxAction::LaunchInboxCompoundSplit => {
-                self.start_compound_split_resolution_for_zone(false, None, crate::db::types::Zone::Inbox);
+                self.start_compound_split_resolution_for_zone(
+                    false,
+                    None,
+                    crate::db::types::Zone::Inbox,
+                );
             }
         }
     }
@@ -64,10 +84,13 @@ impl App {
     /// Gathers all inbox tag canonicity signal keys, creates clusters with
     /// `InboxTagCanonicity` kind, and launches the standard canonicity modal.
     fn start_inbox_tag_canonicity_resolution(&mut self) {
-        let signal_keys = self.cache.query(|db| {
-            db.aggregate_signal_keys::<InboxTagCanonicitySignal>()
-                .unwrap_or_default()
-        }).recv();
+        let signal_keys = self
+            .cache
+            .query(|db| {
+                db.aggregate_signal_keys::<InboxTagCanonicitySignal>()
+                    .unwrap_or_default()
+            })
+            .recv();
 
         if signal_keys.is_empty() {
             self.status_message = Some("No inbox tag canonicity signals to resolve".to_string());
@@ -89,10 +112,19 @@ impl App {
 
     /// Start inbox corpus match resolution modal.
     pub(in crate::ui) fn start_inbox_corpus_match_resolution(&mut self) {
-        let fuzz = self.config().opinions.quality_resolution.inbox_bitrate_fuzz_percent;
-        let data = self.cache.query(move |db| {
-            inbox_corpus_match_modal::InboxCorpusMatchModalData::load(db, fuzz).ok().unwrap_or_default()
-        }).recv();
+        let fuzz = self
+            .config()
+            .opinions
+            .quality_resolution
+            .inbox_bitrate_fuzz_percent;
+        let data = self
+            .cache
+            .query(move |db| {
+                inbox_corpus_match_modal::InboxCorpusMatchModalData::load(db, fuzz)
+                    .ok()
+                    .unwrap_or_default()
+            })
+            .recv();
 
         let preview = inbox_corpus_match_modal::InboxCorpusMatchPreviewState::new(data);
         self.view = ActiveView::InboxCorpusMatchResolution(preview);
@@ -115,7 +147,12 @@ impl App {
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Stash inbox corpus matches", DecisionKey::InboxCorpusMatch, w);
+                    self.stage_mutations_with_transaction(
+                        mutations,
+                        "Stash inbox corpus matches",
+                        DecisionKey::InboxCorpusMatch,
+                        w,
+                    );
                     self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to stash".to_string());
@@ -130,7 +167,12 @@ impl App {
                     _ => Vec::new(),
                 };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Stash all inbox duplicates", DecisionKey::InboxCorpusMatch, w);
+                    self.stage_mutations_with_transaction(
+                        mutations,
+                        "Stash all inbox duplicates",
+                        DecisionKey::InboxCorpusMatch,
+                        w,
+                    );
                     self.after_staging_decisions();
                 } else {
                     self.status_message = Some("No files to stash".to_string());
@@ -145,9 +187,10 @@ impl App {
     /// Start the inbox organize workflow.
     fn start_inbox_organize(&mut self) {
         let config = self.config().clone();
-        let state = self.cache.query(move |db| {
-            inbox_organize::InboxOrganizeState::load_from_read_db(db, &config)
-        }).recv();
+        let state = self
+            .cache
+            .query(move |db| inbox_organize::InboxOrganizeState::load_from_read_db(db, &config))
+            .recv();
 
         if let Some(state) = state {
             self.view = ActiveView::InboxOrganize(state);
@@ -165,7 +208,12 @@ impl App {
             inbox_organize::InboxOrganizeAction::Complete(mutations) => {
                 let Some(w) = witness else { return };
                 if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(mutations, "Organize inbox into corpus", DecisionKey::InboxOrganize, w);
+                    self.stage_mutations_with_transaction(
+                        mutations,
+                        "Organize inbox into corpus",
+                        DecisionKey::InboxOrganize,
+                        w,
+                    );
                     self.after_staging_decisions();
                 } else {
                     self.cancel_and_return_to_source("No mutations generated");

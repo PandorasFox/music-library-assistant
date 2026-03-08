@@ -11,8 +11,8 @@ use ratatui::{
     Frame,
 };
 
-use crate::ui::helpers::render_pane;
 use super::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
+use crate::ui::helpers::render_pane;
 
 /// The active tab in the deploy signal view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -176,8 +176,11 @@ impl<'a> TabbedSignalList<'a> {
             spans.push(Span::styled(label, style));
         }
 
-        let paragraph = Paragraph::new(Line::from(spans))
-            .block(Block::default().borders(Borders::ALL).title("Signal Categories"));
+        let paragraph = Paragraph::new(Line::from(spans)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Signal Categories"),
+        );
 
         f.render_widget(paragraph, area);
     }

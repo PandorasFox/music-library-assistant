@@ -22,10 +22,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewState) {
     // Two-pane horizontal split: 65% left, 35% right
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(65),
-            Constraint::Percentage(35),
-        ])
+        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
         .split(area);
 
     render_left_pane(f, chunks[0], state);
@@ -74,7 +71,13 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                 let a = &p.acoustid;
                 let m = &p.mb;
                 if m.total > 0 && a.total > 0 {
-                    (format!("{}/{} + MB {}/{}", a.processed, a.total, m.processed, m.total), Color::Yellow)
+                    (
+                        format!(
+                            "{}/{} + MB {}/{}",
+                            a.processed, a.total, m.processed, m.total
+                        ),
+                        Color::Yellow,
+                    )
                 } else if m.total > 0 {
                     (format!("MB {}/{}", m.processed, m.total), Color::Yellow)
                 } else {
@@ -89,7 +92,9 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
 
         let marker = if selected { "▸ " } else { "  " };
         let label_style = if selected {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else if !state.has_api_key || state.fetch_active {
             Style::default().fg(Color::DarkGray)
         } else {
@@ -100,18 +105,24 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
         lines.push(Line::from(vec![
             Span::styled(marker, label_style),
             Span::styled("Cache external metadata matches  ", label_style),
-            Span::styled(format!("{:<12}", status_label), Style::default().fg(status_color)),
+            Span::styled(
+                format!("{:<12}", status_label),
+                Style::default().fg(status_color),
+            ),
         ]));
-        state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
+        state
+            .click_targets
+            .add_row(nav_index.to_string(), inner.y + line_idx as u16);
         nav_index += 1;
     }
 
     // Pack releases entry
     {
         let selected = state.cursor == nav_index;
-        let has_data = state.cached_data.as_ref().is_some_and(|d| {
-            !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty()
-        });
+        let has_data = state
+            .cached_data
+            .as_ref()
+            .is_some_and(|d| !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty());
         let (status_label, status_color) = if state.fetch_active {
             ("Fetch active", Color::DarkGray)
         } else if !has_data {
@@ -122,7 +133,9 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
 
         let marker = if selected { "▸ " } else { "  " };
         let label_style = if selected {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else if state.fetch_active || !has_data {
             Style::default().fg(Color::DarkGray)
         } else {
@@ -133,9 +146,14 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
         lines.push(Line::from(vec![
             Span::styled(marker, label_style),
             Span::styled("Analyze release matches   ", label_style),
-            Span::styled(format!("{:<12}", status_label), Style::default().fg(status_color)),
+            Span::styled(
+                format!("{:<12}", status_label),
+                Style::default().fg(status_color),
+            ),
         ]));
-        state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
+        state
+            .click_targets
+            .add_row(nav_index.to_string(), inner.y + line_idx as u16);
         nav_index += 1;
     }
 
@@ -161,7 +179,9 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                     data.untagged_entries.len(),
                     false,
                 ));
-                state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
+                state
+                    .click_targets
+                    .add_row(nav_index.to_string(), inner.y + line_idx as u16);
                 nav_index += 1;
             }
 
@@ -186,7 +206,9 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                     bucket.total,
                     label_dim,
                 ));
-                state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
+                state
+                    .click_targets
+                    .add_row(nav_index.to_string(), inner.y + line_idx as u16);
                 nav_index += 1;
             }
             // Release Packing categories (after confidence tiers)
@@ -204,18 +226,40 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                 )));
 
                 let packing_entries: Vec<(&str, &str, usize, Color)> = vec![
-                    ("✓", "Full matches", data.packing_full_match_count, Color::Green),
+                    (
+                        "✓",
+                        "Full matches",
+                        data.packing_full_match_count,
+                        Color::Green,
+                    ),
                     ("♪", "Singles", data.packing_singles_count, Color::Cyan),
-                    ("◐", "Incomplete", data.packing_incomplete_count, Color::Yellow),
-                    ("!", "Near-misses", data.packing_near_miss_count, Color::Yellow),
-                    ("?", "Unmatched", data.packing_unmatched_count, Color::DarkGray),
+                    (
+                        "◐",
+                        "Incomplete",
+                        data.packing_incomplete_count,
+                        Color::Yellow,
+                    ),
+                    (
+                        "!",
+                        "Near-misses",
+                        data.packing_near_miss_count,
+                        Color::Yellow,
+                    ),
+                    (
+                        "?",
+                        "Unmatched",
+                        data.packing_unmatched_count,
+                        Color::DarkGray,
+                    ),
                 ];
 
                 for (icon, label, count, color) in packing_entries {
                     if count > 0 {
                         let selected = state.cursor == nav_index;
                         let label_style = if selected {
-                            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().fg(Color::White)
                         };
@@ -228,7 +272,9 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                             Span::styled(format!("{:<24}", label), label_style),
                             Span::styled(format!("{:>6}", count), Style::default().fg(color)),
                         ]));
-                        state.click_targets.add_row(nav_index.to_string(), inner.y + line_idx as u16);
+                        state
+                            .click_targets
+                            .add_row(nav_index.to_string(), inner.y + line_idx as u16);
                         nav_index += 1;
                     }
                 }
@@ -270,7 +316,9 @@ fn render_bucket_line_styled(
 ) -> Line<'static> {
     let cursor_marker = if selected { "▸ " } else { "  " };
     let label_style = if selected {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else if dim {
         Style::default().fg(Color::DarkGray)
     } else {
@@ -323,7 +371,9 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             "Cache external metadata matches",
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::raw("")),
     ];
@@ -360,21 +410,32 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
                 ]));
                 lines.push(Line::from(vec![
                     Span::styled("  Matched:    ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{:>5}", a.matched), Style::default().fg(Color::Green)),
+                    Span::styled(
+                        format!("{:>5}", a.matched),
+                        Style::default().fg(Color::Green),
+                    ),
                 ]));
                 lines.push(Line::from(vec![
                     Span::styled("  No match:   ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{:>5}", a.no_match), Style::default().fg(Color::White)),
+                    Span::styled(
+                        format!("{:>5}", a.no_match),
+                        Style::default().fg(Color::White),
+                    ),
                 ]));
                 lines.push(Line::from(vec![
                     Span::styled("  Retries:    ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{:>5}", a.retries), Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        format!("{:>5}", a.retries),
+                        Style::default().fg(Color::Yellow),
+                    ),
                 ]));
             }
 
             // MB section (only shown when MB has work)
             if m.total > 0 {
-                if a.total > 0 { lines.push(Line::from(Span::raw(""))); }
+                if a.total > 0 {
+                    lines.push(Line::from(Span::raw("")));
+                }
                 lines.push(Line::from(vec![
                     Span::styled("MusicBrainz: ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
@@ -384,15 +445,24 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
                 ]));
                 lines.push(Line::from(vec![
                     Span::styled("  Good fetch: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{:>5}", m.matched), Style::default().fg(Color::Green)),
+                    Span::styled(
+                        format!("{:>5}", m.matched),
+                        Style::default().fg(Color::Green),
+                    ),
                 ]));
                 lines.push(Line::from(vec![
                     Span::styled("  Not found:  ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{:>5}", m.no_match), Style::default().fg(Color::White)),
+                    Span::styled(
+                        format!("{:>5}", m.no_match),
+                        Style::default().fg(Color::White),
+                    ),
                 ]));
                 lines.push(Line::from(vec![
                     Span::styled("  Retries:    ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{:>5}", m.retries), Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        format!("{:>5}", m.retries),
+                        Style::default().fg(Color::Yellow),
+                    ),
                 ]));
             }
 
@@ -401,7 +471,11 @@ fn render_fetch_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
             // Progress bar: show combined progress
             let total_processed = a.processed + m.processed;
             let total_items = a.total + m.total;
-            lines.push(Line::from(render_braille_bar(total_processed, total_items, state.tick_count)));
+            lines.push(Line::from(render_braille_bar(
+                total_processed,
+                total_items,
+                state.tick_count,
+            )));
 
             // ETA: use live rates from the scheduler's rate limiters
             let a_remaining = a.total.saturating_sub(a.processed);
@@ -536,14 +610,17 @@ fn render_pack_releases_detail(state: &ExternalMatchesViewState) -> Vec<Line<'st
     let mut lines = vec![
         Line::from(Span::styled(
             "Analyze release matches",
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::raw("")),
     ];
 
-    let has_data = state.cached_data.as_ref().is_some_and(|d| {
-        !d.confidence_buckets.is_empty()
-    });
+    let has_data = state
+        .cached_data
+        .as_ref()
+        .is_some_and(|d| !d.confidence_buckets.is_empty());
 
     if state.fetch_active {
         lines.push(Line::from(Span::styled(
@@ -600,14 +677,18 @@ fn render_pack_releases_detail(state: &ExternalMatchesViewState) -> Vec<Line<'st
 }
 
 fn render_untagged_detail(state: &ExternalMatchesViewState) -> Vec<Line<'static>> {
-    let count = state.cached_data.as_ref()
+    let count = state
+        .cached_data
+        .as_ref()
         .map(|d| d.untagged_entries.len())
         .unwrap_or(0);
 
     vec![
         Line::from(Span::styled(
             "Untagged Matches",
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::raw("")),
         Line::from(Span::styled(
@@ -653,7 +734,9 @@ fn render_packing_category_detail(cat: PackingCategory) -> Vec<Line<'static>> {
     vec![
         Line::from(Span::styled(
             title.to_string(),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::raw("")),
         Line::from(Span::styled(
@@ -668,8 +751,13 @@ fn render_packing_category_detail(cat: PackingCategory) -> Vec<Line<'static>> {
     ]
 }
 
-fn render_tier_detail(state: &ExternalMatchesViewState, tier: ConfidenceTier) -> Vec<Line<'static>> {
-    let total = state.cached_data.as_ref()
+fn render_tier_detail(
+    state: &ExternalMatchesViewState,
+    tier: ConfidenceTier,
+) -> Vec<Line<'static>> {
+    let total = state
+        .cached_data
+        .as_ref()
         .and_then(|d| d.confidence_buckets.iter().find(|b| b.tier == tier))
         .map(|b| b.total)
         .unwrap_or(0);
@@ -687,18 +775,19 @@ fn render_tier_detail(state: &ExternalMatchesViewState, tier: ConfidenceTier) ->
     let mut lines = vec![
         Line::from(Span::styled(
             title,
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::raw("")),
-        Line::from(Span::styled(
-            description,
-            Style::default().fg(Color::White),
-        )),
+        Line::from(Span::styled(description, Style::default().fg(Color::White))),
         Line::from(Span::raw("")),
     ];
 
     let hint = match tier {
-        ConfidenceTier::Perfect | ConfidenceTier::VeryHigh => "Highest impact matches. Press Enter to browse.",
+        ConfidenceTier::Perfect | ConfidenceTier::VeryHigh => {
+            "Highest impact matches. Press Enter to browse."
+        }
         ConfidenceTier::High => "High confidence matches. Press Enter to browse.",
         ConfidenceTier::Medium => "Medium confidence. Press Enter to browse.",
         ConfidenceTier::Low => "Low confidence. May contain false positives.",

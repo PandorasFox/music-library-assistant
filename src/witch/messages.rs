@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use crate::db::{Database, reconciler};
+use crate::db::{reconciler, Database};
 
 /// Initial state the Witch determines at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

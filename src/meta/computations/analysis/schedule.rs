@@ -2,10 +2,10 @@
 
 use std::time::Instant;
 
+use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::get_configured_library_names;
 use crate::meta::recomputation::RecomputationScope;
-use crate::db::ReadOnlyDb;
 
 use super::{Computation, Result};
 
@@ -64,7 +64,13 @@ pub fn execute_schedule_content_analysis(
     }
 
     // Deploy-sensitive: files OR deploy OR tags (deploy path depends on tags+files)
-    if run_all || s.touches_any(&[RecomputationScope::FILES, RecomputationScope::DEPLOY, RecomputationScope::TAGS]) {
+    if run_all
+        || s.touches_any(&[
+            RecomputationScope::FILES,
+            RecomputationScope::DEPLOY,
+            RecomputationScope::TAGS,
+        ])
+    {
         spawn.push(Computation::DetectDeployConflicts);
         // DetectReleaseOverlaps spawns DeriveCorpusDeployStatus after
         // wait_for_queue_drain(), ensuring overlap signals are visible.
@@ -100,7 +106,13 @@ pub fn execute_schedule_content_analysis(
     }
 
     // External match derivation: EXTERNAL (new data), TAGS (comparison baseline), FILES (new fingerprints)
-    if run_all || s.touches_any(&[RecomputationScope::EXTERNAL, RecomputationScope::TAGS, RecomputationScope::FILES]) {
+    if run_all
+        || s.touches_any(&[
+            RecomputationScope::EXTERNAL,
+            RecomputationScope::TAGS,
+            RecomputationScope::FILES,
+        ])
+    {
         spawn.push(Computation::DeriveExternalMatches);
     }
 
@@ -117,7 +129,8 @@ pub fn execute_schedule_content_analysis(
     let total_possible = 17; // approximate total without library-specific ones
     log_general(format!(
         "[COMPUTE] ScheduleContentAnalysis: spawning {} computations (of ~{} possible)",
-        spawn.len(), total_possible
+        spawn.len(),
+        total_possible
     ));
 
     // Suppress unused read_only_db warning - not used in this function

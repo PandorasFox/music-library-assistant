@@ -5,11 +5,11 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use super::external_fetch::ExternalFetchTask;
 use crate::meta::computations::Computation;
 use crate::meta::maintenance::DbMaintenanceTask;
 use crate::meta::mutations::Mutation;
 use crate::meta::recomputation::RecomputationScope;
-use super::external_fetch::ExternalFetchTask;
 
 // ============================================================================
 // State Machine
@@ -41,14 +41,20 @@ pub enum WorkState {
 impl WorkState {
     /// Increment in-flight counter. No-op if not Working.
     pub fn inc_in_flight(&mut self) {
-        if let WorkState::Working { ref mut in_flight, .. } = self {
+        if let WorkState::Working {
+            ref mut in_flight, ..
+        } = self
+        {
             *in_flight += 1;
         }
     }
 
     /// Decrement in-flight counter (saturating). No-op if not Working.
     pub fn dec_in_flight(&mut self) {
-        if let WorkState::Working { ref mut in_flight, .. } = self {
+        if let WorkState::Working {
+            ref mut in_flight, ..
+        } = self
+        {
             *in_flight = in_flight.saturating_sub(1);
         }
     }
@@ -62,7 +68,10 @@ impl WorkState {
 
     /// Increment processed counter. No-op if not Working.
     pub fn inc_processed(&mut self) {
-        if let WorkState::Working { ref mut processed, .. } = self {
+        if let WorkState::Working {
+            ref mut processed, ..
+        } = self
+        {
             *processed += 1;
         }
     }
@@ -87,7 +96,9 @@ impl WorkState {
     pub fn processed(&self) -> usize {
         match self {
             WorkState::Working { processed, .. } => *processed,
-            WorkState::Done { total_processed, .. } => *total_processed,
+            WorkState::Done {
+                total_processed, ..
+            } => *total_processed,
             WorkState::Idle => 0,
         }
     }
@@ -112,14 +123,20 @@ impl WorkState {
 
     /// Increment pending count for a label. No-op if not Working.
     pub fn inc_label(&mut self, label: &str) {
-        if let WorkState::Working { ref mut by_label, .. } = self {
+        if let WorkState::Working {
+            ref mut by_label, ..
+        } = self
+        {
             *by_label.entry(label.to_string()).or_insert(0) += 1;
         }
     }
 
     /// Decrement pending count for a label. No-op if not Working.
     pub fn dec_label(&mut self, label: &str) {
-        if let WorkState::Working { ref mut by_label, .. } = self {
+        if let WorkState::Working {
+            ref mut by_label, ..
+        } = self
+        {
             if let Some(count) = by_label.get_mut(label) {
                 *count = count.saturating_sub(1);
                 if *count == 0 {
@@ -149,7 +166,6 @@ pub enum ReasoningLevel {
     /// Full reasoning available, mutations accepted.
     Full,
 }
-
 
 /// Inode awareness level - tracks filesystem walk progress.
 ///
@@ -244,7 +260,10 @@ pub mod sealed {
         /// of SpawnedMutation IS the proof - it can only be created here.
         ///
         /// Use case: `ApplyTagOps` spawns `ApplyDbTagsToDisk` after DB write succeeds.
-        pub fn spawn_mutation(&self, mutation: crate::meta::mutations::Mutation) -> SpawnedMutation {
+        pub fn spawn_mutation(
+            &self,
+            mutation: crate::meta::mutations::Mutation,
+        ) -> SpawnedMutation {
             SpawnedMutation { mutation }
         }
     }
@@ -428,7 +447,8 @@ pub(super) struct TaskResult {
     /// External fetch result data (only populated for ExternalFetch tasks).
     pub fetch_result: Option<super::external_fetch::FetchResultData>,
     /// Barrier-separated follow-up computation phases (pipeline orchestrators only).
-    pub deferred_phases: std::collections::VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,
+    pub deferred_phases:
+        std::collections::VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,
 }
 
 // ============================================================================

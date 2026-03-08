@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::meta::computations::analysis::image_index::{COVER_FRONT_NAMES, COVER_BACK_NAMES};
+use crate::meta::computations::analysis::image_index::{COVER_BACK_NAMES, COVER_FRONT_NAMES};
 
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
@@ -46,7 +46,9 @@ impl AlbumArtPicker {
         // Exact font size only matters for pixel-perfect protocol rendering; for
         // halfblocks it's irrelevant, and for kitty/sixel it's close enough.
         let picker = Picker::from_fontsize((10, 20));
-        Self { picker: Some(picker) }
+        Self {
+            picker: Some(picker),
+        }
     }
 
     /// Create a new stateful protocol for rendering an image.
@@ -130,7 +132,6 @@ impl AlbumArtCache {
     pub fn retain_only_keys(&mut self, keys: &[ArtCacheKey]) {
         self.entries.retain(|k, _| keys.contains(k));
     }
-
 }
 
 /// Load a sidecar image from disk and create a protocol for it.
@@ -142,13 +143,15 @@ fn load_sidecar_image(path: &Path, picker: &mut AlbumArtPicker) -> CachedArtProt
                 .format()
                 .map(|f| format!("{:?}", f).to_lowercase())
                 .unwrap_or_default();
-            reader.decode().map(|img| (img, format_hint)).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-            })
+            reader
+                .decode()
+                .map(|img| (img, format_hint))
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
         });
 
     // Derive role from filename stem
-    let stem = path.file_stem()
+    let stem = path
+        .file_stem()
         .and_then(|s| s.to_str())
         .map(|s| s.to_lowercase())
         .unwrap_or_default();
@@ -158,7 +161,8 @@ fn load_sidecar_image(path: &Path, picker: &mut AlbumArtPicker) -> CachedArtProt
         "cover_back"
     } else {
         "other"
-    }.to_string();
+    }
+    .to_string();
 
     match result {
         Ok((img, format)) => {
@@ -200,9 +204,7 @@ fn load_embedded_art(audio_path: &Path, picker: &mut AlbumArtPicker) -> CachedAr
     };
 
     // Open and read the audio file's tags
-    let tagged_file = match lofty::probe::Probe::open(audio_path)
-        .and_then(|p| p.read())
-    {
+    let tagged_file = match lofty::probe::Probe::open(audio_path).and_then(|p| p.read()) {
         Ok(f) => f,
         Err(_) => return empty,
     };
@@ -252,7 +254,8 @@ fn load_embedded_art(audio_path: &Path, picker: &mut AlbumArtPicker) -> CachedAr
         lofty::picture::PictureType::CoverFront => "cover_front",
         lofty::picture::PictureType::CoverBack => "cover_back",
         _ => "other",
-    }.to_string();
+    }
+    .to_string();
 
     let protocol = picker.new_protocol(img);
 
@@ -270,11 +273,7 @@ fn load_embedded_art(audio_path: &Path, picker: &mut AlbumArtPicker) -> CachedAr
 ///
 /// If the image protocol is available, renders the image graphically.
 /// Otherwise, renders a text fallback showing metadata.
-pub fn render_album_art_preview(
-    f: &mut Frame,
-    area: Rect,
-    cached: &mut CachedArtProtocol,
-) {
+pub fn render_album_art_preview(f: &mut Frame, area: Rect, cached: &mut CachedArtProtocol) {
     if area.width < 2 || area.height < 2 {
         return;
     }
@@ -298,7 +297,10 @@ fn render_text_fallback(f: &mut Frame, area: Rect, cached: &CachedArtProtocol) {
     let info = if cached.width > 0 {
         format!(
             "[{} {}x{} {}]",
-            filename, cached.width, cached.height, cached.format.to_uppercase()
+            filename,
+            cached.width,
+            cached.height,
+            cached.format.to_uppercase()
         )
     } else {
         format!("[{}]", filename)

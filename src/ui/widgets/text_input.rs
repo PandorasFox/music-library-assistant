@@ -62,7 +62,11 @@ impl TextInputState {
         if self.cursor > 0 {
             self.cursor -= 1;
             let byte_idx = self.cursor_byte_index();
-            let char_len = self.value[byte_idx..].chars().next().map(|c| c.len_utf8()).unwrap_or(0);
+            let char_len = self.value[byte_idx..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
             self.value.drain(byte_idx..byte_idx + char_len);
         }
     }
@@ -72,7 +76,11 @@ impl TextInputState {
         let char_count = self.value.chars().count();
         if self.cursor < char_count {
             let byte_idx = self.cursor_byte_index();
-            let char_len = self.value[byte_idx..].chars().next().map(|c| c.len_utf8()).unwrap_or(0);
+            let char_len = self.value[byte_idx..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
             self.value.drain(byte_idx..byte_idx + char_len);
         }
     }
@@ -198,21 +206,60 @@ impl TextInputState {
     /// Handle a semantic input action, returning true if the event was consumed.
     pub fn handle_input(&mut self, action: &InputAction) -> bool {
         match action {
-            InputAction::Char(c) => { self.insert_char(*c); true }
+            InputAction::Char(c) => {
+                self.insert_char(*c);
+                true
+            }
             // Space is mapped to Toggle globally for list selection, but in
             // text fields it's a space character.
-            InputAction::Toggle => { self.insert_char(' '); true }
-            InputAction::Paste(text) => { self.insert_str(text); true }
-            InputAction::Backspace => { self.backspace(); true }
-            InputAction::Delete => { self.delete(); true }
-            InputAction::NavLeft => { self.move_left(); true }
-            InputAction::NavRight => { self.move_right(); true }
-            InputAction::WordLeft => { self.move_word_left(); true }
-            InputAction::WordRight => { self.move_word_right(); true }
-            InputAction::Home | InputAction::TextHome => { self.move_home(); true }
-            InputAction::End | InputAction::TextEnd => { self.move_end(); true }
-            InputAction::KillToStart => { self.kill_to_start(); true }
-            InputAction::KillToEnd => { self.kill_to_end(); true }
+            InputAction::Toggle => {
+                self.insert_char(' ');
+                true
+            }
+            InputAction::Paste(text) => {
+                self.insert_str(text);
+                true
+            }
+            InputAction::Backspace => {
+                self.backspace();
+                true
+            }
+            InputAction::Delete => {
+                self.delete();
+                true
+            }
+            InputAction::NavLeft => {
+                self.move_left();
+                true
+            }
+            InputAction::NavRight => {
+                self.move_right();
+                true
+            }
+            InputAction::WordLeft => {
+                self.move_word_left();
+                true
+            }
+            InputAction::WordRight => {
+                self.move_word_right();
+                true
+            }
+            InputAction::Home | InputAction::TextHome => {
+                self.move_home();
+                true
+            }
+            InputAction::End | InputAction::TextEnd => {
+                self.move_end();
+                true
+            }
+            InputAction::KillToStart => {
+                self.kill_to_start();
+                true
+            }
+            InputAction::KillToEnd => {
+                self.kill_to_end();
+                true
+            }
             _ => false,
         }
     }

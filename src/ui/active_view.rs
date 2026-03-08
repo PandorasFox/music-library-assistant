@@ -6,42 +6,16 @@
 
 use std::path::PathBuf;
 
-use crate::witch::cache_thread::DbQuery;
 use crate::ui::{
-    compound_split_v2,
-    config_editor,
-    corrupt_file_modal,
-    deploy_modal,
-    disc_extraction_modal,
-    directory_cluster_modal,
-    external_match_modal,
-    external_match_view,
-    eye::Eye,
-    filter_popup,
-    history_view,
-    inbox_corpus_match_modal,
-    inbox_organize,
-    inbox_view,
-    insights_view,
-    manual_review_modal,
-    missing_album_modal,
-    missing_directory_modal,
-    missing_file_modal,
-    moved_file_modal,
-    oob_conflict_modal,
-    oob_sync_modal,
-    progress_screen,
-    progressive_worker,
-    shit_format_modal,
-    startup,
-    subpar_duplicate_modal,
-    tag_canonicity_v2,
-    tag_editor,
-    tag_search,
-    transaction_review,
-    tabbed_transaction_review,
-    tree_browser,
+    compound_split_v2, config_editor, corrupt_file_modal, deploy_modal, directory_cluster_modal,
+    disc_extraction_modal, external_match_modal, external_match_view, eye::Eye, filter_popup,
+    history_view, inbox_corpus_match_modal, inbox_organize, inbox_view, insights_view,
+    manual_review_modal, missing_album_modal, missing_directory_modal, missing_file_modal,
+    moved_file_modal, oob_conflict_modal, oob_sync_modal, progress_screen, progressive_worker,
+    shit_format_modal, startup, subpar_duplicate_modal, tabbed_transaction_review,
+    tag_canonicity_v2, tag_editor, tag_search, transaction_review, tree_browser,
 };
+use crate::witch::cache_thread::DbQuery;
 
 // ============================================================================
 // ActiveView
@@ -176,8 +150,7 @@ impl ActiveView {
     pub(crate) fn selected_path(&self) -> Option<&str> {
         match self {
             Self::SchemaUpdate(_) | Self::VacuumPrompt(_) => None,
-            Self::CorpusBrowser(browser) => browser.selected_path()
-                .and_then(|p| p.to_str()),
+            Self::CorpusBrowser(browser) => browser.selected_path().and_then(|p| p.to_str()),
             Self::TagCanonicityResolution { state, .. } => state.selected_path(),
             Self::CompoundTagSplit { state, .. } => state.selected_path(),
             Self::MissingFileResolution(s) => s.selected_path(),
@@ -309,7 +282,6 @@ pub(crate) struct ExitConfirmModalState {
     pub button_rects: crate::ui::widgets::ButtonRects,
 }
 
-
 // ============================================================================
 // FilterOverlay - bundles filter popup state + context
 // ============================================================================
@@ -359,12 +331,19 @@ pub(crate) struct TagCanonicityClusters {
 
 impl TagCanonicityClusters {
     pub fn new(signal_keys: Vec<String>, kind: CanonicitySignalKind) -> Self {
-        Self { signal_keys, current_index: 0, kind }
+        Self {
+            signal_keys,
+            current_index: 0,
+            kind,
+        }
     }
 
     /// Whether the canonical value text field should be pre-filled.
     pub fn pre_fill(&self) -> bool {
-        matches!(self.kind, CanonicitySignalKind::TagCanonicity | CanonicitySignalKind::InboxTagCanonicity)
+        matches!(
+            self.kind,
+            CanonicitySignalKind::TagCanonicity | CanonicitySignalKind::InboxTagCanonicity
+        )
     }
 
     pub fn current_signal_key(&self) -> Option<&str> {

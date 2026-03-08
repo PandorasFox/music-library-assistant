@@ -7,11 +7,11 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::db::ReadOnlyDb;
 use crate::corpus::paths;
-use crate::meta::mutations::Mutation;
+use crate::db::ReadOnlyDb;
 use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
+use crate::meta::mutations::Mutation;
 
 /// What kind of manual review this modal is performing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,14 +128,13 @@ impl ManualReviewData {
 
             let mut files = Vec::new();
             for (idx, &inode) in data.inodes.iter().enumerate() {
-                let path = data.paths.get(idx)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        read_db.get_corpus_path_for_inode(inode)
-                            .ok()
-                            .flatten()
-                            .unwrap_or_else(|| format!("<inode {}>", inode))
-                    });
+                let path = data.paths.get(idx).cloned().unwrap_or_else(|| {
+                    read_db
+                        .get_corpus_path_for_inode(inode)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| format!("<inode {}>", inode))
+                });
 
                 files.push(ReviewFileEntry {
                     corpus_path: path,
@@ -147,7 +146,11 @@ impl ManualReviewData {
             }
 
             if files.len() >= 2 {
-                groups.push(ReviewGroup { label, files, signal_key: Some(key) });
+                groups.push(ReviewGroup {
+                    label,
+                    files,
+                    signal_key: Some(key),
+                });
             }
         }
 
@@ -161,21 +164,24 @@ impl ManualReviewData {
         for group in conflict_groups {
             let label = group.deploy_path.clone();
 
-            let files: Vec<ReviewFileEntry> = group.conflicting_files
+            let files: Vec<ReviewFileEntry> = group
+                .conflicting_files
                 .into_iter()
-                .map(|(corpus_path, inode)| {
-                    ReviewFileEntry {
-                        corpus_path,
-                        inode,
-                        context: format!("Deploys to: {}", group.deploy_path),
-                        stashed: false,
-                        meta: None,
-                    }
+                .map(|(corpus_path, inode)| ReviewFileEntry {
+                    corpus_path,
+                    inode,
+                    context: format!("Deploys to: {}", group.deploy_path),
+                    stashed: false,
+                    meta: None,
                 })
                 .collect();
 
             if files.len() >= 2 {
-                groups.push(ReviewGroup { label, files, signal_key: None });
+                groups.push(ReviewGroup {
+                    label,
+                    files,
+                    signal_key: None,
+                });
             }
         }
 
@@ -191,7 +197,8 @@ impl ManualReviewData {
 
             let mut files = Vec::new();
             for &inode in &data.inodes {
-                let path = read_db.get_corpus_path_for_inode(inode)
+                let path = read_db
+                    .get_corpus_path_for_inode(inode)
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| format!("<inode {}>", inode));
@@ -206,7 +213,11 @@ impl ManualReviewData {
             }
 
             if files.len() >= 2 {
-                groups.push(ReviewGroup { label, files, signal_key: None });
+                groups.push(ReviewGroup {
+                    label,
+                    files,
+                    signal_key: None,
+                });
             }
         }
 
@@ -237,7 +248,10 @@ impl ManualReviewData {
                         sample_rate: info.sample_rate,
                         file_size,
                         has_pictures,
-                        tags: tags.into_iter().map(|t| (t.tag_name, t.tag_value)).collect(),
+                        tags: tags
+                            .into_iter()
+                            .map(|t| (t.tag_name, t.tag_value))
+                            .collect(),
                     });
                 }
             }

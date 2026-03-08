@@ -52,14 +52,12 @@ impl DeployViewState {
     /// Handle semantic input action for the Deploy view.
     pub fn handle_input(&mut self, action: &InputAction) -> DeployAction {
         match self {
-            DeployViewState::UpToDate { .. } => {
-                match action {
-                    InputAction::CycleNext => DeployAction::CycleNext,
-                    InputAction::CyclePrev => DeployAction::CyclePrev,
-                    InputAction::Cancel => DeployAction::RequestQuit,
-                    _ => DeployAction::None,
-                }
-            }
+            DeployViewState::UpToDate { .. } => match action {
+                InputAction::CycleNext => DeployAction::CycleNext,
+                InputAction::CyclePrev => DeployAction::CyclePrev,
+                InputAction::Cancel => DeployAction::RequestQuit,
+                _ => DeployAction::None,
+            },
             DeployViewState::Preview(preview) => {
                 match action {
                     InputAction::CycleNext => DeployAction::CycleNext,
@@ -116,7 +114,9 @@ impl DeployViewState {
     /// Render the Deploy view.
     pub fn render(&self, f: &mut Frame, area: Rect) {
         match self {
-            DeployViewState::UpToDate { library_file_counts } => {
+            DeployViewState::UpToDate {
+                library_file_counts,
+            } => {
                 render_up_to_date(f, area, library_file_counts);
             }
             DeployViewState::Preview(preview) => {
@@ -132,7 +132,9 @@ fn render_up_to_date(f: &mut Frame, area: Rect, library_file_counts: &[(String, 
         Line::from(""),
         Line::from(Span::styled(
             "Deployment up to date :)",
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
@@ -141,7 +143,8 @@ fn render_up_to_date(f: &mut Frame, area: Rect, library_file_counts: &[(String, 
         content.push(Line::from(""));
 
         // Find max name width for alignment
-        let max_name = library_file_counts.iter()
+        let max_name = library_file_counts
+            .iter()
             .map(|(name, _)| name.len())
             .max()
             .unwrap_or(0);

@@ -39,7 +39,9 @@ pub fn render(f: &mut Frame, area: Rect, state: &ProgressiveWorkerState) {
         .border_style(Style::default().fg(Color::Cyan))
         .title(Span::styled(
             format!(" {} ", state.label),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ));
 
     f.render_widget(block.clone(), modal_area);
@@ -79,14 +81,18 @@ pub fn render(f: &mut Frame, area: Rect, state: &ProgressiveWorkerState) {
     // Current item label (if available)
     if let Some(ref label) = state.current_label {
         let truncated = if label.len() > (modal_width as usize).saturating_sub(4) {
-            format!("{}...", &label[..label.len().min((modal_width as usize).saturating_sub(7))])
+            format!(
+                "{}...",
+                &label[..label.len().min((modal_width as usize).saturating_sub(7))]
+            )
         } else {
             label.clone()
         };
 
-        let item_label = Paragraph::new(Line::from(vec![
-            Span::styled(truncated, Style::default().fg(Color::DarkGray)),
-        ]))
+        let item_label = Paragraph::new(Line::from(vec![Span::styled(
+            truncated,
+            Style::default().fg(Color::DarkGray),
+        )]))
         .alignment(Alignment::Center);
 
         f.render_widget(item_label, chunks[4]);

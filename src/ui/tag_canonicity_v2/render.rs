@@ -124,8 +124,12 @@ fn render_variants_pane(f: &mut Frame, area: Rect, state: &mut TagCanonicalitySt
 
     // Register click target rows
     for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-        if entry_idx >= state.data.variants.len() { break; }
-        state.variant_click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        if entry_idx >= state.data.variants.len() {
+            break;
+        }
+        state
+            .variant_click_targets
+            .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
     }
 
     let items: Vec<ListItem> = state
@@ -202,8 +206,12 @@ fn render_files_pane(f: &mut Frame, area: Rect, state: &mut TagCanonicalityState
 
     // Register click target rows
     for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-        if entry_idx >= state.data.files.len() { break; }
-        state.file_click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        if entry_idx >= state.data.files.len() {
+            break;
+        }
+        state
+            .file_click_targets
+            .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
     }
 
     let items: Vec<ListItem> = state
@@ -335,8 +343,7 @@ fn render_tags_pane(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
 
 /// Render the canonical value input field.
 fn render_input(f: &mut Frame, area: Rect, state: &TagCanonicalityStateV2) {
-    let is_focused =
-        state.focus_pane == FocusPaneV2::Variants && state.variant_cursor == -1;
+    let is_focused = state.focus_pane == FocusPaneV2::Variants && state.variant_cursor == -1;
     // Magenta when unfocused = editable but not currently focused
     // Cyan when focused = active input
     let input_style = if is_focused {

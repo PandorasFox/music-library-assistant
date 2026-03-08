@@ -27,10 +27,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::meta::signals::data::*;
-use crate::meta::mutations::MutationToken;
 use crate::corpus::paths;
 use crate::db::write_thread;
+use crate::meta::mutations::MutationToken;
+use crate::meta::signals::data::*;
 use crate::witch::MutationExecutionWitness;
 
 // =============================================================================
@@ -105,27 +105,33 @@ impl TagSet {
     /// For other formats (mp3, m4a, etc.), falls back to lofty's generic Tag/Probe.
     /// Binary tags (album art, etc.) are skipped.
     pub fn from_file(path: &Path) -> Result<Self> {
-        let ext = path.extension().and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase()).unwrap_or_default();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
 
         match ext.as_str() {
             "flac" => {
                 use lofty::config::ParseOptions;
                 use lofty::file::AudioFile;
 
-                let file = std::fs::File::open(path)
-                    .with_context(|| format!("Failed to open file for tag reading: {}", path.display()))?;
+                let file = std::fs::File::open(path).with_context(|| {
+                    format!("Failed to open file for tag reading: {}", path.display())
+                })?;
                 let mut reader = std::io::BufReader::new(file);
-                let flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
-                    .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
+                let flac =
+                    lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
+                        .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
                 Ok(Self::from_vorbis_comments(flac.vorbis_comments()))
             }
             "opus" => {
                 use lofty::config::ParseOptions;
                 use lofty::file::AudioFile;
 
-                let file = std::fs::File::open(path)
-                    .with_context(|| format!("Failed to open file for tag reading: {}", path.display()))?;
+                let file = std::fs::File::open(path).with_context(|| {
+                    format!("Failed to open file for tag reading: {}", path.display())
+                })?;
                 let mut reader = std::io::BufReader::new(file);
                 let opus = lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default())
                     .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
@@ -135,11 +141,13 @@ impl TagSet {
                 use lofty::config::ParseOptions;
                 use lofty::file::AudioFile;
 
-                let file = std::fs::File::open(path)
-                    .with_context(|| format!("Failed to open file for tag reading: {}", path.display()))?;
+                let file = std::fs::File::open(path).with_context(|| {
+                    format!("Failed to open file for tag reading: {}", path.display())
+                })?;
                 let mut reader = std::io::BufReader::new(file);
-                let vorbis = lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default())
-                    .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
+                let vorbis =
+                    lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default())
+                        .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
                 Ok(Self::from_vorbis_comments(Some(vorbis.vorbis_comments())))
             }
             _ => Self::from_generic_tag(path),
@@ -154,8 +162,11 @@ impl TagSet {
     ///
     /// Non-fatal — returns None on read errors.
     pub fn extract_picture_info(path: &Path) -> Option<PictureInfo> {
-        let ext = path.extension().and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase()).unwrap_or_default();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
 
         match ext.as_str() {
             "flac" => {
@@ -165,11 +176,14 @@ impl TagSet {
 
                 let file = std::fs::File::open(path).ok()?;
                 let mut reader = std::io::BufReader::new(file);
-                let flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+                let flac =
+                    lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default()).ok()?;
 
                 // Collect pictures from both standalone PICTURE blocks and VorbisComments
-                let mut all_pics: Vec<&(lofty::picture::Picture, lofty::picture::PictureInformation)> =
-                    flac.pictures().iter().collect();
+                let mut all_pics: Vec<&(
+                    lofty::picture::Picture,
+                    lofty::picture::PictureInformation,
+                )> = flac.pictures().iter().collect();
                 if let Some(vc) = flac.vorbis_comments() {
                     all_pics.extend(vc.pictures().iter());
                 }
@@ -180,7 +194,8 @@ impl TagSet {
 
                 let count = all_pics.len() as u32;
                 // Find CoverFront, or fall back to first picture
-                let (pic, info) = all_pics.iter()
+                let (pic, info) = all_pics
+                    .iter()
                     .find(|(p, _)| p.pic_type() == lofty::picture::PictureType::CoverFront)
                     .or_else(|| all_pics.first())
                     .unwrap();
@@ -199,7 +214,8 @@ impl TagSet {
 
                 let file = std::fs::File::open(path).ok()?;
                 let mut reader = std::io::BufReader::new(file);
-                let opus = lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+                let opus =
+                    lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default()).ok()?;
 
                 let pics = opus.vorbis_comments().pictures();
                 if pics.is_empty() {
@@ -207,7 +223,8 @@ impl TagSet {
                 }
 
                 let count = pics.len() as u32;
-                let (pic, info) = pics.iter()
+                let (pic, info) = pics
+                    .iter()
                     .find(|(p, _)| p.pic_type() == lofty::picture::PictureType::CoverFront)
                     .or_else(|| pics.first())
                     .unwrap();
@@ -226,7 +243,8 @@ impl TagSet {
 
                 let file = std::fs::File::open(path).ok()?;
                 let mut reader = std::io::BufReader::new(file);
-                let vorbis = lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+                let vorbis =
+                    lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default()).ok()?;
 
                 let pics = vorbis.vorbis_comments().pictures();
                 if pics.is_empty() {
@@ -234,7 +252,8 @@ impl TagSet {
                 }
 
                 let count = pics.len() as u32;
-                let (pic, info) = pics.iter()
+                let (pic, info) = pics
+                    .iter()
                     .find(|(p, _)| p.pic_type() == lofty::picture::PictureType::CoverFront)
                     .or_else(|| pics.first())
                     .unwrap();
@@ -265,7 +284,8 @@ impl TagSet {
                 }
 
                 let count = all_pictures.len() as u32;
-                let pic = all_pictures.iter()
+                let pic = all_pictures
+                    .iter()
                     .find(|p| p.pic_type() == lofty::picture::PictureType::CoverFront)
                     .or_else(|| all_pictures.first())
                     .unwrap();
@@ -287,7 +307,8 @@ impl TagSet {
     /// Reads raw key=value pairs directly — no ItemKey mapping, no bijection problem.
     fn from_vorbis_comments(vc: Option<&lofty::ogg::VorbisComments>) -> Self {
         let Some(vc) = vc else { return Self::empty() };
-        let tags: Vec<(String, String)> = vc.items()
+        let tags: Vec<(String, String)> = vc
+            .items()
             .filter(|(k, _)| !is_binary_tag_key(k))
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
@@ -457,7 +478,10 @@ impl TagSetDiff {
     /// Classify the difference for OOB detection.
     #[cfg(test)]
     pub fn classify(&self) -> DiffClassification {
-        match (self.only_left.tags.is_empty(), self.only_right.tags.is_empty()) {
+        match (
+            self.only_left.tags.is_empty(),
+            self.only_right.tags.is_empty(),
+        ) {
             (true, true) => DiffClassification::Identical,
             (false, true) => DiffClassification::LeftOnly,
             (true, false) => DiffClassification::RightOnly,
@@ -496,8 +520,11 @@ pub enum DiffClassification {
 ///
 /// Used by both `write_file_tags()` (mutation context) and `copy_tags()` (transcode).
 pub(crate) fn write_tags_to_file(path: &Path, tags: &TagSet) -> Result<()> {
-    let ext = path.extension().and_then(|e| e.to_str())
-        .map(|s| s.to_lowercase()).unwrap_or_default();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
 
     match ext.as_str() {
         "flac" => write_vorbis_tags_flac(path, tags),
@@ -576,28 +603,13 @@ pub fn write_file_tags(
         .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
         .unwrap_or((0, 0));
 
-    sender.update_file_mtime(
-        source,
-        inode,
-        mtime_secs,
-        mtime_nanos,
-        witness,
-    );
+    sender.update_file_mtime(source, inode, mtime_secs, mtime_nanos, witness);
 
     // Clear OOB/tag signals after successful write - they'll be recomputed next cycle
     // This ensures mutations don't leave stale signals behind (inode-keyed)
-    sender.clear_corpus_signal::<OutOfBandTagSyncSignal>(
-        inode,
-        witness,
-    );
-    sender.clear_corpus_signal::<OutOfBandTagConflictSignal>(
-        inode,
-        witness,
-    );
-    sender.clear_corpus_signal::<MtimeOnlyMismatchSignal>(
-        inode,
-        witness,
-    );
+    sender.clear_corpus_signal::<OutOfBandTagSyncSignal>(inode, witness);
+    sender.clear_corpus_signal::<OutOfBandTagConflictSignal>(inode, witness);
+    sender.clear_corpus_signal::<MtimeOnlyMismatchSignal>(inode, witness);
     // Clear tag mismatches - will be recomputed by VerifyTags
     sender.clear_tag_mismatches_for_track(&rel_path_str, witness);
 
@@ -627,8 +639,11 @@ fn mime_type_to_format(mime: Option<&lofty::picture::MimeType>) -> String {
 /// Returns (width, height, format_string). Returns (0, 0, format) if dimensions
 /// can't be determined.
 pub fn image_dimensions(path: &Path) -> (u32, u32, String) {
-    let ext = path.extension().and_then(|e| e.to_str())
-        .map(|s| s.to_lowercase()).unwrap_or_default();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
 
     let format = match ext.as_str() {
         "jpg" | "jpeg" => "jpeg",
@@ -638,11 +653,10 @@ pub fn image_dimensions(path: &Path) -> (u32, u32, String) {
         "webp" => "webp",
         "tiff" | "tif" => "tiff",
         _ => "unknown",
-    }.to_string();
+    }
+    .to_string();
 
-    match image::ImageReader::open(path)
-        .and_then(|r| r.with_guessed_format())
-    {
+    match image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) {
         Ok(reader) => match reader.into_dimensions() {
             Ok((w, h)) => (w, h, format),
             Err(_) => (0, 0, format),
@@ -653,9 +667,17 @@ pub fn image_dimensions(path: &Path) -> (u32, u32, String) {
 
 /// Binary/embedded tag keys to skip (album art, lyrics, etc.)
 const BINARY_TAG_PATTERNS: &[&str] = &[
-    "apic", "pic", "uslt", "sylt", "geob",
-    "metadata_block_picture", "picture", "popularimeter",
-    "cover", "artwork", "lyrics",
+    "apic",
+    "pic",
+    "uslt",
+    "sylt",
+    "geob",
+    "metadata_block_picture",
+    "picture",
+    "popularimeter",
+    "cover",
+    "artwork",
+    "lyrics",
 ];
 
 /// Check if a tag key matches binary/embedded patterns that should be filtered.
@@ -730,7 +752,8 @@ fn write_vorbis_tags_ogg(path: &Path, tags: &TagSet) -> Result<()> {
     let vc = vorbis.vorbis_comments_mut();
     populate_vorbis_comments(vc, tags);
 
-    vorbis.save_to_path(path, WriteOptions::default())
+    vorbis
+        .save_to_path(path, WriteOptions::default())
         .with_context(|| format!("Failed to save tags to OGG: {}", path.display()))?;
 
     Ok(())
@@ -768,9 +791,15 @@ mod tests {
 
         let mut encoder = flac_codec::encode::FlacSampleWriter::create(
             path,
-            flac_codec::encode::Options::default().no_padding().no_seektable(),
-            44100, 16, 1, Some(4410),
-        ).expect("FLAC encoder");
+            flac_codec::encode::Options::default()
+                .no_padding()
+                .no_seektable(),
+            44100,
+            16,
+            1,
+            Some(4410),
+        )
+        .expect("FLAC encoder");
 
         encoder.write(&samples).expect("FLAC write");
         encoder.finalize().expect("FLAC finalize");
@@ -779,15 +808,20 @@ mod tests {
     /// Generate a minimal valid Opus file with silence at the given path.
     fn generate_opus_fixture(path: &Path) {
         use audiopus::coder::Encoder as OpusEncoder;
-        use audiopus::{Application, Bitrate, Channels as OpusChannels, SampleRate as OpusSampleRate};
+        use audiopus::{
+            Application, Bitrate, Channels as OpusChannels, SampleRate as OpusSampleRate,
+        };
         use ogg::writing::{PacketWriteEndInfo, PacketWriter};
         use std::io::BufWriter;
 
         const FRAME_SIZE: usize = 960; // 20ms at 48kHz
 
-        let mut encoder =
-            OpusEncoder::new(OpusSampleRate::Hz48000, OpusChannels::Mono, Application::Audio)
-                .expect("Opus encoder");
+        let mut encoder = OpusEncoder::new(
+            OpusSampleRate::Hz48000,
+            OpusChannels::Mono,
+            Application::Audio,
+        )
+        .expect("Opus encoder");
         encoder
             .set_bitrate(Bitrate::BitsPerSecond(64000))
             .expect("set bitrate");
@@ -841,14 +875,17 @@ mod tests {
     /// Path to the checked-in OGG Vorbis silence fixture.
     fn ogg_vorbis_fixture_path() -> std::path::PathBuf {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        std::path::PathBuf::from(manifest_dir)
-            .join("src/corpus/test_fixtures/silence.ogg")
+        std::path::PathBuf::from(manifest_dir).join("src/corpus/test_fixtures/silence.ogg")
     }
 
     /// Copy the OGG Vorbis fixture to a temp file for read-write testing.
     fn copy_ogg_vorbis_fixture(dest: &Path) {
         let source = ogg_vorbis_fixture_path();
-        assert!(source.exists(), "OGG Vorbis fixture not found at {:?}", source);
+        assert!(
+            source.exists(),
+            "OGG Vorbis fixture not found at {:?}",
+            source
+        );
         std::fs::copy(&source, dest).expect("copy OGG Vorbis fixture");
     }
 
@@ -1143,7 +1180,11 @@ mod tests {
         let file = std::fs::File::open(&path).unwrap();
         let mut reader = std::io::BufReader::new(file);
         let flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default());
-        assert!(flac.is_ok(), "FLAC file corrupted after tag write: {:?}", flac.err());
+        assert!(
+            flac.is_ok(),
+            "FLAC file corrupted after tag write: {:?}",
+            flac.err()
+        );
 
         // Verify tags survived
         let readback = TagSet::from_file(&path).unwrap();
@@ -1218,9 +1259,17 @@ mod tests {
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
         let mut hint = Hint::new();
         hint.with_extension("opus");
-        let result = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default());
-        assert!(result.is_ok(), "Opus file corrupted after tag write: {:?}", result.err());
+        let result = symphonia::default::get_probe().format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        );
+        assert!(
+            result.is_ok(),
+            "Opus file corrupted after tag write: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1321,8 +1370,14 @@ mod tests {
         generate_flac_fixture(&path);
 
         let tags = TagSet::new(vec![
-            ("artist".to_string(), "\u{4e2d}\u{6587}\u{827a}\u{672f}\u{5bb6}".to_string()), // CJK
-            ("album".to_string(), "\u{00e9}\u{00e8}\u{00ea}\u{00eb}".to_string()), // accented chars
+            (
+                "artist".to_string(),
+                "\u{4e2d}\u{6587}\u{827a}\u{672f}\u{5bb6}".to_string(),
+            ), // CJK
+            (
+                "album".to_string(),
+                "\u{00e9}\u{00e8}\u{00ea}\u{00eb}".to_string(),
+            ), // accented chars
             ("title".to_string(), "\u{1f3b5} Music \u{1f3b6}".to_string()), // emoji
         ]);
         write_tags_to_file(&path, &tags).unwrap();
@@ -1343,14 +1398,21 @@ mod tests {
         generate_opus_fixture(&path);
 
         let tags = TagSet::new(vec![
-            ("artist".to_string(), "\u{4e2d}\u{6587}\u{827a}\u{672f}\u{5bb6}".to_string()),
+            (
+                "artist".to_string(),
+                "\u{4e2d}\u{6587}\u{827a}\u{672f}\u{5bb6}".to_string(),
+            ),
             ("title".to_string(), "\u{1f3b5} Music".to_string()),
         ]);
         write_tags_to_file(&path, &tags).unwrap();
 
         let readback = TagSet::from_file(&path).unwrap();
         let diff = tags.diff(&readback);
-        assert!(diff.only_left.is_empty(), "Unicode Opus tags lost: {:?}", diff.only_left.as_slice());
+        assert!(
+            diff.only_left.is_empty(),
+            "Unicode Opus tags lost: {:?}",
+            diff.only_left.as_slice()
+        );
     }
 
     // =========================================================================
@@ -1364,9 +1426,7 @@ mod tests {
         generate_flac_fixture(&path);
 
         let long_value = "x".repeat(100_000); // 100KB value
-        let tags = TagSet::new(vec![
-            ("comment".to_string(), long_value.clone()),
-        ]);
+        let tags = TagSet::new(vec![("comment".to_string(), long_value.clone())]);
         write_tags_to_file(&path, &tags).unwrap();
 
         let readback = TagSet::from_file(&path).unwrap();
@@ -1380,14 +1440,20 @@ mod tests {
         generate_flac_fixture(&path);
 
         let tags = TagSet::new(
-            (0..100).map(|i| (format!("custom_key_{}", i), format!("value_{}", i))).collect::<Vec<_>>()
+            (0..100)
+                .map(|i| (format!("custom_key_{}", i), format!("value_{}", i)))
+                .collect::<Vec<_>>(),
         );
         write_tags_to_file(&path, &tags).unwrap();
 
         let readback = TagSet::from_file(&path).unwrap();
         assert_eq!(readback.len(), 100);
         let diff = tags.diff(&readback);
-        assert!(diff.only_left.is_empty(), "Some of 100 keys lost: {:?}", diff.only_left.as_slice());
+        assert!(
+            diff.only_left.is_empty(),
+            "Some of 100 keys lost: {:?}",
+            diff.only_left.as_slice()
+        );
     }
 
     #[test]
@@ -1412,7 +1478,10 @@ mod tests {
         let tags = standard_test_tags();
         let result = write_tags_to_file(&path, &tags);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Cannot write tags to .wav"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Cannot write tags to .wav"));
     }
 
     #[test]
@@ -1432,7 +1501,10 @@ mod tests {
 
         let meta_after = std::fs::metadata(&path).unwrap();
         let mtime_after = meta_after.modified().unwrap();
-        assert!(mtime_after > mtime_before, "mtime should change after tag write");
+        assert!(
+            mtime_after > mtime_before,
+            "mtime should change after tag write"
+        );
     }
 
     #[test]
@@ -1443,7 +1515,11 @@ mod tests {
 
         // Fresh FLAC has no VorbisComments block
         let tags = TagSet::from_file(&path).unwrap();
-        assert!(tags.is_empty(), "Fresh FLAC should have no tags, got {:?}", tags.as_slice());
+        assert!(
+            tags.is_empty(),
+            "Fresh FLAC should have no tags, got {:?}",
+            tags.as_slice()
+        );
     }
 
     #[test]
@@ -1454,7 +1530,11 @@ mod tests {
 
         // Fresh Opus has OpusTags header but no user tags
         let tags = TagSet::from_file(&path).unwrap();
-        assert!(tags.is_empty(), "Fresh Opus should have no user tags, got {:?}", tags.as_slice());
+        assert!(
+            tags.is_empty(),
+            "Fresh Opus should have no user tags, got {:?}",
+            tags.as_slice()
+        );
     }
 
     #[test]
@@ -1462,7 +1542,10 @@ mod tests {
         // Construct VorbisComments with a binary-pattern key
         let mut vc = lofty::ogg::VorbisComments::default();
         vc.push("ARTIST".to_string(), "Foo".to_string());
-        vc.push("METADATA_BLOCK_PICTURE".to_string(), "base64data".to_string());
+        vc.push(
+            "METADATA_BLOCK_PICTURE".to_string(),
+            "base64data".to_string(),
+        );
         vc.push("TITLE".to_string(), "Bar".to_string());
 
         let tags = TagSet::from_vorbis_comments(Some(&vc));

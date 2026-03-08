@@ -4,8 +4,8 @@
 //! via Ctrl+/. Supports filtering by file type, sample rate, bitrate, and
 //! duration using the same condition types as the extended tag search.
 
-mod state;
 mod render;
+mod state;
 
-pub use state::{FilterCondition, FilterPopupAction, FilterPopupState};
 pub use render::render;
+pub use state::{FilterCondition, FilterPopupAction, FilterPopupState};

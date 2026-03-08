@@ -8,11 +8,11 @@
 //! - `computations/` - Background computation types and executors
 //! - `maintenance/` - Database maintenance tasks (migrations, vacuum)
 
-pub mod views;
-pub mod decisions;
-pub mod signals;
-pub mod mutations;
 pub mod computations;
-pub mod maintenance;
-pub mod recomputation;
+pub mod decisions;
 pub mod external;
+pub mod maintenance;
+pub mod mutations;
+pub mod recomputation;
+pub mod signals;
+pub mod views;

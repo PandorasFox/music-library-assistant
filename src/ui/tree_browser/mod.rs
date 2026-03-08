@@ -70,17 +70,17 @@ impl TreeBrowserState {
             EntryFilter::directories_only()
         };
 
-        let mut navigator = TreeNavigator::new(
-            root,
-            filter,
-            false,
-            deploy_source_paths,
-            primary_zone_paths,
-        );
+        let mut navigator =
+            TreeNavigator::new(root, filter, false, deploy_source_paths, primary_zone_paths);
         navigator.focus_and_expand(&corpus_dir);
-        let variant = BrowserVariant::CorpusBrowser(CorpusBrowserVariant::new(variant_config, corpus_dir));
+        let variant =
+            BrowserVariant::CorpusBrowser(CorpusBrowserVariant::new(variant_config, corpus_dir));
 
-        Self { navigator, variant, click_targets: Default::default() }
+        Self {
+            navigator,
+            variant,
+            click_targets: Default::default(),
+        }
     }
 
     /// Handle a semantic input action.
@@ -96,7 +96,15 @@ impl TreeBrowserState {
         art_picker: &mut AlbumArtPicker,
         art_cache: &mut AlbumArtCache,
     ) {
-        render::render(f, area, &mut self.navigator, &mut self.variant, art_picker, art_cache, &mut self.click_targets);
+        render::render(
+            f,
+            area,
+            &mut self.navigator,
+            &mut self.variant,
+            art_picker,
+            art_cache,
+            &mut self.click_targets,
+        );
     }
 
     // =========================================================================

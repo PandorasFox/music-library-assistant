@@ -10,8 +10,8 @@
 
 use std::time::Instant;
 
-use crate::db::ReadOnlyDb;
 use super::types::ComputationWitness;
+use crate::db::ReadOnlyDb;
 
 /// Context provided to computation executors at execution time.
 pub struct ComputationContext<'a> {

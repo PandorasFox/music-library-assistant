@@ -60,9 +60,15 @@ impl MissingFilePreviewState {
     pub fn selected_path(&self) -> Option<&str> {
         let idx = self.scroll[self.focused_list];
         if self.focused_list == 0 {
-            self.cached_data.restorable.get(idx).map(|f| f.corpus_path.as_str())
+            self.cached_data
+                .restorable
+                .get(idx)
+                .map(|f| f.corpus_path.as_str())
         } else {
-            self.cached_data.non_restorable.get(idx).map(|f| f.corpus_path.as_str())
+            self.cached_data
+                .non_restorable
+                .get(idx)
+                .map(|f| f.corpus_path.as_str())
         }
     }
 
@@ -89,7 +95,12 @@ impl MissingFilePreviewState {
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<MissingFilePreviewAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<MissingFilePreviewAction> {
         let has_restorable = self.cached_data.has_restorable();
 
         // Check buttons first
@@ -239,7 +250,10 @@ impl MissingFilePreviewState {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" ({} total: {} restorable, {} lost)", total, restorable, non_restorable),
+                format!(
+                    " ({} total: {} restorable, {} lost)",
+                    total, restorable, non_restorable
+                ),
                 Style::default().fg(Color::DarkGray),
             ),
         ]))
@@ -272,7 +286,11 @@ impl MissingFilePreviewState {
         let title = format!(" Restorable from Library ({}) ", count);
         let block = Block::default()
             .title(title)
-            .title_style(Style::default().fg(if count > 0 { Color::Green } else { Color::DarkGray }))
+            .title_style(Style::default().fg(if count > 0 {
+                Color::Green
+            } else {
+                Color::DarkGray
+            }))
             .borders(Borders::ALL)
             .border_style(border_style);
 
@@ -283,13 +301,16 @@ impl MissingFilePreviewState {
         self.click_targets_restorable.set_list_area(inner);
         let visible_height = inner.height as usize;
         for (vis_idx, entry_idx) in (self.scroll[0]..).take(visible_height).enumerate() {
-            if entry_idx >= self.cached_data.restorable.len() { break; }
-            self.click_targets_restorable.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+            if entry_idx >= self.cached_data.restorable.len() {
+                break;
+            }
+            self.click_targets_restorable
+                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
         }
 
         if self.cached_data.restorable.is_empty() {
-            let empty = Paragraph::new("No restorable files")
-                .style(Style::default().fg(Color::DarkGray));
+            let empty =
+                Paragraph::new("No restorable files").style(Style::default().fg(Color::DarkGray));
             f.render_widget(empty, inner);
             return;
         }
@@ -317,7 +338,11 @@ impl MissingFilePreviewState {
         let title = format!(" Non-Restorable / Data Lost ({}) ", count);
         let block = Block::default()
             .title(title)
-            .title_style(Style::default().fg(if count > 0 { Color::Red } else { Color::DarkGray }))
+            .title_style(Style::default().fg(if count > 0 {
+                Color::Red
+            } else {
+                Color::DarkGray
+            }))
             .borders(Borders::ALL)
             .border_style(border_style);
 
@@ -328,8 +353,11 @@ impl MissingFilePreviewState {
         self.click_targets_non_restorable.set_list_area(inner);
         let visible_height = inner.height as usize;
         for (vis_idx, entry_idx) in (self.scroll[1]..).take(visible_height).enumerate() {
-            if entry_idx >= self.cached_data.non_restorable.len() { break; }
-            self.click_targets_non_restorable.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+            if entry_idx >= self.cached_data.non_restorable.len() {
+                break;
+            }
+            self.click_targets_non_restorable
+                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
         }
 
         if self.cached_data.non_restorable.is_empty() {
@@ -374,7 +402,10 @@ impl MissingFilePreviewState {
         let restore_style = if !has_restorable {
             Style::default().fg(Color::DarkGray)
         } else if self.selected_button == SelectedButton::RestoreAll {
-            Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Green)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Green)
         };
@@ -385,7 +416,10 @@ impl MissingFilePreviewState {
 
         // Drop Missing button
         let drop_style = if self.selected_button == SelectedButton::DropLost {
-            Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Red)
         };
@@ -396,7 +430,10 @@ impl MissingFilePreviewState {
 
         // Cancel button
         let cancel_style = if self.selected_button == SelectedButton::Cancel {
-            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };

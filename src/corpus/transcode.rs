@@ -42,10 +42,7 @@ impl TranscodeTarget {
                 source.with_extension(self.extension())
             }
             TranscodeTarget::FlacLossyCapture => {
-                let orig_ext = source
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("");
+                let orig_ext = source.extension().and_then(|e| e.to_str()).unwrap_or("");
                 let new_ext = format!("{}.LOSSY.flac", orig_ext);
                 source.with_extension(new_ext)
             }
@@ -56,7 +53,12 @@ impl TranscodeTarget {
 /// Transcode a source audio file to the target format using native decode/encode.
 ///
 /// The destination path must not already exist.
-pub fn transcode(source: &Path, dest: &Path, target: TranscodeTarget, _witness: &MutationExecutionWitness) -> Result<()> {
+pub fn transcode(
+    source: &Path,
+    dest: &Path,
+    target: TranscodeTarget,
+    _witness: &MutationExecutionWitness,
+) -> Result<()> {
     if !source.exists() {
         return Err(anyhow::anyhow!(
             "Source file does not exist: {}",
@@ -91,20 +93,22 @@ pub fn transcode(source: &Path, dest: &Path, target: TranscodeTarget, _witness: 
     // For FLAC destinations, these become PICTURE metadata blocks that survive
     // the subsequent text tag write (lofty reads them into FlacFile.pictures on
     // parse and chains them back into output on save).
-    copy_pictures(source, dest)
-        .with_context(|| format!(
+    copy_pictures(source, dest).with_context(|| {
+        format!(
             "Transcode succeeded but picture copy failed: {} -> {}",
             source.display(),
             dest.display(),
-        ))?;
+        )
+    })?;
 
     // Copy text tags from source to destination via lofty
-    copy_tags(source, dest)
-        .with_context(|| format!(
+    copy_tags(source, dest).with_context(|| {
+        format!(
             "Transcode succeeded but tag copy failed: {} -> {}",
             source.display(),
             dest.display()
-        ))?;
+        )
+    })?;
 
     // Verify the output file was created
     if !dest.exists() {
@@ -123,7 +127,12 @@ pub fn transcode(source: &Path, dest: &Path, target: TranscodeTarget, _witness: 
 
 fn encode_flac(source: &Path, dest: &Path) -> Result<()> {
     let crate::corpus::codecs::AudioSource {
-        mut format, mut decoder, sample_rate, channels, bits_per_sample, ..
+        mut format,
+        mut decoder,
+        sample_rate,
+        channels,
+        bits_per_sample,
+        ..
     } = crate::corpus::codecs::open_audio_source(source)?;
 
     // Stream decoded packets directly through the encoder instead of collecting
@@ -140,14 +149,16 @@ fn encode_flac(source: &Path, dest: &Path) -> Result<()> {
         bits_per_sample,
         channels as u8,
         None,
-    ).map_err(|e| anyhow::anyhow!("FLAC encoder creation failed: {}", e))?;
+    )
+    .map_err(|e| anyhow::anyhow!("FLAC encoder creation failed: {}", e))?;
 
     let mut wrote_any = false;
     while let Ok(packet) = format.next_packet() {
         match decoder.decode(&packet) {
             Ok(decoded) => {
                 let (samples, _frames) = convert_audio_buffer_to_i32(decoded, channels)?;
-                encoder.write(&samples)
+                encoder
+                    .write(&samples)
                     .map_err(|e| anyhow::anyhow!("FLAC encoding failed: {}", e))?;
                 wrote_any = true;
             }
@@ -160,7 +171,8 @@ fn encode_flac(source: &Path, dest: &Path) -> Result<()> {
         return Err(anyhow::anyhow!("No audio frames decoded from source"));
     }
 
-    encoder.finalize()
+    encoder
+        .finalize()
         .map_err(|e| anyhow::anyhow!("FLAC finalization failed: {}", e))?;
 
     Ok(())
@@ -179,7 +191,11 @@ fn encode_opus(source: &Path, dest: &Path, bitrate_kbps: u32) -> Result<()> {
     const FRAME_SIZE: usize = 960; // 20ms at 48kHz
 
     let crate::corpus::codecs::AudioSource {
-        mut format, mut decoder, sample_rate, channels, ..
+        mut format,
+        mut decoder,
+        sample_rate,
+        channels,
+        ..
     } = crate::corpus::codecs::open_audio_source(source)?;
 
     if channels > 2 {
@@ -220,9 +236,8 @@ fn encode_opus(source: &Path, dest: &Path, bitrate_kbps: u32) -> Result<()> {
         OpusChannels::Stereo
     };
 
-    let mut encoder =
-        OpusEncoder::new(OpusSampleRate::Hz48000, opus_channels, Application::Audio)
-            .map_err(|e| anyhow::anyhow!("Failed to create Opus encoder: {:?}", e))?;
+    let mut encoder = OpusEncoder::new(OpusSampleRate::Hz48000, opus_channels, Application::Audio)
+        .map_err(|e| anyhow::anyhow!("Failed to create Opus encoder: {:?}", e))?;
 
     encoder
         .set_bitrate(Bitrate::BitsPerSecond(bitrate_kbps as i32 * 1000))
@@ -282,8 +297,13 @@ fn encode_opus(source: &Path, dest: &Path, bitrate_kbps: u32) -> Result<()> {
             PacketWriteEndInfo::NormalPacket
         };
 
-        ogg.write_packet(packet_buf[..encoded_len].to_vec(), serial, end_info, granule_pos)
-            .context("Failed to write Opus audio packet")?;
+        ogg.write_packet(
+            packet_buf[..encoded_len].to_vec(),
+            serial,
+            end_info,
+            granule_pos,
+        )
+        .context("Failed to write Opus audio packet")?;
     }
 
     Ok(())
@@ -316,8 +336,7 @@ fn build_opus_tags() -> Vec<u8> {
 /// Resample interleaved i16 audio from `source_rate` to 48000 Hz.
 fn resample_to_48k(samples: &[i16], source_rate: u32, channels: usize) -> Result<Vec<i16>> {
     use rubato::{
-        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType,
-        WindowFunction,
+        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
     };
 
     let ratio = 48000.0 / source_rate as f64;
@@ -346,7 +365,10 @@ fn resample_to_48k(samples: &[i16], source_rate: u32, channels: usize) -> Result
     let mut output_channels: Vec<Vec<f64>> = vec![Vec::new(); channels];
     let mut pos = 0;
     while pos + chunk_size <= total_frames {
-        let chunk: Vec<&[f64]> = channel_data.iter().map(|ch| &ch[pos..pos + chunk_size]).collect();
+        let chunk: Vec<&[f64]> = channel_data
+            .iter()
+            .map(|ch| &ch[pos..pos + chunk_size])
+            .collect();
         let resampled = resampler
             .process(&chunk, None)
             .map_err(|e| anyhow::anyhow!("Resample failed: {:?}", e))?;
@@ -622,7 +644,12 @@ fn copy_pictures(source: &Path, dest: &Path) -> Result<()> {
 
     // Read pictures from the source file
     let tagged_file = Probe::open(source)
-        .with_context(|| format!("Failed to open source for picture reading: {}", source.display()))?
+        .with_context(|| {
+            format!(
+                "Failed to open source for picture reading: {}",
+                source.display()
+            )
+        })?
         .read()
         .with_context(|| format!("Failed to read source for pictures: {}", source.display()))?;
 
@@ -647,8 +674,9 @@ fn copy_pictures(source: &Path, dest: &Path) -> Result<()> {
         use lofty::file::AudioFile;
         use lofty::ogg::OggPictureStorage;
 
-        let file = File::open(dest)
-            .with_context(|| format!("Failed to open dest FLAC for pictures: {}", dest.display()))?;
+        let file = File::open(dest).with_context(|| {
+            format!("Failed to open dest FLAC for pictures: {}", dest.display())
+        })?;
         let mut reader = std::io::BufReader::new(file);
         let mut flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
             .with_context(|| format!("Failed to read dest FLAC: {}", dest.display()))?;

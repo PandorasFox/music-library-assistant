@@ -9,16 +9,15 @@ use std::time::Instant;
 
 use crate::db::queries::external::ExternalMatchRow;
 use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
-use crate::external::acoustid::{self, AcoustIdResponse, AcoustIdRecording};
+use crate::db::ReadOnlyDb;
+use crate::external::acoustid::{self, AcoustIdRecording, AcoustIdResponse};
 use crate::logging::log_general;
-use crate::meta::computations::helpers::{ComputedCorpusSignal, reconcile_corpus_signals};
+use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpusSignal};
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::external::ExternalSource;
 use crate::meta::signals::data::{
-    ExternalMatchData, ExternalMatchSignal, ExternalTagDiff,
-    MatchClassification, TypedSignalWrite,
+    ExternalMatchData, ExternalMatchSignal, ExternalTagDiff, MatchClassification, TypedSignalWrite,
 };
 
 use super::{Computation, Result};
@@ -58,8 +57,12 @@ pub fn execute_derive_external_matches(
 
     if all_rows.is_empty() {
         // No external matches — reconcile with empty set to clear stale signals.
-        let (cleared, _, _, _) =
-            reconcile_corpus_signals::<ExternalMatchSignal>(read_only_db, &sender, Vec::new(), witness);
+        let (cleared, _, _, _) = reconcile_corpus_signals::<ExternalMatchSignal>(
+            read_only_db,
+            &sender,
+            Vec::new(),
+            witness,
+        );
         if cleared > 0 {
             log_general(format!(
                 "[COMPUTE] DeriveExternalMatches: cleared {} stale signals (no external matches)",
@@ -127,9 +130,7 @@ pub fn execute_derive_external_matches(
         };
 
         // Count total candidates across all results for this response.
-        let total_candidates: usize = response.results.iter()
-            .map(|r| r.recordings.len())
-            .sum();
+        let total_candidates: usize = response.results.iter().map(|r| r.recordings.len()).sum();
 
         // Get corpus tags for this inode.
         let corpus_tags = tag_map.get(inode);
@@ -237,9 +238,8 @@ fn compare_recording_to_corpus(
 
     // ARTIST comparison.
     if !recording.artists.is_empty() {
-        let ext_artist_names: Vec<&str> = recording.artists.iter()
-            .map(|a| a.name.as_str())
-            .collect();
+        let ext_artist_names: Vec<&str> =
+            recording.artists.iter().map(|a| a.name.as_str()).collect();
 
         let corpus_artists = tags.get("ARTIST");
         match corpus_artists {
@@ -288,7 +288,8 @@ fn compare_recording_to_corpus(
     // ALBUM comparison (best-matching release title).
     if !recording.releases.is_empty() {
         let corpus_album = tags.get("ALBUM").and_then(|v| v.first());
-        let best_release_title = pick_best_release_title(recording, corpus_album.map(|s| s.as_str()));
+        let best_release_title =
+            pick_best_release_title(recording, corpus_album.map(|s| s.as_str()));
 
         if let Some(ext_album) = best_release_title {
             match corpus_album {
@@ -360,7 +361,9 @@ fn pick_best_release(
 
     let best = if let Some(ca) = corpus_album {
         // Prefer exact title match.
-        recording.releases.iter()
+        recording
+            .releases
+            .iter()
             .find(|r| r.title.as_deref() == Some(ca.as_str()))
             .unwrap_or(&recording.releases[0])
     } else {
@@ -379,19 +382,25 @@ fn pick_best_release(
 ///
 /// If corpus has an ALBUM tag, prefer a release whose title matches.
 /// Otherwise, take the first release's title.
-fn pick_best_release_title(recording: &AcoustIdRecording, corpus_album: Option<&str>) -> Option<String> {
+fn pick_best_release_title(
+    recording: &AcoustIdRecording,
+    corpus_album: Option<&str>,
+) -> Option<String> {
     if recording.releases.is_empty() {
         return None;
     }
 
     if let Some(ca) = corpus_album {
         // Check for exact match first.
-        if let Some(r) = recording.releases.iter().find(|r| r.title.as_deref() == Some(ca)) {
+        if let Some(r) = recording
+            .releases
+            .iter()
+            .find(|r| r.title.as_deref() == Some(ca))
+        {
             return r.title.clone();
         }
     }
 
     // Fall back to first release with a title.
-    recording.releases.iter()
-        .find_map(|r| r.title.clone())
+    recording.releases.iter().find_map(|r| r.title.clone())
 }

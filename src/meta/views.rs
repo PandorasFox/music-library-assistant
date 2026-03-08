@@ -287,7 +287,10 @@ pub struct LeftoverSignalFile {
 
 impl LeftoverSignalFile {
     /// Produce a StashLeftovers mutation for this leftover file.
-    pub fn to_mutation(&self, resolver: &crate::corpus::paths::PathResolver) -> crate::meta::mutations::Mutation {
+    pub fn to_mutation(
+        &self,
+        resolver: &crate::corpus::paths::PathResolver,
+    ) -> crate::meta::mutations::Mutation {
         let path_rel = std::path::Path::new("libraries").join(&self.library_path);
         let path = resolver.resolve(&path_rel);
         crate::meta::mutations::Mutation::StashLeftovers(
@@ -298,13 +301,19 @@ impl LeftoverSignalFile {
 
 impl StaleSignalFile {
     /// Produce a LibraryMove mutation to correct this stale deployment.
-    pub fn to_mutation(&self, resolver: &crate::corpus::paths::PathResolver) -> crate::meta::mutations::Mutation {
+    pub fn to_mutation(
+        &self,
+        resolver: &crate::corpus::paths::PathResolver,
+    ) -> crate::meta::mutations::Mutation {
         let source_rel = std::path::Path::new("libraries").join(&self.library_path);
         let source = resolver.resolve(&source_rel);
         let dest_rel = std::path::Path::new("libraries").join(&self.expected_path);
         let destination = resolver.resolve(&dest_rel);
         crate::meta::mutations::Mutation::LibraryMove(
-            crate::meta::mutations::file_ops::LibraryMoveMutation { source, destination },
+            crate::meta::mutations::file_ops::LibraryMoveMutation {
+                source,
+                destination,
+            },
         )
     }
 }
@@ -313,7 +322,10 @@ impl DeploySignalFile {
     /// Produce a HardLink mutation to deploy this file.
     ///
     /// Returns `None` if `library_name` or `deploy_path` is empty (config gap).
-    pub fn to_mutation(&self, resolver: &crate::corpus::paths::PathResolver) -> Option<crate::meta::mutations::Mutation> {
+    pub fn to_mutation(
+        &self,
+        resolver: &crate::corpus::paths::PathResolver,
+    ) -> Option<crate::meta::mutations::Mutation> {
         if self.deploy_path.is_empty() || self.library_name.is_empty() {
             return None;
         }
@@ -323,7 +335,10 @@ impl DeploySignalFile {
             .join(&self.deploy_path);
         let destination = resolver.resolve(&dest_rel);
         Some(crate::meta::mutations::Mutation::HardLink(
-            crate::meta::mutations::file_ops::HardLinkMutation { source, destination },
+            crate::meta::mutations::file_ops::HardLinkMutation {
+                source,
+                destination,
+            },
         ))
     }
 }

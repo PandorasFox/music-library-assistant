@@ -130,7 +130,8 @@ impl AcoustIDClient {
     ) -> Result<(LookupOutcome, Option<Vec<u8>>)> {
         let fp_encoded = Self::encode_fingerprint(fingerprint);
 
-        let response = self.agent
+        let response = self
+            .agent
             .post("https://api.acoustid.org/v2/lookup")
             .set("Content-Type", "application/x-www-form-urlencoded")
             .send_string(&format!(
@@ -154,7 +155,8 @@ impl AcoustIDClient {
             }
         };
 
-        let body = response.into_string()
+        let body = response
+            .into_string()
             .context("Failed to read AcoustID response body")?;
         let raw = body.as_bytes().to_vec();
 
@@ -169,11 +171,12 @@ impl AcoustIDClient {
 
 /// Parse AcoustID JSON response bytes into a typed `AcoustIdResponse`.
 pub fn parse_acoustid_response(body: &[u8]) -> Result<LookupOutcome> {
-    let response: AcoustIdResponse = serde_json::from_slice(body)
-        .context("Failed to parse AcoustID JSON response")?;
+    let response: AcoustIdResponse =
+        serde_json::from_slice(body).context("Failed to parse AcoustID JSON response")?;
 
     if response.status == "error" {
-        let message = response.error
+        let message = response
+            .error
             .map(|e| e.message)
             .unwrap_or_else(|| "unknown error".to_string());
         anyhow::bail!("AcoustID API error: {}", message);
@@ -205,8 +208,13 @@ pub fn parse_acoustid_response(body: &[u8]) -> Result<LookupOutcome> {
 ///
 /// Used by the signal derivation computation to extract metadata for
 /// the matched recording from the stored raw response JSON.
-pub fn find_recording_in_response<'a>(response: &'a AcoustIdResponse, recording_id: &str) -> Option<&'a AcoustIdRecording> {
-    response.results.iter()
+pub fn find_recording_in_response<'a>(
+    response: &'a AcoustIdResponse,
+    recording_id: &str,
+) -> Option<&'a AcoustIdRecording> {
+    response
+        .results
+        .iter()
         .flat_map(|r| r.recordings.iter())
         .find(|rec| rec.id == recording_id)
 }
@@ -260,7 +268,9 @@ fn compress_fingerprint_bytes(fingerprint: &[u32], algorithm: u8) -> Vec<u8> {
 
     // Header: [algorithm, size_hi, size_mid, size_lo]
     let size = fingerprint.len();
-    let mut result = Vec::with_capacity(4 + (normal_bits.len() * 3).div_ceil(8) + (exceptional_bits.len() * 5).div_ceil(8));
+    let mut result = Vec::with_capacity(
+        4 + (normal_bits.len() * 3).div_ceil(8) + (exceptional_bits.len() * 5).div_ceil(8),
+    );
     result.push(algorithm);
     result.push(((size >> 16) & 0xFF) as u8);
     result.push(((size >> 8) & 0xFF) as u8);
@@ -276,11 +286,7 @@ fn compress_fingerprint_bytes(fingerprint: &[u32], algorithm: u8) -> Vec<u8> {
 
 /// Extract set-bit gaps from a subfingerprint value, splitting into
 /// normal (≤6) and exceptional (≥7, stored as value-7) components.
-fn process_subfingerprint(
-    mut x: u32,
-    normal_bits: &mut Vec<u32>,
-    exceptional_bits: &mut Vec<u32>,
-) {
+fn process_subfingerprint(mut x: u32, normal_bits: &mut Vec<u32>, exceptional_bits: &mut Vec<u32>) {
     let mut bit = 1u32;
     let mut last_bit = 0u32;
 
@@ -364,25 +370,19 @@ mod tests {
     #[test]
     fn one_item_one_bit() {
         assert_eq!(
-            compress_fingerprint_bytes(&[1], 0),  // C++ tests use algorithm 0
+            compress_fingerprint_bytes(&[1], 0), // C++ tests use algorithm 0
             vec![0, 0, 0, 1, 1]
         );
     }
 
     #[test]
     fn one_item_three_bits() {
-        assert_eq!(
-            compress_fingerprint_bytes(&[7], 0),
-            vec![0, 0, 0, 1, 73, 0]
-        );
+        assert_eq!(compress_fingerprint_bytes(&[7], 0), vec![0, 0, 0, 1, 73, 0]);
     }
 
     #[test]
     fn one_item_one_bit_except() {
-        assert_eq!(
-            compress_fingerprint_bytes(&[64], 0),
-            vec![0, 0, 0, 1, 7, 0]
-        );
+        assert_eq!(compress_fingerprint_bytes(&[64], 0), vec![0, 0, 0, 1, 7, 0]);
     }
 
     #[test]
@@ -411,10 +411,7 @@ mod tests {
 
     #[test]
     fn empty_fingerprint() {
-        assert_eq!(
-            compress_fingerprint_bytes(&[], 0),
-            vec![0, 0, 0, 0]
-        );
+        assert_eq!(compress_fingerprint_bytes(&[], 0), vec![0, 0, 0, 0]);
     }
 
     #[test]
@@ -422,9 +419,9 @@ mod tests {
         let fp = vec![0u32; 300];
         let result = compress_fingerprint_bytes(&fp, 1);
         assert_eq!(result[0], 1);
-        assert_eq!(result[1], 0);   // (300 >> 16)
-        assert_eq!(result[2], 1);   // (300 >> 8)
-        assert_eq!(result[3], 44);  // 300 & 0xFF
+        assert_eq!(result[1], 0); // (300 >> 16)
+        assert_eq!(result[2], 1); // (300 >> 8)
+        assert_eq!(result[3], 44); // 300 & 0xFF
     }
 
     #[test]
@@ -445,9 +442,8 @@ mod tests {
             .decode(&encoded)
             .unwrap();
         assert_eq!(decoded[0], CHROMAPRINT_ALGORITHM);
-        let len = ((decoded[1] as usize) << 16)
-            | ((decoded[2] as usize) << 8)
-            | (decoded[3] as usize);
+        let len =
+            ((decoded[1] as usize) << 16) | ((decoded[2] as usize) << 8) | (decoded[3] as usize);
         assert_eq!(len, 10);
     }
 }

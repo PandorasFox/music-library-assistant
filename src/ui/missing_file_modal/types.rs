@@ -8,9 +8,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use crate::corpus::paths;
 use crate::db::ReadOnlyDb;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
-use crate::corpus::paths;
 
 /// A missing corpus file that can be restored from library.
 ///
@@ -150,7 +150,7 @@ impl MissingFileModalData {
                     crate::meta::mutations::file_ops::HardLinkMutation {
                         source,
                         destination,
-                    }
+                    },
                 )
             })
             .collect()

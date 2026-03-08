@@ -300,11 +300,7 @@ mod tests {
 
         for (input, expected_base, expected_format) in cases {
             let norm = normalize_album(input);
-            assert_eq!(
-                norm.base_name, expected_base,
-                "Failed for input: {}",
-                input
-            );
+            assert_eq!(norm.base_name, expected_base, "Failed for input: {}", input);
             assert_eq!(
                 norm.format_type, expected_format,
                 "Failed for input: {}",
@@ -325,11 +321,7 @@ mod tests {
 
         for (input, expected_base, expected_format) in cases {
             let norm = normalize_album(input);
-            assert_eq!(
-                norm.base_name, expected_base,
-                "Failed for input: {}",
-                input
-            );
+            assert_eq!(norm.base_name, expected_base, "Failed for input: {}", input);
             assert_eq!(
                 norm.format_type, expected_format,
                 "Failed for input: {}",

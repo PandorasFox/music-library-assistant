@@ -83,10 +83,7 @@ pub fn render_detail_panel(f: &mut Frame, area: Rect, params: &DetailPanelParams
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(footer_height),
-        ])
+        .constraints([Constraint::Min(1), Constraint::Length(footer_height)])
         .split(inner);
 
     let fields_area = chunks[0];
@@ -97,7 +94,9 @@ pub fn render_detail_panel(f: &mut Frame, area: Rect, params: &DetailPanelParams
     for (i, field) in fields.iter().enumerate() {
         let is_focused = !focus_on_buttons && i == field_cursor;
         let label_style = if is_focused {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Cyan)
         };
@@ -136,14 +135,21 @@ pub fn render_detail_panel(f: &mut Frame, area: Rect, params: &DetailPanelParams
                     Span::styled(value.to_string(), val_style),
                 ]));
             }
-            DetailWidget::StringItems { items, cursor, edited } => {
+            DetailWidget::StringItems {
+                items,
+                cursor,
+                edited,
+            } => {
                 let edit_marker = if *edited { " *" } else { "" };
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{}{}:", field.label, edit_marker), label_style),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    format!("{}{}:", field.label, edit_marker),
+                    label_style,
+                )]));
                 if items.is_empty() {
                     let empty_style = if is_focused {
-                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC)
                     } else {
                         Style::default().fg(Color::DarkGray)
                     };
@@ -182,13 +188,11 @@ pub fn render_detail_panel(f: &mut Frame, area: Rect, params: &DetailPanelParams
     if footer_height > 0 {
         let footer_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(
-                if button_height > 0 && hint_height > 0 {
-                    vec![Constraint::Length(1), Constraint::Length(1)]
-                } else {
-                    vec![Constraint::Length(1)]
-                },
-            )
+            .constraints(if button_height > 0 && hint_height > 0 {
+                vec![Constraint::Length(1), Constraint::Length(1)]
+            } else {
+                vec![Constraint::Length(1)]
+            })
             .split(footer_area);
 
         let mut chunk_idx = 0;
@@ -214,17 +218,18 @@ pub fn render_detail_panel(f: &mut Frame, area: Rect, params: &DetailPanelParams
                     spans
                 })
                 .collect();
-            f.render_widget(Paragraph::new(Line::from(button_spans)), footer_chunks[chunk_idx]);
+            f.render_widget(
+                Paragraph::new(Line::from(button_spans)),
+                footer_chunks[chunk_idx],
+            );
             chunk_idx += 1;
         }
 
         // Hint
         if let Some(hint_text) = hint {
             if chunk_idx < footer_chunks.len() {
-                let hint_line = Line::styled(
-                    hint_text.to_string(),
-                    Style::default().fg(Color::DarkGray),
-                );
+                let hint_line =
+                    Line::styled(hint_text.to_string(), Style::default().fg(Color::DarkGray));
                 f.render_widget(Paragraph::new(hint_line), footer_chunks[chunk_idx]);
             }
         }

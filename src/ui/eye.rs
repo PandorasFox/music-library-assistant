@@ -188,7 +188,8 @@ impl Eye {
                 };
 
                 if elapsed.as_millis() >= duration {
-                    if matches!(self.current_blink_type, BlinkType::Flutter) && self.flutter_count > 0
+                    if matches!(self.current_blink_type, BlinkType::Flutter)
+                        && self.flutter_count > 0
                     {
                         self.flutter_count -= 1;
                         self.state = EyeAnimationState::FlutterClosing;

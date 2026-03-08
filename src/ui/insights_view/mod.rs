@@ -32,8 +32,8 @@ use crate::ui::input::InputAction;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
-use crate::meta::views::{InsightsData, CorpusFilesBucket, TagSquashBucket, OtherSignalsBucket};
 use crate::meta::decisions::DecisionKeyKind;
+use crate::meta::views::{CorpusFilesBucket, InsightsData, OtherSignalsBucket, TagSquashBucket};
 use crate::ui::widgets::ListClickTargets;
 use crate::witch::WorkStatus;
 
@@ -140,7 +140,7 @@ pub enum InsightType {
     RedundantDuplicates,
     InconsistentAlbumArtist,
     TagCanonicity { tag_name: String },
-    CompoundTagValueSafe { tag_name: String },   // All split parts exist in corpus
+    CompoundTagValueSafe { tag_name: String }, // All split parts exist in corpus
     CompoundTagValueReview { tag_name: String }, // Some/all parts are new to corpus
     MissingAlbumSingle,
     DiscExtraction,
@@ -312,7 +312,11 @@ impl BucketEntry {
             insight_type: InsightType::RedundantDuplicates,
             label: "Redundant duplicates".to_string(),
             count: Some(count),
-            color: if count > 0 { Color::Yellow } else { Color::Green },
+            color: if count > 0 {
+                Color::Yellow
+            } else {
+                Color::Green
+            },
             rank: 0,
             action: InsightAction::LaunchManualReview,
         }
@@ -324,7 +328,11 @@ impl BucketEntry {
             insight_type: InsightType::InconsistentAlbumArtist,
             label: "Inconsistent album_artist".to_string(),
             count: Some(count),
-            color: if count > 0 { Color::Yellow } else { Color::Green },
+            color: if count > 0 {
+                Color::Yellow
+            } else {
+                Color::Green
+            },
             rank: 0,
             action: InsightAction::LaunchTagCanonicityResolution,
         }
@@ -333,10 +341,16 @@ impl BucketEntry {
     /// Create tag canonicity entry (for a specific tag name)
     fn tag_canonicity(tag_name: &str, cluster_count: usize) -> Self {
         Self {
-            insight_type: InsightType::TagCanonicity { tag_name: tag_name.to_string() },
+            insight_type: InsightType::TagCanonicity {
+                tag_name: tag_name.to_string(),
+            },
             label: format!("{} canonicity", tag_name),
             count: Some(cluster_count),
-            color: if cluster_count > 0 { Color::Yellow } else { Color::Green },
+            color: if cluster_count > 0 {
+                Color::Yellow
+            } else {
+                Color::Green
+            },
             rank: 0,
             action: InsightAction::LaunchTagCanonicityResolution,
         }
@@ -345,10 +359,16 @@ impl BucketEntry {
     /// Create compound tag value safe entry (all parts exist in corpus)
     fn compound_tag_value_safe(tag_name: &str, count: usize) -> Self {
         Self {
-            insight_type: InsightType::CompoundTagValueSafe { tag_name: tag_name.to_string() },
+            insight_type: InsightType::CompoundTagValueSafe {
+                tag_name: tag_name.to_string(),
+            },
             label: format!("{} compound splits (safe)", tag_name),
             count: Some(count),
-            color: if count > 0 { Color::Green } else { Color::DarkGray },
+            color: if count > 0 {
+                Color::Green
+            } else {
+                Color::DarkGray
+            },
             rank: 0,
             action: InsightAction::LaunchCompoundTagSplitSafe,
         }
@@ -357,10 +377,16 @@ impl BucketEntry {
     /// Create compound tag value review entry (some parts are new)
     fn compound_tag_value_review(tag_name: &str, count: usize) -> Self {
         Self {
-            insight_type: InsightType::CompoundTagValueReview { tag_name: tag_name.to_string() },
+            insight_type: InsightType::CompoundTagValueReview {
+                tag_name: tag_name.to_string(),
+            },
             label: format!("{} compound splits (review)", tag_name),
             count: Some(count),
-            color: if count > 0 { Color::Yellow } else { Color::DarkGray },
+            color: if count > 0 {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            },
             rank: 0,
             action: InsightAction::LaunchCompoundTagSplitReview,
         }
@@ -372,7 +398,11 @@ impl BucketEntry {
             insight_type: InsightType::MissingAlbumSingle,
             label: "Missing album singles".to_string(),
             count: Some(count),
-            color: if count > 0 { Color::Yellow } else { Color::DarkGray },
+            color: if count > 0 {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            },
             rank: 0,
             action: InsightAction::LaunchMissingAlbumSingleResolution,
         }
@@ -384,7 +414,11 @@ impl BucketEntry {
             insight_type: InsightType::DiscExtraction,
             label: "Disc extractions".to_string(),
             count: Some(count),
-            color: if count > 0 { Color::Yellow } else { Color::DarkGray },
+            color: if count > 0 {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            },
             rank: 0,
             action: InsightAction::LaunchDiscExtractionResolution,
         }
@@ -396,7 +430,11 @@ impl BucketEntry {
             insight_type: InsightType::PathTagMismatch,
             label: "Filename tag schema issues".to_string(),
             count: Some(count),
-            color: if count > 0 { Color::Yellow } else { Color::DarkGray },
+            color: if count > 0 {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            },
             rank: 0,
             action: InsightAction::LaunchPathTagMismatchResolution,
         }
@@ -406,7 +444,9 @@ impl BucketEntry {
     fn other(index: usize, label: &str, count: usize, signal_type: &str) -> Self {
         // Determine action based on signal type
         let action = match signal_type {
-            "TagCanonicity" | "InconsistentAlbumArtist" => InsightAction::LaunchTagCanonicityResolution,
+            "TagCanonicity" | "InconsistentAlbumArtist" => {
+                InsightAction::LaunchTagCanonicityResolution
+            }
             "CompoundTagValue" => InsightAction::LaunchCompoundTagSplitReview, // Default to review
             "missing_tag" => InsightAction::LaunchMissingTagResolution,
             "metadata_dup" | "deploy_conflict" => InsightAction::LaunchManualReview,
@@ -417,7 +457,11 @@ impl BucketEntry {
             insight_type: InsightType::OtherSignal { index },
             label: label.to_string(),
             count: Some(count),
-            color: if count > 0 { Color::Yellow } else { Color::Green },
+            color: if count > 0 {
+                Color::Yellow
+            } else {
+                Color::Green
+            },
             rank: 0, // Pre-sorted from database
             action,
         }
@@ -450,7 +494,11 @@ impl CachedBucketEntries {
                 "Mtime changes (ack needed)",
                 corpus.mtime_only_mismatch,
                 if corpus.mtime_only_mismatch > 0 { 0 } else { 2 },
-                if corpus.mtime_only_mismatch > 0 { Color::Yellow } else { Color::DarkGray },
+                if corpus.mtime_only_mismatch > 0 {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                },
                 InsightAction::LaunchOobTagConflict, // Same modal as conflict, handles MtimeOnly bucket
             ),
             BucketEntry::corpus(
@@ -458,7 +506,11 @@ impl CachedBucketEntries {
                 "Tags syncable (out-of-band)",
                 corpus.oob_tag_sync,
                 if corpus.oob_tag_sync > 0 { 0 } else { 2 },
-                if corpus.oob_tag_sync > 0 { Color::Yellow } else { Color::DarkGray },
+                if corpus.oob_tag_sync > 0 {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                },
                 InsightAction::LaunchOobTagSync,
             ),
             BucketEntry::corpus(
@@ -466,7 +518,11 @@ impl CachedBucketEntries {
                 "Tag conflicts (out-of-band)",
                 corpus.oob_tag_conflict,
                 if corpus.oob_tag_conflict > 0 { 0 } else { 2 },
-                if corpus.oob_tag_conflict > 0 { Color::Red } else { Color::DarkGray },
+                if corpus.oob_tag_conflict > 0 {
+                    Color::Red
+                } else {
+                    Color::DarkGray
+                },
                 InsightAction::LaunchOobTagConflict,
             ),
             // Note: InodeChanged was removed in v3 migration
@@ -500,7 +556,11 @@ impl CachedBucketEntries {
                 "Files unindexed",
                 corpus.files_unindexed,
                 1,
-                if corpus.files_unindexed > 0 { Color::Yellow } else { Color::Green },
+                if corpus.files_unindexed > 0 {
+                    Color::Yellow
+                } else {
+                    Color::Green
+                },
                 InsightAction::LaunchIntakeConfirmation,
             ),
             BucketEntry::corpus(
@@ -508,7 +568,11 @@ impl CachedBucketEntries {
                 "Files missing",
                 corpus.files_missing,
                 1,
-                if corpus.files_missing > 0 { Color::Red } else { Color::Green },
+                if corpus.files_missing > 0 {
+                    Color::Red
+                } else {
+                    Color::Green
+                },
                 InsightAction::LaunchMissingFileResolution,
             ),
             BucketEntry::corpus(
@@ -516,7 +580,11 @@ impl CachedBucketEntries {
                 "Directories missing",
                 corpus.directories_missing,
                 if corpus.directories_missing > 0 { 0 } else { 2 },
-                if corpus.directories_missing > 0 { Color::Red } else { Color::DarkGray },
+                if corpus.directories_missing > 0 {
+                    Color::Red
+                } else {
+                    Color::DarkGray
+                },
                 InsightAction::LaunchMissingDirectoryResolution,
             ),
             BucketEntry::corpus(
@@ -524,7 +592,11 @@ impl CachedBucketEntries {
                 "Files relocated (moved)",
                 corpus.files_relocated,
                 if corpus.files_relocated > 0 { 0 } else { 2 },
-                if corpus.files_relocated > 0 { Color::Yellow } else { Color::DarkGray },
+                if corpus.files_relocated > 0 {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                },
                 InsightAction::LaunchMovedFileAcknowledge,
             ),
             BucketEntry::corpus(
@@ -532,7 +604,11 @@ impl CachedBucketEntries {
                 "Corrupt files",
                 corpus.corrupt_files,
                 if corpus.corrupt_files > 0 { 0 } else { 2 },
-                if corpus.corrupt_files > 0 { Color::Red } else { Color::DarkGray },
+                if corpus.corrupt_files > 0 {
+                    Color::Red
+                } else {
+                    Color::DarkGray
+                },
                 InsightAction::LaunchCorruptFileResolution,
             ),
             BucketEntry::corpus(
@@ -540,7 +616,11 @@ impl CachedBucketEntries {
                 "Shit format files",
                 corpus.shit_format_files,
                 if corpus.shit_format_files > 0 { 0 } else { 2 },
-                if corpus.shit_format_files > 0 { Color::Yellow } else { Color::DarkGray },
+                if corpus.shit_format_files > 0 {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                },
                 InsightAction::LaunchShitFormatTranscode,
             ),
         ];
@@ -555,7 +635,9 @@ impl CachedBucketEntries {
 
         // Cross-source overlaps at top - easy resolutions
         if bucket.directory_overlap_cluster_count > 0 {
-            entries.push(BucketEntry::cross_source_overlaps(bucket.directory_overlap_cluster_count));
+            entries.push(BucketEntry::cross_source_overlaps(
+                bucket.directory_overlap_cluster_count,
+            ));
         }
 
         // Release overlaps - multiple releases → same album directory
@@ -565,37 +647,54 @@ impl CachedBucketEntries {
 
         // Subpar duplicates - identified low-quality copies ready to stash
         if bucket.subpar_duplicate_count > 0 {
-            entries.push(BucketEntry::subpar_duplicates(bucket.subpar_duplicate_count));
+            entries.push(BucketEntry::subpar_duplicates(
+                bucket.subpar_duplicate_count,
+            ));
         }
 
         // Redundant duplicates - equal-quality copies needing operator choice
         if bucket.redundant_duplicate_count > 0 {
-            entries.push(BucketEntry::redundant_duplicates(bucket.redundant_duplicate_count));
+            entries.push(BucketEntry::redundant_duplicates(
+                bucket.redundant_duplicate_count,
+            ));
         }
 
         // Add inconsistent album_artist if present
         if bucket.inconsistent_album_artist_count > 0 {
-            entries.push(BucketEntry::inconsistent_album_artist(bucket.inconsistent_album_artist_count));
+            entries.push(BucketEntry::inconsistent_album_artist(
+                bucket.inconsistent_album_artist_count,
+            ));
         }
 
         // Add tag canonicity entries for each tag type
         for entry in &bucket.tag_canonicity {
-            entries.push(BucketEntry::tag_canonicity(&entry.tag_name, entry.cluster_count));
+            entries.push(BucketEntry::tag_canonicity(
+                &entry.tag_name,
+                entry.cluster_count,
+            ));
         }
 
         // Add compound tag values per tag - safe first (easy bulk action), then review
         for entry in &bucket.compound_tags {
             if entry.safe_count > 0 {
-                entries.push(BucketEntry::compound_tag_value_safe(&entry.tag_name, entry.safe_count));
+                entries.push(BucketEntry::compound_tag_value_safe(
+                    &entry.tag_name,
+                    entry.safe_count,
+                ));
             }
             if entry.review_count > 0 {
-                entries.push(BucketEntry::compound_tag_value_review(&entry.tag_name, entry.review_count));
+                entries.push(BucketEntry::compound_tag_value_review(
+                    &entry.tag_name,
+                    entry.review_count,
+                ));
             }
         }
 
         // Missing album singles
         if bucket.missing_album_single_count > 0 {
-            entries.push(BucketEntry::missing_album_single(bucket.missing_album_single_count));
+            entries.push(BucketEntry::missing_album_single(
+                bucket.missing_album_single_count,
+            ));
         }
 
         // Embedded disc numbers
@@ -605,7 +704,9 @@ impl CachedBucketEntries {
 
         // Path-tag schema mismatches
         if bucket.path_tag_mismatch_count > 0 {
-            entries.push(BucketEntry::path_tag_mismatch(bucket.path_tag_mismatch_count));
+            entries.push(BucketEntry::path_tag_mismatch(
+                bucket.path_tag_mismatch_count,
+            ));
         }
 
         entries
@@ -613,10 +714,13 @@ impl CachedBucketEntries {
 
     fn build_other_entries(other: &OtherSignalsBucket) -> Vec<BucketEntry> {
         // Entries come pre-sorted from database
-        other.entries
+        other
+            .entries
             .iter()
             .enumerate()
-            .map(|(idx, entry)| BucketEntry::other(idx, &entry.display_label, entry.count, &entry.signal_type))
+            .map(|(idx, entry)| {
+                BucketEntry::other(idx, &entry.display_label, entry.count, &entry.signal_type)
+            })
             .collect()
     }
 
@@ -773,10 +877,7 @@ impl InsightsViewState {
         handled_sources: &HashSet<DecisionKeyKind>,
         cache_stale: bool,
     ) {
-        let busy = cache_stale
-            || witch_status
-                .map(|s| s.pending > 0)
-                .unwrap_or(false);
+        let busy = cache_stale || witch_status.map(|s| s.pending > 0).unwrap_or(false);
 
         self.modal = if busy {
             InsightsModal::NotReady_WitchBusy
@@ -809,7 +910,11 @@ impl InsightsViewState {
 
     /// Clamp all bucket selection indices to stay within bounds after filtering.
     fn clamp_all_selections(&mut self) {
-        for bucket in [FocusedBucket::Corpus, FocusedBucket::Placeholder, FocusedBucket::Other] {
+        for bucket in [
+            FocusedBucket::Corpus,
+            FocusedBucket::Placeholder,
+            FocusedBucket::Other,
+        ] {
             let count = self.cached_entries.entries_for(bucket).len();
             let sel = &mut self.bucket_selections[bucket.index()];
             if count == 0 {
@@ -915,7 +1020,11 @@ impl InsightsViewState {
     /// Navigate to the very last entry (last bucket, last item)
     fn navigate_to_end(&mut self) {
         // Find last non-empty bucket
-        for bucket in [FocusedBucket::Other, FocusedBucket::Placeholder, FocusedBucket::Corpus] {
+        for bucket in [
+            FocusedBucket::Other,
+            FocusedBucket::Placeholder,
+            FocusedBucket::Corpus,
+        ] {
             let count = self.get_bucket_entry_count(bucket);
             if count > 0 {
                 self.focused_bucket = bucket;
@@ -1018,9 +1127,7 @@ mod tests {
                 disc_extraction_count: 0,
                 path_tag_mismatch_count: 0,
             },
-            bucket_other: OtherSignalsBucket {
-                entries: vec![],
-            },
+            bucket_other: OtherSignalsBucket { entries: vec![] },
         }
     }
 
@@ -1100,7 +1207,11 @@ mod tests {
         // Should have one fewer entry
         assert_eq!(state.cached_entries.corpus.len(), corpus_count_before - 1);
         // And it shouldn't contain CorpusMtimeOnly
-        assert!(!state.cached_entries.corpus.iter().any(|e| e.insight_type == InsightType::CorpusMtimeOnly));
+        assert!(!state
+            .cached_entries
+            .corpus
+            .iter()
+            .any(|e| e.insight_type == InsightType::CorpusMtimeOnly));
     }
 
     #[test]
@@ -1117,8 +1228,16 @@ mod tests {
         state.update(None, Some(data), &handled, false);
 
         // Informational entries (FilesInCorpus, FilesIndexed) should survive
-        assert!(state.cached_entries.corpus.iter().any(|e| e.insight_type == InsightType::CorpusFilesInCorpus));
-        assert!(state.cached_entries.corpus.iter().any(|e| e.insight_type == InsightType::CorpusFilesIndexed));
+        assert!(state
+            .cached_entries
+            .corpus
+            .iter()
+            .any(|e| e.insight_type == InsightType::CorpusFilesInCorpus));
+        assert!(state
+            .cached_entries
+            .corpus
+            .iter()
+            .any(|e| e.insight_type == InsightType::CorpusFilesIndexed));
     }
 
     #[test]
@@ -1295,12 +1414,18 @@ mod tests {
 
         // Start at default (Corpus bucket, item 0)
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.bucket_selections[FocusedBucket::Corpus.index()].selected, 0);
+        assert_eq!(
+            state.bucket_selections[FocusedBucket::Corpus.index()].selected,
+            0
+        );
 
         // Click on Corpus item 1
         assert!(state.handle_click(10, 2));
         assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.bucket_selections[FocusedBucket::Corpus.index()].selected, 1);
+        assert_eq!(
+            state.bucket_selections[FocusedBucket::Corpus.index()].selected,
+            1
+        );
 
         // Click outside - should return false (Other bucket has no entries in mock data)
         assert!(!state.handle_click(200, 200));

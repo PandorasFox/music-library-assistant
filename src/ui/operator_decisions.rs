@@ -64,9 +64,7 @@ pub fn commit_transaction(
 ///
 /// Called from Escape/cancel keypress on transaction modal.
 /// Does not require a gesture — discarding is always safe.
-pub fn discard_transaction(
-    witch: &mut Witch,
-) -> Result<DiscardSummary, TransactionError> {
+pub fn discard_transaction(witch: &mut Witch) -> Result<DiscardSummary, TransactionError> {
     witch.discard_transaction()
 }
 
@@ -80,4 +78,3 @@ pub fn remove_decision(
 ) -> Result<(), TransactionError> {
     witch.remove_decision(key, gesture)
 }
-

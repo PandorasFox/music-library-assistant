@@ -12,9 +12,9 @@ use ratatui::{
     Frame,
 };
 
-use crate::ui::widgets::control_colors;
-use super::state::{ConfigEditorState, EditorButton, EditorFocus, CollectionPosition};
+use super::state::{CollectionPosition, ConfigEditorState, EditorButton, EditorFocus};
 use super::types::{ConfigField, ConfigValue, FieldSource};
+use crate::ui::widgets::control_colors;
 
 /// Render the config editor view into the given content area.
 pub fn render(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
@@ -22,9 +22,9 @@ pub fn render(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(5),     // Scrollable field list
-            Constraint::Length(1),  // Button row
-            Constraint::Length(1),  // Control hints
+            Constraint::Min(5),    // Scrollable field list
+            Constraint::Length(1), // Button row
+            Constraint::Length(1), // Control hints
         ])
         .split(area);
 
@@ -44,12 +44,20 @@ fn render_field_list(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
 
     for group in &state.groups {
         // Group header
-        let collapse_indicator = if group.collapsed { "\u{25b8}" } else { "\u{25be}" };
+        let collapse_indicator = if group.collapsed {
+            "\u{25b8}"
+        } else {
+            "\u{25be}"
+        };
         let is_collapsed_cursor = group.collapsed && flat_idx == state.cursor;
         let header_style = if is_collapsed_cursor {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         };
         lines.push((
             Line::from(vec![
@@ -95,7 +103,10 @@ fn render_field_list(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
     }
 
     // Auto-scroll to keep target line visible
-    let target_line_idx = lines.iter().position(|(_, is_target)| *is_target).unwrap_or(0);
+    let target_line_idx = lines
+        .iter()
+        .position(|(_, is_target)| *is_target)
+        .unwrap_or(0);
     let scroll = if target_line_idx < state.scroll_offset {
         target_line_idx
     } else if target_line_idx >= state.scroll_offset + visible_height {
@@ -105,7 +116,8 @@ fn render_field_list(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
     };
 
     // Render visible lines
-    let visible_lines: Vec<Line<'_>> = lines.into_iter()
+    let visible_lines: Vec<Line<'_>> = lines
+        .into_iter()
         .skip(scroll)
         .take(visible_height)
         .map(|(line, _)| line)
@@ -132,11 +144,18 @@ fn render_field_line<'a>(
     if is_cursor && state.text_input.is_some() && state.collection_pos.is_none() {
         let input = state.text_input.as_ref().unwrap();
         return Line::from(vec![
-            Span::styled(cursor_indicator, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                cursor_indicator,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(format!("{:<38}", field.label)),
             Span::styled(
                 format!("{}\u{2588}", input.value),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::UNDERLINED),
             ),
         ]);
     }
@@ -148,7 +167,9 @@ fn render_field_line<'a>(
     };
 
     let label_style = if is_cursor && state.focus == EditorFocus::Fields {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
@@ -159,14 +180,26 @@ fn render_field_line<'a>(
         FieldSource::Edited => "(edited)",
     };
 
-    let restart_tag = if field.restart_required { " (restart)" } else { "" };
+    let restart_tag = if field.restart_required {
+        " (restart)"
+    } else {
+        ""
+    };
 
     let value_str = field.value.display();
 
     Line::from(vec![
-        Span::styled(cursor_indicator.to_string(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            cursor_indicator.to_string(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(format!("{:<38}", field.label), label_style),
-        Span::styled(format!("{:<24}", value_str), Style::default().fg(value_color)),
+        Span::styled(
+            format!("{:<24}", value_str),
+            Style::default().fg(value_color),
+        ),
         Span::styled(source_tag, Style::default().fg(Color::DarkGray)),
         Span::styled(restart_tag, Style::default().fg(Color::DarkGray)),
     ])
@@ -197,12 +230,16 @@ fn render_collection_items<'a>(
                         Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
                         Span::styled(
                             format!("{}\u{2588}", input.value),
-                            Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::UNDERLINED),
                         ),
                     ])
                 } else {
                     let style = if is_selected {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -224,7 +261,9 @@ fn render_collection_items<'a>(
                     Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
                     Span::styled(
                         format!("{}\u{2588}", input.value),
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::UNDERLINED),
                     ),
                 ])
             } else {
@@ -255,7 +294,9 @@ fn render_collection_items<'a>(
 
                 if is_expanded {
                     // Show tag header with colon, no separator summary
-                    let tag_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                    let tag_style = Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD);
                     lines.push((
                         Line::from(vec![
                             Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
@@ -269,7 +310,11 @@ fn render_collection_items<'a>(
                     for (si, sep) in separators.iter().enumerate() {
                         let is_sub_selected = sub_pos == Some(CollectionPosition::Item(si));
                         let is_sub_editing = is_sub_selected && text_input.is_some();
-                        let sub_cursor = if is_sub_selected { "        > " } else { "          " };
+                        let sub_cursor = if is_sub_selected {
+                            "        > "
+                        } else {
+                            "          "
+                        };
 
                         let line = if is_sub_editing {
                             let input = text_input.unwrap();
@@ -277,12 +322,16 @@ fn render_collection_items<'a>(
                                 Span::styled(sub_cursor, Style::default().fg(Color::Yellow)),
                                 Span::styled(
                                     format!("{}\u{2588}", input.value),
-                                    Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                                    Style::default()
+                                        .fg(Color::Yellow)
+                                        .add_modifier(Modifier::UNDERLINED),
                                 ),
                             ])
                         } else {
                             let style = if is_sub_selected {
-                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD)
                             } else {
                                 Style::default().fg(Color::Cyan)
                             };
@@ -297,7 +346,11 @@ fn render_collection_items<'a>(
                     // Sub-collection add-new row
                     let is_sub_add = sub_pos == Some(CollectionPosition::AddNew);
                     let is_sub_editing = is_sub_add && text_input.is_some();
-                    let sub_cursor = if is_sub_add { "        > " } else { "          " };
+                    let sub_cursor = if is_sub_add {
+                        "        > "
+                    } else {
+                        "          "
+                    };
 
                     let line = if is_sub_editing {
                         let input = text_input.unwrap();
@@ -305,7 +358,9 @@ fn render_collection_items<'a>(
                             Span::styled(sub_cursor, Style::default().fg(Color::Yellow)),
                             Span::styled(
                                 format!("{}\u{2588}", input.value),
-                                Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::UNDERLINED),
                             ),
                         ])
                     } else {
@@ -325,11 +380,17 @@ fn render_collection_items<'a>(
                     let seps_display = if separators.is_empty() {
                         "(no separators)".to_string()
                     } else {
-                        separators.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(", ")
+                        separators
+                            .iter()
+                            .map(|s| format!("\"{}\"", s))
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     };
 
                     let tag_style = if is_selected {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -355,7 +416,9 @@ fn render_collection_items<'a>(
                     Span::styled(cursor_char, Style::default().fg(Color::Yellow)),
                     Span::styled(
                         format!("{}\u{2588}", input.value),
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::UNDERLINED),
                     ),
                     Span::styled(": (new tag)", Style::default().fg(Color::DarkGray)),
                 ])
@@ -384,13 +447,19 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
     let in_buttons = state.focus == EditorFocus::Buttons;
 
     let save_style = if in_buttons && state.selected_button == EditorButton::Save {
-        Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Green)
     };
 
     let discard_style = if in_buttons && state.selected_button == EditorButton::Discard {
-        Style::default().fg(Color::Black).bg(Color::Gray).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Gray)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
@@ -452,7 +521,8 @@ fn render_hints(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
         ])
     } else {
         // Show field description if cursor is on a field
-        let description = state.cursor_to_group_field()
+        let description = state
+            .cursor_to_group_field()
             .map(|(gi, fi)| state.groups[gi].fields[fi].description)
             .unwrap_or("");
 

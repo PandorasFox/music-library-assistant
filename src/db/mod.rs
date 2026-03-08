@@ -15,11 +15,11 @@
 //! The separation enforces that UI code cannot accidentally write to the database.
 //! Variables holding `ReadOnlyDb` should be named `read_db` to make intent clear.
 
+pub mod data_migrations;
 pub mod queries;
+pub mod reconciler;
 mod schema;
 pub mod table_schema;
-pub mod reconciler;
-pub mod data_migrations;
 pub mod types;
 pub mod write_thread;
 

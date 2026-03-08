@@ -21,13 +21,8 @@
 //! 4. The tick function processes items until done
 //! 5. On completion, the handler transitions to the appropriate next state
 
-mod types;
 mod render;
+mod types;
 
-pub use types::{
-    OnComplete,
-    ProgressiveWorkerState,
-    WorkItem,
-    WorkSummary,
-};
 pub use render::render;
+pub use types::{OnComplete, ProgressiveWorkerState, WorkItem, WorkSummary};

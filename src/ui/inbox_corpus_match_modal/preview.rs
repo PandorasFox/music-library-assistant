@@ -22,7 +22,9 @@ use ratatui::{
 
 use crate::meta::views::MatchClassification;
 use crate::ui::helpers::{render_pane, truncate_left};
-use crate::ui::widgets::{ConfirmationButton, ListClickTargets, render_button_row, PathField, CURSOR_STYLE};
+use crate::ui::widgets::{
+    render_button_row, ConfirmationButton, ListClickTargets, PathField, CURSOR_STYLE,
+};
 
 use super::types::{InboxCorpusMatchModalData, SelectedButton};
 
@@ -74,7 +76,10 @@ pub struct InboxCorpusMatchPreviewState {
 
 impl InboxCorpusMatchPreviewState {
     pub fn selected_path(&self) -> Option<&str> {
-        self.cached_data.entries.get(self.scroll).map(|e| e.inbox_path.as_str())
+        self.cached_data
+            .entries
+            .get(self.scroll)
+            .map(|e| e.inbox_path.as_str())
     }
 
     pub fn new(cached_data: InboxCorpusMatchModalData) -> Self {
@@ -88,7 +93,12 @@ impl InboxCorpusMatchPreviewState {
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<InboxCorpusMatchPreviewAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<InboxCorpusMatchPreviewAction> {
         if let Some(id) = self.click_targets.hit_test(x, y) {
             if let Ok(idx) = id.parse::<usize>() {
                 if idx < self.cached_data.entries.len() {
@@ -190,8 +200,10 @@ impl InboxCorpusMatchPreviewState {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" {} better, {} equivalent, {} subpar",
-                    better, equivalent, subpar),
+                format!(
+                    " {} better, {} equivalent, {} subpar",
+                    better, equivalent, subpar
+                ),
                 Style::default().fg(Color::DarkGray),
             ),
         ]))
@@ -217,9 +229,17 @@ impl InboxCorpusMatchPreviewState {
 
         let block = Block::default()
             .title(format!(" Inbox Files ({}) ", count))
-            .title_style(Style::default().fg(if count > 0 { Color::Cyan } else { Color::DarkGray }))
+            .title_style(Style::default().fg(if count > 0 {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            }))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(if list_focused { Color::Cyan } else { Color::DarkGray }));
+            .border_style(Style::default().fg(if list_focused {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            }));
 
         let inner = render_pane(f, chunks[1], block);
 
@@ -239,8 +259,11 @@ impl InboxCorpusMatchPreviewState {
 
         // Track click target rows
         for (vis_idx, entry_idx) in (scroll..).take(visible_lines).enumerate() {
-            if entry_idx >= self.cached_data.entries.len() { break; }
-            self.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+            if entry_idx >= self.cached_data.entries.len() {
+                break;
+            }
+            self.click_targets
+                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
         }
 
         let total_width = inner.width as usize;
@@ -284,10 +307,7 @@ impl InboxCorpusMatchPreviewState {
                 let path_display = truncate_left(&entry.inbox_path, path_width.saturating_sub(1));
 
                 let line = Line::from(vec![
-                    Span::styled(
-                        format!(" {} ", icon),
-                        icon_style,
-                    ),
+                    Span::styled(format!(" {} ", icon), icon_style),
                     Span::styled(
                         format!("{:<width$}", path_display, width = path_width),
                         style,
@@ -334,10 +354,7 @@ impl InboxCorpusMatchPreviewState {
 
             for (i, cm) in entry.corpus_matches.iter().enumerate().take(3) {
                 let mut match_lines = PathField::new(
-                    Span::styled(
-                        format!("  #{}: ", i + 1),
-                        Style::default().fg(Color::Green),
-                    ),
+                    Span::styled(format!("  #{}: ", i + 1), Style::default().fg(Color::Green)),
                     &cm.corpus_path,
                 )
                 .style(Style::default().fg(Color::White))
@@ -353,9 +370,10 @@ impl InboxCorpusMatchPreviewState {
 
             lines
         } else {
-            vec![
-                Line::from(Span::styled("No entry selected", Style::default().fg(Color::DarkGray))),
-            ]
+            vec![Line::from(Span::styled(
+                "No entry selected",
+                Style::default().fg(Color::DarkGray),
+            ))]
         };
 
         let para = Paragraph::new(lines);
@@ -369,9 +387,13 @@ impl InboxCorpusMatchPreviewState {
         let has_entries = total > 0;
         let buttons_focused = self.focus_pane == FocusPane::Buttons;
 
-        let block = Block::default().borders(Borders::TOP).border_style(
-            Style::default().fg(if buttons_focused { Color::Cyan } else { Color::DarkGray })
-        );
+        let block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(if buttons_focused {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            }));
         let inner = block.inner(area);
         f.render_widget(block, area);
 
@@ -384,15 +406,28 @@ impl InboxCorpusMatchPreviewState {
             .split(inner);
 
         // Buttons via standard widget
-        let stash_color = if has_stashable { Color::Cyan } else { Color::DarkGray };
-        let stash_all_color = if has_entries { Color::Yellow } else { Color::DarkGray };
-        let stash_selected = has_stashable && buttons_focused && self.selected_button == SelectedButton::StashEquivalents;
-        let stash_all_selected = has_entries && buttons_focused && self.selected_button == SelectedButton::StashAll;
+        let stash_color = if has_stashable {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
+        let stash_all_color = if has_entries {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
+        let stash_selected = has_stashable
+            && buttons_focused
+            && self.selected_button == SelectedButton::StashEquivalents;
+        let stash_all_selected =
+            has_entries && buttons_focused && self.selected_button == SelectedButton::StashAll;
         let cancel_selected = buttons_focused && self.selected_button == SelectedButton::Cancel;
 
         let buttons = vec![
-            ConfirmationButton::new(format!("Stash {} equiv+subpar", stashable), stash_color).selected(stash_selected),
-            ConfirmationButton::new(format!("Stash all {}", total), stash_all_color).selected(stash_all_selected),
+            ConfirmationButton::new(format!("Stash {} equiv+subpar", stashable), stash_color)
+                .selected(stash_selected),
+            ConfirmationButton::new(format!("Stash all {}", total), stash_all_color)
+                .selected(stash_all_selected),
             ConfirmationButton::new("Cancel", Color::White).selected(cancel_selected),
         ];
         render_button_row(f, inner_chunks[0], &buttons);
@@ -401,7 +436,8 @@ impl InboxCorpusMatchPreviewState {
         let hint = Paragraph::new(Line::from(Span::styled(
             "Shift+\u{2191}\u{2193} focus  \u{2190}\u{2192} select  Enter confirm",
             Style::default().fg(Color::DarkGray),
-        ))).alignment(ratatui::layout::Alignment::Center);
+        )))
+        .alignment(ratatui::layout::Alignment::Center);
         f.render_widget(hint, inner_chunks[1]);
     }
 }

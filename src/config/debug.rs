@@ -1,7 +1,7 @@
 //! Global debug config (OnceLock + accessor functions).
 
-use std::sync::OnceLock;
 use super::types::DebugOpinions;
+use std::sync::OnceLock;
 
 static DEBUG_CONFIG: OnceLock<DebugOpinions> = OnceLock::new();
 

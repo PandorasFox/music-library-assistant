@@ -195,7 +195,12 @@ impl MissingAlbumState {
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<MissingAlbumAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<MissingAlbumAction> {
         if let Some(id) = self.click_targets.hit_test(x, y) {
             if let Ok(idx) = id.parse::<usize>() {
                 let track_count = self.current_group_data().map_or(0, |g| g.tracks.len());
@@ -341,8 +346,11 @@ impl MissingAlbumState {
         self.click_targets.set_list_area(inner);
         let visible_height = inner.height as usize;
         for (vis_idx, entry_idx) in (self.track_scroll..).take(visible_height).enumerate() {
-            if entry_idx >= group.tracks.len() { break; }
-            self.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+            if entry_idx >= group.tracks.len() {
+                break;
+            }
+            self.click_targets
+                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
         }
 
         let entries: Vec<PathEntry> = group
@@ -427,10 +435,7 @@ impl MissingAlbumState {
         }
 
         // Resolution buttons (top line of inner area)
-        let button_area = Rect {
-            height: 1,
-            ..inner
-        };
+        let button_area = Rect { height: 1, ..inner };
 
         let per_track_label = format!("\"{{title}}{}\"", self.suffix);
         let buttons = [

@@ -3,12 +3,12 @@
 //! Handles all actions from the ManualReview modal: stash confirmation,
 //! tag editor launch, group navigation, and transaction management.
 
+use super::super::App;
+use super::witness;
 use crate::db::types::Zone;
 use crate::meta::decisions::DecisionKey;
-use crate::ui::{manual_review_modal, tag_editor, ActiveView};
 use crate::ui::manual_review_modal::types;
-use super::witness;
-use super::super::App;
+use crate::ui::{manual_review_modal, tag_editor, ActiveView};
 
 impl App {
     /// Start manual review modal from Insights view.
@@ -16,9 +16,14 @@ impl App {
     /// Loads data from the database based on review kind, starts a transaction,
     /// and switches to the ManualReview view.
     pub(in crate::ui) fn start_manual_review(&mut self, kind: types::ReviewKind) {
-        let data = self.cache.query(move |db| {
-            types::ManualReviewData::load(db, kind).ok().unwrap_or_default()
-        }).recv();
+        let data = self
+            .cache
+            .query(move |db| {
+                types::ManualReviewData::load(db, kind)
+                    .ok()
+                    .unwrap_or_default()
+            })
+            .recv();
 
         // Start transaction for the review session
         let _ = self.witch.start_transaction(kind.transaction_label());
@@ -88,9 +93,15 @@ impl App {
     /// Stage StashFromZone + DropFromIndex mutations for the currently selected file.
     fn stage_stash_for_selected_file(&mut self, gesture: &witness::ConfirmationGesture) {
         let (group_idx, file_idx, corpus_path, inode, stash_name) = {
-            let ActiveView::ManualReview(ref state) = self.view else { return };
-            let Some(file) = state.selected_file() else { return };
-            if file.stashed { return; }
+            let ActiveView::ManualReview(ref state) = self.view else {
+                return;
+            };
+            let Some(file) = state.selected_file() else {
+                return;
+            };
+            if file.stashed {
+                return;
+            }
             (
                 state.current_group,
                 state.file_cursor,
@@ -106,7 +117,9 @@ impl App {
         let label = format!("Stash {}", corpus_path);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
-            DecisionKey::ManualReview { group_index: group_idx },
+            DecisionKey::ManualReview {
+                group_index: group_idx,
+            },
             &label,
             mutations,
             gesture,
@@ -121,23 +134,36 @@ impl App {
     /// Stage an EmitExpectedDuplicate mutation for the current group's fingerprint key.
     fn stage_mark_expected_duplicate(&mut self, gesture: &witness::ConfirmationGesture) {
         let (group_idx, fingerprint_key, group_label, is_last) = {
-            let ActiveView::ManualReview(ref state) = self.view else { return };
-            if state.kind != types::ReviewKind::RedundantDuplicate { return; }
-            let Some(group) = state.current_group_ref() else { return };
-            let Some(ref key) = group.signal_key else { return };
-            (state.current_group, key.clone(), group.label.clone(), state.current_group + 1 >= state.data.groups.len())
+            let ActiveView::ManualReview(ref state) = self.view else {
+                return;
+            };
+            if state.kind != types::ReviewKind::RedundantDuplicate {
+                return;
+            }
+            let Some(group) = state.current_group_ref() else {
+                return;
+            };
+            let Some(ref key) = group.signal_key else {
+                return;
+            };
+            (
+                state.current_group,
+                key.clone(),
+                group.label.clone(),
+                state.current_group + 1 >= state.data.groups.len(),
+            )
         };
 
         let mutation = crate::meta::mutations::Mutation::EmitExpectedDuplicate(
-            crate::meta::mutations::indexing::EmitExpectedDuplicateMutation {
-                fingerprint_key,
-            },
+            crate::meta::mutations::indexing::EmitExpectedDuplicateMutation { fingerprint_key },
         );
 
         let label = format!("Mark expected duplicate: {}", group_label);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
-            DecisionKey::ManualReview { group_index: group_idx },
+            DecisionKey::ManualReview {
+                group_index: group_idx,
+            },
             &label,
             vec![mutation],
             gesture,
@@ -169,36 +195,55 @@ impl App {
     /// Open the embedded tag editor from within the manual review modal.
     fn open_manual_review_tag_editor(&mut self, aggregated: bool) {
         let (inodes, decision_key, decision_label) = {
-            let ActiveView::ManualReview(ref state) = self.view else { return };
-            if !state.kind.supports_tag_edit() { return; }
+            let ActiveView::ManualReview(ref state) = self.view else {
+                return;
+            };
+            if !state.kind.supports_tag_edit() {
+                return;
+            }
 
             let group_inodes = state.current_group_inodes();
-            if group_inodes.is_empty() { return; }
+            if group_inodes.is_empty() {
+                return;
+            }
 
             let inodes = if aggregated {
                 group_inodes
             } else {
                 // Single file mode: just the selected file
-                state.selected_file()
+                state
+                    .selected_file()
                     .filter(|f| !f.stashed)
                     .map(|f| vec![f.inode])
                     .unwrap_or_default()
             };
 
-            if inodes.is_empty() { return; }
+            if inodes.is_empty() {
+                return;
+            }
 
-            let label = state.current_group_ref()
+            let label = state
+                .current_group_ref()
                 .map(|g| g.label.clone())
                 .unwrap_or_else(|| "Manual review".to_string());
 
-            (inodes, DecisionKey::ManualReview { group_index: state.current_group }, label)
+            (
+                inodes,
+                DecisionKey::ManualReview {
+                    group_index: state.current_group,
+                },
+                label,
+            )
         };
 
         // Load audio files from database
-        let audio_files = self.cache.query(move |db| {
-            db.get_audio_files_by_inodes(&inodes, Zone::Corpus)
-                .unwrap_or_default()
-        }).recv();
+        let audio_files = self
+            .cache
+            .query(move |db| {
+                db.get_audio_files_by_inodes(&inodes, Zone::Corpus)
+                    .unwrap_or_default()
+            })
+            .recv();
 
         if audio_files.is_empty() {
             self.status_message = Some("No indexed audio files found for editing".to_string());
@@ -211,11 +256,6 @@ impl App {
             tag_editor::TagEditorMode::Individual
         };
 
-        self.open_embedded_tag_editor(
-            mode,
-            audio_files,
-            decision_key,
-            decision_label,
-        );
+        self.open_embedded_tag_editor(mode, audio_files, decision_key, decision_label);
     }
 }

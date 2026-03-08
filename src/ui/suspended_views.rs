@@ -8,15 +8,11 @@
 //! Hard navigation (Confirm, Discard, escape-to-health) clears the entire
 //! stack so no stale views leak.
 
-use crate::ui::{
-    insights_view,
-    progressive_worker,
-    tag_editor,
-    transaction_review,
-    ActiveView,
-    active_view::SuspendedView,
-};
 use super::App;
+use crate::ui::{
+    active_view::SuspendedView, insights_view, progressive_worker, tag_editor, transaction_review,
+    ActiveView,
+};
 
 /// Describes which modal we're switching to. Each variant carries an existing
 /// state struct that becomes the new `ActiveView`.
@@ -55,9 +51,7 @@ impl App {
     /// Returns false if the stack was empty (caller should navigate to health).
     pub(crate) fn pop_and_restore(&mut self) -> bool {
         match self.view_stack.pop() {
-            Some(suspended) => {
-                self.restore_suspended_view(suspended)
-            }
+            Some(suspended) => self.restore_suspended_view(suspended),
             None => false,
         }
     }
@@ -81,9 +75,16 @@ impl App {
             | ActiveView::TagCanonicityLoading { clusters, .. } => {
                 SuspendedView::TagCanonicityReload { clusters }
             }
-            ActiveView::CompoundTagSplit { clusters, safe_mode, zone, .. } => {
-                SuspendedView::CompoundTagSplitReload { clusters, safe_mode, zone }
-            }
+            ActiveView::CompoundTagSplit {
+                clusters,
+                safe_mode,
+                zone,
+                ..
+            } => SuspendedView::CompoundTagSplitReload {
+                clusters,
+                safe_mode,
+                zone,
+            },
             view => SuspendedView::Direct(view),
         }
     }
@@ -100,9 +101,11 @@ impl App {
             SuspendedView::TagCanonicityReload { clusters } => {
                 self.load_current_cluster_signal_with_clusters(clusters)
             }
-            SuspendedView::CompoundTagSplitReload { clusters, safe_mode, zone } => {
-                self.load_current_compound_split_signal_with_clusters(clusters, safe_mode, zone)
-            }
+            SuspendedView::CompoundTagSplitReload {
+                clusters,
+                safe_mode,
+                zone,
+            } => self.load_current_compound_split_signal_with_clusters(clusters, safe_mode, zone),
         }
     }
 }

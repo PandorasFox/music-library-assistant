@@ -31,12 +31,12 @@ use std::os::unix::fs::MetadataExt;
 use std::time::Instant;
 
 use crate::config;
-use crate::meta::computations::{Computation, derivation, with_read_only_db};
-use crate::meta::recomputation::RecomputationScope;
-use crate::meta::signals::data::TypedSignalWrite;
-use crate::meta::mutations::{Mutation, PendingSignal};
 use crate::corpus::paths;
 use crate::db::write_thread;
+use crate::meta::computations::{derivation, with_read_only_db, Computation};
+use crate::meta::mutations::{Mutation, PendingSignal};
+use crate::meta::recomputation::RecomputationScope;
+use crate::meta::signals::data::TypedSignalWrite;
 
 use crate::meta::maintenance::DbMaintenanceTask;
 
@@ -67,14 +67,19 @@ pub(super) fn execute_task(task: Task, label: String, queue_time: Instant) -> Ta
 ///
 /// All writes go through `write_thread::signal_sender()`. Read operations use
 /// the same thread-local cached connection as computations.
-pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms: u64) -> TaskResult {
+pub(super) fn execute_mutation(
+    mutation: Mutation,
+    label: String,
+    queue_wait_ms: u64,
+) -> TaskResult {
     use crate::meta::mutations::traits::MutationContext;
 
     let start = Instant::now();
 
     crate::logging::log_mutation(format!(
         "[EXECUTION] execute_mutation START: {} (label={:?})",
-        mutation.label(), label
+        mutation.label(),
+        label
     ));
 
     // Create execution witness - proves we're inside the Witch's execution context
@@ -97,17 +102,20 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
             session_id,
         };
         let r = executor.execute(&ctx);
-        (r.success, r.error, r.spawn_mutations, r.pending_signals, r.discovered_inodes)
+        (
+            r.success,
+            r.error,
+            r.spawn_mutations,
+            r.pending_signals,
+            r.discovered_inodes,
+        )
     });
 
     // Handle DB access failure
     let (success, error, spawn_mutations, pending_signals, discovered_inodes) = match result {
         Ok((s, e, sm, ps, di)) => (s, e, sm, ps, di),
         Err(db_err) => {
-            crate::logging::log_error(format!(
-                "[EXECUTION] DB access FAILED: {}",
-                db_err
-            ));
+            crate::logging::log_error(format!("[EXECUTION] DB access FAILED: {}", db_err));
             return TaskResult {
                 success: false,
                 error: Some(format!("DB access failed: {}", db_err)),
@@ -139,7 +147,8 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     if !success {
         if let Some(ref err) = error {
             crate::logging::log_error(format!(
-                "[EXECUTION] Mutation failed (label={:?}): {}", label, err
+                "[EXECUTION] Mutation failed (label={:?}): {}",
+                label, err
             ));
         }
 
@@ -175,7 +184,13 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
     }
 
     // Apply structured post-execution pipeline
-    let spawn = apply_post_execution(&mutation, success, &pending_signals, &discovered_inodes, &witness);
+    let spawn = apply_post_execution(
+        &mutation,
+        success,
+        &pending_signals,
+        &discovered_inodes,
+        &witness,
+    );
 
     // Extract config update for config-modifying mutations.
     // Both ApplyConfigEdits and ApplyDirConfigEdit carry the new Config in-band.
@@ -218,7 +233,11 @@ pub(super) fn execute_mutation(mutation: Mutation, label: String, queue_wait_ms:
 }
 
 /// Execute a single computation. Uses thread-local DB connection.
-pub(super) fn execute_computation(computation: Computation, label: String, queue_wait_ms: u64) -> TaskResult {
+pub(super) fn execute_computation(
+    computation: Computation,
+    label: String,
+    queue_wait_ms: u64,
+) -> TaskResult {
     use crate::meta::computations;
 
     let result = computations::execute_single(&computation);
@@ -250,7 +269,11 @@ pub(super) fn execute_computation(computation: Computation, label: String, queue
 }
 
 /// Execute a database maintenance task (migration or vacuum).
-pub(super) fn execute_maintenance(task: DbMaintenanceTask, label: String, queue_wait_ms: u64) -> TaskResult {
+pub(super) fn execute_maintenance(
+    task: DbMaintenanceTask,
+    label: String,
+    queue_wait_ms: u64,
+) -> TaskResult {
     let start = Instant::now();
 
     let (success, error) = match task {
@@ -441,11 +464,11 @@ fn apply_post_execution(
         let abs = resolver.resolve(&rel);
         if paths::is_corpus_path(&rel) {
             spawned.push(Computation::Derivation(
-                derivation::Computation::UpdateCorpusFileSignals { path: abs }
+                derivation::Computation::UpdateCorpusFileSignals { path: abs },
             ));
         } else if paths::is_library_path(&rel) {
             spawned.push(Computation::Derivation(
-                derivation::Computation::UpdateLibraryFileSignals { path: abs }
+                derivation::Computation::UpdateLibraryFileSignals { path: abs },
             ));
         }
     }
@@ -460,7 +483,12 @@ fn apply_post_execution(
     if !signals_to_clear.is_empty() {
         if let Some(sender) = write_thread::signal_sender() {
             for spec in &signals_to_clear {
-                sender.clear_aggregate_signal_fn(spec.clear_by_key_fn, &spec.key, spec.label, witness);
+                sender.clear_aggregate_signal_fn(
+                    spec.clear_by_key_fn,
+                    &spec.key,
+                    spec.label,
+                    witness,
+                );
             }
         }
     }
@@ -522,18 +550,19 @@ pub(super) fn execute_external_fetch(
     let start = Instant::now();
 
     let fetch_result = match task {
-        ExternalFetchTask::AcoustId(ref t) => {
-            execute_acoustid_lookup(t.inode, &t.fingerprint_raw, t.fingerprint_blob.clone(), t.duration_secs, &t.api_key)
-        }
-        ExternalFetchTask::MusicBrainz(ref t) => {
-            execute_mb_fetch(t.kind, &t.mbid, &t.base_url)
-        }
+        ExternalFetchTask::AcoustId(ref t) => execute_acoustid_lookup(
+            t.inode,
+            &t.fingerprint_raw,
+            t.fingerprint_blob.clone(),
+            t.duration_secs,
+            &t.api_key,
+        ),
+        ExternalFetchTask::MusicBrainz(ref t) => execute_mb_fetch(t.kind, &t.mbid, &t.base_url),
     };
 
     let success = !matches!(
         fetch_result,
-        FetchResultData::AcoustIdError
-        | FetchResultData::MbError
+        FetchResultData::AcoustIdError | FetchResultData::MbError
     );
 
     TaskResult {
@@ -564,8 +593,8 @@ fn execute_acoustid_lookup(
     duration_secs: u32,
     api_key: &str,
 ) -> FetchResultData {
-    use crate::external::acoustid::{AcoustIDClient, LookupOutcome};
     use super::external_fetch::MatchRow;
+    use crate::external::acoustid::{AcoustIDClient, LookupOutcome};
 
     let result = ACOUSTID_CLIENT.with(|cell| {
         let mut opt = cell.borrow_mut();
@@ -601,12 +630,7 @@ fn execute_acoustid_lookup(
                         None,
                         now,
                     );
-                    sender.insert_mb_known_entity(
-                        &row.recording_id,
-                        "recording",
-                        None,
-                        now,
-                    );
+                    sender.insert_mb_known_entity(&row.recording_id, "recording", None, now);
                 }
                 sender.delete_external_retry(inode, acoustid_source_key);
             }
@@ -636,15 +660,11 @@ fn execute_acoustid_lookup(
         Err(e) => {
             let error = format!("{:#}", e);
             crate::logging::log_error(format!(
-                "[FETCH] AcoustID lookup failed for inode {}: {}", inode, error
+                "[FETCH] AcoustID lookup failed for inode {}: {}",
+                inode, error
             ));
             if let Some(sender) = write_thread::signal_sender() {
-                sender.upsert_external_retry(
-                    inode,
-                    fingerprint_blob,
-                    acoustid_source_key,
-                    &error,
-                );
+                sender.upsert_external_retry(inode, fingerprint_blob, acoustid_source_key, &error);
             }
             FetchResultData::AcoustIdError
         }
@@ -653,7 +673,7 @@ fn execute_acoustid_lookup(
 
 /// Execute a MusicBrainz entity fetch. Writes cache + discovered entities to DB immediately.
 fn execute_mb_fetch(kind: MbEntityKind, mbid: &str, base_url: &str) -> FetchResultData {
-    use crate::external::musicbrainz::{MusicBrainzClient, MbLookupOutcome};
+    use crate::external::musicbrainz::{MbLookupOutcome, MusicBrainzClient};
 
     let fetch_result = MB_CLIENT.with(|cell| {
         let mut opt = cell.borrow_mut();
@@ -693,20 +713,16 @@ fn execute_mb_fetch(kind: MbEntityKind, mbid: &str, base_url: &str) -> FetchResu
 
             // Extract and persist discovered entities (recordings only)
             let discovered_entities = if kind == MbEntityKind::Recording {
-                let entities = super::external_fetch::extract_entities_from_recording(&raw_json, mbid)
-                    .unwrap_or_default();
+                let entities =
+                    super::external_fetch::extract_entities_from_recording(&raw_json, mbid)
+                        .unwrap_or_default();
 
                 // Write discovered entities to DB immediately for crash-safety
                 if !entities.is_empty() {
                     if let Some(sender) = write_thread::signal_sender() {
                         let now = now_unix();
                         for (ek, ref eid) in &entities {
-                            sender.insert_mb_known_entity(
-                                eid,
-                                ek.as_str(),
-                                Some(mbid),
-                                now,
-                            );
+                            sender.insert_mb_known_entity(eid, ek.as_str(), Some(mbid), now);
                         }
                     }
                 }
@@ -716,11 +732,15 @@ fn execute_mb_fetch(kind: MbEntityKind, mbid: &str, base_url: &str) -> FetchResu
                 Vec::new()
             };
 
-            FetchResultData::MbFound { discovered_entities }
+            FetchResultData::MbFound {
+                discovered_entities,
+            }
         }
         Ok(MbLookupOutcome::NotFound) => {
             crate::logging::log_general(format!(
-                "[FETCH] MB {} {} not found (404)", kind.as_str(), mbid
+                "[FETCH] MB {} {} not found (404)",
+                kind.as_str(),
+                mbid
             ));
             FetchResultData::MbNotFound
         }
@@ -736,7 +756,10 @@ fn execute_mb_fetch(kind: MbEntityKind, mbid: &str, base_url: &str) -> FetchResu
         Err(e) => {
             let error = format!("{:#}", e);
             crate::logging::log_error(format!(
-                "[FETCH] MB fetch failed for {} {}: {}", kind.as_str(), mbid, error
+                "[FETCH] MB fetch failed for {} {}: {}",
+                kind.as_str(),
+                mbid,
+                error
             ));
             FetchResultData::MbError
         }
@@ -749,4 +772,3 @@ fn now_unix() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
-

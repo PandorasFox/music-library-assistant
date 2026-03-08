@@ -4,13 +4,13 @@
 
 use std::time::Instant;
 
-use crate::logging::log_general;
-use crate::meta::computations::types::ComputationWitness;
-use crate::meta::computations::helpers::drop_stale_corpus_signal;
 use crate::db::types::Zone;
-use crate::meta::signals::data::{ShitFormatSignal, TypedSignalWrite};
-use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
+use crate::db::ReadOnlyDb;
+use crate::logging::log_general;
+use crate::meta::computations::helpers::drop_stale_corpus_signal;
+use crate::meta::computations::types::ComputationWitness;
+use crate::meta::signals::data::{ShitFormatSignal, TypedSignalWrite};
 
 use super::{Computation, Result};
 
@@ -20,7 +20,9 @@ use super::{Computation, Result};
 
 /// File types that should trigger ShitFormat signal (non-Vorbis containers).
 /// Includes lossy formats with poor metadata and lossless needing remux.
-const SHIT_FORMAT_TYPES: &[&str] = &["mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv"];
+const SHIT_FORMAT_TYPES: &[&str] = &[
+    "mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv",
+];
 
 const SHIT_FORMAT_COMPUTATION: &str = "shit_format";
 
@@ -82,13 +84,23 @@ pub fn execute_detect_shit_formats(
                     emitted += 1;
                 } else {
                     // Not a shit format — clear any stale signal
-                    drop_stale_corpus_signal::<ShitFormatSignal>(read_only_db, &sender, *inode, witness);
+                    drop_stale_corpus_signal::<ShitFormatSignal>(
+                        read_only_db,
+                        &sender,
+                        *inode,
+                        witness,
+                    );
                     cleared += 1;
                 }
             }
             _ => {
                 // File gone from corpus — clear any stale signal
-                drop_stale_corpus_signal::<ShitFormatSignal>(read_only_db, &sender, *inode, witness);
+                drop_stale_corpus_signal::<ShitFormatSignal>(
+                    read_only_db,
+                    &sender,
+                    *inode,
+                    witness,
+                );
                 cleared += 1;
             }
         }
@@ -98,7 +110,9 @@ pub fn execute_detect_shit_formats(
 
     log_general(format!(
         "[COMPUTE] DetectShitFormats: {} dirty inodes, emitted={}, cleared={}",
-        dirty_inodes.len(), emitted, cleared
+        dirty_inodes.len(),
+        emitted,
+        cleared
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())

@@ -20,7 +20,7 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{SubparDuplicateModalData, SelectedButton};
+use super::types::{SelectedButton, SubparDuplicateModalData};
 use crate::ui::helpers::{render_pane, truncate_left};
 use crate::ui::widgets::{ListClickTargets, PathField, CURSOR_STYLE};
 
@@ -77,7 +77,10 @@ pub struct SubparDuplicatePreviewState {
 impl SubparDuplicatePreviewState {
     /// Path of the currently selected file (for status bar).
     pub fn selected_path(&self) -> Option<&str> {
-        self.cached_data.files.get(self.scroll).map(|f| f.corpus_path.as_str())
+        self.cached_data
+            .files
+            .get(self.scroll)
+            .map(|f| f.corpus_path.as_str())
     }
 
     /// Create a new preview state with cached data.
@@ -92,7 +95,12 @@ impl SubparDuplicatePreviewState {
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<SubparDuplicatePreviewAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<SubparDuplicatePreviewAction> {
         if let Some(id) = self.click_targets.hit_test(x, y) {
             if let Ok(idx) = id.parse::<usize>() {
                 if idx < self.cached_data.files.len() {
@@ -226,7 +234,7 @@ impl SubparDuplicatePreviewState {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(6),               // List pane (top)
+                Constraint::Min(6),                // List pane (top)
                 Constraint::Length(detail_height), // Detail pane (bottom, dynamic)
             ])
             .split(area);
@@ -234,9 +242,17 @@ impl SubparDuplicatePreviewState {
         // Render list pane (top)
         let block = Block::default()
             .title(format!(" Subpar Files ({}) ", count))
-            .title_style(Style::default().fg(if count > 0 { Color::Cyan } else { Color::DarkGray }))
+            .title_style(Style::default().fg(if count > 0 {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            }))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(if list_focused { Color::Cyan } else { Color::DarkGray }));
+            .border_style(Style::default().fg(if list_focused {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            }));
 
         let inner = render_pane(f, chunks[0], block);
 
@@ -251,8 +267,11 @@ impl SubparDuplicatePreviewState {
 
             // Track click target rows
             for (vis_idx, entry_idx) in (scroll..).take(visible_lines).enumerate() {
-                if entry_idx >= self.cached_data.files.len() { break; }
-                self.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+                if entry_idx >= self.cached_data.files.len() {
+                    break;
+                }
+                self.click_targets
+                    .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
             }
 
             // Four columns: 40% subpar path | 10% reason | 8% score | 42% superior path
@@ -283,8 +302,10 @@ impl SubparDuplicatePreviewState {
                         Style::default().fg(Color::Yellow)
                     };
 
-                    let subpar_path = truncate_left(&file.corpus_path, left_width.saturating_sub(1));
-                    let superior_path = truncate_left(&file.superior_path, right_width.saturating_sub(1));
+                    let subpar_path =
+                        truncate_left(&file.corpus_path, left_width.saturating_sub(1));
+                    let superior_path =
+                        truncate_left(&file.superior_path, right_width.saturating_sub(1));
                     let score_str = format!("{:.1}%", file.similarity_score);
 
                     let score_style = if is_selected && list_focused {
@@ -307,7 +328,11 @@ impl SubparDuplicatePreviewState {
                             score_style,
                         ),
                         Span::styled(
-                            format!(" {:<width$}", superior_path, width = right_width.saturating_sub(1)),
+                            format!(
+                                " {:<width$}",
+                                superior_path,
+                                width = right_width.saturating_sub(1)
+                            ),
                             style,
                         ),
                     ]);
@@ -380,7 +405,10 @@ impl SubparDuplicatePreviewState {
         let stash_style = if !has_files {
             Style::default().fg(Color::DarkGray)
         } else if buttons_focused && self.selected_button == SelectedButton::StashAll {
-            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Cyan)
         };
@@ -389,7 +417,10 @@ impl SubparDuplicatePreviewState {
 
         // Cancel button
         let cancel_style = if buttons_focused && self.selected_button == SelectedButton::Cancel {
-            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::White)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
@@ -402,10 +433,15 @@ impl SubparDuplicatePreviewState {
             Style::default().fg(Color::DarkGray),
         ));
 
-        let controls = Paragraph::new(Line::from(buttons))
-            .block(Block::default().borders(Borders::TOP).border_style(
-                Style::default().fg(if buttons_focused { Color::Cyan } else { Color::DarkGray })
-            ));
+        let controls = Paragraph::new(Line::from(buttons)).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(if buttons_focused {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                })),
+        );
 
         f.render_widget(controls, area);
     }

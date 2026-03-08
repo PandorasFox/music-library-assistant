@@ -87,7 +87,9 @@ impl OobSyncState {
 
     pub fn new(files: Vec<OobSyncFile>) -> Self {
         // Default to AcceptDisk if there are disk-to-index files, otherwise AcceptDb
-        let has_disk_to_index = files.iter().any(|f| f.direction == OobSyncDirection::DiskToIndex);
+        let has_disk_to_index = files
+            .iter()
+            .any(|f| f.direction == OobSyncDirection::DiskToIndex);
         let default_button = if has_disk_to_index {
             OobSyncButton::AcceptDisk
         } else {
@@ -123,7 +125,8 @@ impl OobSyncState {
     /// Apply a filter condition and compute filtered indices.
     pub fn apply_filter(&mut self, condition: FilterCondition) {
         if condition.is_active() {
-            let indices: Vec<usize> = self.files
+            let indices: Vec<usize> = self
+                .files
                 .iter()
                 .enumerate()
                 .filter(|(_, _f)| {
@@ -150,15 +153,26 @@ impl OobSyncState {
 
     /// Count of files by direction.
     pub fn disk_to_index_count(&self) -> usize {
-        self.files.iter().filter(|f| f.direction == OobSyncDirection::DiskToIndex).count()
+        self.files
+            .iter()
+            .filter(|f| f.direction == OobSyncDirection::DiskToIndex)
+            .count()
     }
 
     pub fn index_to_disk_count(&self) -> usize {
-        self.files.iter().filter(|f| f.direction == OobSyncDirection::IndexToDisk).count()
+        self.files
+            .iter()
+            .filter(|f| f.direction == OobSyncDirection::IndexToDisk)
+            .count()
     }
 
     /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<OobSyncAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<OobSyncAction> {
         if let Some(button_name) = self.button_rects.hit_test(x, y) {
             self.focus_pane = FocusPane::Buttons;
             match button_name {

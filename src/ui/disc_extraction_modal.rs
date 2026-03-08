@@ -124,65 +124,63 @@ impl DiscExtractionData {
     ) -> Self {
         let groups = signals
             .into_iter()
-            .map(|s| {
-                match &s.data.source {
-                    DiscExtractionSource::Album {
-                        original_album,
-                        cleaned_album,
-                        disc_number,
-                    } => {
-                        let files: Vec<DiscFileEntry> = s
-                            .data
-                            .inodes
-                            .iter()
-                            .map(|&inode| DiscFileEntry {
-                                inode,
-                                path: path_lookup(inode),
-                                original_value: original_album.clone(),
-                                cleaned_value: cleaned_album.clone(),
-                                source_tag: "ALBUM".to_string(),
-                            })
-                            .collect();
-                        DiscExtractionGroup {
-                            description: format!("Album \"{}\" → Disc {}", original_album, disc_number),
-                            disc_value: disc_number.clone(),
-                            files,
-                        }
+            .map(|s| match &s.data.source {
+                DiscExtractionSource::Album {
+                    original_album,
+                    cleaned_album,
+                    disc_number,
+                } => {
+                    let files: Vec<DiscFileEntry> = s
+                        .data
+                        .inodes
+                        .iter()
+                        .map(|&inode| DiscFileEntry {
+                            inode,
+                            path: path_lookup(inode),
+                            original_value: original_album.clone(),
+                            cleaned_value: cleaned_album.clone(),
+                            source_tag: "ALBUM".to_string(),
+                        })
+                        .collect();
+                    DiscExtractionGroup {
+                        description: format!("Album \"{}\" → Disc {}", original_album, disc_number),
+                        disc_value: disc_number.clone(),
+                        files,
                     }
-                    DiscExtractionSource::TrackNumber {
-                        disc_prefix,
-                        album,
-                        album_artist,
-                        per_file,
-                    } => {
-                        let disc_value = if map_letters_to_numbers {
-                            letter_to_number(disc_prefix)
-                        } else {
-                            disc_prefix.clone()
-                        };
-                        let files: Vec<DiscFileEntry> = per_file
-                            .iter()
-                            .map(|tf| DiscFileEntry {
-                                inode: tf.inode,
-                                path: path_lookup(tf.inode),
-                                original_value: tf.original_value.clone(),
-                                cleaned_value: tf.cleaned_digits.clone(),
-                                source_tag: "TRACKNUMBER".to_string(),
-                            })
-                            .collect();
-                        let context = if album_artist.is_empty() {
-                            album.clone()
-                        } else {
-                            format!("{} — {}", album_artist, album)
-                        };
-                        DiscExtractionGroup {
-                            description: format!(
-                                "TrackNumber prefix \"{}\" in {}",
-                                disc_prefix, context
-                            ),
-                            disc_value,
-                            files,
-                        }
+                }
+                DiscExtractionSource::TrackNumber {
+                    disc_prefix,
+                    album,
+                    album_artist,
+                    per_file,
+                } => {
+                    let disc_value = if map_letters_to_numbers {
+                        letter_to_number(disc_prefix)
+                    } else {
+                        disc_prefix.clone()
+                    };
+                    let files: Vec<DiscFileEntry> = per_file
+                        .iter()
+                        .map(|tf| DiscFileEntry {
+                            inode: tf.inode,
+                            path: path_lookup(tf.inode),
+                            original_value: tf.original_value.clone(),
+                            cleaned_value: tf.cleaned_digits.clone(),
+                            source_tag: "TRACKNUMBER".to_string(),
+                        })
+                        .collect();
+                    let context = if album_artist.is_empty() {
+                        album.clone()
+                    } else {
+                        format!("{} — {}", album_artist, album)
+                    };
+                    DiscExtractionGroup {
+                        description: format!(
+                            "TrackNumber prefix \"{}\" in {}",
+                            disc_prefix, context
+                        ),
+                        disc_value,
+                        files,
                     }
                 }
             })
@@ -262,7 +260,12 @@ impl DiscExtractionState {
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(&mut self, x: u16, y: u16, _gesture: &ConfirmationGesture) -> Option<DiscExtractionAction> {
+    pub fn handle_click(
+        &mut self,
+        x: u16,
+        y: u16,
+        _gesture: &ConfirmationGesture,
+    ) -> Option<DiscExtractionAction> {
         if let Some(id) = self.click_targets.hit_test(x, y) {
             if let Ok(idx) = id.parse::<usize>() {
                 let file_count = self.current_group_data().map_or(0, |g| g.files.len());
@@ -408,8 +411,11 @@ impl DiscExtractionState {
         self.click_targets.set_list_area(inner);
         let visible_height = inner.height as usize;
         for (vis_idx, entry_idx) in (self.file_scroll..).take(visible_height).enumerate() {
-            if entry_idx >= group.files.len() { break; }
-            self.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+            if entry_idx >= group.files.len() {
+                break;
+            }
+            self.click_targets
+                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
         }
 
         let entries: Vec<PathEntry> = group
@@ -455,10 +461,7 @@ impl DiscExtractionState {
                             Style::default().fg(Color::Cyan),
                         ))),
                         ListItem::new(Line::from(Span::styled(
-                            format!(
-                                " + {} = \"{}\"",
-                                self.disc_tag_name, group.disc_value
-                            ),
+                            format!(" + {} = \"{}\"", self.disc_tag_name, group.disc_value),
                             Style::default().fg(Color::Green),
                         ))),
                     ]
@@ -494,10 +497,7 @@ impl DiscExtractionState {
         }
 
         // Resolution buttons (top line of inner area)
-        let button_area = Rect {
-            height: 1,
-            ..inner
-        };
+        let button_area = Rect { height: 1, ..inner };
 
         let buttons = [
             ConfirmationButton::new("Apply", Color::Cyan)

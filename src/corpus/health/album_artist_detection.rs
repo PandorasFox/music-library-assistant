@@ -17,8 +17,8 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::db::ReadOnlyDb;
 use super::normalization::normalize_artist;
+use crate::db::ReadOnlyDb;
 
 /// An album with inconsistent album_artist that needs resolution.
 #[derive(Debug, Clone)]
@@ -72,7 +72,9 @@ pub fn detect_inconsistent_album_artist(db: &ReadOnlyDb<'_>) -> Result<Vec<Album
         for track in &tracks {
             inodes.push(track.inode);
             *artist_counts.entry(track.artist.clone()).or_insert(0) += 1;
-            *album_artist_counts.entry(track.album_artist.clone()).or_insert(0) += 1;
+            *album_artist_counts
+                .entry(track.album_artist.clone())
+                .or_insert(0) += 1;
             if album_name.is_empty() && !track.album.is_empty() {
                 album_name = track.album.clone();
             }
@@ -172,4 +174,3 @@ fn normalize_album(album: &str) -> String {
     // Albums need less aggressive normalization than artists
     normalize_artist(album)
 }
-

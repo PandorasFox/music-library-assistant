@@ -160,30 +160,63 @@ impl Computation {
             Computation::ScheduleSecondLevelDerivations => {
                 execute_schedule_second_level_derivations(ctx.read_db, ctx.witness, ctx.start)
             }
-            Computation::DeriveInboxSignals { observed_inodes } => {
-                execute_derive_inbox_signals(ctx.read_db, observed_inodes.clone(), ctx.witness, ctx.start)
-            }
-            Computation::DeriveCorpusSignals { observed_inodes } => {
-                execute_derive_corpus_signals(ctx.read_db, observed_inodes.clone(), ctx.witness, ctx.start)
-            }
+            Computation::DeriveInboxSignals { observed_inodes } => execute_derive_inbox_signals(
+                ctx.read_db,
+                observed_inodes.clone(),
+                ctx.witness,
+                ctx.start,
+            ),
+            Computation::DeriveCorpusSignals { observed_inodes } => execute_derive_corpus_signals(
+                ctx.read_db,
+                observed_inodes.clone(),
+                ctx.witness,
+                ctx.start,
+            ),
             Computation::UpdateCorpusFileSignals { path } => {
                 execute_update_corpus_file_signals(ctx.read_db, path, ctx.witness, ctx.start)
             }
             Computation::UpdateLibraryFileSignals { path } => {
                 execute_update_library_file_signals(ctx.read_db, path, ctx.witness, ctx.start)
             }
-            Computation::WalkLibrary { library_root, library_name, corpus_path_prefixes } => {
-                execute_walk_library(ctx.read_db, library_root, library_name, corpus_path_prefixes, ctx.witness, ctx.start)
-            }
-            Computation::ScanLibraryDirectory { directory, library_name, library_root, corpus_path_prefixes } => {
-                execute_scan_library_directory(ctx.read_db, directory, library_name, library_root, corpus_path_prefixes, ctx.witness, ctx.start)
-            }
+            Computation::WalkLibrary {
+                library_root,
+                library_name,
+                corpus_path_prefixes,
+            } => execute_walk_library(
+                ctx.read_db,
+                library_root,
+                library_name,
+                corpus_path_prefixes,
+                ctx.witness,
+                ctx.start,
+            ),
+            Computation::ScanLibraryDirectory {
+                directory,
+                library_name,
+                library_root,
+                corpus_path_prefixes,
+            } => execute_scan_library_directory(
+                ctx.read_db,
+                directory,
+                library_name,
+                library_root,
+                corpus_path_prefixes,
+                ctx.witness,
+                ctx.start,
+            ),
             Computation::ReconcileLibraryFiles { observed_files } => {
                 execute_reconcile_library_files(ctx.read_db, observed_files, ctx.witness, ctx.start)
             }
-            Computation::UpdateDeploySignals { corpus_path, library_path } => {
-                execute_update_deploy_signals(ctx.read_db, corpus_path, library_path, ctx.witness, ctx.start)
-            }
+            Computation::UpdateDeploySignals {
+                corpus_path,
+                library_path,
+            } => execute_update_deploy_signals(
+                ctx.read_db,
+                corpus_path,
+                library_path,
+                ctx.witness,
+                ctx.start,
+            ),
         }
     }
 }

@@ -11,12 +11,14 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::meta::computations::{Computation, derivation};
+use crate::meta::computations::{derivation, Computation};
 use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::*;
 
 use super::traits::{MutationContext, MutationExecutor};
-use super::types::{DiffEntry, Mutation, MutationResult, SignalClearScope, SignalToClear, path_filename};
+use super::types::{
+    path_filename, DiffEntry, Mutation, MutationResult, SignalClearScope, SignalToClear,
+};
 
 // ============================================================================
 // Mutation Structs
@@ -101,8 +103,12 @@ pub struct InboxDirToCorpusMutation {
 // ============================================================================
 
 impl MutationExecutor for MoveMutation {
-    fn label(&self) -> &'static str { "File move" }
-    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
+    fn label(&self) -> &'static str {
+        "File move"
+    }
+    fn staging(&self) -> super::traits::MutationStaging {
+        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush)
+    }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -122,10 +128,16 @@ impl MutationExecutor for MoveMutation {
         }
     }
 
-    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+    fn signal_clear_scope(&self) -> SignalClearScope {
+        SignalClearScope::MutableOnly
+    }
 
-    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES }
+    fn affected_inodes(&self) -> Vec<i64> {
+        Vec::new()
+    }
+    fn recomputation_scope(&self) -> RecomputationScope {
+        RecomputationScope::FILES
+    }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.source.clone(), self.destination.clone()]
@@ -141,8 +153,12 @@ impl MutationExecutor for MoveMutation {
 }
 
 impl MutationExecutor for StashFromZoneMutation {
-    fn label(&self) -> &'static str { "File stash" }
-    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
+    fn label(&self) -> &'static str {
+        "File stash"
+    }
+    fn staging(&self) -> super::traits::MutationStaging {
+        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush)
+    }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         use std::os::unix::fs::MetadataExt;
@@ -176,10 +192,16 @@ impl MutationExecutor for StashFromZoneMutation {
         }
     }
 
-    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
+    fn signal_clear_scope(&self) -> SignalClearScope {
+        SignalClearScope::All
+    }
 
-    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::DEPLOY }
+    fn affected_inodes(&self) -> Vec<i64> {
+        Vec::new()
+    }
+    fn recomputation_scope(&self) -> RecomputationScope {
+        RecomputationScope::FILES | RecomputationScope::DEPLOY
+    }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
         vec![DiffEntry::new(
@@ -191,8 +213,12 @@ impl MutationExecutor for StashFromZoneMutation {
 }
 
 impl MutationExecutor for StashLeftoversMutation {
-    fn label(&self) -> &'static str { "Library leftover stash" }
-    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush) }
+    fn label(&self) -> &'static str {
+        "Library leftover stash"
+    }
+    fn staging(&self) -> super::traits::MutationStaging {
+        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush)
+    }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         use std::os::unix::fs::MetadataExt;
@@ -226,10 +252,16 @@ impl MutationExecutor for StashLeftoversMutation {
         }
     }
 
-    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::All }
+    fn signal_clear_scope(&self) -> SignalClearScope {
+        SignalClearScope::All
+    }
 
-    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::DEPLOY }
+    fn affected_inodes(&self) -> Vec<i64> {
+        Vec::new()
+    }
+    fn recomputation_scope(&self) -> RecomputationScope {
+        RecomputationScope::FILES | RecomputationScope::DEPLOY
+    }
 
     fn specific_signals_to_clear(&self) -> Vec<SignalToClear> {
         use crate::corpus::paths;
@@ -256,8 +288,12 @@ impl MutationExecutor for StashLeftoversMutation {
 }
 
 impl MutationExecutor for HardLinkMutation {
-    fn label(&self) -> &'static str { "Hard link" }
-    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskDeploy) }
+    fn label(&self) -> &'static str {
+        "Hard link"
+    }
+    fn staging(&self) -> super::traits::MutationStaging {
+        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskDeploy)
+    }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -277,20 +313,28 @@ impl MutationExecutor for HardLinkMutation {
         }
     }
 
-    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+    fn signal_clear_scope(&self) -> SignalClearScope {
+        SignalClearScope::MutableOnly
+    }
 
-    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::DEPLOY }
+    fn affected_inodes(&self) -> Vec<i64> {
+        Vec::new()
+    }
+    fn recomputation_scope(&self) -> RecomputationScope {
+        RecomputationScope::DEPLOY
+    }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.source.clone(), self.destination.clone()]
     }
 
     fn additional_computations(&self) -> Vec<Computation> {
-        vec![Computation::Derivation(derivation::Computation::UpdateDeploySignals {
-            corpus_path: self.source.clone(),
-            library_path: self.destination.clone(),
-        })]
+        vec![Computation::Derivation(
+            derivation::Computation::UpdateDeploySignals {
+                corpus_path: self.source.clone(),
+                library_path: self.destination.clone(),
+            },
+        )]
     }
 
     fn diff_entries(&self) -> Vec<DiffEntry> {
@@ -303,8 +347,12 @@ impl MutationExecutor for HardLinkMutation {
 }
 
 impl MutationExecutor for LibraryMoveMutation {
-    fn label(&self) -> &'static str { "Library move" }
-    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskDeploy) }
+    fn label(&self) -> &'static str {
+        "Library move"
+    }
+    fn staging(&self) -> super::traits::MutationStaging {
+        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskDeploy)
+    }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
@@ -324,10 +372,16 @@ impl MutationExecutor for LibraryMoveMutation {
         }
     }
 
-    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+    fn signal_clear_scope(&self) -> SignalClearScope {
+        SignalClearScope::MutableOnly
+    }
 
-    fn affected_inodes(&self) -> Vec<i64> { Vec::new() }
-    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::DEPLOY }
+    fn affected_inodes(&self) -> Vec<i64> {
+        Vec::new()
+    }
+    fn recomputation_scope(&self) -> RecomputationScope {
+        RecomputationScope::DEPLOY
+    }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.source.clone(), self.destination.clone()]
@@ -358,25 +412,28 @@ impl MutationExecutor for LibraryMoveMutation {
 }
 
 impl MutationExecutor for InboxToCorpusMutation {
-    fn label(&self) -> &'static str { "Inbox → Corpus" }
-    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
+    fn label(&self) -> &'static str {
+        "Inbox → Corpus"
+    }
+    fn staging(&self) -> super::traits::MutationStaging {
+        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
+    }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
 
         // Step 1: Move file on disk
-        let result = execute_move(&self.inbox_path, &self.corpus_path)
-            .and_then(|()| {
-                // Step 2: Update DB path + zone (inbox → corpus, migrates tags)
-                super::indexing::execute_update_file_path(
-                    ctx.read_db,
-                    "inbox",
-                    self.inode,
-                    &self.corpus_path,
-                    Some("corpus"),
-                    ctx.witness,
-                )
-            });
+        let result = execute_move(&self.inbox_path, &self.corpus_path).and_then(|()| {
+            // Step 2: Update DB path + zone (inbox → corpus, migrates tags)
+            super::indexing::execute_update_file_path(
+                ctx.read_db,
+                "inbox",
+                self.inode,
+                &self.corpus_path,
+                Some("corpus"),
+                ctx.witness,
+            )
+        });
 
         let (success, error) = match result {
             Ok(()) => (true, None),
@@ -393,10 +450,16 @@ impl MutationExecutor for InboxToCorpusMutation {
         }
     }
 
-    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+    fn signal_clear_scope(&self) -> SignalClearScope {
+        SignalClearScope::MutableOnly
+    }
 
-    fn affected_inodes(&self) -> Vec<i64> { vec![self.inode] }
-    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::TAGS | RecomputationScope::INBOX }
+    fn affected_inodes(&self) -> Vec<i64> {
+        vec![self.inode]
+    }
+    fn recomputation_scope(&self) -> RecomputationScope {
+        RecomputationScope::FILES | RecomputationScope::TAGS | RecomputationScope::INBOX
+    }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.inbox_path.clone(), self.corpus_path.clone()]
@@ -412,28 +475,31 @@ impl MutationExecutor for InboxToCorpusMutation {
 }
 
 impl MutationExecutor for InboxDirToCorpusMutation {
-    fn label(&self) -> &'static str { "Inbox dir → Corpus" }
-    fn staging(&self) -> super::traits::MutationStaging { super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB) }
+    fn label(&self) -> &'static str {
+        "Inbox dir → Corpus"
+    }
+    fn staging(&self) -> super::traits::MutationStaging {
+        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
+    }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
 
         // Step 1: Move the entire directory on disk
-        let result = execute_move(&self.inbox_dir_path, &self.corpus_dir_path)
-            .and_then(|()| {
-                // Step 2: Update DB records for each tracked audio file
-                for tracked in &self.tracked_files {
-                    super::indexing::execute_update_file_path(
-                        ctx.read_db,
-                        "inbox",
-                        tracked.inode,
-                        &tracked.corpus_path,
-                        Some("corpus"),
-                        ctx.witness,
-                    )?;
-                }
-                Ok(())
-            });
+        let result = execute_move(&self.inbox_dir_path, &self.corpus_dir_path).and_then(|()| {
+            // Step 2: Update DB records for each tracked audio file
+            for tracked in &self.tracked_files {
+                super::indexing::execute_update_file_path(
+                    ctx.read_db,
+                    "inbox",
+                    tracked.inode,
+                    &tracked.corpus_path,
+                    Some("corpus"),
+                    ctx.witness,
+                )?;
+            }
+            Ok(())
+        });
 
         let (success, error) = match result {
             Ok(()) => (true, None),
@@ -450,13 +516,17 @@ impl MutationExecutor for InboxDirToCorpusMutation {
         }
     }
 
-    fn signal_clear_scope(&self) -> SignalClearScope { SignalClearScope::MutableOnly }
+    fn signal_clear_scope(&self) -> SignalClearScope {
+        SignalClearScope::MutableOnly
+    }
 
     fn affected_inodes(&self) -> Vec<i64> {
         self.tracked_files.iter().map(|f| f.inode).collect()
     }
 
-    fn recomputation_scope(&self) -> RecomputationScope { RecomputationScope::FILES | RecomputationScope::TAGS | RecomputationScope::INBOX }
+    fn recomputation_scope(&self) -> RecomputationScope {
+        RecomputationScope::FILES | RecomputationScope::TAGS | RecomputationScope::INBOX
+    }
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.inbox_dir_path.clone(), self.corpus_dir_path.clone()]
@@ -479,10 +549,7 @@ impl MutationExecutor for InboxDirToCorpusMutation {
 /// Execute a Move mutation.
 ///
 /// Moves a file from source to destination, creating parent directories if needed.
-pub fn execute_move(
-    source: &Path,
-    destination: &Path,
-) -> Result<()> {
+pub fn execute_move(source: &Path, destination: &Path) -> Result<()> {
     // Ensure source exists
     if !source.exists() {
         return Err(anyhow::anyhow!(
@@ -611,11 +678,7 @@ fn execute_library_move_impl(source: &Path, destination: &Path) -> Result<()> {
 /// Examples:
 /// - `/archive/corpus/Artist/Album/track.flac` -> `stash/overlaps/Artist/Album/track.flac`
 /// - `/archive/libraries/music/Artist/track.mp3` -> `stash/leftovers/music/Artist/track.mp3`
-pub fn execute_move_to_stash(
-    path: &Path,
-    stash_name: &str,
-    stash_root: &Path,
-) -> Result<()> {
+pub fn execute_move_to_stash(path: &Path, stash_name: &str, stash_root: &Path) -> Result<()> {
     use crate::corpus::paths;
 
     if !path.exists() {

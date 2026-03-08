@@ -2,38 +2,36 @@
 //!
 //! KDL configuration parsing and path utilities.
 
-mod types;
-mod performance;
 mod debug;
 mod dirs;
-mod parse;
 mod edit;
+mod parse;
 pub mod path_schema;
+mod performance;
+mod types;
 
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 
 // Re-export utilities from mm-utils
-pub use mm_utils::{
-    get_config_dir, get_db_path, is_audio_extension,
-    AUDIO_EXTENSIONS,
-};
+pub use mm_utils::{get_config_dir, get_db_path, is_audio_extension, AUDIO_EXTENSIONS};
 
 // Re-export from submodules
-pub use types::{
-    Config, Opinions, StartupView, InboxOrganizeGranularity,
-    SourceDir, SharedConfig, read_shared_config, SidecarDeployMode,
-    StartupOpinions, QualityResolutionOpinions, CanonicalizationOpinions,
-    HealthDetectionOpinions, PerformanceOpinions, TagSplittingOpinions,
-    DuplicateAnalysisOpinions, ReleasePackingOpinions, PackingWeights, InboxOrganizeOpinions, ExternalMatchingConfig,
-    DiscExtractionOpinions, AlbumArtOpinions, DebugOpinions,
-};
-pub use performance::{init_performance_config, get_worker_thread_count, get_db_cache_kb, is_timing_enabled};
 pub use debug::{init_debug_config, is_memory_logging_enabled};
 pub use dirs::{parse_dirs_kdl, write_dirs_to_disk};
 pub use edit::write_config_to_disk;
 pub use path_schema::parse_path_schema;
+pub use performance::{
+    get_db_cache_kb, get_worker_thread_count, init_performance_config, is_timing_enabled,
+};
+pub use types::{
+    read_shared_config, AlbumArtOpinions, CanonicalizationOpinions, Config, DebugOpinions,
+    DiscExtractionOpinions, DuplicateAnalysisOpinions, ExternalMatchingConfig,
+    HealthDetectionOpinions, InboxOrganizeGranularity, InboxOrganizeOpinions, Opinions,
+    PackingWeights, PerformanceOpinions, QualityResolutionOpinions, ReleasePackingOpinions,
+    SharedConfig, SidecarDeployMode, SourceDir, StartupOpinions, StartupView, TagSplittingOpinions,
+};
 
 use parse::parse_kdl_config;
 

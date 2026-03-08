@@ -4,9 +4,9 @@
 //! - The External Matches lateral view (browse/fetch/launch)
 //! - The External Match Review modal (read-only browser)
 
+use super::super::App;
 use crate::meta::views::ExternalMatchReviewEntry;
 use crate::ui::{external_match_modal, external_match_view, widgets, ActiveView};
-use super::super::App;
 
 impl App {
     // =========================================================================
@@ -30,9 +30,11 @@ impl App {
             }
             external_match_view::ExternalMatchesAction::RequestQuit => {
                 if self.has_pending_operations() {
-                    self.status_message = Some("Cannot quit while operations are pending".to_string());
+                    self.status_message =
+                        Some("Cannot quit while operations are pending".to_string());
                 } else {
-                    self.view = ActiveView::ExitConfirm(super::super::ExitConfirmModalState::default());
+                    self.view =
+                        ActiveView::ExitConfirm(super::super::ExitConfirmModalState::default());
                 }
             }
             external_match_view::ExternalMatchesAction::RequestFetch => {
@@ -53,7 +55,9 @@ impl App {
             }
             external_match_view::ExternalMatchesAction::LaunchUntaggedReview => {
                 let entries = if let ActiveView::ExternalMatches(ref state) = self.view {
-                    state.cached_data.as_ref()
+                    state
+                        .cached_data
+                        .as_ref()
                         .map(|d| d.untagged_entries.clone())
                         .unwrap_or_default()
                 } else {
@@ -63,10 +67,15 @@ impl App {
             }
             external_match_view::ExternalMatchesAction::LaunchTierReview(tier) => {
                 let entries = if let ActiveView::ExternalMatches(ref state) = self.view {
-                    state.cached_data.as_ref()
-                        .and_then(|d| d.confidence_buckets.iter()
-                            .find(|b| b.tier == tier)
-                            .map(|b| b.entries.clone()))
+                    state
+                        .cached_data
+                        .as_ref()
+                        .and_then(|d| {
+                            d.confidence_buckets
+                                .iter()
+                                .find(|b| b.tier == tier)
+                                .map(|b| b.entries.clone())
+                        })
                         .unwrap_or_default()
                 } else {
                     vec![]
@@ -114,47 +123,50 @@ impl App {
 
         // Query cache thread for all recording data in one batch
         let ids = recording_ids.clone();
-        let result = self.cache.query(move |db| {
-            let mut summaries = Vec::new();
-            for rec_id in &ids {
-                let rec_cache = db.get_mb_recording_cache(rec_id).ok().flatten();
-                let recording = rec_cache
-                    .and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
+        let result = self
+            .cache
+            .query(move |db| {
+                let mut summaries = Vec::new();
+                for rec_id in &ids {
+                    let rec_cache = db.get_mb_recording_cache(rec_id).ok().flatten();
+                    let recording =
+                        rec_cache.and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
 
-                if let Some(rec) = recording {
-                    // Load cached artist data for locale-aware name resolution.
-                    let artists: Vec<(String, Option<musicbrainz::MbArtist>)> = rec
-                        .artist_credit
-                        .iter()
-                        .map(|c| {
-                            let parsed = db
-                                .get_mb_artist_cache(&c.artist.id)
-                                .ok()
-                                .flatten()
-                                .and_then(|(json, _)| musicbrainz::parse_artist(&json).ok());
-                            (c.artist.id.clone(), parsed)
-                        })
-                        .collect();
+                    if let Some(rec) = recording {
+                        // Load cached artist data for locale-aware name resolution.
+                        let artists: Vec<(String, Option<musicbrainz::MbArtist>)> = rec
+                            .artist_credit
+                            .iter()
+                            .map(|c| {
+                                let parsed = db
+                                    .get_mb_artist_cache(&c.artist.id)
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|(json, _)| musicbrainz::parse_artist(&json).ok());
+                                (c.artist.id.clone(), parsed)
+                            })
+                            .collect();
 
-                    let artist_credit = musicbrainz::join_artist_credits_localized(
-                        &rec.artist_credit,
-                        &artists,
-                        &preferred_locales,
-                    );
+                        let artist_credit = musicbrainz::join_artist_credits_localized(
+                            &rec.artist_credit,
+                            &artists,
+                            &preferred_locales,
+                        );
 
-                    summaries.push((
-                        rec_id.clone(),
-                        external_match_modal::types::RecordingSummary {
-                            title: rec.title.clone(),
-                            artist_credit,
-                            length_ms: rec.length.map(|l| l as u64),
-                            release_count: rec.releases.len(),
-                        },
-                    ));
+                        summaries.push((
+                            rec_id.clone(),
+                            external_match_modal::types::RecordingSummary {
+                                title: rec.title.clone(),
+                                artist_credit,
+                                length_ms: rec.length.map(|l| l as u64),
+                                release_count: rec.releases.len(),
+                            },
+                        ));
+                    }
                 }
-            }
-            summaries
-        }).recv();
+                summaries
+            })
+            .recv();
 
         for (id, summary) in result {
             state.recording_summaries.insert(id, summary);
@@ -213,57 +225,72 @@ impl App {
         };
 
         let rec_id = recording_id.clone();
-        let result = self.cache.query(move |db| {
-            let rec_cache = db.get_mb_recording_cache(&rec_id).ok().flatten();
-            let recording = rec_cache
-                .and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
+        let result = self
+            .cache
+            .query(move |db| {
+                let rec_cache = db.get_mb_recording_cache(&rec_id).ok().flatten();
+                let recording =
+                    rec_cache.and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
 
-            let recording = recording?;
+                let recording = recording?;
 
-            // Collect unique artist IDs from credits + relations
-            let mut artist_ids: Vec<String> = Vec::new();
-            let mut seen = std::collections::HashSet::new();
-            for credit in &recording.artist_credit {
-                if seen.insert(credit.artist.id.clone()) {
-                    artist_ids.push(credit.artist.id.clone());
-                }
-            }
-            for relation in &recording.relations {
-                if let Some(ref artist) = relation.artist {
-                    if seen.insert(artist.id.clone()) {
-                        artist_ids.push(artist.id.clone());
+                // Collect unique artist IDs from credits + relations
+                let mut artist_ids: Vec<String> = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                for credit in &recording.artist_credit {
+                    if seen.insert(credit.artist.id.clone()) {
+                        artist_ids.push(credit.artist.id.clone());
                     }
                 }
-            }
+                for relation in &recording.relations {
+                    if let Some(ref artist) = relation.artist {
+                        if seen.insert(artist.id.clone()) {
+                            artist_ids.push(artist.id.clone());
+                        }
+                    }
+                }
 
-            // Load cached artist data
-            let artists: Vec<_> = artist_ids.into_iter().map(|id| {
-                let parsed = db.get_mb_artist_cache(&id).ok().flatten()
-                    .and_then(|(json, _)| musicbrainz::parse_artist(&json).ok());
-                (id, parsed)
-            }).collect();
+                // Load cached artist data
+                let artists: Vec<_> = artist_ids
+                    .into_iter()
+                    .map(|id| {
+                        let parsed = db
+                            .get_mb_artist_cache(&id)
+                            .ok()
+                            .flatten()
+                            .and_then(|(json, _)| musicbrainz::parse_artist(&json).ok());
+                        (id, parsed)
+                    })
+                    .collect();
 
-            // Load cached release data
-            let releases: Vec<_> = recording.releases.iter().map(|r| {
-                let parsed = db.get_mb_release_cache(&r.id).ok().flatten()
-                    .and_then(|(json, _)| musicbrainz::parse_release(&json).ok());
-                (r.id.clone(), parsed)
-            }).collect();
+                // Load cached release data
+                let releases: Vec<_> = recording
+                    .releases
+                    .iter()
+                    .map(|r| {
+                        let parsed = db
+                            .get_mb_release_cache(&r.id)
+                            .ok()
+                            .flatten()
+                            .and_then(|(json, _)| musicbrainz::parse_release(&json).ok());
+                        (r.id.clone(), parsed)
+                    })
+                    .collect();
 
-            Some((recording, artists, releases))
-        }).recv();
+                Some((recording, artists, releases))
+            })
+            .recv();
 
         match result {
             Some((recording, artists, releases)) => {
                 if let ActiveView::ExternalMatchReview(ref mut state) = self.view {
-                    state.viewing_detail = Some(
-                        external_match_modal::types::RecordingDetailState {
+                    state.viewing_detail =
+                        Some(external_match_modal::types::RecordingDetailState {
                             recording,
                             artists,
                             releases,
                             scroll: 0,
-                        }
-                    );
+                        });
                 }
             }
             None => {
@@ -282,11 +309,13 @@ impl App {
         category: crate::ui::release_packing_browser::types::PackingCategory,
     ) {
         use crate::meta::signals::data::PackedReleaseCategory;
-        use crate::ui::release_packing_browser::ReleasePackingBrowserState;
         use crate::ui::release_packing_browser::types::PackingCategory;
+        use crate::ui::release_packing_browser::ReleasePackingBrowserState;
 
         let state = match category {
-            PackingCategory::FullMatches | PackingCategory::Singles | PackingCategory::Incomplete => {
+            PackingCategory::FullMatches
+            | PackingCategory::Singles
+            | PackingCategory::Incomplete => {
                 // Map UI category to signal category prefix
                 let prefix = match category {
                     PackingCategory::FullMatches => PackedReleaseCategory::FullMatch.key_prefix(),
@@ -296,12 +325,19 @@ impl App {
                 };
                 let prefix_owned = prefix.to_string();
 
-                let result = self.cache.query(move |db| {
-                    let packed = db.get_packed_releases_by_category(&prefix_owned).unwrap_or_default();
-                    let packing = db.get_release_packing_signal_data().unwrap_or_default();
-                    let unfilled = db.get_unfilled_release_slot_signal_data().unwrap_or_default();
-                    (packed, packing, unfilled)
-                }).recv();
+                let result = self
+                    .cache
+                    .query(move |db| {
+                        let packed = db
+                            .get_packed_releases_by_category(&prefix_owned)
+                            .unwrap_or_default();
+                        let packing = db.get_release_packing_signal_data().unwrap_or_default();
+                        let unfilled = db
+                            .get_unfilled_release_slot_signal_data()
+                            .unwrap_or_default();
+                        (packed, packing, unfilled)
+                    })
+                    .recv();
 
                 let (packed, packing, unfilled) = result;
 
@@ -313,9 +349,10 @@ impl App {
                 ReleasePackingBrowserState::build_releases(category, packed, packing, unfilled)
             }
             PackingCategory::NearMisses => {
-                let near_misses = self.cache.query(|db| {
-                    db.get_near_miss_release_signal_data().unwrap_or_default()
-                }).recv();
+                let near_misses = self
+                    .cache
+                    .query(|db| db.get_near_miss_release_signal_data().unwrap_or_default())
+                    .recv();
 
                 if near_misses.is_empty() {
                     self.status_message = Some("No near-miss releases".to_string());
@@ -325,9 +362,13 @@ impl App {
                 ReleasePackingBrowserState::build_near_misses(near_misses)
             }
             PackingCategory::Unmatched => {
-                let unmatched = self.cache.query(|db| {
-                    db.get_unmatched_corpus_track_signal_data().unwrap_or_default()
-                }).recv();
+                let unmatched = self
+                    .cache
+                    .query(|db| {
+                        db.get_unmatched_corpus_track_signal_data()
+                            .unwrap_or_default()
+                    })
+                    .recv();
 
                 if unmatched.is_empty() {
                     self.status_message = Some("No unmatched files".to_string());

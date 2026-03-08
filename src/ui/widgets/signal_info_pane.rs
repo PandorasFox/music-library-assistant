@@ -171,7 +171,13 @@ impl<'a> SignalInfoPane<'a> {
         lines
     }
 
-    fn new_directory_content(&self, directory: &str, file_count: usize, sidecars: &[SidecarSummary], width: u16) -> Vec<Line<'a>> {
+    fn new_directory_content(
+        &self,
+        directory: &str,
+        file_count: usize,
+        sidecars: &[SidecarSummary],
+        width: u16,
+    ) -> Vec<Line<'a>> {
         let mut lines = vec![
             Line::from(""),
             Line::from(vec![
@@ -227,9 +233,16 @@ impl<'a> SignalInfoPane<'a> {
                 };
                 let desc = format!(
                     "  {} {}x{} {}{}",
-                    sc.filename, sc.width, sc.height, sc.format.to_uppercase(), role_suffix
+                    sc.filename,
+                    sc.width,
+                    sc.height,
+                    sc.format.to_uppercase(),
+                    role_suffix
                 );
-                lines.push(Line::from(Span::styled(desc, Style::default().fg(Color::DarkGray))));
+                lines.push(Line::from(Span::styled(
+                    desc,
+                    Style::default().fg(Color::DarkGray),
+                )));
             }
         }
 
@@ -241,16 +254,19 @@ impl<'a> SignalInfoPane<'a> {
         lines
     }
 
-    fn conflict_content(&self, deploy_path: &str, conflicting_files: &[String], width: u16) -> Vec<Line<'a>> {
+    fn conflict_content(
+        &self,
+        deploy_path: &str,
+        conflicting_files: &[String],
+        width: u16,
+    ) -> Vec<Line<'a>> {
         let mut lines = vec![
             Line::from(""),
             Line::from(vec![
                 Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     "CONFLICT - Cannot deploy",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(""),
@@ -265,16 +281,11 @@ impl<'a> SignalInfoPane<'a> {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Conflicting Corpus Files:",
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )));
 
         for file in conflicting_files {
-            lines.extend(
-                PathField::new(Span::raw("  - "), file)
-                    .render_lines(width),
-            );
+            lines.extend(PathField::new(Span::raw("  - "), file).render_lines(width));
         }
 
         lines.push(Line::from(""));
@@ -286,7 +297,12 @@ impl<'a> SignalInfoPane<'a> {
         lines
     }
 
-    fn leftover_directory_content(&self, directory: &str, file_count: usize, width: u16) -> Vec<Line<'a>> {
+    fn leftover_directory_content(
+        &self,
+        directory: &str,
+        file_count: usize,
+        width: u16,
+    ) -> Vec<Line<'a>> {
         let mut lines = vec![
             Line::from(""),
             Line::from(vec![
@@ -319,7 +335,10 @@ impl<'a> SignalInfoPane<'a> {
                 if file_count == 1 { " file" } else { " files" },
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(" with no corpus backing", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                " with no corpus backing",
+                Style::default().fg(Color::DarkGray),
+            ),
         ]));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(

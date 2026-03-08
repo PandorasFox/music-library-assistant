@@ -22,10 +22,10 @@ use std::time::{Duration, Instant};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config::{self, Config, SharedConfig};
-use crate::meta::computations::{Computation, observation, derivation, analysis};
-use crate::db::Database;
-use crate::meta::mutations::Mutation;
 use crate::db::write_thread::{self, DbThreadHandle, DbThreadStats};
+use crate::db::Database;
+use crate::meta::computations::{analysis, derivation, observation, Computation};
+use crate::meta::mutations::Mutation;
 
 // Module declarations
 pub(crate) mod cache_thread;
@@ -39,11 +39,9 @@ mod worker_stats;
 // Re-export public types
 pub use messages::InitialUiState;
 pub use types::{
-    WorkStatus, WorkState, WorkStateSnapshot,
-    ReasoningLevel, InodeAwarenessLevel,
-    MaintenanceWitness, MutationExecutionWitness,
-    PendingTransaction, SpawnedMutation, Task,
-    TaskLabel, WorkerStats,
+    InodeAwarenessLevel, MaintenanceWitness, MutationExecutionWitness, PendingTransaction,
+    ReasoningLevel, SpawnedMutation, Task, TaskLabel, WorkState, WorkStateSnapshot, WorkStatus,
+    WorkerStats,
 };
 // Decision authority flows through ConfirmationGesture (ui/action_handlers/witness.rs)
 // and WitnessedDecision (meta/decisions/mod.rs). See operator_decisions.rs for call sites.
@@ -164,12 +162,16 @@ pub struct Witch {
 
     /// Remaining mutation phases from a staged transaction.
     /// Populated by `confirm_transaction()`, drained by `update_state()`.
-    pending_mutation_phases: VecDeque<(crate::meta::mutations::MutationExecutionStage, Vec<Mutation>)>,
+    pending_mutation_phases: VecDeque<(
+        crate::meta::mutations::MutationExecutionStage,
+        Vec<Mutation>,
+    )>,
 
     /// Remaining computation phases from a staged pipeline (e.g., release packing).
     /// Populated by `tick()` from computation result `deferred_phases`, drained by
     /// `transition_to_completed()` after mutation phases.
-    pending_computation_phases: VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,
+    pending_computation_phases:
+        VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,
 
     /// Handle to the dedicated DB write thread.
     /// Provides stats access and shutdown coordination.
@@ -179,7 +181,6 @@ pub struct Witch {
     // -------------------------------------------------------------------------
     // Worker Performance Stats (Thread-Safe, Isolated)
     // -------------------------------------------------------------------------
-
     /// Thread-safe worker stats in separate heap allocation.
     /// None when timing instrumentation is disabled.
     worker_stats_shared: Option<Arc<SharedWorkerStats>>,
@@ -245,7 +246,14 @@ impl Witch {
     /// Linger duration for completed session display.
     const LINGER_DURATION: Duration = Duration::from_secs(30);
 
-    pub fn new(cfg: &Config, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> (Self, cache_thread::CacheHandle, std::sync::mpsc::Receiver<WitchNotice>) {
+    pub fn new(
+        cfg: &Config,
+        log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
+    ) -> (
+        Self,
+        cache_thread::CacheHandle,
+        std::sync::mpsc::Receiver<WitchNotice>,
+    ) {
         // Spawn the logging thread if we have the receiver
         let log_thread_handle = log_rx.map(crate::logging::spawn_log_thread);
 
@@ -333,7 +341,16 @@ impl Witch {
     }
 
     /// Create a new Witch with opinions applied.
-    pub fn with_opinions(cfg: &Config, read_only_mode: bool, force_check_all_files_at_startup: bool, log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>) -> (Self, cache_thread::CacheHandle, std::sync::mpsc::Receiver<WitchNotice>) {
+    pub fn with_opinions(
+        cfg: &Config,
+        read_only_mode: bool,
+        force_check_all_files_at_startup: bool,
+        log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
+    ) -> (
+        Self,
+        cache_thread::CacheHandle,
+        std::sync::mpsc::Receiver<WitchNotice>,
+    ) {
         let (mut she, cache_handle, notice_rx) = Self::new(cfg, log_rx);
         she.read_only_mode = read_only_mode;
         she.force_check_all_files_at_startup = force_check_all_files_at_startup;
@@ -418,11 +435,10 @@ impl Witch {
     /// Called when a runtime invariant is violated (e.g., mount boundary crossed).
     pub fn latch_read_only_for_safety(&mut self, reason: String) {
         if self.safety_latch_reason.is_none() {
-            crate::logging::log_error(format!(
-                "[WITCH] SAFETY LATCH TRIGGERED: {}",
-                reason
-            ));
-            let _ = self.notice_tx.send(WitchNotice::SafetyLatch(reason.clone()));
+            crate::logging::log_error(format!("[WITCH] SAFETY LATCH TRIGGERED: {}", reason));
+            let _ = self
+                .notice_tx
+                .send(WitchNotice::SafetyLatch(reason.clone()));
             self.safety_latch_reason = Some(reason);
         }
     }
@@ -554,7 +570,10 @@ impl Witch {
                         result.queue_wait_ms, total_qw_now, max_qw_now
                     ));
                 }
-                if current_processed <= 50 || current_processed.is_multiple_of(500) || result.queue_wait_ms > 50000 {
+                if current_processed <= 50
+                    || current_processed.is_multiple_of(500)
+                    || result.queue_wait_ms > 50000
+                {
                     crate::logging::log_perf(format!(
                         "[PERF DEBUG] queue_wait_ms={} for task={}, total_processed={}, total_queue_wait_ms={}, max_queue_wait_ms={}",
                         result.queue_wait_ms, result.label, current_processed, total_qw_now, max_qw_now
@@ -584,11 +603,14 @@ impl Witch {
             }
 
             // Accumulate observed inodes from ScanCorpusDirectory results
-            self.observed_corpus_inodes.extend(result.observed_corpus_inodes);
-            self.observed_inbox_inodes.extend(result.observed_inbox_inodes);
+            self.observed_corpus_inodes
+                .extend(result.observed_corpus_inodes);
+            self.observed_inbox_inodes
+                .extend(result.observed_inbox_inodes);
 
             // Accumulate observed library files from ScanLibraryDirectory results
-            self.observed_library_files.extend(result.observed_library_files);
+            self.observed_library_files
+                .extend(result.observed_library_files);
 
             // Collect spawned follow-up computations and mutations
             spawned_computations.extend(result.spawn);
@@ -596,7 +618,8 @@ impl Witch {
 
             // Collect deferred computation phases (pipeline orchestrators)
             if !result.deferred_phases.is_empty() {
-                self.pending_computation_phases.extend(result.deferred_phases);
+                self.pending_computation_phases
+                    .extend(result.deferred_phases);
             }
         }
 
@@ -691,7 +714,8 @@ impl Witch {
                     && self.db_thread_handle.queue_empty()
                     && !self.pending_computation_phases.is_empty()
                 {
-                    let (stage, computations) = self.pending_computation_phases.pop_front().unwrap();
+                    let (stage, computations) =
+                        self.pending_computation_phases.pop_front().unwrap();
                     crate::logging::log_general(format!(
                         "[PIPELINE] Phase advancement: draining db_thread, then queueing {} ({} computations). \
                          {} phase(s) remaining.",
@@ -822,7 +846,9 @@ impl Witch {
                     self.reasoning_level = ReasoningLevel::Full;
 
                     if !self.read_only_mode {
-                        crate::logging::log_general("[STATE] Mutations now enabled (read-write mode).");
+                        crate::logging::log_general(
+                            "[STATE] Mutations now enabled (read-write mode).",
+                        );
                     }
 
                     // Queue content analysis after full awakening
@@ -850,12 +876,10 @@ impl Witch {
                     ));
                     // Carry the accumulated scope into the pending slot for
                     // ScheduleContentAnalysis to consume after re-awakening.
-                    self.pending_recomputation_scope = Some(
-                        std::mem::replace(
-                            &mut self.session_recomputation_scope,
-                            crate::meta::recomputation::RecomputationScope::EMPTY,
-                        )
-                    );
+                    self.pending_recomputation_scope = Some(std::mem::replace(
+                        &mut self.session_recomputation_scope,
+                        crate::meta::recomputation::RecomputationScope::EMPTY,
+                    ));
                     self.reasoning_level = ReasoningLevel::Inodes;
                     self.inode_awareness = InodeAwarenessLevel::Checking;
                     queue_reobservation_after_reset = true;
@@ -865,7 +889,10 @@ impl Witch {
 
             // Maintenance can complete while None - this is valid, just NOP
             (false, ReasoningLevel::None) => {
-                let only_maintenance = self.kind_counts.keys().all(|k| *k == types::TaskKind::Maintenance);
+                let only_maintenance = self
+                    .kind_counts
+                    .keys()
+                    .all(|k| *k == types::TaskKind::Maintenance);
                 if only_maintenance {
                     crate::logging::log_general(format!(
                         "[STATE] Maintenance complete while None. Staying None. \
@@ -897,7 +924,12 @@ impl Witch {
         // writes. Without this barrier, the next phase's computations could read stale
         // data (e.g., DeriveDeployHealthSignals reading library files written by
         // ScanLibraryDirectory, or Awake-phase computations reading Awakening signals).
-        if queue_awakening_after_reset || queue_idle_rescan_awakening_after_reset || queue_content_analysis_after_reset || queue_reobservation_after_reset || queue_reconcile_library_after_reset {
+        if queue_awakening_after_reset
+            || queue_idle_rescan_awakening_after_reset
+            || queue_content_analysis_after_reset
+            || queue_reobservation_after_reset
+            || queue_reconcile_library_after_reset
+        {
             write_thread::wait_for_queue_drain();
         }
 
@@ -980,15 +1012,29 @@ impl Witch {
         }
         // In open-txn mode, idle rescans are always allowed (they're read-only observation).
         // In closed-txn mode, block if a transaction is open (user is actively reviewing).
-        let open_txn_mode = self.shared_config.as_ref()
-            .map(|sc| sc.read().expect("SharedConfig lock poisoned").opinions.leave_transactions_open)
+        let open_txn_mode = self
+            .shared_config
+            .as_ref()
+            .map(|sc| {
+                sc.read()
+                    .expect("SharedConfig lock poisoned")
+                    .opinions
+                    .leave_transactions_open
+            })
             .unwrap_or(false);
         if !open_txn_mode && self.pending_transaction.is_some() {
             return;
         }
 
-        let interval_secs = self.shared_config.as_ref()
-            .map(|sc| sc.read().expect("SharedConfig lock poisoned").opinions.idle_rescan_interval_secs)
+        let interval_secs = self
+            .shared_config
+            .as_ref()
+            .map(|sc| {
+                sc.read()
+                    .expect("SharedConfig lock poisoned")
+                    .opinions
+                    .idle_rescan_interval_secs
+            })
             .unwrap_or(0);
         if interval_secs == 0 {
             return;
@@ -1005,7 +1051,8 @@ impl Witch {
         // All gates passed — start idle rescan
         crate::logging::log_general(format!(
             "[STATE] Starting idle rescan (idle for {}s, interval={}s)",
-            idle_since.elapsed().as_secs(), interval_secs
+            idle_since.elapsed().as_secs(),
+            interval_secs
         ));
 
         self.idle_rescan_active = true;
@@ -1098,11 +1145,15 @@ impl Witch {
                 external_fetch::SchedulerMessage::SourceDone { source, stats } => {
                     crate::logging::log_general(format!(
                         "[FETCH] {} done: {} processed, {} matched, {} no-match, {} retries",
-                        source.name(), stats.processed, stats.matched,
-                        stats.no_match, stats.retries
+                        source.name(),
+                        stats.processed,
+                        stats.matched,
+                        stats.no_match,
+                        stats.retries
                     ));
                     if stats.matched > 0 {
-                        self.session_recomputation_scope |= crate::meta::recomputation::RecomputationScope::EXTERNAL;
+                        self.session_recomputation_scope |=
+                            crate::meta::recomputation::RecomputationScope::EXTERNAL;
                     }
                 }
                 external_fetch::SchedulerMessage::AllDone => {
@@ -1121,33 +1172,25 @@ impl Witch {
         &self,
         data: external_fetch::FetchResultData,
     ) -> external_fetch::FetchOutcome {
-        use external_fetch::{FetchResultData, FetchOutcome};
+        use external_fetch::{FetchOutcome, FetchResultData};
 
         match data {
             FetchResultData::AcoustIdMatch { recordings } => {
                 FetchOutcome::AcoustIdMatch { recordings }
             }
-            FetchResultData::AcoustIdNoMatch => {
-                FetchOutcome::AcoustIdNoMatch
-            }
+            FetchResultData::AcoustIdNoMatch => FetchOutcome::AcoustIdNoMatch,
             FetchResultData::AcoustIdRateLimited { task } => {
                 FetchOutcome::AcoustIdRateLimited { task }
             }
-            FetchResultData::AcoustIdError => {
-                FetchOutcome::AcoustIdError
-            }
-            FetchResultData::MbFound { discovered_entities } => {
-                FetchOutcome::MbFound { discovered_entities }
-            }
-            FetchResultData::MbNotFound => {
-                FetchOutcome::MbNotFound
-            }
-            FetchResultData::MbRateLimited { task } => {
-                FetchOutcome::MbRateLimited { task }
-            }
-            FetchResultData::MbError => {
-                FetchOutcome::MbError
-            }
+            FetchResultData::AcoustIdError => FetchOutcome::AcoustIdError,
+            FetchResultData::MbFound {
+                discovered_entities,
+            } => FetchOutcome::MbFound {
+                discovered_entities,
+            },
+            FetchResultData::MbNotFound => FetchOutcome::MbNotFound,
+            FetchResultData::MbRateLimited { task } => FetchOutcome::MbRateLimited { task },
+            FetchResultData::MbError => FetchOutcome::MbError,
         }
     }
 
@@ -1166,7 +1209,9 @@ impl Witch {
         let (api_key, eligible_dirs) = {
             let config = shared_config.read().expect("SharedConfig lock poisoned");
             let key = config.opinions.external_matching.acoustid_api_key.clone();
-            let dirs: Vec<std::path::PathBuf> = config.source_dirs.iter()
+            let dirs: Vec<std::path::PathBuf> = config
+                .source_dirs
+                .iter()
                 .filter(|sd| sd.enable_acoustid.unwrap_or(true))
                 .map(|sd| sd.path.clone())
                 .collect();
@@ -1208,7 +1253,9 @@ impl Witch {
 
     /// Whether an external AcoustID fetch batch is currently active.
     pub fn is_external_fetch_active(&self) -> bool {
-        self.external_fetch.as_ref().is_some_and(|h| h.is_batch_active())
+        self.external_fetch
+            .as_ref()
+            .is_some_and(|h| h.is_batch_active())
     }
 
     /// Latest progress snapshot from the external fetch thread.
@@ -1216,12 +1263,15 @@ impl Witch {
         self.fetch_progress.as_ref()
     }
 
-
     /// Whether an AcoustID API key is configured.
     pub fn has_acoustid_api_key(&self) -> bool {
         self.shared_config.as_ref().is_some_and(|sc| {
             let config = sc.read().expect("SharedConfig lock poisoned");
-            !config.opinions.external_matching.acoustid_api_key.is_empty()
+            !config
+                .opinions
+                .external_matching
+                .acoustid_api_key
+                .is_empty()
         })
     }
 
@@ -1246,7 +1296,7 @@ impl Witch {
         let resolver = crate::corpus::paths::get_resolver();
 
         crate::logging::log_general(
-            "[STATE] Queueing re-observation computations for post-mutation re-awakening"
+            "[STATE] Queueing re-observation computations for post-mutation re-awakening",
         );
 
         // Clear accumulated observation state before fresh scan
@@ -1412,7 +1462,11 @@ impl Witch {
     // This ensures proper decision witness semantics where each user action is
     // explicitly witnessed, and batch review/commit is possible.
 
-    pub(super) fn queue_mutations_internal(&mut self, mutations: impl IntoIterator<Item = Mutation>, label: Option<String>) {
+    pub(super) fn queue_mutations_internal(
+        &mut self,
+        mutations: impl IntoIterator<Item = Mutation>,
+        label: Option<String>,
+    ) {
         self.transition_to_working();
 
         let queue_time = Instant::now();
@@ -1420,7 +1474,8 @@ impl Witch {
 
         crate::logging::log_general(format!(
             "[WORKER] queue_mutations_internal: queueing {} mutations (label={:?})",
-            mutations.len(), label
+            mutations.len(),
+            label
         ));
 
         let count = mutations.len();
@@ -1430,7 +1485,11 @@ impl Witch {
         }
 
         // Store label in WorkState for phase advancement
-        if let WorkState::Working { label: ref mut ws_label, .. } = self.work_state {
+        if let WorkState::Working {
+            label: ref mut ws_label,
+            ..
+        } = self.work_state
+        {
             if ws_label.is_none() {
                 *ws_label = label.clone();
             }
@@ -1563,10 +1622,7 @@ impl Witch {
     ///
     /// Requires a `ConfirmationGesture` from the VacuumPrompt view.
     /// Drops the cached read-only connection first (VACUUM needs exclusive access).
-    pub fn queue_vacuum(
-        &mut self,
-        _gesture: &crate::meta::decisions::ConfirmationGesture,
-    ) {
+    pub fn queue_vacuum(&mut self, _gesture: &crate::meta::decisions::ConfirmationGesture) {
         use crate::meta::maintenance::DbMaintenanceTask;
 
         self.queue_maintenance(DbMaintenanceTask::Vacuum);
@@ -1665,7 +1721,9 @@ impl Witch {
     /// Get the decision key kinds that have been handled in the active transaction.
     ///
     /// Used by the insights view to hide entries already staged.
-    pub fn handled_decision_kinds(&self) -> &std::collections::HashSet<crate::meta::decisions::DecisionKeyKind> {
+    pub fn handled_decision_kinds(
+        &self,
+    ) -> &std::collections::HashSet<crate::meta::decisions::DecisionKeyKind> {
         &self.handled_sources
     }
 
@@ -1673,7 +1731,8 @@ impl Witch {
     ///
     /// Called internally after transaction mutations (add, remove, confirm, discard).
     pub(crate) fn sync_handled_sources(&mut self) {
-        self.handled_sources = self.pending_transaction
+        self.handled_sources = self
+            .pending_transaction
             .as_ref()
             .map(|txn| txn.decisions.keys().filter_map(|k| k.kind()).collect())
             .unwrap_or_default();

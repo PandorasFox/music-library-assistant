@@ -19,8 +19,10 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::config;
-use crate::meta::views::{DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData};
 use crate::db::{Database, ReadOnlyDb};
+use crate::meta::views::{
+    DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
+};
 
 // ============================================================================
 // Cache Thread Protocol
@@ -104,7 +106,9 @@ impl CacheHandle {
     /// Signal urgent demand for external matches data (shorter throttle).
     /// Use when external fetch is actively running.
     pub(crate) fn want_external_matches_urgent(&self) {
-        let _ = self.request_tx.send(CacheRequest::WantExternalMatchesUrgent);
+        let _ = self
+            .request_tx
+            .send(CacheRequest::WantExternalMatchesUrgent);
     }
 
     /// Invalidate all cached data. Next want_* call will force a re-query.
@@ -271,23 +275,31 @@ impl ThrottleState {
     }
 
     fn should_refresh_insights(&self) -> bool {
-        self.insights_wanted && self.insights_at
-            .is_none_or(|t| t.elapsed() >= Self::INSIGHTS_THROTTLE)
+        self.insights_wanted
+            && self
+                .insights_at
+                .is_none_or(|t| t.elapsed() >= Self::INSIGHTS_THROTTLE)
     }
 
     fn should_refresh_inbox(&self) -> bool {
-        self.inbox_wanted && self.inbox_at
-            .is_none_or(|t| t.elapsed() >= Self::INBOX_THROTTLE)
+        self.inbox_wanted
+            && self
+                .inbox_at
+                .is_none_or(|t| t.elapsed() >= Self::INBOX_THROTTLE)
     }
 
     fn should_refresh_deploy(&self) -> bool {
-        self.deploy_wanted && self.deploy_at
-            .is_none_or(|t| t.elapsed() >= Self::DEPLOY_THROTTLE)
+        self.deploy_wanted
+            && self
+                .deploy_at
+                .is_none_or(|t| t.elapsed() >= Self::DEPLOY_THROTTLE)
     }
 
     fn should_refresh_history(&self) -> bool {
-        self.history_wanted && self.history_at
-            .is_none_or(|t| t.elapsed() >= Self::HISTORY_THROTTLE)
+        self.history_wanted
+            && self
+                .history_at
+                .is_none_or(|t| t.elapsed() >= Self::HISTORY_THROTTLE)
     }
 
     fn should_refresh_external_matches(&self) -> bool {
@@ -296,8 +308,10 @@ impl ThrottleState {
         } else {
             Self::EXTERNAL_MATCHES_THROTTLE
         };
-        self.external_matches_wanted && self.external_matches_at
-            .is_none_or(|t| t.elapsed() >= throttle)
+        self.external_matches_wanted
+            && self
+                .external_matches_at
+                .is_none_or(|t| t.elapsed() >= throttle)
     }
 }
 
@@ -335,10 +349,7 @@ fn open_read_only_db() -> Option<Database> {
 }
 
 /// Main loop for the cache thread.
-fn cache_thread_main(
-    request_rx: Receiver<CacheRequest>,
-    ready_tx: Sender<CacheReady>,
-) {
+fn cache_thread_main(request_rx: Receiver<CacheRequest>, ready_tx: Sender<CacheReady>) {
     crate::logging::log_general("[CACHE_THREAD] Started");
 
     let mut db = open_read_only_db();
@@ -424,7 +435,7 @@ fn process_request(
                 // causing recv() on DbQuery to panic. This should only happen
                 // during very early startup before DB exists.
                 crate::logging::log_error(
-                    "[CACHE_THREAD] Query received but no DB connection available"
+                    "[CACHE_THREAD] Query received but no DB connection available",
                 );
             }
         }

@@ -31,7 +31,8 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 /// muzzy_decay_ms:5000    — muzzy (decommitted) pages cleaned up after ~5s
 #[allow(non_upper_case_globals)]
 #[unsafe(export_name = "_rjem_malloc_conf")]
-pub static _rjem_malloc_conf: &[u8] = b"background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:5000\0";
+pub static _rjem_malloc_conf: &[u8] =
+    b"background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:5000\0";
 
 // ============================================================================
 // Version Information

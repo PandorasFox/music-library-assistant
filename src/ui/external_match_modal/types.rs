@@ -7,11 +7,11 @@ use std::collections::HashMap;
 
 use ratatui::layout::Rect;
 
-use crate::external::musicbrainz::{MbRecording, MbArtist, MbRelease};
+use crate::external::musicbrainz::{MbArtist, MbRecording, MbRelease};
 use crate::ui::input::InputAction;
 
 use crate::meta::views::ExternalMatchReviewEntry;
-use crate::ui::widgets::{ListClickTargets, rect_contains};
+use crate::ui::widgets::{rect_contains, ListClickTargets};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExternalMatchReviewAction {
@@ -81,9 +81,9 @@ impl ExternalMatchReviewState {
 
     /// MusicBrainz recording URL for the current entry.
     pub fn current_recording_url(&self) -> Option<String> {
-        self.entries.get(self.cursor).map(|e| {
-            format!("https://musicbrainz.org/recording/{}", e.recording_id)
-        })
+        self.entries
+            .get(self.cursor)
+            .map(|e| format!("https://musicbrainz.org/recording/{}", e.recording_id))
     }
 
     /// Handle a mouse click at (x, y).

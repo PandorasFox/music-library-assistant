@@ -125,10 +125,13 @@ impl ManualReviewState {
     /// Get inodes of all non-stashed files in the current group.
     pub fn current_group_inodes(&self) -> Vec<i64> {
         self.current_group_ref()
-            .map(|g| g.files.iter()
-                .filter(|f| !f.stashed)
-                .map(|f| f.inode)
-                .collect())
+            .map(|g| {
+                g.files
+                    .iter()
+                    .filter(|f| !f.stashed)
+                    .map(|f| f.inode)
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -173,7 +176,9 @@ impl ManualReviewState {
                     let action = match *button {
                         StashConfirmButton::Cancel => ManualReviewAction::CancelStash,
                         StashConfirmButton::Confirm => ManualReviewAction::ConfirmStash,
-                        StashConfirmButton::ConfirmAndAdvance => ManualReviewAction::ConfirmStashAndAdvance,
+                        StashConfirmButton::ConfirmAndAdvance => {
+                            ManualReviewAction::ConfirmStashAndAdvance
+                        }
                     };
                     self.stash_confirm = None;
                     action
@@ -241,14 +246,10 @@ impl ManualReviewState {
             }
 
             // Mark expected duplicate
-            InputAction::FlagValue => {
-                ManualReviewAction::MarkExpectedDuplicate
-            }
+            InputAction::FlagValue => ManualReviewAction::MarkExpectedDuplicate,
 
             // Transaction review
-            InputAction::Shortcut('r') => {
-                ManualReviewAction::ShowReview
-            }
+            InputAction::Shortcut('r') => ManualReviewAction::ShowReview,
 
             _ => ManualReviewAction::None,
         }
@@ -286,10 +287,7 @@ fn render_content(f: &mut Frame, area: Rect, state: &ManualReviewState) {
     // Two-pane horizontal: file list (left) | detail pane (right)
     let panes = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-        ])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
     render_file_list(f, panes[0], state);
@@ -304,7 +302,8 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &ManualReviewState) {
     let title = if let Some(g) = group {
         format!(
             " Group {}/{}: {} ({} files) ",
-            group_idx, group_count,
+            group_idx,
+            group_count,
             truncate_right(&g.label, 30),
             g.files.len()
         )
@@ -321,15 +320,14 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &ManualReviewState) {
     let inner = render_pane(f, area, block);
 
     let Some(group) = group else {
-        let empty = Paragraph::new("No groups to review")
-            .style(Style::default().fg(Color::DarkGray));
+        let empty =
+            Paragraph::new("No groups to review").style(Style::default().fg(Color::DarkGray));
         f.render_widget(empty, inner);
         return;
     };
 
     if group.files.is_empty() {
-        let empty = Paragraph::new("No files in group")
-            .style(Style::default().fg(Color::DarkGray));
+        let empty = Paragraph::new("No files in group").style(Style::default().fg(Color::DarkGray));
         f.render_widget(empty, inner);
         return;
     }
@@ -344,7 +342,9 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &ManualReviewState) {
         0
     };
 
-    let items: Vec<ListItem> = group.files.iter()
+    let items: Vec<ListItem> = group
+        .files
+        .iter()
         .skip(start)
         .take(visible_lines)
         .enumerate()
@@ -353,14 +353,22 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &ManualReviewState) {
             let is_selected = actual_idx == state.file_cursor;
 
             let style = if file.stashed {
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT)
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::CROSSED_OUT)
             } else if is_selected {
                 CURSOR_STYLE
             } else {
                 Style::default().fg(Color::White)
             };
 
-            let prefix = if file.stashed { "✗ " } else if is_selected { "▸ " } else { "  " };
+            let prefix = if file.stashed {
+                "✗ "
+            } else if is_selected {
+                "▸ "
+            } else {
+                "  "
+            };
             let path = truncate_left(&file.corpus_path, max_width.saturating_sub(4));
 
             ListItem::new(Line::from(vec![
@@ -392,7 +400,12 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &ManualReviewState) {
     // Group info
     if let Some(g) = group {
         lines.push(Line::from(vec![
-            Span::styled("Group: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Group: ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(&g.label, Style::default().fg(Color::White)),
         ]));
         lines.push(Line::from(""));
@@ -484,7 +497,9 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &ManualReviewState) {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "Tags:",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
 
                 let tag_budget = max_lines.saturating_sub(lines.len());
@@ -524,7 +539,11 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &ManualReviewState) {
         if stashed_count > 0 {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                format!("{}/{} files stashed in this group", stashed_count, g.files.len()),
+                format!(
+                    "{}/{} files stashed in this group",
+                    stashed_count,
+                    g.files.len()
+                ),
                 Style::default().fg(Color::Yellow),
             )));
         }
@@ -551,13 +570,22 @@ fn render_controls_hint(f: &mut Frame, area: Rect, state: &ManualReviewState) {
 
     if state.kind == ReviewKind::RedundantDuplicate {
         hints.push(Span::styled(" ^F", Style::default().fg(Color::Cyan)));
-        hints.push(Span::styled(" expected ", Style::default().fg(Color::DarkGray)));
+        hints.push(Span::styled(
+            " expected ",
+            Style::default().fg(Color::DarkGray),
+        ));
     }
 
     hints.push(Span::styled(" ^R", Style::default().fg(Color::Cyan)));
-    hints.push(Span::styled(" review ", Style::default().fg(Color::DarkGray)));
+    hints.push(Span::styled(
+        " review ",
+        Style::default().fg(Color::DarkGray),
+    ));
     hints.push(Span::styled(" Esc", Style::default().fg(Color::Cyan)));
-    hints.push(Span::styled(" cancel", Style::default().fg(Color::DarkGray)));
+    hints.push(Span::styled(
+        " cancel",
+        Style::default().fg(Color::DarkGray),
+    ));
 
     let controls = Paragraph::new(Line::from(hints));
     f.render_widget(controls, area);
@@ -569,23 +597,33 @@ fn render_stash_confirm_popup(
     state: &ManualReviewState,
     button: StashConfirmButton,
 ) {
-    let file_label = state.selected_file()
+    let file_label = state
+        .selected_file()
         .map(|f| truncate_left(&f.corpus_path, 40))
         .unwrap_or_else(|| "<unknown>".to_string());
 
     // Build button spans
     let cancel_style = if button == StashConfirmButton::Cancel {
-        Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::White)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
     let confirm_style = if button == StashConfirmButton::Confirm {
-        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Cyan)
     };
     let advance_style = if button == StashConfirmButton::ConfirmAndAdvance {
-        Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Green)
     };
@@ -594,7 +632,9 @@ fn render_stash_confirm_popup(
         Line::from(""),
         Line::from(Span::styled(
             "Add stash to transaction?",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(vec![

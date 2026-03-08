@@ -39,8 +39,7 @@ pub mod types;
 
 pub use render::render;
 pub use types::{
-    FocusPaneV2, TagCanonicalityActionV2, TagCanonicalityModalDataV2,
-    TagCanonicalityStateV2,
+    FocusPaneV2, TagCanonicalityActionV2, TagCanonicalityModalDataV2, TagCanonicalityStateV2,
 };
 
 use crate::ui::input::InputAction;

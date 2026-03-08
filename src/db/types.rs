@@ -1,7 +1,5 @@
 //! Core database types for file metadata and audio info.
 
-
-
 // ============================================================================
 // New Schema Types (inode-based identity)
 // ============================================================================
@@ -124,5 +122,3 @@ pub struct AudioTag {
     pub tag_name: String,
     pub tag_value: String,
 }
-
-

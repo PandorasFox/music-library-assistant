@@ -202,10 +202,16 @@ impl InboxViewState {
                 if let Some(entry) = self.selected_entry() {
                     match entry.action {
                         InboxInsightAction::LaunchIntake => InboxAction::LaunchIntake,
-                        InboxInsightAction::LaunchCorpusMatchResolution => InboxAction::LaunchCorpusMatchResolution,
-                        InboxInsightAction::LaunchInboxTagCanonicity => InboxAction::LaunchInboxTagCanonicity,
+                        InboxInsightAction::LaunchCorpusMatchResolution => {
+                            InboxAction::LaunchCorpusMatchResolution
+                        }
+                        InboxInsightAction::LaunchInboxTagCanonicity => {
+                            InboxAction::LaunchInboxTagCanonicity
+                        }
                         InboxInsightAction::LaunchOrganize => InboxAction::LaunchOrganize,
-                        InboxInsightAction::LaunchInboxCompoundSplit => InboxAction::LaunchInboxCompoundSplit,
+                        InboxInsightAction::LaunchInboxCompoundSplit => {
+                            InboxAction::LaunchInboxCompoundSplit
+                        }
                         InboxInsightAction::Informational => InboxAction::None,
                     }
                 } else {

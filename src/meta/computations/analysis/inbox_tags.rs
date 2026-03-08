@@ -21,20 +21,18 @@ use std::time::Instant;
 /// A list of (tag_name, normalization_fn) pairs used for inbox tag canonicity checks.
 type TagNormalizer<'a> = Vec<(&'a str, Box<dyn Fn(&str) -> String>)>;
 
-use crate::db::ReadOnlyDb;
-use crate::db::types::Zone;
 use crate::corpus::health::normalization::{
     normalize_album, normalize_album_artist, normalize_artist, normalize_genre,
 };
+use crate::db::types::Zone;
 use crate::db::write_thread;
+use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
-use crate::meta::computations::helpers::{ComputedAggregateSignal, reconcile_aggregate_signals};
+use crate::meta::computations::helpers::{reconcile_aggregate_signals, ComputedAggregateSignal};
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
-    InboxTagCanonicityData, InboxTagCanonicitySignal,
-    InboxMissingTagSignal, MissingTagData,
-    InboxCompoundTagSignal, CompoundTagEntry as TypedCompoundEntry,
-    TypedSignalWrite,
+    CompoundTagEntry as TypedCompoundEntry, InboxCompoundTagSignal, InboxMissingTagSignal,
+    InboxTagCanonicityData, InboxTagCanonicitySignal, MissingTagData, TypedSignalWrite,
 };
 
 use super::{Computation, Result};
@@ -149,13 +147,12 @@ pub fn execute_detect_inbox_tag_canonicity(
             }
 
             // Skip if any corpus variant OR the inbox value is marked CanonicalTag
-            let any_canonical = corpus_variants.iter().any(|(v, _)| {
-                read_only_db
-                    .is_canonical_tag(tag_name, v)
-                    .unwrap_or(false)
-            }) || read_only_db
-                .is_canonical_tag(tag_name, inbox_value)
-                .unwrap_or(false);
+            let any_canonical = corpus_variants
+                .iter()
+                .any(|(v, _)| read_only_db.is_canonical_tag(tag_name, v).unwrap_or(false))
+                || read_only_db
+                    .is_canonical_tag(tag_name, inbox_value)
+                    .unwrap_or(false);
 
             if any_canonical {
                 continue;
@@ -180,8 +177,7 @@ pub fn execute_detect_inbox_tag_canonicity(
             };
 
             // Get inbox inodes for these variant values
-            let variant_refs: Vec<&str> =
-                inbox_variants.iter().map(|(v, _)| v.as_str()).collect();
+            let variant_refs: Vec<&str> = inbox_variants.iter().map(|(v, _)| v.as_str()).collect();
             let inbox_inodes = read_only_db
                 .get_inbox_inodes_for_tag_values(tag_name, &variant_refs)
                 .unwrap_or_default();
@@ -203,13 +199,9 @@ pub fn execute_detect_inbox_tag_canonicity(
         }
     }
 
-    let (cleared, new_count, updated, unchanged) =
-        reconcile_aggregate_signals::<InboxTagCanonicitySignal>(
-            read_only_db,
-            &sender,
-            computed,
-            witness,
-        );
+    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals::<
+        InboxTagCanonicitySignal,
+    >(read_only_db, &sender, computed, witness);
 
     log_general(format!(
         "[COMPUTE] DetectInboxTagCanonicity: {} signals (cleared={}, new={}, updated={}, unchanged={})",
@@ -270,7 +262,11 @@ pub fn execute_detect_inbox_missing_tags(
         .collect();
 
     // Remove ALBUM_ARTIST from required set when compilation-only — caught post-intake
-    if config.opinions.health_detection.album_artist_only_required_if_compilation {
+    if config
+        .opinions
+        .health_detection
+        .album_artist_only_required_if_compilation
+    {
         required_tags.remove("ALBUM_ARTIST");
     }
 
@@ -296,10 +292,7 @@ pub fn execute_detect_inbox_missing_tags(
             .map(|s| s.to_string())
             .collect();
 
-        let missing: HashSet<String> = required_tags
-            .difference(&present_tags)
-            .cloned()
-            .collect();
+        let missing: HashSet<String> = required_tags.difference(&present_tags).cloned().collect();
 
         if missing.is_empty() {
             continue;
@@ -315,7 +308,9 @@ pub fn execute_detect_inbox_missing_tags(
             format!("inbox:dir={}", parent)
         };
 
-        let entry = groups.entry(key).or_insert_with(|| (HashSet::new(), Vec::new()));
+        let entry = groups
+            .entry(key)
+            .or_insert_with(|| (HashSet::new(), Vec::new()));
         entry.0.extend(missing);
         entry.1.push(inode);
     }
@@ -326,18 +321,17 @@ pub fn execute_detect_inbox_missing_tags(
         missing_list.sort();
         let signal = TypedSignalWrite::InboxMissingTag(InboxMissingTagSignal {
             key: key.clone(),
-            data: MissingTagData { missing_tags: missing_list, inodes },
+            data: MissingTagData {
+                missing_tags: missing_list,
+                inodes,
+            },
         });
         computed.push(ComputedAggregateSignal::new(key, signal));
     }
 
-    let (cleared, new_count, updated, unchanged) =
-        reconcile_aggregate_signals::<InboxMissingTagSignal>(
-            read_only_db,
-            &sender,
-            computed,
-            witness,
-        );
+    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals::<
+        InboxMissingTagSignal,
+    >(read_only_db, &sender, computed, witness);
 
     log_general(format!(
         "[COMPUTE] DetectInboxMissingTags: {} signals (cleared={}, new={}, updated={}, unchanged={})",
@@ -365,7 +359,7 @@ pub fn execute_detect_inbox_compound_tags(
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    use crate::corpus::health::compound::{CompoundTagValue, detect_featuring_pattern};
+    use crate::corpus::health::compound::{detect_featuring_pattern, CompoundTagValue};
 
     let computation = Computation::DetectInboxCompoundTags;
 
@@ -392,7 +386,11 @@ pub fn execute_detect_inbox_compound_tags(
     };
 
     let tag_splitting = &config.opinions.tag_splitting;
-    let collab_keywords: Vec<String> = tag_splitting.collaboration_keywords.iter().cloned().collect();
+    let collab_keywords: Vec<String> = tag_splitting
+        .collaboration_keywords
+        .iter()
+        .cloned()
+        .collect();
 
     // Get all inbox healthy inodes
     let inbox_healthy_inodes: HashSet<i64> = read_only_db
@@ -415,7 +413,9 @@ pub fn execute_detect_inbox_compound_tags(
     let mut cleared = 0usize;
 
     for &inode in &inbox_healthy_inodes {
-        let tags = read_only_db.get_tags_for_zone(inode, Zone::Inbox).unwrap_or_default();
+        let tags = read_only_db
+            .get_tags_for_zone(inode, Zone::Inbox)
+            .unwrap_or_default();
         if tags.is_empty() {
             if existing_signal_inodes.contains(&inode) {
                 sender.clear_corpus_signal::<InboxCompoundTagSignal>(inode, witness);
@@ -424,7 +424,8 @@ pub fn execute_detect_inbox_compound_tags(
             continue;
         }
 
-        let inbox_path = read_only_db.get_inbox_path_for_inode(inode)
+        let inbox_path = read_only_db
+            .get_inbox_path_for_inode(inode)
             .unwrap_or_default()
             .unwrap_or_default();
 
@@ -435,7 +436,10 @@ pub fn execute_detect_inbox_compound_tags(
             let is_artist_tag = matches!(tag_name_upper.as_str(), "ARTIST" | "ALBUMARTIST");
 
             // Skip if whitelisted canonical
-            if read_only_db.is_canonical_tag(&tag.tag_name, &tag.tag_value).unwrap_or(false) {
+            if read_only_db
+                .is_canonical_tag(&tag.tag_name, &tag.tag_value)
+                .unwrap_or(false)
+            {
                 continue;
             }
 
@@ -448,7 +452,8 @@ pub fn execute_detect_inbox_compound_tags(
                 {
                     let mut split_parts = vec![main_part];
                     split_parts.extend(secondary_parts);
-                    let separator = super::determine_collab_separator_label(&tag.tag_value, &collab_keywords);
+                    let separator =
+                        super::determine_collab_separator_label(&tag.tag_value, &collab_keywords);
                     matched_entry = Some(TypedCompoundEntry {
                         tag_name: tag.tag_name.clone(),
                         compound_value: tag.tag_value.clone(),
@@ -511,11 +516,14 @@ pub fn execute_detect_inbox_compound_tags(
                 .collect();
         }
 
-        sender.write_typed_signal(TypedSignalWrite::InboxCompoundTag(InboxCompoundTagSignal {
-            inode,
-            path: inbox_path,
-            compounds,
-        }), witness);
+        sender.write_typed_signal(
+            TypedSignalWrite::InboxCompoundTag(InboxCompoundTagSignal {
+                inode,
+                path: inbox_path,
+                compounds,
+            }),
+            witness,
+        );
         emitted += 1;
     }
 

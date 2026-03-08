@@ -5,19 +5,19 @@
 
 use std::io::Write;
 
+use super::super::App;
+use super::witness;
 use crate::db::types::Zone;
 use crate::meta::decisions::DecisionKey;
-use crate::meta::mutations::Mutation;
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
+use crate::meta::mutations::Mutation;
 use crate::meta::mutations::TagOp;
 use crate::meta::views::EditHistoryExportRow;
-use crate::ui::{ActiveView, widgets};
 use crate::ui::history_view::{
-    ConflictDisposition, ConflictItem, HistoryAction, HistoryPhase,
-    JettisonAllState, JettisonSessionState, ReversalItem,
+    ConflictDisposition, ConflictItem, HistoryAction, HistoryPhase, JettisonAllState,
+    JettisonSessionState, ReversalItem,
 };
-use super::witness;
-use super::super::App;
+use crate::ui::{widgets, ActiveView};
 
 impl App {
     /// Handle history view actions.
@@ -30,17 +30,23 @@ impl App {
             HistoryAction::None => {}
 
             HistoryAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::History.next(self.transactions_open()));
+                self.start_lateral_view(
+                    widgets::LateralView::History.next(self.transactions_open()),
+                );
             }
             HistoryAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::History.prev(self.transactions_open()));
+                self.start_lateral_view(
+                    widgets::LateralView::History.prev(self.transactions_open()),
+                );
             }
 
             HistoryAction::RequestQuit => {
                 if self.has_pending_operations() {
-                    self.status_message = Some("Cannot quit while operations are pending".to_string());
+                    self.status_message =
+                        Some("Cannot quit while operations are pending".to_string());
                 } else {
-                    self.view = ActiveView::ExitConfirm(super::super::ExitConfirmModalState::default());
+                    self.view =
+                        ActiveView::ExitConfirm(super::super::ExitConfirmModalState::default());
                 }
             }
 
@@ -92,10 +98,9 @@ impl App {
             }
             HistoryAction::AdvanceJettisonAll => {
                 if let ActiveView::History(ref mut state) = self.view {
-                    if let HistoryPhase::ConfirmJettisonAll(ja) = std::mem::replace(
-                        &mut state.phase,
-                        HistoryPhase::SessionList,
-                    ) {
+                    if let HistoryPhase::ConfirmJettisonAll(ja) =
+                        std::mem::replace(&mut state.phase, HistoryPhase::SessionList)
+                    {
                         state.phase = HistoryPhase::ConfirmJettisonAllFinal(ja);
                     }
                 }
@@ -114,16 +119,20 @@ impl App {
     /// Expand a session: one-shot query for edits + inode paths.
     fn expand_history_session(&mut self, session_id: String) {
         let sid = session_id.clone();
-        let result = self.cache.query(move |db| {
-            let edits = db.get_session_edits(&sid).unwrap_or_default();
-            let inodes: Vec<i64> = edits.iter().map(|e| e.inode).collect();
+        let result = self
+            .cache
+            .query(move |db| {
+                let edits = db.get_session_edits(&sid).unwrap_or_default();
+                let inodes: Vec<i64> = edits.iter().map(|e| e.inode).collect();
 
-            // Resolve inode → path for display (batch query)
-            let inode_paths = db.get_file_paths_batch(crate::db::types::Zone::Corpus, &inodes)
-                .unwrap_or_default();
+                // Resolve inode → path for display (batch query)
+                let inode_paths = db
+                    .get_file_paths_batch(crate::db::types::Zone::Corpus, &inodes)
+                    .unwrap_or_default();
 
-            (edits, inode_paths)
-        }).recv();
+                (edits, inode_paths)
+            })
+            .recv();
 
         if let ActiveView::History(ref mut state) = self.view {
             state.set_detail(session_id, result.0, result.1);
@@ -159,18 +168,22 @@ impl App {
 
         // Query current tag values for conflict detection
         let edits_for_query = selected_edits.clone();
-        let current_values = self.cache.query(move |db| {
-            let mut results = Vec::new();
-            for edit in &edits_for_query {
-                // Look up the current value for this (inode, field_name)
-                let tags = db.get_corpus_tags(edit.inode).unwrap_or_default();
-                let current = tags.iter()
-                    .find(|t| t.tag_name.eq_ignore_ascii_case(&edit.field_name))
-                    .map(|t| t.tag_value.clone());
-                results.push(current);
-            }
-            results
-        }).recv();
+        let current_values = self
+            .cache
+            .query(move |db| {
+                let mut results = Vec::new();
+                for edit in &edits_for_query {
+                    // Look up the current value for this (inode, field_name)
+                    let tags = db.get_corpus_tags(edit.inode).unwrap_or_default();
+                    let current = tags
+                        .iter()
+                        .find(|t| t.tag_name.eq_ignore_ascii_case(&edit.field_name))
+                        .map(|t| t.tag_value.clone());
+                    results.push(current);
+                }
+                results
+            })
+            .recv();
 
         // Classify edits as clean reversals or conflicts
         let mut clean = Vec::new();
@@ -253,12 +266,16 @@ impl App {
                 ActiveView::History(ref state) => state,
                 _ => return,
             };
-            state.detail.as_ref()
+            state
+                .detail
+                .as_ref()
                 .map(|d| d.session_id.clone())
                 .unwrap_or_else(|| "unknown".to_string())
         };
 
-        let key = DecisionKey::EditReversal { session_label: session_label.clone() };
+        let key = DecisionKey::EditReversal {
+            session_label: session_label.clone(),
+        };
         let label = format!("Reverse edits from session {}", session_label);
 
         self.stage_mutations_with_transaction(vec![mutation], &label, key, gesture);
@@ -272,12 +289,10 @@ impl App {
     /// Enter confirm-jettison-session phase for the currently selected session.
     fn enter_jettison_session(&mut self) {
         let (session_id, edit_count) = match self.view {
-            ActiveView::History(ref state) => {
-                match state.sessions.get(state.cursor) {
-                    Some(s) => (s.session_id.clone(), s.edit_count),
-                    None => return,
-                }
-            }
+            ActiveView::History(ref state) => match state.sessions.get(state.cursor) {
+                Some(s) => (s.session_id.clone(), s.edit_count),
+                None => return,
+            },
             _ => return,
         };
 
@@ -310,20 +325,19 @@ impl App {
     /// Execute jettison for a single session: export to log, delete from DB.
     fn execute_jettison_session(&mut self) {
         let session_id = match self.view {
-            ActiveView::History(ref state) => {
-                match state.phase {
-                    HistoryPhase::ConfirmJettisonSession(ref js) => js.session_id.clone(),
-                    _ => return,
-                }
-            }
+            ActiveView::History(ref state) => match state.phase {
+                HistoryPhase::ConfirmJettisonSession(ref js) => js.session_id.clone(),
+                _ => return,
+            },
             _ => return,
         };
 
         // Query the session's edit records for export
         let sid = session_id.clone();
-        let rows = self.cache.query(move |db| {
-            db.get_session_edit_history(&sid).unwrap_or_default()
-        }).recv();
+        let rows = self
+            .cache
+            .query(move |db| db.get_session_edit_history(&sid).unwrap_or_default())
+            .recv();
 
         if rows.is_empty() {
             self.status_message = Some("No records to export".to_string());
@@ -370,9 +384,10 @@ impl App {
     /// Execute jettison-all: export everything to log, delete all from DB.
     fn execute_jettison_all(&mut self) {
         // Query all edit history for export
-        let rows = self.cache.query(move |db| {
-            db.get_all_edit_history().unwrap_or_default()
-        }).recv();
+        let rows = self
+            .cache
+            .query(move |db| db.get_all_edit_history().unwrap_or_default())
+            .recv();
 
         if rows.is_empty() {
             self.status_message = Some("No records to export".to_string());
@@ -420,19 +435,25 @@ impl App {
 ///
 /// Returns the path to the written file on success.
 fn export_to_log(rows: &[EditHistoryExportRow]) -> Result<String, String> {
-    let logs_dir = mm_utils::paths::get_logs_dir()
-        .map_err(|e| format!("Cannot resolve logs dir: {}", e))?;
+    let logs_dir =
+        mm_utils::paths::get_logs_dir().map_err(|e| format!("Cannot resolve logs dir: {}", e))?;
 
     let now = chrono::Local::now();
-    let filename = format!("tag_edit_history_export_{}.log", now.format("%Y-%m-%d_%H%M%S"));
+    let filename = format!(
+        "tag_edit_history_export_{}.log",
+        now.format("%Y-%m-%d_%H%M%S")
+    );
     let path = logs_dir.join(&filename);
 
     let mut file = std::fs::File::create(&path)
         .map_err(|e| format!("Cannot create {}: {}", path.display(), e))?;
 
     // Header
-    writeln!(file, "id\tinode\tfield_name\told_value\tnew_value\tedited_at\tsession_id")
-        .map_err(|e| format!("Write error: {}", e))?;
+    writeln!(
+        file,
+        "id\tinode\tfield_name\told_value\tnew_value\tedited_at\tsession_id"
+    )
+    .map_err(|e| format!("Write error: {}", e))?;
 
     // Data rows
     for row in rows {
@@ -457,17 +478,16 @@ fn export_to_log(rows: &[EditHistoryExportRow]) -> Result<String, String> {
 fn reversal_op(edit: &crate::meta::views::EditRecord) -> Option<TagOp> {
     match (&edit.old_value, &edit.new_value) {
         // Was replace: old→new, revert: new→old
-        (Some(old), Some(new)) => {
-            Some(TagOp::replace_tag(edit.inode, &edit.field_name, new.clone(), old.clone()))
-        }
+        (Some(old), Some(new)) => Some(TagOp::replace_tag(
+            edit.inode,
+            &edit.field_name,
+            new.clone(),
+            old.clone(),
+        )),
         // Was add (old=None, new=Some): revert by dropping the added value
-        (None, Some(new)) => {
-            Some(TagOp::drop_tag(edit.inode, &edit.field_name, new.clone()))
-        }
+        (None, Some(new)) => Some(TagOp::drop_tag(edit.inode, &edit.field_name, new.clone())),
         // Was drop (old=Some, new=None): revert by adding the dropped value back
-        (Some(old), None) => {
-            Some(TagOp::add_tag(edit.inode, &edit.field_name, old.clone()))
-        }
+        (Some(old), None) => Some(TagOp::add_tag(edit.inode, &edit.field_name, old.clone())),
         // No-op
         (None, None) => None,
     }
@@ -480,17 +500,16 @@ fn conflict_reversal_op(
 ) -> Option<TagOp> {
     match (&edit.old_value, current_value) {
         // Current exists, old existed: replace current→old
-        (Some(old), Some(cur)) => {
-            Some(TagOp::replace_tag(edit.inode, &edit.field_name, cur.clone(), old.clone()))
-        }
+        (Some(old), Some(cur)) => Some(TagOp::replace_tag(
+            edit.inode,
+            &edit.field_name,
+            cur.clone(),
+            old.clone(),
+        )),
         // Old existed, current is gone: add old back
-        (Some(old), None) => {
-            Some(TagOp::add_tag(edit.inode, &edit.field_name, old.clone()))
-        }
+        (Some(old), None) => Some(TagOp::add_tag(edit.inode, &edit.field_name, old.clone())),
         // Old was None (was an add), current exists: drop current
-        (None, Some(cur)) => {
-            Some(TagOp::drop_tag(edit.inode, &edit.field_name, cur.clone()))
-        }
+        (None, Some(cur)) => Some(TagOp::drop_tag(edit.inode, &edit.field_name, cur.clone())),
         // Both None: no-op
         (None, None) => None,
     }

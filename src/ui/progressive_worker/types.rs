@@ -63,7 +63,12 @@ impl ProgressiveWorkerState {
     /// * `label` - Title shown in the progress modal
     /// * `items` - Work items to process
     /// * `on_complete` - Callback identifier for completion handling
-    pub fn new(label: String, items: Vec<WorkItem>, on_complete: OnComplete, gesture: ConfirmationGesture) -> Self {
+    pub fn new(
+        label: String,
+        items: Vec<WorkItem>,
+        on_complete: OnComplete,
+        gesture: ConfirmationGesture,
+    ) -> Self {
         let total = items.len();
         Self {
             label,
@@ -80,7 +85,11 @@ impl ProgressiveWorkerState {
     }
 
     /// Create a new progressive worker for compound splits.
-    pub fn for_compound_splits(groups: Vec<CompoundGroup>, is_safe_mode: bool, gesture: ConfirmationGesture) -> Self {
+    pub fn for_compound_splits(
+        groups: Vec<CompoundGroup>,
+        is_safe_mode: bool,
+        gesture: ConfirmationGesture,
+    ) -> Self {
         let items: Vec<WorkItem> = groups
             .into_iter()
             .enumerate()

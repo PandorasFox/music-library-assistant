@@ -7,19 +7,20 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::logging::log_general;
-use crate::meta::computations::types::ComputationWitness;
-use crate::meta::computations::helpers::{self, ComputedAggregateSignal, reconcile_aggregate_signals};
-use crate::meta::signals::data::{
-    TypedSignalWrite, TagCanonicitySignal, TagCanonicityData,
-    InconsistentAlbumArtistSignal, InconsistentAlbumArtistData,
-    MissingTagSignal, MissingTagData,
-    MissingAlbumSingleSignal, MissingAlbumSingleData, SingleTrackInfo,
-    CompoundTagSignal, CompoundTagEntry as TypedCompoundEntry,
-    DiscExtractionSignal, DiscExtractionData, DiscExtractionSource, TrackNumberExtraction,
-};
-use crate::db::ReadOnlyDb;
 use crate::db::write_thread;
+use crate::db::ReadOnlyDb;
+use crate::logging::log_general;
+use crate::meta::computations::helpers::{
+    self, reconcile_aggregate_signals, ComputedAggregateSignal,
+};
+use crate::meta::computations::types::ComputationWitness;
+use crate::meta::signals::data::{
+    CompoundTagEntry as TypedCompoundEntry, CompoundTagSignal, DiscExtractionData,
+    DiscExtractionSignal, DiscExtractionSource, InconsistentAlbumArtistData,
+    InconsistentAlbumArtistSignal, MissingAlbumSingleData, MissingAlbumSingleSignal,
+    MissingTagData, MissingTagSignal, SingleTrackInfo, TagCanonicityData, TagCanonicitySignal,
+    TrackNumberExtraction, TypedSignalWrite,
+};
 
 use super::{Computation, Result};
 
@@ -70,7 +71,10 @@ pub fn execute_detect_missing_tags(
     // When album_artist_only_required_if_compilation is true, pull ALBUM_ARTIST
     // out of the base required set and only enforce it on compilation albums.
     let album_artist_key = "ALBUM_ARTIST".to_string();
-    let elide_album_artist = config.opinions.health_detection.album_artist_only_required_if_compilation
+    let elide_album_artist = config
+        .opinions
+        .health_detection
+        .album_artist_only_required_if_compilation
         && required_tags.remove(&album_artist_key);
 
     let compilation_albums: HashSet<String> = if elide_album_artist {
@@ -95,7 +99,8 @@ pub fn execute_detect_missing_tags(
     // Load suppressed inodes (ExpectedMissingTag) once
     let suppressed_inodes: HashSet<i64> = {
         use crate::meta::signals::data::ExpectedMissingTagSignal;
-        read_only_db.corpus_signal_all_inodes::<ExpectedMissingTagSignal>()
+        read_only_db
+            .corpus_signal_all_inodes::<ExpectedMissingTagSignal>()
             .unwrap_or_default()
             .into_iter()
             .collect()
@@ -106,7 +111,6 @@ pub fn execute_detect_missing_tags(
     let mut album_single_groups: HashMap<String, (String, Vec<SingleTrackInfo>)> = HashMap::new();
 
     for (inode, path, album, present_tags_str, artist, title) in tracks_with_tags {
-
         let present_tags: HashSet<String> = present_tags_str
             .unwrap_or_default()
             .split(',')
@@ -114,14 +118,13 @@ pub fn execute_detect_missing_tags(
             .map(|s| s.to_string())
             .collect();
 
-        let mut missing: HashSet<String> = required_tags
-            .difference(&present_tags)
-            .cloned()
-            .collect();
+        let mut missing: HashSet<String> =
+            required_tags.difference(&present_tags).cloned().collect();
 
         // Re-require ALBUM_ARTIST for compilation albums
         if elide_album_artist {
-            let is_compilation = album.as_ref()
+            let is_compilation = album
+                .as_ref()
                 .map(|a| compilation_albums.contains(a))
                 .unwrap_or(false);
             if is_compilation && !present_tags.contains(&album_artist_key) {
@@ -145,7 +148,9 @@ pub fn execute_detect_missing_tags(
             remaining.remove(&album_tag);
 
             let key = artist_val.to_lowercase();
-            let entry = album_single_groups.entry(key).or_insert_with(|| (artist_val.clone(), Vec::new()));
+            let entry = album_single_groups
+                .entry(key)
+                .or_insert_with(|| (artist_val.clone(), Vec::new()));
             entry.1.push(SingleTrackInfo {
                 inode,
                 title: title_val.clone(),
@@ -171,7 +176,9 @@ pub fn execute_detect_missing_tags(
             format!("dir={}", parent)
         };
 
-        let entry = groups.entry(key).or_insert_with(|| (HashSet::new(), Vec::new()));
+        let entry = groups
+            .entry(key)
+            .or_insert_with(|| (HashSet::new(), Vec::new()));
         entry.0.extend(missing);
         entry.1.push(inode);
     }
@@ -182,7 +189,10 @@ pub fn execute_detect_missing_tags(
         missing_list.sort();
         let signal = TypedSignalWrite::MissingTag(MissingTagSignal {
             key: key.clone(),
-            data: MissingTagData { missing_tags: missing_list, inodes },
+            data: MissingTagData {
+                missing_tags: missing_list,
+                inodes,
+            },
         });
         computed_missing.push(ComputedAggregateSignal::new(key, signal));
     }
@@ -197,9 +207,19 @@ pub fn execute_detect_missing_tags(
     }
 
     let (mt_cleared, mt_new, mt_updated, mt_unchanged) =
-        reconcile_aggregate_signals::<MissingTagSignal>(read_only_db, &sender, computed_missing, witness);
+        reconcile_aggregate_signals::<MissingTagSignal>(
+            read_only_db,
+            &sender,
+            computed_missing,
+            witness,
+        );
     let (mas_cleared, mas_new, mas_updated, mas_unchanged) =
-        reconcile_aggregate_signals::<MissingAlbumSingleSignal>(read_only_db, &sender, computed_album_single, witness);
+        reconcile_aggregate_signals::<MissingAlbumSingleSignal>(
+            read_only_db,
+            &sender,
+            computed_album_single,
+            witness,
+        );
 
     log_general(format!(
         "[COMPUTE] DetectMissingTags: missing_tag(cleared={}, new={}, updated={}, unchanged={}), album_single(cleared={}, new={}, updated={}, unchanged={})",
@@ -257,11 +277,15 @@ pub fn execute_detect_tag_canonicalizations(
     let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
 
     // Helper to collect signals for a set of collisions
-    let mut collect_collision_signals = |collisions: Vec<crate::corpus::health::collision::TagCollision>| {
+    let mut collect_collision_signals = |collisions: Vec<
+        crate::corpus::health::collision::TagCollision,
+    >| {
         for collision in collisions {
             // Skip groups where any variant has a CanonicalTag signal
             let any_canonical = collision.variants.iter().any(|v| {
-                read_only_db.is_canonical_tag(&collision.tag_name, v).unwrap_or(false)
+                read_only_db
+                    .is_canonical_tag(&collision.tag_name, v)
+                    .unwrap_or(false)
             });
             if any_canonical {
                 continue;
@@ -274,10 +298,7 @@ pub fn execute_detect_tag_canonicalizations(
                 .unwrap_or_default();
 
             // Build sorted variant tuples (count DESC)
-            let mut variants: Vec<(String, usize)> = collision
-                .variant_counts
-                .into_iter()
-                .collect();
+            let mut variants: Vec<(String, usize)> = collision.variant_counts.into_iter().collect();
             variants.sort_by(|a, b| b.1.cmp(&a.1));
 
             let key = format!("{}:{}", collision.tag_name, collision.normalized_key);
@@ -303,8 +324,12 @@ pub fn execute_detect_tag_canonicalizations(
         collect_collision_signals(collisions);
     }
 
-    let (cleared, new, updated, unchanged) =
-        reconcile_aggregate_signals::<TagCanonicitySignal>(read_only_db, &sender, computed, witness);
+    let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<TagCanonicitySignal>(
+        read_only_db,
+        &sender,
+        computed,
+        witness,
+    );
 
     log_general(format!(
         "[COMPUTE] DetectTagCanonicalizations: cleared={}, new={}, updated={}, unchanged={}",
@@ -374,7 +399,8 @@ pub(super) fn determine_collab_separator_label(value: &str, keywords: &[String])
     for kw in keywords {
         let kw_lower = kw.to_lowercase();
         // Check for " keyword." or " keyword " (with preceding space)
-        if lower.contains(&format!(" {}.", kw_lower)) || lower.contains(&format!(" {} ", kw_lower)) {
+        if lower.contains(&format!(" {}.", kw_lower)) || lower.contains(&format!(" {} ", kw_lower))
+        {
             // Return canonical form: keyword + dot (unless it's a full word like "featuring"/"with")
             return if kw_lower == "featuring" || kw_lower == "with" {
                 kw_lower
@@ -398,7 +424,7 @@ pub fn execute_detect_compound_tags_for_inode(
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    use crate::corpus::health::compound::{CompoundTagValue, detect_featuring_pattern};
+    use crate::corpus::health::compound::{detect_featuring_pattern, CompoundTagValue};
 
     let computation = Computation::DetectCompoundTagsForInode { inode };
 
@@ -456,14 +482,21 @@ pub fn execute_detect_compound_tags_for_inode(
     let mut compounds: Vec<TypedCompoundEntry> = Vec::new();
 
     // Convert collaboration_keywords HashSet to Vec for detect_featuring_pattern
-    let collab_keywords: Vec<String> = tag_splitting.collaboration_keywords.iter().cloned().collect();
+    let collab_keywords: Vec<String> = tag_splitting
+        .collaboration_keywords
+        .iter()
+        .cloned()
+        .collect();
 
     for tag in &tags {
         let tag_name_upper = tag.tag_name.to_uppercase();
         let is_artist_tag = matches!(tag_name_upper.as_str(), "ARTIST" | "ALBUMARTIST");
 
         // Check if this value is whitelisted as canonical
-        if read_only_db.is_canonical_tag(&tag.tag_name, &tag.tag_value).unwrap_or(false) {
+        if read_only_db
+            .is_canonical_tag(&tag.tag_name, &tag.tag_value)
+            .unwrap_or(false)
+        {
             continue;
         }
 
@@ -513,7 +546,12 @@ pub fn execute_detect_compound_tags_for_inode(
 
     // If no compounds found, clear any existing signal (only if one exists)
     if compounds.is_empty() {
-        helpers::drop_stale_corpus_signal::<CompoundTagSignal>(read_only_db, &sender, inode, witness);
+        helpers::drop_stale_corpus_signal::<CompoundTagSignal>(
+            read_only_db,
+            &sender,
+            inode,
+            witness,
+        );
         sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
@@ -667,7 +705,8 @@ pub fn execute_detect_inconsistent_album_artist(
         let mut artist_variants: Vec<(String, usize)> = issue.artist_variants.into_iter().collect();
         artist_variants.sort_by(|a, b| b.1.cmp(&a.1));
 
-        let mut album_artist_variants: Vec<(String, usize)> = issue.album_artist_variants.into_iter().collect();
+        let mut album_artist_variants: Vec<(String, usize)> =
+            issue.album_artist_variants.into_iter().collect();
         album_artist_variants.sort_by(|a, b| b.1.cmp(&a.1));
 
         let key = issue.normalized_album;
@@ -683,8 +722,9 @@ pub fn execute_detect_inconsistent_album_artist(
         computed.push(ComputedAggregateSignal::new(key, signal));
     }
 
-    let (cleared, new, updated, unchanged) =
-        reconcile_aggregate_signals::<InconsistentAlbumArtistSignal>(read_only_db, &sender, computed, witness);
+    let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<
+        InconsistentAlbumArtistSignal,
+    >(read_only_db, &sender, computed, witness);
 
     log_general(format!(
         "[COMPUTE] DetectInconsistentAlbumArtist: cleared={}, new={}, updated={}, unchanged={}",
@@ -758,7 +798,12 @@ pub fn execute_detect_disc_extractions(
 
             let key = format!("album:{}|{}", cleaned_album.to_lowercase(), disc_number);
             let entry = album_groups.entry(key).or_insert_with(|| {
-                (album_value.clone(), cleaned_album.clone(), disc_number.clone(), Vec::new())
+                (
+                    album_value.clone(),
+                    cleaned_album.clone(),
+                    disc_number.clone(),
+                    Vec::new(),
+                )
             });
             if !entry.3.contains(&inode) {
                 entry.3.push(inode);
@@ -788,11 +833,15 @@ pub fn execute_detect_disc_extractions(
         Ok(entries) => entries,
         Err(e) => {
             log_general(format!(
-                "[COMPUTE] DetectDiscExtractions: track number query failed: {}", e
+                "[COMPUTE] DetectDiscExtractions: track number query failed: {}",
+                e
             ));
             // Non-fatal: still emit album signals
-            let (cleared, new, updated, unchanged) =
-                reconcile_aggregate_signals::<DiscExtractionSignal>(read_only_db, &sender, computed, witness);
+            let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<
+                DiscExtractionSignal,
+            >(
+                read_only_db, &sender, computed, witness
+            );
             log_general(format!(
                 "[COMPUTE] DetectDiscExtractions: cleared={}, new={}, updated={}, unchanged={}",
                 cleared, new, updated, unchanged
@@ -861,8 +910,12 @@ pub fn execute_detect_disc_extractions(
         computed.push(ComputedAggregateSignal::new(key, signal));
     }
 
-    let (cleared, new, updated, unchanged) =
-        reconcile_aggregate_signals::<DiscExtractionSignal>(read_only_db, &sender, computed, witness);
+    let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<DiscExtractionSignal>(
+        read_only_db,
+        &sender,
+        computed,
+        witness,
+    );
 
     log_general(format!(
         "[COMPUTE] DetectDiscExtractions: cleared={}, new={}, updated={}, unchanged={}",

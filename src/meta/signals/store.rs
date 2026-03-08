@@ -11,9 +11,9 @@
 //! 3. **Simple aggregate signal** — semantic key + flat columns
 //! 4. **Aggregate signal with BLOB** — semantic key + flat columns + bincode `data BLOB`
 
+use rusqlite::{Connection, Result};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use rusqlite::{Connection, Result};
 
 /// Compute a deterministic hash from bincode-serialized bytes.
 ///
@@ -78,7 +78,10 @@ pub trait CorpusSignalStore: Sized {
     /// get this for free from their `data_hash` column.
     fn query_inode_hash(conn: &Connection, inode: i64) -> Result<Option<i64>> {
         use rusqlite::OptionalExtension;
-        let sql = format!("SELECT data_hash FROM {} WHERE inode = ?1", Self::TABLE_NAME);
+        let sql = format!(
+            "SELECT data_hash FROM {} WHERE inode = ?1",
+            Self::TABLE_NAME
+        );
         conn.query_row(&sql, [inode], |row| row.get(0)).optional()
     }
 }
@@ -170,7 +173,10 @@ impl CorpusSignalStore for FileInCorpusSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_file_in_corpus WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_file_in_corpus WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -182,7 +188,6 @@ impl CorpusSignalStore for FileInCorpusSignal {
         )
     }
 }
-
 
 impl CorpusSignalStore for UnindexedFileSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_unindexed_file (
@@ -201,7 +206,10 @@ impl CorpusSignalStore for UnindexedFileSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_unindexed_file WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_unindexed_file WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -216,11 +224,13 @@ impl CorpusSignalStore for UnindexedFileSignal {
 
 impl UnindexedFileSignal {
     pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT inode, path FROM signal_unindexed_file ORDER BY path"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT inode, path FROM signal_unindexed_file ORDER BY path")?;
         let rows = stmt.query_map([], |row| {
-            Ok(Self { inode: row.get(0)?, path: row.get(1)? })
+            Ok(Self {
+                inode: row.get(0)?,
+                path: row.get(1)?,
+            })
         })?;
         rows.collect()
     }
@@ -258,11 +268,12 @@ impl CorpusSignalStore for HealthyFileSignal {
 
 impl HealthyFileSignal {
     pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT inode, path FROM signal_healthy_file ORDER BY path"
-        )?;
+        let mut stmt = conn.prepare("SELECT inode, path FROM signal_healthy_file ORDER BY path")?;
         let rows = stmt.query_map([], |row| {
-            Ok(Self { inode: row.get(0)?, path: row.get(1)? })
+            Ok(Self {
+                inode: row.get(0)?,
+                path: row.get(1)?,
+            })
         })?;
         rows.collect()
     }
@@ -303,7 +314,6 @@ impl CorpusSignalStore for FileInInboxSignal {
     }
 }
 
-
 impl CorpusSignalStore for InboxUnindexedSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_inbox_unindexed (
         inode INTEGER PRIMARY KEY,
@@ -321,7 +331,10 @@ impl CorpusSignalStore for InboxUnindexedSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_inbox_unindexed WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_inbox_unindexed WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -393,7 +406,10 @@ impl CorpusSignalStore for InboxCorpusMatchSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_inbox_corpus_match WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_inbox_corpus_match WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -457,7 +473,10 @@ impl CorpusSignalStore for MtimeOnlyMismatchSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_mtime_only_mismatch WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_mtime_only_mismatch WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -487,7 +506,10 @@ impl CorpusSignalStore for MissingDirectorySignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_missing_directory WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_missing_directory WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -646,7 +668,10 @@ impl CorpusSignalStore for DeployedHealthySignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_deployed_healthy WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_deployed_healthy WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -683,7 +708,10 @@ impl CorpusSignalStore for SidecarDeployReadySignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_sidecar_deploy_ready WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_sidecar_deploy_ready WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -767,7 +795,10 @@ impl CorpusSignalStore for OutOfBandTagConflictSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_oob_tag_conflict WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_oob_tag_conflict WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -808,7 +839,10 @@ impl CorpusSignalStore for SubparDuplicateSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_subpar_duplicate WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_subpar_duplicate WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -872,9 +906,14 @@ impl CompoundTagSignal {
                 let blob: Vec<u8> = row.get(2)?;
                 let compounds: Vec<CompoundTagEntry> = bincode::deserialize(&blob)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                Ok(Self { inode: row.get(0)?, path: row.get(1)?, compounds })
+                Ok(Self {
+                    inode: row.get(0)?,
+                    path: row.get(1)?,
+                    compounds,
+                })
             },
-        ).optional()
+        )
+        .optional()
     }
 }
 
@@ -906,7 +945,10 @@ impl CorpusSignalStore for PathTagMismatchSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_path_tag_mismatch WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_path_tag_mismatch WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -947,7 +989,10 @@ impl CorpusSignalStore for ExternalMatchSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_external_match WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_external_match WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -988,7 +1033,10 @@ impl CorpusSignalStore for ReleasePackingSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_release_packing WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_release_packing WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -1017,7 +1065,10 @@ impl CorpusSignalStore for ExpectedMissingTagSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_expected_missing_tag WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_expected_missing_tag WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -1083,7 +1134,10 @@ impl AggregateSignalStore for ExpectedDuplicateSignal {
     }
 
     fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_expected_duplicate WHERE key = ?1", [key])?;
+        conn.execute(
+            "DELETE FROM signal_expected_duplicate WHERE key = ?1",
+            [key],
+        )?;
         Ok(())
     }
 
@@ -1219,7 +1273,10 @@ impl AggregateSignalStore for FingerprintOverlapSignal {
     }
 
     fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_fingerprint_overlap WHERE key = ?1", [key])?;
+        conn.execute(
+            "DELETE FROM signal_fingerprint_overlap WHERE key = ?1",
+            [key],
+        )?;
         Ok(())
     }
 
@@ -1235,16 +1292,18 @@ impl AggregateSignalStore for FingerprintOverlapSignal {
 impl FingerprintOverlapSignal {
     /// Query all fingerprint overlap signals with deserialized inodes.
     pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT key, data FROM signal_fingerprint_overlap ORDER BY key"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT key, data FROM signal_fingerprint_overlap ORDER BY key")?;
         let rows = stmt.query_map([], |row| {
             let key: String = row.get(0)?;
             let data: Vec<u8> = row.get(1)?;
-            let inodes: Vec<i64> = bincode::deserialize(&data)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-                    1, rusqlite::types::Type::Blob, Box::new(e)
-                ))?;
+            let inodes: Vec<i64> = bincode::deserialize(&data).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Blob,
+                    Box::new(e),
+                )
+            })?;
             Ok(Self { key, inodes })
         })?;
         rows.collect()
@@ -1278,7 +1337,10 @@ impl AggregateSignalStore for MetadataDuplicateSignal {
     }
 
     fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_metadata_duplicate WHERE key = ?1", [key])?;
+        conn.execute(
+            "DELETE FROM signal_metadata_duplicate WHERE key = ?1",
+            [key],
+        )?;
         Ok(())
     }
 
@@ -1374,9 +1436,7 @@ impl AggregateSignalStore for MissingTagSignal {
 
 impl MissingTagSignal {
     pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT key, data FROM signal_missing_tag ORDER BY key"
-        )?;
+        let mut stmt = conn.prepare("SELECT key, data FROM signal_missing_tag ORDER BY key")?;
         let rows = stmt.query_map([], |row| {
             let blob: Vec<u8> = row.get(1)?;
             let data: MissingTagData = bincode::deserialize(&blob)
@@ -1417,7 +1477,10 @@ impl AggregateSignalStore for MissingAlbumSingleSignal {
     }
 
     fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_missing_album_single WHERE key = ?1", [key])?;
+        conn.execute(
+            "DELETE FROM signal_missing_album_single WHERE key = ?1",
+            [key],
+        )?;
         Ok(())
     }
 
@@ -1432,9 +1495,8 @@ impl AggregateSignalStore for MissingAlbumSingleSignal {
 
 impl MissingAlbumSingleSignal {
     pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT key, data FROM signal_missing_album_single ORDER BY key"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT key, data FROM signal_missing_album_single ORDER BY key")?;
         let rows = stmt.query_map([], |row| {
             let blob: Vec<u8> = row.get(1)?;
             let data: MissingAlbumSingleData = bincode::deserialize(&blob)
@@ -1518,7 +1580,10 @@ impl AggregateSignalStore for SidecarDeployConflictSignal {
     }
 
     fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_sidecar_deploy_conflict WHERE key = ?1", [key])?;
+        conn.execute(
+            "DELETE FROM signal_sidecar_deploy_conflict WHERE key = ?1",
+            [key],
+        )?;
         Ok(())
     }
 
@@ -1582,9 +1647,14 @@ impl TagCanonicitySignal {
                 let blob: Vec<u8> = row.get(2)?;
                 let data: TagCanonicityData = bincode::deserialize(&blob)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                Ok(Self { key: row.get(0)?, tag_name: row.get(1)?, data })
+                Ok(Self {
+                    key: row.get(0)?,
+                    tag_name: row.get(1)?,
+                    data,
+                })
             },
-        ).optional()
+        )
+        .optional()
     }
 }
 
@@ -1609,13 +1679,17 @@ impl AggregateSignalStore for InconsistentAlbumArtistSignal {
     }
 
     fn query_key_hashes(conn: &Connection) -> Result<HashMap<String, i64>> {
-        let mut stmt = conn.prepare("SELECT key, data_hash FROM signal_inconsistent_album_artist")?;
+        let mut stmt =
+            conn.prepare("SELECT key, data_hash FROM signal_inconsistent_album_artist")?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect()
     }
 
     fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_inconsistent_album_artist WHERE key = ?1", [key])?;
+        conn.execute(
+            "DELETE FROM signal_inconsistent_album_artist WHERE key = ?1",
+            [key],
+        )?;
         Ok(())
     }
 
@@ -1638,9 +1712,13 @@ impl InconsistentAlbumArtistSignal {
                 let blob: Vec<u8> = row.get(1)?;
                 let data: InconsistentAlbumArtistData = bincode::deserialize(&blob)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                Ok(Self { key: row.get(0)?, data })
+                Ok(Self {
+                    key: row.get(0)?,
+                    data,
+                })
             },
-        ).optional()
+        )
+        .optional()
     }
 }
 
@@ -1671,7 +1749,10 @@ impl AggregateSignalStore for CrossSourceOverlapSignal {
     }
 
     fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_cross_source_overlap WHERE key = ?1", [key])?;
+        conn.execute(
+            "DELETE FROM signal_cross_source_overlap WHERE key = ?1",
+            [key],
+        )?;
         Ok(())
     }
 
@@ -1726,14 +1807,15 @@ impl AggregateSignalStore for ReleaseOverlapSignal {
 
 impl ReleaseOverlapSignal {
     pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT key, data FROM signal_release_overlap ORDER BY key"
-        )?;
+        let mut stmt = conn.prepare("SELECT key, data FROM signal_release_overlap ORDER BY key")?;
         let rows = stmt.query_map([], |row| {
             let blob: Vec<u8> = row.get(1)?;
             let data: ReleaseOverlapData = bincode::deserialize(&blob)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            Ok(Self { key: row.get(0)?, data })
+            Ok(Self {
+                key: row.get(0)?,
+                data,
+            })
         })?;
         rows.collect()
     }
@@ -1766,7 +1848,10 @@ impl AggregateSignalStore for RedundantDuplicateSignal {
     }
 
     fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_redundant_duplicate WHERE key = ?1", [key])?;
+        conn.execute(
+            "DELETE FROM signal_redundant_duplicate WHERE key = ?1",
+            [key],
+        )?;
         Ok(())
     }
 
@@ -1781,14 +1866,16 @@ impl AggregateSignalStore for RedundantDuplicateSignal {
 
 impl CrossSourceOverlapSignal {
     pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT key, data FROM signal_cross_source_overlap ORDER BY key"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT key, data FROM signal_cross_source_overlap ORDER BY key")?;
         let rows = stmt.query_map([], |row| {
             let blob: Vec<u8> = row.get(1)?;
             let data: CrossSourceOverlapData = bincode::deserialize(&blob)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            Ok(Self { key: row.get(0)?, data })
+            Ok(Self {
+                key: row.get(0)?,
+                data,
+            })
         })?;
         rows.collect()
     }
@@ -1822,7 +1909,10 @@ impl AggregateSignalStore for InboxTagCanonicitySignal {
     }
 
     fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_inbox_tag_canonicity WHERE key = ?1", [key])?;
+        conn.execute(
+            "DELETE FROM signal_inbox_tag_canonicity WHERE key = ?1",
+            [key],
+        )?;
         Ok(())
     }
 
@@ -1903,7 +1993,10 @@ impl CorpusSignalStore for InboxCompoundTagSignal {
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_inbox_compound_tag WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_inbox_compound_tag WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -1926,9 +2019,14 @@ impl InboxCompoundTagSignal {
                 let blob: Vec<u8> = row.get(2)?;
                 let compounds: Vec<CompoundTagEntry> = bincode::deserialize(&blob)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                Ok(Self { inode: row.get(0)?, path: row.get(1)?, compounds })
+                Ok(Self {
+                    inode: row.get(0)?,
+                    path: row.get(1)?,
+                    compounds,
+                })
             },
-        ).optional()
+        )
+        .optional()
     }
 }
 
@@ -1974,9 +2072,7 @@ impl AggregateSignalStore for DiscExtractionSignal {
 
 impl DiscExtractionSignal {
     pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare(
-            "SELECT key, data FROM signal_disc_extraction ORDER BY key"
-        )?;
+        let mut stmt = conn.prepare("SELECT key, data FROM signal_disc_extraction ORDER BY key")?;
         let rows = stmt.query_map([], |row| {
             let blob: Vec<u8> = row.get(1)?;
             let data: DiscExtractionData = bincode::deserialize(&blob)
@@ -2000,11 +2096,15 @@ impl InboxTagCanonicitySignal {
                 let blob: Vec<u8> = row.get(2)?;
                 let data: InboxTagCanonicityData = bincode::deserialize(&blob)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                Ok(Self { key: row.get(0)?, tag_name: row.get(1)?, data })
+                Ok(Self {
+                    key: row.get(0)?,
+                    tag_name: row.get(1)?,
+                    data,
+                })
             },
-        ).optional()
+        )
+        .optional()
     }
-
 }
 
 // ============================================================================
@@ -2033,13 +2133,17 @@ impl CorpusSignalStore for UnmatchedCorpusTrackSignal {
     }
 
     fn query_inode_hashes(conn: &Connection) -> Result<HashMap<i64, i64>> {
-        let mut stmt = conn.prepare("SELECT inode, data_hash FROM signal_unmatched_corpus_track")?;
+        let mut stmt =
+            conn.prepare("SELECT inode, data_hash FROM signal_unmatched_corpus_track")?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect()
     }
 
     fn clear_by_inode(conn: &Connection, inode: i64) -> Result<()> {
-        conn.execute("DELETE FROM signal_unmatched_corpus_track WHERE inode = ?1", [inode])?;
+        conn.execute(
+            "DELETE FROM signal_unmatched_corpus_track WHERE inode = ?1",
+            [inode],
+        )?;
         Ok(())
     }
 
@@ -2079,7 +2183,10 @@ impl AggregateSignalStore for UnfilledReleaseSlotSignal {
     }
 
     fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_unfilled_release_slot WHERE key = ?1", [key])?;
+        conn.execute(
+            "DELETE FROM signal_unfilled_release_slot WHERE key = ?1",
+            [key],
+        )?;
         Ok(())
     }
 

@@ -13,8 +13,8 @@
 //! 3. Add key dispatch + action handler in `action_handlers/`
 //! 4. Add render case in `render.rs`
 
-pub(crate) mod active_view;
 pub(crate) mod action_handlers;
+pub(crate) mod active_view;
 pub(crate) mod input;
 mod suspended_views;
 mod tag_editor_ops;
@@ -22,20 +22,19 @@ mod tick;
 mod types;
 
 pub mod operator_decisions;
-pub mod transaction_review;
 pub mod tabbed_transaction_review;
+pub mod transaction_review;
 
 pub mod bulk_selection;
-pub mod config_editor;
 pub mod compound_split_v2;
+pub mod config_editor;
 pub mod corrupt_file_modal;
 pub mod deploy_modal;
-pub mod disc_extraction_modal;
 pub mod directory_cluster_modal;
+pub mod disc_extraction_modal;
 pub mod external_match_modal;
 pub mod external_match_view;
 pub mod eye;
-pub mod manual_review_modal;
 pub mod filter_popup;
 pub mod helpers;
 pub mod history_view;
@@ -43,13 +42,16 @@ pub mod inbox_corpus_match_modal;
 pub mod inbox_organize;
 pub mod inbox_view;
 pub mod insights_view;
+pub mod manual_review_modal;
 pub mod missing_album_modal;
-pub mod missing_file_modal;
 pub mod missing_directory_modal;
+pub mod missing_file_modal;
 pub mod moved_file_modal;
 pub mod oob_conflict_modal;
 pub mod oob_sync_modal;
 pub mod progress_screen;
+pub mod progressive_worker;
+pub mod release_packing_browser;
 pub mod render;
 pub mod shit_format_modal;
 pub mod startup;
@@ -60,32 +62,29 @@ pub mod tag_search;
 pub mod tree_browser;
 pub mod wait_state;
 pub mod widgets;
-pub mod progressive_worker;
-pub mod release_packing_browser;
 
 // Re-export for convenience
 pub(crate) use active_view::{
-    ActiveView, CanonicitySignalKind, ExitConfirmModalState, ExitConfirmAction, FilterOverlay,
-    FilterPopupContext, SchemaUpdateAction, SchemaUpdateState, SchemaUpdatePhase,
-    SuspendedView, TagCanonicityClusters, VacuumAction, VacuumPhase, VacuumPromptState,
-    ViewAction,
+    ActiveView, CanonicitySignalKind, ExitConfirmAction, ExitConfirmModalState, FilterOverlay,
+    FilterPopupContext, SchemaUpdateAction, SchemaUpdatePhase, SchemaUpdateState, SuspendedView,
+    TagCanonicityClusters, VacuumAction, VacuumPhase, VacuumPromptState, ViewAction,
 };
 use types::ProgressStatsUpdater;
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, DisableBracketedPaste, EnableBracketedPaste, Event, MouseButton, MouseEventKind},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, MouseButton, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use input::InputAction;
-use ratatui::{
-    backend::CrosstermBackend,
-    Frame, Terminal,
-};
+use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::io;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::config::{Config, SharedConfig};
 
@@ -225,28 +224,45 @@ impl App {
                                     browser.clear_filter();
                                 }
                             } else {
-                                let matching_paths = self.cache.query(move |db| {
-                                    let audio_files = db.get_all_audio_files(crate::db::types::Zone::Corpus, false)
-                                        .unwrap_or_default();
-                                    let mut paths = Vec::new();
-                                    for audio_file in audio_files {
-                                        let mut tags: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-                                        for t in db.get_corpus_tags(audio_file.inode()).unwrap_or_default() {
-                                            tags.entry(t.tag_name.to_uppercase()).or_default().push(t.tag_value);
+                                let matching_paths = self
+                                    .cache
+                                    .query(move |db| {
+                                        let audio_files = db
+                                            .get_all_audio_files(
+                                                crate::db::types::Zone::Corpus,
+                                                false,
+                                            )
+                                            .unwrap_or_default();
+                                        let mut paths = Vec::new();
+                                        for audio_file in audio_files {
+                                            let mut tags: std::collections::HashMap<
+                                                String,
+                                                Vec<String>,
+                                            > = std::collections::HashMap::new();
+                                            for t in db
+                                                .get_corpus_tags(audio_file.inode())
+                                                .unwrap_or_default()
+                                            {
+                                                tags.entry(t.tag_name.to_uppercase())
+                                                    .or_default()
+                                                    .push(t.tag_value);
+                                            }
+                                            if condition.matches(
+                                                audio_file.path(),
+                                                &audio_file.audio.file_type,
+                                                audio_file.audio.sample_rate,
+                                                audio_file.audio.bitrate_kbps,
+                                                audio_file.audio.duration_ms,
+                                                &tags,
+                                            ) {
+                                                paths.push(std::path::PathBuf::from(
+                                                    audio_file.path(),
+                                                ));
+                                            }
                                         }
-                                        if condition.matches(
-                                            audio_file.path(),
-                                            &audio_file.audio.file_type,
-                                            audio_file.audio.sample_rate,
-                                            audio_file.audio.bitrate_kbps,
-                                            audio_file.audio.duration_ms,
-                                            &tags,
-                                        ) {
-                                            paths.push(std::path::PathBuf::from(audio_file.path()));
-                                        }
-                                    }
-                                    paths
-                                }).recv();
+                                        paths
+                                    })
+                                    .recv();
                                 if let ActiveView::CorpusBrowser(ref mut browser) = self.view {
                                     browser.apply_filter_results(matching_paths);
                                 }
@@ -298,8 +314,12 @@ impl App {
         let view_action = match &mut self.view {
             ActiveView::SchemaUpdate(s) => {
                 let a = match (s.phase, &action) {
-                    (SchemaUpdatePhase::Approval, InputAction::Confirm) => SchemaUpdateAction::Approve,
-                    (SchemaUpdatePhase::Approval, InputAction::Cancel) => SchemaUpdateAction::Cancel,
+                    (SchemaUpdatePhase::Approval, InputAction::Confirm) => {
+                        SchemaUpdateAction::Approve
+                    }
+                    (SchemaUpdatePhase::Approval, InputAction::Cancel) => {
+                        SchemaUpdateAction::Cancel
+                    }
                     _ => SchemaUpdateAction::None,
                 };
                 ViewAction::SchemaUpdate(a)
@@ -330,7 +350,11 @@ impl App {
                         ExitConfirmAction::None
                     }
                     InputAction::Confirm | InputAction::Toggle => {
-                        if state.selected_no { ExitConfirmAction::Cancel } else { ExitConfirmAction::Quit }
+                        if state.selected_no {
+                            ExitConfirmAction::Cancel
+                        } else {
+                            ExitConfirmAction::Quit
+                        }
                     }
                     InputAction::Cancel => ExitConfirmAction::Cancel,
                     _ => ExitConfirmAction::None,
@@ -339,35 +363,73 @@ impl App {
             }
             ActiveView::IntakeConfirmation(state) => {
                 let visible_height = crossterm::terminal::size()
-                    .map(|(_, h)| startup::intake_confirmation::compute_list_visible_height(
-                        ratatui::layout::Rect::new(0, 0, 80, h)
-                    ))
+                    .map(|(_, h)| {
+                        startup::intake_confirmation::compute_list_visible_height(
+                            ratatui::layout::Rect::new(0, 0, 80, h),
+                        )
+                    })
                     .unwrap_or(10);
                 ViewAction::IntakeConfirmation(state.handle_input(&action, visible_height))
             }
-            ActiveView::UnifiedTagEditor(s) => ViewAction::UnifiedTagEditor(s.handle_input(&action)),
+            ActiveView::UnifiedTagEditor(s) => {
+                ViewAction::UnifiedTagEditor(s.handle_input(&action))
+            }
             ActiveView::Deploy(s) => ViewAction::Deploy(s.handle_input(&action)),
             ActiveView::ExternalMatches(s) => ViewAction::ExternalMatches(s.handle_input(&action)),
-            ActiveView::MissingFileResolution(s) => ViewAction::MissingFileResolution(s.handle_input(&action)),
-            ActiveView::MissingDirectoryResolution(s) => ViewAction::MissingDirectoryResolution(s.handle_input(&action)),
-            ActiveView::CorruptFileResolution(s) => ViewAction::CorruptFileResolution(s.handle_input(&action)),
-            ActiveView::ShitFormatResolution(s) => ViewAction::ShitFormatResolution(s.handle_input(&action)),
-            ActiveView::SubparDuplicateResolution(s) => ViewAction::SubparDuplicateResolution(s.handle_input(&action)),
-            ActiveView::InboxCorpusMatchResolution(s) => ViewAction::InboxCorpusMatchResolution(s.handle_input(&action)),
+            ActiveView::MissingFileResolution(s) => {
+                ViewAction::MissingFileResolution(s.handle_input(&action))
+            }
+            ActiveView::MissingDirectoryResolution(s) => {
+                ViewAction::MissingDirectoryResolution(s.handle_input(&action))
+            }
+            ActiveView::CorruptFileResolution(s) => {
+                ViewAction::CorruptFileResolution(s.handle_input(&action))
+            }
+            ActiveView::ShitFormatResolution(s) => {
+                ViewAction::ShitFormatResolution(s.handle_input(&action))
+            }
+            ActiveView::SubparDuplicateResolution(s) => {
+                ViewAction::SubparDuplicateResolution(s.handle_input(&action))
+            }
+            ActiveView::InboxCorpusMatchResolution(s) => {
+                ViewAction::InboxCorpusMatchResolution(s.handle_input(&action))
+            }
             ActiveView::InboxOrganize(s) => ViewAction::InboxOrganize(s.handle_input(&action)),
-            ActiveView::DirectoryClusterResolution(s) => ViewAction::DirectoryClusterResolution(s.handle_input(&action)),
-            ActiveView::MovedFileAcknowledge(s) => ViewAction::MovedFileAcknowledge(s.handle_input(&action)),
-            ActiveView::OobSyncResolution(s) => ViewAction::OobSyncResolution(s.handle_input(&action)),
-            ActiveView::OobConflictInspection(s) => ViewAction::OobConflictInspection(s.handle_input(&action)),
-            ActiveView::ExternalMatchReview(s) => ViewAction::ExternalMatchReview(s.handle_input(&action)),
-            ActiveView::ReleasePackingBrowser(s) => ViewAction::ReleasePackingBrowser(s.handle_input(&action)),
+            ActiveView::DirectoryClusterResolution(s) => {
+                ViewAction::DirectoryClusterResolution(s.handle_input(&action))
+            }
+            ActiveView::MovedFileAcknowledge(s) => {
+                ViewAction::MovedFileAcknowledge(s.handle_input(&action))
+            }
+            ActiveView::OobSyncResolution(s) => {
+                ViewAction::OobSyncResolution(s.handle_input(&action))
+            }
+            ActiveView::OobConflictInspection(s) => {
+                ViewAction::OobConflictInspection(s.handle_input(&action))
+            }
+            ActiveView::ExternalMatchReview(s) => {
+                ViewAction::ExternalMatchReview(s.handle_input(&action))
+            }
+            ActiveView::ReleasePackingBrowser(s) => {
+                ViewAction::ReleasePackingBrowser(s.handle_input(&action))
+            }
             ActiveView::History(s) => ViewAction::History(s.handle_input(&action)),
-            ActiveView::TagCanonicityResolution { state, .. } => ViewAction::TagCanonicityResolution(state.handle_input(&action)),
-            ActiveView::CompoundTagSplit { state, .. } => ViewAction::CompoundTagSplit(state.handle_input(&action)),
-            ActiveView::MissingAlbumSingleResolution(s) => ViewAction::MissingAlbumSingleResolution(s.handle_input(&action)),
-            ActiveView::DiscExtractionResolution(s) => ViewAction::DiscExtractionResolution(s.handle_input(&action)),
+            ActiveView::TagCanonicityResolution { state, .. } => {
+                ViewAction::TagCanonicityResolution(state.handle_input(&action))
+            }
+            ActiveView::CompoundTagSplit { state, .. } => {
+                ViewAction::CompoundTagSplit(state.handle_input(&action))
+            }
+            ActiveView::MissingAlbumSingleResolution(s) => {
+                ViewAction::MissingAlbumSingleResolution(s.handle_input(&action))
+            }
+            ActiveView::DiscExtractionResolution(s) => {
+                ViewAction::DiscExtractionResolution(s.handle_input(&action))
+            }
             ActiveView::ManualReview(s) => ViewAction::ManualReview(s.handle_input(&action)),
-            ActiveView::TransactionReview(review) => ViewAction::TransactionReview(review.handle_input(&action)),
+            ActiveView::TransactionReview(review) => {
+                ViewAction::TransactionReview(review.handle_input(&action))
+            }
         };
 
         // Phase 2: dispatch with confirmation flag
@@ -436,9 +498,12 @@ impl App {
     pub(super) fn start_inbox_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::Inbox;
         // Check for inbox unindexed files — show intake popup if any
-        let intake_state = self.cache.query(|db| {
-            startup::IntakeConfirmationState::gather_inbox(db, startup::IntakeSource::Inbox)
-        }).recv();
+        let intake_state = self
+            .cache
+            .query(|db| {
+                startup::IntakeConfirmationState::gather_inbox(db, startup::IntakeSource::Inbox)
+            })
+            .recv();
 
         if let Some(state) = intake_state {
             self.view = ActiveView::IntakeConfirmation(state);
@@ -458,7 +523,8 @@ impl App {
         self.last_lateral_view = widgets::LateralView::ExternalMatches;
         let fetch_active = self.witch.is_external_fetch_active();
         let has_api_key = self.witch.has_acoustid_api_key();
-        let mut state = external_match_view::ExternalMatchesViewState::new(fetch_active, has_api_key);
+        let mut state =
+            external_match_view::ExternalMatchesViewState::new(fetch_active, has_api_key);
         if let Some(ref data) = self.cached_external_matches {
             state.update(data.clone());
         }
@@ -496,9 +562,8 @@ impl App {
             .ok()
             .map(|dir| dir.join("config.kdl"))
             .and_then(|path| std::fs::read_to_string(path).ok());
-        self.view = ActiveView::ConfigEditor(
-            config_editor::ConfigEditorState::new(&config, kdl_content),
-        );
+        self.view =
+            ActiveView::ConfigEditor(config_editor::ConfigEditorState::new(&config, kdl_content));
     }
 
     /// Start the deploy lateral view.
@@ -513,13 +578,16 @@ impl App {
         let needs_action = deploy_status.as_ref().is_some_and(|s| s.needs_action);
 
         if needs_action {
-            let data = self.cache.query(|db| {
-                let config = crate::config::load_config().ok();
-                deploy_modal::DeployModalData::load(db, config.as_ref())
-                    .unwrap_or_default()
-            }).recv();
+            let data = self
+                .cache
+                .query(|db| {
+                    let config = crate::config::load_config().ok();
+                    deploy_modal::DeployModalData::load(db, config.as_ref()).unwrap_or_default()
+                })
+                .recv();
             let preview = deploy_modal::DeploymentPreviewState::new(data);
-            self.view = ActiveView::Deploy(deploy_modal::DeployViewState::Preview(Box::new(preview)));
+            self.view =
+                ActiveView::Deploy(deploy_modal::DeployViewState::Preview(Box::new(preview)));
         } else {
             let counts = deploy_status
                 .map(|s| s.library_file_counts)
@@ -536,15 +604,12 @@ impl App {
         let config = self.config();
         let archive_root = config.root.clone();
         let corpus_dir = config.corpus_dir();
-        let deploy_source_paths: Vec<std::path::PathBuf> = config.source_dirs
+        let deploy_source_paths: Vec<std::path::PathBuf> = config
+            .source_dirs
             .iter()
             .map(|sd| corpus_dir.join(&sd.path))
             .collect();
-        let primary_zone_paths = vec![
-            corpus_dir.clone(),
-            config.inbox_dir(),
-            config.stash_dir(),
-        ];
+        let primary_zone_paths = vec![corpus_dir.clone(), config.inbox_dir(), config.stash_dir()];
         drop(config);
         self.view = ActiveView::CorpusBrowser(tree_browser::TreeBrowserState::corpus_browser(
             archive_root,
@@ -578,7 +643,11 @@ impl App {
     }
 
     /// After migrations complete, check if vacuum is needed, otherwise complete startup.
-    pub(super) fn advance_past_migrations(&mut self, db_path: &std::path::Path, vacuum_threshold: f64) {
+    pub(super) fn advance_past_migrations(
+        &mut self,
+        db_path: &std::path::Path,
+        vacuum_threshold: f64,
+    ) {
         if let Some(prompt_state) = Self::check_vacuum_needed(db_path, vacuum_threshold) {
             self.view = ActiveView::VacuumPrompt(prompt_state);
         } else {
@@ -595,11 +664,18 @@ impl App {
         let conn = rusqlite::Connection::open_with_flags(
             db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ).ok()?;
+        )
+        .ok()?;
 
-        let page_count: u64 = conn.pragma_query_value(None, "page_count", |row| row.get(0)).ok()?;
-        let freelist_count: u64 = conn.pragma_query_value(None, "freelist_count", |row| row.get(0)).ok()?;
-        let page_size: u64 = conn.pragma_query_value(None, "page_size", |row| row.get(0)).ok()?;
+        let page_count: u64 = conn
+            .pragma_query_value(None, "page_count", |row| row.get(0))
+            .ok()?;
+        let freelist_count: u64 = conn
+            .pragma_query_value(None, "freelist_count", |row| row.get(0))
+            .ok()?;
+        let page_size: u64 = conn
+            .pragma_query_value(None, "page_size", |row| row.get(0))
+            .ok()?;
 
         drop(conn);
 
@@ -646,21 +722,29 @@ fn render(f: &mut Frame, app: &mut App) {
         app.view.selected_path().map(|s| s.to_string())
     };
 
-    let status_line_2 = app.witch.transaction_summary()
-        .map(|(label, dec, mut_)| {
-            let pd = if dec == 1 { "" } else { "s" };
-            let pm = if mut_ == 1 { "" } else { "s" };
-            format!("Transaction \"{label}\": {dec} decision{pd}, {mut_} mutation{pm} staged")
-        });
+    let status_line_2 = app.witch.transaction_summary().map(|(label, dec, mut_)| {
+        let pd = if dec == 1 { "" } else { "s" };
+        let pm = if mut_ == 1 { "" } else { "s" };
+        format!("Transaction \"{label}\": {dec} decision{pd}, {mut_} mutation{pm} staged")
+    });
 
-    render::render_app(f, app, transaction_review_decisions, status_line_1, status_line_2);
+    render::render_app(
+        f,
+        app,
+        transaction_review_decisions,
+        status_line_1,
+        status_line_2,
+    );
 }
 
 // ============================================================================
 // Entry Point
 // ============================================================================
 
-pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging::LogOp>) -> Result<()> {
+pub fn run_menu(
+    config: Config,
+    log_rx: std::sync::mpsc::Receiver<crate::logging::LogOp>,
+) -> Result<()> {
     crate::logging::log_general("=== MM startup ===");
 
     // Init the image picker (env-based detection, no stdin probing).
@@ -668,7 +752,12 @@ pub fn run_menu(config: Config, log_rx: std::sync::mpsc::Receiver<crate::logging
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -728,10 +817,7 @@ fn run_app<B: ratatui::backend::Backend>(
     let signal_received = Arc::new(AtomicBool::new(false));
 
     if let Err(e) = register_signal_handlers(Arc::clone(&signal_received)) {
-        crate::logging::log_error(format!(
-            "Failed to register signal handlers: {}",
-            e
-        ));
+        crate::logging::log_error(format!("Failed to register signal handlers: {}", e));
     }
 
     loop {
@@ -760,16 +846,20 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         // Startup views don't interact with the normal Witch tick / idle rescan
-        let is_startup_view = matches!(app.view, ActiveView::SchemaUpdate(_) | ActiveView::VacuumPrompt(_));
+        let is_startup_view = matches!(
+            app.view,
+            ActiveView::SchemaUpdate(_) | ActiveView::VacuumPrompt(_)
+        );
 
         // Set idle rescan eligibility based on current view (lateral views only)
-        let idle_eligible = matches!(app.view,
+        let idle_eligible = matches!(
+            app.view,
             ActiveView::Insights(_)
-            | ActiveView::CorpusBrowser(_)
-            | ActiveView::TagSearch(_)
-            | ActiveView::History(_)
-            | ActiveView::Inbox(_)
-            | ActiveView::TabbedTransactionReview(_)
+                | ActiveView::CorpusBrowser(_)
+                | ActiveView::TagSearch(_)
+                | ActiveView::History(_)
+                | ActiveView::Inbox(_)
+                | ActiveView::TabbedTransactionReview(_)
         );
         app.witch.set_idle_rescan_eligible(idle_eligible);
 
@@ -838,7 +928,12 @@ fn run_app<B: ratatui::backend::Backend>(
         if let ActiveView::Insights(ref mut view) = app.view {
             let insights_data = app.cached_insights.clone();
             let handled = app.witch.handled_decision_kinds();
-            view.update(Some(&app.cached_status), insights_data, handled, app.cache_stale);
+            view.update(
+                Some(&app.cached_status),
+                insights_data,
+                handled,
+                app.cache_stale,
+            );
         }
         if let ActiveView::Inbox(ref mut view) = app.view {
             let inbox_data = app.cached_inbox.clone();
@@ -860,7 +955,10 @@ fn run_app<B: ratatui::backend::Backend>(
                 view.tick_count = view.tick_count.wrapping_add(1);
             }
         }
-        if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate { ref mut library_file_counts }) = app.view {
+        if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate {
+            ref mut library_file_counts,
+        }) = app.view
+        {
             if let Some(ref status) = app.cached_deploy {
                 *library_file_counts = status.library_file_counts.clone();
             }
@@ -923,32 +1021,31 @@ fn run_app<B: ratatui::backend::Backend>(
         // Tick tag search for pending bulk edit (after modal has rendered)
         app.tick_tag_search();
 
-
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
                     if key.code == crossterm::event::KeyCode::Char('c')
-                        && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                        && key
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL)
                     {
                         app.handle_input(InputAction::Cancel);
                     } else {
                         app.handle_input(input::map_key(key));
                     }
                 }
-                Event::Mouse(mouse) => {
-                    match mouse.kind {
-                        MouseEventKind::ScrollUp => {
-                            app.handle_input(InputAction::NavUp);
-                        }
-                        MouseEventKind::ScrollDown => {
-                            app.handle_input(InputAction::NavDown);
-                        }
-                        MouseEventKind::Down(MouseButton::Left) => {
-                            app.handle_click(mouse.column, mouse.row);
-                        }
-                        _ => {}
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        app.handle_input(InputAction::NavUp);
                     }
-                }
+                    MouseEventKind::ScrollDown => {
+                        app.handle_input(InputAction::NavDown);
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        app.handle_click(mouse.column, mouse.row);
+                    }
+                    _ => {}
+                },
                 Event::Paste(text) => {
                     app.handle_input(InputAction::Paste(text));
                 }

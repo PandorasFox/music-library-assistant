@@ -2,11 +2,11 @@
 //!
 //! Manages cursor navigation, field editing, and the Save/Discard flow.
 
+use super::build;
+use super::types::*;
 use crate::config::Config;
 use crate::ui::input::InputAction;
 use crate::ui::widgets::TextInputState;
-use super::build;
-use super::types::*;
 
 /// Focus region within the config editor.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -94,16 +94,19 @@ impl ConfigEditorState {
 
     /// Check if any field has been edited.
     pub fn has_edits(&self) -> bool {
-        self.groups.iter().any(|g| g.fields.iter().any(|f| f.source == FieldSource::Edited))
+        self.groups
+            .iter()
+            .any(|g| g.fields.iter().any(|f| f.source == FieldSource::Edited))
     }
 
     /// Total number of cursor-navigable slots across all groups.
     /// Expanded groups contribute their field count; collapsed groups contribute 1
     /// (for the collapsed header, so the user can navigate to it and expand).
     fn visible_field_count(&self) -> usize {
-        self.groups.iter().map(|g| {
-            if g.collapsed { 1 } else { g.fields.len() }
-        }).sum()
+        self.groups
+            .iter()
+            .map(|g| if g.collapsed { 1 } else { g.fields.len() })
+            .sum()
     }
 
     /// Resolve flat cursor position to (group_index, field_index).
@@ -151,7 +154,9 @@ impl ConfigEditorState {
 
     /// Get the item count for the current collection field.
     fn current_collection_len(&self) -> usize {
-        let Some((gi, fi)) = self.cursor_to_group_field() else { return 0 };
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return 0;
+        };
         match &self.groups[gi].fields[fi].value {
             ConfigValue::StringSet(v) => v.len(),
             ConfigValue::StringListMap(v) => v.len(),
@@ -228,9 +233,7 @@ impl ConfigEditorState {
                 }
                 ConfigEditorAction::None
             }
-            InputAction::NavLeft | InputAction::NavRight => {
-                ConfigEditorAction::None
-            }
+            InputAction::NavLeft | InputAction::NavRight => ConfigEditorAction::None,
             InputAction::Confirm => {
                 self.activate_collection_item();
                 ConfigEditorAction::None
@@ -249,10 +252,20 @@ impl ConfigEditorState {
 
     /// Get the separator count for the currently focused StringListMap item.
     fn current_sub_collection_len(&self) -> usize {
-        let Some((gi, fi)) = self.cursor_to_group_field() else { return 0 };
-        let ConfigValue::StringListMap(items) = &self.groups[gi].fields[fi].value else { return 0 };
-        let Some(CollectionPosition::Item(idx)) = self.collection_pos else { return 0 };
-        if idx < items.len() { items[idx].1.len() } else { 0 }
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return 0;
+        };
+        let ConfigValue::StringListMap(items) = &self.groups[gi].fields[fi].value else {
+            return 0;
+        };
+        let Some(CollectionPosition::Item(idx)) = self.collection_pos else {
+            return 0;
+        };
+        if idx < items.len() {
+            items[idx].1.len()
+        } else {
+            0
+        }
     }
 
     /// Handle input while editing within a separator sub-list.
@@ -271,7 +284,8 @@ impl ConfigEditorState {
                     }
                     Some(CollectionPosition::AddNew) => {
                         if item_count > 0 {
-                            self.sub_collection_pos = Some(CollectionPosition::Item(item_count - 1));
+                            self.sub_collection_pos =
+                                Some(CollectionPosition::Item(item_count - 1));
                         } else {
                             self.sub_collection_pos = None;
                         }
@@ -323,10 +337,18 @@ impl ConfigEditorState {
 
     /// Activate (edit) a separator within the sub-collection.
     fn activate_sub_collection_item(&mut self) {
-        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
-        let ConfigValue::StringListMap(items) = &self.groups[gi].fields[fi].value else { return };
-        let Some(CollectionPosition::Item(tag_idx)) = self.collection_pos else { return };
-        if tag_idx >= items.len() { return; }
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return;
+        };
+        let ConfigValue::StringListMap(items) = &self.groups[gi].fields[fi].value else {
+            return;
+        };
+        let Some(CollectionPosition::Item(tag_idx)) = self.collection_pos else {
+            return;
+        };
+        if tag_idx >= items.len() {
+            return;
+        }
 
         match self.sub_collection_pos {
             Some(CollectionPosition::Item(sep_idx)) => {
@@ -348,18 +370,27 @@ impl ConfigEditorState {
 
     /// Delete a separator within the sub-collection.
     fn delete_sub_collection_item(&mut self) {
-        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
-        let Some(CollectionPosition::Item(tag_idx)) = self.collection_pos else { return };
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return;
+        };
+        let Some(CollectionPosition::Item(tag_idx)) = self.collection_pos else {
+            return;
+        };
 
         let field = &mut self.groups[gi].fields[fi];
-        let ConfigValue::StringListMap(ref mut items) = field.value else { return };
-        if tag_idx >= items.len() { return; }
+        let ConfigValue::StringListMap(ref mut items) = field.value else {
+            return;
+        };
+        if tag_idx >= items.len() {
+            return;
+        }
 
         if let Some(CollectionPosition::Item(sep_idx)) = self.sub_collection_pos {
             if sep_idx < items[tag_idx].1.len() {
                 items[tag_idx].1.remove(sep_idx);
                 if sep_idx >= items[tag_idx].1.len() && !items[tag_idx].1.is_empty() {
-                    self.sub_collection_pos = Some(CollectionPosition::Item(items[tag_idx].1.len() - 1));
+                    self.sub_collection_pos =
+                        Some(CollectionPosition::Item(items[tag_idx].1.len() - 1));
                 } else if items[tag_idx].1.is_empty() {
                     self.sub_collection_pos = Some(CollectionPosition::AddNew);
                 }
@@ -370,7 +401,9 @@ impl ConfigEditorState {
 
     /// Activate (edit) the current collection item.
     fn activate_collection_item(&mut self) {
-        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return;
+        };
         let field = &self.groups[gi].fields[fi];
 
         match (&field.value, self.collection_pos) {
@@ -409,7 +442,9 @@ impl ConfigEditorState {
 
     /// Delete the current collection item.
     fn delete_collection_item(&mut self) {
-        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return;
+        };
         let field = &mut self.groups[gi].fields[fi];
 
         let deleted = match (&mut field.value, self.collection_pos) {
@@ -472,12 +507,8 @@ impl ConfigEditorState {
                 }
                 ConfigEditorAction::None
             }
-            InputAction::CyclePrev => {
-                self.try_cycle(CycleDirection::Prev)
-            }
-            InputAction::CycleNext => {
-                self.try_cycle(CycleDirection::Next)
-            }
+            InputAction::CyclePrev => self.try_cycle(CycleDirection::Prev),
+            InputAction::CycleNext => self.try_cycle(CycleDirection::Next),
             InputAction::Confirm | InputAction::Toggle => {
                 self.activate_field();
                 ConfigEditorAction::None
@@ -506,9 +537,7 @@ impl ConfigEditorState {
                 self.toggle_current_group_collapse();
                 ConfigEditorAction::None
             }
-            InputAction::Cancel => {
-                ConfigEditorAction::Discard
-            }
+            InputAction::Cancel => ConfigEditorAction::Discard,
             _ => ConfigEditorAction::None,
         }
     }
@@ -594,7 +623,9 @@ impl ConfigEditorState {
 
     /// Activate the current field (toggle bool, enter text edit, cycle enum, enter collection).
     fn activate_field(&mut self) {
-        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return;
+        };
 
         let field = &mut self.groups[gi].fields[fi];
         match &field.value {
@@ -607,13 +638,20 @@ impl ConfigEditorState {
             ConfigValue::Enum { selected, options } => {
                 let len = options.len();
                 let new_selected = (*selected + 1) % len;
-                if let ConfigValue::Enum { selected: ref mut s, .. } = field.value {
+                if let ConfigValue::Enum {
+                    selected: ref mut s,
+                    ..
+                } = field.value
+                {
                     *s = new_selected;
                     Self::recompute_source(field);
                 }
             }
-            ConfigValue::Float(_) | ConfigValue::UintU32(_)
-            | ConfigValue::SignedInt(_) | ConfigValue::OptionalUint(_) | ConfigValue::String(_)
+            ConfigValue::Float(_)
+            | ConfigValue::UintU32(_)
+            | ConfigValue::SignedInt(_)
+            | ConfigValue::OptionalUint(_)
+            | ConfigValue::String(_)
             | ConfigValue::Duration(_) => {
                 let mut input = TextInputState::new();
                 input.set_value(field.value.display());
@@ -646,8 +684,12 @@ impl ConfigEditorState {
 
     /// Commit text input value to the current field.
     fn commit_text_input(&mut self) {
-        let Some(input) = self.text_input.take() else { return };
-        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
+        let Some(input) = self.text_input.take() else {
+            return;
+        };
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return;
+        };
 
         let text = input.value;
 
@@ -723,12 +765,18 @@ impl ConfigEditorState {
                 true
             }
             ConfigValue::StringList(ref mut v) => {
-                *v = text.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                *v = text
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
                 true
             }
             // Collection types handled above
-            ConfigValue::Bool(_) | ConfigValue::Enum { .. } |
-            ConfigValue::StringSet(_) | ConfigValue::StringListMap(_) => false,
+            ConfigValue::Bool(_)
+            | ConfigValue::Enum { .. }
+            | ConfigValue::StringSet(_)
+            | ConfigValue::StringListMap(_) => false,
         };
 
         if ok {
@@ -737,7 +785,13 @@ impl ConfigEditorState {
     }
 
     /// Commit text input for a collection item.
-    fn commit_collection_input(&mut self, text: &str, gi: usize, fi: usize, pos: CollectionPosition) -> bool {
+    fn commit_collection_input(
+        &mut self,
+        text: &str,
+        gi: usize,
+        fi: usize,
+        pos: CollectionPosition,
+    ) -> bool {
         let field = &mut self.groups[gi].fields[fi];
         let text = text.trim();
 
@@ -763,7 +817,8 @@ impl ConfigEditorState {
             (ConfigValue::StringListMap(ref mut items), CollectionPosition::Item(idx)) => {
                 if idx < items.len() {
                     // Parse comma-separated separators
-                    let seps: Vec<String> = text.split(',')
+                    let seps: Vec<String> = text
+                        .split(',')
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
                         .collect();
@@ -789,14 +844,28 @@ impl ConfigEditorState {
     }
 
     /// Commit text input for a sub-collection separator item.
-    fn commit_sub_collection_input(&mut self, text: &str, gi: usize, fi: usize, sub_pos: CollectionPosition) -> bool {
+    fn commit_sub_collection_input(
+        &mut self,
+        text: &str,
+        gi: usize,
+        fi: usize,
+        sub_pos: CollectionPosition,
+    ) -> bool {
         let field = &mut self.groups[gi].fields[fi];
-        let ConfigValue::StringListMap(ref mut items) = field.value else { return false };
-        let Some(CollectionPosition::Item(tag_idx)) = self.collection_pos else { return false };
-        if tag_idx >= items.len() { return false; }
+        let ConfigValue::StringListMap(ref mut items) = field.value else {
+            return false;
+        };
+        let Some(CollectionPosition::Item(tag_idx)) = self.collection_pos else {
+            return false;
+        };
+        if tag_idx >= items.len() {
+            return false;
+        }
 
         // Don't trim — separators can be intentional whitespace
-        if text.is_empty() { return false; }
+        if text.is_empty() {
+            return false;
+        }
 
         match sub_pos {
             CollectionPosition::Item(sep_idx) => {
@@ -809,7 +878,8 @@ impl ConfigEditorState {
             }
             CollectionPosition::AddNew => {
                 items[tag_idx].1.push(text.to_string());
-                self.sub_collection_pos = Some(CollectionPosition::Item(items[tag_idx].1.len() - 1));
+                self.sub_collection_pos =
+                    Some(CollectionPosition::Item(items[tag_idx].1.len() - 1));
                 true
             }
         }
@@ -817,20 +887,36 @@ impl ConfigEditorState {
 
     /// Cycle enum left.
     fn cycle_enum_left(&mut self) {
-        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return;
+        };
         let field = &mut self.groups[gi].fields[fi];
-        if let ConfigValue::Enum { ref mut selected, options } = &mut field.value {
+        if let ConfigValue::Enum {
+            ref mut selected,
+            options,
+        } = &mut field.value
+        {
             let len = options.len();
-            *selected = if *selected == 0 { len - 1 } else { *selected - 1 };
+            *selected = if *selected == 0 {
+                len - 1
+            } else {
+                *selected - 1
+            };
             Self::recompute_source(field);
         }
     }
 
     /// Cycle enum right.
     fn cycle_enum_right(&mut self) {
-        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return;
+        };
         let field = &mut self.groups[gi].fields[fi];
-        if let ConfigValue::Enum { ref mut selected, options } = &mut field.value {
+        if let ConfigValue::Enum {
+            ref mut selected,
+            options,
+        } = &mut field.value
+        {
             let len = options.len();
             *selected = (*selected + 1) % len;
             Self::recompute_source(field);
@@ -839,7 +925,9 @@ impl ConfigEditorState {
 
     /// Reset the current field to the value it had when the editor was opened.
     fn reset_current_field(&mut self) {
-        let Some((gi, fi)) = self.cursor_to_group_field() else { return };
+        let Some((gi, fi)) = self.cursor_to_group_field() else {
+            return;
+        };
         let field = &mut self.groups[gi].fields[fi];
         field.value = field.original_value.clone();
         field.source = field.original_source;
@@ -847,7 +935,9 @@ impl ConfigEditorState {
 
     /// Toggle collapsed state of the group containing the cursor.
     fn toggle_current_group_collapse(&mut self) {
-        let Some(gi) = self.current_group_index() else { return };
+        let Some(gi) = self.current_group_index() else {
+            return;
+        };
         self.groups[gi].collapsed = !self.groups[gi].collapsed;
         // After toggling, reposition cursor to the start of this group.
         // This keeps the cursor on the group whether expanding or collapsing.
@@ -862,14 +952,20 @@ impl ConfigEditorState {
             if i == target_gi {
                 return offset;
             }
-            offset += if group.collapsed { 1 } else { group.fields.len() };
+            offset += if group.collapsed {
+                1
+            } else {
+                group.fields.len()
+            };
         }
         offset
     }
 
     /// Jump cursor to the first slot of the next group.
     fn jump_to_next_group(&mut self) {
-        let Some(current_gi) = self.current_group_index() else { return };
+        let Some(current_gi) = self.current_group_index() else {
+            return;
+        };
         // Find next group with content (or collapsed header)
         for i in (current_gi + 1)..self.groups.len() {
             if self.groups[i].collapsed || !self.groups[i].fields.is_empty() {
@@ -883,7 +979,9 @@ impl ConfigEditorState {
 
     /// Jump cursor to the first slot of the previous group.
     fn jump_to_prev_group(&mut self) {
-        let Some(current_gi) = self.current_group_index() else { return };
+        let Some(current_gi) = self.current_group_index() else {
+            return;
+        };
         // Find previous group with content (or collapsed header)
         for i in (0..current_gi).rev() {
             if self.groups[i].collapsed || !self.groups[i].fields.is_empty() {

@@ -23,7 +23,6 @@ pub struct EntryFilter {
     pub include_hidden: bool,
 }
 
-
 impl EntryFilter {
     /// Filter that shows only directories.
     pub fn directories_only() -> Self {
@@ -132,9 +131,9 @@ impl TreeNavigator {
 
     /// Get count of matching paths (files only, not directories).
     pub fn filtered_file_count(&self) -> Option<usize> {
-        self.active_path_filter.as_ref().map(|paths| {
-            paths.iter().filter(|p| p.is_file()).count()
-        })
+        self.active_path_filter
+            .as_ref()
+            .map(|paths| paths.iter().filter(|p| p.is_file()).count())
     }
 
     /// Load initial entries based on configuration.
@@ -263,7 +262,8 @@ impl TreeNavigator {
             if current_depth > 0 {
                 // Search backwards for entry with depth = current_depth - 1
                 for i in (0..self.cursor_idx).rev() {
-                    if self.entries[i].depth == current_depth - 1 && self.entries[i].is_directory() {
+                    if self.entries[i].depth == current_depth - 1 && self.entries[i].is_directory()
+                    {
                         self.cursor_idx = i;
                         self.ensure_visible();
                         break;
@@ -285,7 +285,11 @@ impl TreeNavigator {
         // If the parent is currently expanded, refresh its children to pick up the new entry
         if let Some(parent) = path.parent() {
             let parent = parent.to_path_buf();
-            if let Some(idx) = self.entries.iter().position(|e| e.path == parent && e.is_expanded) {
+            if let Some(idx) = self
+                .entries
+                .iter()
+                .position(|e| e.path == parent && e.is_expanded)
+            {
                 self.collapse_at(idx);
                 self.entries[idx].is_expanded = true;
                 self.load_children_at(idx);
@@ -397,12 +401,14 @@ impl TreeNavigator {
                 if path.is_dir() {
                     let has_children = self.path_has_children(&path) || self.show_new_dir_entry;
                     let item_count = self.count_audio_files(&path);
-                    let mut entry = TreeEntry::directory(path.clone(), name, depth, has_children, item_count);
+                    let mut entry =
+                        TreeEntry::directory(path.clone(), name, depth, has_children, item_count);
                     if self.filter.include_images {
                         entry.image_count = self.count_image_files(&path);
                     }
                     entry.deploy_marker = self.deploy_marker_for(&path);
-                    if is_root_parent && !self.primary_zone_paths.is_empty()
+                    if is_root_parent
+                        && !self.primary_zone_paths.is_empty()
                         && !self.primary_zone_paths.iter().any(|z| z == &path)
                     {
                         entry.is_dimmed = true;
@@ -421,13 +427,16 @@ impl TreeNavigator {
             if pending.parent() == Some(parent) {
                 let already_present = dirs.iter().any(|d| d.path == *pending);
                 if !already_present {
-                    let name = pending.file_name()
+                    let name = pending
+                        .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
                     let has_children = self.show_new_dir_entry;
-                    let mut entry = TreeEntry::directory(pending.clone(), name, depth, has_children, 0);
+                    let mut entry =
+                        TreeEntry::directory(pending.clone(), name, depth, has_children, 0);
                     entry.deploy_marker = self.deploy_marker_for(pending);
-                    if is_root_parent && !self.primary_zone_paths.is_empty()
+                    if is_root_parent
+                        && !self.primary_zone_paths.is_empty()
                         && !self.primary_zone_paths.iter().any(|z| z == pending)
                     {
                         entry.is_dimmed = true;
@@ -610,5 +619,4 @@ impl TreeNavigator {
         }
         DeployMarker::None
     }
-
 }

@@ -7,7 +7,9 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
-use super::normalization::{normalize_album, normalize_album_artist, normalize_artist, normalize_genre};
+use super::normalization::{
+    normalize_album, normalize_album_artist, normalize_artist, normalize_genre,
+};
 use crate::db::ReadOnlyDb;
 
 /// A detected collision between tag values.
@@ -29,7 +31,11 @@ pub struct TagCollision {
 
 impl TagCollision {
     /// Create from variant counts map.
-    fn from_variants(tag_name: &str, normalized_key: &str, variants: &HashMap<String, usize>) -> Self {
+    fn from_variants(
+        tag_name: &str,
+        normalized_key: &str,
+        variants: &HashMap<String, usize>,
+    ) -> Self {
         let total: usize = variants.values().sum();
 
         // Find canonical (most common)
@@ -69,10 +75,7 @@ pub fn get_artist_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
     let mut buckets: HashMap<String, HashMap<String, usize>> = HashMap::new();
     for (value, count) in values {
         let normalized = normalize_artist(&value);
-        buckets
-            .entry(normalized)
-            .or_default()
-            .insert(value, count);
+        buckets.entry(normalized).or_default().insert(value, count);
     }
 
     // Convert buckets with multiple variants to collisions
@@ -121,7 +124,10 @@ pub fn get_album_artist_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollisi
 /// Additionally, variants with disjoint ISRCs or catalog numbers are considered
 /// distinct releases and NOT collisions (e.g., "Album EP" with ISRCs {A,B,C} and
 /// "Album" with ISRCs {D,E,F,G} are different releases, not canonicalization issues).
-pub fn get_album_collisions(db: &ReadOnlyDb<'_>, strip_format_suffixes: bool) -> Result<Vec<TagCollision>> {
+pub fn get_album_collisions(
+    db: &ReadOnlyDb<'_>,
+    strip_format_suffixes: bool,
+) -> Result<Vec<TagCollision>> {
     let rows = db.get_album_data_for_collision_detection()?;
 
     // Group by (normalized_artist, normalized_album)
@@ -133,11 +139,7 @@ pub fn get_album_collisions(db: &ReadOnlyDb<'_>, strip_format_suffixes: bool) ->
         let normalized_album = normalize_album(&album, strip_format_suffixes);
         let key = (normalized_artist, normalized_album);
 
-        let variant_data = buckets
-            .entry(key)
-            .or_default()
-            .entry(album)
-            .or_default();
+        let variant_data = buckets.entry(key).or_default().entry(album).or_default();
 
         variant_data.count += 1;
         if !isrc.is_empty() {
@@ -278,10 +280,7 @@ pub fn get_genre_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
     let mut buckets: HashMap<String, HashMap<String, usize>> = HashMap::new();
     for (value, count) in values {
         let normalized = normalize_genre(&value);
-        buckets
-            .entry(normalized)
-            .or_default()
-            .insert(value, count);
+        buckets.entry(normalized).or_default().insert(value, count);
     }
 
     // Convert buckets with multiple variants to collisions

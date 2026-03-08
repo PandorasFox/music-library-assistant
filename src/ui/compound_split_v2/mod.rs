@@ -39,8 +39,8 @@ pub mod types;
 
 pub use render::render;
 pub use types::{
-    CompoundSplitActionV2, CompoundSplitClustersV2, CompoundSplitDataV2,
-    CompoundSplitStateV2, FocusPaneV2,
+    CompoundSplitActionV2, CompoundSplitClustersV2, CompoundSplitDataV2, CompoundSplitStateV2,
+    FocusPaneV2,
 };
 
 use crate::ui::input::InputAction;

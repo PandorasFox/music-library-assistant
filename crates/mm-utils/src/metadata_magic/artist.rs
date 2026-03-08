@@ -56,10 +56,7 @@ mod tests {
 
     #[test]
     fn test_normalize_album_artist() {
-        assert_eq!(
-            normalize_album_artist("Various_Artists"),
-            "various artists"
-        );
+        assert_eq!(normalize_album_artist("Various_Artists"), "various artists");
         assert_eq!(
             normalize_album_artist("  VARIOUS  ARTISTS  "),
             "various artists"

@@ -92,7 +92,9 @@ pub fn render(f: &mut Frame, area: Rect, state: &FilterPopupState) {
 fn render_condition_type(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     let is_focused = state.focus == FilterFieldFocus::ConditionType;
     let style = if is_focused {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
@@ -119,9 +121,9 @@ fn render_value_fields(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     match state.condition.condition_type {
         FilterConditionType::Path => render_path_field(f, area, state),
         FilterConditionType::FileType => render_file_type_field(f, area, state),
-        FilterConditionType::SampleRate | FilterConditionType::Bitrate | FilterConditionType::Duration => {
-            render_range_fields(f, area, state)
-        }
+        FilterConditionType::SampleRate
+        | FilterConditionType::Bitrate
+        | FilterConditionType::Duration => render_range_fields(f, area, state),
         FilterConditionType::Tag => {
             // Tag fields are rendered separately in main render function
         }
@@ -131,7 +133,9 @@ fn render_value_fields(f: &mut Frame, area: Rect, state: &FilterPopupState) {
 fn render_path_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     let is_focused = state.focus == FilterFieldFocus::PathSubstring;
     let style = if is_focused {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
@@ -160,7 +164,9 @@ fn render_path_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
 fn render_tag_name_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     let is_focused = state.focus == FilterFieldFocus::TagName;
     let style = if is_focused {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
@@ -179,13 +185,17 @@ fn render_tag_value_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     let value_focused = state.focus == FilterFieldFocus::TagValue;
 
     let comp_style = if comp_focused {
-        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Magenta)
     };
 
     let value_style = if value_focused {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
@@ -203,7 +213,10 @@ fn render_tag_value_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     };
 
     let line = Line::from(vec![
-        Span::styled(format!("< {} >", state.condition.tag_comparison.label()), comp_style),
+        Span::styled(
+            format!("< {} >", state.condition.tag_comparison.label()),
+            comp_style,
+        ),
         Span::raw(" "),
         Span::styled(format!("[{}]", value_display), actual_value_style),
     ]);
@@ -215,7 +228,9 @@ fn render_tag_value_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
 fn render_file_type_field(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     let is_focused = state.focus == FilterFieldFocus::FileTypeCategory;
     let style = if is_focused {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
@@ -236,13 +251,17 @@ fn render_range_fields(f: &mut Frame, area: Rect, state: &FilterPopupState) {
     let max_focused = state.focus == FilterFieldFocus::RangeMax;
 
     let min_style = if min_focused {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };
 
     let max_style = if max_focused {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::White)
     };

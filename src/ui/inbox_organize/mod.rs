@@ -25,9 +25,12 @@ use std::path::PathBuf;
 
 use crate::ui::input::InputAction;
 
-use crate::config::{InboxOrganizeGranularity, Config};
+use crate::config::{Config, InboxOrganizeGranularity};
 use crate::db::ReadOnlyDb;
-use crate::meta::mutations::{Mutation, file_ops::{InboxToCorpusMutation, InboxDirToCorpusMutation, InboxDirTrackedFile}};
+use crate::meta::mutations::{
+    file_ops::{InboxDirToCorpusMutation, InboxDirTrackedFile, InboxToCorpusMutation},
+    Mutation,
+};
 use crate::ui::tree_browser::{EntryFilter, TreeNavigator};
 use crate::ui::widgets::TextInputState;
 
@@ -227,9 +230,7 @@ impl InboxOrganizeState {
                 InboxOrganizeAction::None
             }
 
-            InputAction::Char('s') | InputAction::Char('S') => {
-                self.advance_to_next_dir()
-            }
+            InputAction::Char('s') | InputAction::Char('S') => self.advance_to_next_dir(),
 
             InputAction::Confirm => {
                 if let Some(entry) = self.corpus_navigator.current_entry().cloned() {
@@ -300,27 +301,23 @@ impl InboxOrganizeState {
                 self.popup_selection = self.popup_selection.next();
                 InboxOrganizeAction::None
             }
-            InputAction::Confirm => {
-                match self.popup_selection {
-                    EmplaceOption::EmplaceDirectory => {
-                        self.generate_emplace_directory_mutations();
-                        self.register_pending_dest();
-                        self.advance_to_next_dir()
-                    }
-                    EmplaceOption::EmplaceFiles => {
-                        self.generate_emplace_files_mutations();
-                        self.register_pending_dest();
-                        self.advance_to_next_dir()
-                    }
-                    EmplaceOption::Skip => {
-                        self.advance_to_next_dir()
-                    }
-                    EmplaceOption::Cancel => {
-                        self.phase = OrganizePhase::BrowsingCorpus;
-                        InboxOrganizeAction::None
-                    }
+            InputAction::Confirm => match self.popup_selection {
+                EmplaceOption::EmplaceDirectory => {
+                    self.generate_emplace_directory_mutations();
+                    self.register_pending_dest();
+                    self.advance_to_next_dir()
                 }
-            }
+                EmplaceOption::EmplaceFiles => {
+                    self.generate_emplace_files_mutations();
+                    self.register_pending_dest();
+                    self.advance_to_next_dir()
+                }
+                EmplaceOption::Skip => self.advance_to_next_dir(),
+                EmplaceOption::Cancel => {
+                    self.phase = OrganizePhase::BrowsingCorpus;
+                    InboxOrganizeAction::None
+                }
+            },
             _ => InboxOrganizeAction::None,
         }
     }
@@ -333,7 +330,8 @@ impl InboxOrganizeState {
     /// pending directory in the tree navigator so it appears for subsequent groups.
     fn register_pending_dest(&mut self) {
         if !self.selected_dest.exists() {
-            self.corpus_navigator.add_pending_dir(self.selected_dest.clone());
+            self.corpus_navigator
+                .add_pending_dir(self.selected_dest.clone());
         }
     }
 
@@ -346,38 +344,50 @@ impl InboxOrganizeState {
     /// Uses a single directory rename so non-audio content (cover images, booklets)
     /// travels with the audio files.
     fn generate_emplace_directory_mutations(&mut self) {
-        let Some(current_dir) = self.directories.get(self.current_dir_idx) else { return };
+        let Some(current_dir) = self.directories.get(self.current_dir_idx) else {
+            return;
+        };
         let dest_base = self.selected_dest.join(&current_dir.dir_name);
 
-        let tracked_files: Vec<InboxDirTrackedFile> = current_dir.files.iter().map(|file| {
-            // Compute each file's corpus path by preserving its relative position
-            // within the inbox directory (important for TopLevel granularity where
-            // files may be in subdirectories).
-            let rel = file.path.strip_prefix(&current_dir.dir_path)
-                .unwrap_or(std::path::Path::new(&file.filename));
-            InboxDirTrackedFile {
-                inode: file.inode,
-                corpus_path: dest_base.join(rel),
-            }
-        }).collect();
+        let tracked_files: Vec<InboxDirTrackedFile> = current_dir
+            .files
+            .iter()
+            .map(|file| {
+                // Compute each file's corpus path by preserving its relative position
+                // within the inbox directory (important for TopLevel granularity where
+                // files may be in subdirectories).
+                let rel = file
+                    .path
+                    .strip_prefix(&current_dir.dir_path)
+                    .unwrap_or(std::path::Path::new(&file.filename));
+                InboxDirTrackedFile {
+                    inode: file.inode,
+                    corpus_path: dest_base.join(rel),
+                }
+            })
+            .collect();
 
-        self.accumulated_mutations.push(Mutation::InboxDirToCorpus(InboxDirToCorpusMutation {
-            inbox_dir_path: current_dir.dir_path.clone(),
-            corpus_dir_path: dest_base,
-            tracked_files,
-        }));
+        self.accumulated_mutations
+            .push(Mutation::InboxDirToCorpus(InboxDirToCorpusMutation {
+                inbox_dir_path: current_dir.dir_path.clone(),
+                corpus_dir_path: dest_base,
+                tracked_files,
+            }));
     }
 
     /// Emplace files: move individual files → `corpus/Dest/` (flat)
     fn generate_emplace_files_mutations(&mut self) {
-        let Some(current_dir) = self.directories.get(self.current_dir_idx) else { return };
+        let Some(current_dir) = self.directories.get(self.current_dir_idx) else {
+            return;
+        };
 
         for file in &current_dir.files {
-            self.accumulated_mutations.push(Mutation::InboxToCorpus(InboxToCorpusMutation {
-                inode: file.inode,
-                inbox_path: file.path.clone(),
-                corpus_path: self.selected_dest.join(&file.filename),
-            }));
+            self.accumulated_mutations
+                .push(Mutation::InboxToCorpus(InboxToCorpusMutation {
+                    inode: file.inode,
+                    inbox_path: file.path.clone(),
+                    corpus_path: self.selected_dest.join(&file.filename),
+                }));
         }
     }
 
@@ -414,8 +424,8 @@ fn group_into_directories(
     inbox_dir: &std::path::Path,
     granularity: InboxOrganizeGranularity,
 ) -> Vec<InboxDirectory> {
-    use std::collections::BTreeMap;
     use crate::corpus::paths;
+    use std::collections::BTreeMap;
 
     let resolver = paths::get_resolver();
 
@@ -429,27 +439,39 @@ fn group_into_directories(
             Some(p) => p.to_path_buf(),
             None => continue,
         };
-        let filename = abs_path.file_name()
+        let filename = abs_path
+            .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        dir_groups.entry(parent).or_default().push(InboxOrganizeFile {
-            inode: *inode,
-            path: abs_path,
-            filename,
-        });
+        dir_groups
+            .entry(parent)
+            .or_default()
+            .push(InboxOrganizeFile {
+                inode: *inode,
+                path: abs_path,
+                filename,
+            });
     }
 
     match granularity {
         InboxOrganizeGranularity::Leaf => {
             // Use directories as-is (deepest dirs containing files)
-            dir_groups.into_iter().map(|(dir_path, files)| {
-                let dir_name = dir_path.strip_prefix(inbox_dir)
-                    .unwrap_or(&dir_path)
-                    .to_string_lossy()
-                    .to_string();
-                InboxDirectory { dir_name, dir_path, files }
-            }).collect()
+            dir_groups
+                .into_iter()
+                .map(|(dir_path, files)| {
+                    let dir_name = dir_path
+                        .strip_prefix(inbox_dir)
+                        .unwrap_or(&dir_path)
+                        .to_string_lossy()
+                        .to_string();
+                    InboxDirectory {
+                        dir_name,
+                        dir_path,
+                        files,
+                    }
+                })
+                .collect()
         }
         InboxOrganizeGranularity::TopLevel => {
             // Group by top-level child of inbox/
@@ -458,20 +480,30 @@ fn group_into_directories(
             for (dir_path, files) in dir_groups {
                 // Find the top-level directory under inbox/
                 let rel = dir_path.strip_prefix(inbox_dir).unwrap_or(&dir_path);
-                let top_component = rel.components().next()
+                let top_component = rel
+                    .components()
+                    .next()
                     .map(|c| inbox_dir.join(c.as_os_str()))
                     .unwrap_or_else(|| dir_path.clone());
 
                 top_groups.entry(top_component).or_default().extend(files);
             }
 
-            top_groups.into_iter().map(|(dir_path, files)| {
-                let dir_name = dir_path.strip_prefix(inbox_dir)
-                    .unwrap_or(&dir_path)
-                    .to_string_lossy()
-                    .to_string();
-                InboxDirectory { dir_name, dir_path, files }
-            }).collect()
+            top_groups
+                .into_iter()
+                .map(|(dir_path, files)| {
+                    let dir_name = dir_path
+                        .strip_prefix(inbox_dir)
+                        .unwrap_or(&dir_path)
+                        .to_string_lossy()
+                        .to_string();
+                    InboxDirectory {
+                        dir_name,
+                        dir_path,
+                        files,
+                    }
+                })
+                .collect()
         }
     }
 }

@@ -7,18 +7,17 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::corpus::paths;
+use crate::db::types::Zone;
+use crate::db::write_thread;
+use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
-    enumerate_all_directories, extract_mtime, is_audio_file, is_image_file,
-    ensure_typed_signal,
-    drop_stale_corpus_signal,
+    drop_stale_corpus_signal, ensure_typed_signal, enumerate_all_directories, extract_mtime,
+    is_audio_file, is_image_file,
 };
-use crate::meta::signals::data::*;
 use crate::meta::computations::types::ComputationWitness;
-use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
-use crate::corpus::paths;
-use crate::db::write_thread;
+use crate::meta::signals::data::*;
 
 use super::{Computation, Result};
 
@@ -60,8 +59,13 @@ pub fn execute_walk_corpus(
 
     log_general(format!(
         "[COMPUTE] WalkCorpus: found {} directories in {:?}{}",
-        directories.len(), root,
-        if force_check { " (force_check=true)" } else { "" }
+        directories.len(),
+        root,
+        if force_check {
+            " (force_check=true)"
+        } else {
+            ""
+        }
     ));
 
     // Spawn ScanCorpusDirectory for each directory
@@ -74,11 +78,7 @@ pub fn execute_walk_corpus(
         })
         .collect();
 
-    Result::success(
-        computation,
-        start.elapsed().as_millis() as u64,
-        spawn,
-    )
+    Result::success(computation, start.elapsed().as_millis() as u64, spawn)
 }
 
 // ============================================================================
@@ -131,11 +131,7 @@ pub fn execute_scan_corpus_directory(
 
     // If no files in directory, nothing to do
     if disk_state.is_empty() {
-        return Result::success(
-            computation,
-            start.elapsed().as_millis() as u64,
-            Vec::new(),
-        );
+        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
     // Build lookup map for disk inodes
@@ -143,10 +139,14 @@ pub fn execute_scan_corpus_directory(
 
     // Get indexed inodes from files table for comparison (mtime info)
     let inode_vec: Vec<i64> = disk_inodes.iter().copied().collect();
-    let indexed_by_inode = read_only_db.get_file_mtime_batch(file_zone, &inode_vec).unwrap_or_default();
+    let indexed_by_inode = read_only_db
+        .get_file_mtime_batch(file_zone, &inode_vec)
+        .unwrap_or_default();
 
     // Get indexed paths for move detection (same inode, different path)
-    let indexed_paths = read_only_db.get_file_paths_batch(file_zone, &inode_vec).unwrap_or_default();
+    let indexed_paths = read_only_db
+        .get_file_paths_batch(file_zone, &inode_vec)
+        .unwrap_or_default();
 
     let mut spawn: Vec<Computation> = Vec::new();
     let mut observed_corpus_inodes: HashMap<i64, String> = HashMap::new();
@@ -221,7 +221,8 @@ pub fn execute_scan_corpus_directory(
                 }
             }
 
-            let mtime_changed = *db_mtime_secs != *disk_mtime_s || *db_mtime_nanos != *disk_mtime_ns;
+            let mtime_changed =
+                *db_mtime_secs != *disk_mtime_s || *db_mtime_nanos != *disk_mtime_ns;
 
             if force_check {
                 // Force-check mode: skip mtime optimization, verify all indexed files directly
@@ -252,7 +253,9 @@ pub fn execute_scan_corpus_directory(
             // Inode not indexed in this zone — check for cross-zone move first.
             // If the inode is indexed in a different zone, it was moved between zones
             // (e.g. inbox→corpus or corpus→inbox).
-            if let Ok(Some((other_zone_str, old_path))) = read_only_db.get_file_zone_and_path_by_inode(*inode) {
+            if let Ok(Some((other_zone_str, old_path))) =
+                read_only_db.get_file_zone_and_path_by_inode(*inode)
+            {
                 let other_zone = Zone::from_str(&other_zone_str).unwrap_or(Zone::Corpus);
                 if other_zone != file_zone {
                     // Cross-zone move detected
@@ -269,7 +272,9 @@ pub fn execute_scan_corpus_directory(
                         );
                     }
                 }
-            } else if let Ok(Some(audio_file)) = read_only_db.get_audio_file_by_path(&relative_path_str) {
+            } else if let Ok(Some(audio_file)) =
+                read_only_db.get_audio_file_by_path(&relative_path_str)
+            {
                 // Not indexed anywhere in corpus/inbox — check if path is indexed
                 // with a different inode. This detects file replacement (same path, new inode).
                 if audio_file.inode() != *inode {
@@ -312,9 +317,16 @@ pub fn execute_scan_corpus_directory(
 
         if !image_state.is_empty() {
             // Build mtime + image_info existence lookups for freshness gating
-            let img_inodes: Vec<i64> = image_state.iter().map(|(inode, _, _, _, _)| *inode).collect();
-            let img_mtimes = read_only_db.get_file_mtime_batch(file_zone, &img_inodes).unwrap_or_default();
-            let img_info_exists = read_only_db.get_image_info_exists_batch(&img_inodes).unwrap_or_default();
+            let img_inodes: Vec<i64> = image_state
+                .iter()
+                .map(|(inode, _, _, _, _)| *inode)
+                .collect();
+            let img_mtimes = read_only_db
+                .get_file_mtime_batch(file_zone, &img_inodes)
+                .unwrap_or_default();
+            let img_info_exists = read_only_db
+                .get_image_info_exists_batch(&img_inodes)
+                .unwrap_or_default();
 
             for (img_inode, img_path, img_mtime_s, img_mtime_ns, img_file_size) in &image_state {
                 let img_relative = match resolver.to_relative(img_path) {
@@ -338,7 +350,8 @@ pub fn execute_scan_corpus_directory(
                 );
 
                 // Freshness gate: skip dirty marking if mtime matches AND image_info exists
-                let mtime_matches = img_mtimes.get(img_inode)
+                let mtime_matches = img_mtimes
+                    .get(img_inode)
                     .is_some_and(|(db_s, db_ns)| *db_s == *img_mtime_s && *db_ns == *img_mtime_ns);
                 let has_image_info = img_info_exists.contains(img_inode);
 
@@ -347,18 +360,10 @@ pub fn execute_scan_corpus_directory(
                 }
 
                 // Mark dirty for IndexImageFile computation
-                sender.mark_dirty_inodes(
-                    vec![*img_inode],
-                    "index_image_file",
-                    witness,
-                );
+                sender.mark_dirty_inodes(vec![*img_inode], "index_image_file", witness);
 
                 // Mark dirty for sidecar deploy recomputation
-                sender.mark_dirty_inodes(
-                    vec![*img_inode],
-                    "sidecar_deploy",
-                    witness,
-                );
+                sender.mark_dirty_inodes(vec![*img_inode], "sidecar_deploy", witness);
             }
         }
     }
@@ -522,11 +527,7 @@ pub fn execute_verify_mtime(
         Vec::new()
     };
 
-    Result::success(
-        computation,
-        start.elapsed().as_millis() as u64,
-        spawn,
-    )
+    Result::success(computation, start.elapsed().as_millis() as u64, spawn)
 }
 
 /// Check if a file's disk mtime differs from what's stored in files table.
@@ -624,12 +625,16 @@ pub fn execute_verify_tags(
                     // Mtime changed but tags are identical - requires operator acknowledgement
                     log_general(format!(
                         "[COMPUTE] VerifyTags: mtime-only change for inode {} ({})",
-                        inode, path.display()
+                        inode,
+                        path.display()
                     ));
                     ensure_typed_signal(
                         read_only_db,
                         &sender,
-                        TypedSignalWrite::MtimeOnlyMismatch(MtimeOnlyMismatchSignal { inode, path: rel_str.clone() }),
+                        TypedSignalWrite::MtimeOnlyMismatch(MtimeOnlyMismatchSignal {
+                            inode,
+                            path: rel_str.clone(),
+                        }),
                         witness,
                     );
                     // Clear mutually exclusive signals
@@ -649,7 +654,8 @@ pub fn execute_verify_tags(
                     // Tags match AND mtime matches - file is healthy, clear all OOB signals
                     log_general(format!(
                         "[COMPUTE] VerifyTags: file healthy for inode {} ({})",
-                        inode, path.display()
+                        inode,
+                        path.display()
                     ));
                     drop_stale_corpus_signal::<MtimeOnlyMismatchSignal>(
                         read_only_db,
@@ -674,7 +680,8 @@ pub fn execute_verify_tags(
                 // Value conflicts or mixed-direction extras - requires operator decision
                 log_general(format!(
                     "[COMPUTE] VerifyTags: tag conflict for inode {} ({})",
-                    inode, path.display()
+                    inode,
+                    path.display()
                 ));
                 // Clear all OOB signals first (including target type to refresh metadata)
                 drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
@@ -696,11 +703,15 @@ pub fn execute_verify_tags(
                     witness,
                 );
                 // Create fresh signal with mismatch metadata (keyed by inode)
-                let mismatches: Vec<TagMismatchEntry> = verify_result.mismatches.into_iter().map(|m| TagMismatchEntry {
-                    tag_name: m.field,
-                    disk_value: m.disk_value,
-                    db_value: m.db_value,
-                }).collect();
+                let mismatches: Vec<TagMismatchEntry> = verify_result
+                    .mismatches
+                    .into_iter()
+                    .map(|m| TagMismatchEntry {
+                        tag_name: m.field,
+                        disk_value: m.disk_value,
+                        db_value: m.db_value,
+                    })
+                    .collect();
                 sender.write_typed_signal(
                     TypedSignalWrite::OutOfBandTagConflict(OutOfBandTagConflictSignal {
                         inode,
@@ -713,7 +724,8 @@ pub fn execute_verify_tags(
                 // One-direction extras only - can be synced without conflict
                 log_general(format!(
                     "[COMPUTE] VerifyTags: syncable tag diff for inode {} ({})",
-                    inode, path.display()
+                    inode,
+                    path.display()
                 ));
                 // Clear all OOB signals first (including target type to refresh metadata)
                 drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
@@ -735,11 +747,15 @@ pub fn execute_verify_tags(
                     witness,
                 );
                 // Create fresh signal with mismatch metadata (keyed by inode)
-                let mismatches: Vec<TagMismatchEntry> = verify_result.mismatches.into_iter().map(|m| TagMismatchEntry {
-                    tag_name: m.field,
-                    disk_value: m.disk_value,
-                    db_value: m.db_value,
-                }).collect();
+                let mismatches: Vec<TagMismatchEntry> = verify_result
+                    .mismatches
+                    .into_iter()
+                    .map(|m| TagMismatchEntry {
+                        tag_name: m.field,
+                        disk_value: m.disk_value,
+                        db_value: m.db_value,
+                    })
+                    .collect();
                 sender.write_typed_signal(
                     TypedSignalWrite::OutOfBandTagSync(OutOfBandTagSyncSignal {
                         inode,
@@ -750,25 +766,26 @@ pub fn execute_verify_tags(
                 );
             }
 
-            Result::success(
-                computation,
-                start.elapsed().as_millis() as u64,
-                Vec::new(),
-            )
+            Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
         }
         Err(e) => {
             // Emit CorruptFile signal so the issue is tracked in the DB (actionable)
             // Log to both general and errors so we can diagnose why this file is flagged
             let err_msg = format!(
                 "[COMPUTE] VerifyTags FAILED for inode {} ({}): {:#}",
-                inode, path.display(), e
+                inode,
+                path.display(),
+                e
             );
             log_general(&err_msg);
             crate::logging::log_error(&err_msg);
             ensure_typed_signal(
                 read_only_db,
                 &sender,
-                TypedSignalWrite::CorruptFile(CorruptFileSignal { inode, path: rel_str.clone() }),
+                TypedSignalWrite::CorruptFile(CorruptFileSignal {
+                    inode,
+                    path: rel_str.clone(),
+                }),
                 witness,
             );
             // Clear OOB signals on parse error - we can't classify what we can't read
@@ -791,11 +808,7 @@ pub fn execute_verify_tags(
                 witness,
             );
             // Return success so computation continues processing other files
-            Result::success(
-                computation,
-                start.elapsed().as_millis() as u64,
-                Vec::new(),
-            )
+            Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
         }
     }
 }
@@ -850,40 +863,32 @@ pub fn execute_verify_audio(
     match crate::corpus::metadata::verify_audio_integrity(path) {
         Ok(()) => {
             // Audio is valid - clear any stale CorruptFile signal (keyed by inode)
-            drop_stale_corpus_signal::<CorruptFileSignal>(
-                read_only_db,
-                &sender,
-                inode,
-                witness,
-            );
-            Result::success(
-                computation,
-                start.elapsed().as_millis() as u64,
-                Vec::new(),
-            )
+            drop_stale_corpus_signal::<CorruptFileSignal>(read_only_db, &sender, inode, witness);
+            Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
         }
         Err(e) => {
             // Audio verification failed - file is corrupt
             // Log to both general and errors so we can diagnose why this file is flagged
             let err_msg = format!(
                 "[COMPUTE] VerifyAudio FAILED for inode {} ({}): {:#}",
-                inode, path.display(), e
+                inode,
+                path.display(),
+                e
             );
             log_general(&err_msg);
             crate::logging::log_error(&err_msg);
             ensure_typed_signal(
                 read_only_db,
                 &sender,
-                TypedSignalWrite::CorruptFile(CorruptFileSignal { inode, path: rel_str.clone() }),
+                TypedSignalWrite::CorruptFile(CorruptFileSignal {
+                    inode,
+                    path: rel_str.clone(),
+                }),
                 witness,
             );
             // Return success so computation continues processing other files
             // (the signal emission handles the error state)
-            Result::success(
-                computation,
-                start.elapsed().as_millis() as u64,
-                Vec::new(),
-            )
+            Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
         }
     }
 }

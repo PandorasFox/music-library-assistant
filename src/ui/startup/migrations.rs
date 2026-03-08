@@ -17,14 +17,10 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::ui::active_view::{SchemaUpdateState, SchemaUpdatePhase};
+use crate::ui::active_view::{SchemaUpdatePhase, SchemaUpdateState};
 
 /// Render the schema update view based on current phase.
-pub fn render_schema_update_view(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    state: &SchemaUpdateState,
-) {
+pub fn render_schema_update_view(f: &mut ratatui::Frame, area: Rect, state: &SchemaUpdateState) {
     match state.phase {
         SchemaUpdatePhase::Approval => render_approval(f, area, &state.descriptions),
         SchemaUpdatePhase::Running => render_progress(f, area, &state.descriptions),
@@ -50,12 +46,13 @@ fn render_approval(f: &mut ratatui::Frame, area: Rect, pending: &[String]) {
 
     let mut lines = vec![
         ratatui::text::Line::from(""),
-        ratatui::text::Line::from("MM needs to update your database schema.").style(
-            Style::default().fg(Color::White),
-        ),
+        ratatui::text::Line::from("MM needs to update your database schema.")
+            .style(Style::default().fg(Color::White)),
         ratatui::text::Line::from(""),
         ratatui::text::Line::from("Pending changes:").style(
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
 
@@ -106,7 +103,9 @@ fn render_progress(f: &mut ratatui::Frame, area: Rect, pending: &[String]) {
     let mut lines = vec![
         ratatui::text::Line::from(""),
         ratatui::text::Line::from("Applying schema changes:").style(
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
         ratatui::text::Line::from(""),
     ];
@@ -116,10 +115,7 @@ fn render_progress(f: &mut ratatui::Frame, area: Rect, pending: &[String]) {
     }
 
     lines.push(ratatui::text::Line::from(""));
-    lines.push(
-        ratatui::text::Line::from("Reconciling...")
-            .style(Style::default().fg(Color::Cyan)),
-    );
+    lines.push(ratatui::text::Line::from("Reconciling...").style(Style::default().fg(Color::Cyan)));
 
     let paragraph = Paragraph::new(lines)
         .block(
@@ -150,8 +146,15 @@ fn render_complete(f: &mut ratatui::Frame, area: Rect, change_count: usize) {
 
     let paragraph = Paragraph::new(vec![
         ratatui::text::Line::from(""),
-        ratatui::text::Line::from(format!("{} schema change(s) applied successfully", change_count))
-            .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        ratatui::text::Line::from(format!(
+            "{} schema change(s) applied successfully",
+            change_count
+        ))
+        .style(
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
         ratatui::text::Line::from(""),
         ratatui::text::Line::from("Starting application...")
             .style(Style::default().fg(Color::DarkGray)),

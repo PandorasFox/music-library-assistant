@@ -5,12 +5,12 @@
 
 use crossterm::event;
 
-use crate::db::types::AudioFile;
-use crate::corpus::paths;
-use crate::ui::tag_editor;
-use crate::ui::suspended_views::SuspendTarget;
-use crate::ui::ActiveView;
 use super::App;
+use crate::corpus::paths;
+use crate::db::types::AudioFile;
+use crate::ui::suspended_views::SuspendTarget;
+use crate::ui::tag_editor;
+use crate::ui::ActiveView;
 
 /// Drain any pending input events from the terminal buffer.
 ///
@@ -35,69 +35,68 @@ impl App {
         let rel_path = match resolver.to_relative(path) {
             Some(p) => p,
             None => {
-                self.abort_to_health(format!(
-                    "Path not in corpus: {}",
-                    path.display()
-                ));
+                self.abort_to_health(format!("Path not in corpus: {}", path.display()));
                 return;
             }
         };
 
         // Load audio files from database using relative path
         let rel_path_owned = rel_path.to_path_buf();
-        let (audio_files, selected_idx) = self.cache.query(move |db| {
-            if recursive {
-                // Get all audio files in directory and subdirectories
-                let files = db.get_audio_files_for_tag_editing(&rel_path_owned)
-                    .unwrap_or_default();
-                (files, 0usize)
-            } else {
-                let rel_parent = match rel_path_owned.parent() {
-                    Some(p) => p.to_path_buf(),
-                    None => return (Vec::new(), 0usize),
-                };
-
-                // Load all audio files from parent directory
-                let dir_files = db.get_audio_files_for_tag_editing(&rel_parent)
-                    .unwrap_or_default();
-
-                // Filter to only files directly in this directory (not subdirectories)
-                let rel_path_str = rel_path_owned.to_string_lossy().to_string();
-                let rel_parent_str = rel_parent.to_string_lossy().to_string();
-                let files_in_dir: Vec<_> = dir_files
-                    .into_iter()
-                    .filter(|f| {
-                        if let Some(suffix) = f.path().strip_prefix(&rel_parent_str) {
-                            let suffix = suffix.trim_start_matches(std::path::MAIN_SEPARATOR);
-                            !suffix.contains(std::path::MAIN_SEPARATOR)
-                        } else {
-                            false
-                        }
-                    })
-                    .collect();
-
-                let selected_idx = files_in_dir
-                    .iter()
-                    .position(|f| f.path() == rel_path_str)
-                    .unwrap_or(0);
-
-                if files_in_dir.is_empty() {
-                    // Fallback: try to get just the single audio file
-                    match db.get_audio_file_by_path(&rel_path_str) {
-                        Ok(Some(audio_file)) => (vec![audio_file], 0),
-                        _ => (Vec::new(), 0),
-                    }
+        let (audio_files, selected_idx) = self
+            .cache
+            .query(move |db| {
+                if recursive {
+                    // Get all audio files in directory and subdirectories
+                    let files = db
+                        .get_audio_files_for_tag_editing(&rel_path_owned)
+                        .unwrap_or_default();
+                    (files, 0usize)
                 } else {
-                    (files_in_dir, selected_idx)
+                    let rel_parent = match rel_path_owned.parent() {
+                        Some(p) => p.to_path_buf(),
+                        None => return (Vec::new(), 0usize),
+                    };
+
+                    // Load all audio files from parent directory
+                    let dir_files = db
+                        .get_audio_files_for_tag_editing(&rel_parent)
+                        .unwrap_or_default();
+
+                    // Filter to only files directly in this directory (not subdirectories)
+                    let rel_path_str = rel_path_owned.to_string_lossy().to_string();
+                    let rel_parent_str = rel_parent.to_string_lossy().to_string();
+                    let files_in_dir: Vec<_> = dir_files
+                        .into_iter()
+                        .filter(|f| {
+                            if let Some(suffix) = f.path().strip_prefix(&rel_parent_str) {
+                                let suffix = suffix.trim_start_matches(std::path::MAIN_SEPARATOR);
+                                !suffix.contains(std::path::MAIN_SEPARATOR)
+                            } else {
+                                false
+                            }
+                        })
+                        .collect();
+
+                    let selected_idx = files_in_dir
+                        .iter()
+                        .position(|f| f.path() == rel_path_str)
+                        .unwrap_or(0);
+
+                    if files_in_dir.is_empty() {
+                        // Fallback: try to get just the single audio file
+                        match db.get_audio_file_by_path(&rel_path_str) {
+                            Ok(Some(audio_file)) => (vec![audio_file], 0),
+                            _ => (Vec::new(), 0),
+                        }
+                    } else {
+                        (files_in_dir, selected_idx)
+                    }
                 }
-            }
-        }).recv();
+            })
+            .recv();
 
         if audio_files.is_empty() {
-            self.abort_to_health(format!(
-                "No indexed files at: {}",
-                path.display()
-            ));
+            self.abort_to_health(format!("No indexed files at: {}", path.display()));
             return;
         }
 
@@ -142,11 +141,8 @@ impl App {
         let _ = self.witch.start_transaction(label);
 
         // NOTE: single_file reads tags from disk
-        let editor = tag_editor::UnifiedTagEditorState::single_file(
-            audio_file,
-            source,
-            group_context,
-        );
+        let editor =
+            tag_editor::UnifiedTagEditorState::single_file(audio_file, source, group_context);
 
         // Drain any keypresses that accumulated during loading
         drain_input_buffer();
@@ -193,23 +189,23 @@ impl App {
         let rel_dir = match resolver.to_relative(directory) {
             Some(p) => p,
             None => {
-                self.status_message = Some(format!(
-                    "Directory not in corpus: {}",
-                    directory.display()
-                ));
+                self.status_message =
+                    Some(format!("Directory not in corpus: {}", directory.display()));
                 return;
             }
         };
 
-        let audio_files = self.cache.query(move |db| {
-            db.get_audio_files_for_tag_editing(&rel_dir).unwrap_or_default()
-        }).recv();
+        let audio_files = self
+            .cache
+            .query(move |db| {
+                db.get_audio_files_for_tag_editing(&rel_dir)
+                    .unwrap_or_default()
+            })
+            .recv();
 
         if audio_files.is_empty() {
-            self.status_message = Some(format!(
-                "No indexed files found in {}",
-                directory.display()
-            ));
+            self.status_message =
+                Some(format!("No indexed files found in {}", directory.display()));
             return;
         }
 
@@ -252,7 +248,8 @@ impl App {
             audio_files,
             tag_editor::TagEditorSource::HealthModal,
             None,
-        ).with_embedded_mode(decision_key, decision_label);
+        )
+        .with_embedded_mode(decision_key, decision_label);
 
         drain_input_buffer();
 

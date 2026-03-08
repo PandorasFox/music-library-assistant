@@ -72,8 +72,8 @@ impl ResolutionLayout {
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(info_height),   // Info bar
-                Constraint::Min(5),                // Content panes
+                Constraint::Length(info_height),    // Info bar
+                Constraint::Min(5),                 // Content panes
                 Constraint::Length(buttons_height), // Buttons
             ])
             .split(area);
@@ -145,7 +145,6 @@ impl ButtonRects {
         }
         None
     }
-
 }
 
 /// Check if a point (x, y) falls within a Rect's bounds.

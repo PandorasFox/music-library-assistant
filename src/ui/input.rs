@@ -31,15 +31,15 @@ pub enum InputAction {
     PageDown,
 
     // -- Semantic actions --
-    Confirm,   // Enter
-    Cancel,    // Esc
-    Toggle,    // Space (selection toggle in lists)
+    Confirm, // Enter
+    Cancel,  // Esc
+    Toggle,  // Space (selection toggle in lists)
     Backspace,
     Delete,
 
     // -- Text entry --
-    Char(char),      // single unmodified character keypress
-    Paste(String),   // bracketed paste content
+    Char(char),    // single unmodified character keypress
+    Paste(String), // bracketed paste content
 
     // -- Text editing (Emacs shortcuts lifted to first-class actions) --
     TextHome,    // Ctrl+A — cursor to start of text field

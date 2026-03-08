@@ -23,18 +23,12 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
     // Two-row layout: info bar (3 lines) + content panes (rest)
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(5),
-        ])
+        .constraints([Constraint::Length(3), Constraint::Min(5)])
         .split(padded);
 
     let horizontal = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(40),
-            Constraint::Percentage(60),
-        ])
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(vertical[1]);
 
     render_info_bar(f, vertical[0], state);
@@ -86,23 +80,24 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewSt
     let visible_height = inner.height as usize;
     let scroll = state.scroll;
     for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-        if entry_idx >= state.entries.len() { break; }
-        state.click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+        if entry_idx >= state.entries.len() {
+            break;
+        }
+        state
+            .click_targets
+            .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
     }
 
-    let entries: Vec<PathEntry> = state.entries
+    let entries: Vec<PathEntry> = state
+        .entries
         .iter()
-        .map(|entry| {
-            PathEntry {
-                path: &entry.path,
-                prefix: vec![],
-                suffix: vec![
-                    Span::styled(
-                        format!(" {:.0}%", entry.confidence * 100.0),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ],
-            }
+        .map(|entry| PathEntry {
+            path: &entry.path,
+            prefix: vec![],
+            suffix: vec![Span::styled(
+                format!(" {:.0}%", entry.confidence * 100.0),
+                Style::default().fg(Color::DarkGray),
+            )],
         })
         .collect();
 
@@ -171,10 +166,7 @@ fn render_details(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewStat
         if summary.release_count > 0 {
             lines.push(Line::from(vec![
                 Span::styled("Releases: ", label_style),
-                Span::styled(
-                    format!("{}", summary.release_count),
-                    value_style,
-                ),
+                Span::styled(format!("{}", summary.release_count), value_style),
             ]));
         }
         lines.push(Line::raw(""));
@@ -222,7 +214,9 @@ fn render_recording_detail(f: &mut Frame, area: Rect, state: &ExternalMatchRevie
 
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().fg(Color::White);
-    let heading_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    let heading_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
     let dim_style = Style::default().fg(Color::DarkGray);
 
     let mut lines: Vec<Line> = Vec::new();
@@ -270,7 +264,9 @@ fn render_recording_detail(f: &mut Frame, area: Rect, state: &ExternalMatchRevie
             lines.push(Line::from(spans));
 
             // Show aliases if we have cached artist data
-            if let Some((_, Some(ref artist))) = detail.artists.iter()
+            if let Some((_, Some(ref artist))) = detail
+                .artists
+                .iter()
                 .find(|(id, _)| *id == credit.artist.id)
             {
                 if artist.name != credit.name {
@@ -287,7 +283,9 @@ fn render_recording_detail(f: &mut Frame, area: Rect, state: &ExternalMatchRevie
                     ]));
                 }
                 if !artist.aliases.is_empty() {
-                    let alias_strs: Vec<String> = artist.aliases.iter()
+                    let alias_strs: Vec<String> = artist
+                        .aliases
+                        .iter()
                         .take(5)
                         .map(|a| {
                             let mut s = a.name.clone();
@@ -313,7 +311,9 @@ fn render_recording_detail(f: &mut Frame, area: Rect, state: &ExternalMatchRevie
     }
 
     // Relations
-    let relevant_relations: Vec<_> = rec.relations.iter()
+    let relevant_relations: Vec<_> = rec
+        .relations
+        .iter()
         .filter(|r| r.artist.is_some() && r.direction.as_deref() != Some("forward"))
         .collect();
     if !relevant_relations.is_empty() {
@@ -340,7 +340,9 @@ fn render_recording_detail(f: &mut Frame, area: Rect, state: &ExternalMatchRevie
         for (id, parsed) in &detail.releases {
             match parsed {
                 Some(release) => {
-                    let artist_str: String = release.artist_credit.iter()
+                    let artist_str: String = release
+                        .artist_credit
+                        .iter()
                         .map(|c| c.name.as_str())
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -358,15 +360,17 @@ fn render_recording_detail(f: &mut Frame, area: Rect, state: &ExternalMatchRevie
                     ]));
                 }
                 None => {
-                    let fallback_title = rec.releases.iter()
+                    let fallback_title = rec
+                        .releases
+                        .iter()
                         .find(|r| r.id == *id)
                         .and_then(|r| r.title.as_deref());
-                    let fallback_rg = rec.releases.iter()
+                    let fallback_rg = rec
+                        .releases
+                        .iter()
                         .find(|r| r.id == *id)
                         .and_then(|r| r.release_group.as_ref());
-                    let mut spans = vec![
-                        Span::styled("  ", label_style),
-                    ];
+                    let mut spans = vec![Span::styled("  ", label_style)];
                     if let Some(title) = fallback_title {
                         spans.push(Span::styled(title, value_style));
                         spans.push(Span::styled(" (not cached)", dim_style));

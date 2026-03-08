@@ -74,11 +74,15 @@ impl fmt::Display for SchemaParseError {
         match self {
             Self::EmptyTemplate => write!(f, "empty template"),
             Self::UnterminatedBrace(pos) => write!(f, "unterminated ${{}} at position {}", pos),
-            Self::UnterminatedOptionalGroup(pos) => write!(f, "unterminated $[] at position {}", pos),
+            Self::UnterminatedOptionalGroup(pos) => {
+                write!(f, "unterminated $[] at position {}", pos)
+            }
             Self::EmptyTagName(pos) => write!(f, "empty tag name at position {}", pos),
             Self::NestedOptionalGroup(pos) => write!(f, "nested $[] at position {}", pos),
             Self::NoTagInOptionalGroup(pos) => write!(f, "no tag in $[] at position {}", pos),
-            Self::MultipleTagsInOptionalGroup(pos) => write!(f, "multiple tags in $[] at position {}", pos),
+            Self::MultipleTagsInOptionalGroup(pos) => {
+                write!(f, "multiple tags in $[] at position {}", pos)
+            }
         }
     }
 }
@@ -174,13 +178,16 @@ fn parse_segment(segment: &str, base_offset: usize) -> Result<Vec<SchemaPart>, S
                         i += 1;
                     }
                     if depth > 0 {
-                        return Err(SchemaParseError::UnterminatedOptionalGroup(base_offset + group_start));
+                        return Err(SchemaParseError::UnterminatedOptionalGroup(
+                            base_offset + group_start,
+                        ));
                     }
                     let content: String = chars[content_start..i].iter().collect();
                     i += 1; // skip `]`
 
                     // Parse the group content for literals and exactly one tag.
-                    let group_parts = parse_optional_group_content(&content, base_offset + content_start)?;
+                    let group_parts =
+                        parse_optional_group_content(&content, base_offset + content_start)?;
 
                     // Find the tag name in the group.
                     let mut tag_name = None;
@@ -193,10 +200,14 @@ fn parse_segment(segment: &str, base_offset: usize) -> Result<Vec<SchemaPart>, S
                     }
 
                     if tag_count == 0 {
-                        return Err(SchemaParseError::NoTagInOptionalGroup(base_offset + group_start));
+                        return Err(SchemaParseError::NoTagInOptionalGroup(
+                            base_offset + group_start,
+                        ));
                     }
                     if tag_count > 1 {
-                        return Err(SchemaParseError::MultipleTagsInOptionalGroup(base_offset + group_start));
+                        return Err(SchemaParseError::MultipleTagsInOptionalGroup(
+                            base_offset + group_start,
+                        ));
                     }
 
                     parts.push(SchemaPart::OptionalGroup {
@@ -240,7 +251,10 @@ fn parse_segment(segment: &str, base_offset: usize) -> Result<Vec<SchemaPart>, S
 
 /// Parse content inside an optional group `$[...]`.
 /// Only allows literals and bare/braced tag references (no nested optional groups).
-fn parse_optional_group_content(content: &str, base_offset: usize) -> Result<Vec<SchemaPart>, SchemaParseError> {
+fn parse_optional_group_content(
+    content: &str,
+    base_offset: usize,
+) -> Result<Vec<SchemaPart>, SchemaParseError> {
     let mut parts = Vec::new();
     let chars: Vec<char> = content.chars().collect();
     let mut i = 0;
@@ -398,9 +412,13 @@ fn match_segment(parts: &[SchemaPart], actual: &str) -> SegmentMatchResult {
                 extracted.push((tag_name.clone(), value));
                 pos = end;
             }
-            SchemaPart::OptionalGroup { parts: group_parts, tag_name } => {
+            SchemaPart::OptionalGroup {
+                parts: group_parts,
+                tag_name,
+            } => {
                 // Try to match the group's literal prefix at the current position.
-                match try_match_optional_group(group_parts, tag_name, &chars, pos, parts, part_idx) {
+                match try_match_optional_group(group_parts, tag_name, &chars, pos, parts, part_idx)
+                {
                     OptionalGroupResult::Matched(tags, new_pos) => {
                         // Backtrack check: verify the next outer part can still match.
                         // If the optional group consumed content that the following
@@ -409,7 +427,8 @@ fn match_segment(parts: &[SchemaPart], actual: &str) -> SegmentMatchResult {
                             Some(SchemaPart::Literal(lit)) => {
                                 let lit_chars: Vec<char> = lit.chars().collect();
                                 if new_pos + lit_chars.len() <= chars.len() {
-                                    let slice: String = chars[new_pos..new_pos + lit_chars.len()].iter().collect();
+                                    let slice: String =
+                                        chars[new_pos..new_pos + lit_chars.len()].iter().collect();
                                     slice == *lit
                                 } else {
                                     false
@@ -492,7 +511,10 @@ fn find_substring(haystack: &[char], needle: &[char], start: usize) -> Option<us
     if needle.is_empty() {
         return Some(start);
     }
-    haystack[start..].windows(needle.len()).position(|w| w == needle).map(|i| i + start)
+    haystack[start..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|i| i + start)
 }
 
 enum OptionalGroupResult {
@@ -544,7 +566,9 @@ fn try_match_optional_group(
                         SchemaPart::RequiredTag(name) => {
                             // Find where this tag ends: next literal in group, or
                             // if last in group, next literal in outer parts.
-                            let end = if let Some(next_lit) = find_next_literal_in_group(group_parts, gidx + 1) {
+                            let end = if let Some(next_lit) =
+                                find_next_literal_in_group(group_parts, gidx + 1)
+                            {
                                 let nl_chars: Vec<char> = next_lit.chars().collect();
                                 find_substring(chars, &nl_chars, gpos).unwrap_or(chars.len())
                             } else {
@@ -611,7 +635,6 @@ impl PartialEq for PathTagSchema {
         self.template == other.template
     }
 }
-
 
 // ============================================================================
 // Tests
@@ -785,7 +808,8 @@ mod tests {
 
     #[test]
     fn test_extract_full_example() {
-        let schema = parse_path_schema("$LABEL/$CATALOGNUMBER/$ARTIST$[ - $ALBUM] - $TITLE").unwrap();
+        let schema =
+            parse_path_schema("$LABEL/$CATALOGNUMBER/$ARTIST$[ - $ALBUM] - $TITLE").unwrap();
         match schema.extract("monstercat/MCEP123/Artist - Album - Title") {
             PathSchemaMatchResult::Match(tags) => {
                 assert_eq!(tags["LABEL"], "monstercat");

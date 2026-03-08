@@ -69,9 +69,11 @@ pub fn detect_featuring_pattern(value: &str, keywords: &[String]) -> Option<(Str
         .collect();
     let keyword_pattern = alternation.join("|");
 
-    let pattern = Regex::new(
-        &format!(r"(?i)^(.+?)\s+(?:\(?\s*({})\s+(.+?)\)?)\s*$", keyword_pattern)
-    ).ok()?;
+    let pattern = Regex::new(&format!(
+        r"(?i)^(.+?)\s+(?:\(?\s*({})\s+(.+?)\)?)\s*$",
+        keyword_pattern
+    ))
+    .ok()?;
 
     let caps = pattern.captures(value)?;
 

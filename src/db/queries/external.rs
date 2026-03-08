@@ -107,10 +107,7 @@ impl Database {
     /// Slim variant of `get_external_matches_for_derivation` for the release
     /// packing pipeline which never reads raw_response. Avoids loading kilobytes
     /// of AcoustID JSON per row.
-    pub fn get_external_matches_slim(
-        &self,
-        source_key: i64,
-    ) -> Result<Vec<ExternalMatchRow>> {
+    pub fn get_external_matches_slim(&self, source_key: i64) -> Result<Vec<ExternalMatchRow>> {
         let mut stmt = self.conn().prepare(
             r#"SELECT em.inode, em.recording_id, em.confidence, NULL, f.path
                FROM external_matches em
@@ -202,7 +199,8 @@ impl Database {
             param_values.push(Box::new(pattern.clone()));
         }
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
 
         let rows = stmt.query_map(param_refs.as_slice(), |row| {
             let inode: i64 = row.get(0)?;
@@ -248,9 +246,9 @@ impl Database {
     ///
     /// Returns (raw_json, fetched_at) if cached.
     pub fn get_mb_artist_cache(&self, artist_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT raw_json, fetched_at FROM mb_artist_cache WHERE artist_id = ?1",
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT raw_json, fetched_at FROM mb_artist_cache WHERE artist_id = ?1")?;
 
         let result = stmt.query_row(params![artist_id], |row| {
             Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
@@ -267,9 +265,9 @@ impl Database {
     ///
     /// Returns (raw_json, fetched_at) if cached.
     pub fn get_mb_release_cache(&self, release_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT raw_json, fetched_at FROM mb_release_cache WHERE release_id = ?1",
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT raw_json, fetched_at FROM mb_release_cache WHERE release_id = ?1")?;
 
         let result = stmt.query_row(params![release_id], |row| {
             Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
@@ -286,7 +284,10 @@ impl Database {
     ///
     /// Returns `Vec<(release_id, raw_json)>` for all release IDs that have cache entries.
     /// Uses chunked IN-clause queries for large ID sets.
-    pub fn get_mb_release_cache_bulk(&self, release_ids: &[&str]) -> Result<Vec<(String, Vec<u8>)>> {
+    pub fn get_mb_release_cache_bulk(
+        &self,
+        release_ids: &[&str],
+    ) -> Result<Vec<(String, Vec<u8>)>> {
         if release_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -301,7 +302,8 @@ impl Database {
                 placeholders.join(", ")
             );
             let mut stmt = self.conn().prepare(&sql)?;
-            let params: Vec<&dyn rusqlite::types::ToSql> = chunk.iter()
+            let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+                .iter()
                 .map(|id| id as &dyn rusqlite::types::ToSql)
                 .collect();
             let rows = stmt.query_map(params.as_slice(), |row| {
@@ -358,10 +360,7 @@ impl Database {
     ///
     /// Returns all distinct recording IDs from external matches (corpus files)
     /// that either have no MB cache entry or a stale one.
-    pub fn get_recording_ids_needing_mb_fetch(
-        &self,
-        ttl_secs: i64,
-    ) -> Result<Vec<String>> {
+    pub fn get_recording_ids_needing_mb_fetch(&self, ttl_secs: i64) -> Result<Vec<String>> {
         let stale_threshold = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -378,9 +377,7 @@ impl Database {
         "#;
 
         let mut stmt = self.conn().prepare(sql)?;
-        let rows = stmt.query_map(params![stale_threshold], |row| {
-            row.get::<_, String>(0)
-        })?;
+        let rows = stmt.query_map(params![stale_threshold], |row| row.get::<_, String>(0))?;
 
         Ok(rows.flatten().collect())
     }
@@ -442,7 +439,6 @@ impl Database {
         Ok(results)
     }
 
-
     // =========================================================================
     // Signal Data Reading (for Release Packing Browser)
     // =========================================================================
@@ -451,9 +447,9 @@ impl Database {
     pub fn get_release_packing_signal_data(
         &self,
     ) -> Result<Vec<(i64, String, crate::meta::signals::data::ReleasePackingData)>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT inode, path, data FROM signal_release_packing ORDER BY path",
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT inode, path, data FROM signal_release_packing ORDER BY path")?;
         let rows = stmt.query_map([], |row| {
             let inode: i64 = row.get(0)?;
             let path: String = row.get(1)?;
@@ -473,10 +469,16 @@ impl Database {
     /// Read all UnmatchedCorpusTrackSignal rows with deserialized data.
     pub fn get_unmatched_corpus_track_signal_data(
         &self,
-    ) -> Result<Vec<(i64, String, crate::meta::signals::data::UnmatchedCorpusTrackData)>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT inode, path, data FROM signal_unmatched_corpus_track ORDER BY path",
-        )?;
+    ) -> Result<
+        Vec<(
+            i64,
+            String,
+            crate::meta::signals::data::UnmatchedCorpusTrackData,
+        )>,
+    > {
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT inode, path, data FROM signal_unmatched_corpus_track ORDER BY path")?;
         let rows = stmt.query_map([], |row| {
             let inode: i64 = row.get(0)?;
             let path: String = row.get(1)?;
@@ -497,9 +499,9 @@ impl Database {
     pub fn get_unfilled_release_slot_signal_data(
         &self,
     ) -> Result<Vec<crate::meta::signals::data::UnfilledReleaseSlotData>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT data FROM signal_unfilled_release_slot",
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT data FROM signal_unfilled_release_slot")?;
         let rows = stmt.query_map([], |row| {
             let blob: Vec<u8> = row.get(0)?;
             Ok(blob)
@@ -518,9 +520,9 @@ impl Database {
     pub fn get_near_miss_release_signal_data(
         &self,
     ) -> Result<Vec<crate::meta::signals::data::NearMissReleaseData>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT data FROM signal_near_miss_release",
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT data FROM signal_near_miss_release")?;
         let rows = stmt.query_map([], |row| {
             let blob: Vec<u8> = row.get(0)?;
             Ok(blob)
@@ -620,9 +622,9 @@ impl Database {
     ///
     /// Used by Stage 4 (AnalyzeReleaseGaps) for corpus paths without a full corpus scan.
     pub fn get_candidate_paths(&self) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT DISTINCT inode, path FROM release_packing_candidates",
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT DISTINCT inode, path FROM release_packing_candidates")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -637,9 +639,9 @@ impl Database {
     ///
     /// Used by Stage 4 to build inode→recording_ids map without loading external_matches.
     pub fn get_candidate_inode_recordings(&self) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT inode, recording_id FROM release_packing_candidates",
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT inode, recording_id FROM release_packing_candidates")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -654,12 +656,10 @@ impl Database {
     ///
     /// Deserializes the bincode blob to extract release_id and slot positions.
     /// Used by elimination matching to understand current assignments.
-    pub fn get_release_packing_assignments(
-        &self,
-    ) -> Result<Vec<PackingAssignment>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT inode, path, data FROM signal_release_packing"
-        )?;
+    pub fn get_release_packing_assignments(&self) -> Result<Vec<PackingAssignment>> {
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT inode, path, data FROM signal_release_packing")?;
         let rows = stmt.query_map([], |row| {
             let inode: i64 = row.get(0)?;
             let path: String = row.get(1)?;
@@ -669,8 +669,16 @@ impl Database {
         let mut results = Vec::new();
         for row in rows {
             let (inode, path, data_blob) = row?;
-            if let Ok(data) = bincode::deserialize::<crate::meta::signals::data::ReleasePackingData>(&data_blob) {
-                results.push((inode, path, data.release_id, data.medium_position, data.track_position));
+            if let Ok(data) =
+                bincode::deserialize::<crate::meta::signals::data::ReleasePackingData>(&data_blob)
+            {
+                results.push((
+                    inode,
+                    path,
+                    data.release_id,
+                    data.medium_position,
+                    data.track_position,
+                ));
             }
         }
         Ok(results)
@@ -693,7 +701,7 @@ impl Database {
              WHERE f.zone = 'corpus' AND f.is_dir = 0 \
              AND f.path LIKE ?1 \
              AND f.path NOT LIKE ?2 \
-             ORDER BY f.path"
+             ORDER BY f.path",
         )?;
         // Match files directly in parent_dir (not in subdirectories)
         let prefix = format!("{}/%", parent_dir);
@@ -762,11 +770,9 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT f.inode, f.path FROM files f
              JOIN audio_info a ON f.inode = a.inode
-             WHERE f.zone = 'corpus' AND f.is_dir = 0 AND a.fingerprint IS NOT NULL"
+             WHERE f.zone = 'corpus' AND f.is_dir = 0 AND a.fingerprint IS NOT NULL",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         Ok(rows.flatten().collect())
     }
 
@@ -778,22 +784,21 @@ impl Database {
         category_prefix: &str,
     ) -> Result<Vec<crate::meta::signals::data::PackedReleaseData>> {
         let pattern = format!("{}:%", category_prefix);
-        let mut stmt = self.conn.prepare(
-            "SELECT data FROM signal_packed_release WHERE key LIKE ?1"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT data FROM signal_packed_release WHERE key LIKE ?1")?;
         let rows = stmt.query_map(params![pattern], |row| {
             let blob: Vec<u8> = row.get(0)?;
-            let data: crate::meta::signals::data::PackedReleaseData =
-                bincode::deserialize(&blob).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Blob,
-                        Box::new(e),
-                    )
-                })?;
+            let data: crate::meta::signals::data::PackedReleaseData = bincode::deserialize(&blob)
+                .map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Blob,
+                    Box::new(e),
+                )
+            })?;
             Ok(data)
         })?;
         Ok(rows.flatten().collect())
     }
-
 }

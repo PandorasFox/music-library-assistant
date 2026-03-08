@@ -49,7 +49,6 @@ impl ConditionType {
             ConditionType::Duration => ConditionType::Tag,
         }
     }
-
 }
 
 // ============================================================================
@@ -121,10 +120,16 @@ impl FileTypeCategory {
         match self {
             FileTypeCategory::Any => true,
             FileTypeCategory::Lossless => {
-                matches!(file_type_lower.as_str(), "flac" | "wav" | "alac" | "aiff" | "ape")
+                matches!(
+                    file_type_lower.as_str(),
+                    "flac" | "wav" | "alac" | "aiff" | "ape"
+                )
             }
             FileTypeCategory::Lossy => {
-                matches!(file_type_lower.as_str(), "mp3" | "opus" | "ogg" | "aac" | "m4a")
+                matches!(
+                    file_type_lower.as_str(),
+                    "mp3" | "opus" | "ogg" | "aac" | "m4a"
+                )
             }
             FileTypeCategory::Specific(f) => f.matches(&file_type_lower),
         }
@@ -221,7 +226,6 @@ impl LogicalOperator {
             LogicalOperator::Xor => LogicalOperator::And,
         }
     }
-
 }
 
 /// Comparison operators for tag value matching.
@@ -339,10 +343,4 @@ pub enum TagSearchModal {
 }
 
 /// Searchable tag field names.
-pub const SEARCHABLE_TAGS: &[&str] = &[
-    "artist",
-    "album",
-    "album_artist",
-    "title",
-    "genre",
-];
+pub const SEARCHABLE_TAGS: &[&str] = &["artist", "album", "album_artist", "title", "genre"];

@@ -14,8 +14,10 @@ use ratatui::Frame;
 
 use crate::ui::helpers::truncate_left;
 use crate::ui::input::InputAction;
+use crate::ui::widgets::detail_panel::{
+    render_detail_panel, DetailField, DetailPanelParams, DetailWidget, PanelButton,
+};
 use crate::ui::widgets::TextInputState;
-use crate::ui::widgets::detail_panel::{DetailField, DetailPanelParams, DetailWidget, PanelButton, render_detail_panel};
 
 use crate::ui::tree_browser::actions::TreeBrowserAction;
 use crate::ui::tree_browser::config::CorpusBrowserConfig;
@@ -104,7 +106,11 @@ impl DirConfigPanelState {
     pub fn render_config_panel(&self, f: &mut Frame, area: Rect) {
         let path_str = self.source_path.display().to_string();
         let title = format!(" Dir: {} ", path_str);
-        let border_color = if self.has_edits() { Color::Yellow } else { Color::Cyan };
+        let border_color = if self.has_edits() {
+            Color::Yellow
+        } else {
+            Color::Cyan
+        };
 
         let libs_edited = self.libraries != self.orig_libraries;
         let stash_edited = self.can_stash_dupes != self.orig_can_stash_dupes;
@@ -158,11 +164,17 @@ impl DirConfigPanelState {
             },
             DetailField {
                 label: "Can stash dupes",
-                widget: DetailWidget::OptBool { value: self.can_stash_dupes, edited: stash_edited },
+                widget: DetailWidget::OptBool {
+                    value: self.can_stash_dupes,
+                    edited: stash_edited,
+                },
             },
             DetailField {
                 label: "Interior dupes",
-                widget: DetailWidget::OptBool { value: self.interior_dupes, edited: interior_edited },
+                widget: DetailWidget::OptBool {
+                    value: self.interior_dupes,
+                    edited: interior_edited,
+                },
             },
             DetailField {
                 label: "Path schema",
@@ -173,7 +185,10 @@ impl DirConfigPanelState {
             },
             DetailField {
                 label: "AcoustID lookup",
-                widget: DetailWidget::OptBool { value: self.enable_acoustid, edited: acoustid_edited },
+                widget: DetailWidget::OptBool {
+                    value: self.enable_acoustid,
+                    edited: acoustid_edited,
+                },
             },
         ];
 
@@ -203,15 +218,19 @@ impl DirConfigPanelState {
             Some("Enter/Space toggle  Tab buttons")
         };
 
-        render_detail_panel(f, area, &DetailPanelParams {
-            title: &title,
-            border_color,
-            fields: &fields,
-            field_cursor: self.field_cursor,
-            buttons: &buttons,
-            focus_on_buttons: self.focus == PanelFocus::Buttons,
-            hint,
-        });
+        render_detail_panel(
+            f,
+            area,
+            &DetailPanelParams {
+                title: &title,
+                border_color,
+                fields: &fields,
+                field_cursor: self.field_cursor,
+                buttons: &buttons,
+                focus_on_buttons: self.focus == PanelFocus::Buttons,
+                hint,
+            },
+        );
     }
 }
 
@@ -340,7 +359,11 @@ impl CorpusBrowserVariant {
     }
 
     /// Handle variant-specific input actions.
-    pub fn handle_input(&mut self, action: &InputAction, nav: &mut TreeNavigator) -> TreeBrowserAction {
+    pub fn handle_input(
+        &mut self,
+        action: &InputAction,
+        nav: &mut TreeNavigator,
+    ) -> TreeBrowserAction {
         // Config panel has priority when focused
         if self.focus == CorpusBrowserFocus::ConfigPanel {
             return self.handle_config_panel_input(action);
@@ -360,7 +383,11 @@ impl CorpusBrowserVariant {
     }
 
     /// Handle input when tree browser is focused.
-    fn handle_tree_browser_input(&mut self, action: &InputAction, nav: &mut TreeNavigator) -> TreeBrowserAction {
+    fn handle_tree_browser_input(
+        &mut self,
+        action: &InputAction,
+        nav: &mut TreeNavigator,
+    ) -> TreeBrowserAction {
         // If we have search results visible, capture navigation keys
         if !self.search.matches.is_empty() {
             match action {
@@ -414,9 +441,7 @@ impl CorpusBrowserVariant {
                 TreeBrowserAction::ReviewTransaction
             }
             // Ctrl+/ opens filter popup
-            InputAction::OpenFilter => {
-                TreeBrowserAction::OpenFilter
-            }
+            InputAction::OpenFilter => TreeBrowserAction::OpenFilter,
             _ => TreeBrowserAction::None,
         }
     }
@@ -603,15 +628,17 @@ impl CorpusBrowserVariant {
                 }
                 TreeBrowserAction::None
             }
-            InputAction::Cancel => {
-                TreeBrowserAction::CloseDirConfig
-            }
+            InputAction::Cancel => TreeBrowserAction::CloseDirConfig,
             _ => TreeBrowserAction::None,
         }
     }
 
     /// Handle input when search bar is focused.
-    fn handle_search_bar_input(&mut self, action: &InputAction, nav: &mut TreeNavigator) -> TreeBrowserAction {
+    fn handle_search_bar_input(
+        &mut self,
+        action: &InputAction,
+        nav: &mut TreeNavigator,
+    ) -> TreeBrowserAction {
         match action {
             InputAction::Confirm => {
                 self.handle_search_enter(nav);
@@ -796,7 +823,12 @@ impl CorpusBrowserVariant {
     }
 
     /// Recursively search for items matching query.
-    fn search_items_recursive(dir: &Path, query: &str, matches: &mut Vec<PathBuf>, include_files: bool) {
+    fn search_items_recursive(
+        dir: &Path,
+        query: &str,
+        matches: &mut Vec<PathBuf>,
+        include_files: bool,
+    ) {
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -825,7 +857,8 @@ impl CorpusBrowserVariant {
 
     /// Get suggestion for tab completion (first match name).
     fn get_suggestion(&self) -> Option<String> {
-        self.search.matches
+        self.search
+            .matches
             .first()
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
     }
@@ -928,7 +961,11 @@ impl CorpusBrowserVariant {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
-            .title(format!("Select Match ({}/{})", self.match_selection_idx + 1, matches.len()));
+            .title(format!(
+                "Select Match ({}/{})",
+                self.match_selection_idx + 1,
+                matches.len()
+            ));
 
         f.render_widget(Clear, modal_area);
         f.render_widget(Paragraph::new(all_lines).block(block), modal_area);

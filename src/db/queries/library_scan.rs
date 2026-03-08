@@ -69,7 +69,9 @@ impl Database {
     ///
     /// Returns a map of stored_path → (inode, mtime_secs, mtime_nanos, file_size)
     /// for all library audio files (is_dir=0).
-    pub fn get_library_file_metadata(&self) -> Result<std::collections::HashMap<String, (i64, i64, i64, i64)>> {
+    pub fn get_library_file_metadata(
+        &self,
+    ) -> Result<std::collections::HashMap<String, (i64, i64, i64, i64)>> {
         let mut stmt = self.conn.prepare(
             "SELECT path, inode, mtime_secs, mtime_nanos, file_size
              FROM files WHERE zone='library' AND is_dir=0",
@@ -98,9 +100,9 @@ impl Database {
     ///
     /// Returns all files where zone = 'library'.
     pub fn get_all_library_files(&self) -> Result<Vec<LibraryScanEntry>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT path, inode FROM files WHERE zone = 'library' ORDER BY path",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, inode FROM files WHERE zone = 'library' ORDER BY path")?;
 
         let entries = stmt
             .query_map(params![], |row| {
@@ -114,5 +116,4 @@ impl Database {
 
         Ok(entries)
     }
-
 }

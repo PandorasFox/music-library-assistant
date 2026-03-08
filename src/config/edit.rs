@@ -116,15 +116,19 @@ pub fn apply_config_edits_to_kdl(original_kdl: &str, old_config: &Config, new_co
     // --- Release Packing ---
     let old_rp = &old_config.opinions.release_packing;
     let new_rp = &new_config.opinions.release_packing;
-    if (new_rp.duration_tolerance_pct - old_rp.duration_tolerance_pct).abs() > f64::EPSILON
-        || (new_rp.min_confidence - old_rp.min_confidence).abs() > f64::EPSILON
-    {
+    if old_rp != new_rp {
         let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_RELEASE_PACKING);
         if (new_rp.duration_tolerance_pct - old_rp.duration_tolerance_pct).abs() > f64::EPSILON {
             set_or_create_float_node(block, ReleasePackingOpinions::KDL_DURATION_TOLERANCE_PCT, new_rp.duration_tolerance_pct);
         }
         if (new_rp.min_confidence - old_rp.min_confidence).abs() > f64::EPSILON {
             set_or_create_float_node(block, ReleasePackingOpinions::KDL_MIN_CONFIDENCE, new_rp.min_confidence);
+        }
+        if new_rp.candidate_weights != old_rp.candidate_weights {
+            serialize_packing_weights(block, ReleasePackingOpinions::KDL_CANDIDATE_WEIGHTS, &new_rp.candidate_weights);
+        }
+        if new_rp.elimination_weights != old_rp.elimination_weights {
+            serialize_packing_weights(block, ReleasePackingOpinions::KDL_ELIMINATION_WEIGHTS, &new_rp.elimination_weights);
         }
     }
 
@@ -289,6 +293,16 @@ pub fn write_config_to_disk(original_kdl: &str, old_config: &Config, new_config:
         .with_context(|| format!("Failed to write config to {:?}", config_path))?;
 
     Ok(())
+}
+
+/// Serialize a PackingWeights struct into a KDL child block.
+fn serialize_packing_weights(doc: &mut kdl::KdlDocument, name: &str, weights: &PackingWeights) {
+    let block = ensure_child_block(doc, name);
+    set_or_create_float_node(block, PackingWeights::KDL_ACOUSTID_CONFIDENCE, weights.acoustid_confidence);
+    set_or_create_float_node(block, PackingWeights::KDL_DURATION_MATCH, weights.duration_match);
+    set_or_create_float_node(block, PackingWeights::KDL_TAG_SIMILARITY, weights.tag_similarity);
+    set_or_create_float_node(block, PackingWeights::KDL_TRACK_NUMBER_MATCH, weights.track_number_match);
+    set_or_create_float_node(block, PackingWeights::KDL_DIRECTORY_COHESION, weights.directory_cohesion);
 }
 
 // KDL modification helpers

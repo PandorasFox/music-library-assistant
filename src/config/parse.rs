@@ -231,6 +231,24 @@ fn parse_tag_splitting_opinions(node: &kdl::KdlNode, opinions: &mut TagSplitting
 }
 
 /// Parse release-packing opinions from KDL node.
+fn parse_packing_weights(node: &kdl::KdlNode, weights: &mut PackingWeights) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            let val = child.entries().first().and_then(|e| e.value().as_f64());
+            if let Some(v) = val {
+                match child.name().value() {
+                    PackingWeights::KDL_ACOUSTID_CONFIDENCE => weights.acoustid_confidence = v,
+                    PackingWeights::KDL_DURATION_MATCH => weights.duration_match = v,
+                    PackingWeights::KDL_TAG_SIMILARITY => weights.tag_similarity = v,
+                    PackingWeights::KDL_TRACK_NUMBER_MATCH => weights.track_number_match = v,
+                    PackingWeights::KDL_DIRECTORY_COHESION => weights.directory_cohesion = v,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
 fn parse_release_packing_opinions(node: &kdl::KdlNode, opinions: &mut ReleasePackingOpinions) {
     if let Some(children) = node.children() {
         for child in children.nodes() {
@@ -248,6 +266,12 @@ fn parse_release_packing_opinions(node: &kdl::KdlNode, opinions: &mut ReleasePac
                             opinions.min_confidence = val;
                         }
                     }
+                }
+                ReleasePackingOpinions::KDL_CANDIDATE_WEIGHTS => {
+                    parse_packing_weights(child, &mut opinions.candidate_weights);
+                }
+                ReleasePackingOpinions::KDL_ELIMINATION_WEIGHTS => {
+                    parse_packing_weights(child, &mut opinions.elimination_weights);
                 }
                 _ => {}
             }

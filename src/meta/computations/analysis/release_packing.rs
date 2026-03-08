@@ -47,6 +47,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::time::Instant;
 
+use crate::config::PackingWeights;
 use crate::db::queries::external::{ExternalMatchRow, OptimalPackingScoreRow, PackingManifestRow};
 use crate::db::types::Zone;
 use crate::db::write_thread::{self, PackingScoreRow};
@@ -636,6 +637,7 @@ fn compute_score(
     release_title: &str,
     corpus: Option<&CorpusFileInfo>,
     duration_tolerance_pct: f64,
+    weights: &PackingWeights,
 ) -> (f64, PackingScoreBreakdown) {
     let acoustid_confidence = rec_match.confidence;
 
@@ -695,17 +697,17 @@ fn compute_score(
         directory_cohesion: 0.0, // Set later by caller
     };
 
-    let score = weighted_composite(&breakdown);
+    let score = weighted_composite(&breakdown, weights);
     (score, breakdown)
 }
 
 /// Compute weighted composite score from breakdown components.
-fn weighted_composite(b: &PackingScoreBreakdown) -> f64 {
-    0.25 * b.acoustid_confidence
-        + 0.25 * b.duration_match
-        + 0.15 * b.tag_similarity
-        + 0.10 * b.track_number_match
-        + 0.25 * b.directory_cohesion
+fn weighted_composite(b: &PackingScoreBreakdown, w: &PackingWeights) -> f64 {
+    w.acoustid_confidence * b.acoustid_confidence
+        + w.duration_match * b.duration_match
+        + w.tag_similarity * b.tag_similarity
+        + w.track_number_match * b.track_number_match
+        + w.directory_cohesion * b.directory_cohesion
 }
 
 /// Kuhn-Munkres (Hungarian) algorithm on an n×n cost matrix.
@@ -1320,6 +1322,8 @@ pub fn execute_score_release_candidates(
         }
     };
     let duration_tolerance_pct = config.opinions.release_packing.duration_tolerance_pct;
+    let candidate_weights = config.opinions.release_packing.candidate_weights.clone();
+    let elimination_weights = config.opinions.release_packing.elimination_weights.clone();
     let preferred_locales = config.opinions.external_matching.preferred_locales.clone();
 
     // Load the release tracklist
@@ -1440,6 +1444,7 @@ pub fn execute_score_release_candidates(
                         &release.title,
                         corpus,
                         duration_tolerance_pct,
+                        &candidate_weights,
                     );
 
                     candidates.push(CandidateAssignment {
@@ -1491,7 +1496,7 @@ pub fn execute_score_release_candidates(
 
             candidate.breakdown.directory_cohesion =
                 unique_candidates as f64 / total_files as f64;
-            candidate.score = weighted_composite(&candidate.breakdown);
+            candidate.score = weighted_composite(&candidate.breakdown, &candidate_weights);
         }
     }
 
@@ -1591,8 +1596,8 @@ pub fn execute_score_release_candidates(
                 })
                 .collect();
 
-            // Build cost matrix: composite scoring (duration 0.5, title 0.35, tracknumber 0.15)
-            // Single Hungarian across all unassigned files × all unfilled slots
+            // Build cost matrix using configurable elimination weights.
+            // Single Hungarian across all unassigned files × all unfilled slots.
             let n_unassigned = all_unassigned.len();
             let n_unfilled = unfilled.len();
             let n = n_unassigned.max(n_unfilled);
@@ -1629,16 +1634,35 @@ pub fn execute_score_release_candidates(
                         })
                         .unwrap_or(0.0);
 
-                    let tracknumber_match = tags
+                    let artist_sim = tags
+                        .get("ARTIST")
+                        .and_then(|v| v.first())
+                        .map(|a| strsim::normalized_levenshtein(a, &resolved_artist))
+                        .unwrap_or(0.0);
+
+                    let album_sim = tags
+                        .get("ALBUM")
+                        .and_then(|v| v.first())
+                        .map(|a| strsim::normalized_levenshtein(a, &release.title))
+                        .unwrap_or(0.0);
+
+                    let tag_similarity = 0.4 * title_sim + 0.35 * artist_sim + 0.25 * album_sim;
+
+                    let track_number_match = tags
                         .get("TRACKNUMBER")
                         .and_then(|v| v.first())
                         .and_then(|tn| tn.parse::<u32>().ok())
                         .map(|tn| if tn == track.position { 1.0 } else { 0.0 })
                         .unwrap_or(0.0);
 
-                    let composite =
-                        0.5 * duration_match + 0.35 * title_sim + 0.15 * tracknumber_match;
-                    cost[ui][fi] = -composite;
+                    let elim_breakdown = PackingScoreBreakdown {
+                        acoustid_confidence: 0.0,
+                        duration_match,
+                        tag_similarity,
+                        track_number_match,
+                        directory_cohesion: 1.0, // same directory by construction
+                    };
+                    cost[ui][fi] = -weighted_composite(&elim_breakdown, &elimination_weights);
                 }
             }
 
@@ -1721,7 +1745,7 @@ pub fn execute_score_release_candidates(
                     track_number_match,
                     directory_cohesion: 1.0,
                 };
-                let score = weighted_composite(&breakdown);
+                let score = weighted_composite(&breakdown, &elimination_weights);
                 let breakdown_bytes = bincode::serialize(&breakdown).unwrap_or_default();
 
                 score_rows.push(PackingScoreRow {
@@ -2319,14 +2343,16 @@ pub(crate) fn execute_map_full_match_releases(
     };
     let mut state = shared.take();
 
-    let r = run_mis_round(&state.full_match_pool, &state.assigned_inodes);
+    let r = run_mis_round_partial(&state.full_match_pool, &state.assigned_inodes, state.knot_ratio, state.knot_size_limit);
     lock_in_round(&r, &state.full_match_pool, &mut state.assigned_inodes, &mut state.assignments);
 
     log_general(format!(
         "[COMPUTE] MapFullMatchReleases: {} eligible, {} selected, \
-         coverage={} inodes, {} components (max {})",
+         coverage={} inodes, {} components (max {}), \
+         dedup_removed={}, knots={} ({} proposals)",
         r.eligible_count, r.selected_count, r.coverage,
         r.component_count, r.max_component_size,
+        r.dedup_removed, r.knot_components, r.knot_proposals,
     ));
 
     let next_state = SharedMappingState::new(state);

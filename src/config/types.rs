@@ -278,6 +278,58 @@ impl DuplicateAnalysisOpinions {
     pub const KDL_ELIDE_VARIANTS: &str = "elide-variant-titles";
 }
 
+/// Scoring dimension weights for release bin-packing assignment.
+///
+/// Controls how much each signal dimension contributes to the composite score
+/// used by the Hungarian assignment algorithm. Two weight sets exist:
+/// `candidate_weights` for AcoustID-backed scoring and `elimination_weights`
+/// for tag-only gap-filling where no fingerprint match exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PackingWeights {
+    /// AcoustID fingerprint confidence weight.
+    pub acoustid_confidence: f64,
+    /// Duration match quality weight.
+    pub duration_match: f64,
+    /// Tag similarity (title/artist/album) weight.
+    pub tag_similarity: f64,
+    /// Track number match weight.
+    pub track_number_match: f64,
+    /// Directory cohesion weight.
+    pub directory_cohesion: f64,
+}
+
+impl PackingWeights {
+    /// Default weights for AcoustID-backed candidate scoring.
+    /// Fingerprint confidence and directory cohesion are strong anchors.
+    pub fn candidate_defaults() -> Self {
+        Self {
+            acoustid_confidence: 0.25,
+            duration_match: 0.25,
+            tag_similarity: 0.15,
+            track_number_match: 0.10,
+            directory_cohesion: 0.25,
+        }
+    }
+
+    /// Default weights for elimination/gap-filling scoring.
+    /// No fingerprint available; tags and tracknumber are primary evidence.
+    pub fn elimination_defaults() -> Self {
+        Self {
+            acoustid_confidence: 0.0,
+            duration_match: 0.35,
+            tag_similarity: 0.20,
+            track_number_match: 0.30,
+            directory_cohesion: 0.15,
+        }
+    }
+
+    pub const KDL_ACOUSTID_CONFIDENCE: &str = "acoustid-confidence";
+    pub const KDL_DURATION_MATCH: &str = "duration-match";
+    pub const KDL_TAG_SIMILARITY: &str = "tag-similarity";
+    pub const KDL_TRACK_NUMBER_MATCH: &str = "track-number-match";
+    pub const KDL_DIRECTORY_COHESION: &str = "directory-cohesion";
+}
+
 /// Opinions for MusicBrainz release bin-packing.
 ///
 /// Controls filtering thresholds for discarding poor-quality recording matches
@@ -289,6 +341,10 @@ pub struct ReleasePackingOpinions {
     pub duration_tolerance_pct: f64,
     /// Minimum AcoustID confidence to consider a recording match. Default: 0.3
     pub min_confidence: f64,
+    /// Scoring weights for AcoustID-backed candidate assignment.
+    pub candidate_weights: PackingWeights,
+    /// Scoring weights for tag-only elimination/gap-filling assignment.
+    pub elimination_weights: PackingWeights,
 }
 
 impl Default for ReleasePackingOpinions {
@@ -296,6 +352,8 @@ impl Default for ReleasePackingOpinions {
         Self {
             duration_tolerance_pct: 0.15,
             min_confidence: 0.3,
+            candidate_weights: PackingWeights::candidate_defaults(),
+            elimination_weights: PackingWeights::elimination_defaults(),
         }
     }
 }
@@ -303,6 +361,8 @@ impl Default for ReleasePackingOpinions {
 impl ReleasePackingOpinions {
     pub const KDL_DURATION_TOLERANCE_PCT: &str = "duration-tolerance-pct";
     pub const KDL_MIN_CONFIDENCE: &str = "min-confidence";
+    pub const KDL_CANDIDATE_WEIGHTS: &str = "candidate-weights";
+    pub const KDL_ELIMINATION_WEIGHTS: &str = "elimination-weights";
 }
 
 /// Directory granularity for inbox organize workflow.

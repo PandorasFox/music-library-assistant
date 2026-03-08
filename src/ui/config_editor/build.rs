@@ -8,7 +8,7 @@ use crate::config::{
     Config, Opinions, StartupView, InboxOrganizeGranularity, SidecarDeployMode,
     StartupOpinions, QualityResolutionOpinions, CanonicalizationOpinions,
     HealthDetectionOpinions, PerformanceOpinions, TagSplittingOpinions,
-    DuplicateAnalysisOpinions, ReleasePackingOpinions, InboxOrganizeOpinions, ExternalMatchingConfig,
+    DuplicateAnalysisOpinions, ReleasePackingOpinions, PackingWeights, InboxOrganizeOpinions, ExternalMatchingConfig,
     DiscExtractionOpinions, AlbumArtOpinions, DebugOpinions,
 };
 use super::types::*;
@@ -134,6 +134,78 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     false,
                     |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.min_confidence = *f; } }),
             ],
+        },
+        // Candidate Weights (AcoustID-backed scoring)
+        ConfigGroup {
+            name: "Packing: Candidate Weights",
+            collapsed: true,
+            fields: {
+                let cw = &ops.release_packing.candidate_weights;
+                let cwd = PackingWeights::candidate_defaults();
+                vec![
+                    field("AcoustID confidence", "Weight for fingerprint confidence (0.0-1.0)",
+                        ConfigValue::Float(cw.acoustid_confidence),
+                        source_for((cw.acoustid_confidence - cwd.acoustid_confidence).abs() < f64::EPSILON, PackingWeights::KDL_ACOUSTID_CONFIDENCE),
+                        false,
+                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.candidate_weights.acoustid_confidence = *f; } }),
+                    field("Duration match", "Weight for duration match quality (0.0-1.0)",
+                        ConfigValue::Float(cw.duration_match),
+                        source_for((cw.duration_match - cwd.duration_match).abs() < f64::EPSILON, PackingWeights::KDL_DURATION_MATCH),
+                        false,
+                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.candidate_weights.duration_match = *f; } }),
+                    field("Tag similarity", "Weight for title/artist/album tag similarity (0.0-1.0)",
+                        ConfigValue::Float(cw.tag_similarity),
+                        source_for((cw.tag_similarity - cwd.tag_similarity).abs() < f64::EPSILON, PackingWeights::KDL_TAG_SIMILARITY),
+                        false,
+                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.candidate_weights.tag_similarity = *f; } }),
+                    field("Track number match", "Weight for tracknumber matching slot position (0.0-1.0)",
+                        ConfigValue::Float(cw.track_number_match),
+                        source_for((cw.track_number_match - cwd.track_number_match).abs() < f64::EPSILON, PackingWeights::KDL_TRACK_NUMBER_MATCH),
+                        false,
+                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.candidate_weights.track_number_match = *f; } }),
+                    field("Directory cohesion", "Weight for sibling files mapping to same release (0.0-1.0)",
+                        ConfigValue::Float(cw.directory_cohesion),
+                        source_for((cw.directory_cohesion - cwd.directory_cohesion).abs() < f64::EPSILON, PackingWeights::KDL_DIRECTORY_COHESION),
+                        false,
+                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.candidate_weights.directory_cohesion = *f; } }),
+                ]
+            },
+        },
+        // Elimination Weights (tag-only gap-filling scoring)
+        ConfigGroup {
+            name: "Packing: Elimination Weights",
+            collapsed: true,
+            fields: {
+                let ew = &ops.release_packing.elimination_weights;
+                let ewd = PackingWeights::elimination_defaults();
+                vec![
+                    field("AcoustID confidence", "Weight for fingerprint confidence — always 0 in elimination (0.0-1.0)",
+                        ConfigValue::Float(ew.acoustid_confidence),
+                        source_for((ew.acoustid_confidence - ewd.acoustid_confidence).abs() < f64::EPSILON, PackingWeights::KDL_ACOUSTID_CONFIDENCE),
+                        false,
+                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.elimination_weights.acoustid_confidence = *f; } }),
+                    field("Duration match", "Weight for duration match quality (0.0-1.0)",
+                        ConfigValue::Float(ew.duration_match),
+                        source_for((ew.duration_match - ewd.duration_match).abs() < f64::EPSILON, PackingWeights::KDL_DURATION_MATCH),
+                        false,
+                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.elimination_weights.duration_match = *f; } }),
+                    field("Tag similarity", "Weight for title/artist/album tag similarity (0.0-1.0)",
+                        ConfigValue::Float(ew.tag_similarity),
+                        source_for((ew.tag_similarity - ewd.tag_similarity).abs() < f64::EPSILON, PackingWeights::KDL_TAG_SIMILARITY),
+                        false,
+                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.elimination_weights.tag_similarity = *f; } }),
+                    field("Track number match", "Weight for tracknumber matching slot position (0.0-1.0)",
+                        ConfigValue::Float(ew.track_number_match),
+                        source_for((ew.track_number_match - ewd.track_number_match).abs() < f64::EPSILON, PackingWeights::KDL_TRACK_NUMBER_MATCH),
+                        false,
+                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.elimination_weights.track_number_match = *f; } }),
+                    field("Directory cohesion", "Weight for directory cohesion — typically 1.0 in elimination (0.0-1.0)",
+                        ConfigValue::Float(ew.directory_cohesion),
+                        source_for((ew.directory_cohesion - ewd.directory_cohesion).abs() < f64::EPSILON, PackingWeights::KDL_DIRECTORY_COHESION),
+                        false,
+                        |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.elimination_weights.directory_cohesion = *f; } }),
+                ]
+            },
         },
         // Tag Splitting
         ConfigGroup {

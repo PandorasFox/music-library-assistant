@@ -215,7 +215,7 @@ pub enum Computation {
     /// Pack corpus files into MusicBrainz releases (Stage 1 — orchestrator).
     ///
     /// Loads external matches, identifies releases, writes session manifest,
-    /// spawns N ScoreReleaseCandidates (Stage 2), defers ResolveReleaseConflicts
+    /// spawns N ScoreReleaseCandidates (Stage 2), defers ComputeReleaseMappings
     /// (Stage 3) and AnalyzeReleaseGaps (Stage 4) as barrier-separated phases.
     ///
     /// Manual trigger only (expensive), not part of ScheduleContentAnalysis.
@@ -233,15 +233,44 @@ pub enum Computation {
         release_id: String,
     },
 
-    /// Global conflict resolution across per-release scoring results (Stage 3).
+    /// Classify release proposals into quality tiers (Stage 3a — orchestrator).
     ///
-    /// Reads fully-packed proposals (AcoustID + elimination rows) from all releases,
-    /// resolves cross-release inode conflicts via greedy global assignment, emits
-    /// ReleasePackingSignal per assigned inode. Records pending AcoustID submissions
-    /// for winning elimination matches.
-    ResolveReleaseConflicts,
+    /// Loads optimal scores and manifest, classifies proposals into tiers
+    /// (Perfect, FullMatch, Incomplete, Single), packages state, and defers
+    /// MIS rounds as separate computations for visibility.
+    ComputeReleaseMappings,
 
-    /// Gap analysis after release packing (Stage 4, renumbered from old Stage 5).
+    /// MIS on Perfect proposals (Stage 3b).
+    ///
+    /// All slots filled, 1:1 directory↔release mapping, no leftover files.
+    /// Multi-medium releases supported via per-medium directory mapping.
+    MapPerfectReleases {
+        state: release_packing::SharedMappingState,
+    },
+
+    /// MIS on FullMatch proposals (Stage 3c).
+    ///
+    /// All slots filled, but cross-directory or directory has extra files.
+    MapFullMatchReleases {
+        state: release_packing::SharedMappingState,
+    },
+
+    /// MIS on Incomplete proposals (Stage 3d).
+    ///
+    /// Partial slot coverage. Proposals enter with unclaimed portion of inode set.
+    MapIncompleteReleases {
+        state: release_packing::SharedMappingState,
+    },
+
+    /// Per-inode-best for Singles + signal emission (Stage 3e).
+    ///
+    /// Assigns single-track releases, emits ReleasePacking signals for all
+    /// rounds, records pending AcoustID submissions.
+    MapSingleReleases {
+        state: release_packing::SharedMappingState,
+    },
+
+    /// Gap analysis after release packing (Stage 4).
     ///
     /// Identifies unmatched corpus tracks, unfilled release slots, and near-miss
     /// patterns where (n-1)/n tracks match from the same directory.
@@ -298,7 +327,11 @@ impl Computation {
             Computation::DetectPathTagMismatches => "Detecting path-tag mismatches",
             Computation::PackReleases => "Packing releases",
             Computation::ScoreReleaseCandidates { .. } => "Scoring release candidates",
-            Computation::ResolveReleaseConflicts => "Resolving release conflicts",
+            Computation::ComputeReleaseMappings => "Classifying release proposals",
+            Computation::MapPerfectReleases { .. } => "Mapping perfect releases",
+            Computation::MapFullMatchReleases { .. } => "Mapping full-match releases",
+            Computation::MapIncompleteReleases { .. } => "Mapping incomplete releases",
+            Computation::MapSingleReleases { .. } => "Mapping single-track releases",
             Computation::AnalyzeReleaseGaps => "Analyzing release gaps",
             Computation::DeriveExternalMatches => "Deriving external match signals",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
@@ -381,8 +414,20 @@ impl Computation {
             Computation::ScoreReleaseCandidates { ref release_id } => {
                 execute_score_release_candidates(ctx.read_db, release_id, ctx.witness, ctx.start)
             }
-            Computation::ResolveReleaseConflicts => {
-                execute_resolve_release_conflicts(ctx.read_db, ctx.witness, ctx.start)
+            Computation::ComputeReleaseMappings => {
+                execute_compute_release_mappings(ctx.read_db, ctx.witness, ctx.start)
+            }
+            Computation::MapPerfectReleases { ref state } => {
+                execute_map_perfect_releases(state, ctx.witness, ctx.start)
+            }
+            Computation::MapFullMatchReleases { ref state } => {
+                execute_map_full_match_releases(state, ctx.witness, ctx.start)
+            }
+            Computation::MapIncompleteReleases { ref state } => {
+                execute_map_incomplete_releases(state, ctx.witness, ctx.start)
+            }
+            Computation::MapSingleReleases { ref state } => {
+                execute_map_single_releases(state, ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::AnalyzeReleaseGaps => {
                 execute_analyze_release_gaps(ctx.read_db, ctx.witness, ctx.start)

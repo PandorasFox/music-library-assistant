@@ -353,6 +353,24 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                 ExternalMatchingConfig::KDL_TAG_TEMPLATES => {
                     parse_tag_templates(child, &mut opinions.tag_templates);
                 }
+                ExternalMatchingConfig::KDL_PACKING_KNOT_RATIO => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            // 0 disables, otherwise must be > 1.0
+                            if val == 0.0 || val > 1.0 {
+                                opinions.packing_knot_ratio = val;
+                            }
+                        }
+                    }
+                }
+                ExternalMatchingConfig::KDL_PACKING_KNOT_SIZE_LIMIT => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            // 0 disables
+                            opinions.packing_knot_size_limit = val.max(0) as usize;
+                        }
+                    }
+                }
                 _ => {}
             }
         }

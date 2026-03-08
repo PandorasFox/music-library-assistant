@@ -1,12 +1,12 @@
 //! Release bin-packing staged pipeline.
 //!
-//! Four-stage pipeline for assigning corpus files to MusicBrainz releases:
+//! Multi-stage pipeline for assigning corpus files to MusicBrainz releases:
 //!
 //! ```text
 //! Stage 1: PackReleases (orchestrator)
 //!     │  Loads external matches, identifies releases, writes manifest
 //!     │  Spawns N ScoreReleaseCandidates
-//!     │  Defers [Stage 3: Resolve, Stage 4: Analyze]
+//!     │  Defers ComputeReleaseMappings
 //!     ▼
 //! Stage 2: ScoreReleaseCandidates { release_id } × N  (parallel)
 //!     │  AcoustID Hungarian matching + per-release elimination
@@ -14,10 +14,23 @@
 //!     │  Writes results to intermediate table
 //!     │  ═══════ BARRIER ═══════
 //!     ▼
-//! Stage 3: ResolveReleaseConflicts
-//!     │  MIS + per-inode-best resolution on fully-packed proposals
-//!     │  Emits ReleasePackingSignal per assigned inode
+//! Stage 3a: ComputeReleaseMappings (orchestrator)
+//!     │  Classifies proposals into quality tiers, defers MIS rounds
+//!     │  ═══════ BARRIER ═══════
+//!     ▼
+//! Stage 3b: MapPerfectReleases — MIS on 1:1 dir↔release proposals
+//!     │  ═══════ BARRIER ═══════
+//!     ▼
+//! Stage 3c: MapFullMatchReleases — MIS on cross-dir/extra-file proposals
+//!     │  ═══════ BARRIER ═══════
+//!     ▼
+//! Stage 3d: MapIncompleteReleases — MIS on partial-coverage proposals
+//!     │  ═══════ BARRIER ═══════
+//!     ▼
+//! Stage 3e: MapSingleReleases — per-inode-best + signal emission
+//!     │  Emits ReleasePackingSignal per assigned inode (all rounds)
 //!     │  Records pending AcoustID submissions for elimination winners
+//!     │  Defers AnalyzeReleaseGaps
 //!     │  ═══════ BARRIER ═══════
 //!     ▼
 //! Stage 4: AnalyzeReleaseGaps
@@ -25,13 +38,16 @@
 //!        Emits gap analysis signals
 //! ```
 //!
+//! State flows between MIS rounds via `SharedMappingState` (Arc<Mutex<Option<Box>>>).
+//! Each round takes ownership, runs its MIS, and packages updated state for the next.
+//!
 //! Manual trigger only — not part of ScheduleContentAnalysis.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::time::Instant;
 
-use crate::db::queries::external::{ExternalMatchRow, OptimalPackingScoreRow};
+use crate::db::queries::external::{ExternalMatchRow, OptimalPackingScoreRow, PackingManifestRow};
 use crate::db::types::Zone;
 use crate::db::write_thread::{self, PackingScoreRow};
 use crate::db::ReadOnlyDb;
@@ -85,6 +101,197 @@ struct CandidateAssignment {
 }
 
 // ============================================================================
+// Proposal types (Stage 3 conflict resolution)
+// ============================================================================
+
+/// Quality tier for a release proposal. Determines which MIS round it enters.
+/// Each tier is a separate pool — proposals enter exactly one pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProposalTier {
+    /// Every slot filled, 1:1 dir↔release (per-medium for multi-medium), no leftover files.
+    Perfect,
+    /// Every slot filled, but cross-directory or directory has extra files.
+    FullMatch,
+    /// Some slots filled but not all (includes near-misses).
+    Incomplete,
+    /// Single-track release.
+    Single,
+}
+
+/// A release-level proposal: a complete assignment of inodes to track slots.
+/// Proposals are the unit of selection in MIS rounds — they stay intact.
+pub(crate) struct Proposal {
+    pub total_tracks: i32,
+    pub rows: Vec<OptimalPackingScoreRow>,
+    pub inode_set: HashSet<i64>,
+    pub total_score: f64,
+    pub tier: ProposalTier,
+}
+
+/// Arc<Mutex<Option<Box<...>>>> wrapper that derives Clone + Debug + Serialize + Deserialize.
+///
+/// Clone is cheap (Arc refcount). Serialize/Deserialize skip the inner state
+/// (these variants are transient pipeline state, never persisted).
+#[derive(Clone)]
+pub(crate) struct SharedMappingState(std::sync::Arc<std::sync::Mutex<Option<Box<ReleaseMappingState>>>>);
+
+impl SharedMappingState {
+    pub fn new(state: ReleaseMappingState) -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(state)))))
+    }
+
+    /// Take the state out of the box. Panics if called twice (state already consumed).
+    pub fn take(&self) -> ReleaseMappingState {
+        *self.0.lock().unwrap().take().expect("ReleaseMappingState consumed twice")
+    }
+}
+
+impl std::fmt::Debug for SharedMappingState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SharedMappingState(..)")
+    }
+}
+
+impl serde::Serialize for SharedMappingState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_unit()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SharedMappingState {
+    fn deserialize<D: serde::Deserializer<'de>>(_deserializer: D) -> std::result::Result<Self, D::Error> {
+        Err(serde::de::Error::custom("SharedMappingState cannot be deserialized"))
+    }
+}
+
+/// Shared state passed between MIS round computations via boxed move semantics.
+///
+/// Each round takes ownership via `SharedMappingState::take()`, runs its MIS,
+/// mutates the accumulator fields, and packages the state into the next round.
+pub(crate) struct ReleaseMappingState {
+    /// Proposal pools — each consumed by its corresponding MIS round.
+    pub perfect_pool: Vec<Proposal>,
+    pub full_match_pool: Vec<Proposal>,
+    pub incomplete_pool: Vec<Proposal>,
+    pub single_pool: Vec<Proposal>,
+    /// Inodes assigned so far (accumulated across rounds).
+    pub assigned_inodes: HashSet<i64>,
+    /// Assignment rows (accumulated across rounds).
+    pub assignments: Vec<OptimalPackingScoreRow>,
+    /// Per-inode alternative release count (for signal emission).
+    pub inode_release_set: HashMap<i64, HashSet<String>>,
+    /// Manifest rows (for signal emission in final round).
+    pub manifest: Vec<PackingManifestRow>,
+    /// Knot extraction threshold: connected components where
+    /// proposals/inodes >= this ratio are too tangled for MIS (many releases
+    /// competing over few files). Extracted and resolved by best-scorer.
+    pub knot_ratio: f64,
+    /// Maximum component size before knot extraction kicks in regardless of ratio.
+    pub knot_size_limit: usize,
+}
+
+/// Default knot extraction ratio. Components with proposals/inodes >= this
+/// are extracted from MIS and resolved by best score.
+const DEFAULT_KNOT_RATIO: f64 = 3.0;
+
+/// Default knot size limit. Components larger than this are extracted
+/// regardless of ratio — too large for BnB to solve in reasonable time.
+const DEFAULT_KNOT_SIZE_LIMIT: usize = 50;
+
+/// Classify a proposal into a quality tier based on slot coverage and directory purity.
+///
+/// `media_count` is the number of MbMedium entries for this release (from the tracklist).
+/// `inode_dir_map` maps each inode to its (parent_dir, dir_file_count).
+fn classify_proposal(
+    rows: &[OptimalPackingScoreRow],
+    total_tracks: i32,
+    media_count: usize,
+    inode_dir_map: &HashMap<i64, (String, i32)>,
+) -> ProposalTier {
+    if total_tracks <= 1 {
+        return ProposalTier::Single;
+    }
+    if (rows.len() as i32) < total_tracks {
+        return ProposalTier::Incomplete;
+    }
+
+    // All slots filled — check directory purity for Perfect vs FullMatch.
+    //
+    // Perfect requires:
+    //   Single-medium: exactly 1 directory, dir_file_count == total_tracks
+    //   Multi-medium: each medium's inodes from exactly 1 directory, each directory
+    //     maps to exactly 1 medium, dir_file_count == medium track count,
+    //     all directories are siblings (same parent)
+
+    // Build dir → inodes and dir → media mapping
+    let mut dir_inodes: HashMap<&str, Vec<i64>> = HashMap::new();
+    let mut dir_media: HashMap<&str, HashSet<i32>> = HashMap::new();
+    let mut medium_dirs: HashMap<i32, HashSet<&str>> = HashMap::new();
+
+    for row in rows {
+        if let Some((dir, _)) = inode_dir_map.get(&row.inode) {
+            dir_inodes.entry(dir.as_str()).or_default().push(row.inode);
+            dir_media.entry(dir.as_str()).or_default().insert(row.medium_pos);
+            medium_dirs.entry(row.medium_pos).or_default().insert(dir.as_str());
+        }
+    }
+
+    if dir_inodes.is_empty() {
+        return ProposalTier::FullMatch;
+    }
+
+    if media_count <= 1 {
+        // Single-medium: Perfect iff exactly 1 directory, file count matches total tracks
+        if dir_inodes.len() == 1 {
+            let dir = *dir_inodes.keys().next().unwrap();
+            let dir_file_count = inode_dir_map
+                .values()
+                .find(|(d, _)| d.as_str() == dir)
+                .map(|(_, c)| *c)
+                .unwrap_or(0);
+            if dir_file_count == total_tracks {
+                return ProposalTier::Perfect;
+            }
+        }
+        return ProposalTier::FullMatch;
+    }
+
+    // Multi-medium: each medium must map to exactly 1 directory and vice versa
+    for medium_dir_set in medium_dirs.values() {
+        if medium_dir_set.len() != 1 {
+            return ProposalTier::FullMatch;
+        }
+    }
+    for dir_medium_set in dir_media.values() {
+        if dir_medium_set.len() != 1 {
+            return ProposalTier::FullMatch;
+        }
+    }
+
+    // Check that each directory's file count matches its medium's track count
+    // and all directories are siblings (same parent)
+    let mut parents: HashSet<&str> = HashSet::new();
+    for (dir, inodes) in &dir_inodes {
+        let dir_file_count = inode_dir_map
+            .values()
+            .find(|(d, _)| d.as_str() == *dir)
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        if dir_file_count != inodes.len() as i32 {
+            return ProposalTier::FullMatch;
+        }
+        if let Some(parent) = Path::new(dir).parent() {
+            parents.insert(parent.to_str().unwrap_or(""));
+        }
+    }
+    if parents.len() > 1 {
+        return ProposalTier::FullMatch;
+    }
+
+    ProposalTier::Perfect
+}
+
+// ============================================================================
 // Shared helpers
 // ============================================================================
 
@@ -109,14 +316,17 @@ struct MisResult {
     selected: Vec<bool>,
     /// Total number of selected candidates.
     selected_count: usize,
+    /// Total coverage: sum of inode_set.len() for selected candidates.
+    selected_coverage: usize,
     /// Number of connected components in the conflict graph.
     component_count: usize,
     /// Size of the largest connected component.
     max_component_size: usize,
 }
 
-/// Solve Maximum Independent Set: select the maximum number of candidates
-/// whose inode sets are pairwise disjoint. Tiebreak on total score.
+/// Solve Maximum Independent Set: select candidates whose inode sets are
+/// pairwise disjoint, maximizing total coverage (sum of inode set sizes).
+/// Tiebreak on total score.
 ///
 /// Uses exhaustive bitmask enumeration for components ≤ 25, branch-and-bound
 /// for larger components.
@@ -126,6 +336,7 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
         return MisResult {
             selected: Vec::new(),
             selected_count: 0,
+            selected_coverage: 0,
             component_count: 0,
             max_component_size: 0,
         };
@@ -179,14 +390,30 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
 
     let mut selected = vec![false; n];
     let mut selected_count = 0usize;
+    let mut selected_coverage = 0usize;
     let mut max_component_size = 0usize;
 
-    for component in &components {
+    // Log component distribution for visibility
+    {
+        let isolated = components.iter().filter(|c| c.len() == 1).count();
+        let small = components.iter().filter(|c| (2..=5).contains(&c.len())).count();
+        let bitmask = components.iter().filter(|c| (6..=25).contains(&c.len())).count();
+        let bnb = components.iter().filter(|c| c.len() > 25).count();
+        let bnb_sizes: Vec<usize> = components.iter().filter(|c| c.len() > 25).map(|c| c.len()).collect();
+        log_general(format!(
+            "[COMPUTE] MIS: {} components (isolated={}, small={}, bitmask={}, bnb={}{})",
+            components.len(), isolated, small, bitmask, bnb,
+            if bnb_sizes.is_empty() { String::new() } else { format!(" sizes={:?}", bnb_sizes) },
+        ));
+    }
+
+    for (ci, component) in components.iter().enumerate() {
         max_component_size = max_component_size.max(component.len());
 
         if component.len() == 1 {
             selected[component[0]] = true;
             selected_count += 1;
+            selected_coverage += candidates[component[0]].inode_set.len();
             continue;
         }
 
@@ -194,13 +421,13 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
             // Exhaustive bitmask enumeration
             let k = component.len();
             let mut best_mask: u32 = 0;
-            let mut best_count: usize = 0;
+            let mut best_coverage: usize = 0;
             let mut best_score: f64 = f64::NEG_INFINITY;
 
             for mask in 1u32..(1u32 << k) {
                 let mut claimed: HashSet<i64> = HashSet::new();
                 let mut feasible = true;
-                let mut count = 0usize;
+                let mut coverage = 0usize;
                 let mut score = 0.0f64;
 
                 for (bit, &gi) in component.iter().enumerate() {
@@ -216,15 +443,15 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
                         break;
                     }
                     claimed.extend(&candidates[gi].inode_set);
-                    count += 1;
+                    coverage += candidates[gi].inode_set.len();
                     score += candidates[gi].score;
                 }
 
                 if feasible
-                    && (count > best_count
-                        || (count == best_count && score > best_score))
+                    && (coverage > best_coverage
+                        || (coverage == best_coverage && score > best_score))
                 {
-                    best_count = count;
+                    best_coverage = coverage;
                     best_score = score;
                     best_mask = mask;
                 }
@@ -234,11 +461,19 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
                 if best_mask & (1 << bit) != 0 {
                     selected[gi] = true;
                     selected_count += 1;
+                    selected_coverage += candidates[gi].inode_set.len();
                 }
             }
         } else {
             // Branch-and-bound for larger components
             let comp_size = component.len();
+            let comp_edges: usize = component.iter()
+                .map(|&gi| adj[gi].iter().filter(|&&n| component.contains(&n)).count())
+                .sum::<usize>() / 2;
+            log_general(format!(
+                "[COMPUTE] MIS: solving BnB component {}/{} (nodes={}, edges={})",
+                ci + 1, components.len(), comp_size, comp_edges,
+            ));
 
             let mut global_to_local: HashMap<usize, usize> = HashMap::new();
             for (li, &gi) in component.iter().enumerate() {
@@ -255,17 +490,19 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
 
             let local_scores: Vec<f64> =
                 component.iter().map(|&gi| candidates[gi].score).collect();
+            let local_coverages: Vec<usize> =
+                component.iter().map(|&gi| candidates[gi].inode_set.len()).collect();
             let local_inode_sets: Vec<&HashSet<i64>> =
                 component.iter().map(|&gi| &candidates[gi].inode_set).collect();
 
-            let mut best_count: usize = 0;
+            let mut best_coverage: usize = 0;
             let mut best_score: f64 = f64::NEG_INFINITY;
             let mut best_selected: Vec<bool> = vec![false; comp_size];
 
             struct BnBState {
                 candidates: Vec<usize>,
                 selected: Vec<bool>,
-                selected_count: usize,
+                selected_coverage: usize,
                 selected_score: f64,
                 claimed_inodes: HashSet<i64>,
             }
@@ -274,16 +511,22 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
             let mut stack: Vec<BnBState> = vec![BnBState {
                 candidates: initial_candidates,
                 selected: vec![false; comp_size],
-                selected_count: 0,
+                selected_coverage: 0,
                 selected_score: 0.0,
                 claimed_inodes: HashSet::new(),
             }];
+            let bnb_start = Instant::now();
+            let mut iterations = 0u64;
 
             while let Some(state) = stack.pop() {
-                if state.selected_count + state.candidates.len() <= best_count {
+                iterations += 1;
+                // Upper bound: current coverage + all remaining candidates' coverage
+                let remaining_max_coverage: usize =
+                    state.candidates.iter().map(|&c| local_coverages[c]).sum();
+                if state.selected_coverage + remaining_max_coverage < best_coverage {
                     continue;
                 }
-                if state.selected_count + state.candidates.len() == best_count {
+                if state.selected_coverage + remaining_max_coverage == best_coverage {
                     let remaining_max_score: f64 =
                         state.candidates.iter().map(|&c| local_scores[c]).sum();
                     if state.selected_score + remaining_max_score <= best_score {
@@ -292,11 +535,11 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
                 }
 
                 if state.candidates.is_empty() {
-                    if state.selected_count > best_count
-                        || (state.selected_count == best_count
+                    if state.selected_coverage > best_coverage
+                        || (state.selected_coverage == best_coverage
                             && state.selected_score > best_score)
                     {
-                        best_count = state.selected_count;
+                        best_coverage = state.selected_coverage;
                         best_score = state.selected_score;
                         best_selected = state.selected.clone();
                     }
@@ -326,7 +569,7 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
                     stack.push(BnBState {
                         candidates: new_candidates,
                         selected: state.selected.clone(),
-                        selected_count: state.selected_count,
+                        selected_coverage: state.selected_coverage,
                         selected_score: state.selected_score,
                         claimed_inodes: state.claimed_inodes.clone(),
                     });
@@ -351,7 +594,7 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
                         stack.push(BnBState {
                             candidates: new_candidates,
                             selected: new_selected,
-                            selected_count: state.selected_count + 1,
+                            selected_coverage: state.selected_coverage + local_coverages[pivot],
                             selected_score: state.selected_score + local_scores[pivot],
                             claimed_inodes: new_claimed,
                         });
@@ -359,10 +602,18 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
                 }
             }
 
+            let bnb_elapsed = bnb_start.elapsed();
+            let bnb_selected: usize = best_selected.iter().filter(|&&s| s).count();
+            log_general(format!(
+                "[COMPUTE] MIS: BnB component done: {} selected, coverage={}, {:.1}s, {} iterations",
+                bnb_selected, best_coverage, bnb_elapsed.as_secs_f64(), iterations,
+            ));
+
             for (li, &gi) in component.iter().enumerate() {
                 if best_selected[li] {
                     selected[gi] = true;
                     selected_count += 1;
+                    selected_coverage += candidates[gi].inode_set.len();
                 }
             }
         }
@@ -371,6 +622,7 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
     MisResult {
         selected,
         selected_count,
+        selected_coverage,
         component_count: components.len(),
         max_component_size,
     }
@@ -1004,22 +1256,16 @@ pub fn execute_pack_releases(
         .collect();
 
     log_general(format!(
-        "[COMPUTE] PackReleases: spawning {} ScoreReleaseCandidates, deferring Resolve → Analyze",
+        "[COMPUTE] PackReleases: spawning {} ScoreReleaseCandidates, deferring mapping pipeline",
         spawn.len()
     ));
 
-    // === Defer Stage 3, 4 as barrier-separated phases ===
+    // === Defer Stage 3 (ComputeReleaseMappings orchestrates the rest) ===
     let deferred_phases = vec![
         (
             PipelineStage::Resolve,
             vec![Computation::Analysis(
-                AnalysisComputation::ResolveReleaseConflicts,
-            )],
-        ),
-        (
-            PipelineStage::Analyze,
-            vec![Computation::Analysis(
-                AnalysisComputation::AnalyzeReleaseGaps,
+                AnalysisComputation::ComputeReleaseMappings,
             )],
         ),
     ];
@@ -1040,7 +1286,8 @@ pub fn execute_pack_releases(
 ///
 /// Reads pre-filtered candidates from `release_packing_candidates` (written by Stage 1),
 /// loads the release tracklist, scores each (inode, track_slot) pairing, solves optimal
-/// per-release assignment via greedy, and writes results to `release_packing_scores`.
+/// per-release assignment via Hungarian algorithm, then fills remaining slots via
+/// elimination matching. Writes results to `release_packing_scores`.
 pub fn execute_score_release_candidates(
     read_only_db: &ReadOnlyDb<'_>,
     release_id: &str,
@@ -1519,24 +1766,350 @@ pub fn execute_score_release_candidates(
 }
 
 // ============================================================================
-// Stage 3: ResolveReleaseConflicts
+// MIS round helpers (Stage 3)
 // ============================================================================
 
-/// Execute ResolveReleaseConflicts — release-level priority resolution.
+/// Result of running one MIS round on a pool of proposals.
+struct MisRoundResult {
+    /// Indices into the pool of proposals that were selected.
+    selected_indices: Vec<usize>,
+    /// Number of eligible proposals (after filtering already-claimed).
+    eligible_count: usize,
+    /// Number of selected proposals.
+    selected_count: usize,
+    /// Total coverage (inodes) of selected proposals.
+    coverage: usize,
+    /// Number of connected components in the conflict graph.
+    component_count: usize,
+    /// Size of the largest connected component.
+    max_component_size: usize,
+    /// Number of proposals removed by inode-signature dedup.
+    dedup_removed: usize,
+    /// Number of components extracted as knots (ratio too high for MIS).
+    knot_components: usize,
+    /// Number of proposals auto-resolved from knot extraction.
+    knot_proposals: usize,
+}
+
+/// Run MIS on a pool of proposals where each proposal requires its ENTIRE
+/// inode set to be unclaimed. Used for Perfect and FullMatch pools.
+fn run_mis_round(pool: &[Proposal], assigned_inodes: &HashSet<i64>) -> MisRoundResult {
+    // Filter to proposals whose entire inode set is unclaimed
+    let eligible: Vec<usize> = pool
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !p.inode_set.is_empty() && p.inode_set.iter().all(|i| !assigned_inodes.contains(i)))
+        .map(|(i, _)| i)
+        .collect();
+
+    if eligible.is_empty() {
+        return MisRoundResult {
+            selected_indices: Vec::new(),
+            eligible_count: 0,
+            selected_count: 0,
+            coverage: 0,
+            component_count: 0,
+            max_component_size: 0,
+            dedup_removed: 0,
+            knot_components: 0,
+            knot_proposals: 0,
+        };
+    }
+
+    let mis_candidates: Vec<MisCandidate> = eligible
+        .iter()
+        .map(|&idx| MisCandidate {
+            inode_set: pool[idx].inode_set.clone(),
+            score: pool[idx].total_score,
+        })
+        .collect();
+
+    let mis_result = solve_maximum_independent_set(&mis_candidates);
+
+    let selected_indices: Vec<usize> = eligible
+        .iter()
+        .enumerate()
+        .filter(|(ei, _)| mis_result.selected[*ei])
+        .map(|(_, &pool_idx)| pool_idx)
+        .collect();
+
+    MisRoundResult {
+        eligible_count: eligible.len(),
+        selected_count: mis_result.selected_count,
+        coverage: mis_result.selected_coverage,
+        component_count: mis_result.component_count,
+        max_component_size: mis_result.max_component_size,
+        selected_indices,
+        dedup_removed: 0,
+        knot_components: 0,
+        knot_proposals: 0,
+    }
+}
+
+/// Run MIS on a pool of pristine proposals with knot extraction.
 ///
-/// Reads optimal picks from all releases and selects the best non-conflicting
-/// set of complete release packings. Two releases conflict if they share any
-/// optimal inode. Connected components of the conflict graph are solved via
-/// maximum independent set (exhaustive for ≤20 releases, greedy for larger).
+/// Pipeline:
+/// 1. **Cull** proposals tainted by prior round claims (any inode claimed).
+/// 2. **Dedup** by inode signature — identical inode sets keep only best scorer.
+/// 3. **Extract knots** — connected components where proposals:inodes >= `knot_ratio`
+///    are too tangled for MIS (many releases over few files). The best-scoring
+///    non-conflicting proposals from each knot are auto-selected greedily.
+/// 4. **MIS** on the remaining (well-structured) conflict graph.
+fn run_mis_round_partial(pool: &[Proposal], assigned_inodes: &HashSet<i64>, knot_ratio: f64, knot_size_limit: usize) -> MisRoundResult {
+    let pool_size = pool.len();
+
+    // --- Step 1: Cull tainted proposals ---
+    // A proposal that lost ANY inode to prior rounds is no longer the package
+    // we scored — discard it entirely.
+    let effective: Vec<(usize, &HashSet<i64>)> = pool
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| {
+            if p.inode_set.iter().any(|inode| assigned_inodes.contains(inode)) {
+                None
+            } else {
+                Some((i, &p.inode_set))
+            }
+        })
+        .collect();
+
+    let culled = pool_size - effective.len();
+
+    // --- Step 2: Dedup by inode signature ---
+    // Multiple proposals wanting the exact same set of inodes (e.g. 16
+    // pressings of the same album) are interchangeable for MIS. Keep only
+    // the best-scoring representative.
+    let mut sig_best: HashMap<Vec<i64>, (usize, f64)> = HashMap::new();
+    for &(idx, inode_set) in &effective {
+        let mut sig: Vec<i64> = inode_set.iter().copied().collect();
+        sig.sort_unstable();
+        let score = pool[idx].total_score;
+        match sig_best.entry(sig) {
+            std::collections::hash_map::Entry::Vacant(e) => { e.insert((idx, score)); }
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                if score > e.get().1 {
+                    e.insert((idx, score));
+                }
+            }
+        }
+    }
+    let best_indices: HashSet<usize> = sig_best.values().map(|(idx, _)| *idx).collect();
+    let deduped: Vec<(usize, &HashSet<i64>)> = effective
+        .iter()
+        .filter(|(idx, _)| best_indices.contains(idx))
+        .copied()
+        .collect();
+    let dedup_removed = effective.len() - deduped.len();
+
+    log_general(format!(
+        "[COMPUTE] MIS partial round: pool={}, culled={} (tainted), deduped={} (identical sigs), {} pristine remain",
+        pool_size, culled, dedup_removed, deduped.len(),
+    ));
+
+    if deduped.is_empty() {
+        return MisRoundResult {
+            selected_indices: Vec::new(),
+            eligible_count: 0,
+            selected_count: 0,
+            coverage: 0,
+            component_count: 0,
+            max_component_size: 0,
+            dedup_removed,
+            knot_components: 0,
+            knot_proposals: 0,
+        };
+    }
+
+    // --- Step 3: Knot extraction ---
+    // Build conflict adjacency among the deduped set, find connected components,
+    // and extract components where proposals/inodes >= knot_ratio. These are
+    // tangled masses of releases over few files — auto-pick best scorer greedily.
+
+    // Map deduped indices to local indices for component detection
+    let mut inode_to_local: HashMap<i64, Vec<usize>> = HashMap::new();
+    for (local_idx, &(_, inode_set)) in deduped.iter().enumerate() {
+        for &inode in inode_set {
+            inode_to_local.entry(inode).or_default().push(local_idx);
+        }
+    }
+
+    let n = deduped.len();
+    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+    for locals in inode_to_local.values() {
+        if locals.len() > 1 {
+            for &i in locals {
+                for &j in locals {
+                    if i != j {
+                        adj[i].insert(j);
+                    }
+                }
+            }
+        }
+    }
+
+    // BFS connected components
+    let mut component_id: Vec<Option<usize>> = vec![None; n];
+    let mut components: Vec<Vec<usize>> = Vec::new();
+    for start in 0..n {
+        if component_id[start].is_some() {
+            continue;
+        }
+        let cid = components.len();
+        let mut comp = Vec::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(start);
+        component_id[start] = Some(cid);
+        while let Some(node) = queue.pop_front() {
+            comp.push(node);
+            for &neighbor in &adj[node] {
+                if component_id[neighbor].is_none() {
+                    component_id[neighbor] = Some(cid);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        components.push(comp);
+    }
+
+    // Classify components: knot vs clean
+    let mut knot_selected: Vec<usize> = Vec::new(); // local indices
+    let mut clean_locals: Vec<usize> = Vec::new();  // local indices entering MIS
+    let mut knot_component_count = 0usize;
+    let mut knot_proposal_count = 0usize;
+
+    for component in &components {
+        // Count unique inodes in this component
+        let mut comp_inodes: HashSet<i64> = HashSet::new();
+        for &local in component {
+            let (_, inode_set) = &deduped[local];
+            comp_inodes.extend(inode_set.iter());
+        }
+        let ratio = component.len() as f64 / comp_inodes.len().max(1) as f64;
+
+        let is_knot_by_ratio = knot_ratio > 0.0 && component.len() > 1 && ratio >= knot_ratio;
+        let is_knot_by_size = knot_size_limit > 0 && component.len() > knot_size_limit;
+        if is_knot_by_ratio || is_knot_by_size {
+            // Knot: too many releases per inode. Greedy best-scorer selection.
+            knot_component_count += 1;
+            knot_proposal_count += component.len();
+
+            // Sort by score descending, greedily pick non-conflicting
+            let mut sorted: Vec<usize> = component.clone();
+            sorted.sort_by(|&a, &b| {
+                pool[deduped[b].0].total_score.partial_cmp(&pool[deduped[a].0].total_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let mut knot_claimed: HashSet<i64> = HashSet::new();
+            for local in sorted {
+                let (_, inode_set) = &deduped[local];
+                if inode_set.iter().all(|i| !knot_claimed.contains(i)) {
+                    knot_claimed.extend(inode_set.iter());
+                    knot_selected.push(local);
+                }
+            }
+        } else {
+            clean_locals.extend(component.iter());
+        }
+    }
+
+    if knot_component_count > 0 {
+        log_general(format!(
+            "[COMPUTE] MIS partial round: extracted {} knot components ({} proposals; thresholds: ratio={:.1}, size={}), {} proposals enter MIS",
+            knot_component_count, knot_proposal_count, knot_ratio, knot_size_limit, clean_locals.len(),
+        ));
+    }
+
+    // Collect knot winners as pool indices
+    let mut selected_indices: Vec<usize> = knot_selected
+        .iter()
+        .map(|&local| deduped[local].0)
+        .collect();
+    let mut total_coverage: usize = knot_selected
+        .iter()
+        .map(|&local| deduped[local].1.len())
+        .sum();
+
+    // --- Step 4: MIS on clean components ---
+    if !clean_locals.is_empty() {
+        let clean_deduped: Vec<(usize, &HashSet<i64>)> = clean_locals
+            .iter()
+            .map(|&local| deduped[local])
+            .collect();
+
+        let mis_candidates: Vec<MisCandidate> = clean_deduped
+            .iter()
+            .map(|(idx, inode_set)| MisCandidate {
+                inode_set: (*inode_set).clone(),
+                score: pool[*idx].total_score,
+            })
+            .collect();
+
+        let mis_result = solve_maximum_independent_set(&mis_candidates);
+
+        for (ei, &(pool_idx, _)) in clean_deduped.iter().enumerate() {
+            if mis_result.selected[ei] {
+                selected_indices.push(pool_idx);
+                total_coverage += pool[pool_idx].inode_set.len();
+            }
+        }
+
+        return MisRoundResult {
+            eligible_count: deduped.len(),
+            selected_count: selected_indices.len(),
+            coverage: total_coverage,
+            component_count: mis_result.component_count + knot_component_count,
+            max_component_size: mis_result.max_component_size,
+            selected_indices,
+            dedup_removed,
+            knot_components: knot_component_count,
+            knot_proposals: knot_proposal_count,
+        };
+    }
+
+    // All components were knots — no MIS needed
+    MisRoundResult {
+        eligible_count: deduped.len(),
+        selected_count: selected_indices.len(),
+        coverage: total_coverage,
+        component_count: knot_component_count,
+        max_component_size: 0,
+        selected_indices,
+        dedup_removed,
+        knot_components: knot_component_count,
+        knot_proposals: knot_proposal_count,
+    }
+}
+
+/// Lock in selected proposals from a full-inode-set round (Perfect/FullMatch).
+fn lock_in_round(
+    result: &MisRoundResult,
+    pool: &[Proposal],
+    assigned_inodes: &mut HashSet<i64>,
+    assignments: &mut Vec<OptimalPackingScoreRow>,
+) {
+    for &idx in &result.selected_indices {
+        for row in &pool[idx].rows {
+            assigned_inodes.insert(row.inode);
+            assignments.push(row.clone());
+        }
+    }
+}
+
+
+// ============================================================================
+// Stage 3: ComputeReleaseMappings
+// ============================================================================
+
+/// Execute ComputeReleaseMappings — Stage 3a orchestrator.
 ///
-/// Selected releases keep their full Stage 2 Hungarian packings intact.
-/// Non-selected releases receive residual unclaimed inodes.
-pub fn execute_resolve_release_conflicts(
+/// Loads scoring data, classifies proposals into quality tiers, packages
+/// state, and defers MIS rounds as separate computations for visibility.
+pub fn execute_compute_release_mappings(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    let computation = AnalysisComputation::ResolveReleaseConflicts;
+    let computation = AnalysisComputation::ComputeReleaseMappings;
 
     let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
@@ -1606,25 +2179,19 @@ pub fn execute_resolve_release_conflicts(
             .insert(row.release_id.clone());
     }
 
-    // --- Release-level optimal resolution ---
-    //
-    // Stage 2 produces complete per-release packings via Hungarian. We select
-    // the best packings at the release level, never remixing individual
-    // assignments across releases.
-    //
-    // Resolution uses MIS (Maximum Independent Set) + fullness-aware assignment:
-    //   Phase 1: MIS among full-capable releases (maximize full match count)
-    //   Phase 2a: Iterative MIS on residual-completable releases (maximize additional full matches)
-    //   Phase 2b: Per-inode-best for truly residual AcoustID inodes
-    //   Phase 3: Per-inode-best for elimination gap-fill (order-independent)
-    //   Phase 4: Per-inode-best for singles (order-independent, last priority)
+    // Load directory metadata for tier classification
+    let inode_dir_map: HashMap<i64, (String, i32)> = match read_only_db.get_candidate_inode_dirs() {
+        Ok(rows) => rows.into_iter().map(|(inode, dir, count)| (inode, (dir, count))).collect(),
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to query candidate inode dirs: {}", e),
+            );
+        }
+    };
 
-    // Step 1: Build per-release proposals from Stage 2 optimal scores
-    struct ReleaseProposal {
-        rows: Vec<OptimalPackingScoreRow>,
-        total_tracks: i32,
-    }
-
+    // Build proposals from optimal scores and classify into tiers
     let mut proposals_map: HashMap<&str, Vec<OptimalPackingScoreRow>> = HashMap::new();
     for row in &optimal_scores {
         proposals_map
@@ -1633,365 +2200,254 @@ pub fn execute_resolve_release_conflicts(
             .push(row.clone());
     }
 
-    let mut multi_proposals: Vec<ReleaseProposal> = Vec::new();
-    let mut single_proposals: Vec<ReleaseProposal> = Vec::new();
+    let mut perfect_pool: Vec<Proposal> = Vec::new();
+    let mut full_match_pool: Vec<Proposal> = Vec::new();
+    let mut incomplete_pool: Vec<Proposal> = Vec::new();
+    let mut single_pool: Vec<Proposal> = Vec::new();
 
     for (release_id, rows) in proposals_map {
         let total_tracks = manifest_map
             .get(release_id)
             .map(|&(_, _, t)| t)
             .unwrap_or(0);
-        let proposal = ReleaseProposal {
-            rows,
-            total_tracks,
-        };
-        if total_tracks <= 1 {
-            single_proposals.push(proposal);
-        } else {
-            multi_proposals.push(proposal);
-        }
-    }
 
-    // Step 2: Optimal assignment via MIS + per-inode-best
-    //
-    // Four phases, none order-dependent:
-    //   Phase 1: Maximum Independent Set among full-capable releases (maximize full matches)
-    //   Phase 2: Per-inode-best-score for residual AcoustID inodes
-    //   Phase 3: Per-inode-best-score for elimination gap-fill
-    //   Phase 4: Per-inode-best-score for singles
-    let mut assigned_inodes: HashSet<i64> = HashSet::new();
-    let mut assignments: Vec<OptimalPackingScoreRow> = Vec::new();
+        let inode_set: HashSet<i64> = rows.iter().map(|r| r.inode).collect();
+        let total_score: f64 = rows.iter().map(|r| r.score).sum();
 
-    // --- Phase 1: Maximum full matches via MIS ---
-    //
-    // Among releases where AcoustID count >= total_tracks ("full-capable"),
-    // find the maximum set that can each get ALL their AcoustID inodes
-    // without sharing any inode with another selected release.
-
-    // Collect per-proposal AcoustID inode sets and scores
-    struct ProposalMeta {
-        idx: usize, // index into multi_proposals
-        acoustid_inodes: HashSet<i64>,
-        acoustid_score: f64,
-    }
-
-    let mut full_capable: Vec<ProposalMeta> = Vec::new();
-    for (idx, prop) in multi_proposals.iter().enumerate() {
-        let acoustid_inodes: HashSet<i64> = prop
-            .rows
+        let media_count = rows
             .iter()
-            .filter(|r| r.match_method == 0)
-            .map(|r| r.inode)
-            .collect();
-        if acoustid_inodes.len() as i32 >= prop.total_tracks && prop.total_tracks > 0 {
-            let acoustid_score: f64 = prop
-                .rows
-                .iter()
-                .filter(|r| r.match_method == 0)
-                .map(|r| r.score)
-                .sum();
-            full_capable.push(ProposalMeta {
-                idx,
-                acoustid_inodes,
-                acoustid_score,
-            });
+            .map(|r| r.medium_pos)
+            .collect::<HashSet<_>>()
+            .len();
+
+        let tier = classify_proposal(&rows, total_tracks, media_count, &inode_dir_map);
+
+        let proposal = Proposal {
+            total_tracks,
+            rows,
+            inode_set,
+            total_score,
+            tier,
+        };
+
+        match proposal.tier {
+            ProposalTier::Perfect => perfect_pool.push(proposal),
+            ProposalTier::FullMatch => full_match_pool.push(proposal),
+            ProposalTier::Incomplete => incomplete_pool.push(proposal),
+            ProposalTier::Single => single_pool.push(proposal),
         }
     }
 
-    let fc_count = full_capable.len();
-    let mis_candidates: Vec<MisCandidate> = full_capable
+    // Log tier distribution
+    let tier_summary = |pool: &[Proposal]| -> (usize, i32) {
+        (pool.len(), pool.iter().map(|p| p.total_tracks).sum())
+    };
+    let (p_count, p_tracks) = tier_summary(&perfect_pool);
+    let (f_count, f_tracks) = tier_summary(&full_match_pool);
+    let (i_count, i_tracks) = tier_summary(&incomplete_pool);
+    let (s_count, _) = tier_summary(&single_pool);
+
+    log_general(format!(
+        "[COMPUTE] ComputeReleaseMappings: {} proposals classified — \
+         {} Perfect ({} tracks), {} FullMatch ({} tracks), {} Incomplete ({} tracks), {} Single",
+        p_count + f_count + i_count + s_count,
+        p_count, p_tracks, f_count, f_tracks, i_count, i_tracks, s_count,
+    ));
+
+    // Package state and defer Round 1
+    let state = SharedMappingState::new(ReleaseMappingState {
+        perfect_pool,
+        full_match_pool,
+        incomplete_pool,
+        single_pool,
+        assigned_inodes: HashSet::new(),
+        assignments: Vec::new(),
+        inode_release_set,
+        manifest,
+        // TODO: thread config.opinions.external_matching.packing_knot_ratio
+        // through ComputationContext once config is available in computations.
+        knot_ratio: DEFAULT_KNOT_RATIO,
+        knot_size_limit: DEFAULT_KNOT_SIZE_LIMIT,
+    });
+
+    let deferred = vec![(
+        PipelineStage::Resolve,
+        vec![Computation::Analysis(AnalysisComputation::MapPerfectReleases { state })],
+    )];
+
+    Result::pipeline(computation, start.elapsed().as_millis() as u64, Vec::new(), deferred)
+}
+
+/// Execute MapPerfectReleases — Stage 3b MIS on Perfect proposals.
+pub(crate) fn execute_map_perfect_releases(
+    shared: &SharedMappingState,
+    _witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = AnalysisComputation::MapPerfectReleases {
+        state: shared.clone(),
+    };
+    let mut state = shared.take();
+
+    let r = run_mis_round(&state.perfect_pool, &state.assigned_inodes);
+    lock_in_round(&r, &state.perfect_pool, &mut state.assigned_inodes, &mut state.assignments);
+
+    log_general(format!(
+        "[COMPUTE] MapPerfectReleases: {} eligible, {} selected, \
+         coverage={} inodes, {} components (max {})",
+        r.eligible_count, r.selected_count, r.coverage,
+        r.component_count, r.max_component_size,
+    ));
+
+    let next_state = SharedMappingState::new(state);
+    let deferred = vec![(
+        PipelineStage::Resolve,
+        vec![Computation::Analysis(AnalysisComputation::MapFullMatchReleases { state: next_state })],
+    )];
+
+    Result::pipeline(computation, start.elapsed().as_millis() as u64, Vec::new(), deferred)
+}
+
+/// Execute MapFullMatchReleases — Stage 3c MIS on FullMatch proposals.
+pub(crate) fn execute_map_full_match_releases(
+    shared: &SharedMappingState,
+    _witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = AnalysisComputation::MapFullMatchReleases {
+        state: shared.clone(),
+    };
+    let mut state = shared.take();
+
+    let r = run_mis_round(&state.full_match_pool, &state.assigned_inodes);
+    lock_in_round(&r, &state.full_match_pool, &mut state.assigned_inodes, &mut state.assignments);
+
+    log_general(format!(
+        "[COMPUTE] MapFullMatchReleases: {} eligible, {} selected, \
+         coverage={} inodes, {} components (max {})",
+        r.eligible_count, r.selected_count, r.coverage,
+        r.component_count, r.max_component_size,
+    ));
+
+    let next_state = SharedMappingState::new(state);
+    let deferred = vec![(
+        PipelineStage::Resolve,
+        vec![Computation::Analysis(AnalysisComputation::MapIncompleteReleases { state: next_state })],
+    )];
+
+    Result::pipeline(computation, start.elapsed().as_millis() as u64, Vec::new(), deferred)
+}
+
+/// Execute MapIncompleteReleases — Stage 3d MIS on Incomplete proposals.
+pub(crate) fn execute_map_incomplete_releases(
+    shared: &SharedMappingState,
+    _witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = AnalysisComputation::MapIncompleteReleases {
+        state: shared.clone(),
+    };
+    let mut state = shared.take();
+
+    let r = run_mis_round_partial(&state.incomplete_pool, &state.assigned_inodes, state.knot_ratio, state.knot_size_limit);
+    lock_in_round(&r, &state.incomplete_pool, &mut state.assigned_inodes, &mut state.assignments);
+
+    log_general(format!(
+        "[COMPUTE] MapIncompleteReleases: {} eligible, {} selected, \
+         coverage={} inodes, {} components (max {}), \
+         deduped={}, knots={} ({} proposals)",
+        r.eligible_count, r.selected_count, r.coverage,
+        r.component_count, r.max_component_size,
+        r.dedup_removed, r.knot_components, r.knot_proposals,
+    ));
+
+    let next_state = SharedMappingState::new(state);
+    let deferred = vec![(
+        PipelineStage::Resolve,
+        vec![Computation::Analysis(AnalysisComputation::MapSingleReleases { state: next_state })],
+    )];
+
+    Result::pipeline(computation, start.elapsed().as_millis() as u64, Vec::new(), deferred)
+}
+
+/// Execute MapSingleReleases — Stage 3e per-inode-best + signal emission.
+pub(crate) fn execute_map_single_releases(
+    shared: &SharedMappingState,
+    read_only_db: &ReadOnlyDb<'_>,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = AnalysisComputation::MapSingleReleases {
+        state: shared.clone(),
+    };
+    let mut state = shared.take();
+
+    let sender = match write_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    // --- Singles: per-inode-best ---
+    let mut singles_count = 0usize;
+    {
+        let mut inode_candidates: HashMap<i64, Vec<&OptimalPackingScoreRow>> = HashMap::new();
+        for prop in &state.single_pool {
+            for row in &prop.rows {
+                if !state.assigned_inodes.contains(&row.inode) {
+                    inode_candidates.entry(row.inode).or_default().push(row);
+                }
+            }
+        }
+        for candidates in inode_candidates.values() {
+            let best = candidates
+                .iter()
+                .max_by(|a, b| {
+                    a.score
+                        .partial_cmp(&b.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.release_id.cmp(&b.release_id))
+                })
+                .unwrap();
+            state.assigned_inodes.insert(best.inode);
+            state.assignments.push((*best).clone());
+            singles_count += 1;
+        }
+    }
+    log_general(format!(
+        "[COMPUTE] MapSingleReleases: {} assigned per-inode-best",
+        singles_count,
+    ));
+
+    // --- Signal emission for ALL rounds ---
+
+    // Build manifest lookup
+    let manifest_map: HashMap<&str, (&str, &str, i32)> = state.manifest
         .iter()
-        .map(|meta| MisCandidate {
-            inode_set: meta.acoustid_inodes.clone(),
-            score: meta.acoustid_score,
+        .map(|r| {
+            (
+                r.release_id.as_str(),
+                (
+                    r.release_title.as_str(),
+                    r.release_artist.as_str(),
+                    r.total_tracks,
+                ),
+            )
         })
         .collect();
 
-    let mis_result = solve_maximum_independent_set(&mis_candidates);
-
-    // Lock in MIS-selected releases: all their AcoustID inodes
-    for (fi, meta) in full_capable.iter().enumerate() {
-        if mis_result.selected[fi] {
-            for row in &multi_proposals[meta.idx].rows {
-                if row.match_method == 0 {
-                    assigned_inodes.insert(row.inode);
-                    assignments.push(row.clone());
-                }
-            }
-        }
-    }
-
-    log_general(format!(
-        "[COMPUTE] ResolveReleaseConflicts Phase 1: {} full-capable, {} components \
-         (max size {}), {} selected via MIS",
-        fc_count,
-        mis_result.component_count,
-        mis_result.max_component_size,
-        mis_result.selected_count,
-    ));
-
-    // --- Phase 2a: Iterative MIS on residual-completable releases ---
-    //
-    // After Phase 1, some full-capable releases lost optimal inodes to selected
-    // releases. But they may have non-optimal AcoustID candidates that can fill
-    // those track slots. We load ALL AcoustID candidates (not just optimal),
-    // check if unclaimed candidates can cover all tracks, and run MIS to maximize
-    // additional full matches before falling back to per-inode-best.
-    let mut phase2a_total = 0usize;
-    let mut phase2a_iterations = 0usize;
-
-    // Track which full-capable releases have been completed by Phase 2a
-    let mut phase2a_completed: HashSet<usize> = HashSet::new();
-
-    // Identify non-selected full-capable releases that lost inodes
-    let non_selected_fc: Vec<usize> = (0..full_capable.len())
-        .filter(|&fi| !mis_result.selected[fi])
-        .collect();
-
-    // Load all AcoustID candidates (optimal + non-optimal) for non-selected releases
-    let all_candidates_rows = if !non_selected_fc.is_empty() {
-        let release_ids: Vec<&str> = non_selected_fc
-            .iter()
-            .map(|&fi| {
-                multi_proposals[full_capable[fi].idx]
-                    .rows
-                    .first()
-                    .map(|r| r.release_id.as_str())
-                    .unwrap_or("")
-            })
-            .filter(|s| !s.is_empty())
-            .collect();
-        read_only_db
-            .get_all_acoustid_candidates_for_releases(&release_ids)
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    // Group all candidates by release_id
-    let mut all_candidates_by_release: HashMap<&str, Vec<&OptimalPackingScoreRow>> =
-        HashMap::new();
-    for row in &all_candidates_rows {
-        all_candidates_by_release
-            .entry(&row.release_id)
-            .or_default()
-            .push(row);
-    }
-
-    loop {
-        // For each non-selected full-capable release, try to build a complete
-        // assignment from unclaimed AcoustID candidates
-        struct ResidualRelease {
-            fc_idx: usize,
-            assigned_rows: Vec<OptimalPackingScoreRow>, // greedy best-per-slot
-            needed_inodes: HashSet<i64>,                // inodes used in assignment
-            total_score: f64,
-        }
-
-        let mut residual: Vec<ResidualRelease> = Vec::new();
-
-        for &fi in &non_selected_fc {
-            if phase2a_completed.contains(&fi) {
-                continue;
-            }
-            let meta = &full_capable[fi];
-            let total_tracks = multi_proposals[meta.idx].total_tracks;
-            let release_id = match multi_proposals[meta.idx].rows.first() {
-                Some(r) => r.release_id.as_str(),
-                None => continue,
-            };
-
-            let candidates = match all_candidates_by_release.get(release_id) {
-                Some(c) => c,
-                None => continue,
-            };
-
-            // Filter to unclaimed inodes only
-            let available: Vec<&&OptimalPackingScoreRow> = candidates
-                .iter()
-                .filter(|r| !assigned_inodes.contains(&r.inode))
-                .collect();
-
-            // Greedy assignment: for each track slot, pick the highest-scoring
-            // available candidate, ensuring each inode is used at most once
-            let mut slots_needed: HashSet<(i32, i32)> = HashSet::new();
-            for row in &multi_proposals[meta.idx].rows {
-                if row.match_method == 0 {
-                    slots_needed.insert((row.medium_pos, row.track_pos));
-                }
-            }
-
-            // Sort available candidates by score descending
-            let mut sorted_available: Vec<&OptimalPackingScoreRow> =
-                available.into_iter().copied().collect();
-            sorted_available.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-            let mut used_inodes: HashSet<i64> = HashSet::new();
-            let mut filled_slots: HashSet<(i32, i32)> = HashSet::new();
-            let mut assigned_rows: Vec<OptimalPackingScoreRow> = Vec::new();
-            let mut total_score = 0.0f64;
-
-            for row in &sorted_available {
-                let slot = (row.medium_pos, row.track_pos);
-                if filled_slots.contains(&slot) || used_inodes.contains(&row.inode) {
-                    continue;
-                }
-                if !slots_needed.contains(&slot) {
-                    continue;
-                }
-                filled_slots.insert(slot);
-                used_inodes.insert(row.inode);
-                assigned_rows.push((*row).clone());
-                total_score += row.score;
-            }
-
-            if filled_slots.len() as i32 >= total_tracks {
-                residual.push(ResidualRelease {
-                    fc_idx: fi,
-                    assigned_rows,
-                    needed_inodes: used_inodes,
-                    total_score,
-                });
-            }
-        }
-
-        if residual.is_empty() {
-            break;
-        }
-
-        // Build MIS candidates from residual-completable releases
-        let residual_candidates: Vec<MisCandidate> = residual
-            .iter()
-            .map(|r| MisCandidate {
-                inode_set: r.needed_inodes.clone(),
-                score: r.total_score,
-            })
-            .collect();
-
-        let residual_mis = solve_maximum_independent_set(&residual_candidates);
-
-        if residual_mis.selected_count == 0 {
-            break;
-        }
-
-        // Lock in selected residual releases
-        for (ri, rr) in residual.iter().enumerate() {
-            if residual_mis.selected[ri] {
-                for row in &rr.assigned_rows {
-                    assigned_inodes.insert(row.inode);
-                    assignments.push(row.clone());
-                }
-                phase2a_completed.insert(rr.fc_idx);
-            }
-        }
-
-        phase2a_total += residual_mis.selected_count;
-        phase2a_iterations += 1;
-    }
-
-    if phase2a_total > 0 {
-        log_general(format!(
-            "[COMPUTE] ResolveReleaseConflicts Phase 2a: {} residual releases completed \
-             in {} iteration(s)",
-            phase2a_total, phase2a_iterations,
-        ));
-    }
-
-    // --- Phase 2b: Per-inode AcoustID residual assignment ---
-    //
-    // For AcoustID inodes not locked by Phase 1 or 2a, each inode independently
-    // goes to its highest-scoring claimant. These inodes cannot complete any
-    // release, so per-inode-best is appropriate.
-    {
-        let mut inode_candidates: HashMap<i64, Vec<&OptimalPackingScoreRow>> = HashMap::new();
-        for prop in &multi_proposals {
-            for row in &prop.rows {
-                if row.match_method == 0 && !assigned_inodes.contains(&row.inode) {
-                    inode_candidates.entry(row.inode).or_default().push(row);
-                }
-            }
-        }
-        for candidates in inode_candidates.values() {
-            let best = candidates
-                .iter()
-                .max_by(|a, b| {
-                    a.score
-                        .partial_cmp(&b.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                        .then_with(|| a.release_id.cmp(&b.release_id))
-                })
-                .unwrap();
-            assigned_inodes.insert(best.inode);
-            assignments.push((*best).clone());
-        }
-    }
-
-    // --- Phase 3: Per-inode elimination gap-fill ---
-    //
-    // Elimination inodes that are not yet assigned go to their
-    // highest-scoring claimant. Cannot steal AcoustID assignments.
-    {
-        let mut inode_candidates: HashMap<i64, Vec<&OptimalPackingScoreRow>> = HashMap::new();
-        for prop in &multi_proposals {
-            for row in &prop.rows {
-                if row.match_method == 1 && !assigned_inodes.contains(&row.inode) {
-                    inode_candidates.entry(row.inode).or_default().push(row);
-                }
-            }
-        }
-        for candidates in inode_candidates.values() {
-            let best = candidates
-                .iter()
-                .max_by(|a, b| {
-                    a.score
-                        .partial_cmp(&b.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                        .then_with(|| a.release_id.cmp(&b.release_id))
-                })
-                .unwrap();
-            assigned_inodes.insert(best.inode);
-            assignments.push((*best).clone());
-        }
-    }
-
-    // --- Phase 4: Per-inode singles ---
-    //
-    // Single-track releases claim remaining inodes. Per-inode-best, last priority.
-    {
-        let mut inode_candidates: HashMap<i64, Vec<&OptimalPackingScoreRow>> = HashMap::new();
-        for prop in &single_proposals {
-            for row in &prop.rows {
-                if !assigned_inodes.contains(&row.inode) {
-                    inode_candidates.entry(row.inode).or_default().push(row);
-                }
-            }
-        }
-        for candidates in inode_candidates.values() {
-            let best = candidates
-                .iter()
-                .max_by(|a, b| {
-                    a.score
-                        .partial_cmp(&b.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                        .then_with(|| a.release_id.cmp(&b.release_id))
-                })
-                .unwrap();
-            assigned_inodes.insert(best.inode);
-            assignments.push((*best).clone());
-        }
-    }
-
     // Compute per-release coverage
     let mut release_filled: HashMap<&str, u32> = HashMap::new();
-    for row in &assignments {
+    for row in &state.assignments {
         *release_filled.entry(&row.release_id).or_default() += 1;
     }
 
-    // Load corpus paths (candidates + elimination-matched inodes from files table)
+    // Load corpus paths
     let corpus_paths: HashMap<i64, String> = match read_only_db.get_packing_inode_paths() {
         Ok(rows) => rows.into_iter().collect(),
         Err(e) => {
@@ -2003,10 +2459,10 @@ pub fn execute_resolve_release_conflicts(
         }
     };
 
-    // Emit signals
+    // Build signals
     let mut computed: Vec<ComputedCorpusSignal> = Vec::new();
 
-    for row in &assignments {
+    for row in &state.assignments {
         let path = match corpus_paths.get(&row.inode) {
             Some(p) => p.clone(),
             None => continue,
@@ -2025,7 +2481,7 @@ pub fn execute_resolve_release_conflicts(
             .copied()
             .unwrap_or(0);
 
-        let alternatives_count = inode_release_set
+        let alternatives_count = state.inode_release_set
             .get(&row.inode)
             .map(|s| s.len() as u16)
             .unwrap_or(1);
@@ -2076,7 +2532,7 @@ pub fn execute_resolve_release_conflicts(
 
     // Record pending AcoustID submissions for elimination-method winners
     let mut pending_submissions: Vec<write_thread::PendingAcoustIdSubmission> = Vec::new();
-    for row in &assignments {
+    for row in &state.assignments {
         if row.match_method != 1 {
             continue;
         }
@@ -2095,22 +2551,11 @@ pub fn execute_resolve_release_conflicts(
     }
 
     log_general(format!(
-        "[COMPUTE] ResolveReleaseConflicts: {} inodes assigned to {} releases \
-         ({} multi-track, {} singles) | \
-         Phase 1 MIS: {}/{} full-capable selected, {} components (max {}) | \
-         Phase 2a: {} residual completed ({} iterations) | \
+        "[COMPUTE] MapSingleReleases total: {} inodes assigned to {} releases | \
          {} elimination submissions | \
          signals: cleared={}, new={}, updated={}, unchanged={}",
-        assignments.len(),
+        state.assignments.len(),
         unique_releases,
-        multi_proposals.len(),
-        single_proposals.len(),
-        mis_result.selected_count,
-        fc_count,
-        mis_result.component_count,
-        mis_result.max_component_size,
-        phase2a_total,
-        phase2a_iterations,
         submission_count,
         cleared,
         new,
@@ -2118,7 +2563,13 @@ pub fn execute_resolve_release_conflicts(
         unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    // Defer AnalyzeReleaseGaps as final stage
+    let deferred = vec![(
+        PipelineStage::Analyze,
+        vec![Computation::Analysis(AnalysisComputation::AnalyzeReleaseGaps)],
+    )];
+
+    Result::pipeline(computation, start.elapsed().as_millis() as u64, Vec::new(), deferred)
 }
 
 

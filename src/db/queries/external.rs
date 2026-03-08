@@ -443,53 +443,6 @@ impl Database {
     }
 
 
-    /// Get all AcoustID candidate rows (both optimal and non-optimal) for a set of releases.
-    /// Returns full rows suitable for assignment. Used by Phase 2a to find alternative
-    /// inodes when optimal ones are claimed by Phase 1.
-    pub fn get_all_acoustid_candidates_for_releases(
-        &self,
-        release_ids: &[&str],
-    ) -> Result<Vec<OptimalPackingScoreRow>> {
-        if release_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let placeholders: String = release_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT release_id, inode, recording_id, medium_pos, track_pos, track_title, \
-             medium_format, track_number, score, score_breakdown, match_method, \
-             fingerprint_hex, raw_duration_ms \
-             FROM release_packing_scores \
-             WHERE match_method = 0 AND release_id IN ({}) \
-             ORDER BY release_id, score DESC",
-            placeholders
-        );
-        let mut stmt = self.conn().prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            release_ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
-        let rows = stmt.query_map(params.as_slice(), |row| {
-            Ok(OptimalPackingScoreRow {
-                release_id: row.get(0)?,
-                inode: row.get(1)?,
-                recording_id: row.get(2)?,
-                medium_pos: row.get(3)?,
-                track_pos: row.get(4)?,
-                track_title: row.get(5)?,
-                medium_format: row.get(6)?,
-                track_number: row.get(7)?,
-                score: row.get(8)?,
-                score_breakdown: row.get(9)?,
-                match_method: row.get(10)?,
-                fingerprint_hex: row.get(11)?,
-                raw_duration_ms: row.get(12)?,
-            })
-        })?;
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
-    }
-
     // =========================================================================
     // Signal Data Reading (for Release Packing Browser)
     // =========================================================================
@@ -632,6 +585,29 @@ impl Database {
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    /// Get (inode, parent_dir, dir_file_count) for all candidate inodes.
+    ///
+    /// Used by Stage 3 to classify proposals into quality tiers based on
+    /// directory purity and file count matching.
+    pub fn get_candidate_inode_dirs(&self) -> Result<Vec<(i64, String, i32)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT DISTINCT inode, parent_dir, dir_file_count \
+             FROM release_packing_candidates",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i32>(2)?,
+            ))
         })?;
         let mut results = Vec::new();
         for row in rows {

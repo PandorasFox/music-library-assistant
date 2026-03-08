@@ -348,6 +348,12 @@ pub struct ExternalMatchingConfig {
     /// Tag templates: (UPPERCASE tag name, template string).
     /// Templates use `{var}` syntax for MB field substitution.
     pub tag_templates: Vec<(String, String)>,
+    /// Knot extraction: proposals/inodes ratio threshold (default 3.0, 0 to disable).
+    /// Components where proposals/inodes >= this are extracted from MIS.
+    pub packing_knot_ratio: f64,
+    /// Knot extraction: component size limit (default 50, 0 to disable).
+    /// Components larger than this are extracted regardless of ratio.
+    pub packing_knot_size_limit: usize,
 }
 
 /// Opinions for disc extraction from ALBUM and TRACKNUMBER tags.
@@ -422,12 +428,16 @@ impl Default for ExternalMatchingConfig {
             mb_cache_ttl_days: 30,
             preferred_locales: Vec::new(),
             tag_templates: Vec::new(),
+            packing_knot_ratio: Self::DEFAULT_PACKING_KNOT_RATIO,
+            packing_knot_size_limit: Self::DEFAULT_PACKING_KNOT_SIZE_LIMIT,
         }
     }
 }
 
 impl ExternalMatchingConfig {
     pub const DEFAULT_MB_BASE_URL: &str = "https://musicbrainz.org/ws/2";
+    pub const DEFAULT_PACKING_KNOT_RATIO: f64 = 3.0;
+    pub const DEFAULT_PACKING_KNOT_SIZE_LIMIT: usize = 50;
 
     pub const KDL_ACOUSTID_KEY: &str = "acoustid-api-key";
     pub const KDL_REQ_PER_SEC: &str = "requests-per-second";
@@ -437,6 +447,8 @@ impl ExternalMatchingConfig {
     pub const KDL_MB_CACHE_TTL: &str = "mb-cache-ttl-days";
     pub const KDL_PREFERRED_LOCALES: &str = "preferred-locales";
     pub const KDL_TAG_TEMPLATES: &str = "tag-templates";
+    pub const KDL_PACKING_KNOT_RATIO: &str = "packing-knot-ratio";
+    pub const KDL_PACKING_KNOT_SIZE_LIMIT: &str = "packing-knot-size-limit";
 }
 
 impl Default for Opinions {

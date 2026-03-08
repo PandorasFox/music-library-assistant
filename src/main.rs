@@ -39,10 +39,10 @@ pub static _rjem_malloc_conf: &[u8] =
 // ============================================================================
 
 /// MM release version string (shown in title bar and reports)
-pub const MM_VERSION: &str = "beta 8";
+pub const MM_VERSION: &str = "beta 9";
 
 /// Full application title with version
-pub const MM_TITLE: &str = "Music Magic (mm beta 8)";
+pub const MM_TITLE: &str = "Music Magic (mm beta 9)";
 
 mod config;
 mod corpus;

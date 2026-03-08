@@ -118,9 +118,3 @@ pub struct ConfigGroup {
     pub collapsed: bool,
 }
 
-impl ConfigGroup {
-    /// Count visible (non-collapsed) fields in this group.
-    pub fn visible_field_count(&self) -> usize {
-        if self.collapsed { 0 } else { self.fields.len() }
-    }
-}

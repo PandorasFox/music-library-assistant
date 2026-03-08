@@ -45,16 +45,22 @@ fn render_field_list(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
     for group in &state.groups {
         // Group header
         let collapse_indicator = if group.collapsed { "\u{25b8}" } else { "\u{25be}" };
-        let header_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+        let is_collapsed_cursor = group.collapsed && flat_idx == state.cursor;
+        let header_style = if is_collapsed_cursor {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        };
         lines.push((
             Line::from(vec![
                 Span::styled(format!(" {} ", collapse_indicator), header_style),
                 Span::styled(group.name, header_style),
             ]),
-            false,
+            is_collapsed_cursor, // scroll target when cursor is on collapsed header
         ));
 
         if group.collapsed {
+            flat_idx += 1; // collapsed group occupies one cursor slot
             lines.push((
                 Line::from(Span::styled(
                     "   (collapsed — Shift+C to expand)",

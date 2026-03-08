@@ -97,16 +97,25 @@ impl ConfigEditorState {
         self.groups.iter().any(|g| g.fields.iter().any(|f| f.source == FieldSource::Edited))
     }
 
-    /// Total number of visible (non-collapsed) fields across all groups.
+    /// Total number of cursor-navigable slots across all groups.
+    /// Expanded groups contribute their field count; collapsed groups contribute 1
+    /// (for the collapsed header, so the user can navigate to it and expand).
     fn visible_field_count(&self) -> usize {
-        self.groups.iter().map(|g| g.visible_field_count()).sum()
+        self.groups.iter().map(|g| {
+            if g.collapsed { 1 } else { g.fields.len() }
+        }).sum()
     }
 
     /// Resolve flat cursor position to (group_index, field_index).
+    /// Returns `None` if the cursor is on a collapsed group header (no field to select).
     pub fn cursor_to_group_field(&self) -> Option<(usize, usize)> {
         let mut remaining = self.cursor;
         for (gi, group) in self.groups.iter().enumerate() {
             if group.collapsed {
+                if remaining == 0 {
+                    return None; // cursor is on collapsed group header
+                }
+                remaining -= 1;
                 continue;
             }
             let count = group.fields.len();
@@ -119,8 +128,25 @@ impl ConfigEditorState {
     }
 
     /// Find the group index for the current cursor position.
+    /// Works for both expanded groups (cursor on a field) and collapsed groups
+    /// (cursor on the collapsed header slot).
     fn current_group_index(&self) -> Option<usize> {
-        self.cursor_to_group_field().map(|(gi, _)| gi)
+        let mut remaining = self.cursor;
+        for (gi, group) in self.groups.iter().enumerate() {
+            if group.collapsed {
+                if remaining == 0 {
+                    return Some(gi);
+                }
+                remaining -= 1;
+                continue;
+            }
+            let count = group.fields.len();
+            if remaining < count {
+                return Some(gi);
+            }
+            remaining -= count;
+        }
+        None
     }
 
     /// Get the item count for the current collection field.
@@ -821,76 +847,55 @@ impl ConfigEditorState {
 
     /// Toggle collapsed state of the group containing the cursor.
     fn toggle_current_group_collapse(&mut self) {
-        if let Some(gi) = self.current_group_index() {
-            self.groups[gi].collapsed = !self.groups[gi].collapsed;
-            // Clamp cursor to valid range
-            let total = self.visible_field_count();
-            if total > 0 && self.cursor >= total {
-                self.cursor = total - 1;
-            }
-        }
+        let Some(gi) = self.current_group_index() else { return };
+        self.groups[gi].collapsed = !self.groups[gi].collapsed;
+        // After toggling, reposition cursor to the start of this group.
+        // This keeps the cursor on the group whether expanding or collapsing.
+        self.cursor = self.group_start_offset(gi);
     }
 
-    /// Jump cursor to the first field of the next group.
-    fn jump_to_next_group(&mut self) {
-        let Some(current_gi) = self.current_group_index() else { return };
-
-        // Find next non-collapsed group after current
+    /// Compute the flat cursor offset for the start of a group (first field,
+    /// or the collapsed-header slot).
+    fn group_start_offset(&self, target_gi: usize) -> usize {
         let mut offset = 0;
         for (i, group) in self.groups.iter().enumerate() {
-            if i <= current_gi {
-                if !group.collapsed {
-                    offset += group.fields.len();
-                }
-                continue;
+            if i == target_gi {
+                return offset;
             }
-            if !group.collapsed && !group.fields.is_empty() {
-                self.cursor = offset;
+            offset += if group.collapsed { 1 } else { group.fields.len() };
+        }
+        offset
+    }
+
+    /// Jump cursor to the first slot of the next group.
+    fn jump_to_next_group(&mut self) {
+        let Some(current_gi) = self.current_group_index() else { return };
+        // Find next group with content (or collapsed header)
+        for i in (current_gi + 1)..self.groups.len() {
+            if self.groups[i].collapsed || !self.groups[i].fields.is_empty() {
+                self.cursor = self.group_start_offset(i);
                 return;
-            }
-            if !group.collapsed {
-                offset += group.fields.len();
             }
         }
         // Wrap to first group
         self.cursor = 0;
     }
 
-    /// Jump cursor to the first field of the previous group.
+    /// Jump cursor to the first slot of the previous group.
     fn jump_to_prev_group(&mut self) {
         let Some(current_gi) = self.current_group_index() else { return };
-
-        // Find previous non-collapsed group
+        // Find previous group with content (or collapsed header)
         for i in (0..current_gi).rev() {
-            let group = &self.groups[i];
-            if !group.collapsed && !group.fields.is_empty() {
-                // offset is currently pointing at current_gi's start
-                // We need the start of group i
-                let mut target = 0;
-                for j in 0..i {
-                    if !self.groups[j].collapsed {
-                        target += self.groups[j].fields.len();
-                    }
-                }
-                self.cursor = target;
+            if self.groups[i].collapsed || !self.groups[i].fields.is_empty() {
+                self.cursor = self.group_start_offset(i);
                 return;
             }
         }
-
         // Wrap to last group
-        let total = self.visible_field_count();
-        if total > 0 {
-            // Find start of last non-collapsed group
-            let mut pos = total;
-            for group in self.groups.iter().rev() {
-                if !group.collapsed && !group.fields.is_empty() {
-                    pos -= group.fields.len();
-                    self.cursor = pos;
-                    return;
-                }
-                if !group.collapsed {
-                    pos -= group.fields.len();
-                }
+        for i in (0..self.groups.len()).rev() {
+            if self.groups[i].collapsed || !self.groups[i].fields.is_empty() {
+                self.cursor = self.group_start_offset(i);
+                return;
             }
         }
     }

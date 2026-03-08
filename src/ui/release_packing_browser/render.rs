@@ -469,6 +469,119 @@ fn render_release_summary(release: &ReleaseGroup) -> Vec<Line<'static>> {
     ]
 }
 
+fn render_release_overview(release: &ReleaseGroup) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Release Overview",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::raw("")),
+        kv_line("Release:", &release.release_title),
+        kv_line("Artist:", &release.release_artist),
+        kv_line("MBID:", &release.release_id),
+        Line::from(Span::raw("")),
+    ];
+
+    // Coverage
+    let coverage_color = if release.coverage >= 1.0 {
+        Color::Green
+    } else if release.coverage >= 0.7 {
+        Color::Yellow
+    } else {
+        Color::Red
+    };
+    lines.push(Line::from(vec![
+        Span::styled("Coverage:  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!(
+                "{}/{} tracks ({:.0}%)",
+                release.tracks.len(),
+                release.total_tracks,
+                release.coverage * 100.0
+            ),
+            Style::default().fg(coverage_color),
+        ),
+    ]));
+
+    // File type breakdown from assigned tracks
+    let mut ext_counts: HashMap<String, usize> = HashMap::new();
+    let mut dir_counts: HashMap<String, usize> = HashMap::new();
+
+    for track in &release.tracks {
+        // Extension
+        let ext = track
+            .path
+            .rsplit('.')
+            .next()
+            .unwrap_or("?")
+            .to_lowercase();
+        *ext_counts.entry(ext).or_default() += 1;
+
+        // Parent directory
+        let dir = match track.path.rsplit_once('/') {
+            Some((parent, _)) => parent.to_string(),
+            None => "?".to_string(),
+        };
+        *dir_counts.entry(dir).or_default() += 1;
+    }
+
+    // Format file types inline: "37 flac, 2 png"
+    let mut ext_pairs: Vec<_> = ext_counts.into_iter().collect();
+    ext_pairs.sort_by(|a, b| b.1.cmp(&a.1));
+    let ext_summary: String = ext_pairs
+        .iter()
+        .map(|(ext, count)| format!("{} {}", count, ext))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    lines.push(Line::from(vec![
+        Span::styled("Files:     ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{} assigned", release.tracks.len()),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            format!(" ({})", ext_summary),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+
+    if !release.unfilled.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("Unfilled:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} slots", release.unfilled.len()),
+                Style::default().fg(Color::Red),
+            ),
+        ]));
+    }
+
+    // Source directories
+    lines.push(Line::from(Span::raw("")));
+    lines.push(Line::from(Span::styled(
+        "── Source Directories ───────────────",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::raw("")));
+
+    let mut dir_pairs: Vec<_> = dir_counts.into_iter().collect();
+    dir_pairs.sort_by(|a, b| b.1.cmp(&a.1));
+
+    for (dir, count) in &dir_pairs {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:>3}  ", count),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(dir.clone(), Style::default().fg(Color::White)),
+        ]));
+    }
+
+    lines
+}
+
 fn render_track_detail(track: &AssignedTrackInfo, release: &ReleaseGroup) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(

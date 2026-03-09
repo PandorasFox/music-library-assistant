@@ -1,0 +1,331 @@
+//! Shared types, constants, and classification helpers for release packing.
+
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+use crate::db::queries::external::{ExternalMatchRow, OptimalPackingScoreRow};
+use crate::meta::signals::data::PackingScoreBreakdown;
+
+// ============================================================================
+// Shared types
+// ============================================================================
+
+/// Corpus file metadata needed for scoring.
+pub(super) struct CorpusFileInfo {
+    pub parent_dir: String,
+    pub tags: HashMap<String, Vec<String>>,
+    pub duration_ms: Option<i64>,
+}
+
+/// A recording match for an inode, filtered for quality.
+pub(super) struct RecordingMatch {
+    pub recording_id: String,
+    pub confidence: f64,
+}
+
+/// A candidate assignment of an inode to a (release, medium, track) slot.
+pub(super) struct CandidateAssignment {
+    pub inode: i64,
+    pub recording_id: String,
+    pub release_id: String,
+    pub medium_pos: u32,
+    pub track_pos: u32,
+    pub medium_format: Option<String>,
+    pub track_number: String,
+    pub track_title: String,
+    pub score: f64,
+    pub breakdown: PackingScoreBreakdown,
+}
+
+// ============================================================================
+// Proposal types (Stage 3 conflict resolution)
+// ============================================================================
+
+/// Quality tier for a release proposal. Determines which MIS round it enters.
+/// Each tier is a separate pool — proposals enter exactly one pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProposalTier {
+    /// Every slot filled, 1:1 dir↔release (per-medium for multi-medium), no leftover files.
+    Perfect,
+    /// Every slot filled, but cross-directory or directory has extra files.
+    FullMatch,
+    /// Some slots filled but not all (includes near-misses).
+    Incomplete,
+    /// Single-track release.
+    Single,
+}
+
+impl ProposalTier {
+    pub(super) fn as_str(&self) -> &'static str {
+        match self {
+            ProposalTier::Perfect => "perfect",
+            ProposalTier::FullMatch => "full_match",
+            ProposalTier::Incomplete => "incomplete",
+            ProposalTier::Single => "single",
+        }
+    }
+}
+
+/// A release-level proposal: a complete assignment of inodes to track slots.
+/// Proposals are the unit of selection in MIS rounds — they stay intact.
+pub(crate) struct Proposal {
+    pub total_tracks: i32,
+    pub rows: Vec<OptimalPackingScoreRow>,
+    pub inode_set: HashSet<i64>,
+    pub total_score: f64,
+    pub tier: ProposalTier,
+}
+
+/// Arc<Mutex<Option<Box<...>>>> wrapper that derives Clone + Debug + Serialize + Deserialize.
+///
+/// Clone is cheap (Arc refcount). Serialize/Deserialize skip the inner state
+/// (these variants are transient pipeline state, never persisted).
+#[derive(Clone)]
+pub(crate) struct SharedMappingState(
+    std::sync::Arc<std::sync::Mutex<Option<Box<ReleaseMappingState>>>>,
+);
+
+impl SharedMappingState {
+    pub fn new(state: ReleaseMappingState) -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
+            state,
+        )))))
+    }
+
+    /// Take the state out of the box. Panics if called twice (state already consumed).
+    pub fn take(&self) -> ReleaseMappingState {
+        *self
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("ReleaseMappingState consumed twice")
+    }
+}
+
+impl std::fmt::Debug for SharedMappingState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SharedMappingState(..)")
+    }
+}
+
+impl serde::Serialize for SharedMappingState {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_unit()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SharedMappingState {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        _deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        Err(serde::de::Error::custom(
+            "SharedMappingState cannot be deserialized",
+        ))
+    }
+}
+
+/// Data for a single connected component to be solved independently.
+pub(crate) struct ComponentData {
+    pub proposals: Vec<Proposal>,
+    pub tier: ProposalTier,
+    pub corpus_paths: HashMap<i64, String>,
+    pub manifest_map: HashMap<String, (String, String, i32)>,
+}
+
+/// Arc<Mutex<Option<Box<...>>>> wrapper for component data.
+/// Same transient-pipeline-state pattern as SharedMappingState.
+#[derive(Clone)]
+pub(crate) struct SharedComponentData(
+    std::sync::Arc<std::sync::Mutex<Option<Box<ComponentData>>>>,
+);
+
+impl SharedComponentData {
+    pub fn new(data: ComponentData) -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
+            data,
+        )))))
+    }
+
+    pub fn take(&self) -> ComponentData {
+        *self
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("ComponentData consumed twice")
+    }
+}
+
+impl std::fmt::Debug for SharedComponentData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SharedComponentData(..)")
+    }
+}
+
+impl serde::Serialize for SharedComponentData {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_unit()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SharedComponentData {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        _deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        Err(serde::de::Error::custom(
+            "SharedComponentData cannot be deserialized",
+        ))
+    }
+}
+
+/// Shared state passed between MIS round computations via boxed move semantics.
+///
+/// Each round takes ownership via `SharedMappingState::take()`, runs its MIS,
+/// and packages the remaining state for the next round. Signal emission happens
+/// per-component within each tier — no accumulation across rounds.
+pub(crate) struct ReleaseMappingState {
+    /// Proposal pools — each consumed by its corresponding tier orchestrator.
+    pub perfect_pool: Vec<Proposal>,
+    pub full_match_pool: Vec<Proposal>,
+    pub incomplete_pool: Vec<Proposal>,
+    pub single_pool: Vec<Proposal>,
+    /// Knot extraction threshold: connected components where
+    /// proposals/inodes >= this ratio are too tangled for MIS (many releases
+    /// competing over few files). Extracted and resolved by best-scorer.
+    pub knot_ratio: f64,
+    /// Maximum component size before knot extraction kicks in regardless of ratio.
+    pub knot_size_limit: usize,
+    /// When true, run Singles before Incompletes in MIS ordering.
+    /// Singles claim one inode each (no MIS needed), preventing single-file
+    /// incompletes from competing in the expensive Incomplete MIS round.
+    pub singles_before_incompletes: bool,
+}
+
+/// Default knot extraction ratio. Components with proposals/inodes >= this
+/// are extracted from MIS and resolved by best score.
+pub(super) const DEFAULT_KNOT_RATIO: f64 = 3.0;
+
+/// Default knot size limit. Components larger than this are extracted
+/// regardless of ratio — too large for BnB to solve in reasonable time.
+pub(super) const DEFAULT_KNOT_SIZE_LIMIT: usize = 50;
+
+/// Classify a proposal into a quality tier based on slot coverage and directory purity.
+///
+/// `media_count` is the number of MbMedium entries for this release (from the tracklist).
+/// `inode_dir_map` maps each inode to its (parent_dir, dir_file_count).
+pub(super) fn classify_proposal(
+    rows: &[OptimalPackingScoreRow],
+    total_tracks: i32,
+    media_count: usize,
+    inode_dir_map: &HashMap<i64, (String, i32)>,
+) -> ProposalTier {
+    if total_tracks <= 1 {
+        return ProposalTier::Single;
+    }
+    if (rows.len() as i32) < total_tracks {
+        return ProposalTier::Incomplete;
+    }
+
+    // All slots filled — check directory purity for Perfect vs FullMatch.
+    //
+    // Perfect requires:
+    //   Single-medium: exactly 1 directory, dir_file_count == total_tracks
+    //   Multi-medium: each medium's inodes from exactly 1 directory, each directory
+    //     maps to exactly 1 medium, dir_file_count == medium track count,
+    //     all directories are siblings (same parent)
+
+    // Build dir → inodes and dir → media mapping
+    let mut dir_inodes: HashMap<&str, Vec<i64>> = HashMap::new();
+    let mut dir_media: HashMap<&str, HashSet<i32>> = HashMap::new();
+    let mut medium_dirs: HashMap<i32, HashSet<&str>> = HashMap::new();
+
+    for row in rows {
+        if let Some((dir, _)) = inode_dir_map.get(&row.inode) {
+            dir_inodes.entry(dir.as_str()).or_default().push(row.inode);
+            dir_media
+                .entry(dir.as_str())
+                .or_default()
+                .insert(row.medium_pos);
+            medium_dirs
+                .entry(row.medium_pos)
+                .or_default()
+                .insert(dir.as_str());
+        }
+    }
+
+    if dir_inodes.is_empty() {
+        return ProposalTier::FullMatch;
+    }
+
+    if media_count <= 1 {
+        // Single-medium: Perfect iff exactly 1 directory, file count matches total tracks
+        if dir_inodes.len() == 1 {
+            let dir = *dir_inodes.keys().next().unwrap();
+            let dir_file_count = inode_dir_map
+                .values()
+                .find(|(d, _)| d.as_str() == dir)
+                .map(|(_, c)| *c)
+                .unwrap_or(0);
+            if dir_file_count == total_tracks {
+                return ProposalTier::Perfect;
+            }
+        }
+        return ProposalTier::FullMatch;
+    }
+
+    // Multi-medium: each medium must map to exactly 1 directory and vice versa
+    for medium_dir_set in medium_dirs.values() {
+        if medium_dir_set.len() != 1 {
+            return ProposalTier::FullMatch;
+        }
+    }
+    for dir_medium_set in dir_media.values() {
+        if dir_medium_set.len() != 1 {
+            return ProposalTier::FullMatch;
+        }
+    }
+
+    // Check that each directory's file count matches its medium's track count
+    // and all directories are siblings (same parent)
+    let mut parents: HashSet<&str> = HashSet::new();
+    for (dir, inodes) in &dir_inodes {
+        let dir_file_count = inode_dir_map
+            .values()
+            .find(|(d, _)| d.as_str() == *dir)
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        if dir_file_count != inodes.len() as i32 {
+            return ProposalTier::FullMatch;
+        }
+        if let Some(parent) = Path::new(dir).parent() {
+            parents.insert(parent.to_str().unwrap_or(""));
+        }
+    }
+    if parents.len() > 1 {
+        return ProposalTier::FullMatch;
+    }
+
+    ProposalTier::Perfect
+}
+
+// ============================================================================
+// Shared helpers
+// ============================================================================
+
+/// Group external match rows by inode, keeping all recordings per inode.
+pub(super) fn group_all_per_inode(
+    rows: Vec<ExternalMatchRow>,
+) -> HashMap<i64, Vec<ExternalMatchRow>> {
+    let mut grouped: HashMap<i64, Vec<ExternalMatchRow>> = HashMap::new();
+    for row in rows {
+        grouped.entry(row.inode).or_default().push(row);
+    }
+    grouped
+}

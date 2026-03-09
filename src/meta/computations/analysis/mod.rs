@@ -446,7 +446,7 @@ impl Computation {
                 execute_map_single_releases(state, ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::ResolvePackingComponent { ref data } => {
-                execute_resolve_packing_component(data, ctx.witness, ctx.start)
+                execute_resolve_packing_component(data, ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::EmitUnmatchedSignals => {
                 execute_emit_unmatched_signals(ctx.read_db, ctx.witness, ctx.start)

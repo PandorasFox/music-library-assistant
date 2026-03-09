@@ -308,6 +308,18 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                     }
                 }
                 let _ = nav_index; // suppress unused warning
+
+                // VA override info (non-navigable)
+                if data.va_override_count > 0 {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled("⚠ ", Style::default().fg(Color::Yellow)),
+                        Span::styled(
+                            format!("{} VA overrides", data.va_override_count),
+                            Style::default().fg(Color::Yellow),
+                        ),
+                    ]));
+                }
             }
         }
     } else {

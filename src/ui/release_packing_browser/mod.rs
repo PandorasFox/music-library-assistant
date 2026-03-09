@@ -11,7 +11,8 @@ pub mod types;
 use std::collections::HashMap;
 
 use crate::meta::signals::data::{
-    PackedReleaseData, ReleasePackingData, UnfilledReleaseSlotData, UnmatchedCorpusTrackData,
+    AlternativeReleasePackingData, PackedReleaseData, ReleasePackingData, UnfilledReleaseSlotData,
+    UnmatchedCorpusTrackData, VariousArtistsOverrideData, VariousArtistsOverrideSource,
 };
 use crate::ui::input::InputAction;
 use crate::ui::widgets::ListClickTargets;
@@ -69,6 +70,8 @@ impl ReleasePackingBrowserState {
         packed: Vec<PackedReleaseData>,
         packing_rows: Vec<(i64, String, ReleasePackingData)>,
         unfilled_rows: Vec<UnfilledReleaseSlotData>,
+        alt_data: Vec<AlternativeReleasePackingData>,
+        va_data: Vec<VariousArtistsOverrideData>,
     ) -> Self {
         // Group packing rows by release_id
         let mut track_map: HashMap<String, Vec<(i64, String, ReleasePackingData)>> = HashMap::new();
@@ -86,6 +89,41 @@ impl ReleasePackingBrowserState {
                 .entry(slot.release_id.clone())
                 .or_default()
                 .push(slot);
+        }
+
+        // Group alternatives by winner release_id
+        let mut alt_map: HashMap<String, Vec<AlternativeReleaseInfo>> = HashMap::new();
+        for alt in alt_data {
+            alt_map
+                .entry(alt.winner_release_id.clone())
+                .or_default()
+                .push(AlternativeReleaseInfo {
+                    release_id: alt.alternative_release_id,
+                    release_title: alt.alternative_release_title,
+                    release_artist: alt.alternative_release_artist,
+                    alternative_score: alt.alternative_score,
+                    winner_score: alt.winner_score,
+                    inode_count: alt.inode_count,
+                });
+        }
+
+        // Index VA overrides by release_id
+        let mut va_map: HashMap<String, VaOverrideInfo> = HashMap::new();
+        for va in va_data {
+            va_map.insert(
+                va.release_id,
+                VaOverrideInfo {
+                    suggested_artist: va.suggested_artist,
+                    source: match va.source {
+                        VariousArtistsOverrideSource::ExactAlternative => {
+                            "exact alternative".to_string()
+                        }
+                        VariousArtistsOverrideSource::CompetingProposal => {
+                            "competing proposal".to_string()
+                        }
+                    },
+                },
+            );
         }
 
         // Build release groups from PackedReleaseData (already categorized)
@@ -138,6 +176,14 @@ impl ReleasePackingBrowserState {
                 0.0
             };
 
+            let mut alternatives = alt_map.remove(&pr.release_id).unwrap_or_default();
+            alternatives.sort_by(|a, b| {
+                b.alternative_score
+                    .partial_cmp(&a.alternative_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let va_override = va_map.remove(&pr.release_id);
+
             releases.push(ReleaseGroup {
                 release_id: pr.release_id,
                 release_title: pr.release_title,
@@ -146,6 +192,8 @@ impl ReleasePackingBrowserState {
                 unfilled,
                 coverage,
                 total_tracks: pr.total_tracks,
+                alternatives,
+                va_override,
             });
         }
 

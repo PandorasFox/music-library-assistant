@@ -173,7 +173,7 @@ fn render_left_entry(
                 Color::Red
             };
 
-            Line::from(vec![
+            let mut spans = vec![
                 Span::styled(marker.to_string(), title_style),
                 Span::styled(
                     truncate_for_width(&release.release_title, title_max),
@@ -183,7 +183,20 @@ fn render_left_entry(
                     format!(" {}/{}", release.tracks.len(), release.total_tracks),
                     Style::default().fg(coverage_color),
                 ),
-            ])
+            ];
+            if !release.alternatives.is_empty() {
+                spans.push(Span::styled(
+                    format!(" +{}", release.alternatives.len()),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            if release.va_override.is_some() {
+                spans.push(Span::styled(
+                    " VA".to_string(),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            Line::from(spans)
         }
 
         PackingListEntry::Unmatched { idx } => {
@@ -550,6 +563,75 @@ fn render_release_overview(release: &ReleaseGroup) -> Vec<Line<'static>> {
             ),
             Span::styled(dir.clone(), Style::default().fg(Color::White)),
         ]));
+    }
+
+    // VA Override
+    if let Some(va) = &release.va_override {
+        lines.push(Line::from(Span::raw("")));
+        lines.push(Line::from(Span::styled(
+            "── VA Override ─────────────────────",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(Span::raw("")));
+        lines.push(Line::from(vec![
+            Span::styled("  Suggested: ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                va.suggested_artist.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Source:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(va.source.clone(), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    // Alternatives
+    if !release.alternatives.is_empty() {
+        lines.push(Line::from(Span::raw("")));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "── Alternatives ({}) ────────────────",
+                release.alternatives.len()
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(Span::raw("")));
+
+        for (i, alt) in release.alternatives.iter().enumerate() {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {}. ", i + 1),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(alt.release_title.clone(), Style::default().fg(Color::White)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("     Artist: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    alt.release_artist.clone(),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled("  Score: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:.2}/{:.2}", alt.alternative_score, alt.winner_score),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!("  ({} tracks)", alt.inode_count),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("     MBID: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    alt.release_id.clone(),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
     }
 
     lines

@@ -340,18 +340,31 @@ impl App {
                         let unfilled = db
                             .get_unfilled_release_slot_signal_data()
                             .unwrap_or_default();
-                        (packed, packing, unfilled)
+                        let alternatives = db
+                            .get_alternative_release_packing_data()
+                            .unwrap_or_default();
+                        let va_overrides = db
+                            .get_various_artists_override_data()
+                            .unwrap_or_default();
+                        (packed, packing, unfilled, alternatives, va_overrides)
                     })
                     .recv();
 
-                let (packed, packing, unfilled) = result;
+                let (packed, packing, unfilled, alternatives, va_overrides) = result;
 
                 if packed.is_empty() {
                     self.status_message = Some("No releases in this category".to_string());
                     return;
                 }
 
-                ReleasePackingBrowserState::build_releases(category, packed, packing, unfilled)
+                ReleasePackingBrowserState::build_releases(
+                    category,
+                    packed,
+                    packing,
+                    unfilled,
+                    alternatives,
+                    va_overrides,
+                )
             }
             PackingCategory::UnsolvedConflict
             | PackingCategory::UnsolvedNoRelease

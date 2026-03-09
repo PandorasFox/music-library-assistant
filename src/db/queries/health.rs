@@ -885,6 +885,15 @@ impl Database {
             )
             .unwrap_or(0);
 
+        let va_override_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_various_artists_override",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
         Ok(ExternalMatchesData {
             untagged_entries,
             confidence_buckets,
@@ -896,6 +905,7 @@ impl Database {
             unsolved_conflict_count,
             unsolved_no_release_count,
             unsolved_no_match_count,
+            va_override_count,
         })
     }
 

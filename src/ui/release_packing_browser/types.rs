@@ -37,6 +37,24 @@ pub struct ReleaseGroup {
     pub unfilled: Vec<UnfilledSlotInfo>,
     pub coverage: f32,
     pub total_tracks: u32,
+    pub alternatives: Vec<AlternativeReleaseInfo>,
+    pub va_override: Option<VaOverrideInfo>,
+}
+
+/// An alternative release that packs identically to a winning release.
+pub struct AlternativeReleaseInfo {
+    pub release_id: String,
+    pub release_title: String,
+    pub release_artist: String,
+    pub alternative_score: f64,
+    pub winner_score: f64,
+    pub inode_count: u32,
+}
+
+/// A VA override suggestion for a winning release.
+pub struct VaOverrideInfo {
+    pub suggested_artist: String,
+    pub source: String,
 }
 
 /// An assigned track within a release.

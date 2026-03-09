@@ -199,6 +199,8 @@ pub struct ExternalMatchesData {
     pub unsolved_no_release_count: usize,
     /// Unsolved: fingerprinted but no AcoustID match.
     pub unsolved_no_match_count: usize,
+    /// Count of releases with VA override suggestions.
+    pub va_override_count: usize,
 }
 
 /// Bucket 3: Other signals (sorted by magnitude)

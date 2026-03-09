@@ -800,4 +800,48 @@ impl Database {
         })?;
         Ok(rows.flatten().collect())
     }
+
+    /// Load all alternative release packing signals with deserialized data.
+    pub fn get_alternative_release_packing_data(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::AlternativeReleasePackingData>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT data FROM signal_alternative_release_packing")?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(0)?;
+            let data: crate::meta::signals::data::AlternativeReleasePackingData =
+                bincode::deserialize(&blob).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
+                    )
+                })?;
+            Ok(data)
+        })?;
+        Ok(rows.flatten().collect())
+    }
+
+    /// Load all various artists override signals with deserialized data.
+    pub fn get_various_artists_override_data(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::VariousArtistsOverrideData>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT data FROM signal_various_artists_override")?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(0)?;
+            let data: crate::meta::signals::data::VariousArtistsOverrideData =
+                bincode::deserialize(&blob).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
+                    )
+                })?;
+            Ok(data)
+        })?;
+        Ok(rows.flatten().collect())
+    }
 }

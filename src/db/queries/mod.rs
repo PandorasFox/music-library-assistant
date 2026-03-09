@@ -981,6 +981,20 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_packed_releases_by_category(category_prefix)
     }
 
+    /// Load all alternative release packing signals.
+    pub fn get_alternative_release_packing_data(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::AlternativeReleasePackingData>> {
+        self.db.get_alternative_release_packing_data()
+    }
+
+    /// Load all various artists override signals.
+    pub fn get_various_artists_override_data(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::VariousArtistsOverrideData>> {
+        self.db.get_various_artists_override_data()
+    }
+
     // =========================================================================
     // Redundant / Metadata Duplicate Queries
     // =========================================================================

@@ -13,9 +13,8 @@ Source: `src/meta/computations/analysis/release_packing.rs`
 | 1 | PackReleases | Identify candidates, write manifest, spawn per-release scorers |
 | 2 | ScoreReleaseCandidates (×N) | Directory selection, AcoustID scoring, elimination matching |
 | 3a | ComputeReleaseMappings | Classify proposals into quality tiers |
-| 3b–3e | Map{Perfect,FullMatch,Incomplete,Single}Releases | Tiered MIS conflict resolution (Incomplete/Single order configurable) |
-| 3f | EmitReleasePackingSignals | Emit ReleasePacking signals, record AcoustID submissions |
-| 4 | AnalyzeReleaseGaps | Emit signals for gaps, unmatched files, and per-release categories |
+| 3b–3e | Map{Perfect,FullMatch,Incomplete,Single}Releases → N×ResolvePackingComponent | Tiered orchestrators: find connected components, spawn parallel per-component MIS solvers. Knots extracted and resolved greedily by orchestrators. Isolated nodes emitted directly. (Incomplete/Single order configurable) |
+| 4 | EmitUnmatchedSignals | Emit signals for unmatched corpus tracks and unfilled release slots |
 
 Stages are barrier-separated: each defers the next via `SharedMappingState`, ensuring serial execution managed by the Witch's computation scheduler.
 
@@ -154,21 +153,9 @@ Each round selects non-conflicting (inode-disjoint) proposals to maximize corpus
 
 When singles run first, single-track releases claim inodes before the expensive Incomplete MIS round, preventing single-file incompletes from competing there.
 
-### 3f: EmitReleasePackingSignals
+Each tier orchestrator finds connected components in the conflict graph, then: (1) isolated nodes (size 1) are emitted directly, (2) knots are extracted and resolved greedily with signals emitted by the orchestrator, (3) clean multi-node components are spawned as parallel `ResolvePackingComponent` computations that independently build local conflict graphs and solve MIS. Inter-tier inode tracking reads assigned inodes from the DB (`signal_release_packing` table). AcoustID submissions for elimination winners are recorded per-component.
 
-Always the final MIS stage. Emits `ReleasePacking` signals from all accumulated assignments, records pending AcoustID submissions for elimination winners, defers `AnalyzeReleaseGaps`.
-
----
-
-## Stage 4: AnalyzeReleaseGaps
-
-Post-resolution analysis producing 4 signal types:
-
-### UnmatchedCorpusTrack
-Emitted for inodes with AcoustID recording matches but no release assignment. Also covers fingerprinted files with no AcoustID match at all.
-
-### UnfilledReleaseSlot
-Empty track slots in partially-assigned releases. Only emitted for releases with `filled_count > 0`.
+All packing signal tables (`signal_packed_release`, `signal_release_packing`, `signal_packing_knot`) are bulk-cleared at pipeline start (ComputeReleaseMappings, Stage 3a).
 
 ### PackedRelease (Categories)
 
@@ -179,10 +166,19 @@ Empty track slots in partially-assigned releases. Only emitted for releases with
 | Single | `single:` | Single-track release |
 | Incomplete | `incomplete:` | Partial coverage |
 
-**Coverage filtering:** Suppresses incomplete `PackedRelease` and `UnfilledReleaseSlot` signals for releases where every candidate inode is already assigned to a full-match release (cached MB entries, not real gaps).
+---
 
-### NearMissRelease
-Criteria: `filled_count + 1 == total_tracks` AND all assigned files from a single directory containing exactly `total_tracks` audio files. Identifies the unmatched file and missing track slot.
+## Stage 4: EmitUnmatchedSignals
+
+Post-resolution analysis producing 2 signal types:
+
+### UnmatchedCorpusTrack
+Emitted for inodes with AcoustID recording matches but no release assignment. Also covers fingerprinted files with no AcoustID match at all.
+
+### UnfilledReleaseSlot
+Empty track slots in partially-assigned releases. Only emitted for releases with `filled_count > 0`.
+
+**Coverage filtering:** Suppresses `UnfilledReleaseSlot` signals for releases where every candidate inode is already assigned to a full-match release (cached MB entries, not real gaps).
 
 ---
 
@@ -190,9 +186,9 @@ Criteria: `filled_count + 1 == total_tracks` AND all assigned files from a singl
 
 These are distinct classification systems used at different stages:
 
-- **ProposalTier** (Stage 3a): Input classification determining which MIS round pool a proposal enters. Based on slot coverage, directory structure, and leftover file counts. A ProposalTier::FullMatch with all-AcoustID matches can become PackedReleaseCategory::Perfect.
+- **ProposalTier** (Stage 3a): Input classification determining which MIS round pool a proposal enters. Based on slot coverage, directory structure, and leftover file counts.
 
-- **PackedReleaseCategory** (Stage 4): Output classification for the final signal. Based solely on whether all slots are filled and the match methods used. This is what the UI displays.
+- **PackedReleaseCategory** (Stage 3b-3e): Output classification for the signal, derived directly from `ProposalTier` (1:1 mapping: Perfect→Perfect, FullMatch→FullMatch, Incomplete→Incomplete, Single→Single). Emitted by ResolvePackingComponent (for multi-node components) or directly by tier orchestrators (for isolated nodes and knot winners). This is what the UI displays.
 
 ---
 
@@ -246,15 +242,8 @@ AcoustID matches (signal_external_match)
               └────────┴───────────┘
                                ▼
                    ┌────────────────────────┐
-                   │ Stage 3f: Emit         │
-                   │ ReleasePacking signals │
-                   └───────────┬────────────┘
-                               ▼
-                   ┌────────────────────────┐
-                   │ Stage 4: Gap analysis  │
-                   │ → PackedRelease        │
+                   │ Stage 4: Unmatched     │
                    │ → UnmatchedCorpusTrack │
                    │ → UnfilledReleaseSlot  │
-                   │ → NearMissRelease      │
                    └────────────────────────┘
 ```

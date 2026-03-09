@@ -971,6 +971,11 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_fingerprinted_corpus_inodes()
     }
 
+    /// Get all inodes currently assigned by release packing.
+    pub fn get_assigned_packing_inodes(&self) -> Result<std::collections::HashSet<i64>> {
+        self.db.get_assigned_packing_inodes()
+    }
+
     /// Get packed release signal data for a specific category prefix.
     pub fn get_packed_releases_by_category(
         &self,

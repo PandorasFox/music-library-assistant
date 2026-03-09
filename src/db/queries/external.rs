@@ -16,7 +16,6 @@ pub struct PackingAssignment {
     pub release_id: String,
     pub medium_position: u32,
     pub track_position: u32,
-    pub match_method: crate::meta::signals::data::MatchMethod,
 }
 
 /// An unassigned corpus audio file in a directory: (inode, path, fingerprint_hex, duration_ms).
@@ -605,7 +604,7 @@ impl Database {
 
     /// Get distinct (inode, path) pairs from the candidates table.
     ///
-    /// Used by Stage 4 (AnalyzeReleaseGaps) for corpus paths without a full corpus scan.
+    /// Used by Stage 4 (EmitUnmatchedSignals) for corpus paths without a full corpus scan.
     pub fn get_candidate_paths(&self) -> Result<Vec<(i64, String)>> {
         let mut stmt = self
             .conn()
@@ -661,7 +660,6 @@ impl Database {
                     release_id: data.release_id,
                     medium_position: data.medium_position,
                     track_position: data.track_position,
-                    match_method: data.match_method,
                 });
             }
         }
@@ -757,6 +755,18 @@ impl Database {
              WHERE f.zone = 'corpus' AND f.is_dir = 0 AND a.fingerprint IS NOT NULL",
         )?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.flatten().collect())
+    }
+
+    /// Get all inodes currently assigned by release packing (from signal_release_packing).
+    ///
+    /// Used by per-tier MIS execution to read inter-tier state from the DB
+    /// rather than passing mutable state between computations.
+    pub fn get_assigned_packing_inodes(&self) -> Result<std::collections::HashSet<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT inode FROM signal_release_packing")?;
+        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
         Ok(rows.flatten().collect())
     }
 

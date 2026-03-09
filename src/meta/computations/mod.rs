@@ -69,8 +69,6 @@ use std::collections::{HashMap, VecDeque};
 pub enum PipelineStage {
     /// Global conflict resolution across scored entities.
     Resolve,
-    /// Post-resolution gap/quality analysis.
-    Analyze,
     /// Dependent analysis: spawn computations that read signals written by the
     /// parent computation. General-purpose "write signals → barrier → analyze"
     /// pattern (e.g., DetectFingerprintOverlaps → AnalyzeFingerprintOverlaps).
@@ -81,7 +79,6 @@ impl PipelineStage {
     pub fn label(&self) -> &'static str {
         match self {
             PipelineStage::Resolve => "Resolving",
-            PipelineStage::Analyze => "Analyzing",
             PipelineStage::DependentAnalysis => "Dependent analysis",
         }
     }

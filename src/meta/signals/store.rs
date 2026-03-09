@@ -63,6 +63,11 @@ pub trait CorpusSignalStore: Sized {
         rows.collect()
     }
 
+    /// Delete all signals from this table.
+    fn clear_all(conn: &Connection) -> Result<usize> {
+        Ok(conn.execute(&format!("DELETE FROM {}", Self::TABLE_NAME), [])?)
+    }
+
     /// Query inode→data_hash map for BLOB signal types.
     ///
     /// Default returns empty map (scalar-only signal types).
@@ -110,6 +115,11 @@ pub trait AggregateSignalStore: Sized {
     fn count(conn: &Connection) -> Result<usize> {
         let sql = format!("SELECT COUNT(*) FROM {}", Self::TABLE_NAME);
         conn.query_row(&sql, [], |row| row.get(0))
+    }
+
+    /// Delete all signals from this table.
+    fn clear_all(conn: &Connection) -> Result<usize> {
+        Ok(conn.execute(&format!("DELETE FROM {}", Self::TABLE_NAME), [])?)
     }
 
     /// Query all keys for this signal type.
@@ -2193,46 +2203,6 @@ impl AggregateSignalStore for UnfilledReleaseSlotSignal {
     fn exists(conn: &Connection, key: &str) -> Result<bool> {
         conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM signal_unfilled_release_slot WHERE key = ?1)",
-            [key],
-            |row| row.get(0),
-        )
-    }
-}
-
-impl AggregateSignalStore for NearMissReleaseSignal {
-    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_near_miss_release (
-        key TEXT PRIMARY KEY,
-        data BLOB NOT NULL,
-        data_hash INTEGER NOT NULL DEFAULT 0,
-        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )";
-    const TABLE_NAME: &'static str = "signal_near_miss_release";
-
-    fn insert(&self, conn: &Connection) -> Result<()> {
-        let data = bincode::serialize(&self.data)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        let hash = compute_blob_hash(&data);
-        conn.execute(
-            "INSERT OR REPLACE INTO signal_near_miss_release (key, data, data_hash) VALUES (?1, ?2, ?3)",
-            rusqlite::params![self.key, data, hash],
-        )?;
-        Ok(())
-    }
-
-    fn query_key_hashes(conn: &Connection) -> Result<HashMap<String, i64>> {
-        let mut stmt = conn.prepare("SELECT key, data_hash FROM signal_near_miss_release")?;
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        rows.collect()
-    }
-
-    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
-        conn.execute("DELETE FROM signal_near_miss_release WHERE key = ?1", [key])?;
-        Ok(())
-    }
-
-    fn exists(conn: &Connection, key: &str) -> Result<bool> {
-        conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM signal_near_miss_release WHERE key = ?1)",
             [key],
             |row| row.get(0),
         )

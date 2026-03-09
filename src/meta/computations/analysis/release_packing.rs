@@ -33,19 +33,14 @@
 //!     │    true:            Singles → Incomplete
 //!     │  ═══════ BARRIER ═══════
 //!     ▼
-//! Stage 3f: EmitReleasePackingSignals
-//!     │  Emits ReleasePackingSignal per assigned inode (all rounds)
-//!     │  Records pending AcoustID submissions for elimination winners
-//!     │  Defers AnalyzeReleaseGaps
-//!     │  ═══════ BARRIER ═══════
-//!     ▼
-//! Stage 4: AnalyzeReleaseGaps
-//!        Unmatched corpus tracks, unfilled slots, near-miss detection
-//!        Emits gap analysis signals
+//! Stage 4: EmitUnmatchedSignals
+//!        Unmatched corpus tracks, unfilled release slots
 //! ```
 //!
+//! Each tier emits PackedRelease, ReleasePacking, and PackingKnot signals
+//! per-component immediately after MIS solving. Inter-tier inode tracking
+//! reads assigned inodes from the DB (signal_release_packing table).
 //! State flows between MIS rounds via `SharedMappingState` (Arc<Mutex<Option<Box>>>).
-//! Each round takes ownership, runs its MIS, and packages updated state for the next.
 //!
 //! Manual trigger only — not part of ScheduleContentAnalysis.
 
@@ -54,7 +49,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::config::PackingWeights;
-use crate::db::queries::external::{ExternalMatchRow, OptimalPackingScoreRow, PackingManifestRow};
+use crate::db::queries::external::{ExternalMatchRow, OptimalPackingScoreRow};
 use crate::db::types::Zone;
 use crate::db::write_thread::{self, PackingScoreRow};
 use crate::db::ReadOnlyDb;
@@ -68,8 +63,8 @@ use crate::meta::computations::types::ComputationWitness;
 use crate::meta::computations::{Computation, PipelineStage};
 use crate::meta::external::ExternalSource;
 use crate::meta::signals::data::{
-    KnotAssignment, KnotClassification, KnotProposalEntry, MatchMethod, NearMissReleaseData,
-    NearMissReleaseSignal, PackedReleaseCategory, PackedReleaseData, PackedReleaseSignal,
+    KnotAssignment, KnotClassification, KnotProposalEntry, MatchMethod, PackedReleaseCategory,
+    PackedReleaseData, PackedReleaseSignal,
     PackingKnotData, PackingKnotSignal, PackingScoreBreakdown, ReleasePackingData,
     ReleasePackingSignal, TypedSignalWrite, UnfilledReleaseSlotData, UnfilledReleaseSlotSignal,
     UnmatchedCorpusTrackData, UnmatchedCorpusTrackSignal,
@@ -124,6 +119,17 @@ pub(crate) enum ProposalTier {
     Incomplete,
     /// Single-track release.
     Single,
+}
+
+impl ProposalTier {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ProposalTier::Perfect => "perfect",
+            ProposalTier::FullMatch => "full_match",
+            ProposalTier::Incomplete => "incomplete",
+            ProposalTier::Single => "single",
+        }
+    }
 }
 
 /// A release-level proposal: a complete assignment of inodes to track slots.
@@ -188,24 +194,74 @@ impl<'de> serde::Deserialize<'de> for SharedMappingState {
     }
 }
 
+/// Data for a single connected component to be solved independently.
+pub(crate) struct ComponentData {
+    pub proposals: Vec<Proposal>,
+    pub tier: ProposalTier,
+    pub corpus_paths: HashMap<i64, String>,
+    pub manifest_map: HashMap<String, (String, String, i32)>,
+}
+
+/// Arc<Mutex<Option<Box<...>>>> wrapper for component data.
+/// Same transient-pipeline-state pattern as SharedMappingState.
+#[derive(Clone)]
+pub(crate) struct SharedComponentData(
+    std::sync::Arc<std::sync::Mutex<Option<Box<ComponentData>>>>,
+);
+
+impl SharedComponentData {
+    pub fn new(data: ComponentData) -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
+            data,
+        )))))
+    }
+
+    pub fn take(&self) -> ComponentData {
+        *self
+            .0
+            .lock()
+            .unwrap()
+            .take()
+            .expect("ComponentData consumed twice")
+    }
+}
+
+impl std::fmt::Debug for SharedComponentData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SharedComponentData(..)")
+    }
+}
+
+impl serde::Serialize for SharedComponentData {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_unit()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SharedComponentData {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        _deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        Err(serde::de::Error::custom(
+            "SharedComponentData cannot be deserialized",
+        ))
+    }
+}
+
 /// Shared state passed between MIS round computations via boxed move semantics.
 ///
 /// Each round takes ownership via `SharedMappingState::take()`, runs its MIS,
-/// mutates the accumulator fields, and packages the state into the next round.
+/// and packages the remaining state for the next round. Signal emission happens
+/// per-component within each tier — no accumulation across rounds.
 pub(crate) struct ReleaseMappingState {
-    /// Proposal pools — each consumed by its corresponding MIS round.
+    /// Proposal pools — each consumed by its corresponding tier orchestrator.
     pub perfect_pool: Vec<Proposal>,
     pub full_match_pool: Vec<Proposal>,
     pub incomplete_pool: Vec<Proposal>,
     pub single_pool: Vec<Proposal>,
-    /// Inodes assigned so far (accumulated across rounds).
-    pub assigned_inodes: HashSet<i64>,
-    /// Assignment rows (accumulated across rounds).
-    pub assignments: Vec<OptimalPackingScoreRow>,
-    /// Per-inode alternative release count (for signal emission).
-    pub inode_release_set: HashMap<i64, HashSet<String>>,
-    /// Manifest rows (for signal emission in final round).
-    pub manifest: Vec<PackingManifestRow>,
     /// Knot extraction threshold: connected components where
     /// proposals/inodes >= this ratio are too tangled for MIS (many releases
     /// competing over few files). Extracted and resolved by best-scorer.
@@ -216,8 +272,6 @@ pub(crate) struct ReleaseMappingState {
     /// Singles claim one inode each (no MIS needed), preventing single-file
     /// incompletes from competing in the expensive Incomplete MIS round.
     pub singles_before_incompletes: bool,
-    /// Accumulated knot component details across MIS rounds (for signal emission).
-    pub captured_knots: Vec<(ProposalTier, CapturedKnotComponent)>,
 }
 
 /// Default knot extraction ratio. Components with proposals/inodes >= this
@@ -354,10 +408,6 @@ struct MisResult {
     selected_count: usize,
     /// Total coverage: sum of inode_set.len() for selected candidates.
     selected_coverage: usize,
-    /// Number of connected components in the conflict graph.
-    component_count: usize,
-    /// Size of the largest connected component.
-    max_component_size: usize,
 }
 
 /// Solve Maximum Independent Set: select candidates whose inode sets are
@@ -373,12 +423,11 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
             selected: Vec::new(),
             selected_count: 0,
             selected_coverage: 0,
-            component_count: 0,
-            max_component_size: 0,
         };
     }
 
     // Build conflict adjacency: edge between candidates that share any inode
+    // Uses sorted Vec<usize> instead of HashSet for deterministic iteration order.
     let mut inode_to_idx: HashMap<i64, Vec<usize>> = HashMap::new();
     for (i, cand) in candidates.iter().enumerate() {
         for &inode in &cand.inode_set {
@@ -386,17 +435,21 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
         }
     }
 
-    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
     for indices in inode_to_idx.values() {
         if indices.len() > 1 {
             for &i in indices {
                 for &j in indices {
                     if i != j {
-                        adj[i].insert(j);
+                        adj[i].push(j);
                     }
                 }
             }
         }
+    }
+    for neighbors in &mut adj {
+        neighbors.sort_unstable();
+        neighbors.dedup();
     }
     drop(inode_to_idx);
 
@@ -421,13 +474,13 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
                 }
             }
         }
+        comp.sort_unstable();
         components.push(comp);
     }
 
     let mut selected = vec![false; n];
     let mut selected_count = 0usize;
     let mut selected_coverage = 0usize;
-    let mut max_component_size = 0usize;
 
     // Log component distribution for visibility
     {
@@ -462,8 +515,6 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
     }
 
     for (ci, component) in components.iter().enumerate() {
-        max_component_size = max_component_size.max(component.len());
-
         if component.len() == 1 {
             selected[component[0]] = true;
             selected_count += 1;
@@ -503,7 +554,10 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
 
                 if feasible
                     && (coverage > best_coverage
-                        || (coverage == best_coverage && score > best_score))
+                        || (coverage == best_coverage && score > best_score)
+                        || (coverage == best_coverage
+                            && score == best_score
+                            && mask < best_mask))
                 {
                     best_coverage = coverage;
                     best_score = score;
@@ -545,6 +599,8 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
                         local_adj[li].push(ln);
                     }
                 }
+                local_adj[li].sort_unstable();
+                local_adj[li].dedup();
             }
 
             let local_scores: Vec<f64> = component.iter().map(|&gi| candidates[gi].score).collect();
@@ -597,10 +653,13 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
                 }
 
                 if state.candidates.is_empty() {
-                    if state.selected_coverage > best_coverage
+                    let dominated = state.selected_coverage > best_coverage
                         || (state.selected_coverage == best_coverage
                             && state.selected_score > best_score)
-                    {
+                        || (state.selected_coverage == best_coverage
+                            && state.selected_score == best_score
+                            && state.selected < best_selected);
+                    if dominated {
                         best_coverage = state.selected_coverage;
                         best_score = state.selected_score;
                         best_selected = state.selected.clone();
@@ -612,11 +671,12 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
                     .candidates
                     .iter()
                     .max_by_key(|&&c| {
-                        state
+                        let degree = state
                             .candidates
                             .iter()
                             .filter(|&&other| local_adj[c].contains(&other))
-                            .count()
+                            .count();
+                        (degree, std::cmp::Reverse(c))
                     })
                     .unwrap();
 
@@ -687,8 +747,6 @@ fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisResult {
         selected,
         selected_count,
         selected_coverage,
-        component_count: components.len(),
-        max_component_size,
     }
 }
 
@@ -2216,381 +2274,596 @@ pub fn execute_score_release_candidates(
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }
 
+
+
+
+
 // ============================================================================
-// MIS round helpers (Stage 3)
+// Component discovery (shared by all tier orchestrators)
 // ============================================================================
 
-/// Result of running one MIS round on a pool of proposals.
-struct MisRoundResult {
-    /// Indices into the pool of proposals that were selected.
-    selected_indices: Vec<usize>,
-    /// Number of eligible proposals (after filtering already-claimed).
-    eligible_count: usize,
-    /// Number of selected proposals.
-    selected_count: usize,
-    /// Total coverage (inodes) of selected proposals.
-    coverage: usize,
-    /// Number of connected components in the conflict graph.
-    component_count: usize,
-    /// Size of the largest connected component.
-    max_component_size: usize,
-    /// Number of proposals removed by inode-signature dedup.
-    dedup_removed: usize,
-    /// Number of components extracted as knots (ratio too high for MIS).
-    knot_components: usize,
-    /// Number of proposals auto-resolved from knot extraction.
-    knot_proposals: usize,
-    /// Captured knot component details for signal emission.
-    knot_details: Vec<CapturedKnotComponent>,
-}
-
-/// A captured knot component with all data needed for signal emission.
-pub(crate) struct CapturedKnotComponent {
-    knot_id: usize,
-    classification: KnotClassification,
-    ratio: f64,
-    contested_inodes: Vec<i64>,
-    /// (pool_index, selected_by_greedy) for each proposal in the component.
-    proposals: Vec<(usize, bool)>,
-}
-
-/// Run MIS on a pool of proposals where each proposal requires its ENTIRE
-/// inode set to be unclaimed. Used for Perfect and FullMatch pools.
-fn run_mis_round(pool: &[Proposal], assigned_inodes: &HashSet<i64>) -> MisRoundResult {
-    // Filter to proposals whose entire inode set is unclaimed
-    let eligible: Vec<usize> = pool
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| {
-            !p.inode_set.is_empty() && p.inode_set.iter().all(|i| !assigned_inodes.contains(i))
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    if eligible.is_empty() {
-        return MisRoundResult {
-            selected_indices: Vec::new(),
-            eligible_count: 0,
-            selected_count: 0,
-            coverage: 0,
-            component_count: 0,
-            max_component_size: 0,
-            dedup_removed: 0,
-            knot_components: 0,
-            knot_proposals: 0,
-            knot_details: Vec::new(),
-        };
-    }
-
-    let mis_candidates: Vec<MisCandidate> = eligible
-        .iter()
-        .map(|&idx| MisCandidate {
-            inode_set: pool[idx].inode_set.clone(),
-            score: pool[idx].total_score,
-        })
-        .collect();
-
-    let mis_result = solve_maximum_independent_set(&mis_candidates);
-
-    let selected_indices: Vec<usize> = eligible
-        .iter()
-        .enumerate()
-        .filter(|(ei, _)| mis_result.selected[*ei])
-        .map(|(_, &pool_idx)| pool_idx)
-        .collect();
-
-    MisRoundResult {
-        eligible_count: eligible.len(),
-        selected_count: mis_result.selected_count,
-        coverage: mis_result.selected_coverage,
-        component_count: mis_result.component_count,
-        max_component_size: mis_result.max_component_size,
-        selected_indices,
-        dedup_removed: 0,
-        knot_components: 0,
-        knot_proposals: 0,
-        knot_details: Vec::new(),
-    }
-}
-
-/// Run MIS on a pool of pristine proposals with knot extraction.
+/// Find connected components in a conflict graph over proposals.
 ///
-/// Pipeline:
-/// 1. **Cull** proposals tainted by prior round claims (any inode claimed).
-/// 2. **Dedup** by inode signature — identical inode sets keep only best scorer.
-/// 3. **Extract knots** — connected components where proposals:inodes >= `knot_ratio`
-///    are too tangled for MIS (many releases over few files). The best-scoring
-///    non-conflicting proposals from each knot are auto-selected greedily.
-/// 4. **MIS** on the remaining (well-structured) conflict graph.
-fn run_mis_round_partial(
-    pool: &[Proposal],
-    assigned_inodes: &HashSet<i64>,
-    knot_ratio: f64,
-    knot_size_limit: usize,
-) -> MisRoundResult {
-    let pool_size = pool.len();
-
-    // --- Step 1: Cull tainted proposals ---
-    // A proposal that lost ANY inode to prior rounds is no longer the package
-    // we scored — discard it entirely.
-    let effective: Vec<(usize, &HashSet<i64>)> = pool
-        .iter()
-        .enumerate()
-        .filter_map(|(i, p)| {
-            if p.inode_set
-                .iter()
-                .any(|inode| assigned_inodes.contains(inode))
-            {
-                None
-            } else {
-                Some((i, &p.inode_set))
-            }
-        })
-        .collect();
-
-    let culled = pool_size - effective.len();
-
-    // --- Step 2: Dedup by inode signature ---
-    // Multiple proposals wanting the exact same set of inodes (e.g. 16
-    // pressings of the same album) are interchangeable for MIS. Keep only
-    // the best-scoring representative.
-    let mut sig_best: HashMap<Vec<i64>, (usize, f64)> = HashMap::new();
-    for &(idx, inode_set) in &effective {
-        let mut sig: Vec<i64> = inode_set.iter().copied().collect();
-        sig.sort_unstable();
-        let score = pool[idx].total_score;
-        match sig_best.entry(sig) {
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert((idx, score));
-            }
-            std::collections::hash_map::Entry::Occupied(mut e) => {
-                if score > e.get().1 {
-                    e.insert((idx, score));
-                }
-            }
-        }
-    }
-    let best_indices: HashSet<usize> = sig_best.values().map(|(idx, _)| *idx).collect();
-    let deduped: Vec<(usize, &HashSet<i64>)> = effective
-        .iter()
-        .filter(|(idx, _)| best_indices.contains(idx))
-        .copied()
-        .collect();
-    let dedup_removed = effective.len() - deduped.len();
-
-    log_general(format!(
-        "[COMPUTE] MIS partial round: pool={}, culled={} (tainted), deduped={} (identical sigs), {} pristine remain",
-        pool_size, culled, dedup_removed, deduped.len(),
-    ));
-
-    if deduped.is_empty() {
-        return MisRoundResult {
-            selected_indices: Vec::new(),
-            eligible_count: 0,
-            selected_count: 0,
-            coverage: 0,
-            component_count: 0,
-            max_component_size: 0,
-            dedup_removed,
-            knot_components: 0,
-            knot_proposals: 0,
-            knot_details: Vec::new(),
-        };
+/// Two proposals conflict if they share any inode. Returns a list of
+/// components, each being a sorted Vec of indices into the input slice.
+fn find_conflict_components(proposals: &[Proposal]) -> Vec<Vec<usize>> {
+    let n = proposals.len();
+    if n == 0 {
+        return Vec::new();
     }
 
-    // --- Step 3: Knot extraction ---
-    // Build conflict adjacency among the deduped set, find connected components,
-    // and extract components where proposals/inodes >= knot_ratio. These are
-    // tangled masses of releases over few files — auto-pick best scorer greedily.
-
-    // Map deduped indices to local indices for component detection
-    let mut inode_to_local: HashMap<i64, Vec<usize>> = HashMap::new();
-    for (local_idx, &(_, inode_set)) in deduped.iter().enumerate() {
-        for &inode in inode_set {
-            inode_to_local.entry(inode).or_default().push(local_idx);
+    // Build conflict adjacency
+    let mut inode_to_idx: HashMap<i64, Vec<usize>> = HashMap::new();
+    for (i, p) in proposals.iter().enumerate() {
+        for &inode in &p.inode_set {
+            inode_to_idx.entry(inode).or_default().push(i);
         }
     }
 
-    let n = deduped.len();
-    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
-    for locals in inode_to_local.values() {
-        if locals.len() > 1 {
-            for &i in locals {
-                for &j in locals {
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for indices in inode_to_idx.values() {
+        if indices.len() > 1 {
+            for &i in indices {
+                for &j in indices {
                     if i != j {
-                        adj[i].insert(j);
+                        adj[i].push(j);
                     }
                 }
             }
         }
     }
+    for neighbors in &mut adj {
+        neighbors.sort_unstable();
+        neighbors.dedup();
+    }
 
     // BFS connected components
-    let mut component_id: Vec<Option<usize>> = vec![None; n];
+    let mut visited = vec![false; n];
     let mut components: Vec<Vec<usize>> = Vec::new();
     for start in 0..n {
-        if component_id[start].is_some() {
+        if visited[start] {
             continue;
         }
-        let cid = components.len();
         let mut comp = Vec::new();
         let mut queue = VecDeque::new();
         queue.push_back(start);
-        component_id[start] = Some(cid);
+        visited[start] = true;
         while let Some(node) = queue.pop_front() {
             comp.push(node);
             for &neighbor in &adj[node] {
-                if component_id[neighbor].is_none() {
-                    component_id[neighbor] = Some(cid);
+                if !visited[neighbor] {
+                    visited[neighbor] = true;
                     queue.push_back(neighbor);
                 }
             }
         }
+        comp.sort_unstable();
         components.push(comp);
     }
 
-    // Classify components: knot vs clean
-    let mut knot_selected: Vec<usize> = Vec::new(); // local indices
-    let mut clean_locals: Vec<usize> = Vec::new(); // local indices entering MIS
-    let mut knot_component_count = 0usize;
-    let mut knot_proposal_count = 0usize;
-    let mut knot_details: Vec<CapturedKnotComponent> = Vec::new();
+    components
+}
 
-    for component in &components {
-        // Count unique inodes in this component
-        let mut comp_inodes: HashSet<i64> = HashSet::new();
-        for &local in component {
-            let (_, inode_set) = &deduped[local];
-            comp_inodes.extend(inode_set.iter());
-        }
-        let ratio = component.len() as f64 / comp_inodes.len().max(1) as f64;
+/// Emit signals for a single isolated proposal (component of size 1).
+///
+/// Used by tier orchestrators to handle trivially-selected proposals without
+/// spawning a computation. Returns the number of inode signals emitted.
+fn emit_isolated_proposal_signals(
+    proposal: &Proposal,
+    tier: ProposalTier,
+    manifest_map: &HashMap<&str, (&str, &str, i32)>,
+    corpus_paths: &HashMap<i64, String>,
+    sender: &write_thread::SignalWriteSender,
+    witness: &ComputationWitness,
+) -> usize {
+    let release_id = &proposal.rows[0].release_id;
+    let (release_title, release_artist, total_tracks) =
+        match manifest_map.get(release_id.as_str()) {
+            Some(&(t, a, tt)) => (t.to_string(), a.to_string(), tt),
+            None => return 0,
+        };
 
-        let is_knot_by_ratio = knot_ratio > 0.0 && component.len() > 1 && ratio >= knot_ratio;
-        let is_knot_by_size = knot_size_limit > 0 && component.len() > knot_size_limit;
-        if is_knot_by_ratio || is_knot_by_size {
-            // Knot: too many releases per inode. Greedy best-scorer selection.
-            knot_component_count += 1;
-            knot_proposal_count += component.len();
+    let filled = proposal.rows.len() as u32;
+    let category = match tier {
+        ProposalTier::Perfect => PackedReleaseCategory::Perfect,
+        ProposalTier::FullMatch => PackedReleaseCategory::FullMatch,
+        ProposalTier::Incomplete => PackedReleaseCategory::Incomplete,
+        ProposalTier::Single => PackedReleaseCategory::Single,
+    };
 
-            let classification = if is_knot_by_ratio {
-                KnotClassification::ByRatio
-            } else {
-                KnotClassification::BySize
-            };
+    log_general(format!(
+        "[PACKING-PICK] tier={} release={} score={:.4} inodes={} filled={}/{}",
+        tier.as_str(), release_id, proposal.total_score, proposal.inode_set.len(), filled, total_tracks,
+    ));
 
-            // Sort by score descending, greedily pick non-conflicting
-            let mut sorted: Vec<usize> = component.clone();
-            sorted.sort_by(|&a, &b| {
-                pool[deduped[b].0]
-                    .total_score
-                    .partial_cmp(&pool[deduped[a].0].total_score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+    let mut signals_batch: Vec<TypedSignalWrite> = Vec::new();
+    let mut pending_submissions: Vec<write_thread::PendingAcoustIdSubmission> = Vec::new();
+
+    // PackedRelease aggregate
+    let packed_key = format!("{}:{}", category.key_prefix(), release_id);
+    signals_batch.push(TypedSignalWrite::PackedRelease(PackedReleaseSignal {
+        key: packed_key,
+        data: PackedReleaseData {
+            release_id: release_id.clone(),
+            release_title: release_title.clone(),
+            release_artist: release_artist.clone(),
+            category,
+            assigned_count: filled,
+            total_tracks: total_tracks as u32,
+        },
+    }));
+
+    // Per-inode ReleasePackingSignal
+    let mut count = 0usize;
+    for row in &proposal.rows {
+        let path = match corpus_paths.get(&row.inode) {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+
+        let breakdown: PackingScoreBreakdown = bincode::deserialize(&row.score_breakdown)
+            .unwrap_or(PackingScoreBreakdown {
+                acoustid_confidence: 0.0,
+                duration_match: 0.0,
+                title_match: 0.0,
+                artist_match: 0.0,
+                album_match: 0.0,
+                track_number_match: 0.0,
             });
-            let mut knot_claimed: HashSet<i64> = HashSet::new();
-            let mut captured_proposals: Vec<(usize, bool)> = Vec::new();
-            for local in sorted {
-                let (pool_idx, inode_set) = &deduped[local];
-                let selected = inode_set.iter().all(|i| !knot_claimed.contains(i));
-                if selected {
-                    knot_claimed.extend(inode_set.iter());
-                    knot_selected.push(local);
-                }
-                captured_proposals.push((*pool_idx, selected));
+
+        signals_batch.push(TypedSignalWrite::ReleasePacking(ReleasePackingSignal {
+            inode: row.inode,
+            path,
+            data: ReleasePackingData {
+                release_id: row.release_id.clone(),
+                release_title: release_title.clone(),
+                release_artist: release_artist.clone(),
+                track_position: row.track_pos as u32,
+                medium_position: row.medium_pos as u32,
+                medium_format: row.medium_format.clone(),
+                track_number: row.track_number.clone(),
+                recording_id: row.recording_id.clone(),
+                track_title: row.track_title.clone(),
+                score: row.score,
+                score_breakdown: breakdown,
+                alternatives_count: 1, // isolated — no alternatives
+                release_coverage: filled as f32 / total_tracks.max(1) as f32,
+                match_method: if row.match_method == 1 {
+                    MatchMethod::Elimination
+                } else {
+                    MatchMethod::AcoustId
+                },
+            },
+        }));
+        count += 1;
+
+        if row.match_method == 1 {
+            if let (Some(fp_hex), Some(dur_ms)) = (&row.fingerprint_hex, row.raw_duration_ms) {
+                pending_submissions.push(write_thread::PendingAcoustIdSubmission {
+                    fingerprint: fp_hex.clone(),
+                    recording_id: row.recording_id.clone(),
+                    duration_ms: dur_ms,
+                    source: "elimination".to_string(),
+                });
             }
-
-            knot_details.push(CapturedKnotComponent {
-                knot_id: knot_details.len(),
-                classification,
-                ratio,
-                contested_inodes: comp_inodes.into_iter().collect(),
-                proposals: captured_proposals,
-            });
-        } else {
-            clean_locals.extend(component.iter());
         }
     }
 
-    if knot_component_count > 0 {
+    if !signals_batch.is_empty() {
+        sender.write_typed_signal_batch(signals_batch, witness);
+    }
+    if !pending_submissions.is_empty() {
+        sender.write_pending_acoustid_submissions(pending_submissions, witness);
+    }
+
+    count
+}
+
+/// Emit knot signals for extracted knot components. Returns the selected pool indices.
+fn emit_knot_component_signals(
+    knot_id: usize,
+    component_proposals: &[&Proposal],
+    tier: ProposalTier,
+    classification: KnotClassification,
+    ratio: f64,
+    manifest_map: &HashMap<&str, (&str, &str, i32)>,
+    corpus_paths: &HashMap<i64, String>,
+    sender: &write_thread::SignalWriteSender,
+    witness: &ComputationWitness,
+) -> Vec<usize> {
+    // Collect contested inodes
+    let mut comp_inodes: HashSet<i64> = HashSet::new();
+    for p in component_proposals {
+        comp_inodes.extend(&p.inode_set);
+    }
+
+    // Sort proposals by score descending, greedily pick non-conflicting
+    let mut order: Vec<usize> = (0..component_proposals.len()).collect();
+    order.sort_by(|&a, &b| {
+        component_proposals[b]
+            .total_score
+            .partial_cmp(&component_proposals[a].total_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut knot_claimed: HashSet<i64> = HashSet::new();
+    let mut selected_local_indices: Vec<usize> = Vec::new();
+    let mut captured_proposals: Vec<(usize, bool)> = Vec::new();
+
+    for &local_idx in &order {
+        let p = component_proposals[local_idx];
+        let selected = p.inode_set.iter().all(|i| !knot_claimed.contains(i));
+        if selected {
+            knot_claimed.extend(&p.inode_set);
+            selected_local_indices.push(local_idx);
+        }
+        captured_proposals.push((local_idx, selected));
+    }
+
+    // Log knot proposals
+    for &(local_idx, selected) in &captured_proposals {
+        let p = component_proposals[local_idx];
         log_general(format!(
-            "[COMPUTE] MIS partial round: extracted {} knot components ({} proposals; thresholds: ratio={:.1}, size={}), {} proposals enter MIS",
-            knot_component_count, knot_proposal_count, knot_ratio, knot_size_limit, clean_locals.len(),
+            "[PACKING-KNOT] tier={} knot={} release={} score={:.4} inodes={} selected={}",
+            tier.as_str(), knot_id, p.rows[0].release_id, p.total_score,
+            p.inode_set.len(), selected,
         ));
     }
 
-    // Collect knot winners as pool indices
-    let mut selected_indices: Vec<usize> = knot_selected
+    let mut signals_batch: Vec<TypedSignalWrite> = Vec::new();
+    let mut pending_submissions: Vec<write_thread::PendingAcoustIdSubmission> = Vec::new();
+
+    // Emit PackingKnot signal
+    let proposals_data: Vec<KnotProposalEntry> = captured_proposals
         .iter()
-        .map(|&local| deduped[local].0)
+        .map(|&(local_idx, selected)| {
+            let proposal = component_proposals[local_idx];
+            let (release_title, release_artist, total_tracks) =
+                match manifest_map.get(proposal.rows[0].release_id.as_str()) {
+                    Some(&(t, a, tt)) => (t.to_string(), a.to_string(), tt),
+                    None => (String::new(), String::new(), proposal.total_tracks),
+                };
+            let assignments = proposal
+                .rows
+                .iter()
+                .map(|row| {
+                    let breakdown: PackingScoreBreakdown =
+                        bincode::deserialize(&row.score_breakdown).unwrap_or(
+                            PackingScoreBreakdown {
+                                acoustid_confidence: 0.0,
+                                duration_match: 0.0,
+                                title_match: 0.0,
+                                artist_match: 0.0,
+                                album_match: 0.0,
+                                track_number_match: 0.0,
+                            },
+                        );
+                    KnotAssignment {
+                        inode: row.inode,
+                        recording_id: row.recording_id.clone(),
+                        medium_pos: row.medium_pos,
+                        track_pos: row.track_pos,
+                        track_title: row.track_title.clone(),
+                        score: row.score,
+                        score_breakdown: breakdown,
+                        match_method: row.match_method,
+                    }
+                })
+                .collect();
+            KnotProposalEntry {
+                release_id: proposal.rows[0].release_id.clone(),
+                release_title,
+                release_artist,
+                total_tracks,
+                total_score: proposal.total_score,
+                selected,
+                assignments,
+            }
+        })
         .collect();
-    let mut total_coverage: usize = knot_selected
-        .iter()
-        .map(|&local| deduped[local].1.len())
-        .sum();
 
-    // --- Step 4: MIS on clean components ---
-    if !clean_locals.is_empty() {
-        let clean_deduped: Vec<(usize, &HashSet<i64>)> =
-            clean_locals.iter().map(|&local| deduped[local]).collect();
+    let mut contested: Vec<i64> = comp_inodes.into_iter().collect();
+    contested.sort_unstable();
 
-        let mis_candidates: Vec<MisCandidate> = clean_deduped
-            .iter()
-            .map(|(idx, inode_set)| MisCandidate {
-                inode_set: (*inode_set).clone(),
-                score: pool[*idx].total_score,
-            })
-            .collect();
+    let key = format!("{}:{}", tier.as_str(), knot_id);
+    signals_batch.push(TypedSignalWrite::PackingKnot(PackingKnotSignal {
+        key,
+        data: PackingKnotData {
+            tier: tier.as_str().to_string(),
+            knot_id,
+            classification,
+            ratio,
+            contested_inodes: contested,
+            proposals: proposals_data,
+        },
+    }));
 
-        let mis_result = solve_maximum_independent_set(&mis_candidates);
+    // Emit PackedRelease + ReleasePacking for greedy-selected proposals
+    let category = match tier {
+        ProposalTier::Perfect => PackedReleaseCategory::Perfect,
+        ProposalTier::FullMatch => PackedReleaseCategory::FullMatch,
+        ProposalTier::Incomplete => PackedReleaseCategory::Incomplete,
+        ProposalTier::Single => PackedReleaseCategory::Single,
+    };
 
-        for (ei, &(pool_idx, _)) in clean_deduped.iter().enumerate() {
-            if mis_result.selected[ei] {
-                selected_indices.push(pool_idx);
-                total_coverage += pool[pool_idx].inode_set.len();
+    for &local_idx in &selected_local_indices {
+        let proposal = component_proposals[local_idx];
+        let release_id = &proposal.rows[0].release_id;
+        let (release_title, release_artist, total_tracks) =
+            match manifest_map.get(release_id.as_str()) {
+                Some(&(t, a, tt)) => (t.to_string(), a.to_string(), tt),
+                None => continue,
+            };
+
+        let filled = proposal.rows.len() as u32;
+
+        log_general(format!(
+            "[PACKING-PICK] tier={} release={} score={:.4} inodes={} filled={}/{} (knot-greedy)",
+            tier.as_str(), release_id, proposal.total_score, proposal.inode_set.len(), filled, total_tracks,
+        ));
+
+        let packed_key = format!("{}:{}", category.key_prefix(), release_id);
+        signals_batch.push(TypedSignalWrite::PackedRelease(PackedReleaseSignal {
+            key: packed_key,
+            data: PackedReleaseData {
+                release_id: release_id.clone(),
+                release_title: release_title.clone(),
+                release_artist: release_artist.clone(),
+                category,
+                assigned_count: filled,
+                total_tracks: total_tracks as u32,
+            },
+        }));
+
+        for row in &proposal.rows {
+            let path = match corpus_paths.get(&row.inode) {
+                Some(p) => p.clone(),
+                None => continue,
+            };
+
+            let breakdown: PackingScoreBreakdown = bincode::deserialize(&row.score_breakdown)
+                .unwrap_or(PackingScoreBreakdown {
+                    acoustid_confidence: 0.0,
+                    duration_match: 0.0,
+                    title_match: 0.0,
+                    artist_match: 0.0,
+                    album_match: 0.0,
+                    track_number_match: 0.0,
+                });
+
+            signals_batch.push(TypedSignalWrite::ReleasePacking(ReleasePackingSignal {
+                inode: row.inode,
+                path,
+                data: ReleasePackingData {
+                    release_id: row.release_id.clone(),
+                    release_title: release_title.clone(),
+                    release_artist: release_artist.clone(),
+                    track_position: row.track_pos as u32,
+                    medium_position: row.medium_pos as u32,
+                    medium_format: row.medium_format.clone(),
+                    track_number: row.track_number.clone(),
+                    recording_id: row.recording_id.clone(),
+                    track_title: row.track_title.clone(),
+                    score: row.score,
+                    score_breakdown: breakdown,
+                    alternatives_count: component_proposals.len() as u16,
+                    release_coverage: filled as f32 / total_tracks.max(1) as f32,
+                    match_method: if row.match_method == 1 {
+                        MatchMethod::Elimination
+                    } else {
+                        MatchMethod::AcoustId
+                    },
+                },
+            }));
+
+            if row.match_method == 1 {
+                if let (Some(fp_hex), Some(dur_ms)) = (&row.fingerprint_hex, row.raw_duration_ms) {
+                    pending_submissions.push(write_thread::PendingAcoustIdSubmission {
+                        fingerprint: fp_hex.clone(),
+                        recording_id: row.recording_id.clone(),
+                        duration_ms: dur_ms,
+                        source: "elimination".to_string(),
+                    });
+                }
             }
         }
-
-        return MisRoundResult {
-            eligible_count: deduped.len(),
-            selected_count: selected_indices.len(),
-            coverage: total_coverage,
-            component_count: mis_result.component_count + knot_component_count,
-            max_component_size: mis_result.max_component_size,
-            selected_indices,
-            dedup_removed,
-            knot_components: knot_component_count,
-            knot_proposals: knot_proposal_count,
-            knot_details,
-        };
     }
 
-    // All components were knots — no MIS needed
-    MisRoundResult {
-        eligible_count: deduped.len(),
-        selected_count: selected_indices.len(),
-        coverage: total_coverage,
-        component_count: knot_component_count,
-        max_component_size: 0,
-        selected_indices,
-        dedup_removed,
-        knot_components: knot_component_count,
-        knot_proposals: knot_proposal_count,
-        knot_details,
+    if !signals_batch.is_empty() {
+        sender.write_typed_signal_batch(signals_batch, witness);
     }
+    if !pending_submissions.is_empty() {
+        sender.write_pending_acoustid_submissions(pending_submissions, witness);
+    }
+
+    selected_local_indices
 }
 
-/// Lock in selected proposals from a full-inode-set round (Perfect/FullMatch).
-fn lock_in_round(
-    result: &MisRoundResult,
-    pool: &[Proposal],
-    assigned_inodes: &mut HashSet<i64>,
-    assignments: &mut Vec<OptimalPackingScoreRow>,
-) {
-    for &idx in &result.selected_indices {
-        for row in &pool[idx].rows {
-            assigned_inodes.insert(row.inode);
-            assignments.push(row.clone());
+// ============================================================================
+// Per-component MIS solver
+// ============================================================================
+
+/// Execute ResolvePackingComponent — solve MIS for one connected component.
+///
+/// Self-contained: builds local conflict graph, solves, emits signals.
+/// Spawned in parallel by tier orchestrators.
+pub(crate) fn execute_resolve_packing_component(
+    shared: &SharedComponentData,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = AnalysisComputation::ResolvePackingComponent {
+        data: shared.clone(),
+    };
+    let component = shared.take();
+    let proposals = component.proposals;
+    let tier = component.tier;
+    let corpus_paths = component.corpus_paths;
+    let manifest_map = component.manifest_map;
+
+    let sender = match write_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    if proposals.is_empty() {
+        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+    }
+
+    // Build MIS candidates from proposals
+    let mis_candidates: Vec<MisCandidate> = proposals
+        .iter()
+        .map(|p| MisCandidate {
+            inode_set: p.inode_set.clone(),
+            score: p.total_score,
+        })
+        .collect();
+
+    let mis_result = solve_maximum_independent_set(&mis_candidates);
+
+    // Build local alternatives_count: how many proposals in THIS component
+    // contain each inode
+    let mut local_inode_proposals: HashMap<i64, u16> = HashMap::new();
+    for p in &proposals {
+        for &inode in &p.inode_set {
+            *local_inode_proposals.entry(inode).or_insert(0) += 1;
         }
     }
+
+    let category = match tier {
+        ProposalTier::Perfect => PackedReleaseCategory::Perfect,
+        ProposalTier::FullMatch => PackedReleaseCategory::FullMatch,
+        ProposalTier::Incomplete => PackedReleaseCategory::Incomplete,
+        ProposalTier::Single => PackedReleaseCategory::Single,
+    };
+
+    let mut total_assigned = 0usize;
+    let mut pending_submissions: Vec<write_thread::PendingAcoustIdSubmission> = Vec::new();
+    let mut signals_batch: Vec<TypedSignalWrite> = Vec::new();
+
+    for (idx, selected) in mis_result.selected.iter().enumerate() {
+        if !selected {
+            continue;
+        }
+        let proposal = &proposals[idx];
+        let release_id = &proposal.rows[0].release_id;
+        let (release_title, release_artist, total_tracks) =
+            match manifest_map.get(release_id.as_str()) {
+                Some((t, a, tt)) => (t.clone(), a.clone(), *tt),
+                None => continue,
+            };
+
+        let filled = proposal.rows.len() as u32;
+
+        log_general(format!(
+            "[PACKING-PICK] tier={} release={} score={:.4} inodes={} filled={}/{}",
+            tier.as_str(), release_id, proposal.total_score, proposal.inode_set.len(), filled, total_tracks,
+        ));
+
+        // Emit PackedRelease aggregate signal
+        let packed_key = format!("{}:{}", category.key_prefix(), release_id);
+        let packed_signal = PackedReleaseSignal {
+            key: packed_key,
+            data: PackedReleaseData {
+                release_id: release_id.clone(),
+                release_title: release_title.clone(),
+                release_artist: release_artist.clone(),
+                category,
+                assigned_count: filled,
+                total_tracks: total_tracks as u32,
+            },
+        };
+        signals_batch.push(TypedSignalWrite::PackedRelease(packed_signal));
+
+        // Emit per-inode ReleasePackingSignal
+        for row in &proposal.rows {
+            let path = match corpus_paths.get(&row.inode) {
+                Some(p) => p.clone(),
+                None => continue,
+            };
+
+            let alternatives_count = local_inode_proposals
+                .get(&row.inode)
+                .copied()
+                .unwrap_or(1);
+
+            let breakdown: PackingScoreBreakdown = bincode::deserialize(&row.score_breakdown)
+                .unwrap_or(PackingScoreBreakdown {
+                    acoustid_confidence: 0.0,
+                    duration_match: 0.0,
+                    title_match: 0.0,
+                    artist_match: 0.0,
+                    album_match: 0.0,
+                    track_number_match: 0.0,
+                });
+
+            let signal = ReleasePackingSignal {
+                inode: row.inode,
+                path,
+                data: ReleasePackingData {
+                    release_id: row.release_id.clone(),
+                    release_title: release_title.clone(),
+                    release_artist: release_artist.clone(),
+                    track_position: row.track_pos as u32,
+                    medium_position: row.medium_pos as u32,
+                    medium_format: row.medium_format.clone(),
+                    track_number: row.track_number.clone(),
+                    recording_id: row.recording_id.clone(),
+                    track_title: row.track_title.clone(),
+                    score: row.score,
+                    score_breakdown: breakdown,
+                    alternatives_count,
+                    release_coverage: filled as f32 / total_tracks.max(1) as f32,
+                    match_method: if row.match_method == 1 {
+                        MatchMethod::Elimination
+                    } else {
+                        MatchMethod::AcoustId
+                    },
+                },
+            };
+            signals_batch.push(TypedSignalWrite::ReleasePacking(signal));
+            total_assigned += 1;
+
+            // Record AcoustID submission for elimination matches
+            if row.match_method == 1 {
+                if let (Some(fp_hex), Some(dur_ms)) = (&row.fingerprint_hex, row.raw_duration_ms) {
+                    pending_submissions.push(write_thread::PendingAcoustIdSubmission {
+                        fingerprint: fp_hex.clone(),
+                        recording_id: row.recording_id.clone(),
+                        duration_ms: dur_ms,
+                        source: "elimination".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Send all signals in a batch
+    if !signals_batch.is_empty() {
+        sender.write_typed_signal_batch(signals_batch, witness);
+    }
+
+    // Record AcoustID submissions
+    if !pending_submissions.is_empty() {
+        sender.write_pending_acoustid_submissions(pending_submissions, witness);
+    }
+
+    log_general(format!(
+        "[COMPUTE] ResolvePackingComponent: tier={} proposals={} selected={} coverage={} signals={}",
+        tier.as_str(),
+        proposals.len(),
+        mis_result.selected_count,
+        mis_result.selected_coverage,
+        total_assigned,
+    ));
+
+    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }
 
 // ============================================================================
@@ -2618,6 +2891,13 @@ pub fn execute_compute_release_mappings(
             );
         }
     };
+
+    // Bulk-clear all packing-related signal tables for clean re-emission.
+    // Each tier will emit its signals per-component as it solves.
+    sender.clear_signal_table::<ReleasePackingSignal>(witness);
+    sender.clear_aggregate_signal_table::<PackedReleaseSignal>(witness);
+    sender.clear_aggregate_signal_table::<PackingKnotSignal>(witness);
+    write_thread::wait_for_queue_drain();
 
     // Read all optimal picks from scoring table
     let optimal_scores = match read_only_db.get_optimal_packing_scores() {
@@ -2658,22 +2938,7 @@ pub fn execute_compute_release_mappings(
         .collect();
 
     if optimal_scores.is_empty() {
-        reconcile_corpus_signals::<ReleasePackingSignal>(
-            read_only_db,
-            &sender,
-            Vec::new(),
-            witness,
-        );
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
-    }
-
-    // Count how many releases each inode appears in (for alternatives_count)
-    let mut inode_release_set: HashMap<i64, HashSet<String>> = HashMap::new();
-    for row in &optimal_scores {
-        inode_release_set
-            .entry(row.inode)
-            .or_default()
-            .insert(row.release_id.clone());
     }
 
     // Load directory metadata for tier classification
@@ -2795,14 +3060,9 @@ pub fn execute_compute_release_mappings(
         full_match_pool,
         incomplete_pool,
         single_pool,
-        assigned_inodes: HashSet::new(),
-        assignments: Vec::new(),
-        inode_release_set,
-        manifest,
         knot_ratio,
         knot_size_limit,
         singles_before_incompletes,
-        captured_knots: Vec::new(),
     });
 
     let deferred = vec![(
@@ -2820,10 +3080,204 @@ pub fn execute_compute_release_mappings(
     )
 }
 
-/// Execute MapPerfectReleases — Stage 3b MIS on Perfect proposals.
+/// Orchestrate a "partial" tier (FullMatch, Incomplete, or Single).
+///
+/// Pipeline: cull tainted → dedup by inode signature → extract knots →
+/// find components → emit isolated directly → spawn N component solvers.
+///
+/// Returns (spawned_computations, log_message).
+fn orchestrate_partial_tier(
+    pool: Vec<Proposal>,
+    tier: ProposalTier,
+    assigned_inodes: &HashSet<i64>,
+    knot_ratio: f64,
+    knot_size_limit: usize,
+    read_only_db: &ReadOnlyDb<'_>,
+    sender: &write_thread::SignalWriteSender,
+    witness: &ComputationWitness,
+) -> (Vec<AnalysisComputation>, String) {
+    let pool_size = pool.len();
+
+    // --- Step 1: Cull tainted proposals ---
+    let effective: Vec<Proposal> = pool
+        .into_iter()
+        .filter(|p| p.inode_set.iter().all(|i| !assigned_inodes.contains(i)))
+        .collect();
+    let culled = pool_size - effective.len();
+
+    // --- Step 2: Dedup by inode signature ---
+    // Multiple proposals wanting the exact same set of inodes keep only best-scoring.
+    let mut sig_best: HashMap<Vec<i64>, (usize, f64)> = HashMap::new();
+    for (i, p) in effective.iter().enumerate() {
+        let mut sig: Vec<i64> = p.inode_set.iter().copied().collect();
+        sig.sort_unstable();
+        match sig_best.entry(sig) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert((i, p.total_score));
+            }
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                if p.total_score > e.get().1 {
+                    e.insert((i, p.total_score));
+                }
+            }
+        }
+    }
+    let keep_indices: HashSet<usize> = sig_best.values().map(|(idx, _)| *idx).collect();
+    let dedup_removed = effective.len() - keep_indices.len();
+
+    // Collect kept proposals (preserving order for determinism)
+    let mut deduped: Vec<Proposal> = Vec::with_capacity(keep_indices.len());
+    for (i, p) in effective.into_iter().enumerate() {
+        if keep_indices.contains(&i) {
+            deduped.push(p);
+        }
+    }
+
+    log_general(format!(
+        "[COMPUTE] {} partial: pool={}, culled={} (tainted), deduped={} (identical sigs), {} pristine remain",
+        tier.as_str(), pool_size, culled, dedup_removed, deduped.len(),
+    ));
+
+    if deduped.is_empty() {
+        return (
+            Vec::new(),
+            format!(
+                "pool={}, culled={}, deduped={}, 0 eligible",
+                pool_size, culled, dedup_removed
+            ),
+        );
+    }
+
+    // --- Step 3: Find components, extract knots ---
+    let components = find_conflict_components(&deduped);
+
+    // Load manifest + corpus paths once for all signal emission (isolated + knots + spawned)
+    let owned_manifest: HashMap<String, (String, String, i32)> = read_only_db
+        .get_packing_manifest()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| (r.release_id, (r.release_title, r.release_artist, r.total_tracks)))
+        .collect();
+    let borrowed_manifest: HashMap<&str, (&str, &str, i32)> = owned_manifest
+        .iter()
+        .map(|(k, (t, a, tt))| (k.as_str(), (t.as_str(), a.as_str(), *tt)))
+        .collect();
+    let corpus_paths: HashMap<i64, String> = read_only_db
+        .get_packing_inode_paths()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    let mut spawned: Vec<AnalysisComputation> = Vec::new();
+    let mut isolated_count = 0usize;
+    let mut isolated_signals = 0usize;
+    let mut knot_component_count = 0usize;
+    let mut knot_proposal_count = 0usize;
+    let mut knot_id = 0usize;
+
+    for component in &components {
+        if component.len() == 1 {
+            // Isolated node — emit directly
+            isolated_signals += emit_isolated_proposal_signals(
+                &deduped[component[0]],
+                tier,
+                &borrowed_manifest,
+                &corpus_paths,
+                sender,
+                witness,
+            );
+            isolated_count += 1;
+            continue;
+        }
+
+        // Check knot extraction threshold
+        let mut comp_inodes: HashSet<i64> = HashSet::new();
+        for &idx in component {
+            comp_inodes.extend(&deduped[idx].inode_set);
+        }
+        let ratio = component.len() as f64 / comp_inodes.len().max(1) as f64;
+
+        let is_knot_by_ratio = knot_ratio > 0.0 && ratio >= knot_ratio;
+        let is_knot_by_size = knot_size_limit > 0 && component.len() > knot_size_limit;
+
+        if is_knot_by_ratio || is_knot_by_size {
+            // Extract knot: greedy best-scorer, emit signals directly
+            let classification = if is_knot_by_ratio {
+                KnotClassification::ByRatio
+            } else {
+                KnotClassification::BySize
+            };
+
+            let component_proposals: Vec<&Proposal> =
+                component.iter().map(|&i| &deduped[i]).collect();
+
+            emit_knot_component_signals(
+                knot_id,
+                &component_proposals,
+                tier,
+                classification,
+                ratio,
+                &borrowed_manifest,
+                &corpus_paths,
+                sender,
+                witness,
+            );
+
+            knot_component_count += 1;
+            knot_proposal_count += component.len();
+            knot_id += 1;
+        } else {
+            // Clean component — spawn solver with in-band data
+            let component_proposals: Vec<Proposal> = component
+                .iter()
+                .map(|&i| {
+                    let p = &deduped[i];
+                    Proposal {
+                        total_tracks: p.total_tracks,
+                        rows: p.rows.clone(),
+                        inode_set: p.inode_set.clone(),
+                        total_score: p.total_score,
+                        tier: p.tier,
+                    }
+                })
+                .collect();
+
+            spawned.push(AnalysisComputation::ResolvePackingComponent {
+                data: SharedComponentData::new(ComponentData {
+                    proposals: component_proposals,
+                    tier,
+                    corpus_paths: corpus_paths.clone(),
+                    manifest_map: owned_manifest.clone(),
+                }),
+            });
+        }
+    }
+
+    if knot_component_count > 0 {
+        log_general(format!(
+            "[COMPUTE] {} partial: extracted {} knot components ({} proposals; thresholds: ratio={:.1}, size={})",
+            tier.as_str(), knot_component_count, knot_proposal_count, knot_ratio, knot_size_limit,
+        ));
+    }
+
+    let log_msg = format!(
+        "pool={}, culled={}, deduped={}, {} eligible, {} components ({} isolated → {} signals, {} knots → {} proposals, {} spawned)",
+        pool_size, culled, dedup_removed, deduped.len(), components.len(),
+        isolated_count, isolated_signals, knot_component_count, knot_proposal_count, spawned.len(),
+    );
+
+    (spawned, log_msg)
+}
+
+/// Execute MapPerfectReleases — Stage 3b orchestrator.
+///
+/// Filters to proposals with entirely unclaimed inodes, finds connected
+/// components, emits isolated nodes directly, spawns per-component solvers
+/// for the rest. Defers MapFullMatchReleases as next barrier phase.
 pub(crate) fn execute_map_perfect_releases(
     shared: &SharedMappingState,
-    _witness: &ComputationWitness,
+    read_only_db: &ReadOnlyDb<'_>,
+    witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::MapPerfectReleases {
@@ -2831,18 +3285,113 @@ pub(crate) fn execute_map_perfect_releases(
     };
     let mut state = shared.take();
 
-    let r = run_mis_round(&state.perfect_pool, &state.assigned_inodes);
-    lock_in_round(
-        &r,
-        &state.perfect_pool,
-        &mut state.assigned_inodes,
-        &mut state.assignments,
-    );
+    let sender = match write_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    let assigned_inodes = read_only_db
+        .get_assigned_packing_inodes()
+        .unwrap_or_default();
+
+    // Filter: proposals whose entire inode set is unclaimed
+    let eligible: Vec<Proposal> = std::mem::take(&mut state.perfect_pool)
+        .into_iter()
+        .filter(|p| {
+            !p.inode_set.is_empty() && p.inode_set.iter().all(|i| !assigned_inodes.contains(i))
+        })
+        .collect();
+
+    if eligible.is_empty() {
+        log_general("[COMPUTE] MapPerfectReleases: 0 eligible, skipping");
+        let next_state = SharedMappingState::new(state);
+        return Result::pipeline(
+            computation,
+            start.elapsed().as_millis() as u64,
+            Vec::new(),
+            vec![(
+                PipelineStage::Resolve,
+                vec![Computation::Analysis(
+                    AnalysisComputation::MapFullMatchReleases { state: next_state },
+                )],
+            )],
+        );
+    }
+
+    // Find connected components
+    let components = find_conflict_components(&eligible);
+
+    // Load manifest + corpus paths once for all signal emission (isolated + spawned)
+    let owned_manifest: HashMap<String, (String, String, i32)> = read_only_db
+        .get_packing_manifest()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| (r.release_id, (r.release_title, r.release_artist, r.total_tracks)))
+        .collect();
+    let borrowed_manifest: HashMap<&str, (&str, &str, i32)> = owned_manifest
+        .iter()
+        .map(|(k, (t, a, tt))| (k.as_str(), (t.as_str(), a.as_str(), *tt)))
+        .collect();
+    let corpus_paths: HashMap<i64, String> = read_only_db
+        .get_packing_inode_paths()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    let mut spawned: Vec<AnalysisComputation> = Vec::new();
+    let mut isolated_count = 0usize;
+    let mut isolated_signals = 0usize;
+
+    for component in &components {
+        if component.len() == 1 {
+            // Isolated node — emit directly
+            isolated_signals += emit_isolated_proposal_signals(
+                &eligible[component[0]],
+                ProposalTier::Perfect,
+                &borrowed_manifest,
+                &corpus_paths,
+                &sender,
+                witness,
+            );
+            isolated_count += 1;
+        } else {
+            // Multi-node component — spawn solver with in-band data
+            let component_proposals: Vec<Proposal> =
+                component.iter().map(|&i| {
+                    let p = &eligible[i];
+                    Proposal {
+                        total_tracks: p.total_tracks,
+                        rows: p.rows.clone(),
+                        inode_set: p.inode_set.clone(),
+                        total_score: p.total_score,
+                        tier: p.tier,
+                    }
+                }).collect();
+
+            spawned.push(AnalysisComputation::ResolvePackingComponent {
+                data: SharedComponentData::new(ComponentData {
+                    proposals: component_proposals,
+                    tier: ProposalTier::Perfect,
+                    corpus_paths: corpus_paths.clone(),
+                    manifest_map: owned_manifest.clone(),
+                }),
+            });
+        }
+    }
 
     log_general(format!(
-        "[COMPUTE] MapPerfectReleases: {} eligible, {} selected, \
-         coverage={} inodes, {} components (max {})",
-        r.eligible_count, r.selected_count, r.coverage, r.component_count, r.max_component_size,
+        "[COMPUTE] MapPerfectReleases: {} eligible, {} components ({} isolated → {} signals, {} spawned)",
+        eligible.len(),
+        components.len(),
+        isolated_count,
+        isolated_signals,
+        spawned.len(),
     ));
 
     let next_state = SharedMappingState::new(state);
@@ -2856,15 +3405,20 @@ pub(crate) fn execute_map_perfect_releases(
     Result::pipeline(
         computation,
         start.elapsed().as_millis() as u64,
-        Vec::new(),
+        spawned,
         deferred,
     )
 }
 
-/// Execute MapFullMatchReleases — Stage 3c MIS on FullMatch proposals.
+/// Execute MapFullMatchReleases — Stage 3c orchestrator.
+///
+/// Culls tainted proposals, deduplicates by inode signature, extracts knots,
+/// finds connected components among clean proposals, spawns per-component
+/// solvers. Defers next tier based on singles_before_incompletes config.
 pub(crate) fn execute_map_full_match_releases(
     shared: &SharedMappingState,
-    _witness: &ComputationWitness,
+    read_only_db: &ReadOnlyDb<'_>,
+    witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::MapFullMatchReleases {
@@ -2872,35 +3426,34 @@ pub(crate) fn execute_map_full_match_releases(
     };
     let mut state = shared.take();
 
-    let r = run_mis_round_partial(
-        &state.full_match_pool,
-        &state.assigned_inodes,
+    let sender = match write_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    let assigned_inodes = read_only_db
+        .get_assigned_packing_inodes()
+        .unwrap_or_default();
+
+    let pool = std::mem::take(&mut state.full_match_pool);
+    let (spawned, log_msg) = orchestrate_partial_tier(
+        pool,
+        ProposalTier::FullMatch,
+        &assigned_inodes,
         state.knot_ratio,
         state.knot_size_limit,
+        read_only_db,
+        &sender,
+        witness,
     );
-    lock_in_round(
-        &r,
-        &state.full_match_pool,
-        &mut state.assigned_inodes,
-        &mut state.assignments,
-    );
-    for knot in r.knot_details {
-        state.captured_knots.push((ProposalTier::FullMatch, knot));
-    }
 
-    log_general(format!(
-        "[COMPUTE] MapFullMatchReleases: {} eligible, {} selected, \
-         coverage={} inodes, {} components (max {}), \
-         dedup_removed={}, knots={} ({} proposals)",
-        r.eligible_count,
-        r.selected_count,
-        r.coverage,
-        r.component_count,
-        r.max_component_size,
-        r.dedup_removed,
-        r.knot_components,
-        r.knot_proposals,
-    ));
+    log_general(format!("[COMPUTE] MapFullMatchReleases: {}", log_msg));
 
     // Dynamic chain: FullMatch → first of (Incomplete, Singles) based on config
     let next_computation = if state.singles_before_incompletes {
@@ -2920,15 +3473,16 @@ pub(crate) fn execute_map_full_match_releases(
     Result::pipeline(
         computation,
         start.elapsed().as_millis() as u64,
-        Vec::new(),
+        spawned,
         deferred,
     )
 }
 
-/// Execute MapIncompleteReleases — MIS on partial-coverage proposals.
+/// Execute MapIncompleteReleases — orchestrator for partial-coverage proposals.
 pub(crate) fn execute_map_incomplete_releases(
     shared: &SharedMappingState,
-    _witness: &ComputationWitness,
+    read_only_db: &ReadOnlyDb<'_>,
+    witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::MapIncompleteReleases {
@@ -2936,42 +3490,39 @@ pub(crate) fn execute_map_incomplete_releases(
     };
     let mut state = shared.take();
 
-    let r = run_mis_round_partial(
-        &state.incomplete_pool,
-        &state.assigned_inodes,
+    let sender = match write_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
+
+    let assigned_inodes = read_only_db
+        .get_assigned_packing_inodes()
+        .unwrap_or_default();
+
+    let pool = std::mem::take(&mut state.incomplete_pool);
+    let (spawned, log_msg) = orchestrate_partial_tier(
+        pool,
+        ProposalTier::Incomplete,
+        &assigned_inodes,
         state.knot_ratio,
         state.knot_size_limit,
+        read_only_db,
+        &sender,
+        witness,
     );
-    lock_in_round(
-        &r,
-        &state.incomplete_pool,
-        &mut state.assigned_inodes,
-        &mut state.assignments,
-    );
-    for knot in r.knot_details {
-        state.captured_knots.push((ProposalTier::Incomplete, knot));
-    }
 
-    log_general(format!(
-        "[COMPUTE] MapIncompleteReleases: {} eligible, {} selected, \
-         coverage={} inodes, {} components (max {}), \
-         deduped={}, knots={} ({} proposals)",
-        r.eligible_count,
-        r.selected_count,
-        r.coverage,
-        r.component_count,
-        r.max_component_size,
-        r.dedup_removed,
-        r.knot_components,
-        r.knot_proposals,
-    ));
+    log_general(format!("[COMPUTE] MapIncompleteReleases: {}", log_msg));
 
-    // Dynamic chain: if singles already ran, go to signal emission;
+    // Dynamic chain: if singles already ran, go to gap analysis;
     // otherwise, singles run next.
     let next_computation = if state.singles_before_incompletes {
-        AnalysisComputation::EmitReleasePackingSignals {
-            state: SharedMappingState::new(state),
-        }
+        AnalysisComputation::EmitUnmatchedSignals
     } else {
         AnalysisComputation::MapSingleReleases {
             state: SharedMappingState::new(state),
@@ -2985,15 +3536,20 @@ pub(crate) fn execute_map_incomplete_releases(
     Result::pipeline(
         computation,
         start.elapsed().as_millis() as u64,
-        Vec::new(),
+        spawned,
         deferred,
     )
 }
 
-/// Execute MapSingleReleases — per-inode-best for single-track releases.
+/// Execute MapSingleReleases — orchestrator for single-track releases.
+///
+/// Uses the same orchestrate_partial_tier pipeline. Each single proposal
+/// has a 1-element inode set, so the MIS solver naturally picks the
+/// best-scoring release per unclaimed inode.
 pub(crate) fn execute_map_single_releases(
     shared: &SharedMappingState,
-    _witness: &ComputationWitness,
+    read_only_db: &ReadOnlyDb<'_>,
+    witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::MapSingleReleases {
@@ -3001,43 +3557,39 @@ pub(crate) fn execute_map_single_releases(
     };
     let mut state = shared.take();
 
-    // --- Singles: per-inode-best ---
-    let mut singles_count = 0usize;
-    {
-        let mut inode_candidates: HashMap<i64, Vec<&OptimalPackingScoreRow>> = HashMap::new();
-        for prop in &state.single_pool {
-            for row in &prop.rows {
-                if !state.assigned_inodes.contains(&row.inode) {
-                    inode_candidates.entry(row.inode).or_default().push(row);
-                }
-            }
+    let sender = match write_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
         }
-        for candidates in inode_candidates.values() {
-            let best = candidates
-                .iter()
-                .max_by(|a, b| {
-                    a.score
-                        .partial_cmp(&b.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                        .then_with(|| a.release_id.cmp(&b.release_id))
-                })
-                .unwrap();
-            state.assigned_inodes.insert(best.inode);
-            state.assignments.push((*best).clone());
-            singles_count += 1;
-        }
-    }
-    log_general(format!(
-        "[COMPUTE] MapSingleReleases: {} assigned per-inode-best",
-        singles_count,
-    ));
+    };
 
-    // Dynamic chain: if incompletes already ran, go to signal emission;
+    let assigned_inodes = read_only_db
+        .get_assigned_packing_inodes()
+        .unwrap_or_default();
+
+    let pool = std::mem::take(&mut state.single_pool);
+    let (spawned, log_msg) = orchestrate_partial_tier(
+        pool,
+        ProposalTier::Single,
+        &assigned_inodes,
+        state.knot_ratio,
+        state.knot_size_limit,
+        read_only_db,
+        &sender,
+        witness,
+    );
+
+    log_general(format!("[COMPUTE] MapSingleReleases: {}", log_msg));
+
+    // Dynamic chain: if incompletes already ran, go to gap analysis;
     // otherwise, incompletes run next.
     let next_computation = if !state.singles_before_incompletes {
-        AnalysisComputation::EmitReleasePackingSignals {
-            state: SharedMappingState::new(state),
-        }
+        AnalysisComputation::EmitUnmatchedSignals
     } else {
         AnalysisComputation::MapIncompleteReleases {
             state: SharedMappingState::new(state),
@@ -3051,297 +3603,22 @@ pub(crate) fn execute_map_single_releases(
     Result::pipeline(
         computation,
         start.elapsed().as_millis() as u64,
-        Vec::new(),
-        deferred,
-    )
-}
-
-/// Emit ReleasePacking signals for all MIS rounds + record AcoustID submissions.
-///
-/// This is the final MIS stage — runs after all assignment rounds are done.
-/// Defers AnalyzeReleaseGaps as the next (and final) pipeline stage.
-pub(crate) fn execute_emit_release_packing_signals(
-    shared: &SharedMappingState,
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
-    start: Instant,
-) -> Result {
-    let computation = AnalysisComputation::EmitReleasePackingSignals {
-        state: shared.clone(),
-    };
-    let state = shared.take();
-
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
-
-    // Build manifest lookup
-    let manifest_map: HashMap<&str, (&str, &str, i32)> = state
-        .manifest
-        .iter()
-        .map(|r| {
-            (
-                r.release_id.as_str(),
-                (
-                    r.release_title.as_str(),
-                    r.release_artist.as_str(),
-                    r.total_tracks,
-                ),
-            )
-        })
-        .collect();
-
-    // Compute per-release coverage
-    let mut release_filled: HashMap<&str, u32> = HashMap::new();
-    for row in &state.assignments {
-        *release_filled.entry(&row.release_id).or_default() += 1;
-    }
-
-    // Load corpus paths
-    let corpus_paths: HashMap<i64, String> = match read_only_db.get_packing_inode_paths() {
-        Ok(rows) => rows.into_iter().collect(),
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to query candidate paths: {}", e),
-            );
-        }
-    };
-
-    // Build signals
-    let mut computed: Vec<ComputedCorpusSignal> = Vec::new();
-
-    for row in &state.assignments {
-        let path = match corpus_paths.get(&row.inode) {
-            Some(p) => p.clone(),
-            None => continue,
-        };
-
-        let (release_title, release_artist, total_tracks): (String, String, i32) =
-            match manifest_map.get(row.release_id.as_str()) {
-                Some(&(title, artist, total)) => (title.to_string(), artist.to_string(), total),
-                None => continue,
-            };
-
-        let filled = release_filled
-            .get(row.release_id.as_str())
-            .copied()
-            .unwrap_or(0);
-
-        let alternatives_count = state
-            .inode_release_set
-            .get(&row.inode)
-            .map(|s| s.len() as u16)
-            .unwrap_or(1);
-
-        let breakdown: PackingScoreBreakdown = bincode::deserialize(&row.score_breakdown)
-            .unwrap_or(PackingScoreBreakdown {
-                acoustid_confidence: 0.0,
-                duration_match: 0.0,
-                title_match: 0.0,
-                artist_match: 0.0,
-                album_match: 0.0,
-                track_number_match: 0.0,
-            });
-
-        let signal = ReleasePackingSignal {
-            inode: row.inode,
-            path,
-            data: ReleasePackingData {
-                release_id: row.release_id.clone(),
-                release_title,
-                release_artist,
-                track_position: row.track_pos as u32,
-                medium_position: row.medium_pos as u32,
-                medium_format: row.medium_format.clone(),
-                track_number: row.track_number.clone(),
-                recording_id: row.recording_id.clone(),
-                track_title: row.track_title.clone(),
-                score: row.score,
-                score_breakdown: breakdown,
-                alternatives_count,
-                release_coverage: filled as f32 / total_tracks.max(1) as f32,
-                match_method: if row.match_method == 1 {
-                    MatchMethod::Elimination
-                } else {
-                    MatchMethod::AcoustId
-                },
-            },
-        };
-
-        computed.push(ComputedCorpusSignal::new(
-            signal.inode,
-            TypedSignalWrite::ReleasePacking(signal),
-        ));
-    }
-
-    let unique_releases = release_filled.len();
-    let (cleared, new, updated, unchanged) =
-        reconcile_corpus_signals::<ReleasePackingSignal>(read_only_db, &sender, computed, witness);
-
-    // Record pending AcoustID submissions for elimination-method winners
-    let mut pending_submissions: Vec<write_thread::PendingAcoustIdSubmission> = Vec::new();
-    for row in &state.assignments {
-        if row.match_method != 1 {
-            continue;
-        }
-        if let (Some(fp_hex), Some(dur_ms)) = (&row.fingerprint_hex, row.raw_duration_ms) {
-            pending_submissions.push(write_thread::PendingAcoustIdSubmission {
-                fingerprint: fp_hex.clone(),
-                recording_id: row.recording_id.clone(),
-                duration_ms: dur_ms,
-                source: "elimination".to_string(),
-            });
-        }
-    }
-    let submission_count = pending_submissions.len();
-    if !pending_submissions.is_empty() {
-        sender.write_pending_acoustid_submissions(pending_submissions, witness);
-    }
-
-    // Emit PackingKnot signals for captured knot components
-    let mut knot_signals: Vec<ComputedAggregateSignal> = Vec::new();
-    for (tier, knot) in &state.captured_knots {
-        let tier_str = match tier {
-            ProposalTier::FullMatch => "full_match",
-            ProposalTier::Incomplete => "incomplete",
-            _ => "unknown",
-        };
-        let pool = match tier {
-            ProposalTier::FullMatch => &state.full_match_pool,
-            ProposalTier::Incomplete => &state.incomplete_pool,
-            ProposalTier::Perfect => &state.perfect_pool,
-            ProposalTier::Single => &state.single_pool,
-        };
-
-        let proposals: Vec<KnotProposalEntry> = knot
-            .proposals
-            .iter()
-            .map(|&(pool_idx, selected)| {
-                let proposal = &pool[pool_idx];
-                let (release_title, release_artist, total_tracks) =
-                    match manifest_map.get(proposal.rows[0].release_id.as_str()) {
-                        Some(&(t, a, tt)) => (t.to_string(), a.to_string(), tt),
-                        None => (String::new(), String::new(), proposal.total_tracks),
-                    };
-                let assignments = proposal
-                    .rows
-                    .iter()
-                    .map(|row| {
-                        let breakdown: PackingScoreBreakdown =
-                            bincode::deserialize(&row.score_breakdown).unwrap_or(
-                                PackingScoreBreakdown {
-                                    acoustid_confidence: 0.0,
-                                    duration_match: 0.0,
-                                    title_match: 0.0,
-                                    artist_match: 0.0,
-                                    album_match: 0.0,
-                                    track_number_match: 0.0,
-                                },
-                            );
-                        KnotAssignment {
-                            inode: row.inode,
-                            recording_id: row.recording_id.clone(),
-                            medium_pos: row.medium_pos,
-                            track_pos: row.track_pos,
-                            track_title: row.track_title.clone(),
-                            score: row.score,
-                            score_breakdown: breakdown,
-                            match_method: row.match_method,
-                        }
-                    })
-                    .collect();
-                KnotProposalEntry {
-                    release_id: proposal.rows[0].release_id.clone(),
-                    release_title,
-                    release_artist,
-                    total_tracks,
-                    total_score: proposal.total_score,
-                    selected,
-                    assignments,
-                }
-            })
-            .collect();
-
-        let key = format!("{}:{}", tier_str, knot.knot_id);
-        let signal = PackingKnotSignal {
-            key: key.clone(),
-            data: PackingKnotData {
-                tier: tier_str.to_string(),
-                knot_id: knot.knot_id,
-                classification: knot.classification,
-                ratio: knot.ratio,
-                contested_inodes: knot.contested_inodes.clone(),
-                proposals,
-            },
-        };
-        knot_signals.push(ComputedAggregateSignal::new(
-            key,
-            TypedSignalWrite::PackingKnot(signal),
-        ));
-    }
-
-    let (knot_cleared, knot_new, knot_updated, knot_unchanged) =
-        reconcile_aggregate_signals::<PackingKnotSignal>(
-            read_only_db,
-            &sender,
-            knot_signals,
-            witness,
-        );
-
-    log_general(format!(
-        "[COMPUTE] EmitReleasePackingSignals: {} inodes assigned to {} releases | \
-         {} elimination submissions | {} knot signals (c={}, n={}, u={}, unch={}) | \
-         signals: cleared={}, new={}, updated={}, unchanged={}",
-        state.assignments.len(),
-        unique_releases,
-        submission_count,
-        state.captured_knots.len(),
-        knot_cleared,
-        knot_new,
-        knot_updated,
-        knot_unchanged,
-        cleared,
-        new,
-        updated,
-        unchanged
-    ));
-
-    // Defer AnalyzeReleaseGaps as final stage
-    let deferred = vec![(
-        PipelineStage::Analyze,
-        vec![Computation::Analysis(
-            AnalysisComputation::AnalyzeReleaseGaps,
-        )],
-    )];
-
-    Result::pipeline(
-        computation,
-        start.elapsed().as_millis() as u64,
-        Vec::new(),
+        spawned,
         deferred,
     )
 }
 
 // ============================================================================
-// Stage 4: AnalyzeReleaseGaps (renumbered from old Stage 5)
+// Stage 4: EmitUnmatchedSignals (gap analysis)
 // ============================================================================
 
-/// Execute AnalyzeReleaseGaps — identify unmatched tracks and near-miss patterns.
-pub fn execute_analyze_release_gaps(
+/// Execute EmitUnmatchedSignals — emit unmatched corpus track and unfilled slot signals.
+pub fn execute_emit_unmatched_signals(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
-    let computation = AnalysisComputation::AnalyzeReleaseGaps;
+    let computation = AnalysisComputation::EmitUnmatchedSignals;
 
     let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
@@ -3493,7 +3770,7 @@ pub fn execute_analyze_release_gaps(
         }
         Err(e) => {
             log_general(format!(
-                "[COMPUTE] AnalyzeReleaseGaps: failed to query fingerprinted inodes: {}",
+                "[COMPUTE] EmitUnmatchedSignals: failed to query fingerprinted inodes: {}",
                 e
             ));
         }
@@ -3517,7 +3794,6 @@ pub fn execute_analyze_release_gaps(
 
     let mut filled_slots: HashMap<String, HashSet<(i32, i32)>> = HashMap::new();
     let mut release_assigned_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
-    let mut release_match_methods: HashMap<String, Vec<MatchMethod>> = HashMap::new();
     for a in &actual_assignments {
         filled_slots
             .entry(a.release_id.clone())
@@ -3527,10 +3803,6 @@ pub fn execute_analyze_release_gaps(
             .entry(a.release_id.clone())
             .or_default()
             .insert(a.inode);
-        release_match_methods
-            .entry(a.release_id.clone())
-            .or_default()
-            .push(a.match_method);
     }
 
     // Build full_match_inodes: set of all inodes assigned to full-match releases.
@@ -3649,235 +3921,10 @@ pub fn execute_analyze_release_gaps(
             witness,
         );
 
-    // === Packed release signals ===
-    // Emit one per-release aggregate signal with typed category.
-    let mut packed_signals: Vec<ComputedAggregateSignal> = Vec::new();
-
-    for manifest_row in &manifest {
-        let filled_count = filled_slots
-            .get(&manifest_row.release_id)
-            .map(|s| s.len() as u32)
-            .unwrap_or(0);
-
-        // Only emit for releases that have at least one assigned track
-        if filled_count == 0 {
-            continue;
-        }
-
-        let total = manifest_row.total_tracks as u32;
-        let category = if total == 1 {
-            PackedReleaseCategory::Single
-        } else if filled_count >= total {
-            // All slots filled — classify by confidence level.
-            let all_acoustid = release_match_methods
-                .get(&manifest_row.release_id)
-                .map(|methods| methods.iter().all(|m| *m == MatchMethod::AcoustId))
-                .unwrap_or(false);
-
-            if all_acoustid {
-                PackedReleaseCategory::Perfect
-            } else {
-                PackedReleaseCategory::FullMatch
-            }
-        } else {
-            // Suppress fully-covered incomplete releases (same filter as unfilled slots)
-            if let Some(candidate_inodes) =
-                release_candidate_inodes.get(manifest_row.release_id.as_str())
-            {
-                if !candidate_inodes.is_empty()
-                    && candidate_inodes
-                        .iter()
-                        .all(|i| full_match_inodes.contains(i))
-                {
-                    continue;
-                }
-            }
-            PackedReleaseCategory::Incomplete
-        };
-
-        let key = format!("{}:{}", category.key_prefix(), manifest_row.release_id);
-        let signal = PackedReleaseSignal {
-            key: key.clone(),
-            data: PackedReleaseData {
-                release_id: manifest_row.release_id.clone(),
-                release_title: manifest_row.release_title.clone(),
-                release_artist: manifest_row.release_artist.clone(),
-                category,
-                assigned_count: filled_count,
-                total_tracks: total,
-            },
-        };
-
-        packed_signals.push(ComputedAggregateSignal::new(
-            key,
-            TypedSignalWrite::PackedRelease(signal),
-        ));
-    }
-
-    let (pr_cleared, pr_new, pr_updated, pr_unchanged) =
-        reconcile_aggregate_signals::<PackedReleaseSignal>(
-            read_only_db,
-            &sender,
-            packed_signals,
-            witness,
-        );
-
-    // === Near-miss detection ===
-    // A release with (n-1)/n tracks matched, all from the same directory containing
-    // exactly n audio files. The unmatched file is the likely missing track.
-    let mut near_miss_signals: Vec<ComputedAggregateSignal> = Vec::new();
-
-    for manifest_row in &manifest {
-        let total = manifest_row.total_tracks as u32;
-        if total < 2 {
-            continue;
-        }
-
-        let filled_for_release = match filled_slots.get(&manifest_row.release_id) {
-            Some(s) => s,
-            None => continue,
-        };
-        let filled_count = filled_for_release.len() as u32;
-
-        // Near-miss: exactly (n-1)/n filled
-        if filled_count + 1 != total {
-            continue;
-        }
-
-        // Get the assigned inodes for this release (from actual assignments,
-        // which includes both AcoustId and Elimination matches)
-        let release_inodes: Vec<i64> = actual_assignments
-            .iter()
-            .filter(|a| a.release_id == manifest_row.release_id)
-            .map(|a| a.inode)
-            .collect();
-
-        // Check directory cohesion: all assigned inodes from same directory
-        let mut dirs: HashSet<String> = HashSet::new();
-        for inode in &release_inodes {
-            if let Some(path) = corpus_paths.get(inode) {
-                if let Some(parent) = Path::new(path).parent() {
-                    dirs.insert(parent.to_string_lossy().to_string());
-                }
-            }
-        }
-
-        if dirs.len() != 1 {
-            continue;
-        }
-        let directory = dirs.into_iter().next().unwrap();
-
-        // Count audio files in that directory (from corpus)
-        let dir_audio_count = corpus_paths
-            .values()
-            .filter(|p| {
-                Path::new(p.as_str())
-                    .parent()
-                    .map(|parent| parent.to_string_lossy() == directory)
-                    .unwrap_or(false)
-            })
-            .count() as u32;
-
-        // The directory should have exactly total tracks (n audio files for an n-track release)
-        if dir_audio_count != total {
-            continue;
-        }
-
-        // Find the unmatched file in this directory
-        let assigned_set: HashSet<i64> = release_inodes.iter().copied().collect();
-        let mut candidate_inode: Option<i64> = None;
-        let mut candidate_path: Option<String> = None;
-
-        for (inode, path) in &corpus_paths {
-            if assigned_set.contains(inode) {
-                continue;
-            }
-            if let Some(parent) = Path::new(path.as_str()).parent() {
-                if parent.to_string_lossy() == directory {
-                    candidate_inode = Some(*inode);
-                    candidate_path = Some(path.clone());
-                    break;
-                }
-            }
-        }
-
-        let (candidate_inode, candidate_path) = match (candidate_inode, candidate_path) {
-            (Some(i), Some(p)) => (i, p),
-            _ => continue,
-        };
-
-        // Find the missing slot
-        let release = match read_only_db.get_mb_release_cache(&manifest_row.release_id) {
-            Ok(Some((raw_json, _))) => match musicbrainz::parse_release(&raw_json) {
-                Ok(r) => r,
-                Err(_) => continue,
-            },
-            _ => continue,
-        };
-
-        let mut missing_slot = None;
-        for medium in &release.media {
-            for track in &medium.tracks {
-                let slot = (medium.position as i32, track.position as i32);
-                if !filled_for_release.contains(&slot) {
-                    missing_slot = Some((
-                        medium.position,
-                        track.position,
-                        track.title.clone(),
-                        track.recording.id.clone(),
-                    ));
-                    break;
-                }
-            }
-            if missing_slot.is_some() {
-                break;
-            }
-        }
-
-        let (missing_medium, missing_track, missing_title, missing_recording) = match missing_slot {
-            Some(s) => s,
-            None => continue,
-        };
-
-        let key = format!("{}:{}", manifest_row.release_id, directory);
-        let signal = NearMissReleaseSignal {
-            key: key.clone(),
-            data: NearMissReleaseData {
-                release_id: manifest_row.release_id.clone(),
-                release_title: manifest_row.release_title.clone(),
-                release_artist: manifest_row.release_artist.clone(),
-                directory,
-                candidate_inode,
-                candidate_path,
-                missing_medium_pos: missing_medium,
-                missing_track_pos: missing_track,
-                missing_track_title: missing_title,
-                missing_recording_id: missing_recording,
-                filled_count,
-                total_tracks: total,
-            },
-        };
-
-        near_miss_signals.push(ComputedAggregateSignal::new(
-            key,
-            TypedSignalWrite::NearMissRelease(signal),
-        ));
-    }
-
-    let (nm_cleared, nm_new, nm_updated, nm_unchanged) =
-        reconcile_aggregate_signals::<NearMissReleaseSignal>(
-            read_only_db,
-            &sender,
-            near_miss_signals,
-            witness,
-        );
-
     log_general(format!(
-        "[COMPUTE] AnalyzeReleaseGaps: \
+        "[COMPUTE] EmitUnmatchedSignals: \
          unmatched_corpus: cleared={}, new={}, updated={}, unchanged={} | \
          unfilled_slots: cleared={}, new={}, updated={}, unchanged={} | \
-         packed_release: cleared={}, new={}, updated={}, unchanged={} | \
-         near_miss: cleared={}, new={}, updated={}, unchanged={} | \
          {} fully-covered releases suppressed",
         uc_cleared,
         uc_new,
@@ -3887,14 +3934,6 @@ pub fn execute_analyze_release_gaps(
         us_new,
         us_updated,
         us_unchanged,
-        pr_cleared,
-        pr_new,
-        pr_updated,
-        pr_unchanged,
-        nm_cleared,
-        nm_new,
-        nm_updated,
-        nm_unchanged,
         suppressed_covered
     ));
 

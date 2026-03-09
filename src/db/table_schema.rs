@@ -644,13 +644,6 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
-        name: "signal_near_miss_release",
-        kind: TableKind::Computed,
-        create_sql: <NearMissReleaseSignal as store::AggregateSignalStore>::TABLE_SQL,
-        index_sql: &[],
-    });
-
-    tables.push(TableEntry {
         name: "signal_packed_release",
         kind: TableKind::Computed,
         create_sql: <PackedReleaseSignal as store::AggregateSignalStore>::TABLE_SQL,

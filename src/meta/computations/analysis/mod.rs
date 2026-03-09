@@ -214,7 +214,7 @@ pub enum Computation {
     ///
     /// Loads external matches, identifies releases, writes session manifest,
     /// spawns N ScoreReleaseCandidates (Stage 2), defers ComputeReleaseMappings
-    /// (Stage 3) and AnalyzeReleaseGaps (Stage 4) as barrier-separated phases.
+    /// (Stage 3) and EmitUnmatchedSignals (Stage 4) as barrier-separated phases.
     ///
     /// Manual trigger only (expensive), not part of ScheduleContentAnalysis.
     PackReleases,
@@ -267,19 +267,22 @@ pub enum Computation {
         state: release_packing::SharedMappingState,
     },
 
-    /// Emit ReleasePacking signals for all MIS rounds (Stage 3 final).
+    /// Resolve one connected component of the packing conflict graph.
     ///
-    /// Builds signals from accumulated assignments, reconciles with existing
-    /// signals, records pending AcoustID submissions, defers AnalyzeReleaseGaps.
-    EmitReleasePackingSignals {
-        state: release_packing::SharedMappingState,
+    /// Self-contained MIS solver: builds local conflict graph from the carried
+    /// proposals, solves via bitmask (≤25) or BnB (>25), emits PackedRelease +
+    /// ReleasePacking signals per selected proposal. Spawned in parallel by
+    /// tier orchestrators (MapPerfect/FullMatch/Incomplete/SingleReleases).
+    ResolvePackingComponent {
+        data: release_packing::SharedComponentData,
     },
 
-    /// Gap analysis after release packing (Stage 4).
+    /// Emit unmatched signals after release packing (Stage 4).
     ///
-    /// Identifies unmatched corpus tracks, unfilled release slots, and near-miss
-    /// patterns where (n-1)/n tracks match from the same directory.
-    AnalyzeReleaseGaps,
+    /// Identifies unmatched corpus tracks and unfilled release slots.
+    /// PackedRelease, ReleasePacking, and PackingKnot signals are emitted
+    /// per-component within each tier's MIS computation.
+    EmitUnmatchedSignals,
 
     /// Derive external match signals from AcoustID lookup results.
     ///
@@ -337,8 +340,8 @@ impl Computation {
             Computation::MapFullMatchReleases { .. } => "Mapping full-match releases",
             Computation::MapIncompleteReleases { .. } => "Mapping incomplete releases",
             Computation::MapSingleReleases { .. } => "Mapping single-track releases",
-            Computation::EmitReleasePackingSignals { .. } => "Emitting release packing signals",
-            Computation::AnalyzeReleaseGaps => "Analyzing release gaps",
+            Computation::ResolvePackingComponent { .. } => "Resolving packing component",
+            Computation::EmitUnmatchedSignals => "Emitting unmatched signals",
             Computation::DeriveExternalMatches => "Deriving external match signals",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
             Computation::IndexImageFile => "Indexing image files",
@@ -431,22 +434,22 @@ impl Computation {
                 execute_compute_release_mappings(ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::MapPerfectReleases { ref state } => {
-                execute_map_perfect_releases(state, ctx.witness, ctx.start)
+                execute_map_perfect_releases(state, ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::MapFullMatchReleases { ref state } => {
-                execute_map_full_match_releases(state, ctx.witness, ctx.start)
+                execute_map_full_match_releases(state, ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::MapIncompleteReleases { ref state } => {
-                execute_map_incomplete_releases(state, ctx.witness, ctx.start)
+                execute_map_incomplete_releases(state, ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::MapSingleReleases { ref state } => {
-                execute_map_single_releases(state, ctx.witness, ctx.start)
+                execute_map_single_releases(state, ctx.read_db, ctx.witness, ctx.start)
             }
-            Computation::EmitReleasePackingSignals { ref state } => {
-                execute_emit_release_packing_signals(state, ctx.read_db, ctx.witness, ctx.start)
+            Computation::ResolvePackingComponent { ref data } => {
+                execute_resolve_packing_component(data, ctx.witness, ctx.start)
             }
-            Computation::AnalyzeReleaseGaps => {
-                execute_analyze_release_gaps(ctx.read_db, ctx.witness, ctx.start)
+            Computation::EmitUnmatchedSignals => {
+                execute_emit_unmatched_signals(ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::DeriveExternalMatches => {
                 execute_derive_external_matches(ctx.read_db, ctx.witness, ctx.start)

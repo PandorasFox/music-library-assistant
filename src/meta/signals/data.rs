@@ -516,33 +516,6 @@ pub struct UnfilledReleaseSlotData {
     pub total_tracks: u32,
 }
 
-/// Near-miss: release with (n-1)/n tracks matched, all from same directory
-/// containing n total audio files. The missing track is likely the unmatched file.
-/// (Aggregate signal, key = `{release_id}:{directory}`)
-#[derive(Debug, Clone)]
-pub struct NearMissReleaseSignal {
-    pub key: String,
-    /// Serialized as bincode BLOB.
-    pub data: NearMissReleaseData,
-}
-
-/// Bincode payload for NearMissRelease.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NearMissReleaseData {
-    pub release_id: String,
-    pub release_title: String,
-    pub release_artist: String,
-    pub directory: String,
-    pub candidate_inode: i64,
-    pub candidate_path: String,
-    pub missing_medium_pos: u32,
-    pub missing_track_pos: u32,
-    pub missing_track_title: String,
-    pub missing_recording_id: String,
-    pub filled_count: u32,
-    pub total_tracks: u32,
-}
-
 /// Per-release aggregate packing result.
 /// Key = `{category_prefix}:{release_id}` for SQL-level filtering.
 /// (Aggregate signal, key = `full_match:{release_id}` | `single:{release_id}` | `incomplete:{release_id}`)
@@ -1135,7 +1108,6 @@ pub enum TypedSignalWrite {
     InboxCompoundTag(InboxCompoundTagSignal),
     DiscExtraction(DiscExtractionSignal),
     UnfilledReleaseSlot(UnfilledReleaseSlotSignal),
-    NearMissRelease(NearMissReleaseSignal),
     PackedRelease(PackedReleaseSignal),
     PackingKnot(PackingKnotSignal),
 }
@@ -1192,7 +1164,6 @@ impl TypedSignalWrite {
             Self::InboxCompoundTag(s) => s.insert(conn),
             Self::DiscExtraction(s) => s.insert(conn),
             Self::UnfilledReleaseSlot(s) => s.insert(conn),
-            Self::NearMissRelease(s) => s.insert(conn),
             Self::PackedRelease(s) => s.insert(conn),
             Self::PackingKnot(s) => s.insert(conn),
         }
@@ -1249,7 +1220,6 @@ impl TypedSignalWrite {
             Self::InboxCompoundTag(s) => InboxCompoundTagSignal::exists(conn, s.inode),
             Self::DiscExtraction(s) => DiscExtractionSignal::exists(conn, &s.key),
             Self::UnfilledReleaseSlot(s) => UnfilledReleaseSlotSignal::exists(conn, &s.key),
-            Self::NearMissRelease(s) => NearMissReleaseSignal::exists(conn, &s.key),
             Self::PackedRelease(s) => PackedReleaseSignal::exists(conn, &s.key),
             Self::PackingKnot(s) => PackingKnotSignal::exists(conn, &s.key),
         };
@@ -1452,11 +1422,6 @@ impl TypedSignalWrite {
             }
             Self::ExpectedDuplicate(_) => {} // key + created_at only
             Self::UnfilledReleaseSlot(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::NearMissRelease(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }

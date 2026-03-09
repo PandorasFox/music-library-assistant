@@ -268,6 +268,11 @@ enum DbWriteOp {
         prefix: String,
         label: &'static str,
     },
+    /// Truncate an entire signal table (DELETE FROM).
+    ClearSignalTable {
+        clear_fn: fn(&rusqlite::Connection) -> rusqlite::Result<usize>,
+        label: &'static str,
+    },
 
     // =========================================================================
     // Library File Operations (Awakening phase - reconciliation)
@@ -809,6 +814,36 @@ impl SignalWriteSender {
         let _ = self.tx.send(DbWriteOp::ClearAggregateByKeyPrefix {
             clear_fn: S::clear_by_key_prefix,
             prefix: prefix.to_string(),
+            label: S::TABLE_NAME,
+        });
+    }
+
+    /// Clear all rows from a signal table (DELETE FROM).
+    ///
+    /// Used for bulk clear-then-write patterns where an entire pipeline
+    /// re-emits all signals from scratch.
+    pub fn clear_signal_table<S: crate::meta::signals::store::CorpusSignalStore>(
+        &self,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::ClearSignalTable {
+            clear_fn: |conn| S::clear_all(conn),
+            label: S::TABLE_NAME,
+        });
+    }
+
+    /// Clear all rows from an aggregate signal table (DELETE FROM).
+    ///
+    /// Used for bulk clear-then-write patterns where an entire pipeline
+    /// re-emits all signals from scratch.
+    pub fn clear_aggregate_signal_table<S: crate::meta::signals::store::AggregateSignalStore>(
+        &self,
+        _witness: &impl SignalWitness,
+    ) {
+        self.mark_enqueued();
+        let _ = self.tx.send(DbWriteOp::ClearSignalTable {
+            clear_fn: |conn| S::clear_all(conn),
             label: S::TABLE_NAME,
         });
     }
@@ -1713,6 +1748,25 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
                     "[DB_THREAD] clear {} by prefix '{}' failed: {}",
                     label, prefix, e
                 ));
+            }
+        }
+
+        DbWriteOp::ClearSignalTable { clear_fn, label } => {
+            match clear_fn(db.conn()) {
+                Ok(count) => {
+                    if count > 0 {
+                        crate::logging::log_general(format!(
+                            "[DB_THREAD] cleared {} rows from {}",
+                            count, label
+                        ));
+                    }
+                }
+                Err(e) => {
+                    crate::logging::log_error(format!(
+                        "[DB_THREAD] clear all {} failed: {}",
+                        label, e
+                    ));
+                }
             }
         }
 

@@ -9,7 +9,8 @@ use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::computations::{Computation, PipelineStage};
 use crate::meta::signals::data::{
-    PackedReleaseSignal, PackingKnotSignal, ReleasePackingSignal,
+    AlternativeReleasePackingSignal, PackedReleaseSignal, PackingKnotSignal,
+    ReleasePackingSignal, VariousArtistsOverrideSignal,
 };
 
 use super::components::{
@@ -17,8 +18,8 @@ use super::components::{
     orchestrate_partial_tier,
 };
 use super::types::{
-    classify_proposal, ComponentData, Proposal, ProposalTier, ReleaseMappingState,
-    SharedComponentData, SharedMappingState,
+    classify_proposal, AlternativeRelease, ComponentData, Proposal, ProposalTier,
+    ReleaseMappingState, SharedComponentData, SharedMappingState,
 };
 use crate::config::ReleasePackingOpinions;
 use crate::meta::computations::analysis::{Computation as AnalysisComputation, Result};
@@ -54,6 +55,8 @@ pub fn execute_compute_release_mappings(
     sender.clear_signal_table::<ReleasePackingSignal>(witness);
     sender.clear_aggregate_signal_table::<PackedReleaseSignal>(witness);
     sender.clear_aggregate_signal_table::<PackingKnotSignal>(witness);
+    sender.clear_aggregate_signal_table::<AlternativeReleasePackingSignal>(witness);
+    sender.clear_aggregate_signal_table::<VariousArtistsOverrideSignal>(witness);
     write_thread::wait_for_queue_drain();
 
     // Read all optimal picks from scoring table
@@ -285,6 +288,9 @@ pub(crate) fn execute_map_perfect_releases(
         );
     }
 
+    // Build inode-signature groups for alternative detection (bookkeeping only, no filtering)
+    let eligible_siblings = build_signature_siblings(&eligible, read_only_db);
+
     // Find connected components
     let components = find_conflict_components(&eligible);
 
@@ -330,22 +336,29 @@ pub(crate) fn execute_map_perfect_releases(
 
     for component in &components {
         if component.len() == 1 {
+            let eligible_idx = component[0];
+            let siblings = eligible_siblings.get(&eligible_idx).map(|v| v.as_slice()).unwrap_or(&[]);
             // Isolated node — emit directly
             isolated_signals += emit_isolated_proposal_signals(
-                &eligible[component[0]],
+                &eligible[eligible_idx],
                 ProposalTier::Perfect,
                 &manifest_map,
                 &corpus_paths,
+                siblings,
                 &sender,
                 witness,
             );
             isolated_count += 1;
         } else {
             // Multi-node component — spawn solver
+            // Remap eligible indices to component-local indices for signature_siblings
+            let mut component_siblings: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
             let component_proposals: Vec<Proposal> =
-                component.iter().map(|&i| {
-                    // Move proposal data out by reconstructing from eligible
-                    let p = &eligible[i];
+                component.iter().enumerate().map(|(local_idx, &eligible_idx)| {
+                    if let Some(sibs) = eligible_siblings.get(&eligible_idx) {
+                        component_siblings.insert(local_idx, sibs.clone());
+                    }
+                    let p = &eligible[eligible_idx];
                     Proposal {
                         total_tracks: p.total_tracks,
                         rows: p.rows.clone(),
@@ -361,6 +374,7 @@ pub(crate) fn execute_map_perfect_releases(
                     tier: ProposalTier::Perfect,
                     corpus_paths: corpus_paths.clone(),
                     manifest_map: manifest_map_owned.clone(),
+                    signature_siblings: component_siblings,
                 }),
             });
         }
@@ -590,4 +604,70 @@ pub(crate) fn execute_map_single_releases(
         spawned,
         deferred,
     )
+}
+
+/// Build per-proposal-index alternative siblings from inode signature groups.
+///
+/// Groups proposals by sorted inode set. For each group with >1 member,
+/// the best-scorer is the "keeper" and the rest become its `AlternativeRelease` siblings.
+/// Returns a map from keeper index to its siblings.
+fn build_signature_siblings(
+    proposals: &[Proposal],
+    read_only_db: &ReadOnlyDb<'_>,
+) -> HashMap<usize, Vec<AlternativeRelease>> {
+    let mut sig_groups: HashMap<Vec<i64>, Vec<usize>> = HashMap::new();
+    for (i, p) in proposals.iter().enumerate() {
+        let mut sig: Vec<i64> = p.inode_set.iter().copied().collect();
+        sig.sort_unstable();
+        sig_groups.entry(sig).or_default().push(i);
+    }
+
+    let manifest = read_only_db.get_packing_manifest().unwrap_or_default();
+    let manifest_map: HashMap<&str, (&str, &str)> = manifest
+        .iter()
+        .map(|r| (r.release_id.as_str(), (r.release_title.as_str(), r.release_artist.as_str())))
+        .collect();
+
+    let mut result: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
+
+    for group in sig_groups.values() {
+        if group.len() < 2 {
+            continue;
+        }
+        // Find best-scorer in group
+        let best_idx = *group
+            .iter()
+            .max_by(|&&a, &&b| {
+                proposals[a]
+                    .total_score
+                    .partial_cmp(&proposals[b].total_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+
+        let siblings: Vec<AlternativeRelease> = group
+            .iter()
+            .filter(|&&i| i != best_idx)
+            .filter_map(|&i| {
+                let p = &proposals[i];
+                let release_id = &p.rows[0].release_id;
+                let (title, artist) = manifest_map
+                    .get(release_id.as_str())
+                    .map(|&(t, a)| (t.to_string(), a.to_string()))
+                    .unwrap_or_default();
+                Some(AlternativeRelease {
+                    release_id: release_id.clone(),
+                    release_title: title,
+                    release_artist: artist,
+                    total_score: p.total_score,
+                })
+            })
+            .collect();
+
+        if !siblings.is_empty() {
+            result.insert(best_idx, siblings);
+        }
+    }
+
+    result
 }

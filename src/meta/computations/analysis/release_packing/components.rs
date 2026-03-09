@@ -8,14 +8,16 @@ use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
+    AlternativeReleasePackingData, AlternativeReleasePackingSignal,
     KnotAssignment, KnotClassification, KnotProposalEntry, MatchMethod, PackedReleaseCategory,
     PackedReleaseData, PackedReleaseSignal, PackingKnotData, PackingKnotSignal,
     PackingScoreBreakdown, ReleasePackingData, ReleasePackingSignal, TypedSignalWrite,
+    VariousArtistsOverrideData, VariousArtistsOverrideSignal, VariousArtistsOverrideSource,
 };
 
 use super::mis::MisCandidate;
 use super::types::{
-    ComponentData, Proposal, ProposalTier, SharedComponentData,
+    AlternativeRelease, ComponentData, Proposal, ProposalTier, SharedComponentData,
 };
 use crate::meta::computations::analysis::{Computation as AnalysisComputation, Result};
 
@@ -90,6 +92,7 @@ pub(super) fn emit_isolated_proposal_signals(
     tier: ProposalTier,
     manifest_map: &HashMap<&str, (&str, &str, i32)>,
     corpus_paths: &HashMap<i64, String>,
+    siblings: &[AlternativeRelease],
     sender: &write_thread::SignalWriteSender,
     witness: &ComputationWitness,
 ) -> usize {
@@ -186,6 +189,36 @@ pub(super) fn emit_isolated_proposal_signals(
         }
     }
 
+    // Emit alternative release signals for siblings
+    let inode_count = proposal.inode_set.len() as u32;
+    for sib in siblings {
+        let alt_key = format!("{}:{}", release_id, sib.release_id);
+        signals_batch.push(TypedSignalWrite::AlternativeReleasePacking(
+            AlternativeReleasePackingSignal {
+                key: alt_key,
+                data: AlternativeReleasePackingData {
+                    winner_release_id: release_id.clone(),
+                    winner_release_title: release_title.clone(),
+                    alternative_release_id: sib.release_id.clone(),
+                    alternative_release_title: sib.release_title.clone(),
+                    alternative_release_artist: sib.release_artist.clone(),
+                    alternative_score: sib.total_score,
+                    winner_score: proposal.total_score,
+                    inode_count,
+                },
+            },
+        ));
+    }
+
+    // VA override: if winner is "Various Artists", suggest a non-VA artist from siblings
+    emit_va_override_from_siblings(
+        release_id,
+        &release_title,
+        &release_artist,
+        siblings,
+        &mut signals_batch,
+    );
+
     if !signals_batch.is_empty() {
         sender.write_typed_signal_batch(signals_batch, witness);
     }
@@ -248,13 +281,48 @@ pub(super) fn emit_knot_component_signals(
                 comp_inodes.len(), selected.len(),
             ));
 
+            // Build signature groups among covering set for alternative detection
+            let mut covering_sig_groups: HashMap<Vec<i64>, Vec<usize>> = HashMap::new();
+            for &(orig_idx, p) in &covering {
+                let mut sig: Vec<i64> = p.inode_set.iter().copied().collect();
+                sig.sort_unstable();
+                covering_sig_groups.entry(sig).or_default().push(orig_idx);
+            }
+
             // Emit winners as normal picks — no knot signal
             for &original_idx in &selected {
+                let p = component_proposals[original_idx];
+                let mut sig: Vec<i64> = p.inode_set.iter().copied().collect();
+                sig.sort_unstable();
+
+                // Siblings = other covering proposals with the same signature, excluding self
+                let siblings: Vec<AlternativeRelease> = covering_sig_groups
+                    .get(&sig)
+                    .map(|group| {
+                        group
+                            .iter()
+                            .filter(|&&i| i != original_idx)
+                            .filter_map(|&i| {
+                                let sp = component_proposals[i];
+                                let rid = &sp.rows[0].release_id;
+                                let (t, a, _) = manifest_map.get(rid.as_str())?;
+                                Some(AlternativeRelease {
+                                    release_id: rid.clone(),
+                                    release_title: t.to_string(),
+                                    release_artist: a.to_string(),
+                                    total_score: sp.total_score,
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
                 emit_isolated_proposal_signals(
-                    component_proposals[original_idx],
+                    p,
                     tier,
                     manifest_map,
                     corpus_paths,
+                    &siblings,
                     sender,
                     witness,
                 );
@@ -405,28 +473,76 @@ pub(super) fn orchestrate_partial_tier(
 
     // --- Step 2: Dedup by inode signature ---
     // Multiple proposals wanting the exact same set of inodes keep only best-scoring.
-    let mut sig_best: HashMap<Vec<i64>, (usize, f64)> = HashMap::new();
+    // Losers become alternative siblings of the keeper.
+    let mut sig_groups: HashMap<Vec<i64>, Vec<usize>> = HashMap::new();
     for (i, p) in effective.iter().enumerate() {
         let mut sig: Vec<i64> = p.inode_set.iter().copied().collect();
         sig.sort_unstable();
-        match sig_best.entry(sig) {
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert((i, p.total_score));
-            }
-            std::collections::hash_map::Entry::Occupied(mut e) => {
-                if p.total_score > e.get().1 {
-                    e.insert((i, p.total_score));
-                }
+        sig_groups.entry(sig).or_default().push(i);
+    }
+
+    // Load manifest for building AlternativeRelease metadata
+    let manifest_for_siblings = read_only_db.get_packing_manifest().unwrap_or_default();
+    let sibling_manifest_map: HashMap<&str, (&str, &str)> = manifest_for_siblings
+        .iter()
+        .map(|r| (r.release_id.as_str(), (r.release_title.as_str(), r.release_artist.as_str())))
+        .collect();
+
+    let mut keep_indices: HashSet<usize> = HashSet::new();
+    // Map from effective index (keeper) → siblings
+    let mut effective_siblings: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
+
+    for group in sig_groups.values() {
+        // Find best-scorer in group
+        let best_idx = *group
+            .iter()
+            .max_by(|&&a, &&b| {
+                effective[a]
+                    .total_score
+                    .partial_cmp(&effective[b].total_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        keep_indices.insert(best_idx);
+
+        if group.len() > 1 {
+            let siblings: Vec<AlternativeRelease> = group
+                .iter()
+                .filter(|&&i| i != best_idx)
+                .filter_map(|&i| {
+                    let p = &effective[i];
+                    let release_id = &p.rows[0].release_id;
+                    let (title, artist) = sibling_manifest_map
+                        .get(release_id.as_str())
+                        .map(|&(t, a)| (t.to_string(), a.to_string()))
+                        .unwrap_or_default();
+                    Some(AlternativeRelease {
+                        release_id: release_id.clone(),
+                        release_title: title,
+                        release_artist: artist,
+                        total_score: p.total_score,
+                    })
+                })
+                .collect();
+            if !siblings.is_empty() {
+                effective_siblings.insert(best_idx, siblings);
             }
         }
     }
-    let keep_indices: HashSet<usize> = sig_best.values().map(|(idx, _)| *idx).collect();
     let dedup_removed = effective.len() - keep_indices.len();
 
     // Collect kept proposals (preserving order for determinism)
+    // Build a mapping from effective index → deduped index
     let mut deduped: Vec<Proposal> = Vec::with_capacity(keep_indices.len());
+    let mut deduped_siblings: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
+    let mut effective_to_deduped: HashMap<usize, usize> = HashMap::new();
     for (i, p) in effective.into_iter().enumerate() {
         if keep_indices.contains(&i) {
+            let deduped_idx = deduped.len();
+            effective_to_deduped.insert(i, deduped_idx);
+            if let Some(sibs) = effective_siblings.remove(&i) {
+                deduped_siblings.insert(deduped_idx, sibs);
+            }
             deduped.push(p);
         }
     }
@@ -494,12 +610,15 @@ pub(super) fn orchestrate_partial_tier(
 
     for component in &components {
         if component.len() == 1 {
+            let deduped_idx = component[0];
+            let siblings = deduped_siblings.get(&deduped_idx).map(|v| v.as_slice()).unwrap_or(&[]);
             // Isolated node — emit directly
             isolated_signals += emit_isolated_proposal_signals(
-                &deduped[component[0]],
+                &deduped[deduped_idx],
                 tier,
                 &manifest_map,
                 &corpus_paths,
+                siblings,
                 sender,
                 witness,
             );
@@ -546,10 +665,16 @@ pub(super) fn orchestrate_partial_tier(
             knot_id += 1;
         } else {
             // Clean component — spawn solver
+            // Remap deduped indices to component-local indices for signature_siblings
+            let mut component_siblings: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
             let component_proposals: Vec<Proposal> = component
                 .iter()
-                .map(|&i| {
-                    let p = &deduped[i];
+                .enumerate()
+                .map(|(local_idx, &deduped_idx)| {
+                    if let Some(sibs) = deduped_siblings.get(&deduped_idx) {
+                        component_siblings.insert(local_idx, sibs.clone());
+                    }
+                    let p = &deduped[deduped_idx];
                     Proposal {
                         total_tracks: p.total_tracks,
                         rows: p.rows.clone(),
@@ -566,6 +691,7 @@ pub(super) fn orchestrate_partial_tier(
                     tier,
                     corpus_paths: corpus_paths.clone(),
                     manifest_map: manifest_map_owned.clone(),
+                    signature_siblings: component_siblings,
                 }),
             });
         }
@@ -609,6 +735,7 @@ pub(crate) fn execute_resolve_packing_component(
     let tier = component.tier;
     let corpus_paths = component.corpus_paths;
     let manifest_map_owned = component.manifest_map;
+    let signature_siblings = component.signature_siblings;
 
     let sender = match write_thread::signal_sender() {
         Some(s) => s.clone(),
@@ -757,6 +884,59 @@ pub(crate) fn execute_resolve_packing_component(
                 }
             }
         }
+
+        // Emit alternative release signals from signature siblings
+        let inode_count = proposal.inode_set.len() as u32;
+        if let Some(siblings) = signature_siblings.get(&idx) {
+            for sib in siblings {
+                let alt_key = format!("{}:{}", release_id, sib.release_id);
+                signals_batch.push(TypedSignalWrite::AlternativeReleasePacking(
+                    AlternativeReleasePackingSignal {
+                        key: alt_key,
+                        data: AlternativeReleasePackingData {
+                            winner_release_id: release_id.clone(),
+                            winner_release_title: release_title.clone(),
+                            alternative_release_id: sib.release_id.clone(),
+                            alternative_release_title: sib.release_title.clone(),
+                            alternative_release_artist: sib.release_artist.clone(),
+                            alternative_score: sib.total_score,
+                            winner_score: proposal.total_score,
+                            inode_count,
+                        },
+                    },
+                ));
+            }
+
+            // VA override from exact alternatives (tier 1)
+            emit_va_override_from_siblings(
+                release_id,
+                &release_title,
+                &release_artist,
+                siblings,
+                &mut signals_batch,
+            );
+        }
+
+        // VA override from competing proposals (tier 2 fallback)
+        // Only if no exact-alternative override was emitted
+        if is_various_artists(&release_artist) {
+            let has_exact_override = signature_siblings
+                .get(&idx)
+                .map(|sibs| sibs.iter().any(|s| !is_various_artists(&s.release_artist) && !s.release_artist.is_empty()))
+                .unwrap_or(false);
+
+            if !has_exact_override {
+                emit_va_override_from_competing(
+                    release_id,
+                    &release_title,
+                    &release_artist,
+                    &proposal.inode_set,
+                    &proposals,
+                    &manifest_map,
+                    &mut signals_batch,
+                );
+            }
+        }
     }
 
     // Send all signals in a batch
@@ -779,6 +959,97 @@ pub(crate) fn execute_resolve_packing_component(
     ));
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+}
+
+/// Check if an artist name is "Various Artists" (case-insensitive).
+fn is_various_artists(artist: &str) -> bool {
+    artist.eq_ignore_ascii_case("various artists")
+}
+
+/// Emit a VA override signal if the winner is "Various Artists" and a non-VA artist
+/// can be found among its exact alternative siblings.
+fn emit_va_override_from_siblings(
+    release_id: &str,
+    release_title: &str,
+    release_artist: &str,
+    siblings: &[AlternativeRelease],
+    signals_batch: &mut Vec<TypedSignalWrite>,
+) {
+    if !is_various_artists(release_artist) || siblings.is_empty() {
+        return;
+    }
+
+    // Find most frequent non-VA artist among siblings
+    let mut artist_counts: HashMap<&str, usize> = HashMap::new();
+    for sib in siblings {
+        if !is_various_artists(&sib.release_artist) && !sib.release_artist.is_empty() {
+            *artist_counts.entry(&sib.release_artist).or_insert(0) += 1;
+        }
+    }
+
+    if let Some((&best_artist, _)) = artist_counts.iter().max_by_key(|(_, &count)| count) {
+        signals_batch.push(TypedSignalWrite::VariousArtistsOverride(
+            VariousArtistsOverrideSignal {
+                key: release_id.to_string(),
+                data: VariousArtistsOverrideData {
+                    release_id: release_id.to_string(),
+                    release_title: release_title.to_string(),
+                    suggested_artist: best_artist.to_string(),
+                    source: VariousArtistsOverrideSource::ExactAlternative,
+                },
+            },
+        ));
+    }
+}
+
+/// Emit a VA override signal from competing proposals in a component.
+///
+/// Used as fallback when exact alternatives don't have a non-VA artist.
+/// Scans all proposals in the component for non-VA artists on releases
+/// that overlap the winner's inodes.
+fn emit_va_override_from_competing(
+    release_id: &str,
+    release_title: &str,
+    release_artist: &str,
+    winner_inodes: &HashSet<i64>,
+    all_proposals: &[Proposal],
+    manifest_map: &HashMap<&str, (&str, &str, i32)>,
+    signals_batch: &mut Vec<TypedSignalWrite>,
+) {
+    if !is_various_artists(release_artist) {
+        return;
+    }
+
+    let mut artist_counts: HashMap<&str, usize> = HashMap::new();
+    for p in all_proposals {
+        let p_release_id = &p.rows[0].release_id;
+        if p_release_id == release_id {
+            continue;
+        }
+        // Must overlap winner's inodes
+        if !p.inode_set.iter().any(|i| winner_inodes.contains(i)) {
+            continue;
+        }
+        if let Some(&(_, artist, _)) = manifest_map.get(p_release_id.as_str()) {
+            if !is_various_artists(artist) && !artist.is_empty() {
+                *artist_counts.entry(artist).or_insert(0) += 1;
+            }
+        }
+    }
+
+    if let Some((&best_artist, _)) = artist_counts.iter().max_by_key(|(_, &count)| count) {
+        signals_batch.push(TypedSignalWrite::VariousArtistsOverride(
+            VariousArtistsOverrideSignal {
+                key: release_id.to_string(),
+                data: VariousArtistsOverrideData {
+                    release_id: release_id.to_string(),
+                    release_title: release_title.to_string(),
+                    suggested_artist: best_artist.to_string(),
+                    source: VariousArtistsOverrideSource::CompetingProposal,
+                },
+            },
+        ));
+    }
 }
 
 #[cfg(test)]

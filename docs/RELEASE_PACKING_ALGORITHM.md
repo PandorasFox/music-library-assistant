@@ -132,7 +132,7 @@ Each round selects non-conflicting (inode-disjoint) proposals to maximize corpus
 
 **Round flow (FullMatch, Incomplete):**
 1. **Cull:** Discard proposals that lost any inode to prior rounds
-2. **Dedup:** Group by sorted inode signature, keep best-scorer per group
+2. **Dedup:** Group by sorted inode signature, keep best-scorer per group. Losers are captured as `AlternativeRelease` siblings of the keeper for alternative detection
 3. **Knot extraction:** Build conflict graph (proposals sharing inodes are adjacent). Connected components with `proposals/inodes >= knot_ratio` (default 3.0) or `size > knot_size_limit` (default 50) are extracted as knots. **Discography reduction** (when `allow-resolve-knots-with-discographies` is true, default): if any proposals in the knot cover ALL contested inodes, they are emitted as normal picks and the knot is fully resolved — no knot signal emitted, losers silently dropped. Otherwise, the knot is emitted as an unresolved `PackingKnotSignal` for manual review — no picks are emitted and contested inodes remain unclaimed.
 4. **MIS solve:** Remaining clean components enter exact MIS:
    - Components ≤25 proposals: exhaustive bitmask enumeration (2^k subsets)
@@ -150,7 +150,28 @@ When singles run first, single-track releases claim inodes before the expensive 
 
 Each tier orchestrator finds connected components in the conflict graph, then: (1) isolated nodes (size 1) are emitted directly, (2) knots are extracted and resolved greedily with signals emitted by the orchestrator, (3) clean multi-node components are spawned as parallel `ResolvePackingComponent` computations that independently build local conflict graphs and solve MIS. Inter-tier inode tracking reads assigned inodes from the DB (`signal_release_packing` table). AcoustID submissions for elimination winners are recorded per-component.
 
-All packing signal tables (`signal_packed_release`, `signal_release_packing`, `signal_packing_knot`) are bulk-cleared at pipeline start (ComputeReleaseMappings, Stage 3a).
+All packing signal tables (`signal_packed_release`, `signal_release_packing`, `signal_packing_knot`, `signal_alternative_release_packing`, `signal_various_artists_override`) are bulk-cleared at pipeline start (ComputeReleaseMappings, Stage 3a).
+
+### Alternative Release Detection
+
+Within any MIS round, multiple proposals may cover the **exact same inode set** — different pressings, editions, or regional variants that pack identically against the same corpus files. These are trivially interchangeable: swapping one for another changes zero inode assignments.
+
+**Detection:** During dedup-by-inode-signature (partial tiers) and via bookkeeping (Perfect tier), proposals are grouped by sorted inode signature. For each group with >1 member, the best-scorer is the keeper and the rest become `AlternativeRelease` siblings. Siblings are attached to `ComponentData` and flow through to all emission paths.
+
+**Scope invariant:** Alternatives are scoped per **individual winning release**, not per aggregate "winning set." A compilation covering `{1,2,3,4,5,6}` is never an alternative to a release covering `{1,2,3}` — only proposals with a byte-identical inode signature qualify.
+
+**Emission paths:**
+1. **Isolated proposals** — siblings passed directly to emitter
+2. **Discography reduction** (knot path) — sig groups built among covering proposals; non-selected proposals with same signature as a selected one become its alternatives
+3. **Standard knot resolution** — no alternatives (no winners picked)
+4. **MIS component solvers** — siblings carried in `ComponentData::signature_siblings`, emitted per winner
+
+### Various Artists Override
+
+When a winning release has "Various Artists" as its album artist, a more specific artist name is suggested via two-tier lookup:
+
+1. **Exact alternatives (ExactAlternative):** Scan signature siblings for the most frequent non-VA artist. Emitted if found.
+2. **Competing proposals (CompetingProposal):** Fallback if no non-VA name in exact alternatives. Scans all proposals in scope (component proposals for MIS path, covering proposals for discography path, manifest for isolated) for non-VA artists on releases overlapping the winner's inodes. Most frequent wins.
 
 ### PackedRelease (Categories)
 

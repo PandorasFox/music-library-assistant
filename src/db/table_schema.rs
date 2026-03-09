@@ -657,6 +657,20 @@ pub fn schema_inventory() -> Vec<TableEntry> {
         index_sql: &[],
     });
 
+    tables.push(TableEntry {
+        name: "signal_alternative_release_packing",
+        kind: TableKind::Computed,
+        create_sql: <AlternativeReleasePackingSignal as store::AggregateSignalStore>::TABLE_SQL,
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
+        name: "signal_various_artists_override",
+        kind: TableKind::Computed,
+        create_sql: <VariousArtistsOverrideSignal as store::AggregateSignalStore>::TABLE_SQL,
+        index_sql: &[],
+    });
+
     // =================================================================
     // Intermediate computed tables (pipeline scratch data)
     // =================================================================

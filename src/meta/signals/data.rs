@@ -645,6 +645,63 @@ pub struct KnotAssignment {
     pub match_method: i32,
 }
 
+// ============================================================================
+// Alternative Release Packing signal (aggregate, key-keyed)
+// ============================================================================
+
+/// Alternative release with identical inode signature to a winning release.
+/// Key = `{winner_release_id}:{alt_release_id}`.
+#[derive(Debug, Clone)]
+pub struct AlternativeReleasePackingSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: AlternativeReleasePackingData,
+}
+
+/// Bincode payload for AlternativeReleasePacking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlternativeReleasePackingData {
+    pub winner_release_id: String,
+    pub winner_release_title: String,
+    pub alternative_release_id: String,
+    pub alternative_release_title: String,
+    pub alternative_release_artist: String,
+    pub alternative_score: f64,
+    pub winner_score: f64,
+    pub inode_count: u32,
+}
+
+// ============================================================================
+// Various Artists Override signal (aggregate, key-keyed)
+// ============================================================================
+
+/// Suggested non-VA artist override for a winning release with "Various Artists".
+/// Key = winner `release_id`.
+#[derive(Debug, Clone)]
+pub struct VariousArtistsOverrideSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: VariousArtistsOverrideData,
+}
+
+/// Bincode payload for VariousArtistsOverride.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariousArtistsOverrideData {
+    pub release_id: String,
+    pub release_title: String,
+    pub suggested_artist: String,
+    pub source: VariousArtistsOverrideSource,
+}
+
+/// How the VA override artist name was discovered.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum VariousArtistsOverrideSource {
+    /// From an exact alternative (same inode signature, different release).
+    ExactAlternative,
+    /// From a competing proposal in the same component that overlaps the winner's inodes.
+    CompetingProposal,
+}
+
 /// A group of inodes sharing the same compound tag value.
 /// Used to aggregate compound split resolution by value rather than per-file.
 #[derive(Debug, Clone)]
@@ -1134,6 +1191,8 @@ pub enum TypedSignalWrite {
     UnfilledReleaseSlot(UnfilledReleaseSlotSignal),
     PackedRelease(PackedReleaseSignal),
     PackingKnot(PackingKnotSignal),
+    AlternativeReleasePacking(AlternativeReleasePackingSignal),
+    VariousArtistsOverride(VariousArtistsOverrideSignal),
 }
 
 impl TypedSignalWrite {
@@ -1190,6 +1249,8 @@ impl TypedSignalWrite {
             Self::UnfilledReleaseSlot(s) => s.insert(conn),
             Self::PackedRelease(s) => s.insert(conn),
             Self::PackingKnot(s) => s.insert(conn),
+            Self::AlternativeReleasePacking(s) => s.insert(conn),
+            Self::VariousArtistsOverride(s) => s.insert(conn),
         }
     }
 
@@ -1246,6 +1307,8 @@ impl TypedSignalWrite {
             Self::UnfilledReleaseSlot(s) => UnfilledReleaseSlotSignal::exists(conn, &s.key),
             Self::PackedRelease(s) => PackedReleaseSignal::exists(conn, &s.key),
             Self::PackingKnot(s) => PackingKnotSignal::exists(conn, &s.key),
+            Self::AlternativeReleasePacking(s) => AlternativeReleasePackingSignal::exists(conn, &s.key),
+            Self::VariousArtistsOverride(s) => VariousArtistsOverrideSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }
@@ -1456,6 +1519,16 @@ impl TypedSignalWrite {
                 }
             }
             Self::PackingKnot(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::AlternativeReleasePacking(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::VariousArtistsOverride(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }

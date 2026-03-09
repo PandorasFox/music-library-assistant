@@ -2290,6 +2290,86 @@ impl AggregateSignalStore for PackingKnotSignal {
     }
 }
 
+impl AggregateSignalStore for AlternativeReleasePackingSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_alternative_release_packing (
+        key TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_alternative_release_packing";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_alternative_release_packing (key, data, data_hash) VALUES (?1, ?2, ?3)",
+            rusqlite::params![self.key, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn query_key_hashes(conn: &Connection) -> Result<HashMap<String, i64>> {
+        let mut stmt = conn.prepare("SELECT key, data_hash FROM signal_alternative_release_packing")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_alternative_release_packing WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_alternative_release_packing WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
+impl AggregateSignalStore for VariousArtistsOverrideSignal {
+    const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_various_artists_override (
+        key TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )";
+    const TABLE_NAME: &'static str = "signal_various_artists_override";
+
+    fn insert(&self, conn: &Connection) -> Result<()> {
+        let data = bincode::serialize(&self.data)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let hash = compute_blob_hash(&data);
+        conn.execute(
+            "INSERT OR REPLACE INTO signal_various_artists_override (key, data, data_hash) VALUES (?1, ?2, ?3)",
+            rusqlite::params![self.key, data, hash],
+        )?;
+        Ok(())
+    }
+
+    fn query_key_hashes(conn: &Connection) -> Result<HashMap<String, i64>> {
+        let mut stmt = conn.prepare("SELECT key, data_hash FROM signal_various_artists_override")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    fn clear_by_key(conn: &Connection, key: &str) -> Result<()> {
+        conn.execute("DELETE FROM signal_various_artists_override WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    fn exists(conn: &Connection, key: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM signal_various_artists_override WHERE key = ?1)",
+            [key],
+            |row| row.get(0),
+        )
+    }
+}
+
 // Table creation is now handled by `db::table_schema::schema_inventory()`.
 // Signal TABLE_SQL consts on each type remain as the source of truth,
 // referenced by the inventory entries.

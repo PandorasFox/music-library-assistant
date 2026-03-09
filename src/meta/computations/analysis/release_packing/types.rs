@@ -128,12 +128,24 @@ impl<'de> serde::Deserialize<'de> for SharedMappingState {
     }
 }
 
+/// A release that was dedup-removed because it has an identical inode signature
+/// to the winning proposal (same set of corpus files, different pressing/edition).
+#[derive(Debug, Clone)]
+pub(crate) struct AlternativeRelease {
+    pub release_id: String,
+    pub release_title: String,
+    pub release_artist: String,
+    pub total_score: f64,
+}
+
 /// Data for a single connected component to be solved independently.
 pub(crate) struct ComponentData {
     pub proposals: Vec<Proposal>,
     pub tier: ProposalTier,
     pub corpus_paths: HashMap<i64, String>,
     pub manifest_map: HashMap<String, (String, String, i32)>,
+    /// Per proposal index in `proposals`: dedup-removed siblings with identical inode signature.
+    pub signature_siblings: HashMap<usize, Vec<AlternativeRelease>>,
 }
 
 /// Arc<Mutex<Option<Box<...>>>> wrapper for component data.

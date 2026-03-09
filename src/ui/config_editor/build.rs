@@ -643,6 +643,22 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                         }
                     },
                 ),
+                field(
+                    "Singles before incompletes",
+                    "Run single-track MIS round before incompletes",
+                    ConfigValue::Bool(ops.external_matching.singles_before_incompletes),
+                    source_for(
+                        ops.external_matching.singles_before_incompletes
+                            == defaults.external_matching.singles_before_incompletes,
+                        ExternalMatchingConfig::KDL_SINGLES_BEFORE_INCOMPLETES,
+                    ),
+                    false,
+                    |v, c| {
+                        if let ConfigValue::Bool(b) = v {
+                            c.opinions.external_matching.singles_before_incompletes = *b;
+                        }
+                    },
+                ),
             ],
         },
         // Disc Extraction
@@ -975,7 +991,7 @@ pub fn apply_groups_to_config(base: &Config, groups: &[ConfigGroup]) -> Config {
 // Enum mapping helpers
 // =============================================================================
 
-const STARTUP_VIEW_OPTIONS: &[&str] = &["Health", "Search", "Browser", "Inbox"];
+const STARTUP_VIEW_OPTIONS: &[&str] = &["Health", "Search", "Browser", "Inbox", "Ext Matches"];
 
 fn startup_view_index(v: StartupView) -> usize {
     match v {
@@ -983,6 +999,7 @@ fn startup_view_index(v: StartupView) -> usize {
         StartupView::Search => 1,
         StartupView::Browser => 2,
         StartupView::Inbox => 3,
+        StartupView::ExternalMatches => 4,
     }
 }
 
@@ -992,6 +1009,7 @@ fn startup_view_from_index(i: usize) -> StartupView {
         1 => StartupView::Search,
         2 => StartupView::Browser,
         3 => StartupView::Inbox,
+        4 => StartupView::ExternalMatches,
         _ => StartupView::Health,
     }
 }

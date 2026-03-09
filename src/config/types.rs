@@ -112,6 +112,7 @@ pub enum StartupView {
     Search,
     Browser,
     Inbox,
+    ExternalMatches,
 }
 
 /// Opinions for startup behavior
@@ -426,6 +427,11 @@ pub struct ExternalMatchingConfig {
     /// Knot extraction: component size limit (default 50, 0 to disable).
     /// Components larger than this are extracted regardless of ratio.
     pub packing_knot_size_limit: usize,
+    /// Run Singles MIS round before Incompletes (default: false).
+    /// When true, single-track releases claim inodes first, preventing
+    /// single-file incomplete packings from entering the expensive MIS round.
+    #[serde(default)]
+    pub singles_before_incompletes: bool,
 }
 
 /// Opinions for disc extraction from ALBUM and TRACKNUMBER tags.
@@ -502,6 +508,7 @@ impl Default for ExternalMatchingConfig {
             tag_templates: Vec::new(),
             packing_knot_ratio: Self::DEFAULT_PACKING_KNOT_RATIO,
             packing_knot_size_limit: Self::DEFAULT_PACKING_KNOT_SIZE_LIMIT,
+            singles_before_incompletes: true,
         }
     }
 }
@@ -521,6 +528,7 @@ impl ExternalMatchingConfig {
     pub const KDL_TAG_TEMPLATES: &str = "tag-templates";
     pub const KDL_PACKING_KNOT_RATIO: &str = "packing-knot-ratio";
     pub const KDL_PACKING_KNOT_SIZE_LIMIT: &str = "packing-knot-size-limit";
+    pub const KDL_SINGLES_BEFORE_INCOMPLETES: &str = "singles-before-incompletes";
 }
 
 impl Default for Opinions {

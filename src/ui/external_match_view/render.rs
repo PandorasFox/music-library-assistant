@@ -225,7 +225,15 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                     Style::default().fg(Color::DarkGray),
                 )));
 
-                let packing_entries: Vec<(&str, &str, usize, Color)> = vec![
+                let incomplete_entry = (
+                    "◐",
+                    "Incomplete",
+                    data.packing_incomplete_count,
+                    Color::Yellow,
+                );
+                let singles_entry = ("♪", "Singles", data.packing_singles_count, Color::Cyan);
+
+                let mut packing_entries: Vec<(&str, &str, usize, Color)> = vec![
                     (
                         "★",
                         "Perfect",
@@ -238,20 +246,20 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                         data.packing_full_match_count,
                         Color::Green,
                     ),
-                    (
-                        "◐",
-                        "Incomplete",
-                        data.packing_incomplete_count,
-                        Color::Yellow,
-                    ),
-                    ("♪", "Singles", data.packing_singles_count, Color::Cyan),
-                    (
-                        "?",
-                        "Unmatched",
-                        data.packing_unmatched_count,
-                        Color::DarkGray,
-                    ),
                 ];
+                if state.singles_before_incompletes {
+                    packing_entries.push(singles_entry);
+                    packing_entries.push(incomplete_entry);
+                } else {
+                    packing_entries.push(incomplete_entry);
+                    packing_entries.push(singles_entry);
+                }
+                packing_entries.push((
+                    "?",
+                    "Unmatched",
+                    data.packing_unmatched_count,
+                    Color::DarkGray,
+                ));
 
                 for (icon, label, count, color) in packing_entries {
                     if count > 0 {

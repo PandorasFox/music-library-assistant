@@ -68,6 +68,7 @@ pub fn apply_config_edits_to_kdl(
                 StartupView::Search => "search",
                 StartupView::Browser => "browser",
                 StartupView::Inbox => "inbox",
+                StartupView::ExternalMatches => "external-matches",
             };
             set_or_create_string_node(startup, StartupOpinions::KDL_DEFAULT_VIEW, view_str);
         }
@@ -289,6 +290,7 @@ pub fn apply_config_edits_to_kdl(
         || new_em.mb_base_url != old_em.mb_base_url
         || new_em.packing_knot_ratio != old_em.packing_knot_ratio
         || new_em.packing_knot_size_limit != old_em.packing_knot_size_limit
+        || new_em.singles_before_incompletes != old_em.singles_before_incompletes
     {
         let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_EXTERNAL_MATCHING);
         if new_em.acoustid_api_key != old_em.acoustid_api_key {
@@ -331,6 +333,13 @@ pub fn apply_config_edits_to_kdl(
                 block,
                 ExternalMatchingConfig::KDL_PACKING_KNOT_SIZE_LIMIT,
                 new_em.packing_knot_size_limit as i64,
+            );
+        }
+        if new_em.singles_before_incompletes != old_em.singles_before_incompletes {
+            set_or_create_bool_node(
+                block,
+                ExternalMatchingConfig::KDL_SINGLES_BEFORE_INCOMPLETES,
+                new_em.singles_before_incompletes,
             );
         }
     }

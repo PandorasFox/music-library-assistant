@@ -471,6 +471,7 @@ impl App {
             crate::config::StartupView::Search => self.start_tag_search(),
             crate::config::StartupView::Browser => self.start_corpus_browser(),
             crate::config::StartupView::Inbox => self.start_inbox_view(),
+            crate::config::StartupView::ExternalMatches => self.start_external_matches_view(),
         }
     }
 
@@ -523,8 +524,16 @@ impl App {
         self.last_lateral_view = widgets::LateralView::ExternalMatches;
         let fetch_active = self.witch.is_external_fetch_active();
         let has_api_key = self.witch.has_acoustid_api_key();
-        let mut state =
-            external_match_view::ExternalMatchesViewState::new(fetch_active, has_api_key);
+        let singles_before_incompletes = self
+            .config()
+            .opinions
+            .external_matching
+            .singles_before_incompletes;
+        let mut state = external_match_view::ExternalMatchesViewState::new(
+            fetch_active,
+            has_api_key,
+            singles_before_incompletes,
+        );
         if let Some(ref data) = self.cached_external_matches {
             state.update(data.clone());
         }

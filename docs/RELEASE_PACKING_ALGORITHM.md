@@ -13,7 +13,8 @@ Source: `src/meta/computations/analysis/release_packing.rs`
 | 1 | PackReleases | Identify candidates, write manifest, spawn per-release scorers |
 | 2 | ScoreReleaseCandidates (×N) | Directory selection, AcoustID scoring, elimination matching |
 | 3a | ComputeReleaseMappings | Classify proposals into quality tiers |
-| 3b–3e | Map{Perfect,FullMatch,NearMiss,Incomplete,Single}Releases | Tiered MIS conflict resolution |
+| 3b–3e | Map{Perfect,FullMatch,Incomplete,Single}Releases | Tiered MIS conflict resolution (Incomplete/Single order configurable) |
+| 3f | EmitReleasePackingSignals | Emit ReleasePacking signals, record AcoustID submissions |
 | 4 | AnalyzeReleaseGaps | Emit signals for gaps, unmatched files, and per-release categories |
 
 Stages are barrier-separated: each defers the next via `SharedMappingState`, ensuring serial execution managed by the Witch's computation scheduler.
@@ -126,17 +127,16 @@ Loads optimal picks from scoring table. Groups into per-release `Proposal` objec
 |-------------|----------|
 | Perfect | All slots filled, single-directory purity (per-medium for multi-medium), no leftover files in directory |
 | FullMatch | All slots filled but directory has extra files or minor purity issues |
-| NearMiss | (n-1)/n slots filled, all from one directory with exactly n files |
 | Incomplete | Some but not all slots filled |
 | Single | Single-track release |
 
-Proposals are sorted into 5 pools and processed in priority order.
+Proposals are sorted into 4 pools and processed in priority order.
 
 ### 3b–3e: MIS Rounds
 
 Each round selects non-conflicting (inode-disjoint) proposals to maximize corpus coverage.
 
-**Round flow (FullMatch, NearMiss, Incomplete):**
+**Round flow (FullMatch, Incomplete):**
 1. **Cull:** Discard proposals that lost any inode to prior rounds
 2. **Dedup:** Group by sorted inode signature, keep best-scorer per group
 3. **Knot extraction:** Build conflict graph (proposals sharing inodes are adjacent). Connected components with `proposals/inodes >= knot_ratio` (default 3.0) or `size > knot_size_limit` (default 50) are resolved greedily (best score first, skip conflicting)
@@ -146,7 +146,17 @@ Each round selects non-conflicting (inode-disjoint) proposals to maximize corpus
 
 **Perfect round** skips cull/dedup/knots — proposals are strict (all inodes must be unclaimed).
 
-**Single round** (3e): per-inode best score, no MIS needed. Also emits `ReleasePacking` signals for all rounds combined.
+**Singles round:** per-inode best score, no MIS needed (no multi-inode conflicts).
+
+**Round ordering** after FullMatch is configurable via `singles-before-incompletes`:
+- `false` (default): Incomplete → Singles
+- `true`: Singles → Incomplete
+
+When singles run first, single-track releases claim inodes before the expensive Incomplete MIS round, preventing single-file incompletes from competing there.
+
+### 3f: EmitReleasePackingSignals
+
+Always the final MIS stage. Emits `ReleasePacking` signals from all accumulated assignments, records pending AcoustID submissions for elimination winners, defers `AnalyzeReleaseGaps`.
 
 ---
 
@@ -227,15 +237,16 @@ AcoustID matches (signal_external_match)
                    │ into proposal tiers    │
                    └───────────┬────────────┘
                                │
-              ┌────────┬───────┼───────┬────────┐
-              ▼        ▼       ▼       ▼        ▼
-          Perfect  FullMatch NearMiss Incomplete Single
-           (3b)     (3c)     (3c½)    (3d)      (3e)
-              │        │       │       │        │
-              └────────┴───────┼───────┴────────┘
+              ┌────────┬───────┼───────┐
+              ▼        ▼       ▼       ▼
+          Perfect  FullMatch  Inc.   Single
+           (3b)     (3c)     (3d)    (3e)
+              │        │       │       │
+              │        │       └───┬───┘  ← order configurable
+              └────────┴───────────┘
                                ▼
                    ┌────────────────────────┐
-                   │ Stage 3e: Emit         │
+                   │ Stage 3f: Emit         │
                    │ ReleasePacking signals │
                    └───────────┬────────────┘
                                ▼

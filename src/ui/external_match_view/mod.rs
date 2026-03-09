@@ -78,6 +78,8 @@ pub(crate) struct ExternalMatchesViewState {
     pub click_targets: crate::ui::widgets::ListClickTargets,
     /// Animation tick counter (incremented each UI tick while fetch is active).
     pub tick_count: u32,
+    /// Whether to show singles before incompletes in the menu (from config).
+    pub singles_before_incompletes: bool,
 }
 
 // ============================================================================
@@ -85,7 +87,7 @@ pub(crate) struct ExternalMatchesViewState {
 // ============================================================================
 
 impl ExternalMatchesViewState {
-    pub fn new(fetch_active: bool, has_api_key: bool) -> Self {
+    pub fn new(fetch_active: bool, has_api_key: bool, singles_before_incompletes: bool) -> Self {
         Self {
             cached_data: None,
             cursor: 0,
@@ -95,6 +97,7 @@ impl ExternalMatchesViewState {
             fetch_progress: None,
             click_targets: Default::default(),
             tick_count: 0,
+            singles_before_incompletes,
         }
     }
 
@@ -135,7 +138,7 @@ impl ExternalMatchesViewState {
                 entries.push(NavigableEntry::ConfidenceBucket(bucket.tier));
             }
             // Release packing categories (only visible when data exists)
-            // Ordering: Perfect → Full matches → Incomplete → Singles → Unmatched
+            // Ordering: Perfect → Full matches → [Singles/Incomplete by config] → Unmatched
             if data.packing_perfect_count > 0 {
                 entries.push(NavigableEntry::PackingCategory(PackingCategory::Perfect));
             }
@@ -144,11 +147,20 @@ impl ExternalMatchesViewState {
                     PackingCategory::FullMatches,
                 ));
             }
-            if data.packing_incomplete_count > 0 {
-                entries.push(NavigableEntry::PackingCategory(PackingCategory::Incomplete));
-            }
-            if data.packing_singles_count > 0 {
-                entries.push(NavigableEntry::PackingCategory(PackingCategory::Singles));
+            if self.singles_before_incompletes {
+                if data.packing_singles_count > 0 {
+                    entries.push(NavigableEntry::PackingCategory(PackingCategory::Singles));
+                }
+                if data.packing_incomplete_count > 0 {
+                    entries.push(NavigableEntry::PackingCategory(PackingCategory::Incomplete));
+                }
+            } else {
+                if data.packing_incomplete_count > 0 {
+                    entries.push(NavigableEntry::PackingCategory(PackingCategory::Incomplete));
+                }
+                if data.packing_singles_count > 0 {
+                    entries.push(NavigableEntry::PackingCategory(PackingCategory::Singles));
+                }
             }
             if data.packing_unmatched_count > 0 {
                 entries.push(NavigableEntry::PackingCategory(PackingCategory::Unmatched));

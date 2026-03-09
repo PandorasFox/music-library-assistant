@@ -251,26 +251,27 @@ pub enum Computation {
         state: release_packing::SharedMappingState,
     },
 
-    /// MIS on NearMiss proposals (Stage 3c½).
+    /// MIS on Incomplete proposals (Stage 3c½/3d).
     ///
-    /// Almost complete: (n-1)/n slots filled from a single directory with n files.
-    /// Prioritized over general incompletes.
-    MapNearMissReleases {
-        state: release_packing::SharedMappingState,
-    },
-
-    /// MIS on Incomplete proposals (Stage 3d).
-    ///
-    /// Partial slot coverage. Proposals enter with unclaimed portion of inode set.
+    /// Partial slot coverage (includes former NearMiss tier).
+    /// Proposals enter with unclaimed portion of inode set.
     MapIncompleteReleases {
         state: release_packing::SharedMappingState,
     },
 
-    /// Per-inode-best for Singles + signal emission (Stage 3f).
+    /// Per-inode-best for single-track releases (Stage 3d/3e).
     ///
-    /// Assigns single-track releases, emits ReleasePacking signals for all
-    /// rounds, records pending AcoustID submissions.
+    /// Assigns single-track releases by picking the best-scoring release
+    /// per unclaimed inode. No MIS needed (no multi-inode conflicts).
     MapSingleReleases {
+        state: release_packing::SharedMappingState,
+    },
+
+    /// Emit ReleasePacking signals for all MIS rounds (Stage 3 final).
+    ///
+    /// Builds signals from accumulated assignments, reconciles with existing
+    /// signals, records pending AcoustID submissions, defers AnalyzeReleaseGaps.
+    EmitReleasePackingSignals {
         state: release_packing::SharedMappingState,
     },
 
@@ -334,9 +335,9 @@ impl Computation {
             Computation::ComputeReleaseMappings => "Classifying release proposals",
             Computation::MapPerfectReleases { .. } => "Mapping perfect releases",
             Computation::MapFullMatchReleases { .. } => "Mapping full-match releases",
-            Computation::MapNearMissReleases { .. } => "Mapping near-miss releases",
             Computation::MapIncompleteReleases { .. } => "Mapping incomplete releases",
             Computation::MapSingleReleases { .. } => "Mapping single-track releases",
+            Computation::EmitReleasePackingSignals { .. } => "Emitting release packing signals",
             Computation::AnalyzeReleaseGaps => "Analyzing release gaps",
             Computation::DeriveExternalMatches => "Deriving external match signals",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
@@ -435,14 +436,14 @@ impl Computation {
             Computation::MapFullMatchReleases { ref state } => {
                 execute_map_full_match_releases(state, ctx.witness, ctx.start)
             }
-            Computation::MapNearMissReleases { ref state } => {
-                execute_map_near_miss_releases(state, ctx.witness, ctx.start)
-            }
             Computation::MapIncompleteReleases { ref state } => {
                 execute_map_incomplete_releases(state, ctx.witness, ctx.start)
             }
             Computation::MapSingleReleases { ref state } => {
-                execute_map_single_releases(state, ctx.read_db, ctx.witness, ctx.start)
+                execute_map_single_releases(state, ctx.witness, ctx.start)
+            }
+            Computation::EmitReleasePackingSignals { ref state } => {
+                execute_emit_release_packing_signals(state, ctx.read_db, ctx.witness, ctx.start)
             }
             Computation::AnalyzeReleaseGaps => {
                 execute_analyze_release_gaps(ctx.read_db, ctx.witness, ctx.start)

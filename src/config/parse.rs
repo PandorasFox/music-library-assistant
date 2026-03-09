@@ -82,6 +82,7 @@ fn parse_startup_opinions(node: &kdl::KdlNode, opinions: &mut StartupOpinions) {
                                 "search" => opinions.default_view = StartupView::Search,
                                 "browser" => opinions.default_view = StartupView::Browser,
                                 "inbox" => opinions.default_view = StartupView::Inbox,
+                                "external-matches" => opinions.default_view = StartupView::ExternalMatches,
                                 _ => {}
                             }
                         }
@@ -401,6 +402,13 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                         if let Some(val) = entry.value().as_i64() {
                             // 0 disables
                             opinions.packing_knot_size_limit = val.max(0) as usize;
+                        }
+                    }
+                }
+                ExternalMatchingConfig::KDL_SINGLES_BEFORE_INCOMPLETES => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.singles_before_incompletes = val;
                         }
                     }
                 }

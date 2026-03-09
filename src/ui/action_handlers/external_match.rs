@@ -323,7 +323,7 @@ impl App {
                     PackingCategory::FullMatches => PackedReleaseCategory::FullMatch.key_prefix(),
                     PackingCategory::Singles => PackedReleaseCategory::Single.key_prefix(),
                     PackingCategory::Incomplete => PackedReleaseCategory::Incomplete.key_prefix(),
-                    PackingCategory::Unmatched => unreachable!(),
+                    PackingCategory::Unmatched | PackingCategory::Knots => unreachable!(),
                 };
                 let prefix_owned = prefix.to_string();
 
@@ -366,9 +366,52 @@ impl App {
 
                 ReleasePackingBrowserState::build_unmatched(unmatched)
             }
+            PackingCategory::Knots => {
+                self.launch_knot_browser();
+                return;
+            }
         };
 
         self.view = ActiveView::ReleasePackingBrowser(state);
+    }
+
+    /// Load knot signal data and launch the knot browser.
+    fn launch_knot_browser(&mut self) {
+        let knots = self
+            .cache
+            .query(|db| db.get_packing_knots().unwrap_or_default())
+            .recv();
+
+        if knots.is_empty() {
+            self.status_message = Some("No knots found".to_string());
+            return;
+        }
+
+        let corpus_paths: std::collections::HashMap<i64, String> = self
+            .cache
+            .query(|db| {
+                db.get_packing_inode_paths()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect()
+            })
+            .recv();
+
+        let state = crate::ui::knot_browser::KnotBrowserState::build(knots, &corpus_paths);
+        self.view = crate::ui::active_view::ActiveView::KnotBrowser(state);
+    }
+
+    /// Handle knot browser actions.
+    pub(super) fn handle_knot_browser_action(
+        &mut self,
+        action: crate::ui::knot_browser::KnotBrowserAction,
+    ) {
+        match action {
+            crate::ui::knot_browser::KnotBrowserAction::None => {}
+            crate::ui::knot_browser::KnotBrowserAction::Cancel => {
+                self.cancel_and_return_to_source("Knot browser closed");
+            }
+        }
     }
 
     /// Handle release packing browser actions.

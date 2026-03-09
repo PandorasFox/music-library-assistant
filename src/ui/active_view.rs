@@ -70,6 +70,9 @@ pub(crate) enum ActiveView {
     // Release packing browser (read-only)
     ReleasePackingBrowser(super::release_packing_browser::ReleasePackingBrowserState),
 
+    // Knot browser (read-only)
+    KnotBrowser(super::knot_browser::KnotBrowserState),
+
     // Resolution flows (companion state bundled)
     TagCanonicityResolution {
         state: tag_canonicity_v2::TagCanonicalityStateV2,
@@ -133,6 +136,7 @@ impl ActiveView {
             Self::OobConflictInspection(_) => Some("OOB Tag Conflicts"),
             Self::ExternalMatchReview(_) => Some("External Match Review"),
             Self::ReleasePackingBrowser(_) => Some("Release Packing Browser"),
+            Self::KnotBrowser(_) => Some("Knot Browser"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
             Self::TagCanonicityLoading { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
@@ -246,6 +250,7 @@ pub(crate) enum ViewAction {
     OobConflictInspection(oob_conflict_modal::OobConflictAction),
     ExternalMatchReview(external_match_modal::ExternalMatchReviewAction),
     ReleasePackingBrowser(super::release_packing_browser::ReleasePackingBrowserAction),
+    KnotBrowser(super::knot_browser::KnotBrowserAction),
     History(history_view::HistoryAction),
     TagCanonicityResolution(tag_canonicity_v2::TagCanonicalityActionV2),
     CompoundTagSplit(compound_split_v2::CompoundSplitActionV2),

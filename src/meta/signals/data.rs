@@ -589,6 +589,65 @@ pub struct PackedReleaseData {
     pub total_tracks: u32,
 }
 
+// ============================================================================
+// Packing Knot signal (aggregate, key-keyed)
+// ============================================================================
+
+/// Knot component from MIS conflict resolution.
+/// Key = `{tier}:{knot_id}` (e.g., `full_match:3`).
+#[derive(Debug, Clone)]
+pub struct PackingKnotSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: PackingKnotData,
+}
+
+/// Bincode payload for PackingKnot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackingKnotData {
+    pub tier: String,
+    pub knot_id: usize,
+    pub classification: KnotClassification,
+    pub ratio: f64,
+    pub contested_inodes: Vec<i64>,
+    pub proposals: Vec<KnotProposalEntry>,
+}
+
+/// How a knot component was classified for extraction.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum KnotClassification {
+    /// proposals/inodes ratio exceeded threshold.
+    ByRatio,
+    /// Component size exceeded limit.
+    BySize,
+}
+
+/// A release proposal within a knot component.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnotProposalEntry {
+    pub release_id: String,
+    pub release_title: String,
+    pub release_artist: String,
+    pub total_tracks: i32,
+    pub total_score: f64,
+    /// Whether this proposal was selected by greedy resolution.
+    pub selected: bool,
+    pub assignments: Vec<KnotAssignment>,
+}
+
+/// A single track assignment within a knot proposal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnotAssignment {
+    pub inode: i64,
+    pub recording_id: String,
+    pub medium_pos: i32,
+    pub track_pos: i32,
+    pub track_title: String,
+    pub score: f64,
+    pub score_breakdown: PackingScoreBreakdown,
+    pub match_method: i32,
+}
+
 /// A group of inodes sharing the same compound tag value.
 /// Used to aggregate compound split resolution by value rather than per-file.
 #[derive(Debug, Clone)]
@@ -1078,6 +1137,7 @@ pub enum TypedSignalWrite {
     UnfilledReleaseSlot(UnfilledReleaseSlotSignal),
     NearMissRelease(NearMissReleaseSignal),
     PackedRelease(PackedReleaseSignal),
+    PackingKnot(PackingKnotSignal),
 }
 
 impl TypedSignalWrite {
@@ -1134,6 +1194,7 @@ impl TypedSignalWrite {
             Self::UnfilledReleaseSlot(s) => s.insert(conn),
             Self::NearMissRelease(s) => s.insert(conn),
             Self::PackedRelease(s) => s.insert(conn),
+            Self::PackingKnot(s) => s.insert(conn),
         }
     }
 
@@ -1190,6 +1251,7 @@ impl TypedSignalWrite {
             Self::UnfilledReleaseSlot(s) => UnfilledReleaseSlotSignal::exists(conn, &s.key),
             Self::NearMissRelease(s) => NearMissReleaseSignal::exists(conn, &s.key),
             Self::PackedRelease(s) => PackedReleaseSignal::exists(conn, &s.key),
+            Self::PackingKnot(s) => PackingKnotSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }
@@ -1400,6 +1462,11 @@ impl TypedSignalWrite {
                 }
             }
             Self::PackedRelease(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::PackingKnot(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }

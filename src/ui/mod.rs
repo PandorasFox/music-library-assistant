@@ -42,6 +42,7 @@ pub mod inbox_corpus_match_modal;
 pub mod inbox_organize;
 pub mod inbox_view;
 pub mod insights_view;
+pub mod knot_browser;
 pub mod manual_review_modal;
 pub mod missing_album_modal;
 pub mod missing_directory_modal;
@@ -412,6 +413,9 @@ impl App {
             }
             ActiveView::ReleasePackingBrowser(s) => {
                 ViewAction::ReleasePackingBrowser(s.handle_input(&action))
+            }
+            ActiveView::KnotBrowser(s) => {
+                ViewAction::KnotBrowser(s.handle_input(&action))
             }
             ActiveView::History(s) => ViewAction::History(s.handle_input(&action)),
             ActiveView::TagCanonicityResolution { state, .. } => {

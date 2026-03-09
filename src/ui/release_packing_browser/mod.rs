@@ -216,6 +216,9 @@ impl ReleasePackingBrowserState {
                     entries.push(PackingListEntry::Unmatched { idx });
                 }
             }
+            PackingCategory::Knots => {
+                // Knots have their own browser — this category is never used here
+            }
         }
 
         self.entries = entries;

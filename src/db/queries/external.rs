@@ -785,4 +785,26 @@ impl Database {
         })?;
         Ok(rows.flatten().collect())
     }
+
+    /// Load all packing knot signals with deserialized data.
+    pub fn get_packing_knots(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::PackingKnotData>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT data FROM signal_packing_knot")?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(0)?;
+            let data: crate::meta::signals::data::PackingKnotData =
+                bincode::deserialize(&blob).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
+                    )
+                })?;
+            Ok(data)
+        })?;
+        Ok(rows.flatten().collect())
+    }
 }

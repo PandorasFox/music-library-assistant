@@ -890,6 +890,13 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_packing_inode_paths()
     }
 
+    /// Load all packing knot signals with deserialized data.
+    pub fn get_packing_knots(
+        &self,
+    ) -> Result<Vec<crate::meta::signals::data::PackingKnotData>> {
+        self.db.get_packing_knots()
+    }
+
     /// Get (inode, parent_dir, dir_file_count) for all candidate inodes.
     pub fn get_candidate_inode_dirs(&self) -> Result<Vec<(i64, String, i32)>> {
         self.db.get_candidate_inode_dirs()

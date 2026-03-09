@@ -216,7 +216,8 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                 || data.packing_full_match_count > 0
                 || data.packing_singles_count > 0
                 || data.packing_incomplete_count > 0
-                || data.packing_unmatched_count > 0;
+                || data.packing_unmatched_count > 0
+                || data.packing_knots_count > 0;
 
             if has_packing {
                 lines.push(Line::from(Span::raw(""))); // spacer
@@ -254,6 +255,12 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                     packing_entries.push(incomplete_entry);
                     packing_entries.push(singles_entry);
                 }
+                packing_entries.push((
+                    "⊛",
+                    "Knots",
+                    data.packing_knots_count,
+                    Color::Red,
+                ));
                 packing_entries.push((
                     "?",
                     "Unmatched",
@@ -736,6 +743,11 @@ fn render_packing_category_detail(cat: PackingCategory) -> Vec<Line<'static>> {
         PackingCategory::Unmatched => (
             "Unmatched Files",
             "Corpus files with fingerprints that were not assigned to any release.",
+        ),
+        PackingCategory::Knots => (
+            "Packing Knots",
+            "Dense conflict components where many releases compete for a small set of files. \
+             Resolved greedily by best score — review to verify the algorithm's choices.",
         ),
     };
 

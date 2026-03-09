@@ -10,6 +10,7 @@ pub enum PackingCategory {
     Singles,
     Incomplete,
     Unmatched,
+    Knots,
 }
 
 /// Which pane currently has focus.

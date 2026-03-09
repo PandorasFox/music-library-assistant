@@ -193,6 +193,8 @@ pub struct ExternalMatchesData {
     pub packing_incomplete_count: usize,
     /// Unmatched corpus tracks.
     pub packing_unmatched_count: usize,
+    /// Packing knot components (conflict tangles requiring review).
+    pub packing_knots_count: usize,
 }
 
 /// Bucket 3: Other signals (sorted by magnitude)

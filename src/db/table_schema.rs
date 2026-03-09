@@ -657,6 +657,13 @@ pub fn schema_inventory() -> Vec<TableEntry> {
         index_sql: &[],
     });
 
+    tables.push(TableEntry {
+        name: "signal_packing_knot",
+        kind: TableKind::Computed,
+        create_sql: <PackingKnotSignal as store::AggregateSignalStore>::TABLE_SQL,
+        index_sql: &[],
+    });
+
     // =================================================================
     // Intermediate computed tables (pipeline scratch data)
     // =================================================================

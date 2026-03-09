@@ -858,6 +858,14 @@ impl Database {
                 |row| row.get(0),
             )
             .unwrap_or(0);
+        let packing_knots_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_packing_knot",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
 
         Ok(ExternalMatchesData {
             untagged_entries,
@@ -867,6 +875,7 @@ impl Database {
             packing_singles_count,
             packing_incomplete_count,
             packing_unmatched_count,
+            packing_knots_count,
         })
     }
 

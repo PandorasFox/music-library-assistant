@@ -68,8 +68,9 @@ use crate::meta::computations::types::ComputationWitness;
 use crate::meta::computations::{Computation, PipelineStage};
 use crate::meta::external::ExternalSource;
 use crate::meta::signals::data::{
-    MatchMethod, NearMissReleaseData, NearMissReleaseSignal, PackedReleaseCategory,
-    PackedReleaseData, PackedReleaseSignal, PackingScoreBreakdown, ReleasePackingData,
+    KnotAssignment, KnotClassification, KnotProposalEntry, MatchMethod, NearMissReleaseData,
+    NearMissReleaseSignal, PackedReleaseCategory, PackedReleaseData, PackedReleaseSignal,
+    PackingKnotData, PackingKnotSignal, PackingScoreBreakdown, ReleasePackingData,
     ReleasePackingSignal, TypedSignalWrite, UnfilledReleaseSlotData, UnfilledReleaseSlotSignal,
     UnmatchedCorpusTrackData, UnmatchedCorpusTrackSignal,
 };
@@ -215,6 +216,8 @@ pub(crate) struct ReleaseMappingState {
     /// Singles claim one inode each (no MIS needed), preventing single-file
     /// incompletes from competing in the expensive Incomplete MIS round.
     pub singles_before_incompletes: bool,
+    /// Accumulated knot component details across MIS rounds (for signal emission).
+    pub captured_knots: Vec<(ProposalTier, CapturedKnotComponent)>,
 }
 
 /// Default knot extraction ratio. Components with proposals/inodes >= this
@@ -2237,6 +2240,18 @@ struct MisRoundResult {
     knot_components: usize,
     /// Number of proposals auto-resolved from knot extraction.
     knot_proposals: usize,
+    /// Captured knot component details for signal emission.
+    knot_details: Vec<CapturedKnotComponent>,
+}
+
+/// A captured knot component with all data needed for signal emission.
+pub(crate) struct CapturedKnotComponent {
+    knot_id: usize,
+    classification: KnotClassification,
+    ratio: f64,
+    contested_inodes: Vec<i64>,
+    /// (pool_index, selected_by_greedy) for each proposal in the component.
+    proposals: Vec<(usize, bool)>,
 }
 
 /// Run MIS on a pool of proposals where each proposal requires its ENTIRE
@@ -2263,6 +2278,7 @@ fn run_mis_round(pool: &[Proposal], assigned_inodes: &HashSet<i64>) -> MisRoundR
             dedup_removed: 0,
             knot_components: 0,
             knot_proposals: 0,
+            knot_details: Vec::new(),
         };
     }
 
@@ -2293,6 +2309,7 @@ fn run_mis_round(pool: &[Proposal], assigned_inodes: &HashSet<i64>) -> MisRoundR
         dedup_removed: 0,
         knot_components: 0,
         knot_proposals: 0,
+        knot_details: Vec::new(),
     }
 }
 
@@ -2377,6 +2394,7 @@ fn run_mis_round_partial(
             dedup_removed,
             knot_components: 0,
             knot_proposals: 0,
+            knot_details: Vec::new(),
         };
     }
 
@@ -2436,6 +2454,7 @@ fn run_mis_round_partial(
     let mut clean_locals: Vec<usize> = Vec::new(); // local indices entering MIS
     let mut knot_component_count = 0usize;
     let mut knot_proposal_count = 0usize;
+    let mut knot_details: Vec<CapturedKnotComponent> = Vec::new();
 
     for component in &components {
         // Count unique inodes in this component
@@ -2453,6 +2472,12 @@ fn run_mis_round_partial(
             knot_component_count += 1;
             knot_proposal_count += component.len();
 
+            let classification = if is_knot_by_ratio {
+                KnotClassification::ByRatio
+            } else {
+                KnotClassification::BySize
+            };
+
             // Sort by score descending, greedily pick non-conflicting
             let mut sorted: Vec<usize> = component.clone();
             sorted.sort_by(|&a, &b| {
@@ -2462,13 +2487,24 @@ fn run_mis_round_partial(
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
             let mut knot_claimed: HashSet<i64> = HashSet::new();
+            let mut captured_proposals: Vec<(usize, bool)> = Vec::new();
             for local in sorted {
-                let (_, inode_set) = &deduped[local];
-                if inode_set.iter().all(|i| !knot_claimed.contains(i)) {
+                let (pool_idx, inode_set) = &deduped[local];
+                let selected = inode_set.iter().all(|i| !knot_claimed.contains(i));
+                if selected {
                     knot_claimed.extend(inode_set.iter());
                     knot_selected.push(local);
                 }
+                captured_proposals.push((*pool_idx, selected));
             }
+
+            knot_details.push(CapturedKnotComponent {
+                knot_id: knot_details.len(),
+                classification,
+                ratio,
+                contested_inodes: comp_inodes.into_iter().collect(),
+                proposals: captured_proposals,
+            });
         } else {
             clean_locals.extend(component.iter());
         }
@@ -2523,6 +2559,7 @@ fn run_mis_round_partial(
             dedup_removed,
             knot_components: knot_component_count,
             knot_proposals: knot_proposal_count,
+            knot_details,
         };
     }
 
@@ -2537,6 +2574,7 @@ fn run_mis_round_partial(
         dedup_removed,
         knot_components: knot_component_count,
         knot_proposals: knot_proposal_count,
+        knot_details,
     }
 }
 
@@ -2764,6 +2802,7 @@ pub fn execute_compute_release_mappings(
         knot_ratio,
         knot_size_limit,
         singles_before_incompletes,
+        captured_knots: Vec::new(),
     });
 
     let deferred = vec![(
@@ -2845,6 +2884,9 @@ pub(crate) fn execute_map_full_match_releases(
         &mut state.assigned_inodes,
         &mut state.assignments,
     );
+    for knot in r.knot_details {
+        state.captured_knots.push((ProposalTier::FullMatch, knot));
+    }
 
     log_general(format!(
         "[COMPUTE] MapFullMatchReleases: {} eligible, {} selected, \
@@ -2906,6 +2948,9 @@ pub(crate) fn execute_map_incomplete_releases(
         &mut state.assigned_inodes,
         &mut state.assignments,
     );
+    for knot in r.knot_details {
+        state.captured_knots.push((ProposalTier::Incomplete, knot));
+    }
 
     log_general(format!(
         "[COMPUTE] MapIncompleteReleases: {} eligible, {} selected, \
@@ -3162,13 +3207,108 @@ pub(crate) fn execute_emit_release_packing_signals(
         sender.write_pending_acoustid_submissions(pending_submissions, witness);
     }
 
+    // Emit PackingKnot signals for captured knot components
+    let mut knot_signals: Vec<ComputedAggregateSignal> = Vec::new();
+    for (tier, knot) in &state.captured_knots {
+        let tier_str = match tier {
+            ProposalTier::FullMatch => "full_match",
+            ProposalTier::Incomplete => "incomplete",
+            _ => "unknown",
+        };
+        let pool = match tier {
+            ProposalTier::FullMatch => &state.full_match_pool,
+            ProposalTier::Incomplete => &state.incomplete_pool,
+            ProposalTier::Perfect => &state.perfect_pool,
+            ProposalTier::Single => &state.single_pool,
+        };
+
+        let proposals: Vec<KnotProposalEntry> = knot
+            .proposals
+            .iter()
+            .map(|&(pool_idx, selected)| {
+                let proposal = &pool[pool_idx];
+                let (release_title, release_artist, total_tracks) =
+                    match manifest_map.get(proposal.rows[0].release_id.as_str()) {
+                        Some(&(t, a, tt)) => (t.to_string(), a.to_string(), tt),
+                        None => (String::new(), String::new(), proposal.total_tracks),
+                    };
+                let assignments = proposal
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        let breakdown: PackingScoreBreakdown =
+                            bincode::deserialize(&row.score_breakdown).unwrap_or(
+                                PackingScoreBreakdown {
+                                    acoustid_confidence: 0.0,
+                                    duration_match: 0.0,
+                                    title_match: 0.0,
+                                    artist_match: 0.0,
+                                    album_match: 0.0,
+                                    track_number_match: 0.0,
+                                },
+                            );
+                        KnotAssignment {
+                            inode: row.inode,
+                            recording_id: row.recording_id.clone(),
+                            medium_pos: row.medium_pos,
+                            track_pos: row.track_pos,
+                            track_title: row.track_title.clone(),
+                            score: row.score,
+                            score_breakdown: breakdown,
+                            match_method: row.match_method,
+                        }
+                    })
+                    .collect();
+                KnotProposalEntry {
+                    release_id: proposal.rows[0].release_id.clone(),
+                    release_title,
+                    release_artist,
+                    total_tracks,
+                    total_score: proposal.total_score,
+                    selected,
+                    assignments,
+                }
+            })
+            .collect();
+
+        let key = format!("{}:{}", tier_str, knot.knot_id);
+        let signal = PackingKnotSignal {
+            key: key.clone(),
+            data: PackingKnotData {
+                tier: tier_str.to_string(),
+                knot_id: knot.knot_id,
+                classification: knot.classification,
+                ratio: knot.ratio,
+                contested_inodes: knot.contested_inodes.clone(),
+                proposals,
+            },
+        };
+        knot_signals.push(ComputedAggregateSignal::new(
+            key,
+            TypedSignalWrite::PackingKnot(signal),
+        ));
+    }
+
+    let (knot_cleared, knot_new, knot_updated, knot_unchanged) =
+        reconcile_aggregate_signals::<PackingKnotSignal>(
+            read_only_db,
+            &sender,
+            knot_signals,
+            witness,
+        );
+
     log_general(format!(
         "[COMPUTE] EmitReleasePackingSignals: {} inodes assigned to {} releases | \
-         {} elimination submissions | \
+         {} elimination submissions | {} knot signals (c={}, n={}, u={}, unch={}) | \
          signals: cleared={}, new={}, updated={}, unchanged={}",
         state.assignments.len(),
         unique_releases,
         submission_count,
+        state.captured_knots.len(),
+        knot_cleared,
+        knot_new,
+        knot_updated,
+        knot_unchanged,
         cleared,
         new,
         updated,

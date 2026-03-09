@@ -57,6 +57,7 @@ fn render_title_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserStat
         PackingCategory::Singles => "Singles",
         PackingCategory::Incomplete => "Incomplete Releases",
         PackingCategory::Unmatched => "Unmatched Files",
+        PackingCategory::Knots => "Packing Knots",
     };
     let count = state.entries.len();
     let line = Line::from(vec![

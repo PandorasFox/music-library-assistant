@@ -27,13 +27,13 @@
 //! Stage 3c: MapFullMatchReleases — MIS on cross-dir/extra-file proposals
 //!     │  ═══════ BARRIER ═══════
 //!     ▼
-//! Stage 3c½: MapNearMissReleases — MIS on (n-1)/n single-dir proposals
+//! Stages 3d/3e: MapIncompleteReleases + MapSingleReleases
+//!     │  Order configurable via `singles-before-incompletes`:
+//!     │    false (default): Incomplete → Singles
+//!     │    true:            Singles → Incomplete
 //!     │  ═══════ BARRIER ═══════
 //!     ▼
-//! Stage 3d: MapIncompleteReleases — MIS on partial-coverage proposals
-//!     │  ═══════ BARRIER ═══════
-//!     ▼
-//! Stage 3e: MapSingleReleases — per-inode-best + signal emission
+//! Stage 3f: EmitReleasePackingSignals
 //!     │  Emits ReleasePackingSignal per assigned inode (all rounds)
 //!     │  Records pending AcoustID submissions for elimination winners
 //!     │  Defers AnalyzeReleaseGaps
@@ -119,9 +119,7 @@ pub(crate) enum ProposalTier {
     Perfect,
     /// Every slot filled, but cross-directory or directory has extra files.
     FullMatch,
-    /// Almost complete: (n-1)/n slots filled, all from one directory with exactly n files.
-    NearMiss,
-    /// Some slots filled but not all.
+    /// Some slots filled but not all (includes near-misses).
     Incomplete,
     /// Single-track release.
     Single,
@@ -197,7 +195,6 @@ pub(crate) struct ReleaseMappingState {
     /// Proposal pools — each consumed by its corresponding MIS round.
     pub perfect_pool: Vec<Proposal>,
     pub full_match_pool: Vec<Proposal>,
-    pub near_miss_pool: Vec<Proposal>,
     pub incomplete_pool: Vec<Proposal>,
     pub single_pool: Vec<Proposal>,
     /// Inodes assigned so far (accumulated across rounds).
@@ -214,6 +211,10 @@ pub(crate) struct ReleaseMappingState {
     pub knot_ratio: f64,
     /// Maximum component size before knot extraction kicks in regardless of ratio.
     pub knot_size_limit: usize,
+    /// When true, run Singles before Incompletes in MIS ordering.
+    /// Singles claim one inode each (no MIS needed), preventing single-file
+    /// incompletes from competing in the expensive Incomplete MIS round.
+    pub singles_before_incompletes: bool,
 }
 
 /// Default knot extraction ratio. Components with proposals/inodes >= this
@@ -238,27 +239,6 @@ fn classify_proposal(
         return ProposalTier::Single;
     }
     if (rows.len() as i32) < total_tracks {
-        // Check for near-miss: exactly (n-1)/n filled, all from one directory
-        // with exactly n audio files.
-        if (rows.len() as i32) + 1 == total_tracks {
-            let mut dirs: HashMap<&str, i32> = HashMap::new();
-            for row in rows {
-                if let Some((dir, count)) = inode_dir_map.get(&row.inode) {
-                    *dirs.entry(dir.as_str()).or_insert(0) += 1;
-                    // Single directory check: if we see a second dir, bail
-                    if dirs.len() > 1 {
-                        return ProposalTier::Incomplete;
-                    }
-                    // Directory file count must match total tracks
-                    if *count != total_tracks {
-                        return ProposalTier::Incomplete;
-                    }
-                }
-            }
-            if dirs.len() == 1 {
-                return ProposalTier::NearMiss;
-            }
-        }
         return ProposalTier::Incomplete;
     }
 
@@ -2684,7 +2664,6 @@ pub fn execute_compute_release_mappings(
 
     let mut perfect_pool: Vec<Proposal> = Vec::new();
     let mut full_match_pool: Vec<Proposal> = Vec::new();
-    let mut near_miss_pool: Vec<Proposal> = Vec::new();
     let mut incomplete_pool: Vec<Proposal> = Vec::new();
     let mut single_pool: Vec<Proposal> = Vec::new();
 
@@ -2716,11 +2695,24 @@ pub fn execute_compute_release_mappings(
         match proposal.tier {
             ProposalTier::Perfect => perfect_pool.push(proposal),
             ProposalTier::FullMatch => full_match_pool.push(proposal),
-            ProposalTier::NearMiss => near_miss_pool.push(proposal),
             ProposalTier::Incomplete => incomplete_pool.push(proposal),
             ProposalTier::Single => single_pool.push(proposal),
         }
     }
+
+    // Sort each pool for deterministic MIS input: highest score first, then release_id
+    let sort_pool = |pool: &mut Vec<Proposal>| {
+        pool.sort_by(|a, b| {
+            b.total_score
+                .partial_cmp(&a.total_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.rows[0].release_id.cmp(&b.rows[0].release_id))
+        });
+    };
+    sort_pool(&mut perfect_pool);
+    sort_pool(&mut full_match_pool);
+    sort_pool(&mut incomplete_pool);
+    sort_pool(&mut single_pool);
 
     // Log tier distribution
     let tier_summary = |pool: &[Proposal]| -> (usize, i32) {
@@ -2728,41 +2720,50 @@ pub fn execute_compute_release_mappings(
     };
     let (p_count, p_tracks) = tier_summary(&perfect_pool);
     let (f_count, f_tracks) = tier_summary(&full_match_pool);
-    let (n_count, n_tracks) = tier_summary(&near_miss_pool);
     let (i_count, i_tracks) = tier_summary(&incomplete_pool);
     let (s_count, _) = tier_summary(&single_pool);
 
     log_general(format!(
         "[COMPUTE] ComputeReleaseMappings: {} proposals classified — \
          {} Perfect ({} tracks), {} FullMatch ({} tracks), \
-         {} NearMiss ({} tracks), {} Incomplete ({} tracks), {} Single",
-        p_count + f_count + n_count + i_count + s_count,
+         {} Incomplete ({} tracks), {} Single",
+        p_count + f_count + i_count + s_count,
         p_count,
         p_tracks,
         f_count,
         f_tracks,
-        n_count,
-        n_tracks,
         i_count,
         i_tracks,
         s_count,
     ));
 
+    // Load config for MIS parameters
+    let (knot_ratio, knot_size_limit, singles_before_incompletes) =
+        match crate::config::load_config() {
+            Ok(c) => {
+                let em = &c.opinions.external_matching;
+                (
+                    em.packing_knot_ratio,
+                    em.packing_knot_size_limit,
+                    em.singles_before_incompletes,
+                )
+            }
+            Err(_) => (DEFAULT_KNOT_RATIO, DEFAULT_KNOT_SIZE_LIMIT, false),
+        };
+
     // Package state and defer Round 1
     let state = SharedMappingState::new(ReleaseMappingState {
         perfect_pool,
         full_match_pool,
-        near_miss_pool,
         incomplete_pool,
         single_pool,
         assigned_inodes: HashSet::new(),
         assignments: Vec::new(),
         inode_release_set,
         manifest,
-        // TODO: thread config.opinions.external_matching.packing_knot_ratio
-        // through ComputationContext once config is available in computations.
-        knot_ratio: DEFAULT_KNOT_RATIO,
-        knot_size_limit: DEFAULT_KNOT_SIZE_LIMIT,
+        knot_ratio,
+        knot_size_limit,
+        singles_before_incompletes,
     });
 
     let deferred = vec![(
@@ -2859,69 +2860,19 @@ pub(crate) fn execute_map_full_match_releases(
         r.knot_proposals,
     ));
 
-    let next_state = SharedMappingState::new(state);
-    let deferred = vec![(
-        PipelineStage::Resolve,
-        vec![Computation::Analysis(
-            AnalysisComputation::MapNearMissReleases { state: next_state },
-        )],
-    )];
-
-    Result::pipeline(
-        computation,
-        start.elapsed().as_millis() as u64,
-        Vec::new(),
-        deferred,
-    )
-}
-
-/// Execute MapNearMissReleases — Stage 3c½ MIS on NearMiss proposals.
-///
-/// Near-misses are (n-1)/n proposals from a single directory with exactly n files.
-/// They run before general incompletes to prioritize almost-complete releases.
-pub(crate) fn execute_map_near_miss_releases(
-    shared: &SharedMappingState,
-    _witness: &ComputationWitness,
-    start: Instant,
-) -> Result {
-    let computation = AnalysisComputation::MapNearMissReleases {
-        state: shared.clone(),
+    // Dynamic chain: FullMatch → first of (Incomplete, Singles) based on config
+    let next_computation = if state.singles_before_incompletes {
+        AnalysisComputation::MapSingleReleases {
+            state: SharedMappingState::new(state),
+        }
+    } else {
+        AnalysisComputation::MapIncompleteReleases {
+            state: SharedMappingState::new(state),
+        }
     };
-    let mut state = shared.take();
-
-    let r = run_mis_round_partial(
-        &state.near_miss_pool,
-        &state.assigned_inodes,
-        state.knot_ratio,
-        state.knot_size_limit,
-    );
-    lock_in_round(
-        &r,
-        &state.near_miss_pool,
-        &mut state.assigned_inodes,
-        &mut state.assignments,
-    );
-
-    log_general(format!(
-        "[COMPUTE] MapNearMissReleases: {} eligible, {} selected, \
-         coverage={} inodes, {} components (max {}), \
-         deduped={}, knots={} ({} proposals)",
-        r.eligible_count,
-        r.selected_count,
-        r.coverage,
-        r.component_count,
-        r.max_component_size,
-        r.dedup_removed,
-        r.knot_components,
-        r.knot_proposals,
-    ));
-
-    let next_state = SharedMappingState::new(state);
     let deferred = vec![(
         PipelineStage::Resolve,
-        vec![Computation::Analysis(
-            AnalysisComputation::MapIncompleteReleases { state: next_state },
-        )],
+        vec![Computation::Analysis(next_computation)],
     )];
 
     Result::pipeline(
@@ -2932,7 +2883,7 @@ pub(crate) fn execute_map_near_miss_releases(
     )
 }
 
-/// Execute MapIncompleteReleases — Stage 3d MIS on Incomplete proposals.
+/// Execute MapIncompleteReleases — MIS on partial-coverage proposals.
 pub(crate) fn execute_map_incomplete_releases(
     shared: &SharedMappingState,
     _witness: &ComputationWitness,
@@ -2970,12 +2921,20 @@ pub(crate) fn execute_map_incomplete_releases(
         r.knot_proposals,
     ));
 
-    let next_state = SharedMappingState::new(state);
+    // Dynamic chain: if singles already ran, go to signal emission;
+    // otherwise, singles run next.
+    let next_computation = if state.singles_before_incompletes {
+        AnalysisComputation::EmitReleasePackingSignals {
+            state: SharedMappingState::new(state),
+        }
+    } else {
+        AnalysisComputation::MapSingleReleases {
+            state: SharedMappingState::new(state),
+        }
+    };
     let deferred = vec![(
         PipelineStage::Resolve,
-        vec![Computation::Analysis(
-            AnalysisComputation::MapSingleReleases { state: next_state },
-        )],
+        vec![Computation::Analysis(next_computation)],
     )];
 
     Result::pipeline(
@@ -2986,28 +2945,16 @@ pub(crate) fn execute_map_incomplete_releases(
     )
 }
 
-/// Execute MapSingleReleases — Stage 3e per-inode-best + signal emission.
+/// Execute MapSingleReleases — per-inode-best for single-track releases.
 pub(crate) fn execute_map_single_releases(
     shared: &SharedMappingState,
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    _witness: &ComputationWitness,
     start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::MapSingleReleases {
         state: shared.clone(),
     };
     let mut state = shared.take();
-
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
 
     // --- Singles: per-inode-best ---
     let mut singles_count = 0usize;
@@ -3040,7 +2987,55 @@ pub(crate) fn execute_map_single_releases(
         singles_count,
     ));
 
-    // --- Signal emission for ALL rounds ---
+    // Dynamic chain: if incompletes already ran, go to signal emission;
+    // otherwise, incompletes run next.
+    let next_computation = if !state.singles_before_incompletes {
+        AnalysisComputation::EmitReleasePackingSignals {
+            state: SharedMappingState::new(state),
+        }
+    } else {
+        AnalysisComputation::MapIncompleteReleases {
+            state: SharedMappingState::new(state),
+        }
+    };
+    let deferred = vec![(
+        PipelineStage::Resolve,
+        vec![Computation::Analysis(next_computation)],
+    )];
+
+    Result::pipeline(
+        computation,
+        start.elapsed().as_millis() as u64,
+        Vec::new(),
+        deferred,
+    )
+}
+
+/// Emit ReleasePacking signals for all MIS rounds + record AcoustID submissions.
+///
+/// This is the final MIS stage — runs after all assignment rounds are done.
+/// Defers AnalyzeReleaseGaps as the next (and final) pipeline stage.
+pub(crate) fn execute_emit_release_packing_signals(
+    shared: &SharedMappingState,
+    read_only_db: &ReadOnlyDb<'_>,
+    witness: &ComputationWitness,
+    start: Instant,
+) -> Result {
+    let computation = AnalysisComputation::EmitReleasePackingSignals {
+        state: shared.clone(),
+    };
+    let state = shared.take();
+
+    let sender = match write_thread::signal_sender() {
+        Some(s) => s.clone(),
+        None => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                "DB thread not initialized".to_string(),
+            );
+        }
+    };
 
     // Build manifest lookup
     let manifest_map: HashMap<&str, (&str, &str, i32)> = state
@@ -3168,7 +3163,7 @@ pub(crate) fn execute_map_single_releases(
     }
 
     log_general(format!(
-        "[COMPUTE] MapSingleReleases total: {} inodes assigned to {} releases | \
+        "[COMPUTE] EmitReleasePackingSignals: {} inodes assigned to {} releases | \
          {} elimination submissions | \
          signals: cleared={}, new={}, updated={}, unchanged={}",
         state.assignments.len(),

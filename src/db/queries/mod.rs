@@ -902,11 +902,6 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_candidate_inode_dirs()
     }
 
-    /// Get distinct (inode, path) pairs from the candidates table.
-    pub fn get_candidate_paths(&self) -> Result<Vec<(i64, String)>> {
-        self.db.get_candidate_paths()
-    }
-
     /// Get distinct (inode, recording_id) pairs from the candidates table.
     pub fn get_candidate_inode_recordings(&self) -> Result<Vec<(i64, String)>> {
         self.db.get_candidate_inode_recordings()

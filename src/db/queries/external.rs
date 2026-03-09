@@ -600,23 +600,6 @@ impl Database {
         Ok(results)
     }
 
-    /// Get distinct (inode, path) pairs from the candidates table.
-    ///
-    /// Used by Stage 4 (EmitUnmatchedSignals) for corpus paths without a full corpus scan.
-    pub fn get_candidate_paths(&self) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self
-            .conn()
-            .prepare("SELECT DISTINCT inode, path FROM release_packing_candidates")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?;
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
-    }
-
     /// Get distinct (inode, recording_id) pairs from the candidates table.
     ///
     /// Used by Stage 4 to build inode→recording_ids map without loading external_matches.

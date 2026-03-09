@@ -42,29 +42,6 @@ pub fn execute_emit_unmatched_signals(
         }
     };
 
-    // Read the manifest and optimal scores
-    let manifest = match read_only_db.get_packing_manifest() {
-        Ok(rows) => rows,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to read manifest: {}", e),
-            );
-        }
-    };
-
-    let optimal_scores = match read_only_db.get_optimal_packing_scores() {
-        Ok(rows) => rows,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                start.elapsed().as_millis() as u64,
-                format!("Failed to read scoring table: {}", e),
-            );
-        }
-    };
-
     // Build set of assigned inodes (from ReleasePackingSignal, written by Stage 3)
     let assigned_inodes: HashSet<i64> = read_only_db
         .corpus_signal_all_inodes::<ReleasePackingSignal>()
@@ -73,9 +50,11 @@ pub fn execute_emit_unmatched_signals(
         .collect();
 
     // === Unmatched corpus tracks ===
-    // Inodes with external matches but no release assignment
+    // Every fingerprinted corpus inode NOT in signal_release_packing is unmatched.
+    // Enriched with recording IDs (from candidates) and considered releases (from scoring)
+    // when available, for UI context.
 
-    // Build inode → recording IDs map from candidates table (no full external_matches scan)
+    // Enrichment: inode → recording IDs from candidates table
     let mut inode_recordings: HashMap<i64, Vec<String>> = HashMap::new();
     match read_only_db.get_candidate_inode_recordings() {
         Ok(rows) => {
@@ -95,7 +74,18 @@ pub fn execute_emit_unmatched_signals(
         }
     }
 
-    // Build inode → considered releases from scoring table
+    // Enrichment: inode → considered releases from scoring table
+    let optimal_scores = match read_only_db.get_optimal_packing_scores() {
+        Ok(rows) => rows,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to read scoring table: {}", e),
+            );
+        }
+    };
+
     let mut inode_considered_releases: HashMap<i64, Vec<String>> = HashMap::new();
     for row in &optimal_scores {
         inode_considered_releases
@@ -104,87 +94,50 @@ pub fn execute_emit_unmatched_signals(
             .push(row.release_id.clone());
     }
 
-    // Load corpus paths from candidates table (no full corpus scan)
-    let corpus_paths: HashMap<i64, String> = match read_only_db.get_candidate_paths() {
-        Ok(rows) => rows.into_iter().collect(),
+    // Primary loop: all fingerprinted corpus inodes, minus assigned
+    let fingerprinted = match read_only_db.get_fingerprinted_corpus_inodes() {
+        Ok(rows) => rows,
         Err(e) => {
             return Result::failure(
                 computation,
                 start.elapsed().as_millis() as u64,
-                format!("Failed to query candidate paths: {}", e),
+                format!("Failed to query fingerprinted inodes: {}", e),
             );
         }
     };
 
     let mut unmatched_signals: Vec<ComputedCorpusSignal> = Vec::new();
-    for (inode, recording_ids) in &inode_recordings {
-        if assigned_inodes.contains(inode) {
+    for (inode, path) in fingerprinted {
+        if assigned_inodes.contains(&inode) {
             continue;
         }
-        let path = match corpus_paths.get(inode) {
-            Some(p) => p.clone(),
-            None => continue,
-        };
-        let considered = inode_considered_releases
-            .get(inode)
+
+        let mut recording_ids = inode_recordings
+            .get(&inode)
             .cloned()
             .unwrap_or_default();
+        recording_ids.sort();
+        recording_ids.dedup();
 
-        // Only emit if this inode was actually scored (had candidates)
-        if considered.is_empty() {
-            continue;
-        }
-
-        let mut recording_ids_dedup = recording_ids.clone();
-        recording_ids_dedup.sort();
-        recording_ids_dedup.dedup();
-
-        let mut considered_dedup = considered;
-        considered_dedup.sort();
-        considered_dedup.dedup();
+        let mut considered_release_ids = inode_considered_releases
+            .get(&inode)
+            .cloned()
+            .unwrap_or_default();
+        considered_release_ids.sort();
+        considered_release_ids.dedup();
 
         let signal = UnmatchedCorpusTrackSignal {
-            inode: *inode,
+            inode,
             path,
             data: UnmatchedCorpusTrackData {
-                recording_ids: recording_ids_dedup,
-                considered_release_ids: considered_dedup,
+                recording_ids,
+                considered_release_ids,
             },
         };
         unmatched_signals.push(ComputedCorpusSignal::new(
-            *inode,
+            inode,
             TypedSignalWrite::UnmatchedCorpusTrack(signal),
         ));
-    }
-
-    // Also emit unmatched signals for fingerprinted corpus files that never entered
-    // the candidate pipeline (no AcoustID match → no recordings → not in inode_recordings).
-    match read_only_db.get_fingerprinted_corpus_inodes() {
-        Ok(fingerprinted) => {
-            for (inode, path) in fingerprinted {
-                if assigned_inodes.contains(&inode) || inode_recordings.contains_key(&inode) {
-                    continue;
-                }
-                let signal = UnmatchedCorpusTrackSignal {
-                    inode,
-                    path,
-                    data: UnmatchedCorpusTrackData {
-                        recording_ids: Vec::new(),
-                        considered_release_ids: Vec::new(),
-                    },
-                };
-                unmatched_signals.push(ComputedCorpusSignal::new(
-                    inode,
-                    TypedSignalWrite::UnmatchedCorpusTrack(signal),
-                ));
-            }
-        }
-        Err(e) => {
-            log_general(format!(
-                "[COMPUTE] EmitUnmatchedSignals: failed to query fingerprinted inodes: {}",
-                e
-            ));
-        }
     }
 
     let (uc_cleared, uc_new, uc_updated, uc_unchanged) =
@@ -196,6 +149,17 @@ pub fn execute_emit_unmatched_signals(
         );
 
     // === Unfilled release slots ===
+    let manifest = match read_only_db.get_packing_manifest() {
+        Ok(rows) => rows,
+        Err(e) => {
+            return Result::failure(
+                computation,
+                start.elapsed().as_millis() as u64,
+                format!("Failed to read manifest: {}", e),
+            );
+        }
+    };
+
     // Build filled_slots from actual assignments (signal_release_packing), which
     // includes both AcoustId and Elimination assignments (all resolved in Stage 3).
     // Cannot use optimal_scores: elimination-matched inodes bypass the scoring table.

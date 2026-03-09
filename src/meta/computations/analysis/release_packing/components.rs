@@ -203,6 +203,7 @@ pub(super) fn emit_knot_component_signals(
     tier: ProposalTier,
     classification: KnotClassification,
     ratio: f64,
+    allow_discography_reduction: bool,
     manifest_map: &HashMap<&str, (&str, &str, i32)>,
     corpus_paths: &HashMap<i64, String>,
     sender: &write_thread::SignalWriteSender,
@@ -214,6 +215,56 @@ pub(super) fn emit_knot_component_signals(
         comp_inodes.extend(&p.inode_set);
     }
 
+    // --- Discography reduction ---
+    // If enabled, check for proposals whose inode_set covers ALL contested inodes.
+    // If any exist, they subsume the entire knot — emit them as normal picks
+    // (no knot signal, losers silently dropped).
+    if allow_discography_reduction {
+        let mut covering: Vec<(usize, &Proposal)> = component_proposals
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| comp_inodes.is_subset(&p.inode_set))
+            .map(|(i, p)| (i, *p))
+            .collect();
+        if !covering.is_empty() {
+            // Pick best-scoring covering proposal(s) greedily
+            covering.sort_by(|a, b| {
+                b.1.total_score
+                    .partial_cmp(&a.1.total_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let mut claimed: HashSet<i64> = HashSet::new();
+            let mut selected: Vec<usize> = Vec::new();
+            for &(original_idx, p) in &covering {
+                if p.inode_set.iter().all(|i| !claimed.contains(i)) {
+                    claimed.extend(&p.inode_set);
+                    selected.push(original_idx);
+                }
+            }
+
+            log_general(format!(
+                "[PACKING-KNOT] tier={} knot={} discography-reduction: {} of {} proposals cover all {} contested inodes, {} selected as picks",
+                tier.as_str(), knot_id, covering.len(), component_proposals.len(),
+                comp_inodes.len(), selected.len(),
+            ));
+
+            // Emit winners as normal picks — no knot signal
+            for &original_idx in &selected {
+                emit_isolated_proposal_signals(
+                    component_proposals[original_idx],
+                    tier,
+                    manifest_map,
+                    corpus_paths,
+                    sender,
+                    witness,
+                );
+            }
+            return selected;
+        }
+    }
+
+    // --- Standard knot resolution: greedy best-scorer ---
+
     // Sort proposals by score descending, greedily pick non-conflicting
     let mut order: Vec<usize> = (0..component_proposals.len()).collect();
     order.sort_by(|&a, &b| {
@@ -224,22 +275,20 @@ pub(super) fn emit_knot_component_signals(
     });
 
     let mut knot_claimed: HashSet<i64> = HashSet::new();
-    let mut selected_local_indices: Vec<usize> = Vec::new();
     let mut captured_proposals: Vec<(usize, bool)> = Vec::new();
 
-    for &local_idx in &order {
-        let p = component_proposals[local_idx];
+    for &original_idx in &order {
+        let p = component_proposals[original_idx];
         let selected = p.inode_set.iter().all(|i| !knot_claimed.contains(i));
         if selected {
             knot_claimed.extend(&p.inode_set);
-            selected_local_indices.push(local_idx);
         }
-        captured_proposals.push((local_idx, selected));
+        captured_proposals.push((original_idx, selected));
     }
 
     // Log knot proposals
-    for &(local_idx, selected) in &captured_proposals {
-        let p = component_proposals[local_idx];
+    for &(original_idx, selected) in &captured_proposals {
+        let p = component_proposals[original_idx];
         log_general(format!(
             "[PACKING-KNOT] tier={} knot={} release={} score={:.4} inodes={} selected={}",
             tier.as_str(), knot_id, p.rows[0].release_id, p.total_score,
@@ -248,13 +297,17 @@ pub(super) fn emit_knot_component_signals(
     }
 
     let mut signals_batch: Vec<TypedSignalWrite> = Vec::new();
-    let mut pending_submissions: Vec<write_thread::PendingAcoustIdSubmission> = Vec::new();
 
     // Emit PackingKnot signal
-    let proposals_data: Vec<KnotProposalEntry> = captured_proposals
+    let selected_set: HashSet<usize> = captured_proposals
         .iter()
-        .map(|&(local_idx, selected)| {
-            let proposal = component_proposals[local_idx];
+        .filter(|(_, sel)| *sel)
+        .map(|(idx, _)| *idx)
+        .collect();
+    let proposals_data: Vec<KnotProposalEntry> = (0..component_proposals.len())
+        .map(|original_idx| {
+            let proposal = component_proposals[original_idx];
+            let selected = selected_set.contains(&original_idx);
             let (release_title, release_artist, total_tracks) =
                 match manifest_map.get(proposal.rows[0].release_id.as_str()) {
                     Some(&(t, a, tt)) => (t.to_string(), a.to_string(), tt),
@@ -315,105 +368,13 @@ pub(super) fn emit_knot_component_signals(
         },
     }));
 
-    // Emit PackedRelease + ReleasePacking for greedy-selected proposals
-    let category = match tier {
-        ProposalTier::Perfect => PackedReleaseCategory::Perfect,
-        ProposalTier::FullMatch => PackedReleaseCategory::FullMatch,
-        ProposalTier::Incomplete => PackedReleaseCategory::Incomplete,
-        ProposalTier::Single => PackedReleaseCategory::Single,
-    };
-
-    for &local_idx in &selected_local_indices {
-        let proposal = component_proposals[local_idx];
-        let release_id = &proposal.rows[0].release_id;
-        let (release_title, release_artist, total_tracks) =
-            match manifest_map.get(release_id.as_str()) {
-                Some(&(t, a, tt)) => (t.to_string(), a.to_string(), tt),
-                None => continue,
-            };
-
-        let filled = proposal.rows.len() as u32;
-
-        log_general(format!(
-            "[PACKING-PICK] tier={} release={} score={:.4} inodes={} filled={}/{} (knot-greedy)",
-            tier.as_str(), release_id, proposal.total_score, proposal.inode_set.len(), filled, total_tracks,
-        ));
-
-        let packed_key = format!("{}:{}", category.key_prefix(), release_id);
-        signals_batch.push(TypedSignalWrite::PackedRelease(PackedReleaseSignal {
-            key: packed_key,
-            data: PackedReleaseData {
-                release_id: release_id.clone(),
-                release_title: release_title.clone(),
-                release_artist: release_artist.clone(),
-                category,
-                assigned_count: filled,
-                total_tracks: total_tracks as u32,
-            },
-        }));
-
-        for row in &proposal.rows {
-            let path = match corpus_paths.get(&row.inode) {
-                Some(p) => p.clone(),
-                None => continue,
-            };
-
-            let breakdown: PackingScoreBreakdown = bincode::deserialize(&row.score_breakdown)
-                .unwrap_or(PackingScoreBreakdown {
-                    acoustid_confidence: 0.0,
-                    duration_match: 0.0,
-                    title_match: 0.0,
-                    artist_match: 0.0,
-                    album_match: 0.0,
-                    track_number_match: 0.0,
-                });
-
-            signals_batch.push(TypedSignalWrite::ReleasePacking(ReleasePackingSignal {
-                inode: row.inode,
-                path,
-                data: ReleasePackingData {
-                    release_id: row.release_id.clone(),
-                    release_title: release_title.clone(),
-                    release_artist: release_artist.clone(),
-                    track_position: row.track_pos as u32,
-                    medium_position: row.medium_pos as u32,
-                    medium_format: row.medium_format.clone(),
-                    track_number: row.track_number.clone(),
-                    recording_id: row.recording_id.clone(),
-                    track_title: row.track_title.clone(),
-                    score: row.score,
-                    score_breakdown: breakdown,
-                    alternatives_count: component_proposals.len() as u16,
-                    release_coverage: filled as f32 / total_tracks.max(1) as f32,
-                    match_method: if row.match_method == 1 {
-                        MatchMethod::Elimination
-                    } else {
-                        MatchMethod::AcoustId
-                    },
-                },
-            }));
-
-            if row.match_method == 1 {
-                if let (Some(fp_hex), Some(dur_ms)) = (&row.fingerprint_hex, row.raw_duration_ms) {
-                    pending_submissions.push(write_thread::PendingAcoustIdSubmission {
-                        fingerprint: fp_hex.clone(),
-                        recording_id: row.recording_id.clone(),
-                        duration_ms: dur_ms,
-                        source: "elimination".to_string(),
-                    });
-                }
-            }
-        }
-    }
-
+    // Knots are unresolved contention — emit the knot signal only, no picks.
+    // Contested inodes remain unclaimed for manual review.
     if !signals_batch.is_empty() {
         sender.write_typed_signal_batch(signals_batch, witness);
     }
-    if !pending_submissions.is_empty() {
-        sender.write_pending_acoustid_submissions(pending_submissions, witness);
-    }
 
-    selected_local_indices
+    Vec::new()
 }
 
 /// Orchestrate a "partial" tier (FullMatch, Incomplete, or Single).
@@ -428,6 +389,7 @@ pub(super) fn orchestrate_partial_tier(
     assigned_inodes: &HashSet<i64>,
     knot_ratio: f64,
     knot_size_limit: usize,
+    allow_discography_reduction: bool,
     read_only_db: &ReadOnlyDb<'_>,
     sender: &write_thread::SignalWriteSender,
     witness: &ComputationWitness,
@@ -572,6 +534,7 @@ pub(super) fn orchestrate_partial_tier(
                 tier,
                 classification,
                 ratio,
+                allow_discography_reduction,
                 &manifest_map,
                 &corpus_paths,
                 sender,

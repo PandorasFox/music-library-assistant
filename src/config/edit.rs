@@ -209,6 +209,45 @@ pub fn apply_config_edits_to_kdl(
                 &new_rp.elimination_weights,
             );
         }
+        if (new_rp.title_preassign_threshold - old_rp.title_preassign_threshold).abs()
+            > f64::EPSILON
+        {
+            set_or_create_float_node(
+                block,
+                ReleasePackingOpinions::KDL_TITLE_PREASSIGN_THRESHOLD,
+                new_rp.title_preassign_threshold,
+            );
+        }
+        if new_rp.packing_knot_ratio != old_rp.packing_knot_ratio {
+            set_or_create_float_node(
+                block,
+                ReleasePackingOpinions::KDL_PACKING_KNOT_RATIO,
+                new_rp.packing_knot_ratio,
+            );
+        }
+        if new_rp.packing_knot_size_limit != old_rp.packing_knot_size_limit {
+            set_or_create_int_node(
+                block,
+                ReleasePackingOpinions::KDL_PACKING_KNOT_SIZE_LIMIT,
+                new_rp.packing_knot_size_limit as i64,
+            );
+        }
+        if new_rp.singles_before_incompletes != old_rp.singles_before_incompletes {
+            set_or_create_bool_node(
+                block,
+                ReleasePackingOpinions::KDL_SINGLES_BEFORE_INCOMPLETES,
+                new_rp.singles_before_incompletes,
+            );
+        }
+        if new_rp.allow_resolve_knots_with_discographies
+            != old_rp.allow_resolve_knots_with_discographies
+        {
+            set_or_create_bool_node(
+                block,
+                ReleasePackingOpinions::KDL_ALLOW_DISCOGRAPHY_REDUCTION,
+                new_rp.allow_resolve_knots_with_discographies,
+            );
+        }
     }
 
     // --- Idle Rescan Interval ---
@@ -288,9 +327,6 @@ pub fn apply_config_edits_to_kdl(
         || new_em.requests_per_second != old_em.requests_per_second
         || new_em.mb_requests_per_second != old_em.mb_requests_per_second
         || new_em.mb_base_url != old_em.mb_base_url
-        || new_em.packing_knot_ratio != old_em.packing_knot_ratio
-        || new_em.packing_knot_size_limit != old_em.packing_knot_size_limit
-        || new_em.singles_before_incompletes != old_em.singles_before_incompletes
     {
         let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_EXTERNAL_MATCHING);
         if new_em.acoustid_api_key != old_em.acoustid_api_key {
@@ -319,27 +355,6 @@ pub fn apply_config_edits_to_kdl(
                 block,
                 ExternalMatchingConfig::KDL_MB_BASE_URL,
                 &new_em.mb_base_url,
-            );
-        }
-        if new_em.packing_knot_ratio != old_em.packing_knot_ratio {
-            set_or_create_float_node(
-                block,
-                ExternalMatchingConfig::KDL_PACKING_KNOT_RATIO,
-                new_em.packing_knot_ratio,
-            );
-        }
-        if new_em.packing_knot_size_limit != old_em.packing_knot_size_limit {
-            set_or_create_int_node(
-                block,
-                ExternalMatchingConfig::KDL_PACKING_KNOT_SIZE_LIMIT,
-                new_em.packing_knot_size_limit as i64,
-            );
-        }
-        if new_em.singles_before_incompletes != old_em.singles_before_incompletes {
-            set_or_create_bool_node(
-                block,
-                ExternalMatchingConfig::KDL_SINGLES_BEFORE_INCOMPLETES,
-                new_em.singles_before_incompletes,
             );
         }
     }

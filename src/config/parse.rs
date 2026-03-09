@@ -279,6 +279,45 @@ fn parse_release_packing_opinions(node: &kdl::KdlNode, opinions: &mut ReleasePac
                 ReleasePackingOpinions::KDL_ELIMINATION_WEIGHTS => {
                     parse_packing_weights(child, &mut opinions.elimination_weights);
                 }
+                ReleasePackingOpinions::KDL_TITLE_PREASSIGN_THRESHOLD => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            opinions.title_preassign_threshold = val;
+                        }
+                    }
+                }
+                ReleasePackingOpinions::KDL_PACKING_KNOT_RATIO => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            // 0 disables, otherwise must be > 1.0
+                            if val == 0.0 || val > 1.0 {
+                                opinions.packing_knot_ratio = val;
+                            }
+                        }
+                    }
+                }
+                ReleasePackingOpinions::KDL_PACKING_KNOT_SIZE_LIMIT => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_i64() {
+                            // 0 disables
+                            opinions.packing_knot_size_limit = val.max(0) as usize;
+                        }
+                    }
+                }
+                ReleasePackingOpinions::KDL_SINGLES_BEFORE_INCOMPLETES => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.singles_before_incompletes = val;
+                        }
+                    }
+                }
+                ReleasePackingOpinions::KDL_ALLOW_DISCOGRAPHY_REDUCTION => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_bool() {
+                            opinions.allow_resolve_knots_with_discographies = val;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -386,31 +425,6 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                 }
                 ExternalMatchingConfig::KDL_TAG_TEMPLATES => {
                     parse_tag_templates(child, &mut opinions.tag_templates);
-                }
-                ExternalMatchingConfig::KDL_PACKING_KNOT_RATIO => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_f64() {
-                            // 0 disables, otherwise must be > 1.0
-                            if val == 0.0 || val > 1.0 {
-                                opinions.packing_knot_ratio = val;
-                            }
-                        }
-                    }
-                }
-                ExternalMatchingConfig::KDL_PACKING_KNOT_SIZE_LIMIT => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_i64() {
-                            // 0 disables
-                            opinions.packing_knot_size_limit = val.max(0) as usize;
-                        }
-                    }
-                }
-                ExternalMatchingConfig::KDL_SINGLES_BEFORE_INCOMPLETES => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.singles_before_incompletes = val;
-                        }
-                    }
                 }
                 _ => {}
             }

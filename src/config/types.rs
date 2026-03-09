@@ -346,7 +346,8 @@ impl PackingWeights {
 /// Opinions for MusicBrainz release bin-packing.
 ///
 /// Controls filtering thresholds for discarding poor-quality recording matches
-/// before the greedy release assignment algorithm runs.
+/// before the greedy release assignment algorithm runs, plus MIS conflict
+/// resolution parameters (knot extraction, tier ordering, discography reduction).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReleasePackingOpinions {
     /// Duration tolerance as a fraction (0.0-1.0). Recording matches where the
@@ -358,6 +359,24 @@ pub struct ReleasePackingOpinions {
     pub candidate_weights: PackingWeights,
     /// Scoring weights for tag-only elimination/gap-filling assignment.
     pub elimination_weights: PackingWeights,
+    /// Title similarity threshold for pre-assignment (elimination phase 1).
+    /// File-slot pairs with similarity above this and exactly one candidate each
+    /// are locked in before Hungarian runs. Default: 0.95.
+    pub title_preassign_threshold: f64,
+    /// Knot extraction: proposals/inodes ratio threshold (default 3.0, 0 to disable).
+    /// Components where proposals/inodes >= this are extracted from MIS.
+    pub packing_knot_ratio: f64,
+    /// Knot extraction: component size limit (default 50, 0 to disable).
+    /// Components larger than this are extracted regardless of ratio.
+    pub packing_knot_size_limit: usize,
+    /// Run Singles MIS round before Incompletes (default: true).
+    /// When true, single-track releases claim inodes first, preventing
+    /// single-file incomplete packings from entering the expensive MIS round.
+    pub singles_before_incompletes: bool,
+    /// When true, knots containing proposals that cover ALL contested inodes
+    /// are reduced to only those covering proposals before greedy resolution.
+    /// A lazy alternative to manual knot review for discography releases. Default: true.
+    pub allow_resolve_knots_with_discographies: bool,
 }
 
 impl Default for ReleasePackingOpinions {
@@ -367,15 +386,29 @@ impl Default for ReleasePackingOpinions {
             min_confidence: 0.3,
             candidate_weights: PackingWeights::candidate_defaults(),
             elimination_weights: PackingWeights::elimination_defaults(),
+            title_preassign_threshold: Self::DEFAULT_TITLE_PREASSIGN_THRESHOLD,
+            packing_knot_ratio: Self::DEFAULT_PACKING_KNOT_RATIO,
+            packing_knot_size_limit: Self::DEFAULT_PACKING_KNOT_SIZE_LIMIT,
+            singles_before_incompletes: true,
+            allow_resolve_knots_with_discographies: true,
         }
     }
 }
 
 impl ReleasePackingOpinions {
+    pub const DEFAULT_TITLE_PREASSIGN_THRESHOLD: f64 = 0.95;
+    pub const DEFAULT_PACKING_KNOT_RATIO: f64 = 3.0;
+    pub const DEFAULT_PACKING_KNOT_SIZE_LIMIT: usize = 50;
+
     pub const KDL_DURATION_TOLERANCE_PCT: &str = "duration-tolerance-pct";
     pub const KDL_MIN_CONFIDENCE: &str = "min-confidence";
     pub const KDL_CANDIDATE_WEIGHTS: &str = "candidate-weights";
     pub const KDL_ELIMINATION_WEIGHTS: &str = "elimination-weights";
+    pub const KDL_TITLE_PREASSIGN_THRESHOLD: &str = "title-preassign-threshold";
+    pub const KDL_PACKING_KNOT_RATIO: &str = "packing-knot-ratio";
+    pub const KDL_PACKING_KNOT_SIZE_LIMIT: &str = "packing-knot-size-limit";
+    pub const KDL_SINGLES_BEFORE_INCOMPLETES: &str = "singles-before-incompletes";
+    pub const KDL_ALLOW_DISCOGRAPHY_REDUCTION: &str = "allow-resolve-knots-with-discographies";
 }
 
 /// Directory granularity for inbox organize workflow.
@@ -421,17 +454,6 @@ pub struct ExternalMatchingConfig {
     /// Tag templates: (UPPERCASE tag name, template string).
     /// Templates use `{var}` syntax for MB field substitution.
     pub tag_templates: Vec<(String, String)>,
-    /// Knot extraction: proposals/inodes ratio threshold (default 3.0, 0 to disable).
-    /// Components where proposals/inodes >= this are extracted from MIS.
-    pub packing_knot_ratio: f64,
-    /// Knot extraction: component size limit (default 50, 0 to disable).
-    /// Components larger than this are extracted regardless of ratio.
-    pub packing_knot_size_limit: usize,
-    /// Run Singles MIS round before Incompletes (default: false).
-    /// When true, single-track releases claim inodes first, preventing
-    /// single-file incomplete packings from entering the expensive MIS round.
-    #[serde(default)]
-    pub singles_before_incompletes: bool,
 }
 
 /// Opinions for disc extraction from ALBUM and TRACKNUMBER tags.
@@ -506,17 +528,12 @@ impl Default for ExternalMatchingConfig {
             mb_cache_ttl_days: 30,
             preferred_locales: Vec::new(),
             tag_templates: Vec::new(),
-            packing_knot_ratio: Self::DEFAULT_PACKING_KNOT_RATIO,
-            packing_knot_size_limit: Self::DEFAULT_PACKING_KNOT_SIZE_LIMIT,
-            singles_before_incompletes: true,
         }
     }
 }
 
 impl ExternalMatchingConfig {
     pub const DEFAULT_MB_BASE_URL: &str = "https://musicbrainz.org/ws/2";
-    pub const DEFAULT_PACKING_KNOT_RATIO: f64 = 3.0;
-    pub const DEFAULT_PACKING_KNOT_SIZE_LIMIT: usize = 50;
 
     pub const KDL_ACOUSTID_KEY: &str = "acoustid-api-key";
     pub const KDL_REQ_PER_SEC: &str = "requests-per-second";
@@ -526,9 +543,6 @@ impl ExternalMatchingConfig {
     pub const KDL_MB_CACHE_TTL: &str = "mb-cache-ttl-days";
     pub const KDL_PREFERRED_LOCALES: &str = "preferred-locales";
     pub const KDL_TAG_TEMPLATES: &str = "tag-templates";
-    pub const KDL_PACKING_KNOT_RATIO: &str = "packing-knot-ratio";
-    pub const KDL_PACKING_KNOT_SIZE_LIMIT: &str = "packing-knot-size-limit";
-    pub const KDL_SINGLES_BEFORE_INCOMPLETES: &str = "singles-before-incompletes";
 }
 
 impl Default for Opinions {

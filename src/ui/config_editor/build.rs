@@ -237,6 +237,90 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                         }
                     },
                 ),
+                field(
+                    "Title pre-assign threshold",
+                    "Title similarity threshold for elimination pre-assignment (0.0-1.0)",
+                    ConfigValue::Float(ops.release_packing.title_preassign_threshold),
+                    source_for(
+                        (ops.release_packing.title_preassign_threshold
+                            - defaults.release_packing.title_preassign_threshold)
+                            .abs()
+                            < f64::EPSILON,
+                        ReleasePackingOpinions::KDL_TITLE_PREASSIGN_THRESHOLD,
+                    ),
+                    false,
+                    |v, c| {
+                        if let ConfigValue::Float(f) = v {
+                            c.opinions.release_packing.title_preassign_threshold = *f;
+                        }
+                    },
+                ),
+                field(
+                    "Packing knot ratio",
+                    "Proposals/inodes ratio threshold for knot extraction (0 to disable)",
+                    ConfigValue::Float(ops.release_packing.packing_knot_ratio),
+                    source_for(
+                        ops.release_packing.packing_knot_ratio
+                            == defaults.release_packing.packing_knot_ratio,
+                        ReleasePackingOpinions::KDL_PACKING_KNOT_RATIO,
+                    ),
+                    false,
+                    |v, c| {
+                        if let ConfigValue::Float(f) = v {
+                            if *f == 0.0 || *f > 1.0 {
+                                c.opinions.release_packing.packing_knot_ratio = *f;
+                            }
+                        }
+                    },
+                ),
+                field(
+                    "Packing knot size limit",
+                    "Max component size before knot extraction (0 to disable)",
+                    ConfigValue::UintU32(ops.release_packing.packing_knot_size_limit as u32),
+                    source_for(
+                        ops.release_packing.packing_knot_size_limit
+                            == defaults.release_packing.packing_knot_size_limit,
+                        ReleasePackingOpinions::KDL_PACKING_KNOT_SIZE_LIMIT,
+                    ),
+                    false,
+                    |v, c| {
+                        if let ConfigValue::UintU32(n) = v {
+                            c.opinions.release_packing.packing_knot_size_limit = *n as usize;
+                        }
+                    },
+                ),
+                field(
+                    "Singles before incompletes",
+                    "Run single-track MIS round before incompletes",
+                    ConfigValue::Bool(ops.release_packing.singles_before_incompletes),
+                    source_for(
+                        ops.release_packing.singles_before_incompletes
+                            == defaults.release_packing.singles_before_incompletes,
+                        ReleasePackingOpinions::KDL_SINGLES_BEFORE_INCOMPLETES,
+                    ),
+                    false,
+                    |v, c| {
+                        if let ConfigValue::Bool(b) = v {
+                            c.opinions.release_packing.singles_before_incompletes = *b;
+                        }
+                    },
+                ),
+                field(
+                    "Resolve knots with discographies",
+                    "Reduce knots to covering proposals (discography releases) when possible",
+                    ConfigValue::Bool(ops.release_packing.allow_resolve_knots_with_discographies),
+                    source_for(
+                        ops.release_packing.allow_resolve_knots_with_discographies
+                            == defaults.release_packing.allow_resolve_knots_with_discographies,
+                        ReleasePackingOpinions::KDL_ALLOW_DISCOGRAPHY_REDUCTION,
+                    ),
+                    false,
+                    |v, c| {
+                        if let ConfigValue::Bool(b) = v {
+                            c.opinions.release_packing.allow_resolve_knots_with_discographies = *b;
+                        }
+                    },
+                ),
             ],
         },
         // Candidate Weights (AcoustID-backed scoring)
@@ -606,56 +690,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                         if let ConfigValue::String(s) = v {
                             c.opinions.external_matching.mb_base_url =
                                 s.trim_end_matches('/').to_string();
-                        }
-                    },
-                ),
-                field(
-                    "Packing knot ratio",
-                    "Proposals/inodes ratio threshold for knot extraction (0 to disable)",
-                    ConfigValue::Float(ops.external_matching.packing_knot_ratio),
-                    source_for(
-                        ops.external_matching.packing_knot_ratio
-                            == defaults.external_matching.packing_knot_ratio,
-                        ExternalMatchingConfig::KDL_PACKING_KNOT_RATIO,
-                    ),
-                    false,
-                    |v, c| {
-                        if let ConfigValue::Float(f) = v {
-                            if *f == 0.0 || *f > 1.0 {
-                                c.opinions.external_matching.packing_knot_ratio = *f;
-                            }
-                        }
-                    },
-                ),
-                field(
-                    "Packing knot size limit",
-                    "Max component size before knot extraction (0 to disable)",
-                    ConfigValue::UintU32(ops.external_matching.packing_knot_size_limit as u32),
-                    source_for(
-                        ops.external_matching.packing_knot_size_limit
-                            == defaults.external_matching.packing_knot_size_limit,
-                        ExternalMatchingConfig::KDL_PACKING_KNOT_SIZE_LIMIT,
-                    ),
-                    false,
-                    |v, c| {
-                        if let ConfigValue::UintU32(n) = v {
-                            c.opinions.external_matching.packing_knot_size_limit = *n as usize;
-                        }
-                    },
-                ),
-                field(
-                    "Singles before incompletes",
-                    "Run single-track MIS round before incompletes",
-                    ConfigValue::Bool(ops.external_matching.singles_before_incompletes),
-                    source_for(
-                        ops.external_matching.singles_before_incompletes
-                            == defaults.external_matching.singles_before_incompletes,
-                        ExternalMatchingConfig::KDL_SINGLES_BEFORE_INCOMPLETES,
-                    ),
-                    false,
-                    |v, c| {
-                        if let ConfigValue::Bool(b) = v {
-                            c.opinions.external_matching.singles_before_incompletes = *b;
                         }
                     },
                 ),

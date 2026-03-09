@@ -531,7 +531,7 @@ impl App {
         let singles_before_incompletes = self
             .config()
             .opinions
-            .external_matching
+            .release_packing
             .singles_before_incompletes;
         let mut state = external_match_view::ExternalMatchesViewState::new(
             fetch_active,

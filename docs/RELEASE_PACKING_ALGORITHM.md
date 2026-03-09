@@ -107,7 +107,7 @@ Six independent dimensions, each normalized to `[0.0, 1.0]`:
 score = Σ(weight_i × dimension_i)
 ```
 
-Both weight sets are configurable under `release-packing` in `config.kdl`.
+Both weight sets and all packing parameters are configurable under `release-packing` in `config.kdl`.
 
 ---
 
@@ -133,7 +133,7 @@ Each round selects non-conflicting (inode-disjoint) proposals to maximize corpus
 **Round flow (FullMatch, Incomplete):**
 1. **Cull:** Discard proposals that lost any inode to prior rounds
 2. **Dedup:** Group by sorted inode signature, keep best-scorer per group
-3. **Knot extraction:** Build conflict graph (proposals sharing inodes are adjacent). Connected components with `proposals/inodes >= knot_ratio` (default 3.0) or `size > knot_size_limit` (default 50) are resolved greedily (best score first, skip conflicting)
+3. **Knot extraction:** Build conflict graph (proposals sharing inodes are adjacent). Connected components with `proposals/inodes >= knot_ratio` (default 3.0) or `size > knot_size_limit` (default 50) are extracted as knots. **Discography reduction** (when `allow-resolve-knots-with-discographies` is true, default): if any proposals in the knot cover ALL contested inodes, they are emitted as normal picks and the knot is fully resolved — no knot signal emitted, losers silently dropped. Otherwise, the knot is emitted as an unresolved `PackingKnotSignal` for manual review — no picks are emitted and contested inodes remain unclaimed.
 4. **MIS solve:** Remaining clean components enter exact MIS:
    - Components ≤25 proposals: exhaustive bitmask enumeration (2^k subsets)
    - Components >25: branch-and-bound with coverage/score objective
@@ -143,8 +143,8 @@ Each round selects non-conflicting (inode-disjoint) proposals to maximize corpus
 **Singles round:** per-inode best score, no MIS needed (no multi-inode conflicts).
 
 **Round ordering** after FullMatch is configurable via `singles-before-incompletes`:
-- `false` (default): Incomplete → Singles
-- `true`: Singles → Incomplete
+- `true` (default): Singles → Incomplete
+- `false`: Incomplete → Singles
 
 When singles run first, single-track releases claim inodes before the expensive Incomplete MIS round, preventing single-file incompletes from competing there.
 
@@ -187,14 +187,18 @@ These are distinct classification systems used at different stages:
 
 ---
 
-## Key Constants
+## Key Config Fields
 
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `TITLE_PREASSIGN_THRESHOLD` | 0.95 | Title pre-assignment: high confidence, 1:1 only |
+All configurable under `release-packing` in `config.kdl`:
+
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `title-preassign-threshold` | 0.95 | Title pre-assignment: high confidence, 1:1 only |
+| `packing-knot-ratio` | 3.0 | Knot extraction: proposals/inodes threshold (0 to disable) |
+| `packing-knot-size-limit` | 50 | Max component size before forced knot extraction (0 to disable) |
+| `singles-before-incompletes` | true | Run singles MIS round before incompletes |
+| `allow-resolve-knots-with-discographies` | true | Reduce knots to covering proposals when possible |
 | ~~`ELIMINATION_SCORE_THRESHOLD`~~ | Removed | No threshold — directory constraint provides the quality gate |
-| `DEFAULT_KNOT_RATIO` | 3.0 | Knot extraction: proposals/inodes threshold |
-| `DEFAULT_KNOT_SIZE_LIMIT` | 50 | Max component size before forced knot extraction |
 
 ---
 

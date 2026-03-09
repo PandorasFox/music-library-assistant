@@ -206,15 +206,11 @@ pub(crate) struct ReleaseMappingState {
     /// Singles claim one inode each (no MIS needed), preventing single-file
     /// incompletes from competing in the expensive Incomplete MIS round.
     pub singles_before_incompletes: bool,
+    /// When true, knots containing proposals that cover ALL contested inodes
+    /// are reduced to only those covering proposals before greedy resolution.
+    pub allow_resolve_knots_with_discographies: bool,
 }
 
-/// Default knot extraction ratio. Components with proposals/inodes >= this
-/// are extracted from MIS and resolved by best score.
-pub(super) const DEFAULT_KNOT_RATIO: f64 = 3.0;
-
-/// Default knot size limit. Components larger than this are extracted
-/// regardless of ratio — too large for BnB to solve in reasonable time.
-pub(super) const DEFAULT_KNOT_SIZE_LIMIT: usize = 50;
 
 /// Classify a proposal into a quality tier based on slot coverage and directory purity.
 ///

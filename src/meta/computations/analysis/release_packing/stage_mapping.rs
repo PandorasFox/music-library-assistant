@@ -18,8 +18,9 @@ use super::components::{
 };
 use super::types::{
     classify_proposal, ComponentData, Proposal, ProposalTier, ReleaseMappingState,
-    SharedComponentData, SharedMappingState, DEFAULT_KNOT_RATIO, DEFAULT_KNOT_SIZE_LIMIT,
+    SharedComponentData, SharedMappingState,
 };
+use crate::config::ReleasePackingOpinions;
 use crate::meta::computations::analysis::{Computation as AnalysisComputation, Result};
 
 // ============================================================================
@@ -197,18 +198,10 @@ pub fn execute_compute_release_mappings(
     ));
 
     // Load config for MIS parameters
-    let (knot_ratio, knot_size_limit, singles_before_incompletes) =
-        match crate::config::load_config() {
-            Ok(c) => {
-                let em = &c.opinions.external_matching;
-                (
-                    em.packing_knot_ratio,
-                    em.packing_knot_size_limit,
-                    em.singles_before_incompletes,
-                )
-            }
-            Err(_) => (DEFAULT_KNOT_RATIO, DEFAULT_KNOT_SIZE_LIMIT, false),
-        };
+    let rp = match crate::config::load_config() {
+        Ok(c) => c.opinions.release_packing.clone(),
+        Err(_) => ReleasePackingOpinions::default(),
+    };
 
     // Package state and defer Round 1
     let state = SharedMappingState::new(ReleaseMappingState {
@@ -216,9 +209,10 @@ pub fn execute_compute_release_mappings(
         full_match_pool,
         incomplete_pool,
         single_pool,
-        knot_ratio,
-        knot_size_limit,
-        singles_before_incompletes,
+        knot_ratio: rp.packing_knot_ratio,
+        knot_size_limit: rp.packing_knot_size_limit,
+        singles_before_incompletes: rp.singles_before_incompletes,
+        allow_resolve_knots_with_discographies: rp.allow_resolve_knots_with_discographies,
     });
 
     let deferred = vec![(
@@ -435,6 +429,7 @@ pub(crate) fn execute_map_full_match_releases(
         &assigned_inodes,
         state.knot_ratio,
         state.knot_size_limit,
+        state.allow_resolve_knots_with_discographies,
         read_only_db,
         &sender,
         witness,
@@ -499,6 +494,7 @@ pub(crate) fn execute_map_incomplete_releases(
         &assigned_inodes,
         state.knot_ratio,
         state.knot_size_limit,
+        state.allow_resolve_knots_with_discographies,
         read_only_db,
         &sender,
         witness,
@@ -566,6 +562,7 @@ pub(crate) fn execute_map_single_releases(
         &assigned_inodes,
         state.knot_ratio,
         state.knot_size_limit,
+        state.allow_resolve_knots_with_discographies,
         read_only_db,
         &sender,
         witness,

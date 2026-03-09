@@ -483,6 +483,7 @@ pub fn execute_score_release_candidates(
     let duration_tolerance_pct = config.opinions.release_packing.duration_tolerance_pct;
     let candidate_weights = config.opinions.release_packing.candidate_weights.clone();
     let elimination_weights = config.opinions.release_packing.elimination_weights.clone();
+    let title_preassign_threshold = config.opinions.release_packing.title_preassign_threshold;
     let preferred_locales = config.opinions.external_matching.preferred_locales.clone();
 
     // Load the release tracklist
@@ -789,8 +790,6 @@ pub fn execute_score_release_candidates(
             // tracknumber from stealing slots that have clear title matches
             // when the rip's track ordering diverges from MB.
 
-            const TITLE_PREASSIGN_THRESHOLD: f64 = 0.95;
-
             // Compute title similarity for every file × slot pair
             let title_sims: Vec<Vec<f64>> = unassigned_tags
                 .iter()
@@ -826,7 +825,7 @@ pub fn execute_score_release_candidates(
                 .map(|ui| {
                     (0..n_slots)
                         .filter(|&fi| {
-                            title_sims[ui][fi] > TITLE_PREASSIGN_THRESHOLD
+                            title_sims[ui][fi] > title_preassign_threshold
                                 && file_medium[ui]
                                     .map_or(true, |fm| unfilled[fi].0 == fm)
                         })
@@ -839,7 +838,7 @@ pub fn execute_score_release_candidates(
                 .map(|fi| {
                     (0..n_files)
                         .filter(|&ui| {
-                            title_sims[ui][fi] > TITLE_PREASSIGN_THRESHOLD
+                            title_sims[ui][fi] > title_preassign_threshold
                                 && file_medium[ui]
                                     .map_or(true, |fm| unfilled[fi].0 == fm)
                         })

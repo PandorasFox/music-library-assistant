@@ -817,3 +817,81 @@ pub(crate) fn execute_resolve_packing_component(
 
     Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proposal(inodes: &[i64]) -> Proposal {
+        Proposal {
+            total_tracks: inodes.len() as i32,
+            rows: Vec::new(),
+            inode_set: inodes.iter().copied().collect(),
+            total_score: 1.0,
+            tier: ProposalTier::FullMatch,
+        }
+    }
+
+    #[test]
+    fn test_components_deterministic() {
+        let proposals = vec![
+            proposal(&[1, 2]),
+            proposal(&[2, 3]),
+            proposal(&[4, 5]),
+            proposal(&[5, 6]),
+            proposal(&[7]),
+        ];
+        let first = find_conflict_components(&proposals);
+        for _ in 0..100 {
+            assert_eq!(find_conflict_components(&proposals), first);
+        }
+    }
+
+    #[test]
+    fn test_components_all_isolated() {
+        let proposals = vec![
+            proposal(&[1]),
+            proposal(&[2]),
+            proposal(&[3]),
+        ];
+        let components = find_conflict_components(&proposals);
+        assert_eq!(components.len(), 3);
+        for comp in &components {
+            assert_eq!(comp.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_components_chain() {
+        // A shares inode with B, B shares with C → one component
+        let proposals = vec![
+            proposal(&[1, 2]),
+            proposal(&[2, 3]),
+            proposal(&[3, 4]),
+        ];
+        let components = find_conflict_components(&proposals);
+        assert_eq!(components.len(), 1);
+        assert_eq!(components[0].len(), 3);
+    }
+
+    #[test]
+    fn test_components_two_groups() {
+        let proposals = vec![
+            proposal(&[1, 2]),
+            proposal(&[2, 3]),
+            proposal(&[10, 11]),
+            proposal(&[11, 12]),
+        ];
+        let components = find_conflict_components(&proposals);
+        assert_eq!(components.len(), 2);
+        // Each component has 2 proposals
+        assert_eq!(components[0].len(), 2);
+        assert_eq!(components[1].len(), 2);
+    }
+
+    #[test]
+    fn test_components_empty() {
+        let components = find_conflict_components(&[]);
+        assert!(components.is_empty());
+    }
+}

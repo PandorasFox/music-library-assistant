@@ -329,3 +329,118 @@ pub(super) fn group_all_per_inode(
     }
     grouped
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_row(inode: i64, medium: i32, track: i32) -> OptimalPackingScoreRow {
+        OptimalPackingScoreRow {
+            release_id: "rel-1".to_string(),
+            inode,
+            recording_id: format!("rec-{}", inode),
+            medium_pos: medium,
+            track_pos: track,
+            track_title: format!("Track {}", track),
+            medium_format: Some("CD".to_string()),
+            track_number: track.to_string(),
+            score: 0.9,
+            score_breakdown: Vec::new(),
+            match_method: 0,
+            fingerprint_hex: None,
+            raw_duration_ms: None,
+        }
+    }
+
+    fn dir_map(pairs: &[(i64, &str, i32)]) -> HashMap<i64, (String, i32)> {
+        pairs
+            .iter()
+            .map(|(inode, dir, count)| (*inode, (dir.to_string(), *count)))
+            .collect()
+    }
+
+    #[test]
+    fn test_classify_perfect() {
+        // Single medium, all slots filled, 1 dir, dir file count == total tracks
+        let rows = vec![
+            make_row(100, 1, 1),
+            make_row(200, 1, 2),
+            make_row(300, 1, 3),
+        ];
+        let inode_dirs = dir_map(&[
+            (100, "/music/album", 3),
+            (200, "/music/album", 3),
+            (300, "/music/album", 3),
+        ]);
+        assert_eq!(classify_proposal(&rows, 3, 1, &inode_dirs), ProposalTier::Perfect);
+    }
+
+    #[test]
+    fn test_classify_full_match() {
+        // All slots filled, but dir has extra files (count=5 > total_tracks=3)
+        let rows = vec![
+            make_row(100, 1, 1),
+            make_row(200, 1, 2),
+            make_row(300, 1, 3),
+        ];
+        let inode_dirs = dir_map(&[
+            (100, "/music/album", 5),
+            (200, "/music/album", 5),
+            (300, "/music/album", 5),
+        ]);
+        assert_eq!(classify_proposal(&rows, 3, 1, &inode_dirs), ProposalTier::FullMatch);
+    }
+
+    #[test]
+    fn test_classify_incomplete() {
+        // Only 2 of 3 slots filled
+        let rows = vec![
+            make_row(100, 1, 1),
+            make_row(200, 1, 2),
+        ];
+        let inode_dirs = dir_map(&[
+            (100, "/music/album", 3),
+            (200, "/music/album", 3),
+        ]);
+        assert_eq!(classify_proposal(&rows, 3, 1, &inode_dirs), ProposalTier::Incomplete);
+    }
+
+    #[test]
+    fn test_classify_single() {
+        let rows = vec![make_row(100, 1, 1)];
+        let inode_dirs = dir_map(&[(100, "/music/album", 1)]);
+        assert_eq!(classify_proposal(&rows, 1, 1, &inode_dirs), ProposalTier::Single);
+    }
+
+    #[test]
+    fn test_classify_multi_medium_perfect() {
+        // Two media, two sibling dirs, each with correct file counts
+        let rows = vec![
+            make_row(100, 1, 1),
+            make_row(200, 1, 2),
+            make_row(300, 2, 1),
+            make_row(400, 2, 2),
+        ];
+        let inode_dirs = dir_map(&[
+            (100, "/music/boxset/disc1", 2),
+            (200, "/music/boxset/disc1", 2),
+            (300, "/music/boxset/disc2", 2),
+            (400, "/music/boxset/disc2", 2),
+        ]);
+        assert_eq!(classify_proposal(&rows, 4, 2, &inode_dirs), ProposalTier::Perfect);
+    }
+
+    #[test]
+    fn test_classify_multi_medium_cross_dir() {
+        // Two media, but inodes from same directory → FullMatch
+        let rows = vec![
+            make_row(100, 1, 1),
+            make_row(200, 2, 1),
+        ];
+        let inode_dirs = dir_map(&[
+            (100, "/music/album", 2),
+            (200, "/music/album", 2),
+        ]);
+        assert_eq!(classify_proposal(&rows, 2, 2, &inode_dirs), ProposalTier::FullMatch);
+    }
+}

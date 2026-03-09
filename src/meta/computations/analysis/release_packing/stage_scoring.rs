@@ -16,7 +16,7 @@ use crate::meta::external::ExternalSource;
 use crate::meta::signals::data::{PackingScoreBreakdown, ReleasePackingSignal};
 
 use super::hungarian::{
-    hungarian_assignment, kuhn_munkres, localized_release_artist, select_target_directory,
+    kuhn_munkres, localized_release_artist, score_all_directories,
     TargetDirs,
 };
 use super::scoring::{compute_score, weighted_composite};
@@ -63,7 +63,6 @@ pub fn execute_pack_releases(
         }
     };
     let min_confidence = config.opinions.release_packing.min_confidence;
-    let duration_tolerance_pct = config.opinions.release_packing.duration_tolerance_pct;
     let preferred_locales = config.opinions.external_matching.preferred_locales.clone();
 
     let source_key = ExternalSource::AcoustID.to_key();
@@ -135,11 +134,13 @@ pub fn execute_pack_releases(
         })
         .collect();
 
-    // === Parse recordings, filter, collect release IDs ===
+    // === Parse recordings, filter by confidence, collect release IDs ===
+    // Duration is NOT filtered here — it's a scoring dimension in Stage 2.
+    // Fingerprint matches already imply structural similarity; duration mismatches
+    // are penalized by the duration_match scoring weight, not hard-gated.
     let mut inode_recordings: HashMap<i64, Vec<RecordingMatch>> = HashMap::new();
     let mut all_release_ids: HashSet<String> = HashSet::new();
     let mut recording_releases: HashMap<String, Vec<String>> = HashMap::new();
-    let mut filtered_duration = 0usize;
     let mut filtered_confidence = 0usize;
     let mut recording_parse_failures = 0usize;
 
@@ -179,19 +180,6 @@ pub fn execute_pack_releases(
                 }
             };
 
-            if let (Some(corpus_dur), Some(mb_dur)) = (
-                corpus_info.get(inode).and_then(|c| c.duration_ms),
-                recording.length,
-            ) {
-                if mb_dur > 0 {
-                    let ratio = (corpus_dur as f64 - mb_dur as f64).abs() / mb_dur as f64;
-                    if ratio > duration_tolerance_pct {
-                        filtered_duration += 1;
-                        continue;
-                    }
-                }
-            }
-
             for release_ref in &recording.releases {
                 all_release_ids.insert(release_ref.id.clone());
             }
@@ -211,8 +199,8 @@ pub fn execute_pack_releases(
     }
 
     log_general(format!(
-        "[COMPUTE] PackReleases: {} inodes after filtering (duration={}, confidence={}, parse_fail={}), {} release IDs",
-        inode_recordings.len(), filtered_duration, filtered_confidence, recording_parse_failures,
+        "[COMPUTE] PackReleases: {} inodes after filtering (confidence={}, parse_fail={}), {} release IDs",
+        inode_recordings.len(), filtered_confidence, recording_parse_failures,
         all_release_ids.len()
     ));
 
@@ -638,13 +626,11 @@ pub fn execute_score_release_candidates(
     }
 
     // --- Directory-constrained packing ---
-    // All packing is constrained to a single directory (or sibling dirs for multi-medium).
-    // Step 1: Select target directory based on file count match and candidate density.
-    // Step 2: Filter candidates to target directory only.
-    // Step 3: Run Hungarian on the filtered candidates.
+    // Run Hungarian for every candidate directory, keep the best-scoring assignment.
+    // This replaces the old greedy heuristic (select_target_directory) with exhaustive
+    // per-directory scoring for deterministic results.
 
     let mut dir_candidate_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
-    let mut dir_total: HashMap<String, i32> = HashMap::new();
 
     for candidate in &candidates {
         if let Some(corpus) = corpus_info.get(&candidate.inode) {
@@ -654,29 +640,21 @@ pub fn execute_score_release_candidates(
                 .insert(candidate.inode);
         }
     }
-    for row in &candidate_rows {
-        dir_total
-            .entry(row.parent_dir.clone())
-            .or_insert(row.dir_file_count);
-    }
 
-    let target_dirs = select_target_directory(
+    let (target_dirs, optimal_pairs) = score_all_directories(
         &candidates,
         &corpus_info,
         &dir_candidate_inodes,
-        &dir_total,
         &release.media,
     );
 
-    // Filter candidates to target directory only (per-medium aware)
+    // Filter candidates to winning directory only (per-medium aware)
     candidates.retain(|c| {
         corpus_info
             .get(&c.inode)
             .map(|ci| target_dirs.contains(&ci.parent_dir, c.medium_pos))
             .unwrap_or(false)
     });
-
-    let optimal_pairs = hungarian_assignment(&candidates);
 
     // Write all candidates to scoring table, marking optimal ones
     let mut score_rows: Vec<PackingScoreRow> = Vec::new();

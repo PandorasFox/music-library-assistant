@@ -134,22 +134,7 @@ pub(super) fn hungarian_assignment(
     result
 }
 
-/// Select the best target directory (or sibling directories for multi-medium) for packing.
-///
-/// All packing is constrained to one directory (or sibling dirs). This replaces the
-/// old `directory_cohesion` scoring gradient with a structural constraint.
-///
-/// **Single-medium** (`media.len() <= 1`):
-/// - Prefer: directory where `dir_file_count == total_tracks` with most AcoustID candidates
-/// - Fallback: directory with the most AcoustID candidates
-/// - Tiebreaker: highest sum of candidate scores
-/// - Returns `TargetDirs::Single(dir)`.
-///
-/// **Multi-medium** (`media.len() > 1`):
-/// - Find sibling directories (same parent) with candidates, assign each medium to
-///   the sibling dir where most of its AcoustID candidates live.
-/// - Returns `TargetDirs::PerMedium(mapping)` with per-medium directory affinity.
-/// - Fallback: treat like single-medium (pick one dir with most candidates).
+/// Target directory constraint for release packing.
 pub(super) enum TargetDirs {
     /// One directory for all media (single-medium or multi-medium fallback).
     Single(String),
@@ -182,66 +167,157 @@ impl TargetDirs {
     }
 }
 
-pub(super) fn select_target_directory(
+/// Run Hungarian for every candidate directory, return the best TargetDirs + optimal pairs.
+///
+/// For multi-medium releases, also tries sibling directory mappings. The candidate
+/// directory that produces the highest total Hungarian assignment score wins.
+/// Deterministic tiebreak: most assigned slots → lexicographic smallest directory path.
+pub(super) fn score_all_directories(
     candidates: &[CandidateAssignment],
     corpus_info: &HashMap<i64, CorpusFileInfo>,
     dir_candidate_inodes: &HashMap<String, HashSet<i64>>,
-    dir_total: &HashMap<String, i32>,
     media: &[musicbrainz::MbMedium],
-) -> TargetDirs {
-    let total_tracks: usize = media.iter().map(|m| m.tracks.len()).sum();
-    let media_count = media.len();
-
-    if total_tracks == 0 || dir_candidate_inodes.is_empty() {
-        return TargetDirs::Empty;
+) -> (TargetDirs, HashSet<(i64, (u32, u32))>) {
+    if candidates.is_empty() || dir_candidate_inodes.is_empty() {
+        return (TargetDirs::Empty, HashSet::new());
     }
 
-    // Multi-medium: try sibling directory group detection first
-    if media_count > 1 {
+    // Track the best result: (total_score, assigned_count, dir_key_for_tiebreak, target_dirs, pairs)
+    let mut best: Option<(f64, usize, String, TargetDirs, HashSet<(i64, (u32, u32))>)> = None;
+
+    let is_better = |score: f64,
+                     count: usize,
+                     dir_key: &str,
+                     best: &Option<(f64, usize, String, TargetDirs, HashSet<(i64, (u32, u32))>)>|
+     -> bool {
+        match best {
+            None => true,
+            Some((best_score, best_count, ref best_key, _, _)) => {
+                if count > *best_count {
+                    true
+                } else if count == *best_count {
+                    if score > *best_score {
+                        true
+                    } else if (score - *best_score).abs() < f64::EPSILON {
+                        dir_key < best_key.as_str()
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+        }
+    };
+
+    // Multi-medium: try sibling directory mapping first
+    if media.len() > 1 {
         if let Some(mapping) =
             find_sibling_dir_mapping(candidates, corpus_info, dir_candidate_inodes)
         {
-            return TargetDirs::PerMedium(mapping);
-        }
-        // Fallback: treat like single-medium below
-    }
-
-    // Single-medium (or multi-medium fallback): pick best single directory
-    // Score each directory: (exact_file_count_match, candidate_count, score_sum)
-    let mut dir_scores: Vec<(&str, bool, usize, f64)> = dir_candidate_inodes
-        .iter()
-        .map(|(dir, inodes)| {
-            let file_count = dir_total.get(dir).copied().unwrap_or(0);
-            let exact_match = file_count == total_tracks as i32;
-            let candidate_count = inodes.len();
-            let score_sum: f64 = candidates
+            let sibling_dirs = TargetDirs::PerMedium(mapping.clone());
+            let filtered: Vec<&CandidateAssignment> = candidates
                 .iter()
                 .filter(|c| {
                     corpus_info
                         .get(&c.inode)
-                        .map(|ci| ci.parent_dir == *dir)
+                        .map(|ci| sibling_dirs.contains(&ci.parent_dir, c.medium_pos))
                         .unwrap_or(false)
                 })
-                .map(|c| c.score)
+                .collect();
+            let filtered_owned: Vec<CandidateAssignment> = filtered
+                .iter()
+                .map(|c| CandidateAssignment {
+                    inode: c.inode,
+                    recording_id: c.recording_id.clone(),
+                    release_id: c.release_id.clone(),
+                    medium_pos: c.medium_pos,
+                    track_pos: c.track_pos,
+                    medium_format: c.medium_format.clone(),
+                    track_number: c.track_number.clone(),
+                    track_title: c.track_title.clone(),
+                    score: c.score,
+                    breakdown: c.breakdown.clone(),
+                })
+                .collect();
+            let pairs = hungarian_assignment(&filtered_owned);
+            let total_score: f64 = pairs
+                .iter()
+                .filter_map(|(inode, slot)| {
+                    filtered_owned
+                        .iter()
+                        .find(|c| c.inode == *inode && (c.medium_pos, c.track_pos) == *slot)
+                        .map(|c| c.score)
+                })
                 .sum();
-            (dir.as_str(), exact_match, candidate_count, score_sum)
-        })
-        .collect();
+            // Dir key for sibling: sorted mapping values
+            let mut dir_key_parts: Vec<&str> = mapping.values().map(|s| s.as_str()).collect();
+            dir_key_parts.sort();
+            let dir_key = dir_key_parts.join("|");
 
-    // Sort: exact match first, then most candidates, then highest score sum
-    dir_scores.sort_by(|a, b| {
-        b.1.cmp(&a.1)
-            .then(b.2.cmp(&a.2))
-            .then(
-                b.3.partial_cmp(&a.3)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
-    });
+            if is_better(total_score, pairs.len(), &dir_key, &best) {
+                best = Some((total_score, pairs.len(), dir_key, sibling_dirs, pairs));
+            }
+        }
+    }
 
-    if let Some((dir, _, _, _)) = dir_scores.first() {
-        TargetDirs::Single(dir.to_string())
-    } else {
-        TargetDirs::Empty
+    // Try each individual directory
+    let mut dirs: Vec<&String> = dir_candidate_inodes.keys().collect();
+    dirs.sort();
+
+    for dir in dirs {
+        let target = TargetDirs::Single(dir.clone());
+        let filtered: Vec<CandidateAssignment> = candidates
+            .iter()
+            .filter(|c| {
+                corpus_info
+                    .get(&c.inode)
+                    .map(|ci| ci.parent_dir == *dir)
+                    .unwrap_or(false)
+            })
+            .map(|c| CandidateAssignment {
+                inode: c.inode,
+                recording_id: c.recording_id.clone(),
+                release_id: c.release_id.clone(),
+                medium_pos: c.medium_pos,
+                track_pos: c.track_pos,
+                medium_format: c.medium_format.clone(),
+                track_number: c.track_number.clone(),
+                track_title: c.track_title.clone(),
+                score: c.score,
+                breakdown: c.breakdown.clone(),
+            })
+            .collect();
+
+        if filtered.is_empty() {
+            continue;
+        }
+
+        let pairs = hungarian_assignment(&filtered);
+        let total_score: f64 = pairs
+            .iter()
+            .filter_map(|(inode, slot)| {
+                filtered
+                    .iter()
+                    .find(|c| c.inode == *inode && (c.medium_pos, c.track_pos) == *slot)
+                    .map(|c| c.score)
+            })
+            .sum();
+
+        if is_better(total_score, pairs.len(), dir.as_str(), &best) {
+            best = Some((
+                total_score,
+                pairs.len(),
+                dir.clone(),
+                target,
+                pairs,
+            ));
+        }
+    }
+
+    match best {
+        Some((_, _, _, target_dirs, pairs)) => (target_dirs, pairs),
+        None => (TargetDirs::Empty, HashSet::new()),
     }
 }
 
@@ -266,13 +342,20 @@ fn find_sibling_dir_mapping(
     }
 
     // Pick the parent group with the most total candidates, requiring ≥2 sibling dirs
+    // Deterministic tiebreak: most candidates, then lexicographic smallest parent path
     let best_group = parent_groups
         .into_iter()
         .filter(|(_, dirs)| dirs.len() >= 2)
-        .max_by_key(|(_, dirs)| {
-            dirs.iter()
+        .max_by(|(parent_a, dirs_a), (parent_b, dirs_b)| {
+            let count_a: usize = dirs_a
+                .iter()
                 .map(|d| dir_candidate_inodes.get(d).map(|s| s.len()).unwrap_or(0))
-                .sum::<usize>()
+                .sum();
+            let count_b: usize = dirs_b
+                .iter()
+                .map(|d| dir_candidate_inodes.get(d).map(|s| s.len()).unwrap_or(0))
+                .sum();
+            count_a.cmp(&count_b).then(parent_b.cmp(parent_a))
         });
 
     let (_, sibling_dirs) = best_group?;
@@ -294,9 +377,12 @@ fn find_sibling_dir_mapping(
     }
 
     // Assign each medium to its highest-count sibling dir
+    // Deterministic tiebreak: highest count, then lexicographic smallest dir
     let mut mapping: HashMap<u32, String> = HashMap::new();
     for (medium_pos, dir_counts) in &medium_dir_counts {
-        if let Some((&best_dir, _)) = dir_counts.iter().max_by_key(|(_, &count)| count) {
+        let mut sorted: Vec<(&&str, &usize)> = dir_counts.iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        if let Some((&best_dir, _)) = sorted.first() {
             mapping.insert(*medium_pos, best_dir.to_string());
         }
     }
@@ -321,5 +407,179 @@ pub(super) fn localized_release_artist(
         musicbrainz::join_artist_credits_localized(credits, artists, preferred_locales)
     } else {
         musicbrainz::join_artist_credits_localized(credits, &[], preferred_locales)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::meta::signals::data::PackingScoreBreakdown;
+
+    fn dummy_breakdown() -> PackingScoreBreakdown {
+        PackingScoreBreakdown {
+            acoustid_confidence: 0.0,
+            duration_match: 0.0,
+            title_match: 0.0,
+            artist_match: 0.0,
+            album_match: 0.0,
+            track_number_match: 0.0,
+        }
+    }
+
+    fn make_candidate(inode: i64, medium: u32, track: u32, score: f64) -> CandidateAssignment {
+        CandidateAssignment {
+            inode,
+            recording_id: format!("rec-{}", inode),
+            release_id: "rel-1".to_string(),
+            medium_pos: medium,
+            track_pos: track,
+            medium_format: None,
+            track_number: track.to_string(),
+            track_title: format!("Track {}", track),
+            score,
+            breakdown: dummy_breakdown(),
+        }
+    }
+
+    #[test]
+    fn test_hungarian_deterministic() {
+        // Same input, 100 iterations → identical output
+        let candidates = vec![
+            make_candidate(100, 1, 1, 0.9),
+            make_candidate(100, 1, 2, 0.3),
+            make_candidate(200, 1, 1, 0.4),
+            make_candidate(200, 1, 2, 0.8),
+            make_candidate(300, 1, 3, 0.7),
+        ];
+        let first = hungarian_assignment(&candidates);
+        for _ in 0..100 {
+            assert_eq!(hungarian_assignment(&candidates), first);
+        }
+    }
+
+    #[test]
+    fn test_hungarian_simple_assignment() {
+        // Known optimal: inode 100 → slot (1,1), inode 200 → slot (1,2)
+        let candidates = vec![
+            make_candidate(100, 1, 1, 0.9),
+            make_candidate(100, 1, 2, 0.1),
+            make_candidate(200, 1, 1, 0.1),
+            make_candidate(200, 1, 2, 0.9),
+        ];
+        let result = hungarian_assignment(&candidates);
+        assert!(result.contains(&(100, (1, 1))));
+        assert!(result.contains(&(200, (1, 2))));
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_hungarian_rectangular_more_inodes() {
+        // 3 inodes, 2 slots → only 2 assigned
+        let candidates = vec![
+            make_candidate(100, 1, 1, 0.5),
+            make_candidate(200, 1, 2, 0.8),
+            make_candidate(300, 1, 1, 0.9),
+            make_candidate(300, 1, 2, 0.3),
+        ];
+        let result = hungarian_assignment(&candidates);
+        assert_eq!(result.len(), 2);
+        // inode 300 should get slot (1,1) with score 0.9, inode 200 gets (1,2)
+        assert!(result.contains(&(300, (1, 1))));
+        assert!(result.contains(&(200, (1, 2))));
+    }
+
+    #[test]
+    fn test_hungarian_rectangular_more_slots() {
+        // 1 inode, 3 slots → only 1 assigned (best slot)
+        let candidates = vec![
+            make_candidate(100, 1, 1, 0.3),
+            make_candidate(100, 1, 2, 0.9),
+            make_candidate(100, 1, 3, 0.5),
+        ];
+        let result = hungarian_assignment(&candidates);
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&(100, (1, 2))));
+    }
+
+    #[test]
+    fn test_directory_scoring_best_wins() {
+        // Dir A has 2 candidates with high scores, Dir B has 1 with low score
+        let candidates = vec![
+            make_candidate(100, 1, 1, 0.9),
+            make_candidate(200, 1, 2, 0.8),
+            make_candidate(300, 1, 1, 0.2),
+        ];
+        let mut corpus_info = HashMap::new();
+        corpus_info.insert(100, CorpusFileInfo {
+            parent_dir: "/music/album_a".to_string(),
+            tags: HashMap::new(),
+            duration_ms: None,
+        });
+        corpus_info.insert(200, CorpusFileInfo {
+            parent_dir: "/music/album_a".to_string(),
+            tags: HashMap::new(),
+            duration_ms: None,
+        });
+        corpus_info.insert(300, CorpusFileInfo {
+            parent_dir: "/music/album_b".to_string(),
+            tags: HashMap::new(),
+            duration_ms: None,
+        });
+
+        let mut dir_inodes = HashMap::new();
+        dir_inodes.insert("/music/album_a".to_string(), [100i64, 200].iter().copied().collect());
+        dir_inodes.insert("/music/album_b".to_string(), [300i64].iter().copied().collect());
+
+        let media = vec![]; // single-medium fallback
+
+        let (target, pairs) = score_all_directories(&candidates, &corpus_info, &dir_inodes, &media);
+        match &target {
+            TargetDirs::Single(d) => assert_eq!(d, "/music/album_a"),
+            _ => panic!("Expected Single target dir"),
+        }
+        assert_eq!(pairs.len(), 2);
+    }
+
+    #[test]
+    fn test_directory_scoring_tiebreak_deterministic() {
+        // Two dirs with identical scores → lexicographic smallest wins
+        let candidates = vec![
+            make_candidate(100, 1, 1, 0.5),
+            make_candidate(200, 1, 1, 0.5),
+        ];
+        let mut corpus_info = HashMap::new();
+        corpus_info.insert(100, CorpusFileInfo {
+            parent_dir: "/music/zzz".to_string(),
+            tags: HashMap::new(),
+            duration_ms: None,
+        });
+        corpus_info.insert(200, CorpusFileInfo {
+            parent_dir: "/music/aaa".to_string(),
+            tags: HashMap::new(),
+            duration_ms: None,
+        });
+
+        let mut dir_inodes = HashMap::new();
+        dir_inodes.insert("/music/zzz".to_string(), [100i64].iter().copied().collect());
+        dir_inodes.insert("/music/aaa".to_string(), [200i64].iter().copied().collect());
+
+        let media = vec![];
+
+        let first = score_all_directories(&candidates, &corpus_info, &dir_inodes, &media);
+        for _ in 0..100 {
+            let (target, pairs) = score_all_directories(&candidates, &corpus_info, &dir_inodes, &media);
+            match &target {
+                TargetDirs::Single(d) => assert_eq!(d, "/music/aaa"),
+                _ => panic!("Expected Single target dir"),
+            }
+            assert_eq!(pairs, first.1);
+        }
+    }
+
+    #[test]
+    fn test_directory_scoring_empty_input() {
+        let (target, pairs) = score_all_directories(&[], &HashMap::new(), &HashMap::new(), &[]);
+        assert!(matches!(target, TargetDirs::Empty));
+        assert!(pairs.is_empty());
     }
 }

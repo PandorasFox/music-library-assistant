@@ -360,3 +360,120 @@ pub(super) fn solve_maximum_independent_set(candidates: &[MisCandidate]) -> MisR
         selected_coverage,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(inodes: &[i64], score: f64) -> MisCandidate {
+        MisCandidate {
+            inode_set: inodes.iter().copied().collect(),
+            score,
+        }
+    }
+
+    #[test]
+    fn test_mis_deterministic() {
+        let candidates = vec![
+            candidate(&[1, 2, 3], 5.0),
+            candidate(&[3, 4, 5], 4.0),
+            candidate(&[5, 6], 3.0),
+            candidate(&[7, 8], 6.0),
+            candidate(&[1, 9], 2.0),
+        ];
+        let first = solve_maximum_independent_set(&candidates);
+        for _ in 0..100 {
+            let result = solve_maximum_independent_set(&candidates);
+            assert_eq!(result.selected, first.selected);
+            assert_eq!(result.selected_count, first.selected_count);
+            assert_eq!(result.selected_coverage, first.selected_coverage);
+        }
+    }
+
+    #[test]
+    fn test_mis_isolated_nodes() {
+        // No conflicts → all selected
+        let candidates = vec![
+            candidate(&[1], 1.0),
+            candidate(&[2], 2.0),
+            candidate(&[3], 3.0),
+        ];
+        let result = solve_maximum_independent_set(&candidates);
+        assert_eq!(result.selected_count, 3);
+        assert_eq!(result.selected_coverage, 3);
+        assert!(result.selected.iter().all(|&s| s));
+    }
+
+    #[test]
+    fn test_mis_conflict_coverage_wins() {
+        // A covers 3 inodes, B covers 2, they conflict → A wins (more coverage)
+        let candidates = vec![
+            candidate(&[1, 2, 3], 1.0),
+            candidate(&[2, 4], 10.0),
+        ];
+        let result = solve_maximum_independent_set(&candidates);
+        assert_eq!(result.selected_count, 1);
+        assert!(result.selected[0]); // A wins: coverage 3 > 2
+        assert!(!result.selected[1]);
+    }
+
+    #[test]
+    fn test_mis_tiebreak_score() {
+        // A and B conflict, same coverage → higher score wins
+        let candidates = vec![
+            candidate(&[1, 2], 3.0),
+            candidate(&[1, 2], 5.0),
+        ];
+        let result = solve_maximum_independent_set(&candidates);
+        assert_eq!(result.selected_count, 1);
+        assert!(!result.selected[0]);
+        assert!(result.selected[1]); // B wins: higher score
+    }
+
+    #[test]
+    fn test_mis_bitmask_boundary() {
+        // 25 proposals (max bitmask size)
+        let mut candidates: Vec<MisCandidate> = Vec::new();
+        // 25 isolated nodes — all should be selected
+        for i in 0..25 {
+            candidates.push(candidate(&[i as i64], 1.0));
+        }
+        let result = solve_maximum_independent_set(&candidates);
+        assert_eq!(result.selected_count, 25);
+        assert_eq!(result.selected_coverage, 25);
+    }
+
+    #[test]
+    fn test_mis_bnb_small() {
+        // 26 proposals → triggers branch-and-bound
+        let mut candidates: Vec<MisCandidate> = Vec::new();
+        // 26 isolated nodes
+        for i in 0..26 {
+            candidates.push(candidate(&[i as i64], 1.0));
+        }
+        let result = solve_maximum_independent_set(&candidates);
+        assert_eq!(result.selected_count, 26);
+        assert_eq!(result.selected_coverage, 26);
+    }
+
+    #[test]
+    fn test_mis_multiple_components() {
+        // Two independent components solved independently
+        // Component 1: A={1,2}, B={2,3} → A or B
+        // Component 2: C={10,11}, D={12,13} → both
+        let candidates = vec![
+            candidate(&[1, 2], 3.0),    // A
+            candidate(&[2, 3], 4.0),    // B
+            candidate(&[10, 11], 5.0),  // C
+            candidate(&[12, 13], 6.0),  // D
+        ];
+        let result = solve_maximum_independent_set(&candidates);
+        // C and D are independent, both selected
+        assert!(result.selected[2]);
+        assert!(result.selected[3]);
+        // A and B conflict, one selected
+        assert_eq!(result.selected[0] as u8 + result.selected[1] as u8, 1);
+        // Total: 3 selected
+        assert_eq!(result.selected_count, 3);
+    }
+}

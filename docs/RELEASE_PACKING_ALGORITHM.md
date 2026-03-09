@@ -25,7 +25,7 @@ Stages are barrier-separated: each defers the next via `SharedMappingState`, ens
 **Trigger:** Manual only (operator requests release packing).
 
 1. Load all AcoustID external matches for corpus files
-2. Filter recordings by `min_confidence` and `duration_tolerance_pct` (from config)
+2. Filter recordings by `min_confidence` (from config). Duration is not filtered — it is a scoring dimension in Stage 2.
 3. Parse release tracklists from MB cache (locale-resolved artist names)
 4. Write manifest rows (`release_id`, `total_tracks`, `title`, `artist`) to `packing_manifest` table
 5. Deduplicate candidates per `(release_id, inode)` — keep highest-confidence recording
@@ -43,30 +43,25 @@ Stages are barrier-separated: each defers the next via `SharedMappingState`, ens
 
 Each instance handles one release. Four phases execute sequentially.
 
-### Phase 1: Directory Selection
+### Phase 1: Exhaustive Per-Directory Scoring
 
-All packing is constrained to target directory(ies) selected by `select_target_directory()`. This structural constraint replaces the former `directory_cohesion` scoring dimension.
+All packing is constrained to target directory(ies) selected by `score_all_directories()`. This runs Hungarian assignment for every candidate directory and picks the one producing the highest total assignment score — replacing the former heuristic-based `select_target_directory()` that could produce non-deterministic results.
 
-**Single-medium** (`media.len() <= 1`):
-- Per directory, compute: `(exact_match: bool, candidate_count: usize, score_sum: f64)`
-  - `exact_match`: directory's file count equals release's total track count
-  - `candidate_count`: number of AcoustID candidate inodes in this directory
-  - `score_sum`: sum of candidate scores in this directory
-- Sort descending by `(exact_match, candidate_count, score_sum)`
-- Select the top directory
+**Algorithm:**
+1. Collect all unique directories containing candidate inodes
+2. **Multi-medium** (`media.len() > 1`): try `find_sibling_dir_mapping()` to detect sibling directories (same parent) with candidates for different media. If found, filter candidates to the sibling set and run Hungarian — record as a candidate result.
+3. **Per-directory**: for each individual directory, filter candidates to that directory, run Hungarian, compute total assignment score.
+4. Select the `(TargetDirs, optimal_pairs)` with:
+   - Most assigned slots (primary)
+   - Highest total assignment score (secondary)
+   - Lexicographic smallest directory path (deterministic tiebreak)
 
-**Multi-medium** (`media.len() > 1`):
-1. Try `find_sibling_dir_bijection()`: backtracking search for a 1:1 mapping of directories to media where:
-   - Each medium's track count matches the directory's file count
-   - All directories share the same parent (are siblings)
-   - At least one AcoustID candidate exists across the sibling directories
-2. If bijection found: return all sibling directories as target set
-3. Fallback: treat like single-medium (pick one best directory)
-
-After selection, all candidates are filtered to the target directory set:
+After selection, all candidates are filtered to the winning directory set:
 ```
 candidates.retain(|c| target_dirs.contains(&corpus_info[c.inode].parent_dir))
 ```
+
+The optimal pairs from Phase 1 are reused directly — no second Hungarian call is needed.
 
 ### Phase 2: AcoustID Scoring (Hungarian)
 

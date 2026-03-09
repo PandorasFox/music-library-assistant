@@ -216,8 +216,10 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                 || data.packing_full_match_count > 0
                 || data.packing_singles_count > 0
                 || data.packing_incomplete_count > 0
-                || data.packing_unmatched_count > 0
-                || data.packing_knots_count > 0;
+                || data.packing_knots_count > 0
+                || data.unsolved_conflict_count > 0
+                || data.unsolved_no_release_count > 0
+                || data.unsolved_no_match_count > 0;
 
             if has_packing {
                 lines.push(Line::from(Span::raw(""))); // spacer
@@ -262,9 +264,21 @@ fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewSt
                     Color::Red,
                 ));
                 packing_entries.push((
+                    "✗",
+                    "Unsolved (conflict)",
+                    data.unsolved_conflict_count,
+                    Color::Magenta,
+                ));
+                packing_entries.push((
                     "?",
-                    "Unmatched",
-                    data.packing_unmatched_count,
+                    "Unsolved (no release)",
+                    data.unsolved_no_release_count,
+                    Color::DarkGray,
+                ));
+                packing_entries.push((
+                    "·",
+                    "Unsolved (no match)",
+                    data.unsolved_no_match_count,
                     Color::DarkGray,
                 ));
 
@@ -740,9 +754,21 @@ fn render_packing_category_detail(cat: PackingCategory) -> Vec<Line<'static>> {
             "Incomplete Releases",
             "Releases with some but not all tracks matched to corpus files.",
         ),
-        PackingCategory::Unmatched => (
-            "Unmatched Files",
-            "Corpus files with fingerprints that were not assigned to any release.",
+        PackingCategory::UnsolvedConflict => (
+            "Unsolved — Lost Conflict Resolution",
+            "Files with AcoustID matches that were scored for releases but lost MIS conflict \
+             resolution to other files. These had viable release candidates.",
+        ),
+        PackingCategory::UnsolvedNoRelease => (
+            "Unsolved — No Viable Release",
+            "Files with AcoustID recording matches whose releases never produced optimal \
+             assignments for their directory. Likely fingerprint collisions or releases \
+             with too few local candidates.",
+        ),
+        PackingCategory::UnsolvedNoMatch => (
+            "Unsolved — No AcoustID Match",
+            "Fingerprinted corpus files with no AcoustID recording match at all. These files \
+             have never been submitted to AcoustID, or the service has no match for them.",
         ),
         PackingCategory::Knots => (
             "Packing Knots",

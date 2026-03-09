@@ -165,8 +165,20 @@ impl ExternalMatchesViewState {
             if data.packing_knots_count > 0 {
                 entries.push(NavigableEntry::PackingCategory(PackingCategory::Knots));
             }
-            if data.packing_unmatched_count > 0 {
-                entries.push(NavigableEntry::PackingCategory(PackingCategory::Unmatched));
+            if data.unsolved_conflict_count > 0 {
+                entries.push(NavigableEntry::PackingCategory(
+                    PackingCategory::UnsolvedConflict,
+                ));
+            }
+            if data.unsolved_no_release_count > 0 {
+                entries.push(NavigableEntry::PackingCategory(
+                    PackingCategory::UnsolvedNoRelease,
+                ));
+            }
+            if data.unsolved_no_match_count > 0 {
+                entries.push(NavigableEntry::PackingCategory(
+                    PackingCategory::UnsolvedNoMatch,
+                ));
             }
         }
 

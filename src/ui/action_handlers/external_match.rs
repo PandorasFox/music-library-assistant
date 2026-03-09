@@ -323,7 +323,10 @@ impl App {
                     PackingCategory::FullMatches => PackedReleaseCategory::FullMatch.key_prefix(),
                     PackingCategory::Singles => PackedReleaseCategory::Single.key_prefix(),
                     PackingCategory::Incomplete => PackedReleaseCategory::Incomplete.key_prefix(),
-                    PackingCategory::Unmatched | PackingCategory::Knots => unreachable!(),
+                    PackingCategory::Knots
+                    | PackingCategory::UnsolvedConflict
+                    | PackingCategory::UnsolvedNoRelease
+                    | PackingCategory::UnsolvedNoMatch => unreachable!(),
                 };
                 let prefix_owned = prefix.to_string();
 
@@ -350,21 +353,31 @@ impl App {
 
                 ReleasePackingBrowserState::build_releases(category, packed, packing, unfilled)
             }
-            PackingCategory::Unmatched => {
-                let unmatched = self
+            PackingCategory::UnsolvedConflict
+            | PackingCategory::UnsolvedNoRelease
+            | PackingCategory::UnsolvedNoMatch => {
+                use crate::meta::signals::data::UnsolvedCategory;
+                let cat_str = match category {
+                    PackingCategory::UnsolvedConflict => UnsolvedCategory::Conflict.as_str(),
+                    PackingCategory::UnsolvedNoRelease => UnsolvedCategory::NoRelease.as_str(),
+                    PackingCategory::UnsolvedNoMatch => UnsolvedCategory::NoMatch.as_str(),
+                    _ => unreachable!(),
+                };
+                let cat_owned = cat_str.to_string();
+                let filtered = self
                     .cache
-                    .query(|db| {
-                        db.get_unmatched_corpus_track_signal_data()
+                    .query(move |db| {
+                        db.get_unmatched_corpus_track_signal_data_by_category(&cat_owned)
                             .unwrap_or_default()
                     })
                     .recv();
 
-                if unmatched.is_empty() {
-                    self.status_message = Some("No unmatched files".to_string());
+                if filtered.is_empty() {
+                    self.status_message = Some("No unsolved files in this category".to_string());
                     return;
                 }
 
-                ReleasePackingBrowserState::build_unmatched(unmatched)
+                ReleasePackingBrowserState::build_unmatched(category, filtered)
             }
             PackingCategory::Knots => {
                 self.launch_knot_browser();

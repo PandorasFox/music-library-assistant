@@ -174,15 +174,18 @@ impl ReleasePackingBrowserState {
         state
     }
 
-    /// Build browser state for unmatched corpus files.
-    pub fn build_unmatched(unmatched_rows: Vec<(i64, String, UnmatchedCorpusTrackData)>) -> Self {
+    /// Build browser state for unsolved corpus files.
+    pub fn build_unmatched(
+        category: PackingCategory,
+        unmatched_rows: Vec<(i64, String, UnmatchedCorpusTrackData)>,
+    ) -> Self {
         let unmatched: Vec<UnmatchedEntry> = unmatched_rows
             .into_iter()
             .map(|(_inode, path, data)| UnmatchedEntry { path, data })
             .collect();
 
         let mut state = Self {
-            category: PackingCategory::Unmatched,
+            category,
             entries: Vec::new(),
             cursor: 0,
             scroll: 0,
@@ -211,7 +214,9 @@ impl ReleasePackingBrowserState {
                     entries.push(PackingListEntry::Release { idx });
                 }
             }
-            PackingCategory::Unmatched => {
+            PackingCategory::UnsolvedConflict
+            | PackingCategory::UnsolvedNoRelease
+            | PackingCategory::UnsolvedNoMatch => {
                 for idx in 0..self.unmatched.len() {
                     entries.push(PackingListEntry::Unmatched { idx });
                 }

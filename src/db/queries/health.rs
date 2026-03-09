@@ -850,18 +850,36 @@ impl Database {
                 |row| row.get(0),
             )
             .unwrap_or(0);
-        let packing_unmatched_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_unmatched_corpus_track",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
         let packing_knots_count: usize = self
             .conn
             .query_row(
                 "SELECT COUNT(*) FROM signal_packing_knot",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        // Unsolved corpus tracks — counted directly from the category column.
+        let unsolved_conflict_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_unmatched_corpus_track WHERE category = 'conflict'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let unsolved_no_release_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_unmatched_corpus_track WHERE category = 'no_release'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let unsolved_no_match_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_unmatched_corpus_track WHERE category = 'no_match'",
                 [],
                 |row| row.get(0),
             )
@@ -874,8 +892,10 @@ impl Database {
             packing_full_match_count,
             packing_singles_count,
             packing_incomplete_count,
-            packing_unmatched_count,
             packing_knots_count,
+            unsolved_conflict_count,
+            unsolved_no_release_count,
+            unsolved_no_match_count,
         })
     }
 

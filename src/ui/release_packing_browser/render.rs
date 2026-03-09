@@ -56,7 +56,9 @@ fn render_title_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserStat
         PackingCategory::FullMatches => "Full Matches",
         PackingCategory::Singles => "Singles",
         PackingCategory::Incomplete => "Incomplete Releases",
-        PackingCategory::Unmatched => "Unmatched Files",
+        PackingCategory::UnsolvedConflict => "Unsolved — Lost Conflict",
+        PackingCategory::UnsolvedNoRelease => "Unsolved — No Viable Release",
+        PackingCategory::UnsolvedNoMatch => "Unsolved — No AcoustID Match",
         PackingCategory::Knots => "Packing Knots",
     };
     let count = state.entries.len();

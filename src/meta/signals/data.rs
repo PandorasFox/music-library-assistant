@@ -474,12 +474,36 @@ pub struct PackingScoreBreakdown {
 // Release Packing Gap Analysis Signals
 // ============================================================================
 
-/// Corpus inode with AcoustID recording matches but no release assignment
-/// after global conflict resolution. (Corpus signal, inode PK)
+/// Classification of unsolved corpus tracks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnsolvedCategory {
+    /// Had AcoustID match, was scored for releases, lost MIS conflict resolution.
+    Conflict,
+    /// Had AcoustID match but was never optimally scored for any release.
+    NoRelease,
+    /// Fingerprinted but no AcoustID recording match at all.
+    NoMatch,
+}
+
+impl UnsolvedCategory {
+    /// String value stored in the `category` column.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Conflict => "conflict",
+            Self::NoRelease => "no_release",
+            Self::NoMatch => "no_match",
+        }
+    }
+
+}
+
+/// Fingerprinted corpus inode not assigned to any release after packing.
+/// (Corpus signal, inode PK)
 #[derive(Debug, Clone)]
 pub struct UnmatchedCorpusTrackSignal {
     pub inode: i64,
     pub path: String,
+    pub category: UnsolvedCategory,
     /// Serialized as bincode BLOB.
     pub data: UnmatchedCorpusTrackData,
 }

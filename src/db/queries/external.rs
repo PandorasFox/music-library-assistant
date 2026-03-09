@@ -470,9 +470,10 @@ impl Database {
         Ok(results)
     }
 
-    /// Read all UnmatchedCorpusTrackSignal rows with deserialized data.
-    pub fn get_unmatched_corpus_track_signal_data(
+    /// Read UnmatchedCorpusTrackSignal rows for a specific unsolved category.
+    pub fn get_unmatched_corpus_track_signal_data_by_category(
         &self,
+        category: &str,
     ) -> Result<
         Vec<(
             i64,
@@ -480,10 +481,11 @@ impl Database {
             crate::meta::signals::data::UnmatchedCorpusTrackData,
         )>,
     > {
-        let mut stmt = self
-            .conn()
-            .prepare("SELECT inode, path, data FROM signal_unmatched_corpus_track ORDER BY path")?;
-        let rows = stmt.query_map([], |row| {
+        let mut stmt = self.conn().prepare(
+            "SELECT inode, path, data FROM signal_unmatched_corpus_track \
+             WHERE category = ?1 ORDER BY path",
+        )?;
+        let rows = stmt.query_map([category], |row| {
             let inode: i64 = row.get(0)?;
             let path: String = row.get(1)?;
             let blob: Vec<u8> = row.get(2)?;

@@ -9,8 +9,13 @@ pub enum PackingCategory {
     FullMatches,
     Singles,
     Incomplete,
-    Unmatched,
     Knots,
+    /// Unsolved: had AcoustID match, was scored for releases, but lost conflict resolution.
+    UnsolvedConflict,
+    /// Unsolved: had AcoustID match but was never optimally scored for any release.
+    UnsolvedNoRelease,
+    /// Unsolved: fingerprinted but no AcoustID match at all.
+    UnsolvedNoMatch,
 }
 
 /// Which pane currently has focus.

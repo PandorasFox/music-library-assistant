@@ -941,9 +941,10 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_release_packing_signal_data()
     }
 
-    /// Read all UnmatchedCorpusTrackSignal rows with deserialized data.
-    pub fn get_unmatched_corpus_track_signal_data(
+    /// Read UnmatchedCorpusTrackSignal rows for a specific unsolved category.
+    pub fn get_unmatched_corpus_track_signal_data_by_category(
         &self,
+        category: &str,
     ) -> Result<
         Vec<(
             i64,
@@ -951,7 +952,8 @@ impl<'a> ReadOnlyDb<'a> {
             crate::meta::signals::data::UnmatchedCorpusTrackData,
         )>,
     > {
-        self.db.get_unmatched_corpus_track_signal_data()
+        self.db
+            .get_unmatched_corpus_track_signal_data_by_category(category)
     }
 
     /// Read all UnfilledReleaseSlotSignal rows with deserialized data.

@@ -14,7 +14,7 @@ use crate::meta::computations::helpers::{
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
     ReleasePackingSignal, TypedSignalWrite, UnfilledReleaseSlotData, UnfilledReleaseSlotSignal,
-    UnmatchedCorpusTrackData, UnmatchedCorpusTrackSignal,
+    UnmatchedCorpusTrackData, UnmatchedCorpusTrackSignal, UnsolvedCategory,
 };
 
 use crate::meta::computations::analysis::{Computation as AnalysisComputation, Result};
@@ -126,9 +126,18 @@ pub fn execute_emit_unmatched_signals(
         considered_release_ids.sort();
         considered_release_ids.dedup();
 
+        let category = if recording_ids.is_empty() {
+            UnsolvedCategory::NoMatch
+        } else if considered_release_ids.is_empty() {
+            UnsolvedCategory::NoRelease
+        } else {
+            UnsolvedCategory::Conflict
+        };
+
         let signal = UnmatchedCorpusTrackSignal {
             inode,
             path,
+            category,
             data: UnmatchedCorpusTrackData {
                 recording_ids,
                 considered_release_ids,

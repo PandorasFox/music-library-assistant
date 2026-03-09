@@ -191,10 +191,14 @@ pub struct ExternalMatchesData {
     pub packing_singles_count: usize,
     /// Incomplete releases (some but not all tracks assigned).
     pub packing_incomplete_count: usize,
-    /// Unmatched corpus tracks.
-    pub packing_unmatched_count: usize,
     /// Packing knot components (conflict tangles requiring review).
     pub packing_knots_count: usize,
+    /// Unsolved: had AcoustID match, was scored, lost conflict resolution.
+    pub unsolved_conflict_count: usize,
+    /// Unsolved: had AcoustID match, never optimally scored for any release.
+    pub unsolved_no_release_count: usize,
+    /// Unsolved: fingerprinted but no AcoustID match.
+    pub unsolved_no_match_count: usize,
 }
 
 /// Bucket 3: Other signals (sorted by magnitude)

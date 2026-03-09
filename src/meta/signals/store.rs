@@ -2125,6 +2125,7 @@ impl CorpusSignalStore for UnmatchedCorpusTrackSignal {
     const TABLE_SQL: &'static str = "CREATE TABLE IF NOT EXISTS signal_unmatched_corpus_track (
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'no_match',
         data BLOB NOT NULL,
         data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -2136,8 +2137,8 @@ impl CorpusSignalStore for UnmatchedCorpusTrackSignal {
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let hash = compute_blob_hash(&data);
         conn.execute(
-            "INSERT OR REPLACE INTO signal_unmatched_corpus_track (inode, path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![self.inode, self.path, data, hash],
+            "INSERT OR REPLACE INTO signal_unmatched_corpus_track (inode, path, category, data, data_hash) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![self.inode, self.path, self.category.as_str(), data, hash],
         )?;
         Ok(())
     }

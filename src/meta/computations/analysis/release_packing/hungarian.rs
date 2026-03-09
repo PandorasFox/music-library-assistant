@@ -135,6 +135,7 @@ pub(super) fn hungarian_assignment(
 }
 
 /// Target directory constraint for release packing.
+#[derive(Debug)]
 pub(super) enum TargetDirs {
     /// One directory for all media (single-medium or multi-medium fallback).
     Single(String),
@@ -169,37 +170,49 @@ impl TargetDirs {
 
 /// Run Hungarian for every candidate directory, return the best TargetDirs + optimal pairs.
 ///
-/// For multi-medium releases, also tries sibling directory mappings. The candidate
-/// directory that produces the highest total Hungarian assignment score wins.
-/// Deterministic tiebreak: most assigned slots → lexicographic smallest directory path.
+/// For multi-medium releases, also tries sibling directory mappings.
+///
+/// Directory selection prefers fewer leftover files (dir_file_count − assigned_slots),
+/// so a snug-fitting directory beats a larger one even if the larger directory fills
+/// more absolute slots. Deterministic tiebreak chain:
+///   fewest leftovers → most assigned slots → highest score → lexicographic dir path.
 pub(super) fn score_all_directories(
     candidates: &[CandidateAssignment],
     corpus_info: &HashMap<i64, CorpusFileInfo>,
     dir_candidate_inodes: &HashMap<String, HashSet<i64>>,
     media: &[musicbrainz::MbMedium],
+    dir_file_counts: &HashMap<String, usize>,
 ) -> (TargetDirs, HashSet<(i64, (u32, u32))>) {
     if candidates.is_empty() || dir_candidate_inodes.is_empty() {
         return (TargetDirs::Empty, HashSet::new());
     }
 
-    // Track the best result: (total_score, assigned_count, dir_key_for_tiebreak, target_dirs, pairs)
-    let mut best: Option<(f64, usize, String, TargetDirs, HashSet<(i64, (u32, u32))>)> = None;
+    // (leftovers, score, assigned_count, dir_key, target_dirs, pairs)
+    type BestCandidate = (usize, f64, usize, String, TargetDirs, HashSet<(i64, (u32, u32))>);
+    let mut best: Option<BestCandidate> = None;
 
-    let is_better = |score: f64,
+    let is_better = |leftovers: usize,
+                     score: f64,
                      count: usize,
                      dir_key: &str,
-                     best: &Option<(f64, usize, String, TargetDirs, HashSet<(i64, (u32, u32))>)>|
+                     best: &Option<BestCandidate>|
      -> bool {
         match best {
             None => true,
-            Some((best_score, best_count, ref best_key, _, _)) => {
-                if count > *best_count {
+            Some((best_left, best_score, best_count, ref best_key, _, _)) => {
+                if leftovers < *best_left {
                     true
-                } else if count == *best_count {
-                    if score > *best_score {
+                } else if leftovers == *best_left {
+                    if count > *best_count {
                         true
-                    } else if (score - *best_score).abs() < f64::EPSILON {
-                        dir_key < best_key.as_str()
+                    } else if count == *best_count {
+                        if score > *best_score {
+                            true
+                        } else if (score - *best_score).abs() < f64::EPSILON {
+                            dir_key < best_key.as_str()
+                        } else {
+                            false
+                        }
                     } else {
                         false
                     }
@@ -255,8 +268,15 @@ pub(super) fn score_all_directories(
             dir_key_parts.sort();
             let dir_key = dir_key_parts.join("|");
 
-            if is_better(total_score, pairs.len(), &dir_key, &best) {
-                best = Some((total_score, pairs.len(), dir_key, sibling_dirs, pairs));
+            // Leftovers = sum of sibling dir file counts − assigned slots
+            let total_files: usize = mapping
+                .values()
+                .map(|d| dir_file_counts.get(d).copied().unwrap_or(0))
+                .sum();
+            let leftovers = total_files.saturating_sub(pairs.len());
+
+            if is_better(leftovers, total_score, pairs.len(), &dir_key, &best) {
+                best = Some((leftovers, total_score, pairs.len(), dir_key, sibling_dirs, pairs));
             }
         }
     }
@@ -304,8 +324,12 @@ pub(super) fn score_all_directories(
             })
             .sum();
 
-        if is_better(total_score, pairs.len(), dir.as_str(), &best) {
+        let file_count = dir_file_counts.get(dir.as_str()).copied().unwrap_or(0);
+        let leftovers = file_count.saturating_sub(pairs.len());
+
+        if is_better(leftovers, total_score, pairs.len(), dir.as_str(), &best) {
             best = Some((
+                leftovers,
                 total_score,
                 pairs.len(),
                 dir.clone(),
@@ -316,7 +340,7 @@ pub(super) fn score_all_directories(
     }
 
     match best {
-        Some((_, _, _, target_dirs, pairs)) => (target_dirs, pairs),
+        Some((_, _, _, _, target_dirs, pairs)) => (target_dirs, pairs),
         None => (TargetDirs::Empty, HashSet::new()),
     }
 }
@@ -503,7 +527,8 @@ mod tests {
 
     #[test]
     fn test_directory_scoring_best_wins() {
-        // Dir A has 2 candidates with high scores, Dir B has 1 with low score
+        // Dir A has 2 candidates with high scores, Dir B has 1 with low score.
+        // Both dirs have file counts matching their candidate counts (no leftovers).
         let candidates = vec![
             make_candidate(100, 1, 1, 0.9),
             make_candidate(200, 1, 2, 0.8),
@@ -530,9 +555,15 @@ mod tests {
         dir_inodes.insert("/music/album_a".to_string(), [100i64, 200].iter().copied().collect());
         dir_inodes.insert("/music/album_b".to_string(), [300i64].iter().copied().collect());
 
+        let mut dir_file_counts = HashMap::new();
+        dir_file_counts.insert("/music/album_a".to_string(), 2);
+        dir_file_counts.insert("/music/album_b".to_string(), 1);
+
         let media = vec![]; // single-medium fallback
 
-        let (target, pairs) = score_all_directories(&candidates, &corpus_info, &dir_inodes, &media);
+        let (target, pairs) = score_all_directories(
+            &candidates, &corpus_info, &dir_inodes, &media, &dir_file_counts,
+        );
         match &target {
             TargetDirs::Single(d) => assert_eq!(d, "/music/album_a"),
             _ => panic!("Expected Single target dir"),
@@ -542,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_directory_scoring_tiebreak_deterministic() {
-        // Two dirs with identical scores → lexicographic smallest wins
+        // Two dirs with identical scores and file counts → lexicographic smallest wins
         let candidates = vec![
             make_candidate(100, 1, 1, 0.5),
             make_candidate(200, 1, 1, 0.5),
@@ -563,11 +594,19 @@ mod tests {
         dir_inodes.insert("/music/zzz".to_string(), [100i64].iter().copied().collect());
         dir_inodes.insert("/music/aaa".to_string(), [200i64].iter().copied().collect());
 
+        let mut dir_file_counts = HashMap::new();
+        dir_file_counts.insert("/music/zzz".to_string(), 1);
+        dir_file_counts.insert("/music/aaa".to_string(), 1);
+
         let media = vec![];
 
-        let first = score_all_directories(&candidates, &corpus_info, &dir_inodes, &media);
+        let first = score_all_directories(
+            &candidates, &corpus_info, &dir_inodes, &media, &dir_file_counts,
+        );
         for _ in 0..100 {
-            let (target, pairs) = score_all_directories(&candidates, &corpus_info, &dir_inodes, &media);
+            let (target, pairs) = score_all_directories(
+                &candidates, &corpus_info, &dir_inodes, &media, &dir_file_counts,
+            );
             match &target {
                 TargetDirs::Single(d) => assert_eq!(d, "/music/aaa"),
                 _ => panic!("Expected Single target dir"),
@@ -578,8 +617,71 @@ mod tests {
 
     #[test]
     fn test_directory_scoring_empty_input() {
-        let (target, pairs) = score_all_directories(&[], &HashMap::new(), &HashMap::new(), &[]);
+        let (target, pairs) = score_all_directories(
+            &[], &HashMap::new(), &HashMap::new(), &[], &HashMap::new(),
+        );
         assert!(matches!(target, TargetDirs::Empty));
         assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn test_directory_scoring_prefers_fewer_leftovers() {
+        // Glitch Mob scenario: 11-track release, two candidate directories.
+        // Dir A: 10 files, 10 match recordings on the release (0 leftovers)
+        // Dir B: 23 files, 11 match recordings on the release (12 leftovers)
+        // Dir A should win despite filling fewer absolute slots.
+        let mut candidates = Vec::new();
+        let mut corpus_info = HashMap::new();
+
+        // Dir A: 10 files matching tracks 1-10 (missing track 4 → 9 assigned slots,
+        // but let's say tracks 1-3,5-11 all match for 10 slots)
+        for (i, track) in [1, 2, 3, 5, 6, 7, 8, 9, 10, 11].iter().enumerate() {
+            let inode = 1000 + i as i64;
+            candidates.push(make_candidate(inode, 1, *track, 0.85));
+            corpus_info.insert(inode, CorpusFileInfo {
+                parent_dir: "/corpus/see-without-eyes".to_string(),
+                tags: HashMap::new(),
+                duration_ms: None,
+            });
+        }
+
+        // Dir B: 23 files, 11 of which match all 11 tracks on this release
+        for track in 1..=11 {
+            let inode = 2000 + track as i64;
+            candidates.push(make_candidate(inode, 1, track, 0.85));
+            corpus_info.insert(inode, CorpusFileInfo {
+                parent_dir: "/corpus/see-without-eyes-deluxe".to_string(),
+                tags: HashMap::new(),
+                duration_ms: None,
+            });
+        }
+
+        let mut dir_inodes = HashMap::new();
+        dir_inodes.insert(
+            "/corpus/see-without-eyes".to_string(),
+            (1000..1010).collect(),
+        );
+        dir_inodes.insert(
+            "/corpus/see-without-eyes-deluxe".to_string(),
+            (2001..2012).collect(),
+        );
+
+        let mut dir_file_counts = HashMap::new();
+        dir_file_counts.insert("/corpus/see-without-eyes".to_string(), 10);
+        dir_file_counts.insert("/corpus/see-without-eyes-deluxe".to_string(), 23);
+
+        let media = vec![];
+
+        let (target, pairs) = score_all_directories(
+            &candidates, &corpus_info, &dir_inodes, &media, &dir_file_counts,
+        );
+
+        // Dir A wins: 0 leftovers (10 files, 10 assigned) beats
+        // Dir B: 12 leftovers (23 files, 11 assigned)
+        match &target {
+            TargetDirs::Single(d) => assert_eq!(d, "/corpus/see-without-eyes"),
+            _ => panic!("Expected Single target dir, got {:?}", target),
+        }
+        assert_eq!(pairs.len(), 10);
     }
 }

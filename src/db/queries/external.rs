@@ -67,6 +67,7 @@ pub struct PackingCandidateRow {
     pub tag_artist: Option<String>,
     pub tag_album: Option<String>,
     pub tag_tracknumber: Option<String>,
+    pub dir_file_count: i32,
 }
 
 /// A candidate inode for external lookup.
@@ -533,7 +534,7 @@ impl Database {
     ) -> Result<Vec<PackingCandidateRow>> {
         let mut stmt = self.conn().prepare(
             "SELECT inode, recording_id, confidence, parent_dir, duration_ms, \
-             tag_title, tag_artist, tag_album, tag_tracknumber \
+             tag_title, tag_artist, tag_album, tag_tracknumber, dir_file_count \
              FROM release_packing_candidates WHERE release_id = ?1",
         )?;
         let rows = stmt.query_map(params![release_id], |row| {
@@ -547,6 +548,7 @@ impl Database {
                 tag_artist: row.get(6)?,
                 tag_album: row.get(7)?,
                 tag_tracknumber: row.get(8)?,
+                dir_file_count: row.get(9)?,
             })
         })?;
         let mut results = Vec::new();

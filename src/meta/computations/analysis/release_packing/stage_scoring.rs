@@ -556,11 +556,15 @@ pub fn execute_score_release_candidates(
         return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
     }
 
-    // Build candidate_inodes and corpus_info from the pre-computed candidate rows
+    // Build candidate_inodes, corpus_info, and dir_file_counts from candidate rows
     let mut candidate_inodes: HashMap<i64, RecordingMatch> = HashMap::new();
     let mut corpus_info: HashMap<i64, CorpusFileInfo> = HashMap::new();
+    let mut dir_file_counts: HashMap<String, usize> = HashMap::new();
 
     for row in &candidate_rows {
+        dir_file_counts
+            .entry(row.parent_dir.clone())
+            .or_insert(row.dir_file_count as usize);
         candidate_inodes
             .entry(row.inode)
             .or_insert_with(|| RecordingMatch {
@@ -647,6 +651,7 @@ pub fn execute_score_release_candidates(
         &corpus_info,
         &dir_candidate_inodes,
         &release.media,
+        &dir_file_counts,
     );
 
     // Filter candidates to winning directory only (per-medium aware)

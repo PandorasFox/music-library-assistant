@@ -956,31 +956,7 @@ fn hex_cursor_to_display(hex_pos: usize) -> usize {
 // Helpers
 // ============================================================================
 
-fn kv_line(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("{:<11}", label),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(value.to_string(), Style::default().fg(Color::White)),
-    ])
-}
-
-fn render_score_bar(label: &str, value: f64) -> Line<'static> {
-    const BAR_WIDTH: usize = 20;
-    let filled = ((value * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
-    let empty = BAR_WIDTH - filled;
-    let bar = format!("{}{}", "█".repeat(filled), " ".repeat(empty));
-
-    Line::from(vec![
-        Span::styled(format!("  {}", label), Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!(" {:.2}  ", value),
-            Style::default().fg(Color::White),
-        ),
-        Span::styled(bar, Style::default().fg(Color::Yellow)),
-    ])
-}
+use crate::ui::helpers::{kv_line, render_score_bar};
 
 /// Coverage color: yellow for LowConfidence (never green), normal thresholds otherwise.
 fn coverage_color(release: &ReleaseGroup, category: PackingCategory) -> Color {

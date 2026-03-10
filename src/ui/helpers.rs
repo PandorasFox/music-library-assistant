@@ -4,6 +4,7 @@
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear};
 use ratatui::Frame;
 
@@ -188,6 +189,133 @@ pub fn format_sample_rate(sr: i32) -> String {
 /// Format a bitrate in kbps.
 pub fn format_kbps(br: i32) -> String {
     format!("{} kbps", br)
+}
+
+// ============================================================================
+// Rendering Helpers
+// ============================================================================
+
+/// Render a label-value line with DarkGray label (padded to 11 chars) and White value.
+pub fn kv_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{:<11}", label),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(value.to_string(), Style::default().fg(Color::White)),
+    ])
+}
+
+/// Render a score bar: label + numeric value + filled/empty block bar.
+pub fn render_score_bar(label: &str, value: f64) -> Line<'static> {
+    const BAR_WIDTH: usize = 20;
+    let filled = ((value * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
+    let empty = BAR_WIDTH - filled;
+    let bar = format!("{}{}", "\u{2588}".repeat(filled), " ".repeat(empty));
+
+    Line::from(vec![
+        Span::styled(format!("  {}", label), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!(" {:.2}  ", value),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(bar, Style::default().fg(Color::Yellow)),
+    ])
+}
+
+/// Render audio metadata lines (Format/Duration/Bitrate/SampleRate/Size/AlbumArt)
+/// from a `FileMetaSummary`. Returns lines to extend into caller's buffer.
+pub fn render_audio_metadata_lines(
+    meta: &crate::ui::manual_review_modal::types::FileMetaSummary,
+    label_style: Style,
+    value_style: Style,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+
+    lines.push(Line::from(vec![
+        Span::styled("Format: ", label_style),
+        Span::styled(meta.file_type.to_uppercase(), value_style),
+    ]));
+
+    if let Some(dur) = meta.duration_ms {
+        lines.push(Line::from(vec![
+            Span::styled("Duration: ", label_style),
+            Span::styled(format_duration_ms(dur), value_style),
+        ]));
+    }
+
+    if let Some(br) = meta.bitrate_kbps {
+        lines.push(Line::from(vec![
+            Span::styled("Bitrate: ", label_style),
+            Span::styled(format_kbps(br), value_style),
+        ]));
+    }
+
+    if let Some(sr) = meta.sample_rate {
+        lines.push(Line::from(vec![
+            Span::styled("Sample rate: ", label_style),
+            Span::styled(format_sample_rate(sr), value_style),
+        ]));
+    }
+
+    if meta.file_size > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("Size: ", label_style),
+            Span::styled(format_bytes(meta.file_size as u64), value_style),
+        ]));
+    }
+
+    let art_label = if meta.has_pictures { "Yes" } else { "No" };
+    let art_style = if meta.has_pictures {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    lines.push(Line::from(vec![
+        Span::styled("Album art: ", label_style),
+        Span::styled(art_label, art_style),
+    ]));
+
+    lines
+}
+
+/// Render "── Pending edits ──" separator and change lines for staged tag edits.
+///
+/// Returns lines to append. Caller decides how to wrap them (ListItem, Paragraph, etc.).
+pub fn render_pending_edit_lines(
+    edits: &[(String, String, String)],
+    max_width: usize,
+    remaining_height: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if edits.is_empty() || remaining_height == 0 {
+        return lines;
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "\u{2500}\u{2500} Pending edits \u{2500}\u{2500}",
+        Style::default().fg(Color::Magenta),
+    )));
+    for (tag, old, new) in edits {
+        if lines.len() >= remaining_height {
+            break;
+        }
+        let change = if old.is_empty() {
+            format!("{}: +\"{}\"", tag, new)
+        } else if new.is_empty() {
+            format!("{}: -\"{}\"", tag, old)
+        } else {
+            format!("{}: \"{}\" \u{2192} \"{}\"", tag, old, new)
+        };
+        let display = truncate_right(&change, max_width);
+        lines.push(Line::from(Span::styled(
+            display,
+            Style::default().fg(Color::Magenta),
+        )));
+    }
+    lines
 }
 
 // ============================================================================

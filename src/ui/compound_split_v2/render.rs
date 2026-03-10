@@ -260,29 +260,9 @@ fn render_tags_pane(f: &mut Frame, area: Rect, state: &CompoundSplitStateV2) {
     if let Some(f) = file.as_ref() {
         if let Some(ref edits_map) = state.pending_tag_edits {
             if let Some(edits) = edits_map.get(&f.inode) {
-                if !edits.is_empty() && items.len() < visible_height {
-                    items.push(ListItem::new(Line::from("")));
-                    items.push(ListItem::new(Line::from(Span::styled(
-                        "\u{2500}\u{2500} Pending edits \u{2500}\u{2500}",
-                        Style::default().fg(Color::Magenta),
-                    ))));
-                    for (tag, old, new) in edits {
-                        if items.len() >= visible_height {
-                            break;
-                        }
-                        let change = if old.is_empty() {
-                            format!("{}: +\"{}\"", tag, new)
-                        } else if new.is_empty() {
-                            format!("{}: -\"{}\"", tag, old)
-                        } else {
-                            format!("{}: \"{}\" \u{2192} \"{}\"", tag, old, new)
-                        };
-                        let display = truncate_right(&change, max_width);
-                        items.push(ListItem::new(Line::from(Span::styled(
-                            display,
-                            Style::default().fg(Color::Magenta),
-                        ))));
-                    }
+                let remaining = visible_height.saturating_sub(items.len());
+                for line in crate::ui::helpers::render_pending_edit_lines(edits, max_width, remaining) {
+                    items.push(ListItem::new(line));
                 }
             }
         }

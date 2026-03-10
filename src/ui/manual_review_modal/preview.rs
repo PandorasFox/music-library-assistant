@@ -430,52 +430,7 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &ManualReviewState) {
 
         // Audio metadata
         if let Some(ref meta) = file.meta {
-            lines.push(Line::from(""));
-
-            // Format + duration + bitrate + sample rate on compact lines
-            lines.push(Line::from(vec![
-                Span::styled("Format: ", label_style),
-                Span::styled(meta.file_type.to_uppercase(), value_style),
-            ]));
-
-            if let Some(dur) = meta.duration_ms {
-                lines.push(Line::from(vec![
-                    Span::styled("Duration: ", label_style),
-                    Span::styled(crate::ui::helpers::format_duration_ms(dur), value_style),
-                ]));
-            }
-
-            if let Some(br) = meta.bitrate_kbps {
-                lines.push(Line::from(vec![
-                    Span::styled("Bitrate: ", label_style),
-                    Span::styled(crate::ui::helpers::format_kbps(br), value_style),
-                ]));
-            }
-
-            if let Some(sr) = meta.sample_rate {
-                lines.push(Line::from(vec![
-                    Span::styled("Sample rate: ", label_style),
-                    Span::styled(crate::ui::helpers::format_sample_rate(sr), value_style),
-                ]));
-            }
-
-            if meta.file_size > 0 {
-                lines.push(Line::from(vec![
-                    Span::styled("Size: ", label_style),
-                    Span::styled(crate::ui::helpers::format_bytes(meta.file_size as u64), value_style),
-                ]));
-            }
-
-            let art_label = if meta.has_pictures { "Yes" } else { "No" };
-            let art_style = if meta.has_pictures {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            lines.push(Line::from(vec![
-                Span::styled("Album art: ", label_style),
-                Span::styled(art_label, art_style),
-            ]));
+            lines.extend(crate::ui::helpers::render_audio_metadata_lines(meta, label_style, value_style));
 
             // Tags section
             if !meta.tags.is_empty() {

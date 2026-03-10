@@ -226,18 +226,12 @@ pub(super) fn build_proposal_detail_blocks(proposal: &KnotProposal) -> Vec<RichB
 // ============================================================================
 
 fn render_score_bar_block(label: &str, value: f64) -> RichBlock {
-    const BAR_WIDTH: usize = 20;
-    let filled = ((value * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
-    let empty = BAR_WIDTH - filled;
-    let bar = format!("{}{}", "\u{2588}".repeat(filled), " ".repeat(empty));
-
-    RichBlock::Paragraph(vec![
-        RichSpan::new(format!("  {}", label), Style::default().fg(Color::DarkGray)),
-        RichSpan::new(
-            format!(" {:.2}  ", value),
-            Style::default().fg(Color::White),
-        ),
-        RichSpan::new(bar, Style::default().fg(Color::Yellow)),
-    ])
+    let line = crate::ui::helpers::render_score_bar(label, value);
+    RichBlock::Paragraph(
+        line.spans
+            .into_iter()
+            .map(|s| RichSpan::new(s.content.into_owned(), s.style))
+            .collect(),
+    )
 }
 

@@ -333,6 +333,57 @@ impl ReleasePackingBrowserState {
             _ => None,
         }
     }
+
+    /// Collect selected release data for approval.
+    ///
+    /// Maps selected list indices → release groups, extracting the per-track
+    /// data needed for tag generation. Skips non-release entries.
+    pub fn collect_selected_releases(
+        &self,
+        selected_indices: &BTreeSet<usize>,
+    ) -> Vec<SelectedReleaseData> {
+        selected_indices
+            .iter()
+            .filter_map(|&idx| {
+                let entry = self.entries.get(idx)?;
+                match entry {
+                    PackingListEntry::Release { idx: rel_idx, .. } => {
+                        let release = self.releases.get(*rel_idx)?;
+                        Some(SelectedReleaseData {
+                            release_id: release.release_id.clone(),
+                            tracks: release
+                                .tracks
+                                .iter()
+                                .map(|t| SelectedTrackData {
+                                    inode: t.inode,
+                                    track_title: t.track_title.clone(),
+                                    track_position: t.track_position,
+                                    medium_position: t.medium_position,
+                                    recording_id: t.recording_id.clone(),
+                                })
+                                .collect(),
+                        })
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+}
+
+/// Data extracted from a selected release for approval processing.
+pub(crate) struct SelectedReleaseData {
+    pub release_id: String,
+    pub tracks: Vec<SelectedTrackData>,
+}
+
+/// Per-track data needed for tag generation.
+pub(crate) struct SelectedTrackData {
+    pub inode: i64,
+    pub track_title: String,
+    pub track_position: u32,
+    pub medium_position: u32,
+    pub recording_id: String,
 }
 
 // ============================================================================

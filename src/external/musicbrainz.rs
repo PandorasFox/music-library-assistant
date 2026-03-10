@@ -356,3 +356,92 @@ pub fn parse_artist(raw_json: &[u8]) -> Result<MbArtist> {
 pub fn parse_release(raw_json: &[u8]) -> Result<MbRelease> {
     serde_json::from_slice(raw_json).context("Failed to parse cached MusicBrainz release JSON")
 }
+
+// ============================================================================
+// Batch Cache Loading
+// ============================================================================
+
+/// Batch-loaded MB data from the database cache.
+///
+/// Provides parsed releases, recordings, and artists in HashMaps keyed by MBID.
+/// Artist loading is transitive: artists referenced by release credits and
+/// recording credits/relations are automatically chased.
+pub struct MbCacheBundle {
+    pub releases: HashMap<String, MbRelease>,
+    pub recordings: HashMap<String, MbRecording>,
+    pub artists: HashMap<String, MbArtist>,
+}
+
+impl MbCacheBundle {
+    /// Load releases and recordings by ID from the DB cache, chasing artist references.
+    ///
+    /// Designed to run inside a `cache.query()` closure. Silently skips
+    /// entries where the cache is missing or JSON fails to parse.
+    pub fn load(
+        db: &crate::db::queries::ReadOnlyDb<'_>,
+        release_ids: &[String],
+        recording_ids: &[String],
+    ) -> Self {
+        let mut releases = HashMap::new();
+        let mut recordings = HashMap::new();
+        let mut artists = HashMap::new();
+
+        // Load releases + their credit artists
+        for rid in release_ids {
+            if let Ok(Some((json, _))) = db.get_mb_release_cache(rid) {
+                if let Ok(rel) = parse_release(&json) {
+                    load_credit_artists(&rel.artist_credit, db, &mut artists);
+                    releases.insert(rid.clone(), rel);
+                }
+            }
+        }
+
+        // Load recordings + their credit/relation artists
+        for rid in recording_ids {
+            if let Ok(Some((json, _))) = db.get_mb_recording_cache(rid) {
+                if let Ok(rec) = parse_recording(&json) {
+                    load_credit_artists(&rec.artist_credit, db, &mut artists);
+                    for relation in &rec.relations {
+                        if let Some(ref ra) = relation.artist {
+                            load_artist_if_absent(&ra.id, db, &mut artists);
+                        }
+                    }
+                    recordings.insert(rid.clone(), rec);
+                }
+            }
+        }
+
+        Self {
+            releases,
+            recordings,
+            artists,
+        }
+    }
+}
+
+/// Load artists from credit entries into the map, skipping already-loaded ones.
+fn load_credit_artists(
+    credits: &[MbArtistCredit],
+    db: &crate::db::queries::ReadOnlyDb<'_>,
+    artists: &mut HashMap<String, MbArtist>,
+) {
+    for credit in credits {
+        load_artist_if_absent(&credit.artist.id, db, artists);
+    }
+}
+
+/// Load a single artist into the map if not already present.
+fn load_artist_if_absent(
+    artist_id: &str,
+    db: &crate::db::queries::ReadOnlyDb<'_>,
+    artists: &mut HashMap<String, MbArtist>,
+) {
+    if artists.contains_key(artist_id) {
+        return;
+    }
+    if let Ok(Some((json, _))) = db.get_mb_artist_cache(artist_id) {
+        if let Ok(a) = parse_artist(&json) {
+            artists.insert(artist_id.to_string(), a);
+        }
+    }
+}

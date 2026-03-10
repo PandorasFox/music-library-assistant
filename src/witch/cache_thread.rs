@@ -19,7 +19,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::config;
-use crate::db::domain::DomainQuery;
+use crate::db::domain::{self, DomainQuery};
 use crate::db::{Database, ReadOnlyDb};
 use crate::meta::views::{
     DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
@@ -70,7 +70,8 @@ pub(crate) enum CacheReady {
 }
 
 /// Cached packing directory data for tree browser markers.
-pub(crate) struct PackingDirsData {
+#[derive(serde::Serialize)]
+pub struct PackingDirsData {
     /// Paths of files with release packing assignments.
     pub file_paths: std::collections::HashSet<std::path::PathBuf>,
     /// Parent directories mapped to their best packing category.
@@ -498,55 +499,43 @@ fn run_refreshes(
 ) {
     if throttle.should_refresh_insights() {
         throttle.insights_wanted = false;
-        if let Ok(data) = read_db.get_insights_data() {
-            throttle.insights_at = Some(Instant::now());
-            let _ = ready_tx.send(CacheReady::Insights(data));
-        }
+        let data = domain::GetInsights.execute(read_db);
+        throttle.insights_at = Some(Instant::now());
+        let _ = ready_tx.send(CacheReady::Insights(data));
     }
 
     if throttle.should_refresh_inbox() {
         throttle.inbox_wanted = false;
-        if let Ok(data) = read_db.get_inbox_overview_data() {
-            throttle.inbox_at = Some(Instant::now());
-            let _ = ready_tx.send(CacheReady::InboxOverview(data));
-        }
+        let data = domain::GetInboxOverview.execute(read_db);
+        throttle.inbox_at = Some(Instant::now());
+        let _ = ready_tx.send(CacheReady::InboxOverview(data));
     }
 
     if throttle.should_refresh_deploy() {
         throttle.deploy_wanted = false;
-        let data: DeployStatus = crate::db::domain::GetDeployStatus.execute(&read_db);
-        {
-            throttle.deploy_at = Some(Instant::now());
-            let _ = ready_tx.send(CacheReady::DeployStatus(data));
-        }
+        let data = domain::GetDeployStatus.execute(read_db);
+        throttle.deploy_at = Some(Instant::now());
+        let _ = ready_tx.send(CacheReady::DeployStatus(data));
     }
 
     if throttle.should_refresh_history() {
         throttle.history_wanted = false;
-        if let Ok(sessions) = read_db.get_edit_sessions() {
-            throttle.history_at = Some(Instant::now());
-            let _ = ready_tx.send(CacheReady::EditHistory(EditHistoryData { sessions }));
-        }
+        let data = domain::GetEditHistory.execute(read_db);
+        throttle.history_at = Some(Instant::now());
+        let _ = ready_tx.send(CacheReady::EditHistory(data));
     }
 
     if throttle.should_refresh_packing_dirs() {
         throttle.packing_dirs_wanted = false;
-        let file_paths = read_db.get_packing_assigned_paths().unwrap_or_default();
-        let dir_categories = read_db
-            .get_packing_directory_categories()
-            .unwrap_or_default();
+        let data = domain::GetPackingDirs.execute(read_db);
         throttle.packing_dirs_at = Some(Instant::now());
-        let _ = ready_tx.send(CacheReady::PackingDirs(PackingDirsData {
-            file_paths,
-            dir_categories,
-        }));
+        let _ = ready_tx.send(CacheReady::PackingDirs(data));
     }
 
     if throttle.should_refresh_external_matches() {
         throttle.external_matches_wanted = false;
-        if let Ok(data) = read_db.get_external_matches_data() {
-            throttle.external_matches_at = Some(Instant::now());
-            let _ = ready_tx.send(CacheReady::ExternalMatches(data));
-        }
+        let data = domain::GetExternalMatches.execute(read_db);
+        throttle.external_matches_at = Some(Instant::now());
+        let _ = ready_tx.send(CacheReady::ExternalMatches(data));
     }
 }

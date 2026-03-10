@@ -11,7 +11,7 @@
 
 /// Insights data for the bucketed Insights view.
 /// Computed at cache refresh time, never in render.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct InsightsData {
     pub bucket_corpus: CorpusFilesBucket,
     pub bucket_placeholder: PlaceholderBucket,
@@ -19,7 +19,7 @@ pub struct InsightsData {
 }
 
 /// Bucket 1: Corpus Files - file state overview
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct CorpusFilesBucket {
     // OOB signals at top - highest priority within bucket
     pub oob_tag_sync: usize,
@@ -45,7 +45,7 @@ pub struct CorpusFilesBucket {
 }
 
 /// Bucket 2: Tag Squash - duplicates, tag canonicity, album_artist, and compound tag issues
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct TagSquashBucket {
     /// Directory overlap clusters (grouped fingerprint overlaps for bulk resolution)
     pub directory_overlap_cluster_count: usize,
@@ -70,7 +70,7 @@ pub struct TagSquashBucket {
 }
 
 /// Entry for tag squash signals (grouped by tag name)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TagSquashEntry {
     /// Tag name (e.g., "artist", "genre", "album")
     pub tag_name: String,
@@ -81,7 +81,7 @@ pub struct TagSquashEntry {
 }
 
 /// Entry for compound tag signals (grouped by tag name)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CompoundTagEntry {
     /// Tag name (e.g., "artist", "genre")
     pub tag_name: String,
@@ -102,7 +102,7 @@ pub type PlaceholderBucket = TagSquashBucket;
 ///
 /// Read-only view: track → MB recording URL with confidence score.
 /// Actual tagging decisions come from the bin-packed release analysis.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ExternalMatchReviewEntry {
     pub path: String,
     /// AcoustID confidence score.
@@ -116,7 +116,7 @@ pub struct ExternalMatchReviewEntry {
 // ============================================================================
 
 /// Confidence tier for bucketing external matches by AcoustID confidence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum ConfidenceTier {
     /// confidence == 1.0
     Perfect,
@@ -166,7 +166,7 @@ impl ConfidenceTier {
 }
 
 /// A confidence bucket grouping external matches by AcoustID confidence tier.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ConfidenceBucket {
     pub tier: ConfidenceTier,
     pub total: usize,
@@ -175,7 +175,7 @@ pub struct ConfidenceBucket {
 }
 
 /// Data for the External Matches lateral view (loaded via cache thread).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ExternalMatchesData {
     /// MetadataOnly entries — fingerprint matches on files with no existing tags.
     pub untagged_entries: Vec<ExternalMatchReviewEntry>,
@@ -210,14 +210,14 @@ pub struct ExternalMatchesData {
 }
 
 /// Bucket 3: Other signals (sorted by magnitude)
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct OtherSignalsBucket {
     /// Sorted descending by count
     pub entries: Vec<OtherSignalEntry>,
 }
 
 /// Entry for other signals bucket
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct OtherSignalEntry {
     pub signal_type: String,
     pub display_label: String,
@@ -227,14 +227,14 @@ pub struct OtherSignalEntry {
 }
 
 /// Directory breakdown for detail pane
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct DirectoryBreakdown {
     /// Sorted by count descending
     pub _entries: Vec<DirectoryBreakdownEntry>,
 }
 
 /// Single entry in directory breakdown
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DirectoryBreakdownEntry {
     pub _directory: String,
     pub _count: usize,
@@ -246,7 +246,7 @@ pub struct DirectoryBreakdownEntry {
 
 /// Aggregate overview data for the inbox view.
 /// Computed at cache refresh time, never in render.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct InboxOverviewData {
     /// Total files present in inbox
     pub file_in_inbox: usize,
@@ -557,7 +557,7 @@ pub struct DeployStatus {
 // ============================================================================
 
 /// Summary of one edit session for the History list.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EditSessionSummary {
     pub session_id: String,
     pub earliest_at: String,
@@ -589,7 +589,7 @@ pub struct EditHistoryExportRow {
 }
 
 /// Data payload for the History view cache refresh.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct EditHistoryData {
     pub sessions: Vec<EditSessionSummary>,
 }

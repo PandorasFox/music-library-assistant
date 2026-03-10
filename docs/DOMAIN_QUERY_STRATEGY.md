@@ -159,72 +159,62 @@ These rules exist so that a proc-macro can eventually generate the plumbing for 
 
 6. **Identical error handling.** Queries return their `Response` type, not `Result`. The `execute` implementation handles errors internally (defaulting, logging, returning empty collections). The caller gets a usable value, always. This keeps the dispatch layer trivial — no per-query error-handling logic.
 
-### Boilerplate as a Feature
+### The `define_domain_query!` Macro
 
-During the manual phase, each new query will look nearly identical to existing ones:
+The macro is implemented as `macro_rules!` in `src/db/domain.rs`. It supports four forms:
 
 ```rust
-#[derive(Serialize, Deserialize)]
-struct MissingTagGroups;
-
-#[derive(Serialize, Deserialize)]
-struct MissingTagGroupsResponse {
-    groups: Vec<TagGroupSummary>,
+// Simple cached: unit struct, single db method, unwrap_or_default
+define_domain_query! {
+    /// Doc comment
+    GetFoo => FooData, cached(15), db.get_foo_data()
 }
 
-impl DomainQuery for MissingTagGroups {
-    type Response = MissingTagGroupsResponse;
-
-    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
-        let groups = db.get_missing_tag_groups().unwrap_or_default();
-        MissingTagGroupsResponse { groups }
+// Body cached: custom execute logic with db in scope
+define_domain_query! {
+    /// Doc comment
+    GetBar => BarData, cached(30), |db| {
+        let x = db.get_x().unwrap_or_default();
+        let y = db.get_y().unwrap_or_default();
+        BarData { x, y }
     }
 }
-```
 
-This repetition is intentional. **Do not factor out the boilerplate prematurely.** Each copy proves the pattern holds. When 10+ queries look identical except for names and types, the macro extraction becomes mechanical — a find-and-replace over a proven template, not a speculative abstraction.
-
-### What the Macro Eventually Generates
-
-Given a future annotation like:
-
-```rust
-#[domain_query(cached, throttle_secs = 30)]
-fn corpus_summary(db: &ReadOnlyDb<'_>) -> CorpusSummaryData {
-    // ...
+// Simple uncached (detail query):
+define_domain_query! {
+    /// Doc comment
+    GetBaz => BazData, uncached, db.get_baz_data()
 }
 
-#[domain_query]
-fn missing_tag_detail(db: &ReadOnlyDb<'_>, tag_name: String) -> Vec<MissingTagEntry> {
-    // ...
+// Body uncached (detail query):
+define_domain_query! {
+    /// Doc comment
+    GetQux => QuxData, uncached, |db| { ... }
 }
 ```
 
-The macro would generate:
-- The query struct (`CorpusSummary` / `MissingTagDetail { tag_name: String }`)
-- The response wrapper struct
-- The `DomainQuery` impl (and `CachedQuery` impl if `cached`)
-- A variant in the dispatch enum
-- `Serialize`/`Deserialize` derives on everything
-- Web route registration (when the web layer exists)
+Each invocation generates:
+- The query struct with `#[derive(Serialize, Deserialize)]`
+- The `DomainQuery` impl with the specified response type and execute body
+- The `CachedQuery` impl (if `cached`) with the throttle duration
 
-This is mechanical *only if* every hand-written query followed the trait contract exactly. Deviations during the manual phase become macro escape hatches later — so don't deviate.
+**When adding new queries, always use the macro.** If a query doesn't fit the macro's forms, that's a signal to reshape the query (or extend the macro with a new form), not to hand-write the impls.
 
 ## Migration Strategy
 
 This is incremental work. The TUI continues functioning throughout. The trait-driven design is not a later phase — it applies from the first query converted.
 
-1. **Establish the `DomainQuery` trait and dispatch infrastructure.** Define the trait, build the channel-based dispatch in the cache thread (or its successor). Every query written from this point forward implements the trait exactly.
+1. ~~**Establish the `DomainQuery` trait and dispatch infrastructure.**~~ **DONE.** Traits defined in `src/db/domain.rs`. Cache thread refresh path routes through `DomainQuery::execute()`.
 
-2. **Convert `CacheReady` variants to trait-implementing summary query structs.** Each `CacheReady::Insights(data)` becomes a `CorpusSummary` struct implementing `DomainQuery + CachedQuery`. The TUI's demand-flag polling becomes a thin adapter. **Resist the urge to "improve" the query shapes during conversion — port them faithfully first.**
+2. ~~**Convert `CacheReady` variants to trait-implementing summary query structs.**~~ **DONE.** All 6 variants (Insights, InboxOverview, DeployStatus, EditHistory, ExternalMatches, PackingDirs) converted. `Serialize` added to all response types and their transitive dependencies.
 
-3. **Convert closure callsites to detail query structs.** Each `cache.query(|db| ...)` becomes a named struct with fields for its parameters. Modal init loaders (`::load(db)`) wrap trivially. Signal-then-resolve two-step patterns collapse into single enriched detail queries.
+3. ~~**Extract `define_domain_query!` macro.**~~ **DONE.** `macro_rules!` macro in `src/db/domain.rs` handles simple/body × cached/uncached forms. All 6 summary queries use the macro.
 
-4. **Eliminate `get_audio_files_by_inodes` as a client-facing query.** It remains as an internal helper within `execute` implementations, but no client should ever call it directly.
+4. **Convert closure callsites to detail query structs.** Each `cache.query(|db| ...)` becomes a named struct with fields for its parameters. Modal init loaders (`::load(db)`) wrap trivially. Signal-then-resolve two-step patterns collapse into single enriched detail queries.
 
-5. **Remove the closure escape hatch** once all callsites are converted.
+5. **Eliminate `get_audio_files_by_inodes` as a client-facing query.** It remains as an internal helper within `execute` implementations, but no client should ever call it directly.
 
-6. **Extract proc-macro** once 10+ queries prove the pattern is truly uniform. The extraction should be mechanical — if it requires creativity, the manual phase had deviations that need fixing first.
+6. **Remove the closure escape hatch** once all callsites are converted.
 
 At any point after step 2, a web server can be introduced as a second client speaking the same protocol. The `Serialize` bound on all response types (enforced from step 1) guarantees web-readiness without retrofit.
 

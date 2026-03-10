@@ -483,6 +483,19 @@ impl App {
             );
         }
 
-        self.after_staging_decisions();
+        if self.open_txn_mode() {
+            // Stay in the packing browser for batch pinning
+            self.status_message = Some(format!(
+                "Pinned {} to {} dir{}",
+                &release_id[..8],
+                source_dirs.len(),
+                if source_dirs.len() == 1 { "" } else { "s" }
+            ));
+            if let ActiveView::ReleasePackingBrowser(ref mut state) = self.view {
+                state.pinned_release_ids.insert(release_id);
+            }
+        } else {
+            self.start_transaction_review();
+        }
     }
 }

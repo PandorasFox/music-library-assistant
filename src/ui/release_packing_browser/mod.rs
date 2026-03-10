@@ -8,7 +8,7 @@
 pub mod render;
 pub mod types;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::meta::signals::data::{
     AlternativeReleasePackingData, PackedReleaseData, ReleasePackingData, UnfilledReleaseSlotData,
@@ -61,6 +61,9 @@ pub(crate) struct ReleasePackingBrowserState {
     // Pin release input overlay
     pub pin_input: Option<TextInputState>,
     pub pin_error: Option<String>,
+
+    // Release IDs pinned during this browser session (for visual feedback)
+    pub pinned_release_ids: HashSet<String>,
 
     // Source data (only the category being viewed is populated)
     pub releases: Vec<ReleaseGroup>,
@@ -240,6 +243,7 @@ impl ReleasePackingBrowserState {
             click_targets: Default::default(),
             pin_input: None,
             pin_error: None,
+            pinned_release_ids: HashSet::new(),
             releases,
             unmatched: Vec::new(),
         };
@@ -269,6 +273,7 @@ impl ReleasePackingBrowserState {
             click_targets: Default::default(),
             pin_input: None,
             pin_error: None,
+            pinned_release_ids: HashSet::new(),
             releases: Vec::new(),
             unmatched,
         };

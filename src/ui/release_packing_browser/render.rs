@@ -193,6 +193,12 @@ fn render_left_entry(
                     Style::default().fg(Color::Yellow),
                 ));
             }
+            if state.pinned_release_ids.contains(&release.release_id) {
+                spans.push(Span::styled(
+                    " PIN",
+                    Style::default().fg(Color::LightBlue),
+                ));
+            }
             Line::from(spans)
         }
 

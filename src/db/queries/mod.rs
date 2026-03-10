@@ -181,6 +181,69 @@ impl Database {
     }
 
     // Schema initialization and version management: see db/schema.rs
+
+    // ========================================================================
+    // Generic Bincode BLOB Readers
+    // ========================================================================
+
+    /// Query a signal table's `data` BLOB column and deserialize each row.
+    ///
+    /// Silently skips rows that fail to deserialize (stale schema).
+    pub(crate) fn query_signal_blobs<T: serde::de::DeserializeOwned>(
+        &self,
+        sql: &str,
+    ) -> Result<Vec<T>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+        let mut results = Vec::new();
+        for blob in rows.flatten() {
+            if let Ok(data) = bincode::deserialize(&blob) {
+                results.push(data);
+            }
+        }
+        Ok(results)
+    }
+
+    /// Query a signal table for `(key TEXT, data BLOB)` and deserialize each row.
+    ///
+    /// Silently skips rows that fail to deserialize.
+    pub(crate) fn query_signal_key_blobs<T: serde::de::DeserializeOwned>(
+        &self,
+        sql: &str,
+    ) -> Result<Vec<(String, T)>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        let mut results = Vec::new();
+        for row in rows.flatten() {
+            if let Ok(data) = bincode::deserialize(&row.1) {
+                results.push((row.0, data));
+            }
+        }
+        Ok(results)
+    }
+
+    /// Query a signal table for `(inode, path, data BLOB)` and deserialize each row.
+    ///
+    /// Silently skips rows that fail to deserialize.
+    pub(crate) fn query_signal_inode_blobs<T: serde::de::DeserializeOwned>(
+        &self,
+        sql: &str,
+        params: &[&dyn rusqlite::types::ToSql],
+    ) -> Result<Vec<(i64, String, T)>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params, |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Vec<u8>>(2)?))
+        })?;
+        let mut results = Vec::new();
+        for row in rows.flatten() {
+            if let Ok(data) = bincode::deserialize(&row.2) {
+                results.push((row.0, row.1, data));
+            }
+        }
+        Ok(results)
+    }
 }
 
 // ============================================================================

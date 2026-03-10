@@ -213,15 +213,9 @@ impl Database {
             let fp_blob: Vec<u8> = row.get(1)?;
             let duration_ms: i64 = row.get(2)?;
 
-            // Convert BLOB back to Vec<u32> (little-endian)
-            let fingerprint: Vec<u32> = fp_blob
-                .chunks_exact(4)
-                .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                .collect();
-
             Ok(ExternalLookupCandidate {
                 inode,
-                fingerprint,
+                fingerprint: super::files::blob_to_fingerprint(&fp_blob),
                 duration_secs: (duration_ms / 1000) as u32,
             })
         })?;
@@ -229,61 +223,34 @@ impl Database {
         Ok(rows.flatten().collect())
     }
 
-    /// Get cached MusicBrainz recording JSON by recording ID.
+    /// Get a cached MusicBrainz entity by its primary key.
     ///
     /// Returns (raw_json, fetched_at) if cached.
-    pub fn get_mb_recording_cache(&self, recording_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT raw_json, fetched_at FROM mb_recording_cache WHERE recording_id = ?1",
-        )?;
-
-        let result = stmt.query_row(params![recording_id], |row| {
+    fn get_mb_cache(&self, table: &str, id_col: &str, id: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        let sql = format!("SELECT raw_json, fetched_at FROM {table} WHERE {id_col} = ?1");
+        let result = self.conn().query_row(&sql, params![id], |row| {
             Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
         });
-
         match result {
             Ok(r) => Ok(Some(r)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Get cached MusicBrainz recording JSON by recording ID.
+    pub fn get_mb_recording_cache(&self, recording_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        self.get_mb_cache("mb_recording_cache", "recording_id", recording_id)
     }
 
     /// Get cached MusicBrainz artist JSON by artist ID.
-    ///
-    /// Returns (raw_json, fetched_at) if cached.
     pub fn get_mb_artist_cache(&self, artist_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
-        let mut stmt = self
-            .conn()
-            .prepare("SELECT raw_json, fetched_at FROM mb_artist_cache WHERE artist_id = ?1")?;
-
-        let result = stmt.query_row(params![artist_id], |row| {
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
-        });
-
-        match result {
-            Ok(r) => Ok(Some(r)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        self.get_mb_cache("mb_artist_cache", "artist_id", artist_id)
     }
 
     /// Get cached MusicBrainz release JSON by release ID.
-    ///
-    /// Returns (raw_json, fetched_at) if cached.
     pub fn get_mb_release_cache(&self, release_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
-        let mut stmt = self
-            .conn()
-            .prepare("SELECT raw_json, fetched_at FROM mb_release_cache WHERE release_id = ?1")?;
-
-        let result = stmt.query_row(params![release_id], |row| {
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
-        });
-
-        match result {
-            Ok(r) => Ok(Some(r)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        self.get_mb_cache("mb_release_cache", "release_id", release_id)
     }
 
     /// Bulk-load cached MusicBrainz release JSON for a set of release IDs.
@@ -454,75 +421,29 @@ impl Database {
     pub fn get_release_packing_signal_data(
         &self,
     ) -> Result<Vec<(i64, String, crate::meta::signals::data::ReleasePackingData)>> {
-        let mut stmt = self
-            .conn()
-            .prepare("SELECT inode, path, data FROM signal_release_packing ORDER BY path")?;
-        let rows = stmt.query_map([], |row| {
-            let inode: i64 = row.get(0)?;
-            let path: String = row.get(1)?;
-            let blob: Vec<u8> = row.get(2)?;
-            Ok((inode, path, blob))
-        })?;
-        let mut results = Vec::new();
-        for row in rows {
-            let (inode, path, blob) = row?;
-            if let Ok(data) = bincode::deserialize(&blob) {
-                results.push((inode, path, data));
-            }
-        }
-        Ok(results)
+        self.query_signal_inode_blobs(
+            "SELECT inode, path, data FROM signal_release_packing ORDER BY path",
+            &[],
+        )
     }
 
     /// Read UnmatchedCorpusTrackSignal rows for a specific unsolved category.
     pub fn get_unmatched_corpus_track_signal_data_by_category(
         &self,
         category: &str,
-    ) -> Result<
-        Vec<(
-            i64,
-            String,
-            crate::meta::signals::data::UnmatchedCorpusTrackData,
-        )>,
-    > {
-        let mut stmt = self.conn().prepare(
+    ) -> Result<Vec<(i64, String, crate::meta::signals::data::UnmatchedCorpusTrackData)>> {
+        self.query_signal_inode_blobs(
             "SELECT inode, path, data FROM signal_unmatched_corpus_track \
              WHERE category = ?1 ORDER BY path",
-        )?;
-        let rows = stmt.query_map([category], |row| {
-            let inode: i64 = row.get(0)?;
-            let path: String = row.get(1)?;
-            let blob: Vec<u8> = row.get(2)?;
-            Ok((inode, path, blob))
-        })?;
-        let mut results = Vec::new();
-        for row in rows {
-            let (inode, path, blob) = row?;
-            if let Ok(data) = bincode::deserialize(&blob) {
-                results.push((inode, path, data));
-            }
-        }
-        Ok(results)
+            &[&category as &dyn rusqlite::types::ToSql],
+        )
     }
 
     /// Read all UnfilledReleaseSlotSignal rows with deserialized data.
     pub fn get_unfilled_release_slot_signal_data(
         &self,
     ) -> Result<Vec<crate::meta::signals::data::UnfilledReleaseSlotData>> {
-        let mut stmt = self
-            .conn()
-            .prepare("SELECT data FROM signal_unfilled_release_slot")?;
-        let rows = stmt.query_map([], |row| {
-            let blob: Vec<u8> = row.get(0)?;
-            Ok(blob)
-        })?;
-        let mut results = Vec::new();
-        for row in rows {
-            let blob = row?;
-            if let Ok(data) = bincode::deserialize(&blob) {
-                results.push(data);
-            }
-        }
-        Ok(results)
+        self.query_signal_blobs("SELECT data FROM signal_unfilled_release_slot")
     }
 
     // =========================================================================
@@ -716,14 +637,9 @@ impl Database {
             let fp_blob: Vec<u8> = row.get(1)?;
             let duration_ms: i64 = row.get(2)?;
 
-            let fingerprint: Vec<u32> = fp_blob
-                .chunks_exact(4)
-                .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                .collect();
-
             Ok(ExternalLookupCandidate {
                 inode,
-                fingerprint,
+                fingerprint: super::files::blob_to_fingerprint(&fp_blob),
                 duration_secs: (duration_ms / 1000) as u32,
             })
         })?;
@@ -785,66 +701,21 @@ impl Database {
     pub fn get_packing_knots(
         &self,
     ) -> Result<Vec<crate::meta::signals::data::PackingKnotData>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT data FROM signal_packing_knot")?;
-        let rows = stmt.query_map([], |row| {
-            let blob: Vec<u8> = row.get(0)?;
-            let data: crate::meta::signals::data::PackingKnotData =
-                bincode::deserialize(&blob).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Blob,
-                        Box::new(e),
-                    )
-                })?;
-            Ok(data)
-        })?;
-        Ok(rows.flatten().collect())
+        self.query_signal_blobs("SELECT data FROM signal_packing_knot")
     }
 
     /// Load all alternative release packing signals with deserialized data.
     pub fn get_alternative_release_packing_data(
         &self,
     ) -> Result<Vec<crate::meta::signals::data::AlternativeReleasePackingData>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT data FROM signal_alternative_release_packing")?;
-        let rows = stmt.query_map([], |row| {
-            let blob: Vec<u8> = row.get(0)?;
-            let data: crate::meta::signals::data::AlternativeReleasePackingData =
-                bincode::deserialize(&blob).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Blob,
-                        Box::new(e),
-                    )
-                })?;
-            Ok(data)
-        })?;
-        Ok(rows.flatten().collect())
+        self.query_signal_blobs("SELECT data FROM signal_alternative_release_packing")
     }
 
     /// Load all various artists override signals with deserialized data.
     pub fn get_various_artists_override_data(
         &self,
     ) -> Result<Vec<crate::meta::signals::data::VariousArtistsOverrideData>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT data FROM signal_various_artists_override")?;
-        let rows = stmt.query_map([], |row| {
-            let blob: Vec<u8> = row.get(0)?;
-            let data: crate::meta::signals::data::VariousArtistsOverrideData =
-                bincode::deserialize(&blob).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Blob,
-                        Box::new(e),
-                    )
-                })?;
-            Ok(data)
-        })?;
-        Ok(rows.flatten().collect())
+        self.query_signal_blobs("SELECT data FROM signal_various_artists_override")
     }
 
     /// Get paths of all files with release packing assignments.

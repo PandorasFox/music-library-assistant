@@ -24,7 +24,7 @@ pub type AudioFileWithTags = (AudioFile, HashMap<String, Vec<String>>);
 // ============================================================================
 
 /// Convert BLOB bytes to fingerprint Vec<u32> (little-endian).
-fn blob_to_fingerprint(blob: &[u8]) -> Vec<u32> {
+pub(crate) fn blob_to_fingerprint(blob: &[u8]) -> Vec<u32> {
     blob.chunks_exact(4)
         .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
@@ -37,6 +37,19 @@ pub fn fingerprint_to_text(fp: &[u32]) -> String {
         .collect::<Vec<_>>()
         .join(",")
 }
+
+// Column list for AudioFile queries (files JOIN audio_info).
+// The fingerprint column is parameterized because some callers use NULL
+// to avoid transferring ~7KB/file of fingerprint BLOBs needlessly.
+fn audio_file_select(fp_col: &str) -> String {
+    format!(
+        r#"f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
+                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, {fp_col}, a.needs_tag_flush"#
+    )
+}
+
+/// The standard fingerprint column expression.
+const FP_COL: &str = "a.fingerprint";
 
 impl Database {
     // ========================================================================
@@ -180,16 +193,11 @@ impl Database {
 
     /// Get audio file (combined file entry + audio info) by path.
     pub fn get_audio_file_by_path(&self, path: &str) -> Result<Option<AudioFile>> {
-        let result = self.conn.query_row(
-            r#"SELECT
-                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
-                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
-            FROM files f
-            JOIN audio_info a ON f.inode = a.inode
-            WHERE f.path = ?1"#,
-            params![path],
-            Self::row_to_audio_file,
+        let sql = format!(
+            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode WHERE f.path = ?1",
+            audio_file_select(FP_COL),
         );
+        let result = self.conn.query_row(&sql, params![path], Self::row_to_audio_file);
 
         match result {
             Ok(af) => Ok(Some(af)),
@@ -208,19 +216,11 @@ impl Database {
         zone: Zone,
         with_fingerprints: bool,
     ) -> Result<Vec<AudioFile>> {
-        let fp_col = if with_fingerprints {
-            "a.fingerprint"
-        } else {
-            "NULL"
-        };
+        let fp_col = if with_fingerprints { FP_COL } else { "NULL" };
         let sql = format!(
-            r#"SELECT
-                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
-                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, {fp_col}, a.needs_tag_flush
-            FROM files f
-            JOIN audio_info a ON f.inode = a.inode
-            WHERE f.zone = ?1 AND f.is_dir = 0
-            ORDER BY f.path"#
+            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode \
+             WHERE f.zone = ?1 AND f.is_dir = 0 ORDER BY f.path",
+            audio_file_select(fp_col),
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -234,16 +234,12 @@ impl Database {
     /// the primary key is (path, zone, inode). The same inode can exist
     /// in multiple zones (corpus and library for hard-linked files).
     pub fn get_audio_file_by_inode(&self, inode: i64, zone: Zone) -> Result<Option<AudioFile>> {
-        let result = self.conn.query_row(
-            r#"SELECT
-                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
-                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
-            FROM files f
-            JOIN audio_info a ON f.inode = a.inode
-            WHERE f.inode = ?1 AND f.zone = ?2 AND f.is_dir = 0"#,
-            params![inode, zone.as_str()],
-            Self::row_to_audio_file,
+        let sql = format!(
+            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode \
+             WHERE f.inode = ?1 AND f.zone = ?2 AND f.is_dir = 0",
+            audio_file_select(FP_COL),
         );
+        let result = self.conn.query_row(&sql, params![inode, zone.as_str()], Self::row_to_audio_file);
 
         match result {
             Ok(af) => Ok(Some(af)),
@@ -265,15 +261,11 @@ impl Database {
         let placeholders: Vec<String> = (1..=inodes.len()).map(|i| format!("?{}", i)).collect();
 
         let sql = format!(
-            r#"SELECT
-                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
-                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
-            FROM files f
-            JOIN audio_info a ON f.inode = a.inode
-            WHERE f.inode IN ({}) AND f.zone = '{}' AND f.is_dir = 0
-            ORDER BY f.path"#,
+            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode \
+             WHERE f.inode IN ({}) AND f.zone = '{}' AND f.is_dir = 0 ORDER BY f.path",
+            audio_file_select(FP_COL),
             placeholders.join(", "),
-            zone.as_str()
+            zone.as_str(),
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -294,15 +286,12 @@ impl Database {
     pub fn get_audio_files_by_path_prefix(&self, path_prefix: &str) -> Result<Vec<AudioFile>> {
         let pattern = super::dir_like_pattern_str(path_prefix);
 
-        let mut stmt = self.conn.prepare(
-            r#"SELECT
-                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
-                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
-            FROM files f
-            JOIN audio_info a ON f.inode = a.inode
-            WHERE f.zone = 'corpus' AND f.path LIKE ?1 ESCAPE '\' AND f.is_dir = 0
-            ORDER BY f.path"#,
-        )?;
+        let sql = format!(
+            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode \
+             WHERE f.zone = 'corpus' AND f.path LIKE ?1 ESCAPE '\\' AND f.is_dir = 0 ORDER BY f.path",
+            audio_file_select(FP_COL),
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let files = stmt.query_map(params![pattern], Self::row_to_audio_file)?;
         files.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -315,15 +304,12 @@ impl Database {
     ) -> Result<Vec<AudioFile>> {
         let pattern = super::dir_like_pattern(dir_path);
 
-        let mut stmt = self.conn.prepare(
-            r#"SELECT
-                f.inode, f.zone, f.path, f.is_dir, f.mtime_secs, f.mtime_nanos, f.file_size, f.scanned_at,
-                a.file_type, a.duration_ms, a.bitrate_kbps, a.sample_rate, a.fingerprint, a.needs_tag_flush
-            FROM files f
-            JOIN audio_info a ON f.inode = a.inode
-            WHERE f.path LIKE ?1 ESCAPE '\' AND f.is_dir = 0
-            ORDER BY f.path"#,
-        )?;
+        let sql = format!(
+            "SELECT {} FROM files f JOIN audio_info a ON f.inode = a.inode \
+             WHERE f.path LIKE ?1 ESCAPE '\\' AND f.is_dir = 0 ORDER BY f.path",
+            audio_file_select(FP_COL),
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let files = stmt
             .query_map(params![pattern], Self::row_to_audio_file)?
@@ -356,52 +342,40 @@ impl Database {
         Ok(results)
     }
 
-    /// Get audio files with their present tag names (for missing tag detection, corpus only).
-    /// Returns: Vec<(inode, path, album_or_none, comma_separated_uppercase_tags, artist_or_none, title_or_none)>
+    /// Get audio files with their present tag names (for missing tag detection).
+    #[allow(clippy::type_complexity)]
+    fn get_audio_files_with_tag_presence_for_zone(
+        &self,
+        tag_table: &str,
+        zone: &str,
+    ) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>
+    {
+        let query = format!(
+            r#"SELECT f.inode, f.path,
+                   (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) as album,
+                   GROUP_CONCAT(UPPER(t.tag_name), ',') as present_tags,
+                   (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) as artist,
+                   (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) as title
+            FROM files f
+            JOIN audio_info a ON f.inode = a.inode
+            LEFT JOIN {tag_table} t ON f.inode = t.inode
+            WHERE f.is_dir = 0 AND f.zone = ?1
+            GROUP BY f.inode"#
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let rows = stmt.query_map(params![zone], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
+    /// Get corpus audio files with their present tag names.
     #[allow(clippy::type_complexity)]
     pub fn get_audio_files_with_tag_presence(
         &self,
-    ) -> Result<
-        Vec<(
-            i64,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )>,
-    > {
-        // Only check missing tags for corpus files
-        let query = r#"
-            SELECT f.inode, f.path,
-                   (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) as album,
-                   GROUP_CONCAT(UPPER(ct.tag_name), ',') as present_tags,
-                   (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) as artist,
-                   (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) as title
-            FROM files f
-            JOIN audio_info a ON f.inode = a.inode
-            LEFT JOIN corpus_tags ct ON f.inode = ct.inode
-            WHERE f.is_dir = 0 AND f.zone = 'corpus'
-            GROUP BY f.inode
-        "#;
-
-        let mut stmt = self.conn.prepare(query)?;
-        let rows = stmt.query_map(params![], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            ))
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
+    ) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>
+    {
+        self.get_audio_files_with_tag_presence_for_zone("corpus_tags", "corpus")
     }
 
     /// Get albums that are compilations (more than one distinct ARTIST value).
@@ -466,42 +440,29 @@ impl Database {
         Ok(ids)
     }
 
-    /// Get all corpus audio file inodes mapped to their paths.
-    pub fn get_all_corpus_inodes(&self) -> Result<HashMap<i64, String>> {
+    /// Get all audio file inodes mapped to their paths for a zone.
+    fn get_all_inodes_for_zone(&self, zone: &str) -> Result<HashMap<i64, String>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT inode, path FROM files WHERE zone = 'corpus' AND is_dir = 0")?;
-
-        let mut result = HashMap::new();
-        let rows = stmt.query_map(params![], |row| {
+            .prepare("SELECT inode, path FROM files WHERE zone = ?1 AND is_dir = 0")?;
+        let rows = stmt.query_map(params![zone], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?;
-
-        for row in rows {
-            let (inode, path) = row?;
-            result.insert(inode, path);
+        let mut result = HashMap::new();
+        for row in rows.flatten() {
+            result.insert(row.0, row.1);
         }
-
         Ok(result)
+    }
+
+    /// Get all corpus audio file inodes mapped to their paths.
+    pub fn get_all_corpus_inodes(&self) -> Result<HashMap<i64, String>> {
+        self.get_all_inodes_for_zone("corpus")
     }
 
     /// Get all inbox audio file inodes mapped to their paths.
     pub fn get_all_inbox_inodes(&self) -> Result<HashMap<i64, String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT inode, path FROM files WHERE zone = 'inbox' AND is_dir = 0")?;
-
-        let mut result = HashMap::new();
-        let rows = stmt.query_map(params![], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-        })?;
-
-        for row in rows {
-            let (inode, path) = row?;
-            result.insert(inode, path);
-        }
-
-        Ok(result)
+        self.get_all_inodes_for_zone("inbox")
     }
 
     /// Check whether an audio file has embedded pictures.
@@ -532,52 +493,13 @@ impl Database {
         }
     }
 
-    /// Get inbox audio files with their present tag names (for inbox missing tag detection).
-    ///
-    /// Mirrors `get_audio_files_with_tag_presence()` but uses `inbox_tags` and `zone = 'inbox'`.
+    /// Get inbox audio files with their present tag names.
     #[allow(clippy::type_complexity)]
     pub fn get_inbox_audio_files_with_tag_presence(
         &self,
-    ) -> Result<
-        Vec<(
-            i64,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )>,
-    > {
-        let query = r#"
-            SELECT f.inode, f.path,
-                   (SELECT tag_value FROM inbox_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) as album,
-                   GROUP_CONCAT(UPPER(it.tag_name), ',') as present_tags,
-                   (SELECT tag_value FROM inbox_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) as artist,
-                   (SELECT tag_value FROM inbox_tags WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) as title
-            FROM files f
-            JOIN audio_info a ON f.inode = a.inode
-            LEFT JOIN inbox_tags it ON f.inode = it.inode
-            WHERE f.is_dir = 0 AND f.zone = 'inbox'
-            GROUP BY f.inode
-        "#;
-
-        let mut stmt = self.conn.prepare(query)?;
-        let rows = stmt.query_map(params![], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            ))
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
+    ) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>
+    {
+        self.get_audio_files_with_tag_presence_for_zone("inbox_tags", "inbox")
     }
 
     /// Get the inbox path for a single inode.

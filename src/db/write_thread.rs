@@ -34,6 +34,18 @@ use crate::meta::computations::ComputationWitness;
 use crate::witch::MutationExecutionWitness;
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/// Current time as Unix epoch seconds (i64).
+fn current_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+// ============================================================================
 // Index Signal Data Types
 // ============================================================================
 
@@ -1992,7 +2004,7 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             fetched_at,
         } => {
             with_retry("upsert_mb_recording_cache", recording_id, || {
-                execute_upsert_mb_recording_cache(db, recording_id, raw_json, *fetched_at)
+                execute_upsert_mb_cache(db, "mb_recording_cache", "recording_id", recording_id, raw_json, *fetched_at)
             });
         }
 
@@ -2002,7 +2014,7 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             fetched_at,
         } => {
             with_retry("upsert_mb_artist_cache", artist_id, || {
-                execute_upsert_mb_artist_cache(db, artist_id, raw_json, *fetched_at)
+                execute_upsert_mb_cache(db, "mb_artist_cache", "artist_id", artist_id, raw_json, *fetched_at)
             });
         }
 
@@ -2012,7 +2024,7 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             fetched_at,
         } => {
             with_retry("upsert_mb_release_cache", release_id, || {
-                execute_upsert_mb_release_cache(db, release_id, raw_json, *fetched_at)
+                execute_upsert_mb_cache(db, "mb_release_cache", "release_id", release_id, raw_json, *fetched_at)
             });
         }
 
@@ -2335,12 +2347,7 @@ fn execute_index_audio_file(
     session_id: &str,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let scanned_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let scanned_at = current_unix_secs();
 
     // Determine which tag table to use based on zone
     let tag_table = if file_data.zone == "inbox" {
@@ -2592,16 +2599,12 @@ fn execute_update_track_path_with_metadata(
     new_file_type: &str,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     // Get old inode
     let old_inode = get_inode_by_path(db, old_path)?
         .ok_or_else(|| anyhow::anyhow!("File not found at old path: {}", old_path))?;
 
-    let scanned_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let scanned_at = current_unix_secs();
 
     // Wrap all operations in a single transaction
     let tx = db.conn().unchecked_transaction()?;
@@ -2680,12 +2683,7 @@ fn execute_upsert_file_entry(
     file_entry: &FileEntryData,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let scanned_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let scanned_at = current_unix_secs();
 
     // Upsert into files table
     db.conn().execute(
@@ -2732,12 +2730,7 @@ fn execute_index_directory(
     mtime_nanos: i64,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let scanned_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let scanned_at = current_unix_secs();
 
     // Insert or replace directory entry
     db.conn().execute(
@@ -2763,12 +2756,7 @@ fn execute_index_image_file(
     file_size: i64,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let scanned_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let scanned_at = current_unix_secs();
 
     db.conn().execute(
         r#"
@@ -2897,12 +2885,7 @@ fn execute_mark_dirty_inodes(
     computation_type: &str,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let now = current_unix_secs();
     for inode in inodes {
         db.conn().execute(
             "INSERT OR IGNORE INTO dirty_inodes (inode, computation_type, dirtied_at) VALUES (?1, ?2, ?3)",
@@ -2923,12 +2906,7 @@ fn execute_upsert_library_file(
     file_size: i64,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let scanned_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let scanned_at = current_unix_secs();
 
     db.conn().execute(
         "INSERT OR REPLACE INTO files
@@ -3019,12 +2997,7 @@ fn execute_upsert_external_retry(
     error: &str,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let now = current_unix_secs();
 
     db.conn().execute(
         r#"INSERT INTO external_retry (inode, fingerprint, source, failed_at, error, retry_count)
@@ -3062,60 +3035,21 @@ fn execute_drop_external_match(db: &Database, inode: i64) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// Execute UpsertMbRecordingCache: cache raw MB recording JSON.
-fn execute_upsert_mb_recording_cache(
+/// Execute an MB cache upsert for any entity type.
+fn execute_upsert_mb_cache(
     db: &Database,
-    recording_id: &str,
+    table: &str,
+    id_col: &str,
+    id: &str,
     raw_json: &[u8],
     fetched_at: i64,
 ) -> anyhow::Result<()> {
     use rusqlite::params;
 
-    db.conn().execute(
-        r#"INSERT OR REPLACE INTO mb_recording_cache
-           (recording_id, raw_json, fetched_at)
-           VALUES (?1, ?2, ?3)"#,
-        params![recording_id, raw_json, fetched_at],
-    )?;
-
-    Ok(())
-}
-
-/// Execute UpsertMbArtistCache: cache raw MB artist JSON.
-fn execute_upsert_mb_artist_cache(
-    db: &Database,
-    artist_id: &str,
-    raw_json: &[u8],
-    fetched_at: i64,
-) -> anyhow::Result<()> {
-    use rusqlite::params;
-
-    db.conn().execute(
-        r#"INSERT OR REPLACE INTO mb_artist_cache
-           (artist_id, raw_json, fetched_at)
-           VALUES (?1, ?2, ?3)"#,
-        params![artist_id, raw_json, fetched_at],
-    )?;
-
-    Ok(())
-}
-
-/// Execute UpsertMbReleaseCache: cache raw MB release JSON.
-fn execute_upsert_mb_release_cache(
-    db: &Database,
-    release_id: &str,
-    raw_json: &[u8],
-    fetched_at: i64,
-) -> anyhow::Result<()> {
-    use rusqlite::params;
-
-    db.conn().execute(
-        r#"INSERT OR REPLACE INTO mb_release_cache
-           (release_id, raw_json, fetched_at)
-           VALUES (?1, ?2, ?3)"#,
-        params![release_id, raw_json, fetched_at],
-    )?;
-
+    let sql = format!(
+        "INSERT OR REPLACE INTO {table} ({id_col}, raw_json, fetched_at) VALUES (?1, ?2, ?3)"
+    );
+    db.conn().execute(&sql, params![id, raw_json, fetched_at])?;
     Ok(())
 }
 

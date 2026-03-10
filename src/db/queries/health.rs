@@ -772,98 +772,64 @@ impl Database {
             })
             .collect();
 
-        // Packing per-category counts from PackedRelease aggregate signals
-        let packing_perfect_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'perfect:%'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        let packing_full_match_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'full_match:%'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        let packing_singles_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'single:%'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        let packing_incomplete_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'incomplete:%'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        let packing_low_confidence_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'low_confidence:%'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        let packing_knots_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_packing_knot",
-                [],
-                |row| row.get(0),
-            )
+        // Packing per-category counts via GROUP BY on key prefix.
+        let (
+            mut packing_perfect_count,
+            mut packing_full_match_count,
+            mut packing_singles_count,
+            mut packing_incomplete_count,
+            mut packing_low_confidence_count,
+        ) = (0usize, 0, 0, 0, 0);
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT SUBSTR(key, 1, INSTR(key, ':') - 1) AS cat, COUNT(*) \
+                 FROM signal_packed_release GROUP BY cat",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+            })?;
+            for row in rows.flatten() {
+                match row.0.as_str() {
+                    "perfect" => packing_perfect_count = row.1,
+                    "full_match" => packing_full_match_count = row.1,
+                    "single" => packing_singles_count = row.1,
+                    "incomplete" => packing_incomplete_count = row.1,
+                    "low_confidence" => packing_low_confidence_count = row.1,
+                    _ => {}
+                }
+            }
+        }
+
+        let packing_knots_count: usize = self.conn
+            .query_row("SELECT COUNT(*) FROM signal_packing_knot", [], |row| row.get(0))
             .unwrap_or(0);
 
-        // Unsolved corpus tracks — counted directly from the category column.
-        let unsolved_conflict_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_unmatched_corpus_track WHERE category = 'conflict'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        let unsolved_no_release_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_unmatched_corpus_track WHERE category = 'no_release'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        let unsolved_no_match_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_unmatched_corpus_track WHERE category = 'no_match'",
-                [],
-                |row| row.get(0),
-            )
+        // Unsolved corpus tracks — single GROUP BY instead of 3 queries.
+        let (mut unsolved_conflict_count, mut unsolved_no_release_count, mut unsolved_no_match_count) =
+            (0usize, 0, 0);
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT category, COUNT(*) FROM signal_unmatched_corpus_track GROUP BY category",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+            })?;
+            for row in rows.flatten() {
+                match row.0.as_str() {
+                    "conflict" => unsolved_conflict_count = row.1,
+                    "no_release" => unsolved_no_release_count = row.1,
+                    "no_match" => unsolved_no_match_count = row.1,
+                    _ => {}
+                }
+            }
+        }
+
+        let va_override_count: usize = self.conn
+            .query_row("SELECT COUNT(*) FROM signal_various_artists_override", [], |row| row.get(0))
             .unwrap_or(0);
 
-        let va_override_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_various_artists_override",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-
-        let pinned_conflict_count: usize = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM signal_pinned_release_conflict",
-                [],
-                |row| row.get(0),
-            )
+        let pinned_conflict_count: usize = self.conn
+            .query_row("SELECT COUNT(*) FROM signal_pinned_release_conflict", [], |row| row.get(0))
             .unwrap_or(0);
 
         // Check staleness: any pinned release without a matching packed_release signal?
@@ -1573,34 +1539,12 @@ impl Database {
     // ========================================================================
 
     /// Get all redundant duplicate groups with deserialized data.
-    ///
-    /// Returns (signal_key, data) pairs for each group. Each group contains
-    /// files with identical fingerprints and identical quality scores that
-    /// require operator choice to resolve.
     pub fn get_redundant_duplicate_groups(
         &self,
     ) -> Result<Vec<(String, crate::meta::signals::data::RedundantDuplicateData)>> {
-        use crate::meta::signals::data::RedundantDuplicateData;
-
-        let mut stmt = self
-            .conn
-            .prepare("SELECT key, data FROM signal_redundant_duplicate ORDER BY key")?;
-
-        let mut results = Vec::new();
-        let rows = stmt.query_map(params![], |row| {
-            let key: String = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            Ok((key, blob))
-        })?;
-
-        for row in rows {
-            let (key, blob) = row?;
-            if let Ok(data) = bincode::deserialize::<RedundantDuplicateData>(&blob) {
-                results.push((key, data));
-            }
-        }
-
-        Ok(results)
+        self.query_signal_key_blobs(
+            "SELECT key, data FROM signal_redundant_duplicate ORDER BY key",
+        )
     }
 
     // ========================================================================
@@ -1608,34 +1552,12 @@ impl Database {
     // ========================================================================
 
     /// Get all metadata duplicate groups with deserialized data.
-    ///
-    /// Returns (signal_key, data) pairs for each group. Each group contains
-    /// files with identical tag signatures (artist/album/title) that may need
-    /// tag editing or stashing to resolve.
     pub fn get_metadata_duplicate_groups(
         &self,
     ) -> Result<Vec<(String, crate::meta::signals::data::MetadataDuplicateData)>> {
-        use crate::meta::signals::data::MetadataDuplicateData;
-
-        let mut stmt = self
-            .conn
-            .prepare("SELECT key, data FROM signal_metadata_duplicate ORDER BY key")?;
-
-        let mut results = Vec::new();
-        let rows = stmt.query_map(params![], |row| {
-            let key: String = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            Ok((key, blob))
-        })?;
-
-        for row in rows {
-            let (key, blob) = row?;
-            if let Ok(data) = bincode::deserialize::<MetadataDuplicateData>(&blob) {
-                results.push((key, data));
-            }
-        }
-
-        Ok(results)
+        self.query_signal_key_blobs(
+            "SELECT key, data FROM signal_metadata_duplicate ORDER BY key",
+        )
     }
 
     /// Get deploy status for the Deploy view and titlebar indicator.

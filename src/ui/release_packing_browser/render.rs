@@ -17,6 +17,7 @@ use ratatui::{
 
 use super::types::*;
 use super::ReleasePackingBrowserState;
+use crate::meta::signals::packing_category::PackingCategory;
 use crate::ui::widgets::control_colors;
 
 pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
@@ -156,13 +157,7 @@ fn render_left_entry(
             } else {
                 Style::default().fg(Color::White)
             };
-            let coverage_color = if release.coverage >= 1.0 {
-                Color::Green
-            } else if release.coverage >= 0.7 {
-                Color::Yellow
-            } else {
-                Color::Red
-            };
+            let coverage_color = coverage_color(release, state.category);
 
             let mut spans = vec![
                 Span::styled(marker.to_string(), title_style),
@@ -369,9 +364,9 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrows
     let lines = match state.selected_entry() {
         Some(PackingListEntry::Release { idx }) => {
             if matches!(state.focused_pane, FocusedPane::LeftPane) {
-                render_release_overview(&state.releases[*idx])
+                render_release_overview(&state.releases[*idx], state.category)
             } else {
-                detail_for_release(&state.releases[*idx], state.track_cursor)
+                detail_for_release(&state.releases[*idx], state.track_cursor, state.category)
             }
         }
         Some(PackingListEntry::Unmatched { idx }) => {
@@ -397,14 +392,18 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrows
     }
 }
 
-fn detail_for_release(release: &ReleaseGroup, track_cursor: usize) -> Vec<Line<'static>> {
+fn detail_for_release(
+    release: &ReleaseGroup,
+    track_cursor: usize,
+    category: PackingCategory,
+) -> Vec<Line<'static>> {
     let track_count = release.tracks.len();
     if track_cursor < track_count {
         render_track_detail(&release.tracks[track_cursor], release)
     } else if track_cursor < track_count + release.unfilled.len() {
         render_unfilled_detail(&release.unfilled[track_cursor - track_count], release)
     } else {
-        render_release_summary(release)
+        render_release_summary(release, category)
     }
 }
 
@@ -419,7 +418,7 @@ fn render_scrollable_lines(f: &mut Frame, area: Rect, lines: &[Line<'static>], s
 // Detail Renderers (reused from original)
 // ============================================================================
 
-fn render_release_summary(release: &ReleaseGroup) -> Vec<Line<'static>> {
+fn render_release_summary(release: &ReleaseGroup, category: PackingCategory) -> Vec<Line<'static>> {
     vec![
         kv_line("Release:", &release.release_title),
         kv_line("Artist:", &release.release_artist),
@@ -434,20 +433,47 @@ fn render_release_summary(release: &ReleaseGroup) -> Vec<Line<'static>> {
                     release.total_tracks,
                     release.coverage * 100.0
                 ),
-                Style::default().fg(if release.coverage >= 0.9 {
-                    Color::Green
-                } else if release.coverage >= 0.7 {
-                    Color::Yellow
-                } else {
-                    Color::Red
-                }),
+                Style::default().fg(coverage_color(release, category)),
             ),
         ]),
     ]
 }
 
-fn render_release_overview(release: &ReleaseGroup) -> Vec<Line<'static>> {
-    let mut lines = vec![
+fn render_release_overview(release: &ReleaseGroup, category: PackingCategory) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    // Low confidence warning banner — bright and prominent
+    if let Some(ref reason) = release.low_confidence_reason {
+        lines.push(Line::from(Span::styled(
+            "⚠ LOW CONFIDENCE — PROBABLE MISPACK ⚠",
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(vec![
+            Span::styled("  AcoustID ratio: ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("{:.1}%", reason.acoustid_ratio * 100.0),
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" below threshold", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Avg album match: ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("{:.2}", reason.avg_album_match),
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" below threshold", Style::default().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(Span::raw("")));
+    }
+
+    lines.extend([
         Line::from(Span::styled(
             "Release Overview",
             Style::default()
@@ -459,16 +485,10 @@ fn render_release_overview(release: &ReleaseGroup) -> Vec<Line<'static>> {
         kv_line("Artist:", &release.release_artist),
         kv_line("MBID:", &release.release_id),
         Line::from(Span::raw("")),
-    ];
+    ]);
 
     // Coverage
-    let coverage_color = if release.coverage >= 1.0 {
-        Color::Green
-    } else if release.coverage >= 0.7 {
-        Color::Yellow
-    } else {
-        Color::Red
-    };
+    let cov_color = coverage_color(release, category);
     lines.push(Line::from(vec![
         Span::styled("Coverage:  ", Style::default().fg(Color::DarkGray)),
         Span::styled(
@@ -478,7 +498,7 @@ fn render_release_overview(release: &ReleaseGroup) -> Vec<Line<'static>> {
                 release.total_tracks,
                 release.coverage * 100.0
             ),
-            Style::default().fg(coverage_color),
+            Style::default().fg(cov_color),
         ),
     ]));
 
@@ -847,6 +867,24 @@ fn render_score_bar(label: &str, value: f64) -> Line<'static> {
         ),
         Span::styled(bar, Style::default().fg(Color::Yellow)),
     ])
+}
+
+/// Coverage color: yellow for LowConfidence (never green), normal thresholds otherwise.
+fn coverage_color(release: &ReleaseGroup, category: PackingCategory) -> Color {
+    if category == PackingCategory::LowConfidence {
+        // Low confidence releases should never look healthy
+        if release.coverage >= 0.7 {
+            Color::Yellow
+        } else {
+            Color::Red
+        }
+    } else if release.coverage >= 1.0 {
+        Color::Green
+    } else if release.coverage >= 0.7 {
+        Color::Yellow
+    } else {
+        Color::Red
+    }
 }
 
 /// Truncate a string to max_chars, appending "..." if truncated.

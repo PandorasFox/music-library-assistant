@@ -184,6 +184,19 @@ impl ReleasePackingBrowserState {
             });
             let va_override = va_map.remove(&pr.release_id);
 
+            let low_confidence_reason = match (
+                pr.low_confidence_acoustid_ratio,
+                pr.low_confidence_avg_album_match,
+            ) {
+                (Some(acoustid_ratio), Some(avg_album_match)) => {
+                    Some(LowConfidenceReason {
+                        acoustid_ratio,
+                        avg_album_match,
+                    })
+                }
+                _ => None,
+            };
+
             releases.push(ReleaseGroup {
                 release_id: pr.release_id,
                 release_title: pr.release_title,
@@ -194,6 +207,7 @@ impl ReleasePackingBrowserState {
                 total_tracks: pr.total_tracks,
                 alternatives,
                 va_override,
+                low_confidence_reason,
             });
         }
 

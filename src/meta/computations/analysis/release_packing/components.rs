@@ -88,19 +88,21 @@ pub(super) fn find_conflict_components(proposals: &[Proposal]) -> Vec<Vec<usize>
 /// Only applies to FullMatch and Incomplete tiers. Returns true when the
 /// AcoustID ratio (rows matched via AcoustID / total rows) and the average
 /// album_match score are both below the configured thresholds.
-fn should_downgrade_to_low_confidence(
+/// Check if a proposal should be downgraded to LowConfidence.
+/// Returns `Some((acoustid_ratio, avg_album_match))` if downgraded, `None` otherwise.
+fn check_low_confidence(
     proposal: &Proposal,
     tier: ProposalTier,
     low_confidence_max_acoustid_ratio: f64,
     low_confidence_max_album_match: f64,
-) -> bool {
+) -> Option<(f64, f64)> {
     match tier {
         ProposalTier::FullMatch | ProposalTier::Incomplete => {}
-        _ => return false,
+        _ => return None,
     }
 
     if proposal.rows.is_empty() {
-        return false;
+        return None;
     }
 
     let total = proposal.rows.len() as f64;
@@ -112,7 +114,7 @@ fn should_downgrade_to_low_confidence(
     let acoustid_ratio = acoustid_count / total;
 
     if acoustid_ratio >= low_confidence_max_acoustid_ratio {
-        return false;
+        return None;
     }
 
     // Compute average album_match from score breakdowns
@@ -126,11 +128,15 @@ fn should_downgrade_to_low_confidence(
     }
 
     if decoded_count == 0 {
-        return false;
+        return None;
     }
 
     let avg_album_match = album_match_sum / decoded_count as f64;
-    avg_album_match < low_confidence_max_album_match
+    if avg_album_match < low_confidence_max_album_match {
+        Some((acoustid_ratio, avg_album_match))
+    } else {
+        None
+    }
 }
 
 /// Emit signals for a single isolated proposal (component of size 1).
@@ -163,12 +169,13 @@ pub(super) fn emit_isolated_proposal_signals(
         ProposalTier::Single => PackedReleaseCategory::Single,
     };
 
-    if should_downgrade_to_low_confidence(
+    let lc_metrics = check_low_confidence(
         proposal,
         tier,
         low_confidence_max_acoustid_ratio,
         low_confidence_max_album_match,
-    ) {
+    );
+    if lc_metrics.is_some() {
         category = PackedReleaseCategory::LowConfidence;
     }
 
@@ -191,6 +198,8 @@ pub(super) fn emit_isolated_proposal_signals(
             category,
             assigned_count: filled,
             total_tracks: total_tracks as u32,
+            low_confidence_acoustid_ratio: lc_metrics.map(|(r, _)| r),
+            low_confidence_avg_album_match: lc_metrics.map(|(_, a)| a),
         },
     }));
 
@@ -885,7 +894,8 @@ pub(crate) fn execute_resolve_packing_component(
             ProposalTier::Incomplete => PackedReleaseCategory::Incomplete,
             ProposalTier::Single => PackedReleaseCategory::Single,
         };
-        if should_downgrade_to_low_confidence(proposal, tier, lc_acoustid_ratio, lc_album_match) {
+        let lc_metrics = check_low_confidence(proposal, tier, lc_acoustid_ratio, lc_album_match);
+        if lc_metrics.is_some() {
             category = PackedReleaseCategory::LowConfidence;
         }
 
@@ -905,6 +915,8 @@ pub(crate) fn execute_resolve_packing_component(
                 category,
                 assigned_count: filled,
                 total_tracks: total_tracks as u32,
+                low_confidence_acoustid_ratio: lc_metrics.map(|(r, _)| r),
+                low_confidence_avg_album_match: lc_metrics.map(|(_, a)| a),
             },
         };
         signals_batch.push(TypedSignalWrite::PackedRelease(packed_signal));

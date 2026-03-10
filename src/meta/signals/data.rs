@@ -588,6 +588,10 @@ pub struct PackedReleaseData {
     pub category: PackedReleaseCategory,
     pub assigned_count: u32,
     pub total_tracks: u32,
+    /// For LowConfidence: the AcoustID ratio that triggered the downgrade.
+    pub low_confidence_acoustid_ratio: Option<f64>,
+    /// For LowConfidence: the avg album_match that triggered the downgrade.
+    pub low_confidence_avg_album_match: Option<f64>,
 }
 
 // ============================================================================

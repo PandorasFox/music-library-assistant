@@ -26,6 +26,14 @@ pub struct ReleaseGroup {
     pub total_tracks: u32,
     pub alternatives: Vec<AlternativeReleaseInfo>,
     pub va_override: Option<VaOverrideInfo>,
+    /// For LowConfidence releases: the metrics that triggered the downgrade.
+    pub low_confidence_reason: Option<LowConfidenceReason>,
+}
+
+/// Why a release was downgraded to LowConfidence.
+pub struct LowConfidenceReason {
+    pub acoustid_ratio: f64,
+    pub avg_album_match: f64,
 }
 
 /// An alternative release that packs identically to a winning release.

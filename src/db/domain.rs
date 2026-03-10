@@ -513,7 +513,7 @@ impl DomainQuery for GetCorpusTags {
     type Response = Vec<(String, String)>;
 
     fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
-        db.get_corpus_tags(self.inode)
+        db.get_tags::<crate::zones::CorpusZone>(self.inode)
             .unwrap_or_default()
             .into_iter()
             .map(|t| (t.tag_name, t.tag_value))
@@ -662,7 +662,7 @@ impl DomainQuery for GetCurrentTagValues {
         self.queries
             .iter()
             .map(|(inode, field_name)| {
-                let tags = db.get_corpus_tags(*inode).unwrap_or_default();
+                let tags = db.get_tags::<crate::zones::CorpusZone>(*inode).unwrap_or_default();
                 tags.iter()
                     .find(|t| t.tag_name.eq_ignore_ascii_case(field_name))
                     .map(|t| t.tag_value.clone())

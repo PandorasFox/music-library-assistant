@@ -185,7 +185,7 @@ impl DirectoryClusterModalData {
                         continue;
                     }
                     let audio_info = read_db.get_audio_info(inode).ok().flatten();
-                    let tags = read_db.get_corpus_tags(inode).ok().unwrap_or_default();
+                    let tags = read_db.get_tags::<crate::zones::CorpusZone>(inode).ok().unwrap_or_default();
                     let has_pictures = read_db.get_has_pictures(inode).unwrap_or(false);
 
                     if let Some(info) = audio_info {
@@ -318,7 +318,7 @@ impl DirectoryClusterModalData {
                         continue;
                     }
                     let audio_info = read_db.get_audio_info(inode).ok().flatten();
-                    let tags = read_db.get_corpus_tags(inode).ok().unwrap_or_default();
+                    let tags = read_db.get_tags::<crate::zones::CorpusZone>(inode).ok().unwrap_or_default();
                     let has_pictures = read_db.get_has_pictures(inode).unwrap_or(false);
 
                     if let Some(info) = audio_info {

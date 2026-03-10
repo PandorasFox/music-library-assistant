@@ -335,7 +335,6 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_audio_files_by_path_prefix(path_prefix: &str) -> Result<Vec<super::types::AudioFile>>;
         fn get_audio_files_for_tag_editing(dir_path: &std::path::Path) -> Result<Vec<super::types::AudioFile>>;
         fn get_all_audio_files_with_tags(source: super::types::Zone, with_fingerprints: bool) -> Result<Vec<files::AudioFileWithTags>>;
-        fn get_corpus_tags(inode: i64) -> Result<Vec<super::types::AudioTag>>;
         fn get_tags_for_zone(inode: i64, zone: super::types::Zone) -> Result<Vec<super::types::AudioTag>>;
         fn get_audio_info(inode: i64) -> Result<Option<super::types::AudioInfo>>;
         fn get_has_pictures(inode: i64) -> Result<bool>;
@@ -546,7 +545,6 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_duplicate_inode_groups() -> Result<Vec<(i64, String)>>;
         fn get_compilation_albums() -> Result<std::collections::HashSet<String>>;
         fn get_inbox_unindexed_files() -> Result<Vec<(i64, String)>>;
-        fn get_corpus_path_for_inode(inode: i64) -> Result<Option<String>>;
         fn get_all_tags_ordered() -> Result<Vec<(i64, String, String)>>;
         fn get_indexed_corpus_directories() -> Result<Vec<(std::path::PathBuf, i64)>>;
         fn get_missing_directory_paths() -> Result<Vec<String>>;

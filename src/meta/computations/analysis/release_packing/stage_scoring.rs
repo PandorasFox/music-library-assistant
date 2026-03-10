@@ -843,7 +843,7 @@ pub fn execute_score_release_candidates(
             let unassigned_tags: Vec<HashMap<String, Vec<String>>> = all_unassigned
                 .iter()
                 .map(|(inode, _, _, _)| {
-                    let raw = read_only_db.get_corpus_tags(*inode).unwrap_or_default();
+                    let raw = read_only_db.get_tags::<crate::zones::CorpusZone>(*inode).unwrap_or_default();
                     let mut tags: HashMap<String, Vec<String>> = HashMap::new();
                     for tag in raw {
                         tags.entry(tag.tag_name).or_default().push(tag.tag_value);

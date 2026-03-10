@@ -66,7 +66,7 @@ pub fn execute_detect_deploy_conflicts(
     let mut deploy_path_to_tracks: HashMap<String, Vec<i64>> = HashMap::new();
 
     for signal in &healthy_signals {
-        let tags = match read_only_db.get_corpus_tags(signal.inode) {
+        let tags = match read_only_db.get_tags::<crate::zones::CorpusZone>(signal.inode) {
             Ok(v) => v,
             Err(e) => {
                 log_error(format!(
@@ -185,7 +185,7 @@ pub fn execute_detect_release_overlaps(
             None => continue,
         };
 
-        let tags = match read_only_db.get_corpus_tags(signal.inode) {
+        let tags = match read_only_db.get_tags::<crate::zones::CorpusZone>(signal.inode) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -606,7 +606,7 @@ fn classify_audio_stale(
     inode: i64,
     library_path_to_inode: &HashMap<PathBuf, i64>,
 ) -> DeployLifecyclePhase {
-    let tags = match read_only_db.get_corpus_tags(inode) {
+    let tags = match read_only_db.get_tags::<crate::zones::CorpusZone>(inode) {
         Ok(v) => v,
         Err(e) => {
             log_error(format!(
@@ -716,7 +716,7 @@ fn lookup_album_dir_from_sibling(
         .get_any_audio_sibling_in_directory(corpus_dir)
         .ok()??;
 
-    let tags = read_only_db.get_corpus_tags(sibling_inode).ok()?;
+    let tags = read_only_db.get_tags::<crate::zones::CorpusZone>(sibling_inode).ok()?;
     if tags.is_empty() {
         return None;
     }
@@ -749,7 +749,7 @@ fn compute_expected_library_path(
 ) -> Option<String> {
     // Audio file: compute from tags directly
     if let Ok(Some(_audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
-        let tags = read_only_db.get_corpus_tags(library_inode).ok()?;
+        let tags = read_only_db.get_tags::<crate::zones::CorpusZone>(library_inode).ok()?;
         let tag_map: HashMap<String, String> = tags
             .into_iter()
             .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
@@ -874,7 +874,7 @@ pub fn execute_derive_corpus_deploy_status(
     let mut skipped_not_configured = 0usize;
 
     for (&inode, corpus_path) in &all_corpus_inodes {
-        let tags = match read_only_db.get_corpus_tags(inode) {
+        let tags = match read_only_db.get_tags::<crate::zones::CorpusZone>(inode) {
             Ok(v) => v,
             Err(e) => {
                 log_error(format!(

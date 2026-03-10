@@ -55,7 +55,7 @@ pub fn execute_index_image_file(
     let mut skipped = 0;
 
     for inode in &dirty_inodes {
-        match read_only_db.get_corpus_path_for_inode(*inode) {
+        match read_only_db.get_path_for_inode::<crate::zones::CorpusZone>(*inode) {
             Ok(Some(rel_path)) => {
                 let abs_path = resolver.resolve(Path::new(&rel_path));
 

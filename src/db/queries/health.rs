@@ -1071,7 +1071,7 @@ impl Database {
 
             let mut conflicting_files = Vec::new();
             for inode in inodes {
-                if let Ok(Some(path)) = self.get_corpus_path_for_inode(inode) {
+                if let Ok(Some(path)) = self.get_path_for_inode::<crate::zones::CorpusZone>(inode) {
                     conflicting_files.push((path, inode));
                 }
             }

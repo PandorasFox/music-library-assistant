@@ -978,7 +978,7 @@ pub fn execute_verify_tags(
         .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
 
     // Get tags from database as TagSet
-    let db_tags = db.get_corpus_tags(inode)?;
+    let db_tags = db.get_tags::<crate::zones::CorpusZone>(inode)?;
     let db_tagset = TagSet::new(
         db_tags
             .into_iter()

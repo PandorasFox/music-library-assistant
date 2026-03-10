@@ -130,7 +130,7 @@ impl ManualReviewData {
             for (idx, &inode) in data.inodes.iter().enumerate() {
                 let path = data.paths.get(idx).cloned().unwrap_or_else(|| {
                     read_db
-                        .get_corpus_path_for_inode(inode)
+                        .get_path_for_inode::<crate::zones::CorpusZone>(inode)
                         .ok()
                         .flatten()
                         .unwrap_or_else(|| format!("<inode {}>", inode))
@@ -198,7 +198,7 @@ impl ManualReviewData {
             let mut files = Vec::new();
             for &inode in &data.inodes {
                 let path = read_db
-                    .get_corpus_path_for_inode(inode)
+                    .get_path_for_inode::<crate::zones::CorpusZone>(inode)
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| format!("<inode {}>", inode));
@@ -229,7 +229,7 @@ impl ManualReviewData {
         for group in &mut self.groups {
             for file in &mut group.files {
                 let audio_info = read_db.get_audio_info(file.inode).ok().flatten();
-                let tags = read_db.get_corpus_tags(file.inode).ok().unwrap_or_default();
+                let tags = read_db.get_tags::<crate::zones::CorpusZone>(file.inode).ok().unwrap_or_default();
                 let has_pictures = read_db.get_has_pictures(file.inode).unwrap_or(false);
 
                 if let Some(info) = audio_info {

@@ -784,7 +784,7 @@ pub fn execute_analyze_fingerprint_overlaps(
             let mut identities: Vec<TrackReleaseIdentity> = Vec::new();
             for audio_file in &cluster {
                 let inode = audio_file.inode();
-                let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
+                let tags = read_only_db.get_tags::<crate::zones::CorpusZone>(inode).unwrap_or_default();
                 let tag_map: HashMap<String, String> = tags
                     .into_iter()
                     .map(|t| (t.tag_name.to_uppercase(), t.tag_value))

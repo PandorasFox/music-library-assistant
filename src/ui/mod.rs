@@ -240,7 +240,7 @@ impl App {
                                                 Vec<String>,
                                             > = std::collections::HashMap::new();
                                             for t in db
-                                                .get_corpus_tags(audio_file.inode())
+                                                .get_tags::<crate::zones::CorpusZone>(audio_file.inode())
                                                 .unwrap_or_default()
                                             {
                                                 tags.entry(t.tag_name.to_uppercase())

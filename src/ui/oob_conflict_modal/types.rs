@@ -387,7 +387,7 @@ pub fn compute_tag_diff(
     use std::collections::HashSet;
 
     // Get DB tags as TagSet
-    let db_tags = match read_db.get_corpus_tags(inode) {
+    let db_tags = match read_db.get_tags::<crate::zones::CorpusZone>(inode) {
         Ok(tags) => tags,
         Err(_) => return Vec::new(),
     };

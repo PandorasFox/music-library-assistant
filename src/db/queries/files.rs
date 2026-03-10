@@ -450,11 +450,6 @@ impl Database {
         }
     }
 
-    /// Get the corpus path for a single inode.
-    pub fn get_corpus_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
-        self.get_path_for_inode::<crate::zones::CorpusZone>(inode)
-    }
-
     /// Get all tags ordered by inode and tag name (for metadata duplicate detection, corpus only).
     /// Returns: Vec<(inode, tag_name, tag_value)>
     pub fn get_all_tags_ordered(&self) -> Result<Vec<(i64, String, String)>> {
@@ -561,11 +556,6 @@ impl Database {
         Ok(tags)
     }
 
-    /// Get all tags for an audio file (corpus).
-    pub fn get_corpus_tags(&self, inode: i64) -> Result<Vec<AudioTag>> {
-        self.get_tags::<crate::zones::CorpusZone>(inode)
-    }
-
     /// Get all tags for an audio file from the tag table appropriate for its zone.
     ///
     /// Corpus → corpus_tags, Inbox → inbox_tags, Library → error (no tags).
@@ -604,7 +594,7 @@ impl Database {
         let files = self.get_all_audio_files(zone, with_fingerprints)?;
         let mut results = Vec::new();
         for file in files {
-            let tags = self.get_corpus_tags(file.inode())?;
+            let tags = self.get_tags::<crate::zones::CorpusZone>(file.inode())?;
             let mut tag_map: HashMap<String, Vec<String>> = HashMap::new();
             for t in tags {
                 tag_map

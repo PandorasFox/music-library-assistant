@@ -70,16 +70,16 @@ pub fn execute_pack_releases(
 
     if all_per_inode.is_empty() {
         // No matches — clear stale signals and exit pipeline
-        let (cleared, _, _, _) = reconcile_corpus_signals::<ReleasePackingSignal>(
+        let stats = reconcile_corpus_signals::<ReleasePackingSignal>(
             read_only_db,
             &sender,
             Vec::new(),
             witness,
         );
-        if cleared > 0 {
+        if stats.cleared > 0 {
             log_general(format!(
                 "[COMPUTE] PackReleases: cleared {} stale signals (no external matches)",
-                cleared
+                stats.cleared
             ));
         }
         return Result::success(computation, Vec::new());
@@ -209,16 +209,16 @@ pub fn execute_pack_releases(
     ));
 
     if inode_recordings.is_empty() {
-        let (cleared, _, _, _) = reconcile_corpus_signals::<ReleasePackingSignal>(
+        let stats = reconcile_corpus_signals::<ReleasePackingSignal>(
             read_only_db,
             &sender,
             Vec::new(),
             witness,
         );
-        if cleared > 0 {
+        if stats.cleared > 0 {
             log_general(format!(
                 "[COMPUTE] PackReleases: cleared {} stale signals (all filtered)",
-                cleared
+                stats.cleared
             ));
         }
         return Result::success(computation, Vec::new());

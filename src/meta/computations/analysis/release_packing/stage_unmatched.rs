@@ -134,13 +134,12 @@ pub fn execute_emit_unmatched_signals(
         ));
     }
 
-    let (uc_cleared, uc_new, uc_updated, uc_unchanged) =
-        reconcile_corpus_signals::<UnmatchedCorpusTrackSignal>(
-            read_only_db,
-            &sender,
-            unmatched_signals,
-            witness,
-        );
+    let uc_stats = reconcile_corpus_signals::<UnmatchedCorpusTrackSignal>(
+        read_only_db,
+        &sender,
+        unmatched_signals,
+        witness,
+    );
 
     // === Unfilled release slots ===
     let manifest = match read_only_db.get_packing_manifest() {
@@ -281,28 +280,16 @@ pub fn execute_emit_unmatched_signals(
         }
     }
 
-    let (us_cleared, us_new, us_updated, us_unchanged) =
-        reconcile_aggregate_signals::<UnfilledReleaseSlotSignal>(
-            read_only_db,
-            &sender,
-            unfilled_signals,
-            witness,
-        );
+    let us_stats = reconcile_aggregate_signals::<UnfilledReleaseSlotSignal>(
+        read_only_db,
+        &sender,
+        unfilled_signals,
+        witness,
+    );
 
     log_general(format!(
-        "[COMPUTE] EmitUnmatchedSignals: \
-         unmatched_corpus: cleared={}, new={}, updated={}, unchanged={} | \
-         unfilled_slots: cleared={}, new={}, updated={}, unchanged={} | \
-         {} fully-covered releases suppressed",
-        uc_cleared,
-        uc_new,
-        uc_updated,
-        uc_unchanged,
-        us_cleared,
-        us_new,
-        us_updated,
-        us_unchanged,
-        suppressed_covered
+        "[COMPUTE] EmitUnmatchedSignals: unmatched_corpus: {} | unfilled_slots: {} | {} fully-covered releases suppressed",
+        uc_stats, us_stats, suppressed_covered,
     ));
 
     Result::success(computation, Vec::new())

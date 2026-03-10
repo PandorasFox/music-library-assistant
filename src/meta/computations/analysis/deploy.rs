@@ -104,7 +104,7 @@ pub fn execute_detect_deploy_conflicts(
     }
 
     let conflict_count = computed.len();
-    let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<DeployConflictSignal>(
+    let stats = reconcile_aggregate_signals::<DeployConflictSignal>(
         read_only_db,
         &sender,
         computed,
@@ -112,13 +112,10 @@ pub fn execute_detect_deploy_conflicts(
     );
 
     log_general(format!(
-        "[COMPUTE] DetectDeployConflicts: {} conflicts among {} healthy files (reconcile: {} cleared, {} new, {} updated, {} unchanged)",
+        "[COMPUTE] DetectDeployConflicts: {} conflicts among {} healthy files (reconcile: {})",
         conflict_count,
         healthy_signals.len(),
-        cleared,
-        new,
-        updated,
-        unchanged,
+        stats,
     ));
 
     Result::success(computation, Vec::new())
@@ -282,7 +279,7 @@ pub fn execute_detect_release_overlaps(
     }
 
     let overlap_count = computed.len();
-    let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<ReleaseOverlapSignal>(
+    let stats = reconcile_aggregate_signals::<ReleaseOverlapSignal>(
         read_only_db,
         &sender,
         computed,
@@ -290,14 +287,11 @@ pub fn execute_detect_release_overlaps(
     );
 
     log_general(format!(
-        "[COMPUTE] DetectReleaseOverlaps: {} overlapping album dirs among {} dirs ({} healthy files) (reconcile: {} cleared, {} new, {} updated, {} unchanged)",
+        "[COMPUTE] DetectReleaseOverlaps: {} overlapping album dirs among {} dirs ({} healthy files) (reconcile: {})",
         overlap_count,
         album_dir_files.len(),
         healthy_signals.len(),
-        cleared,
-        new,
-        updated,
-        unchanged,
+        stats,
     ));
 
     // DeriveCorpusDeployStatus reads ReleaseOverlap signals written above.
@@ -1057,20 +1051,18 @@ pub fn execute_derive_corpus_deploy_status(
         }
     }
 
-    let (dr_cleared, dr_new, dr_updated, dr_unchanged) =
-        reconcile_corpus_signals::<DeployReadySignal>(
-            read_only_db,
-            &sender,
-            computed_deploy_ready,
-            witness,
-        );
-    let (dh_cleared, dh_new, dh_updated, dh_unchanged) =
-        reconcile_corpus_signals::<DeployedHealthySignal>(
-            read_only_db,
-            &sender,
-            computed_deployed_healthy,
-            witness,
-        );
+    let dr_stats = reconcile_corpus_signals::<DeployReadySignal>(
+        read_only_db,
+        &sender,
+        computed_deploy_ready,
+        witness,
+    );
+    let dh_stats = reconcile_corpus_signals::<DeployedHealthySignal>(
+        read_only_db,
+        &sender,
+        computed_deployed_healthy,
+        witness,
+    );
 
     // ====================================================================
     // Phase 4: Sidecar image deployment discovery
@@ -1105,9 +1097,8 @@ pub fn execute_derive_corpus_deploy_status(
         sidecar_count,
     ));
     log_general(format!(
-        "[COMPUTE] DeriveCorpusDeployStatus reconcile: DeployReady({} cleared, {} new, {} updated, {} unchanged) DeployedHealthy({} cleared, {} new, {} updated, {} unchanged)",
-        dr_cleared, dr_new, dr_updated, dr_unchanged,
-        dh_cleared, dh_new, dh_updated, dh_unchanged,
+        "[COMPUTE] DeriveCorpusDeployStatus reconcile: DeployReady({}) DeployedHealthy({})",
+        dr_stats, dh_stats,
     ));
 
     Result::success(computation, Vec::new())
@@ -1144,16 +1135,16 @@ fn derive_sidecar_deploy_signals(
     let mode = config.opinions.album_art.sidecar_deploy_mode;
     if mode == SidecarDeployMode::Disabled {
         // Clear any existing sidecar signals and return
-        let (cleared, _, _, _) = reconcile_corpus_signals::<SidecarDeployReadySignal>(
+        let stats = reconcile_corpus_signals::<SidecarDeployReadySignal>(
             read_only_db,
             sender,
             Vec::new(),
             witness,
         );
-        if cleared > 0 {
+        if stats.cleared > 0 {
             log_general(format!(
                 "[COMPUTE] Sidecar deploy disabled, cleared {} stale signals",
-                cleared,
+                stats.cleared,
             ));
         }
         return 0;
@@ -1313,36 +1304,27 @@ fn derive_sidecar_deploy_signals(
     // when nothing has changed.
     let sidecar_count = computed_sidecars.len();
 
-    let (sc_cleared, sc_new, sc_updated, sc_unchanged) =
-        reconcile_corpus_signals::<SidecarDeployReadySignal>(
-            read_only_db,
-            sender,
-            computed_sidecars,
-            witness,
-        );
+    let sc_stats = reconcile_corpus_signals::<SidecarDeployReadySignal>(
+        read_only_db,
+        sender,
+        computed_sidecars,
+        witness,
+    );
 
-    let (cc_cleared, cc_new, cc_updated, cc_unchanged) =
-        reconcile_aggregate_signals::<SidecarDeployConflictSignal>(
-            read_only_db,
-            sender,
-            computed_conflicts,
-            witness,
-        );
+    let cc_stats = reconcile_aggregate_signals::<SidecarDeployConflictSignal>(
+        read_only_db,
+        sender,
+        computed_conflicts,
+        witness,
+    );
 
     log_general(format!(
         "[COMPUTE] DeriveCorpusDeployStatus sidecar reconcile: {} dirs, {} images, \
-         SidecarDeployReady({} cleared, {} new, {} updated, {} unchanged), \
-         SidecarDeployConflict({} cleared, {} new, {} updated, {} unchanged)",
+         SidecarDeployReady({}), SidecarDeployConflict({})",
         dir_targets.len(),
         all_images.len(),
-        sc_cleared,
-        sc_new,
-        sc_updated,
-        sc_unchanged,
-        cc_cleared,
-        cc_new,
-        cc_updated,
-        cc_unchanged,
+        sc_stats,
+        cc_stats,
     ));
 
     // Clear all dirty inodes after recompute

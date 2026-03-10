@@ -44,16 +44,16 @@ pub fn execute_derive_external_matches(
 
     if all_rows.is_empty() {
         // No external matches — reconcile with empty set to clear stale signals.
-        let (cleared, _, _, _) = reconcile_corpus_signals::<ExternalMatchSignal>(
+        let stats = reconcile_corpus_signals::<ExternalMatchSignal>(
             read_only_db,
             &sender,
             Vec::new(),
             witness,
         );
-        if cleared > 0 {
+        if stats.cleared > 0 {
             log_general(format!(
                 "[COMPUTE] DeriveExternalMatches: cleared {} stale signals (no external matches)",
-                cleared
+                stats.cleared
             ));
         }
         return Result::success(computation, Vec::new());
@@ -154,14 +154,12 @@ pub fn execute_derive_external_matches(
         ));
     }
 
-    let (cleared, new, updated, unchanged) =
+    let stats =
         reconcile_corpus_signals::<ExternalMatchSignal>(read_only_db, &sender, computed, witness);
 
     log_general(format!(
-        "[COMPUTE] DeriveExternalMatches: exact={}, content_diff={}, metadata_only={}, parse_failures={} | \
-         signals: cleared={}, new={}, updated={}, unchanged={}",
-        exact, content_diff, metadata_only, parse_failures,
-        cleared, new, updated, unchanged
+        "[COMPUTE] DeriveExternalMatches: exact={}, content_diff={}, metadata_only={}, parse_failures={} | signals: {}",
+        exact, content_diff, metadata_only, parse_failures, stats,
     ));
 
     Result::success(computation, Vec::new())

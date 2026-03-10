@@ -115,14 +115,12 @@ pub fn execute_detect_fingerprint_overlaps(
     if fingerprinted.is_empty() {
         log_general("[COMPUTE] DetectFingerprintOverlaps: no fingerprinted files");
         // Reconcile with empty set to clear any stale signals
-        let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals::<
-            FingerprintOverlapSignal,
-        >(
-            read_only_db, &sender, Vec::new(), witness
+        let stats = reconcile_aggregate_signals::<FingerprintOverlapSignal>(
+            read_only_db, &sender, Vec::new(), witness,
         );
         log_general(format!(
-            "[COMPUTE] DetectFingerprintOverlaps: 0 groups, cleared={}, new={}, updated={}, unchanged={}",
-            cleared, new_count, updated, unchanged
+            "[COMPUTE] DetectFingerprintOverlaps: 0 groups, {}",
+            stats,
         ));
         return Result::pipeline(
             computation,
@@ -228,14 +226,13 @@ pub fn execute_detect_fingerprint_overlaps(
     }
 
     // Reconcile with existing signals (handles stale/new/changed/unchanged)
-    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals::<
-        FingerprintOverlapSignal,
-    >(read_only_db, &sender, computed, witness);
+    let stats = reconcile_aggregate_signals::<FingerprintOverlapSignal>(
+        read_only_db, &sender, computed, witness,
+    );
 
-    let total_groups = new_count + updated + unchanged;
     log_general(format!(
-        "[COMPUTE] DetectFingerprintOverlaps: {} groups ({} tracks), cleared={}, new={}, updated={}, unchanged={}",
-        total_groups, total_tracks, cleared, new_count, updated, unchanged
+        "[COMPUTE] DetectFingerprintOverlaps: {} groups ({} tracks), {}",
+        stats.active(), total_tracks, stats,
     ));
 
     // Dependent computations (AnalyzeFingerprintOverlaps, DetectCrossSourceOverlaps)
@@ -294,14 +291,13 @@ pub fn execute_detect_duplicate_inodes(
     }
 
     // Reconcile with existing signals (handles stale/new/changed/unchanged)
-    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals::<
-        DuplicateInodeSignal,
-    >(read_only_db, &sender, computed, witness);
+    let stats = reconcile_aggregate_signals::<DuplicateInodeSignal>(
+        read_only_db, &sender, computed, witness,
+    );
 
-    let total_groups = new_count + updated + unchanged;
     log_general(format!(
-        "[COMPUTE] DetectDuplicateInodes: {} groups, cleared={}, new={}, updated={}, unchanged={}",
-        total_groups, cleared, new_count, updated, unchanged
+        "[COMPUTE] DetectDuplicateInodes: {} groups, {}",
+        stats.active(), stats,
     ));
 
     Result::success(computation, Vec::new())
@@ -385,14 +381,13 @@ pub fn execute_detect_metadata_duplicates(
         ));
     }
 
-    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals::<
-        MetadataDuplicateSignal,
-    >(read_only_db, &sender, computed, witness);
+    let stats = reconcile_aggregate_signals::<MetadataDuplicateSignal>(
+        read_only_db, &sender, computed, witness,
+    );
 
-    let total_groups = new_count + updated + unchanged;
     log_general(format!(
-        "[COMPUTE] DetectMetadataDuplicates: {} duplicate metadata groups, cleared={}, new={}, updated={}, unchanged={}",
-        total_groups, cleared, new_count, updated, unchanged
+        "[COMPUTE] DetectMetadataDuplicates: {} duplicate metadata groups, {}",
+        stats.active(), stats,
     ));
 
     Result::success(computation, Vec::new())
@@ -720,22 +715,22 @@ pub fn execute_analyze_fingerprint_overlaps(
             "[COMPUTE] AnalyzeFingerprintOverlaps: no fingerprint overlap signals to analyze",
         );
         // Reconcile with empty sets to clear any stale signals
-        let (subpar_cleared, _, _, _) = reconcile_corpus_signals::<SubparDuplicateSignal>(
+        let subpar_stats = reconcile_corpus_signals::<SubparDuplicateSignal>(
             read_only_db,
             &sender,
             Vec::new(),
             witness,
         );
-        let (redundant_cleared, _, _, _) = reconcile_aggregate_signals::<RedundantDuplicateSignal>(
+        let redundant_stats = reconcile_aggregate_signals::<RedundantDuplicateSignal>(
             read_only_db,
             &sender,
             Vec::new(),
             witness,
         );
-        if subpar_cleared > 0 || redundant_cleared > 0 {
+        if subpar_stats.cleared > 0 || redundant_stats.cleared > 0 {
             log_general(format!(
                 "[COMPUTE] AnalyzeFingerprintOverlaps: cleared {} stale SubparDuplicate + {} stale RedundantDuplicate",
-                subpar_cleared, redundant_cleared
+                subpar_stats.cleared, redundant_stats.cleared
             ));
         }
         return Result::success(computation, Vec::new());
@@ -977,30 +972,26 @@ pub fn execute_analyze_fingerprint_overlaps(
     }
 
     // Reconcile SubparDuplicate (corpus signals, keyed by inode)
-    let (subpar_cleared, subpar_new, subpar_updated, subpar_unchanged) =
-        reconcile_corpus_signals::<SubparDuplicateSignal>(
-            read_only_db,
-            &sender,
-            computed_subpar,
-            witness,
-        );
+    let subpar_stats = reconcile_corpus_signals::<SubparDuplicateSignal>(
+        read_only_db,
+        &sender,
+        computed_subpar,
+        witness,
+    );
 
     // Reconcile RedundantDuplicate (aggregate signals, keyed by fingerprint key)
-    let (redundant_cleared, redundant_new, redundant_updated, redundant_unchanged) =
-        reconcile_aggregate_signals::<RedundantDuplicateSignal>(
-            read_only_db,
-            &sender,
-            computed_redundant,
-            witness,
-        );
+    let redundant_stats = reconcile_aggregate_signals::<RedundantDuplicateSignal>(
+        read_only_db,
+        &sender,
+        computed_redundant,
+        witness,
+    );
 
-    let subpar_total = subpar_new + subpar_updated + subpar_unchanged;
-    let redundant_total = redundant_new + redundant_updated + redundant_unchanged;
     log_general(format!(
-        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, {} SubparDuplicate (cleared={}, new={}, updated={}, unchanged={}) + {} RedundantDuplicate (cleared={}, new={}, updated={}, unchanged={}), skipped {} variants, {} expected, {} interior-suppressed",
+        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, {} SubparDuplicate ({}) + {} RedundantDuplicate ({}), skipped {} variants, {} expected, {} interior-suppressed",
         total_groups,
-        subpar_total, subpar_cleared, subpar_new, subpar_updated, subpar_unchanged,
-        redundant_total, redundant_cleared, redundant_new, redundant_updated, redundant_unchanged,
+        subpar_stats.active(), subpar_stats,
+        redundant_stats.active(), redundant_stats,
         variant_skipped, expected_skipped, interior_skipped
     ));
 
@@ -1092,16 +1083,16 @@ pub fn execute_detect_cross_source_overlaps(
             "[COMPUTE] DetectCrossSourceOverlaps: no fingerprint overlap signals to analyze",
         );
         // Reconcile with empty set to clear any stale signals
-        let (cleared, _, _, _) = reconcile_aggregate_signals::<CrossSourceOverlapSignal>(
+        let stats = reconcile_aggregate_signals::<CrossSourceOverlapSignal>(
             read_only_db,
             &sender,
             Vec::new(),
             witness,
         );
-        if cleared > 0 {
+        if stats.cleared > 0 {
             log_general(format!(
                 "[COMPUTE] DetectCrossSourceOverlaps: cleared {} stale signals",
-                cleared
+                stats.cleared
             ));
         }
         return Result::success(computation, Vec::new());
@@ -1278,15 +1269,13 @@ pub fn execute_detect_cross_source_overlaps(
         ));
     }
 
-    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals::<
-        CrossSourceOverlapSignal,
-    >(read_only_db, &sender, computed, witness);
+    let stats = reconcile_aggregate_signals::<CrossSourceOverlapSignal>(
+        read_only_db, &sender, computed, witness,
+    );
 
-    let emitted_count = new_count + updated + unchanged;
     log_general(format!(
-        "[COMPUTE] DetectCrossSourceOverlaps: {} cross-source pairs ({} fingerprint overlaps, {} within-source skipped, {} expected skipped), cleared={}, new={}, updated={}, unchanged={}",
-        emitted_count, total_overlaps, within_source_skipped, expected_skipped,
-        cleared, new_count, updated, unchanged
+        "[COMPUTE] DetectCrossSourceOverlaps: {} cross-source pairs ({} fingerprint overlaps, {} within-source skipped, {} expected skipped), {}",
+        stats.active(), total_overlaps, within_source_skipped, expected_skipped, stats,
     ));
 
     Result::success(computation, Vec::new())

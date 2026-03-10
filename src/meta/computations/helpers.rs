@@ -18,6 +18,36 @@ use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
 use super::types::ComputationWitness;
 
 // ============================================================================
+// Reconciliation Stats
+// ============================================================================
+
+/// Statistics returned by `reconcile_corpus_signals` / `reconcile_aggregate_signals`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ReconcileStats {
+    pub cleared: usize,
+    pub new: usize,
+    pub updated: usize,
+    pub unchanged: usize,
+}
+
+impl ReconcileStats {
+    /// Total signals that remain after reconciliation (new + updated + unchanged).
+    pub fn active(&self) -> usize {
+        self.new + self.updated + self.unchanged
+    }
+}
+
+impl std::fmt::Display for ReconcileStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} cleared, {} new, {} updated, {} unchanged",
+            self.cleared, self.new, self.updated, self.unchanged
+        )
+    }
+}
+
+// ============================================================================
 // File Type Detection
 // ============================================================================
 
@@ -284,13 +314,12 @@ impl ComputedCorpusSignal {
 /// - Changed signals (key exists but hash differs): written
 /// - Unchanged signals (key exists and hash matches): skipped
 ///
-/// Returns (cleared, new, updated, unchanged).
 pub(super) fn reconcile_aggregate_signals<S: AggregateSignalStore>(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &write_thread::SignalWriteSender,
     computed: Vec<ComputedAggregateSignal>,
     witness: &ComputationWitness,
-) -> (usize, usize, usize, usize) {
+) -> ReconcileStats {
     let existing_hashes: HashMap<String, i64> = read_only_db
         .aggregate_signal_key_hashes::<S>()
         .unwrap_or_default();
@@ -332,7 +361,7 @@ pub(super) fn reconcile_aggregate_signals<S: AggregateSignalStore>(
     }
     sender.write_typed_signal_batch(batch, witness);
 
-    (cleared, new, updated, unchanged)
+    ReconcileStats { cleared, new, updated, unchanged }
 }
 
 /// Reconcile computed corpus signals against existing DB signals.
@@ -341,13 +370,12 @@ pub(super) fn reconcile_aggregate_signals<S: AggregateSignalStore>(
 /// For scalar-only signal types (which return empty hash maps), falls back
 /// to inode existence checks.
 ///
-/// Returns (cleared, new, updated, unchanged).
 pub(super) fn reconcile_corpus_signals<S: CorpusSignalStore>(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &write_thread::SignalWriteSender,
     computed: Vec<ComputedCorpusSignal>,
     witness: &ComputationWitness,
-) -> (usize, usize, usize, usize) {
+) -> ReconcileStats {
     let existing_hashes: HashMap<i64, i64> = read_only_db
         .corpus_signal_inode_hashes::<S>()
         .unwrap_or_default();
@@ -415,5 +443,5 @@ pub(super) fn reconcile_corpus_signals<S: CorpusSignalStore>(
     }
     sender.write_typed_signal_batch(batch, witness);
 
-    (cleared, new, updated, unchanged)
+    ReconcileStats { cleared, new, updated, unchanged }
 }

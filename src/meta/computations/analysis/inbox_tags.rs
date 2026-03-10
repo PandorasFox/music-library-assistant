@@ -186,13 +186,13 @@ pub fn execute_detect_inbox_tag_canonicity(
         }
     }
 
-    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals::<
-        InboxTagCanonicitySignal,
-    >(read_only_db, &sender, computed, witness);
+    let stats = reconcile_aggregate_signals::<InboxTagCanonicitySignal>(
+        read_only_db, &sender, computed, witness,
+    );
 
     log_general(format!(
-        "[COMPUTE] DetectInboxTagCanonicity: {} signals (cleared={}, new={}, updated={}, unchanged={})",
-        new_count + updated + unchanged, cleared, new_count, updated, unchanged
+        "[COMPUTE] DetectInboxTagCanonicity: {} signals ({})",
+        stats.active(), stats,
     ));
 
     Result::success(computation, Vec::new())
@@ -304,13 +304,13 @@ pub fn execute_detect_inbox_missing_tags(
         computed.push(ComputedAggregateSignal::new(key, signal));
     }
 
-    let (cleared, new_count, updated, unchanged) = reconcile_aggregate_signals::<
-        InboxMissingTagSignal,
-    >(read_only_db, &sender, computed, witness);
+    let stats = reconcile_aggregate_signals::<InboxMissingTagSignal>(
+        read_only_db, &sender, computed, witness,
+    );
 
     log_general(format!(
-        "[COMPUTE] DetectInboxMissingTags: {} signals (cleared={}, new={}, updated={}, unchanged={})",
-        new_count + updated + unchanged, cleared, new_count, updated, unchanged
+        "[COMPUTE] DetectInboxMissingTags: {} signals ({})",
+        stats.active(), stats,
     ));
 
     Result::success(computation, Vec::new())

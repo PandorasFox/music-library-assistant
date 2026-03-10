@@ -192,24 +192,22 @@ pub fn execute_detect_missing_tags(
         computed_album_single.push(ComputedAggregateSignal::new(key, signal));
     }
 
-    let (mt_cleared, mt_new, mt_updated, mt_unchanged) =
-        reconcile_aggregate_signals::<MissingTagSignal>(
-            read_only_db,
-            &sender,
-            computed_missing,
-            witness,
-        );
-    let (mas_cleared, mas_new, mas_updated, mas_unchanged) =
-        reconcile_aggregate_signals::<MissingAlbumSingleSignal>(
-            read_only_db,
-            &sender,
-            computed_album_single,
-            witness,
-        );
+    let mt_stats = reconcile_aggregate_signals::<MissingTagSignal>(
+        read_only_db,
+        &sender,
+        computed_missing,
+        witness,
+    );
+    let mas_stats = reconcile_aggregate_signals::<MissingAlbumSingleSignal>(
+        read_only_db,
+        &sender,
+        computed_album_single,
+        witness,
+    );
 
     log_general(format!(
-        "[COMPUTE] DetectMissingTags: missing_tag(cleared={}, new={}, updated={}, unchanged={}), album_single(cleared={}, new={}, updated={}, unchanged={})",
-        mt_cleared, mt_new, mt_updated, mt_unchanged, mas_cleared, mas_new, mas_updated, mas_unchanged
+        "[COMPUTE] DetectMissingTags: missing_tag({}), album_single({})",
+        mt_stats, mas_stats
     ));
 
     Result::success(computation, Vec::new())
@@ -299,7 +297,7 @@ pub fn execute_detect_tag_canonicalizations(
         collect_collision_signals(collisions);
     }
 
-    let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<TagCanonicitySignal>(
+    let stats = reconcile_aggregate_signals::<TagCanonicitySignal>(
         read_only_db,
         &sender,
         computed,
@@ -307,8 +305,8 @@ pub fn execute_detect_tag_canonicalizations(
     );
 
     log_general(format!(
-        "[COMPUTE] DetectTagCanonicalizations: cleared={}, new={}, updated={}, unchanged={}",
-        cleared, new, updated, unchanged
+        "[COMPUTE] DetectTagCanonicalizations: {}",
+        stats,
     ));
 
     Result::success(computation, Vec::new())
@@ -663,13 +661,13 @@ pub fn execute_detect_inconsistent_album_artist(
         computed.push(ComputedAggregateSignal::new(key, signal));
     }
 
-    let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<
-        InconsistentAlbumArtistSignal,
-    >(read_only_db, &sender, computed, witness);
+    let stats = reconcile_aggregate_signals::<InconsistentAlbumArtistSignal>(
+        read_only_db, &sender, computed, witness,
+    );
 
     log_general(format!(
-        "[COMPUTE] DetectInconsistentAlbumArtist: cleared={}, new={}, updated={}, unchanged={}",
-        cleared, new, updated, unchanged
+        "[COMPUTE] DetectInconsistentAlbumArtist: {}",
+        stats,
     ));
 
     Result::success(computation, Vec::new())
@@ -767,14 +765,12 @@ pub fn execute_detect_disc_extractions(
                 e
             ));
             // Non-fatal: still emit album signals
-            let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<
-                DiscExtractionSignal,
-            >(
-                read_only_db, &sender, computed, witness
+            let stats = reconcile_aggregate_signals::<DiscExtractionSignal>(
+                read_only_db, &sender, computed, witness,
             );
             log_general(format!(
-                "[COMPUTE] DetectDiscExtractions: cleared={}, new={}, updated={}, unchanged={}",
-                cleared, new, updated, unchanged
+                "[COMPUTE] DetectDiscExtractions: {}",
+                stats,
             ));
             return Result::success(computation, Vec::new());
         }
@@ -840,7 +836,7 @@ pub fn execute_detect_disc_extractions(
         computed.push(ComputedAggregateSignal::new(key, signal));
     }
 
-    let (cleared, new, updated, unchanged) = reconcile_aggregate_signals::<DiscExtractionSignal>(
+    let stats = reconcile_aggregate_signals::<DiscExtractionSignal>(
         read_only_db,
         &sender,
         computed,
@@ -848,8 +844,8 @@ pub fn execute_detect_disc_extractions(
     );
 
     log_general(format!(
-        "[COMPUTE] DetectDiscExtractions: cleared={}, new={}, updated={}, unchanged={}",
-        cleared, new, updated, unchanged
+        "[COMPUTE] DetectDiscExtractions: {}",
+        stats,
     ));
 
     Result::success(computation, Vec::new())

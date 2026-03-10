@@ -72,16 +72,16 @@ pub fn execute_detect_inbox_corpus_matches(
     if inbox_fingerprinted.is_empty() {
         log_general("[COMPUTE] DetectInboxCorpusMatches: no fingerprinted inbox files");
         // Reconcile with empty set to clear any stale signals
-        let (cleared, _, _, _) = reconcile_corpus_signals::<InboxCorpusMatchSignal>(
+        let stats = reconcile_corpus_signals::<InboxCorpusMatchSignal>(
             read_only_db,
             &sender,
             Vec::new(),
             witness,
         );
-        if cleared > 0 {
+        if stats.cleared > 0 {
             log_general(format!(
                 "[COMPUTE] DetectInboxCorpusMatches: cleared {} stale signals",
-                cleared
+                stats.cleared
             ));
         }
         return Result::success(computation, Vec::new());
@@ -105,16 +105,16 @@ pub fn execute_detect_inbox_corpus_matches(
 
     if corpus_fingerprinted.is_empty() {
         log_general("[COMPUTE] DetectInboxCorpusMatches: no fingerprinted corpus files");
-        let (cleared, _, _, _) = reconcile_corpus_signals::<InboxCorpusMatchSignal>(
+        let stats = reconcile_corpus_signals::<InboxCorpusMatchSignal>(
             read_only_db,
             &sender,
             Vec::new(),
             witness,
         );
-        if cleared > 0 {
+        if stats.cleared > 0 {
             log_general(format!(
                 "[COMPUTE] DetectInboxCorpusMatches: cleared {} stale signals",
-                cleared
+                stats.cleared
             ));
         }
         return Result::success(computation, Vec::new());
@@ -238,7 +238,7 @@ pub fn execute_detect_inbox_corpus_matches(
     }
 
     let match_count = computed.len();
-    let (cleared, new_count, updated, unchanged) = reconcile_corpus_signals::<InboxCorpusMatchSignal>(
+    let stats = reconcile_corpus_signals::<InboxCorpusMatchSignal>(
         read_only_db,
         &sender,
         computed,
@@ -246,8 +246,8 @@ pub fn execute_detect_inbox_corpus_matches(
     );
 
     log_general(format!(
-        "[COMPUTE] DetectInboxCorpusMatches: {} inbox files matched corpus (cleared={}, new={}, updated={}, unchanged={})",
-        match_count, cleared, new_count, updated, unchanged
+        "[COMPUTE] DetectInboxCorpusMatches: {} inbox files matched corpus ({})",
+        match_count, stats,
     ));
 
     Result::success(computation, Vec::new())

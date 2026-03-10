@@ -5,7 +5,6 @@
 //! with their DB tags.
 
 use std::path::Path;
-use std::time::Instant;
 
 use crate::config::path_schema::PathSchemaMatchResult;
 use crate::db::types::Zone;
@@ -25,7 +24,6 @@ use super::{Computation, Result};
 pub fn execute_detect_path_tag_mismatches(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DetectPathTagMismatches;
 
@@ -34,7 +32,6 @@ pub fn execute_detect_path_tag_mismatches(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -45,7 +42,6 @@ pub fn execute_detect_path_tag_mismatches(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -67,7 +63,7 @@ pub fn execute_detect_path_tag_mismatches(
                 cleared
             ));
         }
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // Load all corpus audio files with their tags.
@@ -76,7 +72,6 @@ pub fn execute_detect_path_tag_mismatches(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query corpus files: {}", e),
             );
         }
@@ -169,7 +164,7 @@ pub fn execute_detect_path_tag_mismatches(
         checked, structure_mismatches, value_mismatches, cleared, new, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 /// Strip the file extension from a path string.

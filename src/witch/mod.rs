@@ -5,7 +5,6 @@
 //!
 //! ## Module Organization
 //! - `types.rs` - Core types, enums, witness system
-//! - `worker_stats.rs` - Thread-safe performance statistics
 //! - `transaction.rs` - Transaction lifecycle management
 //! - `execution.rs` - Task execution (mutations, computations, maintenance)
 //!
@@ -13,16 +12,14 @@
 //! - New task types: Add variants to `Task` enum in `types.rs`
 //! - New execution logic: Add to `execution.rs`
 //! - Transaction features: Modify `transaction.rs`
-//! - Performance tracking: Modify `worker_stats.rs`
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::config::{self, Config, SharedConfig};
-use crate::db::write_thread::{self, DbThreadHandle, DbThreadStats};
+use crate::db::write_thread::{self, DbThreadHandle};
 use crate::db::Database;
 use crate::meta::computations::{analysis, derivation, observation, Computation};
 use crate::meta::mutations::Mutation;
@@ -34,14 +31,11 @@ pub(crate) mod external_fetch;
 pub mod messages;
 mod transaction;
 mod types;
-mod worker_stats;
-
 // Re-export public types
 pub use messages::InitialUiState;
 pub use types::{
     InodeAwarenessLevel, MaintenanceWitness, MutationExecutionWitness, PendingTransaction,
     ReasoningLevel, SpawnedMutation, Task, TaskLabel, WorkState, WorkStateSnapshot, WorkStatus,
-    WorkerStats,
 };
 // Decision authority flows through ConfirmationGesture (ui/action_handlers/witness.rs)
 // and WitnessedDecision (meta/decisions/mod.rs). See operator_decisions.rs for call sites.
@@ -49,7 +43,6 @@ pub use types::{
 // Internal imports
 use execution::execute_task;
 use types::{ContentAnalysisWitness, TaskResult};
-use worker_stats::SharedWorkerStats;
 
 // ============================================================================
 // WitchNotice — Typed Witch → UI Notifications
@@ -183,7 +176,6 @@ pub struct Witch {
     // -------------------------------------------------------------------------
     /// Thread-safe worker stats in separate heap allocation.
     /// None when timing instrumentation is disabled.
-    worker_stats_shared: Option<Arc<SharedWorkerStats>>,
 
     /// Handle for the dedicated cache thread (periodic refreshes + one-shot queries).
     /// Spawned in new(), shut down in Drop.
@@ -279,13 +271,6 @@ impl Witch {
         // connections work with busy_timeout. The db_thread sits idle on recv() during migrations.
         crate::logging::log_general("[WITCH] Spawning db_thread");
 
-        // Create isolated worker stats only when timing instrumentation is enabled
-        let worker_stats_shared = if config::is_timing_enabled() {
-            Some(Arc::new(SharedWorkerStats::new()))
-        } else {
-            None
-        };
-
         // Spawn the dedicated cache thread
         let (cache_ui_handle, cache_witch_handle) = cache_thread::spawn();
 
@@ -311,7 +296,6 @@ impl Witch {
             pending_mutation_phases: VecDeque::new(),
             pending_computation_phases: VecDeque::new(),
             db_thread_handle: write_thread::spawn(),
-            worker_stats_shared,
             cache_thread_handle: cache_witch_handle,
             notice_tx,
             handled_sources: std::collections::HashSet::new(),
@@ -327,15 +311,6 @@ impl Witch {
             external_fetch: None,
             fetch_progress: None,
         };
-
-        // DEBUG: Verify initialization (only when timing enabled)
-        if let Some(ref stats) = she.worker_stats_shared {
-            let (_tasks, total_qw, max_qw) = stats.debug_values();
-            crate::logging::log_perf(format!(
-                "[PERF INIT] Witch::new() - total_queue_wait_ms={}, max_queue_wait_ms={}, total_processed={}",
-                total_qw, max_qw, she.work_state.processed()
-            ));
-        }
 
         (she, cache_ui_handle, notice_rx)
     }
@@ -519,17 +494,6 @@ impl Witch {
             self.latch_read_only_for_safety(reason.to_string());
         }
 
-        // DEBUG: Log first tick state (only when timing enabled)
-        if let Some(ref stats) = self.worker_stats_shared {
-            let (_, total_qw_before, _) = stats.debug_values();
-            if self.work_state.processed() == 0 && total_qw_before != 0 {
-                crate::logging::log_perf(format!(
-                    "[PERF BUG] tick() called with total_processed=0 but total_queue_wait_ms={}!",
-                    total_qw_before
-                ));
-            }
-        }
-
         // Drain completed results and collect spawned computations and mutations
         let mut spawned_computations: Vec<Computation> = Vec::new();
         let mut spawned_mutations: Vec<types::SpawnedMutation> = Vec::new();
@@ -556,30 +520,6 @@ impl Witch {
 
             // Decrement pending count for this label
             self.work_state.dec_label(&result.label);
-
-            // Record stats via thread-safe interface (only when timing enabled)
-            let current_processed = self.work_state.processed();
-            if let Some(ref stats) = self.worker_stats_shared {
-                stats.record_result(&result);
-
-                // DEBUG: Log queue wait values
-                let (_, total_qw_now, max_qw_now) = stats.debug_values();
-                if current_processed == 1 {
-                    crate::logging::log_perf(format!(
-                        "[PERF FIRST] FIRST TASK: queue_wait_ms={}, total_queue_wait_ms={} (should equal queue_wait_ms!), max_queue_wait_ms={}",
-                        result.queue_wait_ms, total_qw_now, max_qw_now
-                    ));
-                }
-                if current_processed <= 50
-                    || current_processed.is_multiple_of(500)
-                    || result.queue_wait_ms > 50000
-                {
-                    crate::logging::log_perf(format!(
-                        "[PERF DEBUG] queue_wait_ms={} for task={}, total_processed={}, total_queue_wait_ms={}, max_queue_wait_ms={}",
-                        result.queue_wait_ms, result.label, current_processed, total_qw_now, max_qw_now
-                    ));
-                }
-            }
 
             if !result.success {
                 if let Some(err) = result.error {
@@ -1137,7 +1077,7 @@ impl Witch {
                 external_fetch::SchedulerMessage::TaskRequest { task, label } => {
                     // Spawn on rayon — bypasses work_state tracking entirely
                     let t = Task::ExternalFetch(task);
-                    self.spawn_task(t, label, Instant::now());
+                    self.spawn_task(t, label);
                 }
                 external_fetch::SchedulerMessage::Progress(p) => {
                     self.fetch_progress = Some(p);
@@ -1390,13 +1330,13 @@ impl Witch {
     ///
     /// If the task panics, we still send a failure result so the Witch's
     /// in_flight counter stays accurate and we don't lose tasks silently.
-    fn spawn_task(&self, task: Task, label: String, queue_time: Instant) {
+    fn spawn_task(&self, task: Task, label: String) {
         let tx = self.result_tx.clone();
         let label_for_panic = label.clone();
         let kind_for_panic = types::TaskKind::from_task(&task);
         rayon::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                execute_task(task, label, queue_time)
+                execute_task(task, label)
             }));
             let result = match result {
                 Ok(r) => r,
@@ -1415,9 +1355,6 @@ impl Witch {
                         kind: kind_for_panic,
                         spawn: Vec::new(),
                         spawn_mutations: Vec::new(),
-                        duration_ms: queue_time.elapsed().as_millis() as u64,
-                        queue_wait_ms: 0,
-                        thread_stats: None,
                         config_update: None,
                         recomputation_scope: crate::meta::recomputation::RecomputationScope::EMPTY,
                         fetch_result: None,
@@ -1469,7 +1406,6 @@ impl Witch {
     ) {
         self.transition_to_working();
 
-        let queue_time = Instant::now();
         let mutations: Vec<_> = mutations.into_iter().collect();
 
         crate::logging::log_general(format!(
@@ -1499,7 +1435,7 @@ impl Witch {
             let task = Task::Mutation(Box::new(mutation));
             let task_label = self.resolve_label(label.clone(), &task);
             self.work_state.inc_label(&task_label);
-            self.spawn_task(task, task_label, queue_time);
+            self.spawn_task(task, task_label);
         }
     }
 
@@ -1523,7 +1459,7 @@ impl Witch {
         self.work_state.inc_queued(1);
         self.work_state.inc_in_flight();
         self.work_state.inc_label(&task_label);
-        self.spawn_task(task, task_label, Instant::now());
+        self.spawn_task(task, task_label);
     }
 
     // -------------------------------------------------------------------------
@@ -1543,7 +1479,7 @@ impl Witch {
         self.work_state.inc_queued(1);
         self.work_state.inc_in_flight();
         self.work_state.inc_label(&task_label);
-        self.spawn_task(task, task_label, Instant::now());
+        self.spawn_task(task, task_label);
     }
 
     // -------------------------------------------------------------------------
@@ -1563,7 +1499,7 @@ impl Witch {
         self.work_state.inc_queued(1);
         self.work_state.inc_in_flight();
         self.work_state.inc_label(&task_label);
-        self.spawn_task(task, task_label, Instant::now());
+        self.spawn_task(task, task_label);
     }
 
     // -------------------------------------------------------------------------
@@ -1691,31 +1627,9 @@ impl Witch {
         crate::logging::log_general("[WITCH] Post-cycle: requested cache thread SQLite shrink");
     }
 
-    /// Get current DB thread stats for UI display.
-    /// Returns None if timing instrumentation is disabled.
-    pub fn db_stats(&self) -> Option<DbThreadStats> {
-        self.db_thread_handle.stats()
-    }
-
-    /// Get pending DB write queue depth (always available, no timing guard).
+    /// Get pending DB write queue depth.
     pub fn db_queue_depth(&self) -> u64 {
         self.db_thread_handle.queue_depth()
-    }
-
-    /// Get current worker performance stats for UI display.
-    /// Returns None if timing instrumentation is disabled.
-    pub fn worker_stats(&self) -> Option<WorkerStats> {
-        let stats = self.worker_stats_shared.as_ref()?.snapshot();
-
-        // DEBUG: Log if avg > max (should never happen now with isolated stats)
-        if stats.tasks_completed > 0 && stats.queue_wait_avg_ms > stats.queue_wait_max_ms {
-            crate::logging::log_perf(format!(
-                "[PERF BUG] avg > max! tasks={}, avg={}, max={}",
-                stats.tasks_completed, stats.queue_wait_avg_ms, stats.queue_wait_max_ms
-            ));
-        }
-
-        Some(stats)
     }
 
     /// Get the decision key kinds that have been handled in the active transaction.

@@ -100,7 +100,7 @@ impl Computation {
                 root,
                 zone,
                 force_check,
-            } => execute_walk_corpus(ctx.read_db, root, zone, *force_check, ctx.start),
+            } => execute_walk_corpus(ctx.read_db, root, zone, *force_check),
             Computation::ScanCorpusDirectory {
                 directory,
                 zone,
@@ -111,7 +111,6 @@ impl Computation {
                 zone,
                 *force_check,
                 ctx.witness,
-                ctx.start,
             ),
             Computation::VerifyMtime {
                 inode,
@@ -124,13 +123,12 @@ impl Computation {
                 path,
                 *expected_mtime_secs,
                 *expected_mtime_nanos,
-                ctx.start,
             ),
             Computation::VerifyTags { inode, path } => {
-                execute_verify_tags(ctx.read_db, *inode, path, ctx.witness, ctx.start)
+                execute_verify_tags(ctx.read_db, *inode, path, ctx.witness)
             }
             Computation::VerifyAudio { inode, path } => {
-                execute_verify_audio(ctx.read_db, *inode, path, ctx.witness, ctx.start)
+                execute_verify_audio(ctx.read_db, *inode, path, ctx.witness)
             }
         }
     }
@@ -149,7 +147,6 @@ pub struct Result {
     pub _computation: Computation,
     pub success: bool,
     pub error: Option<String>,
-    pub duration_ms: u64,
     /// Follow-up computations - ONLY Observation computations allowed.
     pub spawn: Vec<Computation>,
     /// Corpus inodes observed on disk during this computation (inode → relative path).
@@ -159,12 +156,11 @@ pub struct Result {
 }
 
 impl Result {
-    pub fn success(computation: Computation, duration_ms: u64, spawn: Vec<Computation>) -> Self {
+    pub fn success(computation: Computation, spawn: Vec<Computation>) -> Self {
         Self {
             _computation: computation,
             success: true,
             error: None,
-            duration_ms,
             spawn,
             observed_corpus_inodes: HashMap::new(),
             observed_inbox_inodes: HashMap::new(),
@@ -173,7 +169,6 @@ impl Result {
 
     pub fn success_with_observations(
         computation: Computation,
-        duration_ms: u64,
         spawn: Vec<Computation>,
         observed_corpus_inodes: HashMap<i64, String>,
         observed_inbox_inodes: HashMap<i64, String>,
@@ -182,19 +177,17 @@ impl Result {
             _computation: computation,
             success: true,
             error: None,
-            duration_ms,
             spawn,
             observed_corpus_inodes,
             observed_inbox_inodes,
         }
     }
 
-    pub fn failure(computation: Computation, duration_ms: u64, error: String) -> Self {
+    pub fn failure(computation: Computation, error: String) -> Self {
         Self {
             _computation: computation,
             success: false,
             error: Some(error),
-            duration_ms,
             spawn: Vec::new(),
             observed_corpus_inodes: HashMap::new(),
             observed_inbox_inodes: HashMap::new(),

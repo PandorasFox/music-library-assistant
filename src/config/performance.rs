@@ -34,12 +34,3 @@ pub fn get_db_cache_kb() -> i64 {
     // Convert MB to KB, return as negative (SQLite convention for KB)
     -(mb as i64 * 1024)
 }
-
-/// Check if timing instrumentation is enabled.
-/// When false, stats collection is skipped entirely for better performance.
-pub fn is_timing_enabled() -> bool {
-    PERFORMANCE_CONFIG
-        .get()
-        .map(|p| p.timing_instrumentation)
-        .unwrap_or(false)
-}

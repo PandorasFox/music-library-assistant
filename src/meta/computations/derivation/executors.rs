@@ -5,7 +5,6 @@
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use crate::corpus::paths;
 use crate::db::write_thread;
@@ -29,7 +28,6 @@ use super::{Computation, Result};
 pub fn execute_schedule_second_level_derivations(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     log_general("[COMPUTE] ScheduleSecondLevelDerivations: starting");
 
@@ -39,7 +37,6 @@ pub fn execute_schedule_second_level_derivations(
         None => {
             return Result::failure(
                 Computation::ScheduleSecondLevelDerivations,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -124,7 +121,6 @@ pub fn execute_schedule_second_level_derivations(
 
     Result::success(
         Computation::ScheduleSecondLevelDerivations,
-        start.elapsed().as_millis() as u64,
         spawn,
     )
 }
@@ -143,7 +139,6 @@ pub fn execute_derive_corpus_signals(
     read_only_db: &ReadOnlyDb<'_>,
     observed_inodes: HashMap<i64, String>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     log_general("[COMPUTE] DeriveCorpusSignals: starting global inode comparison");
 
@@ -155,7 +150,6 @@ pub fn execute_derive_corpus_signals(
                 Computation::DeriveCorpusSignals {
                     observed_inodes: HashMap::new(),
                 },
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -210,7 +204,6 @@ pub fn execute_derive_corpus_signals(
                 Computation::DeriveCorpusSignals {
                     observed_inodes: HashMap::new(),
                 },
-                start.elapsed().as_millis() as u64,
                 format!("Failed to get indexed inodes: {}", e),
             );
         }
@@ -322,7 +315,6 @@ pub fn execute_derive_corpus_signals(
         Computation::DeriveCorpusSignals {
             observed_inodes: HashMap::new(),
         },
-        start.elapsed().as_millis() as u64,
         Vec::new(),
     )
 }
@@ -342,7 +334,6 @@ pub fn execute_derive_inbox_signals(
     read_only_db: &ReadOnlyDb<'_>,
     observed_inodes: HashMap<i64, String>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     log_general("[COMPUTE] DeriveInboxSignals: starting inbox inode comparison");
 
@@ -353,7 +344,6 @@ pub fn execute_derive_inbox_signals(
                 Computation::DeriveInboxSignals {
                     observed_inodes: HashMap::new(),
                 },
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -425,7 +415,6 @@ pub fn execute_derive_inbox_signals(
             Computation::DeriveInboxSignals {
                 observed_inodes: HashMap::new(),
             },
-            start.elapsed().as_millis() as u64,
             Vec::new(),
         );
     }
@@ -438,7 +427,6 @@ pub fn execute_derive_inbox_signals(
                 Computation::DeriveInboxSignals {
                     observed_inodes: HashMap::new(),
                 },
-                start.elapsed().as_millis() as u64,
                 format!("Failed to get indexed inbox inodes: {}", e),
             );
         }
@@ -530,7 +518,6 @@ pub fn execute_derive_inbox_signals(
         Computation::DeriveInboxSignals {
             observed_inodes: HashMap::new(),
         },
-        start.elapsed().as_millis() as u64,
         Vec::new(),
     )
 }
@@ -625,7 +612,6 @@ pub fn execute_update_corpus_file_signals(
     read_only_db: &ReadOnlyDb<'_>,
     path: &Path,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::UpdateCorpusFileSignals {
         path: path.to_path_buf(),
@@ -636,7 +622,6 @@ pub fn execute_update_corpus_file_signals(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -742,7 +727,7 @@ pub fn execute_update_corpus_file_signals(
     }
     // If file doesn't exist and isn't indexed, there's nothing to do
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 /// Update library signals for a single file after a mutation.
@@ -753,7 +738,6 @@ pub fn execute_update_library_file_signals(
     _read_only_db: &ReadOnlyDb<'_>,
     path: &Path,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::UpdateLibraryFileSignals {
         path: path.to_path_buf(),
@@ -764,7 +748,6 @@ pub fn execute_update_library_file_signals(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -786,7 +769,7 @@ pub fn execute_update_library_file_signals(
     // If file doesn't exist, LibraryLeftover signals will be created during
     // the next full library scan in the Analysis phase
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================
@@ -803,7 +786,6 @@ pub fn execute_walk_library(
     library_name: &str,
     corpus_path_prefixes: &[PathBuf],
     _witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::WalkLibrary {
         library_root: library_root.to_path_buf(),
@@ -816,7 +798,7 @@ pub fn execute_walk_library(
             "[COMPUTE] WalkLibrary: library root does not exist: {:?}",
             library_root
         ));
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     let (directories, _symlink_count) = enumerate_all_directories(library_root);
@@ -838,7 +820,7 @@ pub fn execute_walk_library(
         })
         .collect();
 
-    Result::success(computation, start.elapsed().as_millis() as u64, spawn)
+    Result::success(computation, spawn)
 }
 
 /// Scan a single library directory and return observed files.
@@ -853,7 +835,6 @@ pub fn execute_scan_library_directory(
     library_root: &Path,
     corpus_path_prefixes: &[PathBuf],
     _witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::ScanLibraryDirectory {
         directory: directory.to_path_buf(),
@@ -908,7 +889,6 @@ pub fn execute_scan_library_directory(
 
     Result::success_with_library_files(
         computation,
-        start.elapsed().as_millis() as u64,
         Vec::new(),
         observed_files,
     )
@@ -929,7 +909,6 @@ pub fn execute_reconcile_library_files(
     read_only_db: &ReadOnlyDb<'_>,
     observed_files: &[super::ObservedLibraryFile],
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::ReconcileLibraryFiles {
         observed_files: observed_files.to_vec(),
@@ -940,7 +919,6 @@ pub fn execute_reconcile_library_files(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -1011,7 +989,7 @@ pub fn execute_reconcile_library_files(
         new_count, updated_count, stale_count, unchanged_count
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================
@@ -1028,7 +1006,6 @@ pub fn execute_update_deploy_signals(
     corpus_path: &Path,
     library_path: &Path,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::UpdateDeploySignals {
         corpus_path: corpus_path.to_path_buf(),
@@ -1040,7 +1017,6 @@ pub fn execute_update_deploy_signals(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -1072,14 +1048,12 @@ pub fn execute_update_deploy_signals(
         Ok(None) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Corpus file not in index: {}", corpus_path_str),
             );
         }
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to look up corpus file: {}", e),
             );
         }
@@ -1126,7 +1100,7 @@ pub fn execute_update_deploy_signals(
         },
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 /// Clear library-side signals (LibraryLeftover, LibraryStale) for a library path.

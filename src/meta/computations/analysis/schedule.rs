@@ -1,6 +1,5 @@
 //! Schedule Content Analysis executor.
 
-use std::time::Instant;
 
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
@@ -17,7 +16,6 @@ use super::{Computation, Result};
 ///   overlap with `s`.
 pub fn execute_schedule_content_analysis(
     read_only_db: &ReadOnlyDb<'_>,
-    start: Instant,
     scope: &Option<RecomputationScope>,
 ) -> Result {
     let run_all = scope.is_none();
@@ -138,7 +136,6 @@ pub fn execute_schedule_content_analysis(
 
     Result::success(
         Computation::ScheduleContentAnalysis { scope: *scope },
-        start.elapsed().as_millis() as u64,
         spawn,
     )
 }

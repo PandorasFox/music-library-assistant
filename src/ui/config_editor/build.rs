@@ -6,7 +6,7 @@
 
 use super::types::*;
 use crate::config::{
-    AlbumArtOpinions, CanonicalizationOpinions, Config, DebugOpinions, DiscExtractionOpinions,
+    AlbumArtOpinions, CanonicalizationOpinions, Config, DiscExtractionOpinions,
     DuplicateAnalysisOpinions, ExternalMatchingConfig, HealthDetectionOpinions,
     InboxOrganizeGranularity, InboxOrganizeOpinions, Opinions, PackingWeights, PerformanceOpinions,
     QualityResolutionOpinions, ReleasePackingOpinions, SidecarDeployMode, StartupOpinions,
@@ -997,43 +997,7 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                         }
                     },
                 ),
-                field(
-                    "Timing instrumentation",
-                    "Enable stats display and atomic counter updates",
-                    ConfigValue::Bool(ops.performance.timing_instrumentation),
-                    source_for(
-                        ops.performance.timing_instrumentation
-                            == defaults.performance.timing_instrumentation,
-                        PerformanceOpinions::KDL_TIMING,
-                    ),
-                    true,
-                    |v, c| {
-                        if let ConfigValue::Bool(b) = v {
-                            c.opinions.performance.timing_instrumentation = *b;
-                        }
-                    },
-                ),
             ],
-        },
-        // Debug
-        ConfigGroup {
-            name: "Debug",
-            collapsed: false,
-            fields: vec![field(
-                "Memory logging",
-                "Log periodic memory snapshots (RSS, SQLite, threads) to general.log",
-                ConfigValue::Bool(ops.debug.memory_logging),
-                source_for(
-                    ops.debug.memory_logging == defaults.debug.memory_logging,
-                    DebugOpinions::KDL_MEMORY_LOGGING,
-                ),
-                true,
-                |v, c| {
-                    if let ConfigValue::Bool(b) = v {
-                        c.opinions.debug.memory_logging = *b;
-                    }
-                },
-            )],
         },
     ]
 }

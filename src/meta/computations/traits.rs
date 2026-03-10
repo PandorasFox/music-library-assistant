@@ -8,8 +8,6 @@
 //! each trait returns its phase's Result type, which can only spawn
 //! computations from the same phase.
 
-use std::time::Instant;
-
 use super::types::ComputationWitness;
 use crate::db::ReadOnlyDb;
 
@@ -17,5 +15,4 @@ use crate::db::ReadOnlyDb;
 pub struct ComputationContext<'a> {
     pub read_db: &'a ReadOnlyDb<'a>,
     pub witness: &'a ComputationWitness,
-    pub start: Instant,
 }

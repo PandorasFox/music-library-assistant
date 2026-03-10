@@ -4,7 +4,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use crate::corpus::deploy::{
     compute_deployment_path_with_tags, deploy_album_directory, extract_release_directory,
@@ -45,7 +44,6 @@ struct PrecomputedFile {
 pub fn execute_detect_deploy_conflicts(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DetectDeployConflicts;
 
@@ -54,7 +52,6 @@ pub fn execute_detect_deploy_conflicts(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -69,7 +66,6 @@ pub fn execute_detect_deploy_conflicts(
             ));
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("get_healthy_file_signals: {}", e),
             );
         }
@@ -133,7 +129,7 @@ pub fn execute_detect_deploy_conflicts(
         unchanged,
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================
@@ -149,7 +145,6 @@ pub fn execute_detect_deploy_conflicts(
 pub fn execute_detect_release_overlaps(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DetectReleaseOverlaps;
 
@@ -158,7 +153,6 @@ pub fn execute_detect_release_overlaps(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -169,7 +163,6 @@ pub fn execute_detect_release_overlaps(
         Err(_) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "Failed to load config".to_string(),
             );
         }
@@ -184,7 +177,6 @@ pub fn execute_detect_release_overlaps(
             ));
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("get_healthy_file_signals: {}", e),
             );
         }
@@ -329,7 +321,6 @@ pub fn execute_detect_release_overlaps(
     // writes before spawning it.
     Result::pipeline(
         computation,
-        start.elapsed().as_millis() as u64,
         vec![],
         vec![(
             super::super::PipelineStage::DependentAnalysis,
@@ -354,7 +345,6 @@ pub fn execute_derive_deploy_health_signals(
     library_root: &Path,
     corpus_path_prefixes: &[std::path::PathBuf],
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DeriveDeployHealthSignals {
         library_name: library_name.to_string(),
@@ -367,7 +357,6 @@ pub fn execute_derive_deploy_health_signals(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -393,7 +382,7 @@ pub fn execute_derive_deploy_health_signals(
                 "[COMPUTE] DeriveDeployHealthSignals '{}': failed to get scan data: {}",
                 library_name, e
             ));
-            return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+            return Result::success(computation, Vec::new());
         }
     };
 
@@ -427,7 +416,6 @@ pub fn execute_derive_deploy_health_signals(
             ));
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("get_all_corpus_inodes: {}", e),
             );
         }
@@ -555,7 +543,7 @@ pub fn execute_derive_deploy_health_signals(
         stale_conflict_count,
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================
@@ -833,7 +821,6 @@ fn compute_expected_library_path(
 pub fn execute_derive_corpus_deploy_status(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DeriveCorpusDeployStatus;
 
@@ -842,7 +829,6 @@ pub fn execute_derive_corpus_deploy_status(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -858,7 +844,6 @@ pub fn execute_derive_corpus_deploy_status(
             ));
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("get_healthy_file_signals: {}", e),
             );
         }
@@ -895,7 +880,6 @@ pub fn execute_derive_corpus_deploy_status(
         Err(_) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "Failed to load config".to_string(),
             );
         }
@@ -916,7 +900,6 @@ pub fn execute_derive_corpus_deploy_status(
             ));
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("get_all_corpus_inodes: {}", e),
             );
         }
@@ -1159,7 +1142,7 @@ pub fn execute_derive_corpus_deploy_status(
         dh_cleared, dh_new, dh_updated, dh_unchanged,
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================

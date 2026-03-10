@@ -43,7 +43,7 @@ pub struct Opinions {
     pub disc_extraction: DiscExtractionOpinions,
     /// Album art embedding/upgrade configuration.
     pub album_art: AlbumArtOpinions,
-    /// Debug/diagnostic options.
+    /// Debug/diagnostic options (reserved, currently empty).
     pub debug: DebugOpinions,
 }
 
@@ -67,7 +67,6 @@ impl Opinions {
     pub const KDL_BLOCK_EXTERNAL_MATCHING: &str = "external-matching";
     pub const KDL_BLOCK_DISC_EXTRACTION: &str = "disc-extraction";
     pub const KDL_BLOCK_ALBUM_ART: &str = "album-art";
-    pub const KDL_BLOCK_DEBUG: &str = "debug";
 }
 
 /// Opinions for quality-based auto-resolution
@@ -178,16 +177,13 @@ impl HealthDetectionOpinions {
     pub const KDL_SINGLE_ALBUM_SUFFIX: &str = "single-album-suffix";
 }
 
-/// Opinions for performance tuning (threads, caches, instrumentation)
+/// Opinions for performance tuning (threads, caches)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceOpinions {
     /// Number of worker threads. None = 2x logical cores (default).
     pub worker_threads: Option<usize>,
     /// SQLite page cache size per connection in MB (default: 256).
     pub db_cache_mb: u32,
-    /// Enable timing instrumentation and stats display (default: false).
-    /// When false, skips all atomic counter updates for better performance.
-    pub timing_instrumentation: bool,
 }
 
 impl Default for PerformanceOpinions {
@@ -195,7 +191,6 @@ impl Default for PerformanceOpinions {
         Self {
             worker_threads: None, // 2x cores
             db_cache_mb: 256,
-            timing_instrumentation: false,
         }
     }
 }
@@ -203,7 +198,6 @@ impl Default for PerformanceOpinions {
 impl PerformanceOpinions {
     pub const KDL_WORKER_THREADS: &str = "worker-threads";
     pub const KDL_DB_CACHE: &str = "db-cache";
-    pub const KDL_TIMING: &str = "timing-instrumentation";
 }
 
 /// Opinions for detecting and splitting compound tag values.
@@ -518,17 +512,9 @@ impl AlbumArtOpinions {
     pub const KDL_SIDECAR_DEPLOY: &str = "sidecar-deploy-mode";
 }
 
-/// Debug and diagnostic options.
+/// Debug and diagnostic options (reserved for future use).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DebugOpinions {
-    /// Log periodic memory snapshots (RSS, SQLite, threads) to general.log.
-    /// Default: false.
-    pub memory_logging: bool,
-}
-
-impl DebugOpinions {
-    pub const KDL_MEMORY_LOGGING: &str = "memory-logging";
-}
+pub struct DebugOpinions {}
 
 impl Default for ExternalMatchingConfig {
     fn default() -> Self {

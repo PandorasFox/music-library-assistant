@@ -5,7 +5,6 @@
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use crate::corpus::paths;
 use crate::db::types::Zone;
@@ -31,7 +30,6 @@ pub fn execute_walk_corpus(
     root: &Path,
     zone: &str,
     force_check: bool,
-    start: Instant,
 ) -> Result {
     let computation = Computation::WalkCorpus {
         root: root.to_path_buf(),
@@ -42,7 +40,6 @@ pub fn execute_walk_corpus(
     if !root.exists() {
         return Result::failure(
             computation,
-            start.elapsed().as_millis() as u64,
             format!("Root directory does not exist: {:?}", root),
         );
     }
@@ -78,7 +75,7 @@ pub fn execute_walk_corpus(
         })
         .collect();
 
-    Result::success(computation, start.elapsed().as_millis() as u64, spawn)
+    Result::success(computation, spawn)
 }
 
 // ============================================================================
@@ -92,7 +89,6 @@ pub fn execute_scan_corpus_directory(
     zone: &str,
     force_check: bool,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::ScanCorpusDirectory {
         directory: directory.to_path_buf(),
@@ -106,7 +102,6 @@ pub fn execute_scan_corpus_directory(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -115,7 +110,6 @@ pub fn execute_scan_corpus_directory(
     if !directory.exists() {
         return Result::failure(
             computation,
-            start.elapsed().as_millis() as u64,
             format!("Directory does not exist: {:?}", directory),
         );
     }
@@ -131,7 +125,7 @@ pub fn execute_scan_corpus_directory(
 
     // If no files in directory, nothing to do
     if disk_state.is_empty() {
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // Build lookup map for disk inodes
@@ -370,7 +364,6 @@ pub fn execute_scan_corpus_directory(
 
     Result::success_with_observations(
         computation,
-        start.elapsed().as_millis() as u64,
         spawn,
         observed_corpus_inodes,
         observed_inbox_inodes,
@@ -494,7 +487,6 @@ pub fn execute_verify_mtime(
     path: &Path,
     expected_mtime_secs: i64,
     expected_mtime_nanos: i64,
-    start: Instant,
 ) -> Result {
     let computation = Computation::VerifyMtime {
         inode,
@@ -509,7 +501,6 @@ pub fn execute_verify_mtime(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to read file metadata: {}", e),
             );
         }
@@ -527,7 +518,7 @@ pub fn execute_verify_mtime(
         Vec::new()
     };
 
-    Result::success(computation, start.elapsed().as_millis() as u64, spawn)
+    Result::success(computation, spawn)
 }
 
 /// Check if a file's disk mtime differs from what's stored in files table.
@@ -572,7 +563,6 @@ pub fn execute_verify_tags(
     inode: i64,
     path: &Path,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     use crate::meta::mutations::indexing;
 
@@ -587,7 +577,6 @@ pub fn execute_verify_tags(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -605,7 +594,6 @@ pub fn execute_verify_tags(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Path {} does not match any configured root", path.display()),
             );
         }
@@ -766,7 +754,7 @@ pub fn execute_verify_tags(
                 );
             }
 
-            Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+            Result::success(computation, Vec::new())
         }
         Err(e) => {
             // Emit CorruptFile signal so the issue is tracked in the DB (actionable)
@@ -808,7 +796,7 @@ pub fn execute_verify_tags(
                 witness,
             );
             // Return success so computation continues processing other files
-            Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+            Result::success(computation, Vec::new())
         }
     }
 }
@@ -826,7 +814,6 @@ pub fn execute_verify_audio(
     inode: i64,
     path: &Path,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::VerifyAudio {
         inode,
@@ -839,7 +826,6 @@ pub fn execute_verify_audio(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -852,7 +838,6 @@ pub fn execute_verify_audio(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Path {} does not match any configured root", path.display()),
             );
         }
@@ -864,7 +849,7 @@ pub fn execute_verify_audio(
         Ok(()) => {
             // Audio is valid - clear any stale CorruptFile signal (keyed by inode)
             drop_stale_corpus_signal::<CorruptFileSignal>(read_only_db, &sender, inode, witness);
-            Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+            Result::success(computation, Vec::new())
         }
         Err(e) => {
             // Audio verification failed - file is corrupt
@@ -888,7 +873,7 @@ pub fn execute_verify_audio(
             );
             // Return success so computation continues processing other files
             // (the signal emission handles the error state)
-            Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+            Result::success(computation, Vec::new())
         }
     }
 }

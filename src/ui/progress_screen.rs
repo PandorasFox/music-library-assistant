@@ -34,8 +34,7 @@ use ratatui::{
 
 use super::eye::{EYE_CLOSED, EYE_CLOSING};
 use super::wait_state::WaitState;
-use crate::db::write_thread::DbThreadStats;
-use crate::witch::{ReasoningLevel, Witch, WorkStateSnapshot, WorkStatus, WorkerStats};
+use crate::witch::{ReasoningLevel, Witch, WorkStateSnapshot, WorkStatus};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -102,10 +101,6 @@ pub struct ProgressScreen {
     complete: bool,
     /// Current reasoning level (for Eyeballing phase rendering).
     reasoning_level: ReasoningLevel,
-    /// DB thread stats for optional display.
-    db_stats: Option<DbThreadStats>,
-    /// Worker thread stats for optional display.
-    worker_stats: Option<WorkerStats>,
     /// Pending DB writes (always tracked).
     db_queue_depth: u64,
     /// Consecutive ticks where the Witch was idle (safety valve for missed work).
@@ -130,8 +125,6 @@ impl ProgressScreen {
             progress_detail: Some("Starting...".to_string()),
             complete: false,
             reasoning_level: ReasoningLevel::None,
-            db_stats: None,
-            worker_stats: None,
             db_queue_depth: 0,
             consecutive_idle_ticks: 0,
             tick_count: 0,
@@ -151,8 +144,6 @@ impl ProgressScreen {
             progress_detail: Some("Starting metadata analysis...".to_string()),
             complete: false,
             reasoning_level: ReasoningLevel::Full,
-            db_stats: None,
-            worker_stats: None,
             db_queue_depth: 0,
             consecutive_idle_ticks: 0,
             tick_count: 0,
@@ -174,8 +165,6 @@ impl ProgressScreen {
             progress_detail: Some("Updating signals...".to_string()),
             complete: false,
             reasoning_level: ReasoningLevel::Full,
-            db_stats: None,
-            worker_stats: None,
             db_queue_depth: 0,
             consecutive_idle_ticks: 0,
             tick_count: 0,
@@ -205,20 +194,6 @@ impl ProgressScreen {
     pub fn status_message(&self) -> &'static str {
         self.phase
             .status_message(self.reasoning_level, self.complete)
-    }
-
-    /// Update DB thread stats for display.
-    pub fn set_db_stats(&mut self, stats: Option<DbThreadStats>) {
-        if stats.is_some() {
-            self.db_stats = stats;
-        }
-    }
-
-    /// Update worker thread stats for display.
-    pub fn set_worker_stats(&mut self, stats: Option<WorkerStats>) {
-        if stats.is_some() {
-            self.worker_stats = stats;
-        }
     }
 
     /// Update pending DB write queue depth.
@@ -264,9 +239,6 @@ impl ProgressScreen {
         let status = witch.status();
         self.update_progress(&status);
 
-        // Update stats
-        self.set_db_stats(witch.db_stats());
-        self.set_worker_stats(witch.worker_stats());
         self.set_db_queue_depth(witch.db_queue_depth());
 
         // Phase-specific completion detection
@@ -451,20 +423,12 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
     let show_queue_depth = screen.db_queue_depth > 0;
     let queue_depth_height = 1; // Always 1 to stabilize layout
 
-    // Detailed timing stats (behind timing guard)
-    let show_stats = crate::config::is_timing_enabled();
-    let show_db_stats = show_stats && screen.db_stats.is_some();
-    let show_worker_stats = show_stats && screen.worker_stats.is_some();
-    let db_stats_height = if show_db_stats { 1 } else { 0 };
-    let worker_stats_height = if show_worker_stats { 2 } else { 0 };
     let total_height = 2
         + eye_height
         + eye_progress_spacing
         + progress_height
         + task_summary_height
-        + queue_depth_height
-        + db_stats_height
-        + worker_stats_height;
+        + queue_depth_height;
 
     // Calculate vertical centering
     let v_margin = area.height.saturating_sub(total_height as u16) / 2;
@@ -485,9 +449,7 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
             Constraint::Length(progress_height as u16),      // 5: Progress bar
             Constraint::Length(task_summary_height as u16),  // 6: Task summary
             Constraint::Length(queue_depth_height as u16),   // 7: Queue depth
-            Constraint::Length(db_stats_height as u16),      // 8: DB stats
-            Constraint::Length(worker_stats_height as u16),  // 9: Worker stats
-            Constraint::Min(0),                              // 10: Bottom margin
+            Constraint::Min(0),                              // 8: Bottom margin
         ])
         .split(area);
 
@@ -598,134 +560,4 @@ pub fn render(f: &mut Frame, area: Rect, screen: &ProgressScreen, eye_frame: Opt
         f.render_widget(queue_widget, queue_area);
     }
 
-    // Render DB stats if timing enabled
-    if show_db_stats {
-        if let Some(stats) = &screen.db_stats {
-            let stats_area = chunks[8]; // Index shifted due to task summary row
-
-            let queue_color = if stats.queue_depth > 100 {
-                Color::Red
-            } else if stats.queue_depth > 0 {
-                Color::Yellow
-            } else {
-                Color::Green
-            };
-
-            let stats_line = Line::from(vec![
-                Span::styled("Writes: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{}", stats.total_writes),
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:.1}/s", stats.writes_per_sec),
-                    Style::default().fg(Color::Green),
-                ),
-                Span::styled(" | Q: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{}", stats.queue_depth),
-                    Style::default().fg(queue_color),
-                ),
-            ]);
-
-            let stats_widget = Paragraph::new(stats_line).alignment(Alignment::Center);
-            f.render_widget(stats_widget, stats_area);
-        }
-    }
-
-    // Render worker stats if timing enabled
-    if show_worker_stats {
-        if let Some(stats) = &screen.worker_stats {
-            let stats_area = chunks[9]; // Index shifted due to task summary row
-            let label_color = Color::Rgb(245, 28, 153); // Magenta
-
-            let avg_task_color = if stats.avg_task_ms < 100 {
-                Color::Green
-            } else if stats.avg_task_ms < 500 {
-                Color::Yellow
-            } else {
-                Color::Red
-            };
-
-            let queue_wait_color = if stats.queue_wait_avg_ms < 5 {
-                Color::Green
-            } else if stats.queue_wait_avg_ms < 20 {
-                Color::Yellow
-            } else {
-                Color::Red
-            };
-
-            let line1 = Line::from(vec![
-                Span::styled("Tasks: ", Style::default().fg(label_color)),
-                Span::styled(
-                    format!("{}", stats.tasks_completed),
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Avg: ", Style::default().fg(label_color)),
-                Span::styled(
-                    format!("{}ms", stats.avg_task_ms),
-                    Style::default().fg(avg_task_color),
-                ),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Max: ", Style::default().fg(label_color)),
-                Span::styled(
-                    format!("{}ms", stats.max_task_ms),
-                    Style::default().fg(Color::White),
-                ),
-                if !stats.max_task_label.is_empty() {
-                    Span::styled(
-                        format!(" ({})", stats.max_task_label),
-                        Style::default().fg(Color::DarkGray),
-                    )
-                } else {
-                    Span::raw("")
-                },
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Threads: ", Style::default().fg(label_color)),
-                Span::styled(
-                    format!("{}", stats.active_threads),
-                    Style::default().fg(Color::White),
-                ),
-            ]);
-
-            let line2 = Line::from(vec![
-                Span::styled("Q Wait: ", Style::default().fg(label_color)),
-                Span::styled(
-                    format!("{}avg", stats.queue_wait_avg_ms),
-                    Style::default().fg(queue_wait_color),
-                ),
-                Span::styled("/", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{}max ms", stats.queue_wait_max_ms),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Reads: ", Style::default().fg(label_color)),
-                Span::styled(
-                    format!("{}", stats.avg_db_read_us),
-                    Style::default().fg(Color::Green),
-                ),
-                Span::styled("/", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{}", stats.median_db_read_us),
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::styled("/", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{}µs", stats.max_db_read_us),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(
-                    format!(" ({})", stats.total_db_reads),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]);
-
-            let worker_stats_widget =
-                Paragraph::new(vec![line1, line2]).alignment(Alignment::Center);
-            f.render_widget(worker_stats_widget, stats_area);
-        }
-    }
 }

@@ -5,7 +5,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use mm_utils::tag_names::find_tag_in_map;
 
@@ -74,7 +73,6 @@ impl UnionFind {
 pub fn execute_detect_fingerprint_overlaps(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     use crate::db::queries::files::fingerprint_to_text;
 
@@ -85,7 +83,6 @@ pub fn execute_detect_fingerprint_overlaps(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -97,7 +94,6 @@ pub fn execute_detect_fingerprint_overlaps(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -115,7 +111,6 @@ pub fn execute_detect_fingerprint_overlaps(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query audio files: {}", e),
             );
         }
@@ -141,7 +136,6 @@ pub fn execute_detect_fingerprint_overlaps(
         ));
         return Result::pipeline(
             computation,
-            start.elapsed().as_millis() as u64,
             vec![],
             vec![(
                 super::super::PipelineStage::DependentAnalysis,
@@ -259,7 +253,6 @@ pub fn execute_detect_fingerprint_overlaps(
     // so the Witch drains all in-flight work + DB writes before spawning them.
     Result::pipeline(
         computation,
-        start.elapsed().as_millis() as u64,
         vec![],
         vec![(
             super::super::PipelineStage::DependentAnalysis,
@@ -279,7 +272,6 @@ pub fn execute_detect_fingerprint_overlaps(
 pub fn execute_detect_duplicate_inodes(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DetectDuplicateInodes;
 
@@ -288,7 +280,6 @@ pub fn execute_detect_duplicate_inodes(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -299,7 +290,6 @@ pub fn execute_detect_duplicate_inodes(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query duplicate inodes: {}", e),
             );
         }
@@ -332,7 +322,7 @@ pub fn execute_detect_duplicate_inodes(
         total_groups, cleared, new_count, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================
@@ -343,7 +333,6 @@ pub fn execute_detect_duplicate_inodes(
 pub fn execute_detect_metadata_duplicates(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DetectMetadataDuplicates;
 
@@ -352,7 +341,6 @@ pub fn execute_detect_metadata_duplicates(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -363,7 +351,6 @@ pub fn execute_detect_metadata_duplicates(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query tags: {}", e),
             );
         }
@@ -434,7 +421,7 @@ pub fn execute_detect_metadata_duplicates(
         total_groups, cleared, new_count, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 /// Simple hash function for signature strings.
@@ -726,7 +713,6 @@ impl SubparReason {
 pub fn execute_analyze_fingerprint_overlaps(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::AnalyzeFingerprintOverlaps;
 
@@ -735,7 +721,6 @@ pub fn execute_analyze_fingerprint_overlaps(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -747,7 +732,6 @@ pub fn execute_analyze_fingerprint_overlaps(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -788,7 +772,7 @@ pub fn execute_analyze_fingerprint_overlaps(
                 subpar_cleared, redundant_cleared
             ));
         }
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     let mut total_groups = 0;
@@ -1054,7 +1038,7 @@ pub fn execute_analyze_fingerprint_overlaps(
         variant_skipped, expected_skipped, interior_skipped
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 /// Cluster audio files by duration within tolerance.
@@ -1116,7 +1100,6 @@ fn cluster_by_duration(
 pub fn execute_detect_cross_source_overlaps(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DetectCrossSourceOverlaps;
 
@@ -1125,7 +1108,6 @@ pub fn execute_detect_cross_source_overlaps(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -1137,7 +1119,6 @@ pub fn execute_detect_cross_source_overlaps(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -1165,7 +1146,7 @@ pub fn execute_detect_cross_source_overlaps(
                 cleared
             ));
         }
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // =========================================================================
@@ -1350,7 +1331,7 @@ pub fn execute_detect_cross_source_overlaps(
         cleared, new_count, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 /// Accumulated data for a source pair overlap.

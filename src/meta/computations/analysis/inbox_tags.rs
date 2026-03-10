@@ -16,7 +16,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::time::Instant;
 
 /// A list of (tag_name, normalization_fn) pairs used for inbox tag canonicity checks.
 type TagNormalizer<'a> = Vec<(&'a str, Box<dyn Fn(&str) -> String>)>;
@@ -50,7 +49,6 @@ use super::{Computation, Result};
 pub fn execute_detect_inbox_tag_canonicity(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DetectInboxTagCanonicity;
 
@@ -59,7 +57,6 @@ pub fn execute_detect_inbox_tag_canonicity(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -70,7 +67,6 @@ pub fn execute_detect_inbox_tag_canonicity(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -208,7 +204,7 @@ pub fn execute_detect_inbox_tag_canonicity(
         new_count + updated + unchanged, cleared, new_count, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================
@@ -227,7 +223,6 @@ pub fn execute_detect_inbox_tag_canonicity(
 pub fn execute_detect_inbox_missing_tags(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DetectInboxMissingTags;
 
@@ -236,7 +231,6 @@ pub fn execute_detect_inbox_missing_tags(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -247,7 +241,6 @@ pub fn execute_detect_inbox_missing_tags(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -275,7 +268,6 @@ pub fn execute_detect_inbox_missing_tags(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query inbox files with tag presence: {}", e),
             );
         }
@@ -338,7 +330,7 @@ pub fn execute_detect_inbox_missing_tags(
         new_count + updated + unchanged, cleared, new_count, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================
@@ -357,7 +349,6 @@ pub fn execute_detect_inbox_missing_tags(
 pub fn execute_detect_inbox_compound_tags(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     use crate::corpus::health::compound::{detect_featuring_pattern, CompoundTagValue};
 
@@ -368,7 +359,6 @@ pub fn execute_detect_inbox_compound_tags(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -379,7 +369,6 @@ pub fn execute_detect_inbox_compound_tags(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -540,5 +529,5 @@ pub fn execute_detect_inbox_compound_tags(
         emitted, cleared
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }

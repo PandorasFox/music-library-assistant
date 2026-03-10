@@ -1,7 +1,6 @@
 //! Component discovery, knot extraction, and per-component MIS solving.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::Instant;
 
 use crate::db::write_thread::{self};
 use crate::db::ReadOnlyDb;
@@ -805,7 +804,6 @@ pub(crate) fn execute_resolve_packing_component(
     shared: &SharedComponentData,
     _read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::ResolvePackingComponent {
         data: shared.clone(),
@@ -822,14 +820,13 @@ pub(crate) fn execute_resolve_packing_component(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
     };
 
     if proposals.is_empty() {
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // Build MIS candidates from proposals
@@ -1056,7 +1053,7 @@ pub(crate) fn execute_resolve_packing_component(
         total_assigned,
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 /// Check if an artist name is "Various Artists" (case-insensitive).

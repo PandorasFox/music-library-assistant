@@ -157,37 +157,18 @@ impl App {
             match phase {
                 ProgressPhase::Eyeballing => {
                     // Check for unindexed files before deciding next phase
-                    let transition_start = std::time::Instant::now();
                     if let Some(intake_state) = self.check_for_unindexed_files() {
-                        let check_duration = transition_start.elapsed();
-                        crate::logging::log_general(format!(
-                            "[TRANSITION] check_for_unindexed_files took {}ms, found {} files",
-                            check_duration.as_millis(),
-                            intake_state.file_count
-                        ));
                         self.view = ActiveView::IntakeConfirmation(intake_state);
+                    } else if self.witch.has_pending() {
+                        // Witch has pending work (e.g., freshen latch triggered content analysis)
+                        self.view = ActiveView::Progress {
+                            screen: ProgressScreen::new_content_analysis(),
+                            eye: Eye::default(),
+                        };
                     } else {
-                        let check_duration = transition_start.elapsed();
-                        // Check if the Witch has pending work (e.g., freshen latch triggered content analysis)
-                        if self.witch.has_pending() {
-                            crate::logging::log_general(format!(
-                                "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files but Witch has pending work - showing content analysis progress",
-                                check_duration.as_millis()
-                            ));
-                            // Show content analysis progress screen for the pending work
-                            self.view = ActiveView::Progress {
-                                screen: ProgressScreen::new_content_analysis(),
-                                eye: Eye::default(),
-                            };
-                        } else {
-                            crate::logging::log_general(format!(
-                                "[TRANSITION] check_for_unindexed_files took {}ms, no unindexed files - skipping to default view",
-                                check_duration.as_millis()
-                            ));
-                            // No unindexed files, no mutations - skip content analysis entirely
-                            // Corpus is unchanged from last session, signals are still valid
-                            self.start_default_view();
-                        }
+                        // No unindexed files, no mutations - skip content analysis entirely
+                        // Corpus is unchanged from last session, signals are still valid
+                        self.start_default_view();
                     }
                 }
                 ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {
@@ -232,24 +213,7 @@ impl App {
         ));
 
         self.cache
-            .query(move |db| {
-                let signals_start = std::time::Instant::now();
-                let signal_count = db.count_all_signals();
-                crate::logging::log_general(format!(
-                    "[TRANSITION] count_all_signals took {}ms, {} signals",
-                    signals_start.elapsed().as_millis(),
-                    signal_count
-                ));
-
-                let gather_start = std::time::Instant::now();
-                let result = startup::IntakeConfirmationState::gather_startup(db, &corpus_root);
-                crate::logging::log_general(format!(
-                    "[TRANSITION] IntakeConfirmationState::gather_startup took {}ms",
-                    gather_start.elapsed().as_millis()
-                ));
-
-                result
-            })
+            .query(move |db| startup::IntakeConfirmationState::gather_startup(db, &corpus_root))
             .recv()
     }
 

@@ -15,51 +15,6 @@ impl Database {
     // Health Issue Operations
     // ========================================================================
 
-    /// Count total signals across all typed tables.
-    ///
-    /// More efficient than loading all signals into memory with get_signals(None).
-    pub fn count_all_signals(&self) -> usize {
-        use crate::meta::signals::data::*;
-        use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
-
-        let mut total: usize = 0;
-        // Corpus signal tables
-        total += FileInCorpusSignal::count(&self.conn).unwrap_or(0);
-        total += UnindexedFileSignal::count(&self.conn).unwrap_or(0);
-        total += HealthyFileSignal::count(&self.conn).unwrap_or(0);
-        total += CorruptFileSignal::count(&self.conn).unwrap_or(0);
-        total += MtimeOnlyMismatchSignal::count(&self.conn).unwrap_or(0);
-        total += MissingDirectorySignal::count(&self.conn).unwrap_or(0);
-        total += MissingFileSignal::count(&self.conn).unwrap_or(0);
-        total += MovedFileSignal::count(&self.conn).unwrap_or(0);
-        total += ShitFormatSignal::count(&self.conn).unwrap_or(0);
-        total += DeployReadySignal::count(&self.conn).unwrap_or(0);
-        total += DeployedHealthySignal::count(&self.conn).unwrap_or(0);
-        total += SidecarDeployReadySignal::count(&self.conn).unwrap_or(0);
-        total += OutOfBandTagSyncSignal::count(&self.conn).unwrap_or(0);
-        total += OutOfBandTagConflictSignal::count(&self.conn).unwrap_or(0);
-        total += SubparDuplicateSignal::count(&self.conn).unwrap_or(0);
-        total += CompoundTagSignal::count(&self.conn).unwrap_or(0);
-        // Aggregate signal tables
-        total += FingerprintOverlapSignal::count(&self.conn).unwrap_or(0);
-        total += MetadataDuplicateSignal::count(&self.conn).unwrap_or(0);
-        total += DuplicateInodeSignal::count(&self.conn).unwrap_or(0);
-        total += MissingTagSignal::count(&self.conn).unwrap_or(0);
-        total += DeployConflictSignal::count(&self.conn).unwrap_or(0);
-        total += TagCanonicitySignal::count(&self.conn).unwrap_or(0);
-        total += InconsistentAlbumArtistSignal::count(&self.conn).unwrap_or(0);
-        total += CrossSourceOverlapSignal::count(&self.conn).unwrap_or(0);
-        total += ReleaseOverlapSignal::count(&self.conn).unwrap_or(0);
-        total += RedundantDuplicateSignal::count(&self.conn).unwrap_or(0);
-        total += CanonicalTagSignal::count(&self.conn).unwrap_or(0);
-        total += LibraryLeftoverSignal::count(&self.conn).unwrap_or(0);
-        total += LibraryStaleSignal::count(&self.conn).unwrap_or(0);
-        total += DiscExtractionSignal::count(&self.conn).unwrap_or(0);
-        total += PathTagMismatchSignal::count(&self.conn).unwrap_or(0);
-        total += ExternalMatchSignal::count(&self.conn).unwrap_or(0);
-        total
-    }
-
     // ========================================================================
     // Typed Signal Queries (direct struct access, no JSON)
     // ========================================================================

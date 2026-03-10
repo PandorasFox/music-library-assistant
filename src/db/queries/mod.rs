@@ -304,11 +304,6 @@ impl<'a> ReadOnlyDb<'a> {
     // Signal Queries
     // =========================================================================
 
-    /// Count total signals across all typed tables.
-    pub fn count_all_signals(&self) -> usize {
-        self.db.count_all_signals()
-    }
-
     // --- Typed signal queries (no JSON) ---
 
     pub fn get_unindexed_file_signals(

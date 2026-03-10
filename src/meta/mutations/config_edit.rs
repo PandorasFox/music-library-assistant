@@ -239,12 +239,6 @@ fn config_diff_entries(old: &Config, new: &Config) -> Vec<DiffEntry> {
         o.performance.db_cache_mb,
         n.performance.db_cache_mb
     );
-    cmp!(
-        "Timing instrumentation",
-        o.performance.timing_instrumentation,
-        n.performance.timing_instrumentation
-    );
-
     diffs
 }
 

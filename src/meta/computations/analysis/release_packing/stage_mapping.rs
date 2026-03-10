@@ -1,7 +1,6 @@
 //! Stage 3: ComputeReleaseMappings and tier orchestrators (MapPerfect/FullMatch/Incomplete/Single).
 
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 
 use crate::db::write_thread::{self};
 use crate::db::ReadOnlyDb;
@@ -35,7 +34,6 @@ use crate::meta::computations::analysis::{Computation as AnalysisComputation, Re
 pub fn execute_compute_release_mappings(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::ComputeReleaseMappings;
 
@@ -44,7 +42,6 @@ pub fn execute_compute_release_mappings(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -65,7 +62,6 @@ pub fn execute_compute_release_mappings(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to read scoring table: {}", e),
             );
         }
@@ -77,7 +73,6 @@ pub fn execute_compute_release_mappings(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to read manifest: {}", e),
             );
         }
@@ -98,7 +93,7 @@ pub fn execute_compute_release_mappings(
         .collect();
 
     if optimal_scores.is_empty() {
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // Load directory metadata for tier classification
@@ -110,7 +105,6 @@ pub fn execute_compute_release_mappings(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query candidate inode dirs: {}", e),
             );
         }
@@ -160,6 +154,97 @@ pub fn execute_compute_release_mappings(
             ProposalTier::FullMatch => full_match_pool.push(proposal),
             ProposalTier::Incomplete => incomplete_pool.push(proposal),
             ProposalTier::Single => single_pool.push(proposal),
+        }
+    }
+
+    // === Pre-accept pinned release proposals ===
+    // Pinned proposals are operator decisions — they win unconditionally.
+    // We emit their signals now and remove them from tier pools before MIS.
+    let pinned_release_ids: HashSet<String> = match crate::config::load_config() {
+        Ok(cfg) => cfg
+            .source_dirs
+            .iter()
+            .filter_map(|sd| sd.pinned_release.clone())
+            .collect(),
+        Err(_) => HashSet::new(),
+    };
+
+    if !pinned_release_ids.is_empty() {
+        // Load data needed for signal emission
+        let corpus_paths: HashMap<i64, String> = read_only_db
+            .get_packing_inode_paths()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
+        let mut pinned_inodes: HashSet<i64> = HashSet::new();
+        let mut pinned_accepted = 0usize;
+
+        // Drain pinned proposals from all pools and emit signals
+        let drain_pinned = |pool: &mut Vec<Proposal>, tier: ProposalTier| -> Vec<Proposal> {
+            let mut pinned = Vec::new();
+            pool.retain(|p| {
+                if !p.rows.is_empty() && pinned_release_ids.contains(&p.rows[0].release_id) {
+                    pinned.push(Proposal {
+                        total_tracks: p.total_tracks,
+                        rows: p.rows.clone(),
+                        inode_set: p.inode_set.clone(),
+                        total_score: p.total_score,
+                        tier,
+                    });
+                    false
+                } else {
+                    true
+                }
+            });
+            pinned
+        };
+
+        let mut all_pinned: Vec<(Proposal, ProposalTier)> = Vec::new();
+        for p in drain_pinned(&mut perfect_pool, ProposalTier::Perfect) {
+            all_pinned.push((p, ProposalTier::Perfect));
+        }
+        for p in drain_pinned(&mut full_match_pool, ProposalTier::FullMatch) {
+            all_pinned.push((p, ProposalTier::FullMatch));
+        }
+        for p in drain_pinned(&mut incomplete_pool, ProposalTier::Incomplete) {
+            all_pinned.push((p, ProposalTier::Incomplete));
+        }
+        for p in drain_pinned(&mut single_pool, ProposalTier::Single) {
+            all_pinned.push((p, ProposalTier::Single));
+        }
+
+        for (proposal, tier) in &all_pinned {
+            emit_isolated_proposal_signals(
+                proposal,
+                *tier,
+                &manifest_map,
+                &corpus_paths,
+                &[], // no siblings for pinned proposals
+                &sender,
+                witness,
+                0.0, // no low-confidence downgrade for pinned
+                0.0,
+            );
+            pinned_inodes.extend(&proposal.inode_set);
+            pinned_accepted += 1;
+        }
+
+        if pinned_accepted > 0 {
+            log_general(format!(
+                "[COMPUTE] ComputeReleaseMappings: pre-accepted {} pinned proposal(s) ({} inodes)",
+                pinned_accepted,
+                pinned_inodes.len(),
+            ));
+
+            // Reverse constraint: reject non-pinned proposals that overlap with pinned dirs
+            let reject_overlapping = |pool: &mut Vec<Proposal>| {
+                pool.retain(|p| !p.inode_set.iter().any(|i| pinned_inodes.contains(i)));
+            };
+            reject_overlapping(&mut perfect_pool);
+            reject_overlapping(&mut full_match_pool);
+            reject_overlapping(&mut incomplete_pool);
+            reject_overlapping(&mut single_pool);
         }
     }
 
@@ -229,7 +314,6 @@ pub fn execute_compute_release_mappings(
 
     Result::pipeline(
         computation,
-        start.elapsed().as_millis() as u64,
         Vec::new(),
         deferred,
     )
@@ -244,7 +328,6 @@ pub(crate) fn execute_map_perfect_releases(
     shared: &SharedMappingState,
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::MapPerfectReleases {
         state: shared.clone(),
@@ -256,7 +339,6 @@ pub(crate) fn execute_map_perfect_releases(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -279,7 +361,6 @@ pub(crate) fn execute_map_perfect_releases(
         let next_state = SharedMappingState::new(state);
         return Result::pipeline(
             computation,
-            start.elapsed().as_millis() as u64,
             Vec::new(),
             vec![(
                 PipelineStage::Resolve,
@@ -403,7 +484,6 @@ pub(crate) fn execute_map_perfect_releases(
 
     Result::pipeline(
         computation,
-        start.elapsed().as_millis() as u64,
         spawned,
         deferred,
     )
@@ -418,7 +498,6 @@ pub(crate) fn execute_map_full_match_releases(
     shared: &SharedMappingState,
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::MapFullMatchReleases {
         state: shared.clone(),
@@ -430,7 +509,6 @@ pub(crate) fn execute_map_full_match_releases(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -474,7 +552,6 @@ pub(crate) fn execute_map_full_match_releases(
 
     Result::pipeline(
         computation,
-        start.elapsed().as_millis() as u64,
         spawned,
         deferred,
     )
@@ -485,7 +562,6 @@ pub(crate) fn execute_map_incomplete_releases(
     shared: &SharedMappingState,
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::MapIncompleteReleases {
         state: shared.clone(),
@@ -497,7 +573,6 @@ pub(crate) fn execute_map_incomplete_releases(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -540,7 +615,6 @@ pub(crate) fn execute_map_incomplete_releases(
 
     Result::pipeline(
         computation,
-        start.elapsed().as_millis() as u64,
         spawned,
         deferred,
     )
@@ -555,7 +629,6 @@ pub(crate) fn execute_map_single_releases(
     shared: &SharedMappingState,
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::MapSingleReleases {
         state: shared.clone(),
@@ -567,7 +640,6 @@ pub(crate) fn execute_map_single_releases(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -610,7 +682,6 @@ pub(crate) fn execute_map_single_releases(
 
     Result::pipeline(
         computation,
-        start.elapsed().as_millis() as u64,
         spawned,
         deferred,
     )

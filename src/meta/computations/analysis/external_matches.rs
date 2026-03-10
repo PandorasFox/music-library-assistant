@@ -5,7 +5,6 @@
 //! ContentDiff, or MetadataOnly.
 
 use std::collections::HashMap;
-use std::time::Instant;
 
 use crate::db::queries::external::ExternalMatchRow;
 use crate::db::types::Zone;
@@ -26,7 +25,6 @@ use super::{Computation, Result};
 pub fn execute_derive_external_matches(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DeriveExternalMatches;
 
@@ -35,7 +33,6 @@ pub fn execute_derive_external_matches(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -49,7 +46,6 @@ pub fn execute_derive_external_matches(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query external matches: {}", e),
             );
         }
@@ -69,7 +65,7 @@ pub fn execute_derive_external_matches(
                 cleared
             ));
         }
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // 2. Group by inode, take first per group (highest confidence).
@@ -86,7 +82,6 @@ pub fn execute_derive_external_matches(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query corpus files: {}", e),
             );
         }
@@ -178,7 +173,7 @@ pub fn execute_derive_external_matches(
         cleared, new, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 /// Group external match rows by inode, taking the first per inode (highest confidence).

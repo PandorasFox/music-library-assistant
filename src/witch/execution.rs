@@ -28,8 +28,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
-use std::time::Instant;
-
 use crate::config;
 use crate::corpus::paths;
 use crate::db::write_thread;
@@ -49,15 +47,14 @@ use super::types::{MutationExecutionWitness, Task, TaskKind, TaskResult};
 
 /// Execute a single task (mutation, computation, maintenance, or external fetch).
 /// Opens DB/HTTP connections as needed via thread-local caches.
-pub(super) fn execute_task(task: Task, label: String, queue_time: Instant) -> TaskResult {
-    let queue_wait_ms = queue_time.elapsed().as_millis() as u64;
+pub(super) fn execute_task(task: Task, label: String) -> TaskResult {
     let kind = TaskKind::from_task(&task);
 
     let mut result = match task {
-        Task::Mutation(mutation) => execute_mutation(*mutation, label, queue_wait_ms),
-        Task::Computation(computation) => execute_computation(computation, label, queue_wait_ms),
-        Task::Maintenance(task) => execute_maintenance(task, label, queue_wait_ms),
-        Task::ExternalFetch(fetch_task) => execute_external_fetch(fetch_task, label, queue_wait_ms),
+        Task::Mutation(mutation) => execute_mutation(*mutation, label),
+        Task::Computation(computation) => execute_computation(computation, label),
+        Task::Maintenance(task) => execute_maintenance(task, label),
+        Task::ExternalFetch(fetch_task) => execute_external_fetch(fetch_task, label),
     };
     result.kind = kind;
     result
@@ -70,11 +67,8 @@ pub(super) fn execute_task(task: Task, label: String, queue_time: Instant) -> Ta
 pub(super) fn execute_mutation(
     mutation: Mutation,
     label: String,
-    queue_wait_ms: u64,
 ) -> TaskResult {
     use crate::meta::mutations::traits::MutationContext;
-
-    let start = Instant::now();
 
     crate::logging::log_mutation(format!(
         "[EXECUTION] execute_mutation START: {} (label={:?})",
@@ -123,9 +117,6 @@ pub(super) fn execute_mutation(
                 kind: TaskKind::Mutation,
                 spawn: Vec::new(),
                 spawn_mutations: Vec::new(),
-                duration_ms: start.elapsed().as_millis() as u64,
-                queue_wait_ms,
-                thread_stats: None,
                 config_update: None,
                 recomputation_scope: RecomputationScope::EMPTY,
                 observed_corpus_inodes: HashMap::new(),
@@ -137,11 +128,9 @@ pub(super) fn execute_mutation(
         }
     };
 
-    let duration_ms = start.elapsed().as_millis() as u64;
-
     crate::logging::log_mutation(format!(
-        "[EXECUTION] execute_mutation END: success={}, error={:?}, duration={}ms",
-        success, error, duration_ms
+        "[EXECUTION] execute_mutation END: success={}, error={:?}",
+        success, error
     ));
     // Mirror failed mutations to errors.log for central error diagnosis
     if !success {
@@ -219,9 +208,6 @@ pub(super) fn execute_mutation(
         kind: TaskKind::Mutation,
         spawn,
         spawn_mutations,
-        duration_ms,
-        queue_wait_ms,
-        thread_stats: None, // Mutations don't use thread-local stats
         config_update,
         recomputation_scope,
         observed_corpus_inodes: HashMap::new(),
@@ -236,14 +222,10 @@ pub(super) fn execute_mutation(
 pub(super) fn execute_computation(
     computation: Computation,
     label: String,
-    queue_wait_ms: u64,
 ) -> TaskResult {
     use crate::meta::computations;
 
     let result = computations::execute_single(&computation);
-
-    // Capture thread stats after execution
-    let thread_stats = Some(computations::get_thread_stats());
 
     // Collect all spawned computations (already wrapped in unified Computation enum)
     let spawn = result.all_spawned();
@@ -255,9 +237,6 @@ pub(super) fn execute_computation(
         kind: TaskKind::Computation,
         spawn,
         spawn_mutations: Vec::new(), // Computations don't spawn mutations
-        duration_ms: result.duration_ms,
-        queue_wait_ms,
-        thread_stats,
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
         observed_corpus_inodes: result.observed_corpus_inodes,
@@ -272,10 +251,7 @@ pub(super) fn execute_computation(
 pub(super) fn execute_maintenance(
     task: DbMaintenanceTask,
     label: String,
-    queue_wait_ms: u64,
 ) -> TaskResult {
-    let start = Instant::now();
-
     let (success, error) = match task {
         DbMaintenanceTask::SchemaReconciliation => {
             crate::logging::log_mutation(format!(
@@ -303,11 +279,9 @@ pub(super) fn execute_maintenance(
         }
     };
 
-    let duration_ms = start.elapsed().as_millis() as u64;
-
     crate::logging::log_general(format!(
-        "[EXECUTION] execute_maintenance END: success={}, error={:?}, duration={}ms",
-        success, error, duration_ms
+        "[EXECUTION] execute_maintenance END: success={}, error={:?}",
+        success, error
     ));
 
     TaskResult {
@@ -317,9 +291,6 @@ pub(super) fn execute_maintenance(
         kind: TaskKind::Maintenance,
         spawn: Vec::new(),
         spawn_mutations: Vec::new(),
-        duration_ms,
-        queue_wait_ms,
-        thread_stats: None,
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
         fetch_result: None,
@@ -545,9 +516,7 @@ thread_local! {
 pub(super) fn execute_external_fetch(
     task: ExternalFetchTask,
     label: String,
-    queue_wait_ms: u64,
 ) -> TaskResult {
-    let start = Instant::now();
 
     let fetch_result = match task {
         ExternalFetchTask::AcoustId(ref t) => execute_acoustid_lookup(
@@ -572,9 +541,6 @@ pub(super) fn execute_external_fetch(
         kind: TaskKind::ExternalFetch,
         spawn: Vec::new(),
         spawn_mutations: Vec::new(),
-        duration_ms: start.elapsed().as_millis() as u64,
-        queue_wait_ms,
-        thread_stats: None,
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
         fetch_result: Some(fetch_result),

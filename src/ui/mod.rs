@@ -149,8 +149,6 @@ pub(crate) struct App {
     /// Click targets for titlebar tabs, populated during render.
     pub(super) tab_click_rects: Vec<(widgets::LateralView, ratatui::layout::Rect)>,
 
-    /// Periodic memory diagnostics (logs to general.log every 30s).
-    mem_diag: crate::diagnostics::MemoryDiagnostics,
 }
 
 impl App {
@@ -186,7 +184,6 @@ impl App {
             art_picker,
             art_cache: widgets::AlbumArtCache::new(),
             tab_click_rects: Vec::new(),
-            mem_diag: crate::diagnostics::MemoryDiagnostics::new(),
         }
     }
 
@@ -470,7 +467,6 @@ impl App {
 
     /// Start the configured default view (post-startup landing screen).
     pub(super) fn start_default_view(&mut self) {
-        self.mem_diag.snapshot_now(); // memory at steady-state
         let default_view = self.config().opinions.startup.default_view;
         match default_view {
             crate::config::StartupView::Health => self.start_health_view(),
@@ -493,8 +489,6 @@ impl App {
         T: ProgressStatsUpdater,
     {
         state.set_db_queue_depth(self.witch.db_queue_depth());
-        state.set_db_stats(self.witch.db_stats());
-        state.set_worker_stats(self.witch.worker_stats());
     }
 
     pub(super) fn start_tag_search(&mut self) {
@@ -781,8 +775,6 @@ pub fn run_menu(
     let mut app = App::new_with_witch(shared_config, witch, cache_handle, notice_rx, art_picker);
     app.vacuum_threshold = vacuum_threshold;
     app.db_path = db_path.clone();
-    app.mem_diag.snapshot_now(); // baseline memory snapshot
-
     // Determine initial view based on startup state
     if app.witch.needs_schema_update() {
         let descriptions = app.witch.pending_schema_descriptions();
@@ -823,8 +815,6 @@ fn run_app<B: ratatui::backend::Backend>(
     }
 
     loop {
-        let frame_start = std::time::Instant::now();
-
         if signal_received.swap(false, Ordering::SeqCst) {
             app.handle_input(InputAction::Cancel);
         }
@@ -866,17 +856,8 @@ fn run_app<B: ratatui::backend::Backend>(
         app.witch.set_idle_rescan_eligible(idle_eligible);
 
         // Tick the Witch (skip during startup views — they tick internally as needed)
-        let mut tick_duration = std::time::Duration::ZERO;
         if !is_startup_view {
-            let tick_start = std::time::Instant::now();
             app.witch.tick();
-            tick_duration = tick_start.elapsed();
-            if tick_duration.as_millis() > 16 {
-                crate::logging::log_perf(format!(
-                    "[FRAME DEBUG] witch.tick() took {}ms",
-                    tick_duration.as_millis(),
-                ));
-            }
         }
 
         // Drain WitchNotices → update local state
@@ -991,9 +972,6 @@ fn run_app<B: ratatui::backend::Backend>(
             app.tick_tag_canonicity_loading();
         }
 
-        // Periodic memory diagnostics (logs every 30s)
-        app.mem_diag.tick();
-
         // Flag demand for cached UI data
         // Always want deploy status — titlebar needs it for purple indicator
         app.cache.want_deploy();
@@ -1017,25 +995,7 @@ fn run_app<B: ratatui::backend::Backend>(
             }
         }
 
-        let draw_start = std::time::Instant::now();
         terminal.draw(|f| render(f, app))?;
-        let draw_duration = draw_start.elapsed();
-        if draw_duration.as_millis() > 16 {
-            crate::logging::log_perf(format!(
-                "[FRAME DEBUG] terminal.draw() took {}ms",
-                draw_duration.as_millis()
-            ));
-        }
-
-        let frame_duration = frame_start.elapsed();
-        if frame_duration.as_millis() > 16 {
-            crate::logging::log_perf(format!(
-                "[FRAME DEBUG] SLOW FRAME: total {}ms (tick={}ms, draw={}ms)",
-                frame_duration.as_millis(),
-                tick_duration.as_millis(),
-                draw_duration.as_millis()
-            ));
-        }
 
         // Tick tag search for pending bulk edit (after modal has rendered)
         app.tick_tag_search();

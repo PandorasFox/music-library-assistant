@@ -2,7 +2,6 @@
 //!
 //! KDL configuration parsing and path utilities.
 
-mod debug;
 mod dirs;
 mod edit;
 mod parse;
@@ -18,15 +17,12 @@ use std::path::Path;
 pub use mm_utils::{get_config_dir, get_db_path, is_audio_extension, AUDIO_EXTENSIONS};
 
 // Re-export from submodules
-pub use debug::{init_debug_config, is_memory_logging_enabled};
 pub use dirs::{parse_dirs_kdl, write_dirs_to_disk};
 pub use edit::write_config_to_disk;
 pub use path_schema::parse_path_schema;
-pub use performance::{
-    get_db_cache_kb, get_worker_thread_count, init_performance_config, is_timing_enabled,
-};
+pub use performance::{get_db_cache_kb, get_worker_thread_count, init_performance_config};
 pub use types::{
-    read_shared_config, AlbumArtOpinions, CanonicalizationOpinions, Config, DebugOpinions,
+    read_shared_config, AlbumArtOpinions, CanonicalizationOpinions, Config,
     DiscExtractionOpinions, DuplicateAnalysisOpinions, ExternalMatchingConfig,
     HealthDetectionOpinions, InboxOrganizeGranularity, InboxOrganizeOpinions, Opinions,
     PackingWeights, PerformanceOpinions, QualityResolutionOpinions, ReleasePackingOpinions,

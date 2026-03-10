@@ -158,25 +158,23 @@ impl Computation {
     pub fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
         match self {
             Computation::ScheduleSecondLevelDerivations => {
-                execute_schedule_second_level_derivations(ctx.read_db, ctx.witness, ctx.start)
+                execute_schedule_second_level_derivations(ctx.read_db, ctx.witness)
             }
             Computation::DeriveInboxSignals { observed_inodes } => execute_derive_inbox_signals(
                 ctx.read_db,
                 observed_inodes.clone(),
                 ctx.witness,
-                ctx.start,
             ),
             Computation::DeriveCorpusSignals { observed_inodes } => execute_derive_corpus_signals(
                 ctx.read_db,
                 observed_inodes.clone(),
                 ctx.witness,
-                ctx.start,
             ),
             Computation::UpdateCorpusFileSignals { path } => {
-                execute_update_corpus_file_signals(ctx.read_db, path, ctx.witness, ctx.start)
+                execute_update_corpus_file_signals(ctx.read_db, path, ctx.witness)
             }
             Computation::UpdateLibraryFileSignals { path } => {
-                execute_update_library_file_signals(ctx.read_db, path, ctx.witness, ctx.start)
+                execute_update_library_file_signals(ctx.read_db, path, ctx.witness)
             }
             Computation::WalkLibrary {
                 library_root,
@@ -188,7 +186,6 @@ impl Computation {
                 library_name,
                 corpus_path_prefixes,
                 ctx.witness,
-                ctx.start,
             ),
             Computation::ScanLibraryDirectory {
                 directory,
@@ -202,10 +199,9 @@ impl Computation {
                 library_root,
                 corpus_path_prefixes,
                 ctx.witness,
-                ctx.start,
             ),
             Computation::ReconcileLibraryFiles { observed_files } => {
-                execute_reconcile_library_files(ctx.read_db, observed_files, ctx.witness, ctx.start)
+                execute_reconcile_library_files(ctx.read_db, observed_files, ctx.witness)
             }
             Computation::UpdateDeploySignals {
                 corpus_path,
@@ -215,7 +211,6 @@ impl Computation {
                 corpus_path,
                 library_path,
                 ctx.witness,
-                ctx.start,
             ),
         }
     }
@@ -234,7 +229,6 @@ pub struct Result {
     pub _computation: Computation,
     pub success: bool,
     pub error: Option<String>,
-    pub duration_ms: u64,
     /// Follow-up computations - ONLY Derivation computations allowed.
     pub spawn: Vec<Computation>,
     /// Library files observed on disk during ScanLibraryDirectory.
@@ -243,12 +237,11 @@ pub struct Result {
 }
 
 impl Result {
-    pub fn success(computation: Computation, duration_ms: u64, spawn: Vec<Computation>) -> Self {
+    pub fn success(computation: Computation, spawn: Vec<Computation>) -> Self {
         Self {
             _computation: computation,
             success: true,
             error: None,
-            duration_ms,
             spawn,
             observed_library_files: Vec::new(),
         }
@@ -256,7 +249,6 @@ impl Result {
 
     pub fn success_with_library_files(
         computation: Computation,
-        duration_ms: u64,
         spawn: Vec<Computation>,
         observed_library_files: Vec<ObservedLibraryFile>,
     ) -> Self {
@@ -264,18 +256,16 @@ impl Result {
             _computation: computation,
             success: true,
             error: None,
-            duration_ms,
             spawn,
             observed_library_files,
         }
     }
 
-    pub fn failure(computation: Computation, duration_ms: u64, error: String) -> Self {
+    pub fn failure(computation: Computation, error: String) -> Self {
         Self {
             _computation: computation,
             success: false,
             error: Some(error),
-            duration_ms,
             spawn: Vec::new(),
             observed_library_files: Vec::new(),
         }

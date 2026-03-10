@@ -26,7 +26,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
 
 use crate::config;
 use crate::corpus::tags::TagSet;
@@ -599,55 +598,20 @@ enum DbWriteOp {
 /// Shared statistics between DB thread and handle.
 ///
 /// All fields are atomic for lock-free access from UI thread.
-/// Timing-related fields are only updated when `timing_enabled` is true.
 struct SharedStats {
-    /// Whether timing instrumentation is enabled
-    timing_enabled: bool,
-    /// Total write operations processed (timing only)
-    total_writes: AtomicU64,
-    /// Signal operations (timing only)
-    signal_writes: AtomicU64,
-    /// Index operations (Phase 2, timing only)
-    index_writes: AtomicU64,
-    /// Current queue depth - always tracked for shutdown coordination
+    /// Current queue depth - tracked for shutdown coordination and UI display.
     queue_depth: AtomicU64,
-    /// Cumulative microseconds spent in DB operations (timing only)
-    total_db_time_us: AtomicU64,
-    /// True when queue is empty - always tracked for shutdown blocking
+    /// True when queue is empty - tracked for shutdown blocking.
     queue_empty: AtomicBool,
-    /// Thread start time for rate calculations (timing only)
-    start_time: Instant,
 }
 
 impl SharedStats {
-    fn new(timing_enabled: bool) -> Self {
+    fn new() -> Self {
         Self {
-            timing_enabled,
-            total_writes: AtomicU64::new(0),
-            signal_writes: AtomicU64::new(0),
-            index_writes: AtomicU64::new(0),
             queue_depth: AtomicU64::new(0),
-            total_db_time_us: AtomicU64::new(0),
             queue_empty: AtomicBool::new(true),
-            start_time: Instant::now(),
         }
     }
-}
-
-// ============================================================================
-// Public Types
-// ============================================================================
-
-/// Statistics snapshot for UI display.
-#[derive(Debug, Clone, Default)]
-pub struct DbThreadStats {
-    pub total_writes: u64,
-    pub _signal_writes: u64,
-    pub _index_writes: u64,
-    pub queue_depth: u64,
-    pub _avg_latency_us: u64,
-    pub writes_per_sec: f64,
-    pub _queue_empty: bool,
 }
 
 /// Handle to the DB thread for stats access and shutdown coordination.
@@ -669,39 +633,9 @@ impl DbThreadHandle {
         self.stats.queue_empty.load(Ordering::Acquire)
     }
 
-    /// Get the current queue depth (always available, regardless of timing).
+    /// Get the current queue depth.
     pub fn queue_depth(&self) -> u64 {
         self.stats.queue_depth.load(Ordering::Relaxed)
-    }
-
-    /// Get current stats snapshot for UI display.
-    /// Returns None if timing instrumentation is disabled.
-    pub fn stats(&self) -> Option<DbThreadStats> {
-        if !self.stats.timing_enabled {
-            return None;
-        }
-
-        let total_writes = self.stats.total_writes.load(Ordering::Relaxed);
-        let total_db_time_us = self.stats.total_db_time_us.load(Ordering::Relaxed);
-        let elapsed_secs = self.stats.start_time.elapsed().as_secs_f64();
-
-        Some(DbThreadStats {
-            total_writes,
-            _signal_writes: self.stats.signal_writes.load(Ordering::Relaxed),
-            _index_writes: self.stats.index_writes.load(Ordering::Relaxed),
-            queue_depth: self.stats.queue_depth.load(Ordering::Relaxed),
-            _avg_latency_us: if total_writes > 0 {
-                total_db_time_us / total_writes
-            } else {
-                0
-            },
-            writes_per_sec: if elapsed_secs > 0.0 {
-                total_writes as f64 / elapsed_secs
-            } else {
-                0.0
-            },
-            _queue_empty: self.stats.queue_empty.load(Ordering::Acquire),
-        })
     }
 }
 
@@ -1444,8 +1378,7 @@ impl SignalWriteSender {
 /// Returns the handle for stats/shutdown. Also initializes the global signal sender
 /// so computation code can access it via `signal_sender()`.
 pub fn spawn() -> DbThreadHandle {
-    let timing_enabled = config::is_timing_enabled();
-    let stats = Arc::new(SharedStats::new(timing_enabled));
+    let stats = Arc::new(SharedStats::new());
 
     // Create channel (unbounded) - all operations go through DbWriteOp
     let (signal_tx, signal_rx) = mpsc::channel::<DbWriteOp>();
@@ -1486,8 +1419,6 @@ fn run_db_thread(signal_rx: Receiver<DbWriteOp>, stats: Arc<SharedStats>) {
 
     // Process signal operations
     // Note: Using recv() which blocks until a message arrives or channel closes
-    let timing_enabled = stats.timing_enabled;
-
     loop {
         match signal_rx.recv() {
             Ok(DbWriteOp::ExecuteVacuum { result_tx }) => {
@@ -1527,23 +1458,9 @@ fn run_db_thread(signal_rx: Receiver<DbWriteOp>, stats: Arc<SharedStats>) {
                 break;
             }
             Ok(op) => {
-                // Only time operations when instrumentation is enabled
-                if timing_enabled {
-                    let start = Instant::now();
-                    execute_signal_op(&db, &op);
-                    let elapsed_us = start.elapsed().as_micros() as u64;
+                execute_signal_op(&db, &op);
 
-                    // Update timing stats
-                    stats.total_writes.fetch_add(1, Ordering::Relaxed);
-                    stats.signal_writes.fetch_add(1, Ordering::Relaxed);
-                    stats
-                        .total_db_time_us
-                        .fetch_add(elapsed_us, Ordering::Relaxed);
-                } else {
-                    execute_signal_op(&db, &op);
-                }
-
-                // Always update queue management (needed for shutdown coordination)
+                // Update queue management (needed for shutdown coordination)
                 stats.queue_depth.fetch_sub(1, Ordering::Relaxed);
                 if stats.queue_depth.load(Ordering::Relaxed) == 0 {
                     stats.queue_empty.store(true, Ordering::Release);

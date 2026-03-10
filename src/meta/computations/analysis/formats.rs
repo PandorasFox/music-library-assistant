@@ -2,7 +2,6 @@
 //!
 //! Shit format detection (non-Vorbis containers).
 
-use std::time::Instant;
 
 use crate::db::types::Zone;
 use crate::db::write_thread;
@@ -34,7 +33,6 @@ const SHIT_FORMAT_COMPUTATION: &str = "shit_format";
 pub fn execute_detect_shit_formats(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DetectShitFormats;
 
@@ -43,7 +41,6 @@ pub fn execute_detect_shit_formats(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -54,7 +51,6 @@ pub fn execute_detect_shit_formats(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query dirty inodes: {}", e),
             );
         }
@@ -62,7 +58,7 @@ pub fn execute_detect_shit_formats(
 
     if dirty_inodes.is_empty() {
         log_general("[COMPUTE] DetectShitFormats: no dirty inodes, skipping");
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     let mut emitted = 0;
@@ -115,5 +111,5 @@ pub fn execute_detect_shit_formats(
         cleared
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }

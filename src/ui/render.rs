@@ -3,8 +3,6 @@
 //! This module contains all top-level render functions that dispatch
 //! to view-specific renderers based on the ActiveView enum.
 
-use std::time::Instant;
-
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -47,15 +45,7 @@ pub fn render_app(
                 EyeFrame::Closed => EYE_CLOSED,
             })
         };
-        let start = Instant::now();
         super::progress_screen::render(f, f.area(), screen, eye_frame);
-        let elapsed = start.elapsed();
-        if elapsed.as_millis() > 16 {
-            crate::logging::log_perf(format!(
-                "[RENDER DEBUG] progress_screen::render took {}ms",
-                elapsed.as_millis()
-            ));
-        }
         return;
     }
 
@@ -90,27 +80,13 @@ pub fn render_app(
         app.tab_click_rects = titlebar.tab_click_rects(chunks[0]);
         titlebar.render(f, chunks[0]);
 
-        let start = Instant::now();
         render_content(f, app, chunks[1]);
-        let content_time = start.elapsed();
-
-        let start = Instant::now();
         render_status_bar(
             f,
             chunks[2],
             status_line_1.as_deref(),
             status_line_2.as_deref(),
         );
-        let footer_time = start.elapsed();
-
-        if content_time.as_millis() > 16 || footer_time.as_millis() > 16 {
-            crate::logging::log_perf(format!(
-                "[RENDER DEBUG] view={} content={}ms footer={}ms",
-                view_name(&app.view),
-                content_time.as_millis(),
-                footer_time.as_millis()
-            ));
-        }
     } else {
         // Standard three-part layout: header + content + status bar
         let chunks = Layout::default()
@@ -122,35 +98,14 @@ pub fn render_app(
             ])
             .split(f.area());
 
-        let start = Instant::now();
         render_header(f, chunks[0], &app.view);
-        let header_time = start.elapsed();
-
-        let start = Instant::now();
         render_content(f, app, chunks[1]);
-        let content_time = start.elapsed();
-
-        let start = Instant::now();
         render_status_bar(
             f,
             chunks[2],
             status_line_1.as_deref(),
             status_line_2.as_deref(),
         );
-        let footer_time = start.elapsed();
-
-        if header_time.as_millis() > 16
-            || content_time.as_millis() > 16
-            || footer_time.as_millis() > 16
-        {
-            crate::logging::log_perf(format!(
-                "[RENDER DEBUG] view={} header={}ms content={}ms footer={}ms",
-                view_name(&app.view),
-                header_time.as_millis(),
-                content_time.as_millis(),
-                footer_time.as_millis()
-            ));
-        }
     }
 }
 
@@ -174,161 +129,117 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, view: &ActiveView) 
     f.render_widget(header, area);
 }
 
-fn render_content(
-    f: &mut Frame,
-    app: &mut super::App,
-    area: ratatui::layout::Rect,
-) {
-    let start = Instant::now();
-    let vname: &str;
-
+fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Rect) {
     match app.view {
         ActiveView::SchemaUpdate(ref state) => {
-            vname = "schema_update";
             startup::migrations::render_schema_update_view(f, area, state);
         }
         ActiveView::VacuumPrompt(ref state) => {
-            vname = "vacuum_prompt";
             startup::vacuum::render_vacuum_view(f, area, state);
         }
         ActiveView::Progress { .. } => {
             // Never reached - handled separately in render_app() before this function
-            vname = "progress";
         }
         ActiveView::ConfigEditor(ref state) => {
-            vname = "config_editor";
             config_editor::render::render(f, area, state);
         }
         ActiveView::ProgressiveWork(ref worker) => {
-            vname = "progressive_work";
             progressive_worker::render(f, area, worker);
         }
         ActiveView::Deploy(ref state) => {
-            vname = "deploy";
             state.render(f, area);
         }
         ActiveView::ExitConfirm(ref mut state) => {
-            vname = "exit_confirm_modal";
             render_exit_confirm_modal(f, area, state);
         }
         ActiveView::CorpusBrowser(ref mut browser) => {
-            vname = "corpus_browser";
             browser.render(f, area, &mut app.art_picker, &mut app.art_cache);
         }
         ActiveView::Insights(ref mut view) => {
-            vname = "health";
             insights_view::render_insights_view(f, area, view);
         }
         ActiveView::History(ref mut state) => {
-            vname = "history";
             super::history_view::render::render(f, area, state);
         }
         ActiveView::ExternalMatches(ref mut state) => {
-            vname = "external_matches";
             super::external_match_view::render::render(f, area, state);
         }
         ActiveView::Inbox(ref mut state) => {
-            vname = "inbox";
             inbox_view::render_inbox_view(f, area, state);
         }
         ActiveView::TabbedTransactionReview(ref mut state) => {
-            vname = "tabbed_transaction_review";
             tabbed_transaction_review::render(f, area, state);
         }
         ActiveView::TagSearch(ref mut state) => {
-            vname = "tag_search";
             state.render(f, area);
         }
         ActiveView::IntakeConfirmation(ref state) => {
-            vname = "intake_confirmation";
             super::startup::intake_confirmation::render(f, area, state);
         }
         ActiveView::UnifiedTagEditor(ref mut editor) => {
-            vname = "unified_tag_editor";
             editor.render(f, area, &mut app.art_picker, &mut app.art_cache);
         }
         ActiveView::MissingFileResolution(ref mut preview) => {
-            vname = "missing_file_resolution";
             preview.render(f, area);
         }
         ActiveView::MissingDirectoryResolution(ref mut preview) => {
-            vname = "missing_directory_resolution";
             preview.render(f, area);
         }
         ActiveView::TagCanonicityResolution { ref mut state, .. } => {
-            vname = "tag_canonicity_resolution";
             tag_canonicity_v2::render(f, area, state);
         }
         ActiveView::TagCanonicityLoading { ref clusters, .. } => {
-            vname = "tag_canonicity_loading";
             render_canonicity_loading(f, area, clusters);
         }
         ActiveView::CompoundTagSplit { ref mut state, .. } => {
-            vname = "compound_tag_split";
             compound_split_v2::render(f, area, state);
         }
         ActiveView::OobSyncResolution(ref mut state) => {
-            vname = "oob_sync_resolution";
             oob_sync_modal::render(f, area, state);
         }
         ActiveView::OobConflictInspection(ref mut state) => {
-            vname = "oob_conflict_inspection";
             oob_conflict_modal::render(f, area, state);
         }
         ActiveView::ExternalMatchReview(ref mut state) => {
-            vname = "external_match_review";
             external_match_modal::render(f, area, state);
         }
         ActiveView::ReleasePackingBrowser(ref mut state) => {
-            vname = "release_packing_browser";
             super::release_packing_browser::render::render(f, area, state);
         }
         ActiveView::KnotBrowser(ref mut state) => {
-            vname = "knot_browser";
             super::knot_browser::render::render(f, area, state);
         }
         ActiveView::MovedFileAcknowledge(ref mut state) => {
-            vname = "moved_file_acknowledge";
             super::moved_file_modal::render(state, f, area);
         }
         ActiveView::TransactionReview(ref mut review) => {
-            vname = "transaction_review";
             transaction_review::render(f, area, review);
         }
         ActiveView::CorruptFileResolution(ref mut preview) => {
-            vname = "corrupt_file_resolution";
             preview.render(f, area);
         }
         ActiveView::ShitFormatResolution(ref mut preview) => {
-            vname = "shit_format_resolution";
             preview.render(f, area);
         }
         ActiveView::SubparDuplicateResolution(ref mut preview) => {
-            vname = "subpar_duplicate_resolution";
             preview.render(f, area);
         }
         ActiveView::InboxCorpusMatchResolution(ref mut preview) => {
-            vname = "inbox_corpus_match_resolution";
             preview.render(f, area);
         }
         ActiveView::InboxOrganize(ref mut state) => {
-            vname = "inbox_organize";
             super::inbox_organize::render::render(f, area, state);
         }
         ActiveView::DirectoryClusterResolution(ref mut preview) => {
-            vname = "directory_cluster_resolution";
             preview.render(f, area);
         }
         ActiveView::MissingAlbumSingleResolution(ref mut state) => {
-            vname = "missing_album_single";
             state.render(f, area);
         }
         ActiveView::DiscExtractionResolution(ref mut state) => {
-            vname = "disc_extraction";
             state.render(f, area);
         }
         ActiveView::ManualReview(ref state) => {
-            vname = "manual_review";
             manual_review_modal::render(f, area, state);
         }
     }
@@ -336,15 +247,6 @@ fn render_content(
     // Render filter popup overlay if active
     if let Some(ref overlay) = app.filter_overlay {
         filter_popup::render(f, area, &overlay.state);
-    }
-
-    let elapsed = start.elapsed();
-    if elapsed.as_millis() > 16 {
-        crate::logging::log_perf(format!(
-            "[RENDER DEBUG] render_content({}) took {}ms",
-            vname,
-            elapsed.as_millis()
-        ));
     }
 }
 
@@ -485,49 +387,6 @@ fn render_status_bar(
     status_line_2: Option<&str>,
 ) {
     status_bar::render(f, area, status_line_1, status_line_2);
-}
-
-/// Get a short name for the active view (for perf logging).
-fn view_name(view: &ActiveView) -> &'static str {
-    match view {
-        ActiveView::SchemaUpdate(_) => "schema_update",
-        ActiveView::VacuumPrompt(_) => "vacuum_prompt",
-        ActiveView::ConfigEditor(_) => "config_editor",
-        ActiveView::Insights(_) => "health",
-        ActiveView::History(_) => "history",
-        ActiveView::Inbox(_) => "inbox",
-        ActiveView::TabbedTransactionReview(_) => "tabbed_transaction_review",
-        ActiveView::CorpusBrowser(_) => "corpus_browser",
-        ActiveView::TagSearch(_) => "tag_search",
-        ActiveView::Progress { .. } => "progress",
-        ActiveView::ProgressiveWork(_) => "progressive_work",
-        ActiveView::ExitConfirm(_) => "exit_confirm",
-        ActiveView::IntakeConfirmation(_) => "intake_confirmation",
-        ActiveView::UnifiedTagEditor(_) => "unified_tag_editor",
-        ActiveView::Deploy(_) => "deploy",
-        ActiveView::MissingFileResolution(_) => "missing_file_resolution",
-        ActiveView::MissingDirectoryResolution(_) => "missing_directory_resolution",
-        ActiveView::CorruptFileResolution(_) => "corrupt_file_resolution",
-        ActiveView::ShitFormatResolution(_) => "shit_format_resolution",
-        ActiveView::SubparDuplicateResolution(_) => "subpar_duplicate_resolution",
-        ActiveView::InboxCorpusMatchResolution(_) => "inbox_corpus_match_resolution",
-        ActiveView::InboxOrganize(_) => "inbox_organize",
-        ActiveView::DirectoryClusterResolution(_) => "directory_cluster_resolution",
-        ActiveView::MovedFileAcknowledge(_) => "moved_file_acknowledge",
-        ActiveView::OobSyncResolution(_) => "oob_sync_resolution",
-        ActiveView::OobConflictInspection(_) => "oob_conflict_inspection",
-        ActiveView::ExternalMatches(_) => "external_matches",
-        ActiveView::ExternalMatchReview(_) => "external_match_review",
-        ActiveView::ReleasePackingBrowser(_) => "release_packing_browser",
-        ActiveView::KnotBrowser(_) => "knot_browser",
-        ActiveView::TagCanonicityResolution { .. } => "tag_canonicity_resolution",
-        ActiveView::TagCanonicityLoading { .. } => "tag_canonicity_loading",
-        ActiveView::CompoundTagSplit { .. } => "compound_tag_split",
-        ActiveView::MissingAlbumSingleResolution(_) => "missing_album_single",
-        ActiveView::DiscExtractionResolution(_) => "disc_extraction",
-        ActiveView::ManualReview(_) => "manual_review",
-        ActiveView::TransactionReview(_) => "transaction_review",
-    }
 }
 
 /// Render a simple loading indicator for tag canonicity cluster loading.

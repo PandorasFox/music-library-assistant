@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::time::Instant;
 
 use crate::db::types::Zone;
 use crate::db::write_thread::{self, PackingScoreRow};
@@ -37,7 +36,6 @@ use crate::meta::computations::analysis::{Computation as AnalysisComputation, Re
 pub fn execute_pack_releases(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::PackReleases;
 
@@ -46,7 +44,6 @@ pub fn execute_pack_releases(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -57,7 +54,6 @@ pub fn execute_pack_releases(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -73,7 +69,6 @@ pub fn execute_pack_releases(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query external matches: {}", e),
             );
         }
@@ -95,7 +90,7 @@ pub fn execute_pack_releases(
                 cleared
             ));
         }
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     log_general(format!(
@@ -109,30 +104,30 @@ pub fn execute_pack_releases(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query corpus files: {}", e),
             );
         }
     };
 
-    let corpus_info: HashMap<i64, CorpusFileInfo> = files_with_tags
-        .into_iter()
-        .map(|(af, tags)| {
-            let path = af.path().to_string();
-            let parent_dir = Path::new(&path)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-            (
-                af.inode(),
-                CorpusFileInfo {
-                    parent_dir,
-                    tags,
-                    duration_ms: af.audio.duration_ms,
-                },
-            )
-        })
-        .collect();
+    let mut corpus_info: HashMap<i64, CorpusFileInfo> = HashMap::new();
+    let mut corpus_inode_paths: HashMap<i64, String> = HashMap::new();
+    for (af, tags) in files_with_tags {
+        let path = af.path().to_string();
+        let parent_dir = Path::new(&path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let inode = af.inode();
+        corpus_inode_paths.insert(inode, path);
+        corpus_info.insert(
+            inode,
+            CorpusFileInfo {
+                parent_dir,
+                tags,
+                duration_ms: af.audio.duration_ms,
+            },
+        );
+    }
 
     // === Parse recordings, filter by confidence, collect release IDs ===
     // Duration is NOT filtered here — it's a scoring dimension in Stage 2.
@@ -198,6 +193,23 @@ pub fn execute_pack_releases(
         }
     }
 
+    // === Inject pinned releases from config ===
+    // Build pinned_dir_releases: dir_path (with "corpus/" prefix) → release_id
+    let mut pinned_dir_releases: HashMap<String, String> = HashMap::new();
+    for sd in &config.source_dirs {
+        if let Some(ref release_id) = sd.pinned_release {
+            let dir_path = format!("corpus/{}", sd.path.display());
+            pinned_dir_releases.insert(dir_path, release_id.clone());
+            all_release_ids.insert(release_id.clone());
+        }
+    }
+    if !pinned_dir_releases.is_empty() {
+        log_general(format!(
+            "[COMPUTE] PackReleases: {} pinned release(s) from config",
+            pinned_dir_releases.len()
+        ));
+    }
+
     log_general(format!(
         "[COMPUTE] PackReleases: {} inodes after filtering (confidence={}, parse_fail={}), {} release IDs",
         inode_recordings.len(), filtered_confidence, recording_parse_failures,
@@ -217,7 +229,7 @@ pub fn execute_pack_releases(
                 cleared
             ));
         }
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // === Load release tracklists ===
@@ -227,7 +239,6 @@ pub fn execute_pack_releases(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to bulk-load release cache: {}", e),
             );
         }
@@ -257,7 +268,7 @@ pub fn execute_pack_releases(
             Vec::new(),
             witness,
         );
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // === Load artist data for locale-aware name resolution ===
@@ -393,6 +404,63 @@ pub fn execute_pack_releases(
         }
     }
 
+    // === Inject synthetic candidates for pinned directories ===
+    // For each pinned dir, ensure all its corpus inodes have at least one candidate
+    // row for the pinned release. This guarantees Stage 2 considers the pinned dir.
+    let mut pinned_injected = 0usize;
+    for (dir_path, release_id) in &pinned_dir_releases {
+        // Find all corpus inodes in this directory
+        for (inode, info) in &corpus_info {
+            if info.parent_dir == *dir_path {
+                let key = (release_id.clone(), *inode);
+                if !deduped.contains_key(&key) {
+                    let inode_path = corpus_inode_paths.get(inode).cloned().unwrap_or_default();
+                    let dir_file_count = dir_total_files.get(dir_path).copied().unwrap_or(1);
+                    deduped.insert(
+                        key,
+                        write_thread::PackingCandidateRow {
+                            release_id: release_id.clone(),
+                            inode: *inode,
+                            recording_id: String::new(), // synthetic — no AcoustID match
+                            confidence: 1.0,
+                            path: inode_path,
+                            parent_dir: dir_path.clone(),
+                            duration_ms: info.duration_ms,
+                            tag_title: info
+                                .tags
+                                .get("TITLE")
+                                .and_then(|v| v.first())
+                                .cloned(),
+                            tag_artist: info
+                                .tags
+                                .get("ARTIST")
+                                .and_then(|v| v.first())
+                                .cloned(),
+                            tag_album: info
+                                .tags
+                                .get("ALBUM")
+                                .and_then(|v| v.first())
+                                .cloned(),
+                            tag_tracknumber: info
+                                .tags
+                                .get("TRACKNUMBER")
+                                .and_then(|v| v.first())
+                                .cloned(),
+                            dir_file_count,
+                        },
+                    );
+                    pinned_injected += 1;
+                }
+            }
+        }
+    }
+    if pinned_injected > 0 {
+        log_general(format!(
+            "[COMPUTE] PackReleases: injected {} synthetic candidate rows for pinned releases",
+            pinned_injected
+        ));
+    }
+
     let mut releases_with_candidates: HashSet<String> = HashSet::new();
     for (release_id, _) in deduped.keys() {
         releases_with_candidates.insert(release_id.clone());
@@ -433,7 +501,6 @@ pub fn execute_pack_releases(
 
     Result::pipeline(
         computation,
-        start.elapsed().as_millis() as u64,
         spawn,
         deferred_phases,
     )
@@ -453,7 +520,6 @@ pub fn execute_score_release_candidates(
     read_only_db: &ReadOnlyDb<'_>,
     release_id: &str,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::ScoreReleaseCandidates {
         release_id: release_id.to_string(),
@@ -464,7 +530,6 @@ pub fn execute_score_release_candidates(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -475,7 +540,6 @@ pub fn execute_score_release_candidates(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -493,7 +557,6 @@ pub fn execute_score_release_candidates(
             _ => {
                 return Result::failure(
                     computation,
-                    start.elapsed().as_millis() as u64,
                     format!("Release {} has no parseable tracklist", release_id),
                 );
             }
@@ -501,7 +564,6 @@ pub fn execute_score_release_candidates(
         _ => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Release {} not in cache", release_id),
             );
         }
@@ -546,14 +608,13 @@ pub fn execute_score_release_candidates(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query packing candidates: {}", e),
             );
         }
     };
 
     if candidate_rows.is_empty() {
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // Build candidate_inodes, corpus_info, and dir_file_counts from candidate rows
@@ -643,6 +704,25 @@ pub fn execute_score_release_candidates(
                 .entry(corpus.parent_dir.clone())
                 .or_default()
                 .insert(candidate.inode);
+        }
+    }
+
+    // === Pinned release constraint: restrict to pinned dirs only ===
+    // If this release is pinned by any dir(s), discard all non-pinned dirs.
+    let pinned_dirs_for_release: Vec<String> = config
+        .source_dirs
+        .iter()
+        .filter(|sd| sd.pinned_release.as_deref() == Some(release_id))
+        .map(|sd| format!("corpus/{}", sd.path.display()))
+        .collect();
+
+    if !pinned_dirs_for_release.is_empty() {
+        dir_candidate_inodes.retain(|dir, _| pinned_dirs_for_release.contains(dir));
+        // Also include pinned dirs that have files but no AcoustID candidates
+        // (their inodes were injected as synthetic candidates in Stage 1,
+        // but might only appear in the elimination phase)
+        for pinned_dir in &pinned_dirs_for_release {
+            dir_candidate_inodes.entry(pinned_dir.clone()).or_default();
         }
     }
 
@@ -1133,5 +1213,5 @@ pub fn execute_score_release_candidates(
         elimination_count
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }

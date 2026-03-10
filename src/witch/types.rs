@@ -427,12 +427,6 @@ pub(super) struct TaskResult {
     pub spawn: Vec<Computation>,
     /// Follow-up mutations to queue (from mutation spawn chaining)
     pub spawn_mutations: Vec<SpawnedMutation>,
-    /// Task execution duration in milliseconds
-    pub duration_ms: u64,
-    /// Time task waited in queue before execution (milliseconds)
-    pub queue_wait_ms: u64,
-    /// Snapshot of thread stats after execution (for computations)
-    pub thread_stats: Option<crate::meta::computations::ThreadStats>,
     /// Updated config from ApplyConfigEdits mutation (applied to SharedConfig in tick()).
     pub config_update: Option<crate::config::Config>,
     /// Recomputation scope from this mutation (which domains it dirtied).
@@ -451,33 +445,3 @@ pub(super) struct TaskResult {
         std::collections::VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,
 }
 
-// ============================================================================
-// Worker Performance Stats
-// ============================================================================
-
-/// Aggregated performance statistics from worker threads.
-#[derive(Debug, Clone, Default)]
-pub struct WorkerStats {
-    /// Total tasks completed across all threads
-    pub tasks_completed: u64,
-    /// Average task execution time in milliseconds
-    pub avg_task_ms: u64,
-    /// Slowest single task execution time
-    pub max_task_ms: u64,
-    /// Label of the slowest task
-    pub max_task_label: String,
-    /// Average queue wait time in milliseconds
-    pub queue_wait_avg_ms: u64,
-    /// Maximum queue wait time
-    pub queue_wait_max_ms: u64,
-    /// Number of worker threads that have executed tasks
-    pub active_threads: usize,
-    /// Average DB read time in microseconds
-    pub avg_db_read_us: u64,
-    /// Median DB read time in microseconds (from recent samples)
-    pub median_db_read_us: u64,
-    /// Maximum DB read time in microseconds (slowest single read)
-    pub max_db_read_us: u64,
-    /// Total DB reads across all threads
-    pub total_db_reads: u64,
-}

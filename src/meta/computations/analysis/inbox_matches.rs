@@ -5,7 +5,6 @@
 //! Emits InboxCorpusMatchSignal for inbox files that have corpus matches,
 //! including a pre-computed quality classification (Better/Equivalent/Subpar).
 
-use std::time::Instant;
 
 use crate::db::types::Zone;
 use crate::db::write_thread;
@@ -30,7 +29,6 @@ use super::{Computation, Result};
 pub fn execute_detect_inbox_corpus_matches(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DetectInboxCorpusMatches;
 
@@ -39,7 +37,6 @@ pub fn execute_detect_inbox_corpus_matches(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -51,7 +48,6 @@ pub fn execute_detect_inbox_corpus_matches(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -73,7 +69,6 @@ pub fn execute_detect_inbox_corpus_matches(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query inbox audio files: {}", e),
             );
         }
@@ -99,7 +94,7 @@ pub fn execute_detect_inbox_corpus_matches(
                 cleared
             ));
         }
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // Get all corpus audio files with fingerprints
@@ -108,7 +103,6 @@ pub fn execute_detect_inbox_corpus_matches(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query corpus audio files: {}", e),
             );
         }
@@ -133,7 +127,7 @@ pub fn execute_detect_inbox_corpus_matches(
                 cleared
             ));
         }
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     log_general(format!(
@@ -266,5 +260,5 @@ pub fn execute_detect_inbox_corpus_matches(
         match_count, cleared, new_count, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }

@@ -16,7 +16,6 @@
 //! - `general.log` - Startup, state transitions, compute, UI, db_thread
 //! - `mutations.log` - Mutation execution lifecycle, transaction details
 //! - `errors.log` - All errors and warnings (also mirrored to general.log)
-//! - `perf.log` - Timing data (only created when timing_instrumentation is enabled)
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -40,10 +39,6 @@ pub enum LogCategory {
     /// All errors, warnings, failures.
     /// Routes to: errors.log (also mirrored to general.log)
     Error,
-
-    /// Performance timing, queue wait stats, frame debug timing.
-    /// Routes to: perf.log (dropped entirely when timing_instrumentation is off)
-    Perf,
 
     /// Everything else: state transitions, compute progress, UI actions, startup.
     /// Routes to: general.log
@@ -111,12 +106,6 @@ pub fn log_error(message: impl Into<String>) {
     log(LogCategory::Error, message);
 }
 
-/// Log to perf.log — timing data, frame debug.
-/// Messages are always sent; the logging thread drops them when timing is disabled.
-pub fn log_perf(message: impl Into<String>) {
-    log(LogCategory::Perf, message);
-}
-
 // ============================================================================
 // Shutdown
 // ============================================================================
@@ -164,8 +153,6 @@ pub(crate) fn spawn_log_thread(rx: Receiver<LogOp>) -> LogThreadHandle {
 
 /// Main loop for the logging thread. Opens file handles and routes entries.
 fn run_log_thread(rx: Receiver<LogOp>) {
-    let timing_enabled = crate::config::is_timing_enabled();
-
     // Open log directory and files
     let logs_dir = match get_logs_dir() {
         Ok(d) => d,
@@ -178,11 +165,6 @@ fn run_log_thread(rx: Receiver<LogOp>) {
     let mut general_file = open_log_file(&logs_dir, "general.log");
     let mut mutations_file = open_log_file(&logs_dir, "mutations.log");
     let mut errors_file = open_log_file(&logs_dir, "errors.log");
-    let mut perf_file = if timing_enabled {
-        Some(open_log_file(&logs_dir, "perf.log"))
-    } else {
-        None
-    };
 
     // Drain the channel until shutdown or channel close
     while let Ok(op) = rx.recv() {
@@ -205,12 +187,6 @@ fn run_log_thread(rx: Receiver<LogOp>) {
                         let _ = errors_file.write_all(line.as_bytes());
                         // Mirror errors to general.log for timeline context
                         let _ = general_file.write_all(line.as_bytes());
-                    }
-                    LogCategory::Perf => {
-                        // Drop perf messages entirely when timing is disabled
-                        if let Some(ref mut f) = perf_file {
-                            let _ = f.write_all(line.as_bytes());
-                        }
                     }
                 }
             }

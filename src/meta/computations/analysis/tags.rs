@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Instant;
 
 use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
@@ -32,7 +31,6 @@ use super::{Computation, Result};
 pub fn execute_detect_missing_tags(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     use std::collections::HashSet;
 
@@ -43,7 +41,6 @@ pub fn execute_detect_missing_tags(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -54,7 +51,6 @@ pub fn execute_detect_missing_tags(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -90,7 +86,6 @@ pub fn execute_detect_missing_tags(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query files with tag presence: {}", e),
             );
         }
@@ -226,7 +221,7 @@ pub fn execute_detect_missing_tags(
         mt_cleared, mt_new, mt_updated, mt_unchanged, mas_cleared, mas_new, mas_updated, mas_unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================
@@ -241,7 +236,6 @@ pub fn execute_detect_missing_tags(
 pub fn execute_detect_tag_canonicalizations(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     use crate::corpus::health::collision::{
         get_album_artist_collisions, get_album_collisions, get_artist_collisions,
@@ -255,7 +249,6 @@ pub fn execute_detect_tag_canonicalizations(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -266,7 +259,6 @@ pub fn execute_detect_tag_canonicalizations(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to load config: {}", e),
             );
         }
@@ -336,7 +328,7 @@ pub fn execute_detect_tag_canonicalizations(
         cleared, new, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 /// Computation type identifier for dirty inode tracking.
@@ -350,7 +342,6 @@ const COMPOUND_TAG_COMPUTATION: &str = "compound_tag";
 pub fn execute_detect_compound_tag_values(
     read_only_db: &ReadOnlyDb<'_>,
     _witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::DetectCompoundTagValues;
 
@@ -360,7 +351,6 @@ pub fn execute_detect_compound_tag_values(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to get dirty inodes: {}", e),
             );
         }
@@ -369,7 +359,7 @@ pub fn execute_detect_compound_tag_values(
     // Skip if no dirty inodes
     if dirty_inodes.is_empty() {
         log_general("[COMPUTE] DetectCompoundTagValues: no dirty inodes, skipping");
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // Note: We do NOT clear existing signals here. Each per-inode computation will
@@ -387,7 +377,7 @@ pub fn execute_detect_compound_tag_values(
         spawn.len()
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, spawn)
+    Result::success(computation, spawn)
 }
 
 /// Determine the display label for a collaboration keyword match.
@@ -422,7 +412,6 @@ pub fn execute_detect_compound_tags_for_inode(
     read_only_db: &ReadOnlyDb<'_>,
     inode: i64,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     use crate::corpus::health::compound::{detect_featuring_pattern, CompoundTagValue};
 
@@ -433,7 +422,6 @@ pub fn execute_detect_compound_tags_for_inode(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -445,12 +433,11 @@ pub fn execute_detect_compound_tags_for_inode(
         Ok(None) => {
             // File no longer in corpus - clear dirty and skip silently
             sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
-            return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+            return Result::success(computation, Vec::new());
         }
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to get path for inode {}: {}", inode, e),
             );
         }
@@ -462,7 +449,7 @@ pub fn execute_detect_compound_tags_for_inode(
         // No tags - clear any existing signal and dirty flag
         sender.clear_corpus_signal::<CompoundTagSignal>(inode, witness);
         sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // Get tag splitting config from opinions
@@ -470,7 +457,7 @@ pub fn execute_detect_compound_tags_for_inode(
         Ok(c) => c,
         Err(_) => {
             sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
-            return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+            return Result::success(computation, Vec::new());
         }
     };
     let tag_splitting = &config.opinions.tag_splitting;
@@ -553,7 +540,7 @@ pub fn execute_detect_compound_tags_for_inode(
             witness,
         );
         sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     // Populate matching_parts for each compound by checking which split parts
@@ -595,7 +582,7 @@ pub fn execute_detect_compound_tags_for_inode(
     // Clear dirty flag after successful processing
     sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================
@@ -611,7 +598,6 @@ pub fn execute_seed_compound_tag_dirty_inodes(
     read_only_db: &ReadOnlyDb<'_>,
     new_separators: &[(String, String)],
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     use std::collections::HashSet;
 
@@ -624,7 +610,6 @@ pub fn execute_seed_compound_tag_dirty_inodes(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -656,7 +641,7 @@ pub fn execute_seed_compound_tag_dirty_inodes(
         new_separators.len()
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================
@@ -671,7 +656,6 @@ pub fn execute_seed_compound_tag_dirty_inodes(
 pub fn execute_detect_inconsistent_album_artist(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     use crate::corpus::health::album_artist_detection::detect_inconsistent_album_artist;
 
@@ -682,7 +666,6 @@ pub fn execute_detect_inconsistent_album_artist(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -693,7 +676,6 @@ pub fn execute_detect_inconsistent_album_artist(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to detect inconsistent album_artist: {}", e),
             );
         }
@@ -731,7 +713,7 @@ pub fn execute_detect_inconsistent_album_artist(
         cleared, new, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }
 
 // ============================================================================
@@ -748,7 +730,6 @@ pub fn execute_detect_inconsistent_album_artist(
 pub fn execute_detect_disc_extractions(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     use regex::Regex;
 
@@ -759,7 +740,6 @@ pub fn execute_detect_disc_extractions(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -776,7 +756,6 @@ pub fn execute_detect_disc_extractions(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query album values: {}", e),
             );
         }
@@ -846,7 +825,7 @@ pub fn execute_detect_disc_extractions(
                 "[COMPUTE] DetectDiscExtractions: cleared={}, new={}, updated={}, unchanged={}",
                 cleared, new, updated, unchanged
             ));
-            return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+            return Result::success(computation, Vec::new());
         }
     };
 
@@ -922,5 +901,5 @@ pub fn execute_detect_disc_extractions(
         cleared, new, updated, unchanged
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }

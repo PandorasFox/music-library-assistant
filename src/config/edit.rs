@@ -404,10 +404,7 @@ pub fn apply_config_edits_to_kdl(
     // --- Performance ---
     let old_p = &old_config.opinions.performance;
     let new_p = &new_config.opinions.performance;
-    if new_p.worker_threads != old_p.worker_threads
-        || new_p.db_cache_mb != old_p.db_cache_mb
-        || new_p.timing_instrumentation != old_p.timing_instrumentation
-    {
+    if new_p.worker_threads != old_p.worker_threads || new_p.db_cache_mb != old_p.db_cache_mb {
         let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_PERFORMANCE);
         if new_p.worker_threads != old_p.worker_threads {
             match new_p.worker_threads {
@@ -428,25 +425,6 @@ pub fn apply_config_edits_to_kdl(
                 new_p.db_cache_mb as i64,
             );
         }
-        if new_p.timing_instrumentation != old_p.timing_instrumentation {
-            set_or_create_bool_node(
-                block,
-                PerformanceOpinions::KDL_TIMING,
-                new_p.timing_instrumentation,
-            );
-        }
-    }
-
-    // --- Debug ---
-    let old_d = &old_config.opinions.debug;
-    let new_d = &new_config.opinions.debug;
-    if new_d.memory_logging != old_d.memory_logging {
-        let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_DEBUG);
-        set_or_create_bool_node(
-            block,
-            DebugOpinions::KDL_MEMORY_LOGGING,
-            new_d.memory_logging,
-        );
     }
 
     Ok(doc.to_string())

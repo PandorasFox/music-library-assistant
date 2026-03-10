@@ -42,6 +42,7 @@ pub fn parse_dirs_kdl(content: &str) -> Result<Vec<SourceDir>> {
                 interior_dupes: None,
                 path_schema: None,
                 enable_acoustid: None,
+                pinned_release: None,
             };
 
             if let Some(children) = node.children() {
@@ -67,6 +68,13 @@ pub fn parse_dirs_kdl(content: &str) -> Result<Vec<SourceDir>> {
                         "enable-acoustid" => {
                             if let Some(entry) = child.entries().first() {
                                 source.enable_acoustid = entry.value().as_bool();
+                            }
+                        }
+                        "pinned-release" => {
+                            if let Some(entry) = child.entries().first() {
+                                if let Some(s) = entry.value().as_string() {
+                                    source.pinned_release = Some(s.to_string());
+                                }
                             }
                         }
                         "path-schema" => {
@@ -123,6 +131,9 @@ fn serialize_dirs_kdl(dirs: &[SourceDir]) -> String {
         }
         if let Some(ref schema) = dir.path_schema {
             out.push_str(&format!("    path-schema \"{}\"\n", schema.template));
+        }
+        if let Some(ref release_id) = dir.pinned_release {
+            out.push_str(&format!("    pinned-release \"{}\"\n", release_id));
         }
         out.push_str("}\n");
     }
@@ -184,6 +195,7 @@ dir "web/releases/indie" {
                 interior_dupes: Some(false),
                 path_schema: None,
                 enable_acoustid: None,
+                pinned_release: None,
             },
             SourceDir {
                 path: PathBuf::from("web/releases/indie"),
@@ -192,6 +204,7 @@ dir "web/releases/indie" {
                 interior_dupes: None,
                 path_schema: None,
                 enable_acoustid: None,
+                pinned_release: None,
             },
         ];
 
@@ -210,6 +223,7 @@ dir "web/releases/indie" {
             interior_dupes: Some(true),
             path_schema: None,
             enable_acoustid: Some(true),
+            pinned_release: None,
         }];
 
         let serialized = serialize_dirs_kdl(&dirs);
@@ -229,6 +243,7 @@ dir "web/releases/indie" {
             interior_dupes: None,
             path_schema: Some(parse_path_schema("$LABEL/$CATALOGNUMBER/$ARTIST - $TITLE").unwrap()),
             enable_acoustid: None,
+            pinned_release: None,
         }];
 
         let serialized = serialize_dirs_kdl(&dirs);
@@ -248,6 +263,7 @@ dir "web/releases/indie" {
                 interior_dupes: None,
                 path_schema: None,
                 enable_acoustid: None,
+                pinned_release: None,
             },
             // Default: all None, carries no information
             SourceDir {
@@ -257,6 +273,7 @@ dir "web/releases/indie" {
                 interior_dupes: None,
                 path_schema: None,
                 enable_acoustid: None,
+                pinned_release: None,
             },
             // Non-default: has an explicit bool
             SourceDir {
@@ -266,6 +283,7 @@ dir "web/releases/indie" {
                 interior_dupes: None,
                 path_schema: None,
                 enable_acoustid: None,
+                pinned_release: None,
             },
         ];
 
@@ -308,6 +326,7 @@ dir "web/releases/indie" {
                 interior_dupes: None,
                 path_schema: None,
                 enable_acoustid: None,
+                pinned_release: None,
             },
             SourceDir {
                 path: PathBuf::from("incoming/subdir"),
@@ -316,6 +335,7 @@ dir "web/releases/indie" {
                 interior_dupes: Some(false),
                 path_schema: None,
                 enable_acoustid: None,
+                pinned_release: None,
             },
         ]);
 
@@ -349,6 +369,7 @@ dir "web/releases/indie" {
                 interior_dupes: None,
                 path_schema: None,
                 enable_acoustid: None,
+                pinned_release: None,
             },
             SourceDir {
                 path: PathBuf::from("incoming/override"),
@@ -357,6 +378,7 @@ dir "web/releases/indie" {
                 interior_dupes: None,
                 path_schema: None,
                 enable_acoustid: None,
+                pinned_release: None,
             },
         ]);
 
@@ -380,6 +402,7 @@ dir "web/releases/indie" {
             interior_dupes: None,
             path_schema: None,
             enable_acoustid: None,
+            pinned_release: None,
         }]);
 
         let resolved = config
@@ -399,6 +422,7 @@ dir "web/releases/indie" {
             interior_dupes: None,
             path_schema: None,
             enable_acoustid: None,
+            pinned_release: None,
         }]);
 
         assert!(config
@@ -415,6 +439,7 @@ dir "web/releases/indie" {
             interior_dupes: None,
             path_schema: None,
             enable_acoustid: None,
+            pinned_release: None,
         }]);
 
         let resolved = config

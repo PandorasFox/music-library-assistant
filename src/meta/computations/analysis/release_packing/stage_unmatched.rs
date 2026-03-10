@@ -1,7 +1,6 @@
 //! Stage 4: EmitUnmatchedSignals (gap analysis).
 
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 
 use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
@@ -27,7 +26,6 @@ use crate::meta::computations::analysis::{Computation as AnalysisComputation, Re
 pub fn execute_emit_unmatched_signals(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = AnalysisComputation::EmitUnmatchedSignals;
 
@@ -36,7 +34,6 @@ pub fn execute_emit_unmatched_signals(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -68,7 +65,6 @@ pub fn execute_emit_unmatched_signals(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query candidate inode recordings: {}", e),
             );
         }
@@ -80,7 +76,6 @@ pub fn execute_emit_unmatched_signals(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to read scoring table: {}", e),
             );
         }
@@ -100,7 +95,6 @@ pub fn execute_emit_unmatched_signals(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query fingerprinted inodes: {}", e),
             );
         }
@@ -163,7 +157,6 @@ pub fn execute_emit_unmatched_signals(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to read manifest: {}", e),
             );
         }
@@ -321,5 +314,5 @@ pub fn execute_emit_unmatched_signals(
         suppressed_covered
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }

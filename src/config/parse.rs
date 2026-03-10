@@ -159,29 +159,7 @@ fn parse_performance_opinions(node: &kdl::KdlNode, opinions: &mut PerformanceOpi
                         }
                     }
                 }
-                PerformanceOpinions::KDL_TIMING => {
-                    if let Some(entry) = child.entries().first() {
-                        if let Some(val) = entry.value().as_bool() {
-                            opinions.timing_instrumentation = val;
-                        }
-                    }
-                }
                 _ => {}
-            }
-        }
-    }
-}
-
-/// Parse debug opinions from KDL node.
-fn parse_debug_opinions(node: &kdl::KdlNode, opinions: &mut DebugOpinions) {
-    if let Some(children) = node.children() {
-        for child in children.nodes() {
-            if child.name().value() == DebugOpinions::KDL_MEMORY_LOGGING {
-                if let Some(entry) = child.entries().first() {
-                    if let Some(val) = entry.value().as_bool() {
-                        opinions.memory_logging = val;
-                    }
-                }
             }
         }
     }
@@ -637,9 +615,7 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                             Opinions::KDL_BLOCK_ALBUM_ART => {
                                 parse_album_art_opinions(child, &mut config.opinions.album_art);
                             }
-                            Opinions::KDL_BLOCK_DEBUG => {
-                                parse_debug_opinions(child, &mut config.opinions.debug);
-                            }
+                            // "debug" block silently ignored (all debug options removed)
                             _ => {}
                         }
                     }

@@ -45,12 +45,10 @@ pub mod traits;
 mod types;
 
 // Public re-exports
-pub use stats::{close_thread_local_connection, get_thread_stats, with_read_only_db, ThreadStats};
+pub use stats::{close_thread_local_connection, with_read_only_db};
 pub use types::ComputationWitness;
 
 // Internal imports for execute functions
-use crate::config;
-use stats::{ensure_thread_id, record_task_stats};
 use std::collections::{HashMap, VecDeque};
 
 // ============================================================================
@@ -135,7 +133,6 @@ impl Computation {
 pub struct ComputationResult {
     pub success: bool,
     pub error: Option<String>,
-    pub duration_ms: u64,
     /// Observation computations to spawn
     pub spawn_observation: Vec<observation::Computation>,
     /// Derivation computations to spawn
@@ -158,7 +155,6 @@ impl ComputationResult {
         Self {
             success: result.success,
             error: result.error,
-            duration_ms: result.duration_ms,
             spawn_observation: result.spawn,
             spawn_derivation: Vec::new(),
             spawn_analysis: Vec::new(),
@@ -173,7 +169,6 @@ impl ComputationResult {
         Self {
             success: result.success,
             error: result.error,
-            duration_ms: result.duration_ms,
             spawn_observation: Vec::new(),
             spawn_derivation: result.spawn,
             spawn_analysis: Vec::new(),
@@ -188,7 +183,6 @@ impl ComputationResult {
         Self {
             success: result.success,
             error: result.error,
-            duration_ms: result.duration_ms,
             spawn_observation: Vec::new(),
             spawn_derivation: Vec::new(),
             spawn_analysis: result.spawn,
@@ -224,52 +218,30 @@ impl ComputationResult {
 /// Dispatches to the appropriate phase-specific executor based on the
 /// computation variant. Uses thread-local cached read-only connection.
 pub fn execute_single(computation: &Computation) -> ComputationResult {
-    // Ensure this thread has an ID assigned for stats tracking
-    let _thread_id = ensure_thread_id();
-
-    let start = std::time::Instant::now();
-
     // Create witness for signal operations
     let witness = ComputationWitness::new();
 
     // Use thread-local cached READ-ONLY connection
     // IMPORTANT: All writes must go through write_thread::signal_sender()
-    let db_access_start = std::time::Instant::now();
-
     let result = with_read_only_db(|read_only_db| {
-        let db_access_ms = db_access_start.elapsed().as_millis();
-
         let ctx = traits::ComputationContext {
             read_db: read_only_db,
             witness: &witness,
-            start,
         };
 
-        let compute_result = match computation {
+        match computation {
             Computation::Observation(c) => ComputationResult::from_observation(c.execute(&ctx)),
             Computation::Derivation(c) => ComputationResult::from_derivation(c.execute(&ctx)),
             Computation::Analysis(c) => ComputationResult::from_analysis(c.execute(&ctx)),
-        };
-
-        // Log timing (only on first access when connection is opened, and only if timing instrumentation enabled)
-        if db_access_ms > 1 && config::is_timing_enabled() {
-            crate::logging::log_perf(format!(
-                "[PERF] {} db_access={}ms (thread-local init)",
-                computation.label(),
-                db_access_ms
-            ));
         }
-
-        compute_result
     });
 
     // Handle db access failure
-    let final_result = match result {
+    match result {
         Ok(r) => r,
         Err(e) => ComputationResult {
             success: false,
             error: Some(format!("DB access failed: {}", e)),
-            duration_ms: start.elapsed().as_millis() as u64,
             spawn_observation: Vec::new(),
             spawn_derivation: Vec::new(),
             spawn_analysis: Vec::new(),
@@ -278,10 +250,5 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             observed_inbox_inodes: HashMap::new(),
             observed_library_files: Vec::new(),
         },
-    };
-
-    // Record task completion stats
-    record_task_stats(computation.label(), final_result.duration_ms);
-
-    final_result
+    }
 }

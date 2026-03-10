@@ -6,7 +6,6 @@
 //! processes them.
 
 use std::path::Path;
-use std::time::Instant;
 
 use crate::corpus::paths;
 use crate::corpus::tags;
@@ -33,7 +32,6 @@ const INDEX_IMAGE_FILE_COMPUTATION: &str = "index_image_file";
 pub fn execute_index_image_file(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
-    start: Instant,
 ) -> Result {
     let computation = Computation::IndexImageFile;
 
@@ -42,7 +40,6 @@ pub fn execute_index_image_file(
         None => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 "DB thread not initialized".to_string(),
             );
         }
@@ -53,14 +50,13 @@ pub fn execute_index_image_file(
         Err(e) => {
             return Result::failure(
                 computation,
-                start.elapsed().as_millis() as u64,
                 format!("Failed to query dirty inodes: {}", e),
             );
         }
     };
 
     if dirty_inodes.is_empty() {
-        return Result::success(computation, start.elapsed().as_millis() as u64, Vec::new());
+        return Result::success(computation, Vec::new());
     }
 
     let resolver = paths::get_resolver();
@@ -129,5 +125,5 @@ pub fn execute_index_image_file(
         skipped
     ));
 
-    Result::success(computation, start.elapsed().as_millis() as u64, Vec::new())
+    Result::success(computation, Vec::new())
 }

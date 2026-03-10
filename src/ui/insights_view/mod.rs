@@ -208,219 +208,52 @@ pub struct BucketEntry {
 }
 
 impl BucketEntry {
-    /// Create a corpus entry
-    fn corpus(
-        insight_type: InsightType,
-        label: &str,
-        count: usize,
-        rank: u8,
-        color: Color,
-        action: InsightAction,
-    ) -> Self {
+    /// Corpus problem entry: bubbles to top when count > 0, sinks when zero.
+    fn problem(ty: InsightType, label: &str, count: usize, nonzero_color: Color, action: InsightAction) -> Self {
         Self {
-            insight_type,
-            label: label.to_string(),
-            count: Some(count),
-            color,
-            rank,
-            action,
+            insight_type: ty, label: label.to_string(), count: Some(count),
+            color: if count > 0 { nonzero_color } else { Color::DarkGray },
+            rank: if count > 0 { 0 } else { 2 }, action,
         }
     }
 
-    /// Create cross-source overlaps entry
-    fn cross_source_overlaps(count: usize) -> Self {
+    /// Corpus informational entry: always rank 1, fixed color, no action.
+    fn info(ty: InsightType, label: &str, count: usize, color: Color) -> Self {
         Self {
-            insight_type: InsightType::CrossSourceOverlaps,
-            label: "Cross-source overlaps".to_string(),
-            count: Some(count),
-            color: if count > 0 { Color::Cyan } else { Color::Green },
-            rank: 0,
-            action: InsightAction::LaunchDirectoryOverlapResolution,
+            insight_type: ty, label: label.to_string(), count: Some(count),
+            color, rank: 1, action: InsightAction::Informational,
         }
     }
 
-    /// Create release overlaps entry
-    fn release_overlaps(count: usize) -> Self {
+    /// Corpus entry with action and count-dependent color, always rank 1.
+    fn active(ty: InsightType, label: &str, count: usize, nonzero: Color, zero: Color, action: InsightAction) -> Self {
         Self {
-            insight_type: InsightType::ReleaseOverlaps,
-            label: "Release overlaps".to_string(),
-            count: Some(count),
-            color: if count > 0 { Color::Cyan } else { Color::Green },
-            rank: 0,
-            action: InsightAction::LaunchReleaseOverlapResolution,
+            insight_type: ty, label: label.to_string(), count: Some(count),
+            color: if count > 0 { nonzero } else { zero }, rank: 1, action,
         }
     }
 
-    /// Create subpar duplicates entry
-    fn subpar_duplicates(count: usize) -> Self {
+    /// Tag health bucket entry: rank 0, count-dependent color.
+    fn counted(ty: InsightType, label: impl Into<String>, count: usize, nonzero: Color, zero: Color, action: InsightAction) -> Self {
         Self {
-            insight_type: InsightType::SubparDuplicates,
-            label: "Subpar duplicates".to_string(),
-            count: Some(count),
-            color: if count > 0 { Color::Cyan } else { Color::Green },
-            rank: 0,
-            action: InsightAction::LaunchSubparDuplicateResolution,
+            insight_type: ty, label: label.into(), count: Some(count),
+            color: if count > 0 { nonzero } else { zero }, rank: 0, action,
         }
     }
 
-    /// Create redundant duplicates entry
-    fn redundant_duplicates(count: usize) -> Self {
-        Self {
-            insight_type: InsightType::RedundantDuplicates,
-            label: "Redundant duplicates".to_string(),
-            count: Some(count),
-            color: if count > 0 {
-                Color::Yellow
-            } else {
-                Color::Green
-            },
-            rank: 0,
-            action: InsightAction::LaunchManualReview,
-        }
-    }
-
-    /// Create inconsistent album_artist entry
-    fn inconsistent_album_artist(count: usize) -> Self {
-        Self {
-            insight_type: InsightType::InconsistentAlbumArtist,
-            label: "Inconsistent album_artist".to_string(),
-            count: Some(count),
-            color: if count > 0 {
-                Color::Yellow
-            } else {
-                Color::Green
-            },
-            rank: 0,
-            action: InsightAction::LaunchTagCanonicityResolution,
-        }
-    }
-
-    /// Create tag canonicity entry (for a specific tag name)
-    fn tag_canonicity(tag_name: &str, cluster_count: usize) -> Self {
-        Self {
-            insight_type: InsightType::TagCanonicity {
-                tag_name: tag_name.to_string(),
-            },
-            label: format!("{} canonicity", tag_name),
-            count: Some(cluster_count),
-            color: if cluster_count > 0 {
-                Color::Yellow
-            } else {
-                Color::Green
-            },
-            rank: 0,
-            action: InsightAction::LaunchTagCanonicityResolution,
-        }
-    }
-
-    /// Create compound tag value safe entry (all parts exist in corpus)
-    fn compound_tag_value_safe(tag_name: &str, count: usize) -> Self {
-        Self {
-            insight_type: InsightType::CompoundTagValueSafe {
-                tag_name: tag_name.to_string(),
-            },
-            label: format!("{} compound splits (safe)", tag_name),
-            count: Some(count),
-            color: if count > 0 {
-                Color::Green
-            } else {
-                Color::DarkGray
-            },
-            rank: 0,
-            action: InsightAction::LaunchCompoundTagSplitSafe,
-        }
-    }
-
-    /// Create compound tag value review entry (some parts are new)
-    fn compound_tag_value_review(tag_name: &str, count: usize) -> Self {
-        Self {
-            insight_type: InsightType::CompoundTagValueReview {
-                tag_name: tag_name.to_string(),
-            },
-            label: format!("{} compound splits (review)", tag_name),
-            count: Some(count),
-            color: if count > 0 {
-                Color::Yellow
-            } else {
-                Color::DarkGray
-            },
-            rank: 0,
-            action: InsightAction::LaunchCompoundTagSplitReview,
-        }
-    }
-
-    /// Create missing album single entry
-    fn missing_album_single(count: usize) -> Self {
-        Self {
-            insight_type: InsightType::MissingAlbumSingle,
-            label: "Missing album singles".to_string(),
-            count: Some(count),
-            color: if count > 0 {
-                Color::Yellow
-            } else {
-                Color::DarkGray
-            },
-            rank: 0,
-            action: InsightAction::LaunchMissingAlbumSingleResolution,
-        }
-    }
-
-    /// Create embedded disc number entry
-    fn disc_extraction(count: usize) -> Self {
-        Self {
-            insight_type: InsightType::DiscExtraction,
-            label: "Disc extractions".to_string(),
-            count: Some(count),
-            color: if count > 0 {
-                Color::Yellow
-            } else {
-                Color::DarkGray
-            },
-            rank: 0,
-            action: InsightAction::LaunchDiscExtractionResolution,
-        }
-    }
-
-    /// Create path-tag mismatch entry
-    fn path_tag_mismatch(count: usize) -> Self {
-        Self {
-            insight_type: InsightType::PathTagMismatch,
-            label: "Filename tag schema issues".to_string(),
-            count: Some(count),
-            color: if count > 0 {
-                Color::Yellow
-            } else {
-                Color::DarkGray
-            },
-            rank: 0,
-            action: InsightAction::LaunchPathTagMismatchResolution,
-        }
-    }
-
-    /// Create "other signal" entry
+    /// "Other signal" entry with action inferred from signal type.
     fn other(index: usize, label: &str, count: usize, signal_type: &str) -> Self {
-        // Determine action based on signal type
         let action = match signal_type {
-            "TagCanonicity" | "InconsistentAlbumArtist" => {
-                InsightAction::LaunchTagCanonicityResolution
-            }
-            "CompoundTagValue" => InsightAction::LaunchCompoundTagSplitReview, // Default to review
+            "TagCanonicity" | "InconsistentAlbumArtist" => InsightAction::LaunchTagCanonicityResolution,
+            "CompoundTagValue" => InsightAction::LaunchCompoundTagSplitReview,
             "missing_tag" => InsightAction::LaunchMissingTagResolution,
             "metadata_dup" | "deploy_conflict" => InsightAction::LaunchManualReview,
             _ => InsightAction::NotImplemented,
         };
-
         Self {
-            insight_type: InsightType::OtherSignal { index },
-            label: label.to_string(),
-            count: Some(count),
-            color: if count > 0 {
-                Color::Yellow
-            } else {
-                Color::Green
-            },
-            rank: 0, // Pre-sorted from database
-            action,
+            insight_type: InsightType::OtherSignal { index }, label: label.to_string(),
+            count: Some(count), color: if count > 0 { Color::Yellow } else { Color::Green },
+            rank: 0, action,
         }
     }
 }
@@ -444,143 +277,21 @@ impl CachedBucketEntries {
         }
     }
 
-    fn build_corpus_entries(corpus: &CorpusFilesBucket) -> Vec<BucketEntry> {
+    fn build_corpus_entries(c: &CorpusFilesBucket) -> Vec<BucketEntry> {
         let mut entries = vec![
-            BucketEntry::corpus(
-                InsightType::CorpusMtimeOnly,
-                "Mtime changes (ack needed)",
-                corpus.mtime_only_mismatch,
-                if corpus.mtime_only_mismatch > 0 { 0 } else { 2 },
-                if corpus.mtime_only_mismatch > 0 {
-                    Color::Yellow
-                } else {
-                    Color::DarkGray
-                },
-                InsightAction::LaunchOobTagConflict, // Same modal as conflict, handles MtimeOnly bucket
-            ),
-            BucketEntry::corpus(
-                InsightType::CorpusOobTagSync,
-                "Tags syncable (out-of-band)",
-                corpus.oob_tag_sync,
-                if corpus.oob_tag_sync > 0 { 0 } else { 2 },
-                if corpus.oob_tag_sync > 0 {
-                    Color::Yellow
-                } else {
-                    Color::DarkGray
-                },
-                InsightAction::LaunchOobTagSync,
-            ),
-            BucketEntry::corpus(
-                InsightType::CorpusOobTagConflict,
-                "Tag conflicts (out-of-band)",
-                corpus.oob_tag_conflict,
-                if corpus.oob_tag_conflict > 0 { 0 } else { 2 },
-                if corpus.oob_tag_conflict > 0 {
-                    Color::Red
-                } else {
-                    Color::DarkGray
-                },
-                InsightAction::LaunchOobTagConflict,
-            ),
-            BucketEntry::corpus(
-                InsightType::CorpusFilesInCorpus,
-                "Files in corpus",
-                corpus.files_in_corpus,
-                1,
-                Color::Yellow,
-                InsightAction::Informational,
-            ),
-            BucketEntry::corpus(
-                InsightType::CorpusFilesIndexed,
-                "Files indexed",
-                corpus.files_indexed,
-                1,
-                Color::Green,
-                InsightAction::Informational,
-            ),
-            BucketEntry::corpus(
-                InsightType::CorpusImagesInCorpus,
-                "Images in corpus",
-                corpus.images_in_corpus,
-                1,
-                Color::Green,
-                InsightAction::Informational,
-            ),
-            BucketEntry::corpus(
-                InsightType::CorpusFilesUnindexed,
-                "Files unindexed",
-                corpus.files_unindexed,
-                1,
-                if corpus.files_unindexed > 0 {
-                    Color::Yellow
-                } else {
-                    Color::Green
-                },
-                InsightAction::LaunchIntakeConfirmation,
-            ),
-            BucketEntry::corpus(
-                InsightType::CorpusFilesMissing,
-                "Files missing",
-                corpus.files_missing,
-                1,
-                if corpus.files_missing > 0 {
-                    Color::Red
-                } else {
-                    Color::Green
-                },
-                InsightAction::LaunchMissingFileResolution,
-            ),
-            BucketEntry::corpus(
-                InsightType::CorpusDirectoriesMissing,
-                "Directories missing",
-                corpus.directories_missing,
-                if corpus.directories_missing > 0 { 0 } else { 2 },
-                if corpus.directories_missing > 0 {
-                    Color::Red
-                } else {
-                    Color::DarkGray
-                },
-                InsightAction::LaunchMissingDirectoryResolution,
-            ),
-            BucketEntry::corpus(
-                InsightType::CorpusFilesRelocated,
-                "Files relocated (moved)",
-                corpus.files_relocated,
-                if corpus.files_relocated > 0 { 0 } else { 2 },
-                if corpus.files_relocated > 0 {
-                    Color::Yellow
-                } else {
-                    Color::DarkGray
-                },
-                InsightAction::LaunchMovedFileAcknowledge,
-            ),
-            BucketEntry::corpus(
-                InsightType::CorpusCorruptFiles,
-                "Corrupt files",
-                corpus.corrupt_files,
-                if corpus.corrupt_files > 0 { 0 } else { 2 },
-                if corpus.corrupt_files > 0 {
-                    Color::Red
-                } else {
-                    Color::DarkGray
-                },
-                InsightAction::LaunchCorruptFileResolution,
-            ),
-            BucketEntry::corpus(
-                InsightType::CorpusShitFormatFiles,
-                "Shit format files",
-                corpus.shit_format_files,
-                if corpus.shit_format_files > 0 { 0 } else { 2 },
-                if corpus.shit_format_files > 0 {
-                    Color::Yellow
-                } else {
-                    Color::DarkGray
-                },
-                InsightAction::LaunchShitFormatTranscode,
-            ),
+            BucketEntry::problem(InsightType::CorpusMtimeOnly, "Mtime changes (ack needed)", c.mtime_only_mismatch, Color::Yellow, InsightAction::LaunchOobTagConflict),
+            BucketEntry::problem(InsightType::CorpusOobTagSync, "Tags syncable (out-of-band)", c.oob_tag_sync, Color::Yellow, InsightAction::LaunchOobTagSync),
+            BucketEntry::problem(InsightType::CorpusOobTagConflict, "Tag conflicts (out-of-band)", c.oob_tag_conflict, Color::Red, InsightAction::LaunchOobTagConflict),
+            BucketEntry::info(InsightType::CorpusFilesInCorpus, "Files in corpus", c.files_in_corpus, Color::Yellow),
+            BucketEntry::info(InsightType::CorpusFilesIndexed, "Files indexed", c.files_indexed, Color::Green),
+            BucketEntry::info(InsightType::CorpusImagesInCorpus, "Images in corpus", c.images_in_corpus, Color::Green),
+            BucketEntry::active(InsightType::CorpusFilesUnindexed, "Files unindexed", c.files_unindexed, Color::Yellow, Color::Green, InsightAction::LaunchIntakeConfirmation),
+            BucketEntry::active(InsightType::CorpusFilesMissing, "Files missing", c.files_missing, Color::Red, Color::Green, InsightAction::LaunchMissingFileResolution),
+            BucketEntry::problem(InsightType::CorpusDirectoriesMissing, "Directories missing", c.directories_missing, Color::Red, InsightAction::LaunchMissingDirectoryResolution),
+            BucketEntry::problem(InsightType::CorpusFilesRelocated, "Files relocated (moved)", c.files_relocated, Color::Yellow, InsightAction::LaunchMovedFileAcknowledge),
+            BucketEntry::problem(InsightType::CorpusCorruptFiles, "Corrupt files", c.corrupt_files, Color::Red, InsightAction::LaunchCorruptFileResolution),
+            BucketEntry::problem(InsightType::CorpusShitFormatFiles, "Shit format files", c.shit_format_files, Color::Yellow, InsightAction::LaunchShitFormatTranscode),
         ];
-
-        // Sort by rank (0=top, 1=middle, 2=bottom), preserving relative order
         entries.sort_by_key(|e| e.rank);
         entries
     }
@@ -588,80 +299,52 @@ impl CachedBucketEntries {
     fn build_placeholder_entries(bucket: &TagSquashBucket) -> Vec<BucketEntry> {
         let mut entries = Vec::new();
 
-        // Cross-source overlaps at top - easy resolutions
         if bucket.directory_overlap_cluster_count > 0 {
-            entries.push(BucketEntry::cross_source_overlaps(
-                bucket.directory_overlap_cluster_count,
-            ));
+            entries.push(BucketEntry::counted(InsightType::CrossSourceOverlaps, "Cross-source overlaps", bucket.directory_overlap_cluster_count, Color::Cyan, Color::Green, InsightAction::LaunchDirectoryOverlapResolution));
         }
-
-        // Release overlaps - multiple releases → same album directory
         if bucket.release_overlap_count > 0 {
-            entries.push(BucketEntry::release_overlaps(bucket.release_overlap_count));
+            entries.push(BucketEntry::counted(InsightType::ReleaseOverlaps, "Release overlaps", bucket.release_overlap_count, Color::Cyan, Color::Green, InsightAction::LaunchReleaseOverlapResolution));
         }
-
-        // Subpar duplicates - identified low-quality copies ready to stash
         if bucket.subpar_duplicate_count > 0 {
-            entries.push(BucketEntry::subpar_duplicates(
-                bucket.subpar_duplicate_count,
-            ));
+            entries.push(BucketEntry::counted(InsightType::SubparDuplicates, "Subpar duplicates", bucket.subpar_duplicate_count, Color::Cyan, Color::Green, InsightAction::LaunchSubparDuplicateResolution));
         }
-
-        // Redundant duplicates - equal-quality copies needing operator choice
         if bucket.redundant_duplicate_count > 0 {
-            entries.push(BucketEntry::redundant_duplicates(
-                bucket.redundant_duplicate_count,
-            ));
+            entries.push(BucketEntry::counted(InsightType::RedundantDuplicates, "Redundant duplicates", bucket.redundant_duplicate_count, Color::Yellow, Color::Green, InsightAction::LaunchManualReview));
         }
-
-        // Add inconsistent album_artist if present
         if bucket.inconsistent_album_artist_count > 0 {
-            entries.push(BucketEntry::inconsistent_album_artist(
-                bucket.inconsistent_album_artist_count,
-            ));
+            entries.push(BucketEntry::counted(InsightType::InconsistentAlbumArtist, "Inconsistent album_artist", bucket.inconsistent_album_artist_count, Color::Yellow, Color::Green, InsightAction::LaunchTagCanonicityResolution));
         }
-
-        // Add tag canonicity entries for each tag type
         for entry in &bucket.tag_canonicity {
-            entries.push(BucketEntry::tag_canonicity(
-                &entry.tag_name,
-                entry.cluster_count,
+            entries.push(BucketEntry::counted(
+                InsightType::TagCanonicity { tag_name: entry.tag_name.clone() },
+                format!("{} canonicity", entry.tag_name), entry.cluster_count,
+                Color::Yellow, Color::Green, InsightAction::LaunchTagCanonicityResolution,
             ));
         }
-
-        // Add compound tag values per tag - safe first (easy bulk action), then review
         for entry in &bucket.compound_tags {
             if entry.safe_count > 0 {
-                entries.push(BucketEntry::compound_tag_value_safe(
-                    &entry.tag_name,
-                    entry.safe_count,
+                entries.push(BucketEntry::counted(
+                    InsightType::CompoundTagValueSafe { tag_name: entry.tag_name.clone() },
+                    format!("{} compound splits (safe)", entry.tag_name), entry.safe_count,
+                    Color::Green, Color::DarkGray, InsightAction::LaunchCompoundTagSplitSafe,
                 ));
             }
             if entry.review_count > 0 {
-                entries.push(BucketEntry::compound_tag_value_review(
-                    &entry.tag_name,
-                    entry.review_count,
+                entries.push(BucketEntry::counted(
+                    InsightType::CompoundTagValueReview { tag_name: entry.tag_name.clone() },
+                    format!("{} compound splits (review)", entry.tag_name), entry.review_count,
+                    Color::Yellow, Color::DarkGray, InsightAction::LaunchCompoundTagSplitReview,
                 ));
             }
         }
-
-        // Missing album singles
         if bucket.missing_album_single_count > 0 {
-            entries.push(BucketEntry::missing_album_single(
-                bucket.missing_album_single_count,
-            ));
+            entries.push(BucketEntry::counted(InsightType::MissingAlbumSingle, "Missing album singles", bucket.missing_album_single_count, Color::Yellow, Color::DarkGray, InsightAction::LaunchMissingAlbumSingleResolution));
         }
-
-        // Embedded disc numbers
         if bucket.disc_extraction_count > 0 {
-            entries.push(BucketEntry::disc_extraction(bucket.disc_extraction_count));
+            entries.push(BucketEntry::counted(InsightType::DiscExtraction, "Disc extractions", bucket.disc_extraction_count, Color::Yellow, Color::DarkGray, InsightAction::LaunchDiscExtractionResolution));
         }
-
-        // Path-tag schema mismatches
         if bucket.path_tag_mismatch_count > 0 {
-            entries.push(BucketEntry::path_tag_mismatch(
-                bucket.path_tag_mismatch_count,
-            ));
+            entries.push(BucketEntry::counted(InsightType::PathTagMismatch, "Filename tag schema issues", bucket.path_tag_mismatch_count, Color::Yellow, Color::DarkGray, InsightAction::LaunchPathTagMismatchResolution));
         }
 
         entries
@@ -751,233 +434,185 @@ impl ListEntry for InsightListItem {
 // Detail Line Generation (baked at construction time)
 // ============================================================================
 
+/// Build a detail popup with title, description lines, and optional CTA.
+fn detail_popup(
+    title: &str,
+    desc: &[&str],
+    cta: Option<(&str, Color)>,
+    text_color: Color,
+    title_color: Color,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::with_capacity(desc.len() + 4);
+    lines.push(Line::from(Span::styled(title.to_string(), Style::default().fg(title_color).add_modifier(Modifier::BOLD))));
+    lines.push(Line::from(""));
+    for text in desc {
+        lines.push(Line::from(Span::styled(text.to_string(), Style::default().fg(text_color))));
+    }
+    if let Some((cta_text, color)) = cta {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(cta_text.to_string(), Style::default().fg(color))));
+    }
+    lines
+}
+
 /// Generate detail lines for a bucket entry's popup. Called once during list construction.
-/// Returns popup content lines with a styled title header.
 fn detail_lines_for_entry(
     entry: &BucketEntry,
     data: Option<&InsightsData>,
     busy: bool,
 ) -> Vec<Line<'static>> {
-    let text_color = if busy { Color::DarkGray } else { Color::White };
-    let title_color = if busy { Color::DarkGray } else { Color::Yellow };
-
-    let mut lines = Vec::new();
-    let title;
+    let tc = if busy { Color::DarkGray } else { Color::White };
+    let hc = if busy { Color::DarkGray } else { Color::Yellow };
+    let cta = |c: Color| if busy { Color::DarkGray } else { c };
 
     match entry.insight_type {
-        InsightType::CorpusMtimeOnly => {
-            title = "Mtime-Only Changes".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Files touched but tags unchanged.", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("Acknowledge to update scan state", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("without modifying files.", Style::default().fg(text_color))));
-        }
-        InsightType::CorpusOobTagSync => {
-            title = "Tags Syncable (Out-of-Band)".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Files have extra tags in one direction", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("only: either on disk or in the index.", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("Can be synced to bring both in line.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to resolve.", Style::default().fg(Color::Cyan))));
-        }
-        InsightType::CorpusOobTagConflict => {
-            title = "Tag Conflicts (Out-of-Band)".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Files have tag values that differ", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("between disk and database, or have", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("extras in both directions.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to inspect.", Style::default().fg(Color::Cyan))));
-        }
-        InsightType::CorpusCorruptFiles => {
-            title = "Corrupt Files".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Files that failed to read during", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("tag verification or waveform decoding.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to stash and drop.", Style::default().fg(Color::Cyan))));
-        }
-        InsightType::CorpusShitFormatFiles => {
-            title = "Shit Format Files".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Non-Vorbis container files (MP3, M4A,", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("WAV, etc.) with poor metadata support.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to transcode to Opus.", Style::default().fg(Color::Cyan))));
-        }
+        InsightType::CorpusMtimeOnly => detail_popup("Mtime-Only Changes", &[
+            "Files touched but tags unchanged.",
+            "Acknowledge to update scan state",
+            "without modifying files.",
+        ], None, tc, hc),
+        InsightType::CorpusOobTagSync => detail_popup("Tags Syncable (Out-of-Band)", &[
+            "Files have extra tags in one direction",
+            "only: either on disk or in the index.",
+            "Can be synced to bring both in line.",
+        ], Some(("Press Enter to resolve.", Color::Cyan)), tc, hc),
+        InsightType::CorpusOobTagConflict => detail_popup("Tag Conflicts (Out-of-Band)", &[
+            "Files have tag values that differ",
+            "between disk and database, or have",
+            "extras in both directions.",
+        ], Some(("Press Enter to inspect.", Color::Cyan)), tc, hc),
+        InsightType::CorpusCorruptFiles => detail_popup("Corrupt Files", &[
+            "Files that failed to read during",
+            "tag verification or waveform decoding.",
+        ], Some(("Press Enter to stash and drop.", Color::Cyan)), tc, hc),
+        InsightType::CorpusShitFormatFiles => detail_popup("Shit Format Files", &[
+            "Non-Vorbis container files (MP3, M4A,",
+            "WAV, etc.) with poor metadata support.",
+        ], Some(("Press Enter to transcode to Opus.", Color::Cyan)), tc, hc),
         InsightType::CorpusFilesInCorpus => {
-            title = "Files in Corpus".to_string();
-            lines.push(Line::from(""));
+            let mut lines = vec![
+                Line::from(Span::styled("Files in Corpus".to_string(), Style::default().fg(hc).add_modifier(Modifier::BOLD))),
+                Line::from(""),
+            ];
             if let Some(data) = data {
                 if !data.bucket_corpus.file_type_breakdown.is_empty() {
-                    lines.push(Line::from(Span::styled("By file type:", Style::default().fg(text_color))));
+                    lines.push(Line::from(Span::styled("By file type:".to_string(), Style::default().fg(tc))));
                     for (ext, count) in &data.bucket_corpus.file_type_breakdown {
-                        lines.push(Line::from(Span::styled(format!("  .{}: {}", ext, count), Style::default().fg(text_color))));
+                        lines.push(Line::from(Span::styled(format!("  .{}: {}", ext, count), Style::default().fg(tc))));
                     }
                 } else {
-                    lines.push(Line::from(Span::styled("No files found.", Style::default().fg(text_color))));
+                    lines.push(Line::from(Span::styled("No files found.".to_string(), Style::default().fg(tc))));
                 }
             } else {
-                lines.push(Line::from(Span::styled("Loading...", Style::default().fg(Color::DarkGray))));
+                lines.push(Line::from(Span::styled("Loading...".to_string(), Style::default().fg(Color::DarkGray))));
             }
+            lines
         }
-        InsightType::CorpusFilesIndexed => {
-            title = "Files Indexed".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Audio files with complete metadata", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("in the database.", Style::default().fg(text_color))));
-        }
-        InsightType::CorpusImagesInCorpus => {
-            title = "Images in Corpus".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Image files (sidecar album art, etc.)", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("indexed in the corpus.", Style::default().fg(text_color))));
-        }
-        InsightType::CorpusFilesUnindexed => {
-            title = "Files Unindexed".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Audio files in corpus not yet", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("indexed. Run indexing to process.", Style::default().fg(text_color))));
-        }
-        InsightType::CorpusFilesMissing => {
-            title = "Files Missing".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Indexed files no longer found", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("at expected path. May have been", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("moved or deleted.", Style::default().fg(text_color))));
-        }
-        InsightType::CorpusDirectoriesMissing => {
-            title = "Directories Missing".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Indexed directories no longer found", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("on disk. May have been moved or", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("deleted externally.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to drop from index.", Style::default().fg(Color::Cyan))));
-        }
-        InsightType::CorpusFilesRelocated => {
-            title = "Files Relocated (Moved)".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Files moved within corpus (same inode,", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("different path). Database paths need", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("updating to match new locations.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to acknowledge and update paths.", Style::default().fg(Color::Cyan))));
-        }
-        InsightType::CrossSourceOverlaps => {
-            title = "Cross-Source Overlaps".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Same tracks exist in different source", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("directories (e.g., bandcamp vs indie).", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to resolve by source.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
-        }
-        InsightType::ReleaseOverlaps => {
-            title = "Release Overlaps".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Multiple releases deploy into the", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("same album directory. Stash the", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("inferior release or fix tags.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to resolve.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
-        }
-        InsightType::SubparDuplicates => {
-            title = "Subpar Duplicates".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Lower quality versions of tracks", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("identified by fingerprint analysis.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to stash subpar copies.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
-        }
-        InsightType::RedundantDuplicates => {
-            title = "Redundant Duplicates".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Same fingerprint, identical quality.", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("Neither file is subpar — requires", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("operator choice.", Style::default().fg(text_color))));
-        }
-        InsightType::InconsistentAlbumArtist => {
-            title = "Inconsistent Album Artist".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Albums with multiple artists but", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("missing or inconsistent album_artist.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to resolve.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
-        }
+        InsightType::CorpusFilesIndexed => detail_popup("Files Indexed", &[
+            "Audio files with complete metadata",
+            "in the database.",
+        ], None, tc, hc),
+        InsightType::CorpusImagesInCorpus => detail_popup("Images in Corpus", &[
+            "Image files (sidecar album art, etc.)",
+            "indexed in the corpus.",
+        ], None, tc, hc),
+        InsightType::CorpusFilesUnindexed => detail_popup("Files Unindexed", &[
+            "Audio files in corpus not yet",
+            "indexed. Run indexing to process.",
+        ], None, tc, hc),
+        InsightType::CorpusFilesMissing => detail_popup("Files Missing", &[
+            "Indexed files no longer found",
+            "at expected path. May have been",
+            "moved or deleted.",
+        ], None, tc, hc),
+        InsightType::CorpusDirectoriesMissing => detail_popup("Directories Missing", &[
+            "Indexed directories no longer found",
+            "on disk. May have been moved or",
+            "deleted externally.",
+        ], Some(("Press Enter to drop from index.", Color::Cyan)), tc, hc),
+        InsightType::CorpusFilesRelocated => detail_popup("Files Relocated (Moved)", &[
+            "Files moved within corpus (same inode,",
+            "different path). Database paths need",
+            "updating to match new locations.",
+        ], Some(("Press Enter to acknowledge and update paths.", Color::Cyan)), tc, hc),
+        InsightType::CrossSourceOverlaps => detail_popup("Cross-Source Overlaps", &[
+            "Same tracks exist in different source",
+            "directories (e.g., bandcamp vs indie).",
+        ], Some(("Press Enter to resolve by source.", cta(Color::Cyan))), tc, hc),
+        InsightType::ReleaseOverlaps => detail_popup("Release Overlaps", &[
+            "Multiple releases deploy into the",
+            "same album directory. Stash the",
+            "inferior release or fix tags.",
+        ], Some(("Press Enter to resolve.", cta(Color::Cyan))), tc, hc),
+        InsightType::SubparDuplicates => detail_popup("Subpar Duplicates", &[
+            "Lower quality versions of tracks",
+            "identified by fingerprint analysis.",
+        ], Some(("Press Enter to stash subpar copies.", cta(Color::Cyan))), tc, hc),
+        InsightType::RedundantDuplicates => detail_popup("Redundant Duplicates", &[
+            "Same fingerprint, identical quality.",
+            "Neither file is subpar \u{2014} requires",
+            "operator choice.",
+        ], None, tc, hc),
+        InsightType::InconsistentAlbumArtist => detail_popup("Inconsistent Album Artist", &[
+            "Albums with multiple artists but",
+            "missing or inconsistent album_artist.",
+        ], Some(("Press Enter to resolve.", cta(Color::Cyan))), tc, hc),
         InsightType::TagCanonicity { ref tag_name } => {
-            title = format!("{} Canonicity", tag_name);
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(format!("Variants of {} tags that should", tag_name), Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("be unified (e.g., spelling differences).", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to resolve.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
+            let desc1 = format!("Variants of {} tags that should", tag_name);
+            detail_popup(&format!("{} Canonicity", tag_name), &[
+                &desc1, "be unified (e.g., spelling differences).",
+            ], Some(("Press Enter to resolve.", cta(Color::Cyan))), tc, hc)
         }
         InsightType::CompoundTagValueSafe { ref tag_name } => {
-            title = format!("{} Compound Splits (Safe)", tag_name);
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(format!("All split parts for {} tags already", tag_name), Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("exist in corpus. Safe to split in bulk.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to bulk split.", Style::default().fg(if busy { Color::DarkGray } else { Color::Green }))));
+            let desc1 = format!("All split parts for {} tags already", tag_name);
+            detail_popup(&format!("{} Compound Splits (Safe)", tag_name), &[
+                &desc1, "exist in corpus. Safe to split in bulk.",
+            ], Some(("Press Enter to bulk split.", cta(Color::Green))), tc, hc)
         }
         InsightType::CompoundTagValueReview { ref tag_name } => {
-            title = format!("{} Compound Splits (Review)", tag_name);
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(format!("Some split parts for {} tags are", tag_name), Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("new to corpus. Review each to verify.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to review.", Style::default().fg(if busy { Color::DarkGray } else { Color::Yellow }))));
+            let desc1 = format!("Some split parts for {} tags are", tag_name);
+            detail_popup(&format!("{} Compound Splits (Review)", tag_name), &[
+                &desc1, "new to corpus. Review each to verify.",
+            ], Some(("Press Enter to review.", cta(Color::Yellow))), tc, hc)
         }
-        InsightType::MissingAlbumSingle => {
-            title = "Missing Album Singles".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Tracks with ARTIST and TITLE but no", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("ALBUM tag, grouped by artist.", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Press Enter to assign album values.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
-        }
-        InsightType::DiscExtraction => {
-            title = "Disc Extractions".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Disc values embedded in ALBUM or", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("TRACKNUMBER tags (e.g., \"Album, Disc 2\"", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("or track number \"A01\").", Style::default().fg(text_color))));
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Extract to DISCNUMBER + clean source tag.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
-        }
-        InsightType::PathTagMismatch => {
-            title = "Filename Tag Schema Issues".to_string();
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Files where tags derived from the", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("filename path don't match embedded", Style::default().fg(text_color))));
-            lines.push(Line::from(Span::styled("tag values.", Style::default().fg(text_color))));
-        }
+        InsightType::MissingAlbumSingle => detail_popup("Missing Album Singles", &[
+            "Tracks with ARTIST and TITLE but no",
+            "ALBUM tag, grouped by artist.",
+        ], Some(("Press Enter to assign album values.", cta(Color::Cyan))), tc, hc),
+        InsightType::DiscExtraction => detail_popup("Disc Extractions", &[
+            "Disc values embedded in ALBUM or",
+            "TRACKNUMBER tags (e.g., \"Album, Disc 2\"",
+            "or track number \"A01\").",
+        ], Some(("Extract to DISCNUMBER + clean source tag.", cta(Color::Cyan))), tc, hc),
+        InsightType::PathTagMismatch => detail_popup("Filename Tag Schema Issues", &[
+            "Files where tags derived from the",
+            "filename path don't match embedded",
+            "tag values.",
+        ], None, tc, hc),
         InsightType::OtherSignal { index } => {
-            // Get extended info from cached_data if available
             if let Some(data) = data {
                 if let Some(signal_entry) = data.bucket_other.entries.get(index) {
-                    title = signal_entry.display_label.clone();
-                    lines.push(Line::from(""));
-                    lines.push(Line::from(Span::styled(format!("Count: {}", signal_entry.count), Style::default().fg(text_color))));
+                    let mut lines = vec![
+                        Line::from(Span::styled(signal_entry.display_label.clone(), Style::default().fg(hc).add_modifier(Modifier::BOLD))),
+                        Line::from(""),
+                        Line::from(Span::styled(format!("Count: {}", signal_entry.count), Style::default().fg(tc))),
+                    ];
                     if let Some(affected) = signal_entry.affected_count {
-                        lines.push(Line::from(Span::styled(format!("Affected tracks: {}", affected), Style::default().fg(text_color))));
+                        lines.push(Line::from(Span::styled(format!("Affected tracks: {}", affected), Style::default().fg(tc))));
                     }
-                    lines.insert(0, Line::from(Span::styled(title, Style::default().fg(title_color).add_modifier(Modifier::BOLD))));
                     return lines;
                 }
             }
-            // Fallback
-            title = entry.label.clone();
-            lines.push(Line::from(""));
+            let mut lines = vec![
+                Line::from(Span::styled(entry.label.clone(), Style::default().fg(hc).add_modifier(Modifier::BOLD))),
+                Line::from(""),
+            ];
             if let Some(count) = entry.count {
-                lines.push(Line::from(Span::styled(format!("Count: {}", count), Style::default().fg(text_color))));
+                lines.push(Line::from(Span::styled(format!("Count: {}", count), Style::default().fg(tc))));
             }
+            lines
         }
     }
-
-    lines.insert(0, Line::from(Span::styled(title, Style::default().fg(title_color).add_modifier(Modifier::BOLD))));
-    lines
 }
 
 // ============================================================================

@@ -212,13 +212,7 @@ impl Database {
 
     /// Get missing directory signal paths (for UI resolution modal).
     pub fn get_missing_directory_paths(&self) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT path FROM signal_missing_directory ORDER BY path")?;
-        let results = stmt
-            .query_map(params![], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<String>>>()?;
-        Ok(results)
+        self.query_signal_paths("signal_missing_directory")
     }
 
     /// Get all file-presence signal inodes with their paths, zone-generic.
@@ -241,6 +235,30 @@ impl Database {
             result.insert(inode, path);
         }
         Ok(result)
+    }
+
+    /// Query all `path` values from a signal table, sorted.
+    ///
+    /// Table name MUST be a hardcoded literal — never user input.
+    fn query_signal_paths(&self, table: &str) -> Result<Vec<String>> {
+        let sql = format!("SELECT path FROM {} ORDER BY path", table);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let results = stmt
+            .query_map(params![], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(results)
+    }
+
+    /// Run a GROUP BY query returning `(String, usize)` category counts.
+    ///
+    /// SQL must select exactly two columns: a text category and an integer count.
+    fn count_by_category(&self, sql: &str) -> Result<Vec<(String, usize)>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?)))?
+            .flatten()
+            .collect::<Vec<_>>();
+        Ok(rows)
     }
 
     /// Get all FileInCorpus signal inodes with their paths.
@@ -658,23 +676,17 @@ impl Database {
             mut packing_incomplete_count,
             mut packing_low_confidence_count,
         ) = (0usize, 0, 0, 0, 0);
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT SUBSTR(key, 1, INSTR(key, ':') - 1) AS cat, COUNT(*) \
-                 FROM signal_packed_release GROUP BY cat",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
-            })?;
-            for row in rows.flatten() {
-                match row.0.as_str() {
-                    "perfect" => packing_perfect_count = row.1,
-                    "full_match" => packing_full_match_count = row.1,
-                    "single" => packing_singles_count = row.1,
-                    "incomplete" => packing_incomplete_count = row.1,
-                    "low_confidence" => packing_low_confidence_count = row.1,
-                    _ => {}
-                }
+        for (cat, count) in self.count_by_category(
+            "SELECT SUBSTR(key, 1, INSTR(key, ':') - 1) AS cat, COUNT(*) \
+             FROM signal_packed_release GROUP BY cat",
+        )? {
+            match cat.as_str() {
+                "perfect" => packing_perfect_count = count,
+                "full_match" => packing_full_match_count = count,
+                "single" => packing_singles_count = count,
+                "incomplete" => packing_incomplete_count = count,
+                "low_confidence" => packing_low_confidence_count = count,
+                _ => {}
             }
         }
 
@@ -685,20 +697,14 @@ impl Database {
         // Unsolved corpus tracks — single GROUP BY instead of 3 queries.
         let (mut unsolved_conflict_count, mut unsolved_no_release_count, mut unsolved_no_match_count) =
             (0usize, 0, 0);
-        {
-            let mut stmt = self.conn.prepare(
-                "SELECT category, COUNT(*) FROM signal_unmatched_corpus_track GROUP BY category",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
-            })?;
-            for row in rows.flatten() {
-                match row.0.as_str() {
-                    "conflict" => unsolved_conflict_count = row.1,
-                    "no_release" => unsolved_no_release_count = row.1,
-                    "no_match" => unsolved_no_match_count = row.1,
-                    _ => {}
-                }
+        for (cat, count) in self.count_by_category(
+            "SELECT category, COUNT(*) FROM signal_unmatched_corpus_track GROUP BY category",
+        )? {
+            match cat.as_str() {
+                "conflict" => unsolved_conflict_count = count,
+                "no_release" => unsolved_no_release_count = count,
+                "no_match" => unsolved_no_match_count = count,
+                _ => {}
             }
         }
 
@@ -1100,15 +1106,7 @@ impl Database {
     /// Used by the missing file resolution modal to categorize files.
     /// MissingFile signals are keyed by inode with path in metadata.
     pub fn get_missing_file_paths(&self) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT path FROM signal_missing_file ORDER BY path")?;
-
-        let results = stmt
-            .query_map(params![], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<String>>>()?;
-
-        Ok(results)
+        self.query_signal_paths("signal_missing_file")
     }
 
     // ========================================================================
@@ -1121,15 +1119,7 @@ impl Database {
     /// Used by the corrupt file resolution modal.
     /// CorruptFile signals are keyed by inode with path in metadata.
     pub fn get_corrupt_file_paths(&self) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT path FROM signal_corrupt_file ORDER BY path")?;
-
-        let results = stmt
-            .query_map(params![], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<String>>>()?;
-
-        Ok(results)
+        self.query_signal_paths("signal_corrupt_file")
     }
 
     // ========================================================================

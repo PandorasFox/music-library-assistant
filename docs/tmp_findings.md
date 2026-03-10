@@ -96,9 +96,9 @@ Analyzed 17 files totaling ~22k LoC. Findings ordered by impact.
 - [x] Tier 1: `delegate_read!` macro (-611 lines)
 - [x] Tier 1: `write_thread.rs` consolidation + module split (-64 lines + structural)
 - [ ] Tier 2: action_handlers split
-- [ ] Tier 2: `MutationResult::from_result()`
-- [ ] Tier 2: derivation/executors helpers
-- [ ] Tier 2: deploy+duplicates shared helpers
+- [x] Tier 2: `MutationResult::from_result()` (-272 lines)
+- [x] Tier 2: derivation/executors helpers (-3 net lines, 4 helpers)
+- [x] Tier 2: deploy+duplicates shared helpers — `require_sender!` (-314 lines), `ReconcileStats` (-21 net lines)
 - [ ] Tier 3: corpus/tags helpers
 - [ ] Tier 3: release_packing extract helpers
 - [ ] Tier 3: queries/health dedup

@@ -210,15 +210,8 @@ pub(super) fn emit_isolated_proposal_signals(
             None => continue,
         };
 
-        let breakdown: PackingScoreBreakdown = bincode::deserialize(&row.score_breakdown)
-            .unwrap_or(PackingScoreBreakdown {
-                acoustid_confidence: 0.0,
-                duration_match: 0.0,
-                title_match: 0.0,
-                artist_match: 0.0,
-                album_match: 0.0,
-                track_number_match: 0.0,
-            });
+        let breakdown: PackingScoreBreakdown =
+            bincode::deserialize(&row.score_breakdown).unwrap_or_default();
 
         signals_batch.push(TypedSignalWrite::ReleasePacking(ReleasePackingSignal {
             inode: row.inode,
@@ -459,16 +452,7 @@ pub(super) fn emit_knot_component_signals(
                 .iter()
                 .map(|row| {
                     let breakdown: PackingScoreBreakdown =
-                        bincode::deserialize(&row.score_breakdown).unwrap_or(
-                            PackingScoreBreakdown {
-                                acoustid_confidence: 0.0,
-                                duration_match: 0.0,
-                                title_match: 0.0,
-                                artist_match: 0.0,
-                                album_match: 0.0,
-                                track_number_match: 0.0,
-                            },
-                        );
+                        bincode::deserialize(&row.score_breakdown).unwrap_or_default();
                     KnotAssignment {
                         inode: row.inode,
                         recording_id: row.recording_id.clone(),
@@ -922,15 +906,8 @@ pub(crate) fn execute_resolve_packing_component(
                 .copied()
                 .unwrap_or(1);
 
-            let breakdown: PackingScoreBreakdown = bincode::deserialize(&row.score_breakdown)
-                .unwrap_or(PackingScoreBreakdown {
-                    acoustid_confidence: 0.0,
-                    duration_match: 0.0,
-                    title_match: 0.0,
-                    artist_match: 0.0,
-                    album_match: 0.0,
-                    track_number_match: 0.0,
-                });
+            let breakdown: PackingScoreBreakdown =
+                bincode::deserialize(&row.score_breakdown).unwrap_or_default();
 
             let signal = ReleasePackingSignal {
                 inode: row.inode,

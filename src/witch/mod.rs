@@ -434,26 +434,42 @@ impl Witch {
 
     /// Queue observing computations (internal helper).
     fn queue_observing_computations(&mut self) {
+        self.queue_walk_computations(
+            self.force_check_all_files_at_startup,
+            true,
+            "Observing",
+        );
+    }
+
+    /// Queue zone walk computations with shared logic.
+    ///
+    /// Clears accumulated observation state, then queues WalkCorpus for corpus,
+    /// inbox (if present), and legacy (if enabled and `include_legacy` is true).
+    fn queue_walk_computations(
+        &mut self,
+        force_check: bool,
+        include_legacy: bool,
+        label_prefix: &str,
+    ) {
         let resolver = crate::corpus::paths::get_resolver();
-        let force_check = self.force_check_all_files_at_startup;
 
         // Clear accumulated observation state before fresh scan
         self.observed_corpus_inodes.clear();
         self.observed_inbox_inodes.clear();
-        self.observed_library_files.clear();
-        self.library_reconciliation_done = false;
+        if include_legacy {
+            self.observed_library_files.clear();
+            self.library_reconciliation_done = false;
+        }
 
-        // Queue corpus walk
         self.queue_computation_with_label(
             Computation::Observation(observation::Computation::WalkCorpus {
                 root: resolver.corpus_dir(),
                 zone: "corpus".to_string(),
                 force_check,
             }),
-            Some("Observing corpus".to_string()),
+            Some(format!("{} corpus", label_prefix)),
         );
 
-        // Queue inbox walk if inbox directory exists
         let inbox_dir = resolver.inbox_dir();
         if inbox_dir.is_dir() {
             self.queue_computation_with_label(
@@ -462,19 +478,18 @@ impl Witch {
                     zone: "inbox".to_string(),
                     force_check,
                 }),
-                Some("Observing inbox".to_string()),
+                Some(format!("{} inbox", label_prefix)),
             );
         }
 
-        // Queue legacy library walk if enabled
-        if self.legacy_enabled {
+        if include_legacy && self.legacy_enabled {
             self.queue_computation_with_label(
                 Computation::Observation(observation::Computation::WalkCorpus {
                     root: resolver.libraries_dir().join("legacy"),
                     zone: "legacy".to_string(),
                     force_check,
                 }),
-                Some("Observing legacy".to_string()),
+                Some(format!("{} legacy", label_prefix)),
             );
         }
     }
@@ -879,10 +894,10 @@ impl Witch {
             self.queue_reobservation_computations();
         }
         if queue_awakening_after_reset {
-            self.queue_awakening_computations();
+            self.queue_awakening_computations(true);
         }
         if queue_idle_rescan_awakening_after_reset {
-            self.queue_idle_rescan_awakening();
+            self.queue_awakening_computations(false);
         }
         if queue_reconcile_library_after_reset {
             if let Some(observed) = reconcile_library_observed {
@@ -904,15 +919,17 @@ impl Witch {
     /// Queue Awakening-phase computations.
     ///
     /// Takes the accumulated observed inode maps and queues DeriveCorpusSignals
-    /// and DeriveInboxSignals directly with the data. Also queues
+    /// and DeriveInboxSignals. When `include_second_level` is true, also queues
     /// ScheduleSecondLevelDerivations for directory checks and library walks.
-    fn queue_awakening_computations(&mut self) {
+    fn queue_awakening_computations(&mut self, include_second_level: bool) {
         let observed_corpus = std::mem::take(&mut self.observed_corpus_inodes);
         let observed_inbox = std::mem::take(&mut self.observed_inbox_inodes);
 
+        let label = if include_second_level { "Awakening" } else { "idle rescan awakening" };
         crate::logging::log_general(format!(
-            "[STATE] Queueing Awakening: DeriveCorpusSignals ({} inodes), DeriveInboxSignals ({} inodes), ScheduleSecondLevelDerivations",
-            observed_corpus.len(), observed_inbox.len()
+            "[STATE] Queueing {}: DeriveCorpusSignals ({} inodes), DeriveInboxSignals ({} inodes){}",
+            label, observed_corpus.len(), observed_inbox.len(),
+            if include_second_level { ", ScheduleSecondLevelDerivations" } else { "" },
         ));
 
         self.queue_computation_with_label(
@@ -929,11 +946,12 @@ impl Witch {
             Some("Deriving inbox signals".to_string()),
         );
 
-        // Directory checks + library walks
-        self.queue_computation_with_label(
-            Computation::Derivation(derivation::Computation::ScheduleSecondLevelDerivations),
-            Some("Computing directory signals".to_string()),
-        );
+        if include_second_level {
+            self.queue_computation_with_label(
+                Computation::Derivation(derivation::Computation::ScheduleSecondLevelDerivations),
+                Some("Computing directory signals".to_string()),
+            );
+        }
     }
 
     /// Check if conditions are met to start an idle rescan.
@@ -999,63 +1017,7 @@ impl Witch {
         self.idle_since = None;
         self.inode_awareness = InodeAwarenessLevel::Checking;
 
-        // Clear accumulated observation state before fresh scan
-        self.observed_corpus_inodes.clear();
-        self.observed_inbox_inodes.clear();
-
-        let resolver = crate::corpus::paths::get_resolver();
-
-        // Queue corpus walk (mtime-optimized)
-        self.queue_computation_with_label(
-            Computation::Observation(observation::Computation::WalkCorpus {
-                root: resolver.corpus_dir(),
-                zone: "corpus".to_string(),
-                force_check: false,
-            }),
-            Some("Rescanning corpus".to_string()),
-        );
-
-        // Queue inbox walk if directory exists (mtime-optimized)
-        let inbox_dir = resolver.inbox_dir();
-        if inbox_dir.is_dir() {
-            self.queue_computation_with_label(
-                Computation::Observation(observation::Computation::WalkCorpus {
-                    root: inbox_dir,
-                    zone: "inbox".to_string(),
-                    force_check: false,
-                }),
-                Some("Rescanning inbox".to_string()),
-            );
-        }
-    }
-
-    /// Queue lightweight awakening computations for idle rescan.
-    ///
-    /// Takes the accumulated observed inode maps and queues DeriveCorpusSignals
-    /// and DeriveInboxSignals. Does NOT queue ScheduleSecondLevelDerivations
-    /// (no library walks, no directory-level checks).
-    fn queue_idle_rescan_awakening(&mut self) {
-        let observed_corpus = std::mem::take(&mut self.observed_corpus_inodes);
-        let observed_inbox = std::mem::take(&mut self.observed_inbox_inodes);
-
-        crate::logging::log_general(format!(
-            "[STATE] Queueing idle rescan awakening: DeriveCorpusSignals ({} inodes), DeriveInboxSignals ({} inodes)",
-            observed_corpus.len(), observed_inbox.len()
-        ));
-
-        self.queue_computation_with_label(
-            Computation::Derivation(derivation::Computation::DeriveCorpusSignals {
-                observed_inodes: observed_corpus,
-            }),
-            Some("Deriving corpus signals".to_string()),
-        );
-
-        self.queue_computation_with_label(
-            Computation::Derivation(derivation::Computation::DeriveInboxSignals {
-                observed_inodes: observed_inbox,
-            }),
-            Some("Deriving inbox signals".to_string()),
-        );
+        self.queue_walk_computations(false, false, "Rescanning");
     }
 
     // =========================================================================
@@ -1228,57 +1190,11 @@ impl Witch {
     }
 
     /// Queue re-observation computations (WalkCorpus) for re-awakening after mutations.
-    ///
-    /// Similar to `queue_observing_computations` but for re-awakening cycles.
-    /// Uses mtime optimization (`force_check: false`) since mutations that changed
-    /// files will naturally trigger verification via mtime changes.
     fn queue_reobservation_computations(&mut self) {
-        let resolver = crate::corpus::paths::get_resolver();
-
         crate::logging::log_general(
             "[STATE] Queueing re-observation computations for post-mutation re-awakening",
         );
-
-        // Clear accumulated observation state before fresh scan
-        self.observed_corpus_inodes.clear();
-        self.observed_inbox_inodes.clear();
-        self.observed_library_files.clear();
-        self.library_reconciliation_done = false;
-
-        // Re-walk corpus (mtime-optimized)
-        self.queue_computation_with_label(
-            Computation::Observation(observation::Computation::WalkCorpus {
-                root: resolver.corpus_dir(),
-                zone: "corpus".to_string(),
-                force_check: false,
-            }),
-            Some("Re-observing corpus".to_string()),
-        );
-
-        // Re-walk inbox if directory exists (mtime-optimized)
-        let inbox_dir = resolver.inbox_dir();
-        if inbox_dir.is_dir() {
-            self.queue_computation_with_label(
-                Computation::Observation(observation::Computation::WalkCorpus {
-                    root: inbox_dir,
-                    zone: "inbox".to_string(),
-                    force_check: false,
-                }),
-                Some("Re-observing inbox".to_string()),
-            );
-        }
-
-        // Re-walk legacy library if enabled (mtime-optimized)
-        if self.legacy_enabled {
-            self.queue_computation_with_label(
-                Computation::Observation(observation::Computation::WalkCorpus {
-                    root: resolver.libraries_dir().join("legacy"),
-                    zone: "legacy".to_string(),
-                    force_check: false,
-                }),
-                Some("Re-observing legacy".to_string()),
-            );
-        }
+        self.queue_walk_computations(false, true, "Re-observing");
     }
 
     /// Queue content analysis computations (internal only).

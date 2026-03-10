@@ -454,7 +454,7 @@ pub struct ReleasePackingData {
 /// Each tag dimension (title, artist, album) is stored independently rather
 /// than as a single composite, so weights can zero out dimensions that are
 /// unreliable in certain scoring contexts (e.g., artist in elimination).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PackingScoreBreakdown {
     /// AcoustID fingerprint confidence (0.0-1.0).
     pub acoustid_confidence: f64,

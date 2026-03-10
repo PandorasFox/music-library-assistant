@@ -483,12 +483,8 @@ pub fn write_file_tags(
     }
 
     // Update file mtime after successful disk write
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized during tag write"))?;
-    let resolver = paths::get_resolver();
-    let rel_path = resolver
-        .to_relative(path)
-        .ok_or_else(|| anyhow::anyhow!("Path {} not in corpus root", path.display()))?;
+    let sender = write_thread::require_sender()?;
+    let rel_path = paths::resolve_relative(path)?;
     let rel_path_str = rel_path.to_string_lossy();
     let file_metadata = std::fs::metadata(path)
         .with_context(|| format!("Failed to read metadata after write: {}", path.display()))?;
@@ -500,16 +496,9 @@ pub fn write_file_tags(
         .and_then(|c| c.as_os_str().to_str())
         .unwrap_or("corpus");
 
-    // Use portable mtime API (consistent with comparison code)
     use std::os::unix::fs::MetadataExt;
-    use std::time::UNIX_EPOCH;
     let inode = file_metadata.ino() as i64;
-    let (mtime_secs, mtime_nanos) = file_metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
-        .unwrap_or((0, 0));
+    let (mtime_secs, mtime_nanos) = paths::read_mtime(&file_metadata);
 
     sender.update_file_mtime(source, inode, mtime_secs, mtime_nanos, witness);
 

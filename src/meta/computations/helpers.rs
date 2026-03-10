@@ -95,6 +95,20 @@ pub(crate) fn is_image_file(path: &Path) -> bool {
 }
 
 // ============================================================================
+// Tag Helpers
+// ============================================================================
+
+/// Convert a Vec of AudioTags into a HashMap keyed by uppercased tag name.
+///
+/// This is the standard way to prepare tags for deploy path computation,
+/// duplicate detection, and any other lookup-by-name pattern.
+pub(crate) fn tags_to_map(tags: Vec<crate::db::types::AudioTag>) -> HashMap<String, String> {
+    tags.into_iter()
+        .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
+        .collect()
+}
+
+// ============================================================================
 // Parsing Helpers
 // ============================================================================
 
@@ -110,13 +124,9 @@ pub(super) fn parse_inodes_csv(s: &str) -> Vec<i64> {
 /// Extract modification time from metadata as (seconds, nanoseconds) tuple.
 ///
 /// Returns (0, 0) if mtime extraction fails.
+/// Delegates to the canonical implementation in `corpus::paths::read_mtime`.
 pub(super) fn extract_mtime(metadata: &std::fs::Metadata) -> (i64, i64) {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
-        .unwrap_or((0, 0))
+    crate::corpus::paths::read_mtime(metadata)
 }
 
 // ============================================================================

@@ -38,7 +38,7 @@ use crate::meta::signals::registry::TypedSignalWrite;
 
 use crate::meta::maintenance::DbMaintenanceTask;
 
-use super::external_fetch::{ExternalFetchTask, FetchResultData, MbEntityKind};
+use super::external_fetch::{ExternalFetchTask, FetchOutcome, MbEntityKind};
 use super::types::{MutationExecutionWitness, Task, TaskKind, TaskResult};
 
 // ============================================================================
@@ -531,7 +531,7 @@ pub(super) fn execute_external_fetch(
 
     let success = !matches!(
         fetch_result,
-        FetchResultData::AcoustIdError | FetchResultData::MbError
+        FetchOutcome::AcoustIdError | FetchOutcome::MbError
     );
 
     TaskResult {
@@ -558,7 +558,7 @@ fn execute_acoustid_lookup(
     fingerprint_blob: Vec<u8>,
     duration_secs: u32,
     api_key: &str,
-) -> FetchResultData {
+) -> FetchOutcome {
     use super::external_fetch::MatchRow;
     use crate::external::acoustid::{AcoustIDClient, LookupOutcome};
 
@@ -601,7 +601,7 @@ fn execute_acoustid_lookup(
                 sender.delete_external_retry(inode, acoustid_source_key);
             }
 
-            FetchResultData::AcoustIdMatch { recordings: rows }
+            FetchOutcome::AcoustIdMatch { recordings: rows }
         }
         Ok((LookupOutcome::NoMatch, _)) => {
             if let Some(sender) = write_thread::signal_sender() {
@@ -609,11 +609,11 @@ fn execute_acoustid_lookup(
                 sender.insert_external_no_match(fingerprint_blob, acoustid_source_key, now);
                 sender.delete_external_retry(inode, acoustid_source_key);
             }
-            FetchResultData::AcoustIdNoMatch
+            FetchOutcome::AcoustIdNoMatch
         }
         Ok((LookupOutcome::RateLimited, _)) => {
             // Return the task data so the scheduler can re-queue
-            FetchResultData::AcoustIdRateLimited {
+            FetchOutcome::AcoustIdRateLimited {
                 task: ExternalFetchTask::AcoustId(super::external_fetch::AcoustIdFetchTask {
                     inode,
                     fingerprint_raw: fingerprint_raw.to_vec(),
@@ -632,13 +632,13 @@ fn execute_acoustid_lookup(
             if let Some(sender) = write_thread::signal_sender() {
                 sender.upsert_external_retry(inode, fingerprint_blob, acoustid_source_key, &error);
             }
-            FetchResultData::AcoustIdError
+            FetchOutcome::AcoustIdError
         }
     }
 }
 
 /// Execute a MusicBrainz entity fetch. Writes cache + discovered entities to DB immediately.
-fn execute_mb_fetch(kind: MbEntityKind, mbid: &str, base_url: &str) -> FetchResultData {
+fn execute_mb_fetch(kind: MbEntityKind, mbid: &str, base_url: &str) -> FetchOutcome {
     use crate::external::musicbrainz::{MbLookupOutcome, MusicBrainzClient};
 
     let fetch_result = MB_CLIENT.with(|cell| {
@@ -698,7 +698,7 @@ fn execute_mb_fetch(kind: MbEntityKind, mbid: &str, base_url: &str) -> FetchResu
                 Vec::new()
             };
 
-            FetchResultData::MbFound {
+            FetchOutcome::MbFound {
                 discovered_entities,
             }
         }
@@ -708,10 +708,10 @@ fn execute_mb_fetch(kind: MbEntityKind, mbid: &str, base_url: &str) -> FetchResu
                 kind.as_str(),
                 mbid
             ));
-            FetchResultData::MbNotFound
+            FetchOutcome::MbNotFound
         }
         Ok(MbLookupOutcome::RateLimited) | Ok(MbLookupOutcome::ServiceUnavailable) => {
-            FetchResultData::MbRateLimited {
+            FetchOutcome::MbRateLimited {
                 task: ExternalFetchTask::MusicBrainz(super::external_fetch::MbFetchTask {
                     kind,
                     mbid: mbid.to_string(),
@@ -727,7 +727,7 @@ fn execute_mb_fetch(kind: MbEntityKind, mbid: &str, base_url: &str) -> FetchResu
                 mbid,
                 error
             ));
-            FetchResultData::MbError
+            FetchOutcome::MbError
         }
     }
 }

@@ -232,13 +232,22 @@ impl CacheThreadHandle {
     pub(crate) fn shrink_memory(&self) {
         let _ = self.request_tx.send(CacheRequest::ShrinkMemory);
     }
+}
 
-    /// Shut down the cache thread and wait for it to exit.
-    pub(crate) fn shutdown(&mut self) {
+impl super::types::ManagedThread for CacheThreadHandle {
+    fn send_shutdown(&self) {
         let _ = self.request_tx.send(CacheRequest::Shutdown);
-        if let Some(handle) = self.join_handle.take() {
-            let _ = handle.join();
-        }
+    }
+
+    fn take_handle(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        self.join_handle.take()
+    }
+}
+
+impl Drop for CacheThreadHandle {
+    fn drop(&mut self) {
+        use super::types::ManagedThread;
+        self.shutdown();
     }
 }
 

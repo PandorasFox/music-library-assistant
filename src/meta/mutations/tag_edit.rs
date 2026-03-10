@@ -163,8 +163,7 @@ fn execute_apply_tag_ops(
     session_id: &str,
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<SpawnedMutation>> {
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     // Group ops by inode
     let mut by_inode: HashMap<i64, Vec<&TagOp>> = HashMap::new();

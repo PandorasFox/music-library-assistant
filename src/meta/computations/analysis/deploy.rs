@@ -76,10 +76,7 @@ pub fn execute_detect_deploy_conflicts(
                 Vec::new()
             }
         };
-        let tag_map: HashMap<String, String> = tags
-            .into_iter()
-            .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
-            .collect();
+        let tag_map = crate::meta::computations::helpers::tags_to_map(tags);
 
         let deploy_path = compute_deployment_path_with_tags(&signal.path, &tag_map)
             .to_string_lossy()
@@ -193,10 +190,7 @@ pub fn execute_detect_release_overlaps(
             continue;
         }
 
-        let tag_map: HashMap<String, String> = tags
-            .into_iter()
-            .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
-            .collect();
+        let tag_map = crate::meta::computations::helpers::tags_to_map(tags);
 
         let deploy_path = compute_deployment_path_with_tags(&signal.path, &tag_map)
             .to_string_lossy()
@@ -616,10 +610,7 @@ fn classify_audio_stale(
             Vec::new()
         }
     };
-    let tag_map: HashMap<String, String> = tags
-        .into_iter()
-        .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
-        .collect();
+    let tag_map = crate::meta::computations::helpers::tags_to_map(tags);
 
     let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
     let library_path_suffix = library_path
@@ -721,10 +712,7 @@ fn lookup_album_dir_from_sibling(
         return None;
     }
 
-    let tag_map: HashMap<String, String> = tags
-        .into_iter()
-        .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
-        .collect();
+    let tag_map = crate::meta::computations::helpers::tags_to_map(tags);
 
     let deploy_path = compute_deployment_path_with_tags(&sibling_path, &tag_map);
     let album_dir = deploy_album_directory(&deploy_path.to_string_lossy());
@@ -750,10 +738,7 @@ fn compute_expected_library_path(
     // Audio file: compute from tags directly
     if let Ok(Some(_audio_file)) = read_only_db.get_audio_file_by_path(corpus_path) {
         let tags = read_only_db.get_tags::<crate::zones::CorpusZone>(library_inode).ok()?;
-        let tag_map: HashMap<String, String> = tags
-            .into_iter()
-            .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
-            .collect();
+        let tag_map = crate::meta::computations::helpers::tags_to_map(tags);
         let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
         let expected_with_prefix = Path::new(library_name).join(&expected_relative);
         return Some(expected_with_prefix.to_string_lossy().to_string());
@@ -888,10 +873,7 @@ pub fn execute_derive_corpus_deploy_status(
             continue;
         }
 
-        let tag_map: HashMap<String, String> = tags
-            .into_iter()
-            .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
-            .collect();
+        let tag_map = crate::meta::computations::helpers::tags_to_map(tags);
         let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
         let deploy_path = expected_relative.to_string_lossy().to_string();
 

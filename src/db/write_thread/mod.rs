@@ -53,6 +53,15 @@ pub fn signal_sender() -> Option<&'static SignalWriteSender> {
     SIGNAL_SENDER.get()
 }
 
+/// Get the global signal sender, returning an error if the DB thread
+/// hasn't been initialized yet.
+///
+/// This is the preferred accessor for mutation executors and tag operations
+/// where the DB thread being absent is an unrecoverable error.
+pub fn require_sender() -> anyhow::Result<&'static SignalWriteSender> {
+    signal_sender().ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))
+}
+
 /// Block until all queued DB operations have been processed.
 ///
 /// Computations call this when they need to ensure their writes are visible
@@ -494,13 +503,6 @@ pub struct DbThreadHandle {
 }
 
 impl DbThreadHandle {
-    /// Join the DB thread, blocking until it finishes closing connections.
-    pub fn join(&mut self) {
-        if let Some(handle) = self.thread_handle.take() {
-            let _ = handle.join();
-        }
-    }
-
     /// Check if the write queue is empty (for shutdown blocking).
     pub fn queue_empty(&self) -> bool {
         self.stats.queue_empty.load(Ordering::Acquire)
@@ -509,6 +511,16 @@ impl DbThreadHandle {
     /// Get the current queue depth.
     pub fn queue_depth(&self) -> u64 {
         self.stats.queue_depth.load(Ordering::Relaxed)
+    }
+}
+
+impl crate::witch::types::ManagedThread for DbThreadHandle {
+    fn send_shutdown(&self) {
+        request_shutdown();
+    }
+
+    fn take_handle(&mut self) -> Option<JoinHandle<()>> {
+        self.thread_handle.take()
     }
 }
 

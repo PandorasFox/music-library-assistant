@@ -711,13 +711,7 @@ pub fn execute_scan_library_directory(
             let path = entry.path();
             if path.is_file() && (is_audio_file(&path) || is_image_file(&path)) {
                 if let Ok(metadata) = std::fs::metadata(&path) {
-                    let mtime = metadata
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-                    let (mtime_secs, mtime_nanos) = mtime
-                        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
-                        .unwrap_or((0, 0));
+                    let (mtime_secs, mtime_nanos) = crate::corpus::paths::read_mtime(&metadata);
 
                     // Compute stored_path: strip library_root prefix, prepend library_name
                     let library_relative = path.strip_prefix(library_root).unwrap_or(&path);

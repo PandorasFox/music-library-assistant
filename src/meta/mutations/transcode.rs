@@ -225,19 +225,12 @@ fn execute_transcode_impl(
         .ok_or_else(|| anyhow::anyhow!("Audio file not found for inode: {}", inode))?;
 
     // Convert new absolute path to relative for storage
-    let resolver = paths::get_resolver();
-    let relative_new_path = resolver.to_relative(&dest_path).with_context(|| {
-        format!(
-            "Path {} does not match any configured root. Check config.kdl roots.",
-            dest_path.display(),
-        )
-    })?;
+    let relative_new_path = paths::resolve_relative(&dest_path)?;
 
     // Get signal_sender for DB writes
     use crate::db::write_thread::{self, FileEntryData};
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     let relative_path_str = relative_new_path.to_string_lossy().to_string();
 

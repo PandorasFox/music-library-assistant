@@ -12,6 +12,31 @@ use crate::meta::mutations::Mutation;
 use crate::meta::recomputation::RecomputationScope;
 
 // ============================================================================
+// ManagedThread Trait
+// ============================================================================
+
+/// Unified shutdown idiom for threads managed by the Witch.
+///
+/// All Witch-managed threads follow the same pattern: send a shutdown
+/// sentinel via channel, then join the thread handle. This trait
+/// codifies that pattern.
+pub trait ManagedThread {
+    /// Send the shutdown sentinel to the thread.
+    fn send_shutdown(&self);
+
+    /// Take the join handle (None if already taken/joined).
+    fn take_handle(&mut self) -> Option<std::thread::JoinHandle<()>>;
+
+    /// Send shutdown and join the thread.
+    fn shutdown(&mut self) {
+        self.send_shutdown();
+        if let Some(h) = self.take_handle() {
+            let _ = h.join();
+        }
+    }
+}
+
+// ============================================================================
 // State Machine
 // ============================================================================
 
@@ -439,7 +464,7 @@ pub(super) struct TaskResult {
     /// Library files observed on disk during ScanLibraryDirectory.
     pub observed_library_files: Vec<crate::meta::computations::derivation::ObservedLibraryFile>,
     /// External fetch result data (only populated for ExternalFetch tasks).
-    pub fetch_result: Option<super::external_fetch::FetchResultData>,
+    pub fetch_result: Option<super::external_fetch::FetchOutcome>,
     /// Barrier-separated follow-up computation phases (pipeline orchestrators only).
     pub deferred_phases:
         std::collections::VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,

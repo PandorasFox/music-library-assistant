@@ -129,12 +129,13 @@ pub(crate) struct LogThreadHandle {
     thread_handle: Option<JoinHandle<()>>,
 }
 
-impl LogThreadHandle {
-    /// Join the logging thread, blocking until it finishes flushing.
-    pub fn join(&mut self) {
-        if let Some(handle) = self.thread_handle.take() {
-            let _ = handle.join();
-        }
+impl crate::witch::types::ManagedThread for LogThreadHandle {
+    fn send_shutdown(&self) {
+        request_shutdown();
+    }
+
+    fn take_handle(&mut self) -> Option<JoinHandle<()>> {
+        self.thread_handle.take()
     }
 }
 

@@ -73,35 +73,6 @@ impl ExternalFetchTask {
     }
 }
 
-/// Result data from executing an ExternalFetchTask on rayon.
-///
-/// DB writes (cache entries, external_matches, mb_known_entities) happen
-/// immediately on the rayon thread via signal_sender. This struct carries
-/// only what the Witch/scheduler need for progress tracking and chain-emit.
-#[derive(Debug)]
-pub enum FetchResultData {
-    AcoustIdMatch {
-        recordings: Vec<MatchRow>,
-    },
-    AcoustIdNoMatch,
-    AcoustIdRateLimited {
-        task: ExternalFetchTask,
-    },
-    /// AcoustID hard error. Already logged on the rayon thread.
-    AcoustIdError,
-    /// MB entity fetched. DB cache already written by rayon task.
-    /// `discovered_entities` populated only for recordings (chain-emit).
-    MbFound {
-        discovered_entities: Vec<(MbEntityKind, String)>,
-    },
-    MbNotFound,
-    MbRateLimited {
-        task: ExternalFetchTask,
-    },
-    /// MB hard error. Already logged on the rayon thread.
-    MbError,
-}
-
 /// A match row to write to external_matches (recording MBID + confidence only).
 pub struct MatchRow {
     pub recording_id: String,
@@ -179,11 +150,13 @@ pub(super) enum SchedulerMessage {
     AllDone,
 }
 
-/// Outcome sent from Witch back to scheduler for chain-emit and progress tracking.
+/// Result of an external fetch task execution.
 ///
-/// DB persistence already happened on the rayon thread. This carries only
-/// what the scheduler needs for queue management and chain-emit decisions.
-pub(super) enum FetchOutcome {
+/// Used both as the rayon task result (carried in `TaskResult::fetch_result`)
+/// and as the outcome sent from Witch back to scheduler for chain-emit and
+/// progress tracking. DB writes already happened on the rayon thread.
+#[derive(Debug)]
+pub enum FetchOutcome {
     AcoustIdMatch {
         recordings: Vec<MatchRow>,
     },
@@ -472,17 +445,21 @@ impl ExternalFetchHandle {
         self.batch_active
     }
 
-    /// Shut down the scheduler thread.
-    pub fn shutdown(&mut self) {
+}
+
+impl super::types::ManagedThread for ExternalFetchHandle {
+    fn send_shutdown(&self) {
         let _ = self.command_tx.send(FetchCommand::Shutdown);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
+    }
+
+    fn take_handle(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        self.handle.take()
     }
 }
 
 impl Drop for ExternalFetchHandle {
     fn drop(&mut self) {
+        use super::types::ManagedThread;
         self.shutdown();
     }
 }

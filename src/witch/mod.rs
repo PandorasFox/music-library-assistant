@@ -30,7 +30,7 @@ mod execution;
 pub(crate) mod external_fetch;
 pub mod messages;
 mod transaction;
-mod types;
+pub(crate) mod types;
 // Re-export public types
 pub use messages::InitialUiState;
 pub use types::{
@@ -520,7 +520,7 @@ impl Witch {
             // Witch's task lifecycle. Process them separately.
             if result.kind == types::TaskKind::ExternalFetch {
                 if let Some(fetch_data) = result.fetch_result {
-                    fetch_outcomes.push(self.fetch_result_to_outcome(fetch_data));
+                    fetch_outcomes.push(fetch_data);
                 }
                 continue;
             }
@@ -971,28 +971,14 @@ impl Witch {
         // In open-txn mode, idle rescans are always allowed (they're read-only observation).
         // In closed-txn mode, block if a transaction is open (user is actively reviewing).
         let open_txn_mode = self
-            .shared_config
-            .as_ref()
-            .map(|sc| {
-                sc.read()
-                    .expect("SharedConfig lock poisoned")
-                    .opinions
-                    .leave_transactions_open
-            })
+            .read_config(|c| c.opinions.leave_transactions_open)
             .unwrap_or(false);
         if !open_txn_mode && self.pending_transaction.is_some() {
             return;
         }
 
         let interval_secs = self
-            .shared_config
-            .as_ref()
-            .map(|sc| {
-                sc.read()
-                    .expect("SharedConfig lock poisoned")
-                    .opinions
-                    .idle_rescan_interval_secs
-            })
+            .read_config(|c| c.opinions.idle_rescan_interval_secs)
             .unwrap_or(0);
         if interval_secs == 0 {
             return;
@@ -1062,37 +1048,6 @@ impl Witch {
                     // batch_active already cleared by drain_messages()
                 }
             }
-        }
-    }
-
-    /// Convert a FetchResultData (from rayon) into a FetchOutcome (for the scheduler).
-    ///
-    /// DB writes already happened on the rayon thread. This just extracts the
-    /// scheduling-relevant information the scheduler needs for chain-emit and
-    /// progress tracking.
-    fn fetch_result_to_outcome(
-        &self,
-        data: external_fetch::FetchResultData,
-    ) -> external_fetch::FetchOutcome {
-        use external_fetch::{FetchOutcome, FetchResultData};
-
-        match data {
-            FetchResultData::AcoustIdMatch { recordings } => {
-                FetchOutcome::AcoustIdMatch { recordings }
-            }
-            FetchResultData::AcoustIdNoMatch => FetchOutcome::AcoustIdNoMatch,
-            FetchResultData::AcoustIdRateLimited { task } => {
-                FetchOutcome::AcoustIdRateLimited { task }
-            }
-            FetchResultData::AcoustIdError => FetchOutcome::AcoustIdError,
-            FetchResultData::MbFound {
-                discovered_entities,
-            } => FetchOutcome::MbFound {
-                discovered_entities,
-            },
-            FetchResultData::MbNotFound => FetchOutcome::MbNotFound,
-            FetchResultData::MbRateLimited { task } => FetchOutcome::MbRateLimited { task },
-            FetchResultData::MbError => FetchOutcome::MbError,
         }
     }
 
@@ -1167,14 +1122,8 @@ impl Witch {
 
     /// Whether an AcoustID API key is configured.
     pub fn has_acoustid_api_key(&self) -> bool {
-        self.shared_config.as_ref().is_some_and(|sc| {
-            let config = sc.read().expect("SharedConfig lock poisoned");
-            !config
-                .opinions
-                .external_matching
-                .acoustid_api_key
-                .is_empty()
-        })
+        self.read_config(|c| !c.opinions.external_matching.acoustid_api_key.is_empty())
+            .unwrap_or(false)
     }
 
     /// Queue release bin-packing analysis (operator-initiated).
@@ -1286,6 +1235,34 @@ impl Witch {
     }
 
     // -------------------------------------------------------------------------
+    // Enqueue Helper
+    // -------------------------------------------------------------------------
+
+    /// Resolve label, bump counters, and spawn a single task on the rayon pool.
+    ///
+    /// Consolidates the 4-step sequence (inc_queued / inc_in_flight / inc_label /
+    /// spawn_task) used by every queue method.
+    fn enqueue_one(&mut self, task: Task, label: Option<String>) {
+        let task_label = self.resolve_label(label, &task);
+        self.work_state.inc_queued(1);
+        self.work_state.inc_in_flight();
+        self.work_state.inc_label(&task_label);
+        self.spawn_task(task, task_label);
+    }
+
+    // -------------------------------------------------------------------------
+    // Config Access Helper
+    // -------------------------------------------------------------------------
+
+    /// Read from shared config, returning None if config isn't set yet.
+    fn read_config<T>(&self, f: impl FnOnce(&Config) -> T) -> Option<T> {
+        self.shared_config.as_ref().map(|sc| {
+            let config = sc.read().expect("SharedConfig lock poisoned");
+            f(&config)
+        })
+    }
+
+    // -------------------------------------------------------------------------
     // Label Resolution Helper
     // -------------------------------------------------------------------------
 
@@ -1368,14 +1345,9 @@ impl Witch {
 
         // Spawned mutations inherit the working state from their parent
         // (transition_to_working already happened when parent was queued)
-
-        let task = Task::Mutation(Box::new(mutation));
-        let task_label = TaskLabel::from_task(&task).0;
-
-        self.work_state.inc_queued(1);
-        self.work_state.inc_in_flight();
-        self.work_state.inc_label(&task_label);
-        self.spawn_task(task, task_label);
+        //
+        // Pass None for label so resolve_label falls through to TaskLabel::from_task
+        self.enqueue_one(Task::Mutation(Box::new(mutation)), None);
     }
 
     // -------------------------------------------------------------------------
@@ -1388,14 +1360,7 @@ impl Witch {
     /// signals. They can execute without user decisions.
     fn queue_computation_with_label(&mut self, computation: Computation, label: Option<String>) {
         self.transition_to_working();
-
-        let task = Task::Computation(computation);
-        let task_label = self.resolve_label(label, &task);
-
-        self.work_state.inc_queued(1);
-        self.work_state.inc_in_flight();
-        self.work_state.inc_label(&task_label);
-        self.spawn_task(task, task_label);
+        self.enqueue_one(Task::Computation(computation), label);
     }
 
     // -------------------------------------------------------------------------
@@ -1408,14 +1373,7 @@ impl Witch {
     /// before observing completes. Called only after operator approval.
     fn queue_maintenance(&mut self, task: crate::meta::maintenance::DbMaintenanceTask) {
         self.transition_to_working();
-
-        let task = Task::Maintenance(task);
-        let task_label = self.resolve_label(None, &task);
-
-        self.work_state.inc_queued(1);
-        self.work_state.inc_in_flight();
-        self.work_state.inc_label(&task_label);
-        self.spawn_task(task, task_label);
+        self.enqueue_one(Task::Maintenance(task), None);
     }
 
     // -------------------------------------------------------------------------
@@ -1571,6 +1529,8 @@ impl Witch {
 
 impl Drop for Witch {
     fn drop(&mut self) {
+        use types::ManagedThread;
+
         // Shutdown order is critical for SQLite WAL cleanup:
         // 0. Shut down external fetch thread (owns a read-only connection)
         // 1. Shut down cache thread (owns a read-only connection)
@@ -1597,13 +1557,11 @@ impl Drop for Witch {
         crate::logging::log_general("[WITCH] Closed all rayon thread-local DB connections");
 
         // Step 3: Shut down the DB thread (it will checkpoint and close write connection)
-        crate::db::write_thread::request_shutdown();
-        self.db_thread_handle.join();
+        self.db_thread_handle.shutdown();
 
-        // Step 5: Shut down the logging thread last so all shutdown messages get logged
-        crate::logging::request_shutdown();
+        // Step 4: Shut down the logging thread last so all shutdown messages get logged
         if let Some(ref mut handle) = self.log_thread_handle {
-            handle.join();
+            handle.shutdown();
         }
     }
 }

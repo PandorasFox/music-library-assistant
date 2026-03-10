@@ -658,30 +658,17 @@ fn index_track_from_metadata(
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::db::write_thread::{self, AudioData, FileData};
-    use std::time::UNIX_EPOCH;
 
-    let resolver = paths::get_resolver();
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     // Convert absolute path to relative for storage
-    let relative_path = resolver.to_relative(path).with_context(|| {
-        format!(
-            "Path {} does not match root. Check config.kdl roots.",
-            path.display(),
-        )
-    })?;
+    let relative_path = paths::resolve_relative(path)?;
     let rel_path_str = relative_path.to_string_lossy();
 
     // Get file metadata using portable API (consistent with comparison code)
     let file_metadata = std::fs::metadata(path)
         .with_context(|| format!("Failed to read file metadata: {}", path.display()))?;
-    let (mtime_secs, mtime_nanos) = file_metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
-        .unwrap_or((0, 0));
+    let (mtime_secs, mtime_nanos) = paths::read_mtime(&file_metadata);
 
     // Build FileData from metadata
     let file_data = FileData {
@@ -799,20 +786,13 @@ pub fn execute_update_file_path(
 ) -> Result<()> {
     use crate::db::write_thread;
 
-    let resolver = paths::get_resolver();
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     // Convert to relative for storage. The new_path may already be relative
     // (e.g., from signal_moved_file table which stores relative paths like
     // "corpus/web/misc/..."), so skip to_relative() if it's not absolute.
     let relative_path = if new_path.is_absolute() {
-        resolver.to_relative(new_path).with_context(|| {
-            format!(
-                "Path {} does not match root. Check config.kdl roots.",
-                new_path.display(),
-            )
-        })?
+        paths::resolve_relative(new_path)?
     } else {
         new_path.to_path_buf()
     };
@@ -844,8 +824,7 @@ pub fn execute_drop_directory_from_index(
 ) -> Result<()> {
     use crate::db::write_thread;
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     let dir_str = directory_path.to_string_lossy().to_string();
 
@@ -894,8 +873,7 @@ pub fn execute_drop_from_index(
 ) -> Result<()> {
     use crate::db::write_thread;
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     // Convert path to string for DB operations
     let path_str = path.to_string_lossy();
@@ -1087,10 +1065,8 @@ pub fn execute_acknowledge_mtime_only(
     witness: &MutationExecutionWitness,
 ) -> Result<Vec<std::path::PathBuf>> {
     use crate::db::write_thread;
-    use std::time::UNIX_EPOCH;
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
     let mut affected_paths = Vec::new();
 
     for (inode, abs_path) in tracks {
@@ -1104,12 +1080,7 @@ pub fn execute_acknowledge_mtime_only(
         // Read current disk mtime using portable API (consistent with comparison code)
         let metadata = std::fs::metadata(abs_path)
             .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
-        let (mtime_secs, mtime_nanos) = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
-            .unwrap_or((0, 0));
+        let (mtime_secs, mtime_nanos) = paths::read_mtime(&metadata);
 
         // Update file mtime via db_thread using (zone, inode) key
         sender.update_file_mtime(
@@ -1152,18 +1123,11 @@ pub fn execute_apply_db_tags_to_disk(
     use crate::corpus::tags::{write_file_tags, TagSet};
     use crate::db::write_thread;
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     // Convert abs_path to relative for DB operations.
     // Use mutation's abs_path parameter, not file's path from DB (may be stale).
-    let resolver = paths::get_resolver();
-    let relative_path = resolver.to_relative(abs_path).with_context(|| {
-        format!(
-            "Path {} does not match root. Check config.kdl roots.",
-            abs_path.display(),
-        )
-    })?;
+    let relative_path = paths::resolve_relative(abs_path)?;
     let rel_path_str = relative_path.to_string_lossy();
 
     // Get DB tags from the zone-appropriate table and convert to TagSet
@@ -1205,16 +1169,9 @@ pub fn execute_flush_tags_to_disk(
     // 1. Drain: block until all pending DB writes have committed
     write_thread::wait_for_queue_drain();
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
-    let resolver = paths::get_resolver();
-    let relative_path = resolver.to_relative(abs_path).with_context(|| {
-        format!(
-            "Path {} does not match root. Check config.kdl roots.",
-            abs_path.display(),
-        )
-    })?;
+    let relative_path = paths::resolve_relative(abs_path)?;
     let rel_path_str = relative_path.to_string_lossy();
 
     // 2. Read committed tags from zone-appropriate table
@@ -1262,22 +1219,14 @@ pub fn execute_assimilate_disk_tags_to_db(
     use crate::corpus::tags::TagSet;
     use crate::db::write_thread;
     use std::os::unix::fs::MetadataExt;
-    use std::time::UNIX_EPOCH;
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     // Convert abs_path to relative for DB operations.
     // IMPORTANT: We use the mutation's abs_path parameter, NOT file's path from DB.
     // When spawned from Transcode, the DB read connection may not have seen the
     // path update yet (async write via db_thread), causing stale reads.
-    let resolver = paths::get_resolver();
-    let relative_path = resolver.to_relative(abs_path).with_context(|| {
-        format!(
-            "Path {} does not match root. Check config.kdl roots.",
-            abs_path.display(),
-        )
-    })?;
+    let relative_path = paths::resolve_relative(abs_path)?;
     let rel_path_str = relative_path.to_string_lossy();
 
     // Use in-band zone when available (chain-spawned from Transcode), otherwise
@@ -1310,12 +1259,7 @@ pub fn execute_assimilate_disk_tags_to_db(
     // Read disk metadata using portable API
     let file_metadata = std::fs::metadata(abs_path)
         .with_context(|| format!("Failed to read metadata for {}", abs_path.display()))?;
-    let (mtime_secs, mtime_nanos) = file_metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
-        .unwrap_or((0, 0));
+    let (mtime_secs, mtime_nanos) = paths::read_mtime(&file_metadata);
 
     // Get current inode from filesystem (not from potentially stale DB read).
     // After transcode, the inode changed and we need the NEW inode for files table lookup.
@@ -1356,8 +1300,7 @@ pub fn execute_emit_canonical_tag(
 ) -> Result<()> {
     use crate::db::write_thread;
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     // Key uses normalized tag name (strip separators + uppercase) so that lookups
     // match regardless of compound variant: "album_artist" ≈ "ALBUMARTIST".
@@ -1406,8 +1349,7 @@ pub fn execute_emit_expected_overlap(
     use crate::db::write_thread;
     use crate::meta::signals::data::ExpectedOverlapSignal;
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     // Key format: sorted "source_a|source_b" (same as CrossSourceOverlap keys)
     let (key_a, key_b) = if source_a < source_b {
@@ -1452,8 +1394,7 @@ pub fn execute_emit_expected_duplicate(
     use crate::db::write_thread;
     use crate::meta::signals::data::ExpectedDuplicateSignal;
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     // Emit ExpectedDuplicate signal
     sender.write_typed_signal(
@@ -1485,8 +1426,7 @@ pub fn execute_emit_expected_missing_tag(
 ) -> Result<()> {
     use crate::db::write_thread;
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     for &inode in inodes {
         sender.write_typed_signal(
@@ -1509,8 +1449,7 @@ pub fn execute_emit_expected_missing_tag(
 pub fn execute_drop_external_match(inode: i64, witness: &MutationExecutionWitness) -> Result<()> {
     use crate::db::write_thread;
 
-    let sender = write_thread::signal_sender()
-        .ok_or_else(|| anyhow::anyhow!("DB thread not initialized"))?;
+    let sender = write_thread::require_sender()?;
 
     sender.drop_external_match(inode, witness);
 

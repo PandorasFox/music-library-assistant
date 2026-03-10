@@ -115,6 +115,39 @@ impl PathResolver {
 }
 
 // =============================================================================
+// Filesystem Metadata Helpers
+// =============================================================================
+
+/// Extract modification time from metadata as (seconds, nanoseconds) tuple.
+///
+/// Returns (0, 0) if mtime extraction fails. Uses the portable `modified()` API
+/// for consistency across all callsites (indexing, observation, tag writes).
+pub fn read_mtime(metadata: &std::fs::Metadata) -> (i64, i64) {
+    use std::time::UNIX_EPOCH;
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+        .unwrap_or((0, 0))
+}
+
+/// Convert an absolute path to a root-relative path, returning an error if
+/// the path is not within the archive root.
+///
+/// This is a convenience wrapper around `get_resolver().to_relative()` for the
+/// common pattern where failure to resolve means an error, not a skip.
+pub fn resolve_relative(path: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    let resolver = get_resolver();
+    resolver.to_relative(path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Path {} does not match root. Check config.kdl roots.",
+            path.display()
+        )
+    })
+}
+
+// =============================================================================
 // Path Classification (free functions — no resolver needed)
 // =============================================================================
 

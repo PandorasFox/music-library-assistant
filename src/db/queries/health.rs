@@ -10,110 +10,48 @@ use rusqlite::params;
 use super::Database;
 use crate::db::types::Zone;
 
-impl Database {
-    // ========================================================================
-    // Health Issue Operations
-    // ========================================================================
+/// Generate a typed signal query method on Database.
+macro_rules! signal_query {
+    (all, $fn_name:ident, $signal:ty) => {
+        pub fn $fn_name(&self) -> Result<Vec<$signal>> {
+            <$signal>::query_all(&self.conn)
+                .map_err(|e| anyhow::anyhow!("Failed to query {} signals: {}", stringify!($signal), e))
+        }
+    };
+    (by_key, $fn_name:ident, $signal:ty) => {
+        pub fn $fn_name(&self, key: &str) -> Result<Option<$signal>> {
+            <$signal>::query_by_key(&self.conn, key)
+                .map_err(|e| anyhow::anyhow!("Failed to query {} signal: {}", stringify!($signal), e))
+        }
+    };
+    (by_inode, $fn_name:ident, $signal:ty) => {
+        pub fn $fn_name(&self, inode: i64) -> Result<Option<$signal>> {
+            <$signal>::query_by_inode(&self.conn, inode)
+                .map_err(|e| anyhow::anyhow!("Failed to query {} signal: {}", stringify!($signal), e))
+        }
+    };
+}
 
+impl Database {
     // ========================================================================
     // Typed Signal Queries (direct struct access, no JSON)
     // ========================================================================
 
-    pub fn get_unindexed_file_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::UnindexedFileSignal>> {
-        crate::meta::signals::data::UnindexedFileSignal::query_all(&self.conn)
-            .map_err(|e| anyhow::anyhow!("Failed to query unindexed file signals: {}", e))
-    }
+    signal_query!(all, get_unindexed_file_signals, crate::meta::signals::data::UnindexedFileSignal);
+    signal_query!(all, get_healthy_file_signals, crate::meta::signals::data::HealthyFileSignal);
+    signal_query!(all, get_cross_source_overlap_signals, crate::meta::signals::data::CrossSourceOverlapSignal);
+    signal_query!(all, get_release_overlap_signals, crate::meta::signals::data::ReleaseOverlapSignal);
+    signal_query!(all, get_fingerprint_overlap_signals, crate::meta::signals::data::FingerprintOverlapSignal);
+    signal_query!(all, get_missing_tag_signals, crate::meta::signals::data::MissingTagSignal);
+    signal_query!(all, get_missing_album_single_signals, crate::meta::signals::data::MissingAlbumSingleSignal);
+    signal_query!(all, get_disc_extraction_signals, crate::meta::signals::data::DiscExtractionSignal);
 
-    pub fn get_healthy_file_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::HealthyFileSignal>> {
-        crate::meta::signals::data::HealthyFileSignal::query_all(&self.conn)
-            .map_err(|e| anyhow::anyhow!("Failed to query healthy file signals: {}", e))
-    }
+    signal_query!(by_key, get_tag_canonicity_signal, crate::meta::signals::data::TagCanonicitySignal);
+    signal_query!(by_key, get_inconsistent_album_artist_signal, crate::meta::signals::data::InconsistentAlbumArtistSignal);
+    signal_query!(by_key, get_inbox_tag_canonicity_signal, crate::meta::signals::data::InboxTagCanonicitySignal);
 
-    pub fn get_tag_canonicity_signal(
-        &self,
-        key: &str,
-    ) -> Result<Option<crate::meta::signals::data::TagCanonicitySignal>> {
-        crate::meta::signals::data::TagCanonicitySignal::query_by_key(&self.conn, key)
-            .map_err(|e| anyhow::anyhow!("Failed to query tag canonicity signal: {}", e))
-    }
-
-    pub fn get_inconsistent_album_artist_signal(
-        &self,
-        key: &str,
-    ) -> Result<Option<crate::meta::signals::data::InconsistentAlbumArtistSignal>> {
-        crate::meta::signals::data::InconsistentAlbumArtistSignal::query_by_key(&self.conn, key)
-            .map_err(|e| anyhow::anyhow!("Failed to query inconsistent album artist signal: {}", e))
-    }
-
-    pub fn get_compound_tag_signal(
-        &self,
-        inode: i64,
-    ) -> Result<Option<crate::meta::signals::data::CompoundTagSignal>> {
-        crate::meta::signals::data::CompoundTagSignal::query_by_inode(&self.conn, inode)
-            .map_err(|e| anyhow::anyhow!("Failed to query compound tag signal: {}", e))
-    }
-
-    pub fn get_inbox_compound_tag_signal(
-        &self,
-        inode: i64,
-    ) -> Result<Option<crate::meta::signals::data::InboxCompoundTagSignal>> {
-        crate::meta::signals::data::InboxCompoundTagSignal::query_by_inode(&self.conn, inode)
-            .map_err(|e| anyhow::anyhow!("Failed to query inbox compound tag signal: {}", e))
-    }
-
-    pub fn get_cross_source_overlap_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::CrossSourceOverlapSignal>> {
-        crate::meta::signals::data::CrossSourceOverlapSignal::query_all(&self.conn)
-            .map_err(|e| anyhow::anyhow!("Failed to query cross source overlap signals: {}", e))
-    }
-
-    pub fn get_release_overlap_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::ReleaseOverlapSignal>> {
-        crate::meta::signals::data::ReleaseOverlapSignal::query_all(&self.conn)
-            .map_err(|e| anyhow::anyhow!("Failed to query release overlap signals: {}", e))
-    }
-
-    pub fn get_fingerprint_overlap_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::FingerprintOverlapSignal>> {
-        crate::meta::signals::data::FingerprintOverlapSignal::query_all(&self.conn)
-            .map_err(|e| anyhow::anyhow!("Failed to query fingerprint overlap signals: {}", e))
-    }
-
-    pub fn get_missing_tag_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::MissingTagSignal>> {
-        crate::meta::signals::data::MissingTagSignal::query_all(&self.conn)
-            .map_err(|e| anyhow::anyhow!("Failed to query missing tag signals: {}", e))
-    }
-
-    pub fn get_missing_album_single_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::MissingAlbumSingleSignal>> {
-        crate::meta::signals::data::MissingAlbumSingleSignal::query_all(&self.conn)
-            .map_err(|e| anyhow::anyhow!("Failed to query missing album single signals: {}", e))
-    }
-
-    pub fn get_disc_extraction_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::DiscExtractionSignal>> {
-        crate::meta::signals::data::DiscExtractionSignal::query_all(&self.conn)
-            .map_err(|e| anyhow::anyhow!("Failed to query disc extraction signals: {}", e))
-    }
-
-    pub fn get_inbox_tag_canonicity_signal(
-        &self,
-        key: &str,
-    ) -> Result<Option<crate::meta::signals::data::InboxTagCanonicitySignal>> {
-        crate::meta::signals::data::InboxTagCanonicitySignal::query_by_key(&self.conn, key)
-            .map_err(|e| anyhow::anyhow!("Failed to query inbox tag canonicity signal: {}", e))
-    }
+    signal_query!(by_inode, get_compound_tag_signal, crate::meta::signals::data::CompoundTagSignal);
+    signal_query!(by_inode, get_inbox_compound_tag_signal, crate::meta::signals::data::InboxCompoundTagSignal);
 
     /// Get compound tag signal groups aggregated by (tag_name, compound_value).
     ///
@@ -331,48 +269,29 @@ impl Database {
         Ok(results)
     }
 
-    /// Get all FileInCorpus signal inodes with their paths.
-    ///
-    /// Returns HashMap<inode, path> for set comparison operations.
-    pub fn get_file_in_corpus_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT inode, path FROM signal_file_in_corpus")?;
-
+    /// Get all signal inodes with their paths from a given signal table.
+    fn get_signal_inode_paths(&self, table: &str) -> Result<std::collections::HashMap<i64, String>> {
+        let sql = format!("SELECT inode, path FROM {}", table);
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![], |row| {
-            let inode: i64 = row.get(0)?;
-            let path: String = row.get(1)?;
-            Ok((inode, path))
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?;
-
         let mut result = std::collections::HashMap::new();
         for row in rows {
             let (inode, path) = row?;
             result.insert(inode, path);
         }
-
         Ok(result)
+    }
+
+    /// Get all FileInCorpus signal inodes with their paths.
+    pub fn get_file_in_corpus_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
+        self.get_signal_inode_paths("signal_file_in_corpus")
     }
 
     /// Get all FileInInbox signal inodes with their paths.
     pub fn get_file_in_inbox_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT inode, path FROM signal_file_in_inbox")?;
-
-        let rows = stmt.query_map(params![], |row| {
-            let inode: i64 = row.get(0)?;
-            let path: String = row.get(1)?;
-            Ok((inode, path))
-        })?;
-
-        let mut result = std::collections::HashMap::new();
-        for row in rows {
-            let (inode, path) = row?;
-            result.insert(inode, path);
-        }
-
-        Ok(result)
+        self.get_signal_inode_paths("signal_file_in_inbox")
     }
 
     /// Get all inbox unindexed files as (inode, path) pairs.

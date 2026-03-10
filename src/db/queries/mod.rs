@@ -298,6 +298,22 @@ pub struct ReadOnlyDb<'a> {
     db: &'a Database,
 }
 
+// Generates simple forwarding methods on ReadOnlyDb that delegate to self.db.
+// Methods that use self.db.conn() directly are hand-written below the macro invocation.
+macro_rules! delegate_read {
+    ($(
+        $(#[$attr:meta])*
+        fn $name:ident($($arg:ident : $ty:ty),* $(,)?) -> $ret:ty;
+    )*) => {
+        $(
+            $(#[$attr])*
+            pub fn $name(&self, $($arg: $ty),*) -> $ret {
+                self.db.$name($($arg),*)
+            }
+        )*
+    };
+}
+
 impl<'a> ReadOnlyDb<'a> {
     /// Create a read-only view of a database.
     ///
@@ -311,172 +327,45 @@ impl<'a> ReadOnlyDb<'a> {
     // AudioFile Queries
     // =========================================================================
 
-    /// Get all audio files for a source.
-    pub fn get_all_audio_files(
-        &self,
-        source: super::types::Zone,
-        with_fingerprints: bool,
-    ) -> Result<Vec<super::types::AudioFile>> {
-        self.db.get_all_audio_files(source, with_fingerprints)
-    }
-
-    /// Get an audio file by path.
-    pub fn get_audio_file_by_path(&self, path: &str) -> Result<Option<super::types::AudioFile>> {
-        self.db.get_audio_file_by_path(path)
-    }
-
-    /// Get an audio file by inode from a specific source.
-    pub fn get_audio_file_by_inode(
-        &self,
-        inode: i64,
-        source: super::types::Zone,
-    ) -> Result<Option<super::types::AudioFile>> {
-        self.db.get_audio_file_by_inode(inode, source)
-    }
-
-    /// Get multiple audio files by their inodes from a specific source.
-    pub fn get_audio_files_by_inodes(
-        &self,
-        inodes: &[i64],
-        source: super::types::Zone,
-    ) -> Result<Vec<super::types::AudioFile>> {
-        self.db.get_audio_files_by_inodes(inodes, source)
-    }
-
-    /// Get audio files by path prefix (directory query).
-    pub fn get_audio_files_by_path_prefix(
-        &self,
-        path_prefix: &str,
-    ) -> Result<Vec<super::types::AudioFile>> {
-        self.db.get_audio_files_by_path_prefix(path_prefix)
-    }
-
-    /// Get audio files in a directory for tag editing.
-    pub fn get_audio_files_for_tag_editing(
-        &self,
-        dir_path: &std::path::Path,
-    ) -> Result<Vec<super::types::AudioFile>> {
-        self.db.get_audio_files_for_tag_editing(dir_path)
-    }
-
-    /// Get all audio files with their tags (for search functionality).
-    pub fn get_all_audio_files_with_tags(
-        &self,
-        source: super::types::Zone,
-        with_fingerprints: bool,
-    ) -> Result<Vec<files::AudioFileWithTags>> {
-        self.db
-            .get_all_audio_files_with_tags(source, with_fingerprints)
-    }
-
-    /// Get tags for an audio file by inode (corpus only).
-    pub fn get_corpus_tags(&self, inode: i64) -> Result<Vec<super::types::AudioTag>> {
-        self.db.get_corpus_tags(inode)
-    }
-
-    /// Get tags for an audio file by inode, dispatching to the correct tag table for the zone.
-    pub fn get_tags_for_zone(
-        &self,
-        inode: i64,
-        zone: super::types::Zone,
-    ) -> Result<Vec<super::types::AudioTag>> {
-        self.db.get_tags_for_zone(inode, zone)
+    delegate_read! {
+        fn get_all_audio_files(source: super::types::Zone, with_fingerprints: bool) -> Result<Vec<super::types::AudioFile>>;
+        fn get_audio_file_by_path(path: &str) -> Result<Option<super::types::AudioFile>>;
+        fn get_audio_file_by_inode(inode: i64, source: super::types::Zone) -> Result<Option<super::types::AudioFile>>;
+        fn get_audio_files_by_inodes(inodes: &[i64], source: super::types::Zone) -> Result<Vec<super::types::AudioFile>>;
+        fn get_audio_files_by_path_prefix(path_prefix: &str) -> Result<Vec<super::types::AudioFile>>;
+        fn get_audio_files_for_tag_editing(dir_path: &std::path::Path) -> Result<Vec<super::types::AudioFile>>;
+        fn get_all_audio_files_with_tags(source: super::types::Zone, with_fingerprints: bool) -> Result<Vec<files::AudioFileWithTags>>;
+        fn get_corpus_tags(inode: i64) -> Result<Vec<super::types::AudioTag>>;
+        fn get_tags_for_zone(inode: i64, zone: super::types::Zone) -> Result<Vec<super::types::AudioTag>>;
+        fn get_audio_info(inode: i64) -> Result<Option<super::types::AudioInfo>>;
+        fn get_has_pictures(inode: i64) -> Result<bool>;
     }
 
     // =========================================================================
     // Signal Queries
     // =========================================================================
 
-    // --- Typed signal queries (no JSON) ---
-
-    pub fn get_unindexed_file_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::UnindexedFileSignal>> {
-        self.db.get_unindexed_file_signals()
+    delegate_read! {
+        fn get_unindexed_file_signals() -> Result<Vec<crate::meta::signals::data::UnindexedFileSignal>>;
+        fn get_healthy_file_signals() -> Result<Vec<crate::meta::signals::data::HealthyFileSignal>>;
+        fn get_tag_canonicity_signal(key: &str) -> Result<Option<crate::meta::signals::data::TagCanonicitySignal>>;
+        fn get_inconsistent_album_artist_signal(key: &str) -> Result<Option<crate::meta::signals::data::InconsistentAlbumArtistSignal>>;
+        fn get_compound_tag_signal(inode: i64) -> Result<Option<crate::meta::signals::data::CompoundTagSignal>>;
+        fn get_inbox_compound_tag_signal(inode: i64) -> Result<Option<crate::meta::signals::data::InboxCompoundTagSignal>>;
+        fn get_cross_source_overlap_signals() -> Result<Vec<crate::meta::signals::data::CrossSourceOverlapSignal>>;
+        fn get_release_overlap_signals() -> Result<Vec<crate::meta::signals::data::ReleaseOverlapSignal>>;
+        fn get_fingerprint_overlap_signals() -> Result<Vec<crate::meta::signals::data::FingerprintOverlapSignal>>;
+        fn get_missing_tag_signals() -> Result<Vec<crate::meta::signals::data::MissingTagSignal>>;
+        fn get_missing_album_single_signals() -> Result<Vec<crate::meta::signals::data::MissingAlbumSingleSignal>>;
+        fn get_disc_extraction_signals() -> Result<Vec<crate::meta::signals::data::DiscExtractionSignal>>;
+        fn get_tracknumber_values_with_context() -> Result<Vec<(i64, String, String, String)>>;
+        fn get_inbox_tag_canonicity_signal(key: &str) -> Result<Option<crate::meta::signals::data::InboxTagCanonicitySignal>>;
+        fn get_compound_signal_groups_by_safety(safe_only: bool, tag_filter: Option<&str>) -> Result<Vec<crate::meta::signals::data::CompoundGroup>>;
+        fn get_inbox_compound_signal_groups() -> Result<Vec<crate::meta::signals::data::CompoundGroup>>;
+        fn get_sidecar_deploy_ready_signals() -> Result<Vec<crate::meta::signals::data::SidecarDeployReadySignal>>;
     }
 
-    pub fn get_healthy_file_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::HealthyFileSignal>> {
-        self.db.get_healthy_file_signals()
-    }
-
-    pub fn get_tag_canonicity_signal(
-        &self,
-        key: &str,
-    ) -> Result<Option<crate::meta::signals::data::TagCanonicitySignal>> {
-        self.db.get_tag_canonicity_signal(key)
-    }
-
-    pub fn get_inconsistent_album_artist_signal(
-        &self,
-        key: &str,
-    ) -> Result<Option<crate::meta::signals::data::InconsistentAlbumArtistSignal>> {
-        self.db.get_inconsistent_album_artist_signal(key)
-    }
-
-    pub fn get_compound_tag_signal(
-        &self,
-        inode: i64,
-    ) -> Result<Option<crate::meta::signals::data::CompoundTagSignal>> {
-        self.db.get_compound_tag_signal(inode)
-    }
-
-    pub fn get_inbox_compound_tag_signal(
-        &self,
-        inode: i64,
-    ) -> Result<Option<crate::meta::signals::data::InboxCompoundTagSignal>> {
-        self.db.get_inbox_compound_tag_signal(inode)
-    }
-
-    pub fn get_cross_source_overlap_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::CrossSourceOverlapSignal>> {
-        self.db.get_cross_source_overlap_signals()
-    }
-
-    pub fn get_release_overlap_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::ReleaseOverlapSignal>> {
-        self.db.get_release_overlap_signals()
-    }
-
-    pub fn get_fingerprint_overlap_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::FingerprintOverlapSignal>> {
-        self.db.get_fingerprint_overlap_signals()
-    }
-
-    pub fn get_missing_tag_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::MissingTagSignal>> {
-        self.db.get_missing_tag_signals()
-    }
-
-    pub fn get_missing_album_single_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::MissingAlbumSingleSignal>> {
-        self.db.get_missing_album_single_signals()
-    }
-
-    pub fn get_disc_extraction_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::DiscExtractionSignal>> {
-        self.db.get_disc_extraction_signals()
-    }
-
-    pub fn get_tracknumber_values_with_context(
-        &self,
-    ) -> Result<Vec<(i64, String, String, String)>> {
-        self.db.get_tracknumber_values_with_context()
-    }
-
-    pub fn get_inbox_tag_canonicity_signal(
-        &self,
-        key: &str,
-    ) -> Result<Option<crate::meta::signals::data::InboxTagCanonicitySignal>> {
-        self.db.get_inbox_tag_canonicity_signal(key)
-    }
+    // Generic signal methods that access self.db.conn() directly — hand-written.
 
     /// Check if an inode-keyed corpus signal exists (generic, type-safe).
     pub fn corpus_signal_exists<S: crate::meta::signals::store::CorpusSignalStore>(
@@ -546,694 +435,194 @@ impl<'a> ReadOnlyDb<'a> {
         signal.exists(self.db.conn())
     }
 
-    /// Get compound tag signal groups aggregated by (tag_name, compound_value).
-    pub fn get_compound_signal_groups_by_safety(
-        &self,
-        safe_only: bool,
-        tag_filter: Option<&str>,
-    ) -> Result<Vec<crate::meta::signals::data::CompoundGroup>> {
-        self.db
-            .get_compound_signal_groups_by_safety(safe_only, tag_filter)
-    }
-
-    /// Get inbox compound tag signal groups aggregated by (tag_name, compound_value).
-    pub fn get_inbox_compound_signal_groups(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::CompoundGroup>> {
-        self.db.get_inbox_compound_signal_groups()
-    }
-
     // =========================================================================
     // OOB / Tag Mismatch Queries
     // =========================================================================
 
-    /// Get files with OOB tag sync issues.
-    pub fn get_oob_sync_files(&self) -> Result<Vec<crate::meta::views::OobSyncFile>> {
-        self.db.get_oob_sync_files()
-    }
-
-    /// Get OOB files bucketed by conflict type.
-    pub fn get_oob_files_bucketed(&self) -> Result<Vec<crate::meta::views::BucketedOobFile>> {
-        self.db.get_oob_files_bucketed()
-    }
-
-    /// Get files that have been moved (same inode, different path).
-    pub fn get_moved_files(&self) -> Result<Vec<crate::meta::views::MovedFileInfo>> {
-        self.db.get_moved_files()
+    delegate_read! {
+        fn get_oob_sync_files() -> Result<Vec<crate::meta::views::OobSyncFile>>;
+        fn get_oob_files_bucketed() -> Result<Vec<crate::meta::views::BucketedOobFile>>;
+        fn get_moved_files() -> Result<Vec<crate::meta::views::MovedFileInfo>>;
     }
 
     // =========================================================================
     // Deploy Queries
     // =========================================================================
 
-    /// Get files ready for deployment.
-    pub fn get_deploy_ready_files(&self) -> Result<Vec<crate::meta::views::DeploySignalFile>> {
-        self.db.get_deploy_ready_files()
-    }
-
-    /// Get healthy deployed files.
-    pub fn get_deployed_healthy_files(&self) -> Result<Vec<crate::meta::views::DeploySignalFile>> {
-        self.db.get_deployed_healthy_files()
-    }
-
-    /// Get stale library files.
-    pub fn get_library_stale_files(&self) -> Result<Vec<crate::meta::views::StaleSignalFile>> {
-        self.db.get_library_stale_files()
-    }
-
-    /// Get leftover library files.
-    pub fn get_library_leftover_files(
-        &self,
-    ) -> Result<Vec<crate::meta::views::LeftoverSignalFile>> {
-        self.db.get_library_leftover_files()
-    }
-
-    /// Get deploy conflict groups.
-    pub fn get_deploy_conflict_groups(&self) -> Result<Vec<crate::meta::views::ConflictGroup>> {
-        self.db.get_deploy_conflict_groups()
-    }
-
-    pub fn get_sidecar_conflict_groups(
-        &self,
-    ) -> Result<Vec<crate::meta::views::SidecarConflictGroup>> {
-        self.db.get_sidecar_conflict_groups()
-    }
-
-    /// Get precomputed sidecar images ready for deployment.
-    pub fn get_sidecar_deploy_ready_signals(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::SidecarDeployReadySignal>> {
-        self.db.get_sidecar_deploy_ready_signals()
-    }
-
-    /// Get paths of missing files.
-    pub fn get_missing_file_paths(&self) -> Result<Vec<String>> {
-        self.db.get_missing_file_paths()
-    }
-
-    /// Get paths of corrupt files.
-    pub fn get_corrupt_file_paths(&self) -> Result<Vec<String>> {
-        self.db.get_corrupt_file_paths()
-    }
-
-    /// Get shit format files (inode, signal_path, file_type).
-    pub fn get_shit_format_files(&self) -> Result<Vec<(i64, String, String)>> {
-        self.db.get_shit_format_files()
-    }
-
-    /// Get counts of shit format files grouped by file type.
-    pub fn get_shit_format_counts_by_type(&self) -> Result<Vec<(String, i64)>> {
-        self.db.get_shit_format_counts_by_type()
-    }
-
-    /// Get subpar duplicate files with metadata.
-    pub fn get_subpar_duplicate_files(
-        &self,
-    ) -> Result<Vec<crate::meta::views::SubparDuplicateEntry>> {
-        self.db.get_subpar_duplicate_files()
-    }
-
-    /// Get inbox corpus match entries with quality classification.
-    pub fn get_inbox_corpus_match_entries(
-        &self,
-        bitrate_fuzz_percent: f64,
-    ) -> Result<Vec<crate::meta::views::InboxCorpusMatchEntry>> {
-        self.db.get_inbox_corpus_match_entries(bitrate_fuzz_percent)
-    }
-
-    /// Get inbox files eligible for organizing into the corpus.
-    pub fn get_organizable_inbox_files(&self) -> Result<Vec<(i64, String)>> {
-        self.db.get_organizable_inbox_files()
+    delegate_read! {
+        fn get_deploy_ready_files() -> Result<Vec<crate::meta::views::DeploySignalFile>>;
+        fn get_deployed_healthy_files() -> Result<Vec<crate::meta::views::DeploySignalFile>>;
+        fn get_library_stale_files() -> Result<Vec<crate::meta::views::StaleSignalFile>>;
+        fn get_library_leftover_files() -> Result<Vec<crate::meta::views::LeftoverSignalFile>>;
+        fn get_deploy_conflict_groups() -> Result<Vec<crate::meta::views::ConflictGroup>>;
+        fn get_sidecar_conflict_groups() -> Result<Vec<crate::meta::views::SidecarConflictGroup>>;
+        fn get_missing_file_paths() -> Result<Vec<String>>;
+        fn get_corrupt_file_paths() -> Result<Vec<String>>;
+        fn get_shit_format_files() -> Result<Vec<(i64, String, String)>>;
+        fn get_shit_format_counts_by_type() -> Result<Vec<(String, i64)>>;
+        fn get_subpar_duplicate_files() -> Result<Vec<crate::meta::views::SubparDuplicateEntry>>;
+        fn get_inbox_corpus_match_entries(bitrate_fuzz_percent: f64) -> Result<Vec<crate::meta::views::InboxCorpusMatchEntry>>;
+        fn get_organizable_inbox_files() -> Result<Vec<(i64, String)>>;
     }
 
     // =========================================================================
     // Library File Queries
     // =========================================================================
 
-    /// Get all library files.
-    pub fn get_all_library_files(&self) -> Result<Vec<library_scan::LibraryScanEntry>> {
-        self.db.get_all_library_files()
+    delegate_read! {
+        fn get_all_library_files() -> Result<Vec<library_scan::LibraryScanEntry>>;
+        fn get_library_files(library_name: &str) -> Result<Vec<library_scan::LibraryScanEntry>>;
     }
 
     // =========================================================================
     // File Entry Queries
     // =========================================================================
 
-    /// Get a file entry by path for a specific zone (without requiring audio_info).
-    ///
-    /// Use this for files that may not have been successfully indexed.
-    pub fn get_file_entry_by_path(
-        &self,
-        path: &str,
-        zone: &str,
-    ) -> Result<Option<super::types::FileEntry>> {
-        self.db.get_file_entry_by_path(path, zone)
-    }
-
-    /// Get mtime info for files by inode (for incremental scanning).
-    pub fn get_file_mtime_batch(
-        &self,
-        source: super::types::Zone,
-        inodes: &[i64],
-    ) -> Result<std::collections::HashMap<i64, (i64, i64)>> {
-        self.db.get_file_mtime_batch(source, inodes)
-    }
-
-    /// Look up the zone and path for an inode in corpus/inbox (excludes library).
-    pub fn get_file_zone_and_path_by_inode(&self, inode: i64) -> Result<Option<(String, String)>> {
-        self.db.get_file_zone_and_path_by_inode(inode)
-    }
-
-    /// Get paths for files by inode (for move detection).
-    pub fn get_file_paths_batch(
-        &self,
-        source: super::types::Zone,
-        inodes: &[i64],
-    ) -> Result<std::collections::HashMap<i64, String>> {
-        self.db.get_file_paths_batch(source, inodes)
-    }
-
-    /// Get inode groups with duplicates (multiple paths for same inode).
-    pub fn get_duplicate_inode_groups(&self) -> Result<Vec<(i64, String)>> {
-        self.db.get_duplicate_inode_groups()
-    }
-
-    /// Get audio files with their present tag names (for missing tag detection).
-    #[allow(clippy::type_complexity)]
-    pub fn get_audio_files_with_tag_presence(
-        &self,
-    ) -> Result<
-        Vec<(
-            i64,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )>,
-    > {
-        self.db.get_audio_files_with_tag_presence()
-    }
-
-    /// Get inbox audio files with their present tag names (for inbox missing tag detection).
-    #[allow(clippy::type_complexity)]
-    pub fn get_inbox_audio_files_with_tag_presence(
-        &self,
-    ) -> Result<
-        Vec<(
-            i64,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )>,
-    > {
-        self.db.get_inbox_audio_files_with_tag_presence()
-    }
-
-    /// Get the inbox path for a single inode.
-    pub fn get_inbox_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
-        self.db.get_inbox_path_for_inode(inode)
-    }
-
-    /// Get albums that are compilations (more than one distinct ARTIST value).
-    pub fn get_compilation_albums(&self) -> Result<std::collections::HashSet<String>> {
-        self.db.get_compilation_albums()
-    }
-
-    /// Get inodes that have any of the given tag values for a specific tag name.
-    pub fn get_inodes_for_tag_values(&self, tag_name: &str, values: &[&str]) -> Result<Vec<i64>> {
-        self.db.get_inodes_for_tag_values(tag_name, values)
-    }
-
-    /// Get all corpus audio file inodes mapped to their paths.
-    pub fn get_all_corpus_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
-        self.db.get_all_corpus_inodes()
-    }
-
-    pub fn get_all_inbox_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
-        self.db.get_all_inbox_inodes()
-    }
-
-    /// Get all FileInCorpus signal inodes with their paths.
-    pub fn get_file_in_corpus_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
-        self.db.get_file_in_corpus_inodes()
-    }
-
-    pub fn get_file_in_inbox_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
-        self.db.get_file_in_inbox_inodes()
-    }
-
-    /// Get all inbox unindexed files as (inode, path) pairs.
-    pub fn get_inbox_unindexed_files(&self) -> Result<Vec<(i64, String)>> {
-        self.db.get_inbox_unindexed_files()
-    }
-
-    /// Check whether an audio file has embedded pictures.
-    pub fn get_has_pictures(&self, inode: i64) -> Result<bool> {
-        self.db.get_has_pictures(inode)
-    }
-
-    /// Get the corpus path for a single inode.
-    pub fn get_corpus_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
-        self.db.get_corpus_path_for_inode(inode)
-    }
-
-    /// Get all tags ordered by inode and tag name (for metadata duplicate detection).
-    pub fn get_all_tags_ordered(&self) -> Result<Vec<(i64, String, String)>> {
-        self.db.get_all_tags_ordered()
-    }
-
-    /// Get indexed corpus directories with their inodes.
-    pub fn get_indexed_corpus_directories(&self) -> Result<Vec<(std::path::PathBuf, i64)>> {
-        self.db.get_indexed_corpus_directories()
-    }
-
-    /// Get missing directory signal paths (for UI resolution modal).
-    pub fn get_missing_directory_paths(&self) -> Result<Vec<String>> {
-        self.db.get_missing_directory_paths()
-    }
-
-    /// Get all files for a library (for DeriveDeployHealthSignals).
-    pub fn get_library_files(
-        &self,
-        library_name: &str,
-    ) -> Result<Vec<library_scan::LibraryScanEntry>> {
-        self.db.get_library_files(library_name)
-    }
-
-    /// Get audio info for a track by inode.
-    pub fn get_audio_info(&self, inode: i64) -> Result<Option<super::types::AudioInfo>> {
-        self.db.get_audio_info(inode)
-    }
-
-    /// Query distinct tag values with file counts from corpus_tags table.
-    pub fn get_distinct_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
-        self.db.get_distinct_tag_values(tag_name)
-    }
-
-    /// Query distinct tag values with file counts from inbox_tags table.
-    pub fn get_distinct_inbox_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
-        self.db.get_distinct_inbox_tag_values(tag_name)
-    }
-
-    /// Get inbox inodes that have any of the given tag values for a specific tag name.
-    pub fn get_inbox_inodes_for_tag_values(
-        &self,
-        tag_name: &str,
-        values: &[&str],
-    ) -> Result<Vec<i64>> {
-        self.db.get_inbox_inodes_for_tag_values(tag_name, values)
-    }
-
-    /// Get ALBUM tag values with their inodes from both corpus and inbox.
-    pub fn get_album_values_with_inodes(&self) -> Result<Vec<(i64, String)>> {
-        self.db.get_album_values_with_inodes()
-    }
-
-    /// Query album data with artist context for collision detection.
-    #[allow(clippy::type_complexity)]
-    pub fn get_album_data_for_collision_detection(
-        &self,
-    ) -> Result<Vec<(String, String, String, String, String, String)>> {
-        self.db.get_album_data_for_collision_detection()
-    }
-
-    /// Get album artist data for inconsistency detection.
-    #[allow(clippy::type_complexity)]
-    pub fn get_album_artist_data(
-        &self,
-    ) -> Result<Vec<(i64, String, String, String, String, String, String, String)>> {
-        self.db.get_album_artist_data()
+    delegate_read! {
+        fn get_file_entry_by_path(path: &str, zone: &str) -> Result<Option<super::types::FileEntry>>;
+        fn get_file_mtime_batch(source: super::types::Zone, inodes: &[i64]) -> Result<std::collections::HashMap<i64, (i64, i64)>>;
+        fn get_file_zone_and_path_by_inode(inode: i64) -> Result<Option<(String, String)>>;
+        fn get_file_paths_batch(source: super::types::Zone, inodes: &[i64]) -> Result<std::collections::HashMap<i64, String>>;
+        fn get_duplicate_inode_groups() -> Result<Vec<(i64, String)>>;
+        #[allow(clippy::type_complexity)]
+        fn get_audio_files_with_tag_presence() -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>;
+        #[allow(clippy::type_complexity)]
+        fn get_inbox_audio_files_with_tag_presence() -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>;
+        fn get_inbox_path_for_inode(inode: i64) -> Result<Option<String>>;
+        fn get_compilation_albums() -> Result<std::collections::HashSet<String>>;
+        fn get_inodes_for_tag_values(tag_name: &str, values: &[&str]) -> Result<Vec<i64>>;
+        fn get_all_corpus_inodes() -> Result<std::collections::HashMap<i64, String>>;
+        fn get_all_inbox_inodes() -> Result<std::collections::HashMap<i64, String>>;
+        fn get_file_in_corpus_inodes() -> Result<std::collections::HashMap<i64, String>>;
+        fn get_file_in_inbox_inodes() -> Result<std::collections::HashMap<i64, String>>;
+        fn get_inbox_unindexed_files() -> Result<Vec<(i64, String)>>;
+        fn get_corpus_path_for_inode(inode: i64) -> Result<Option<String>>;
+        fn get_all_tags_ordered() -> Result<Vec<(i64, String, String)>>;
+        fn get_indexed_corpus_directories() -> Result<Vec<(std::path::PathBuf, i64)>>;
+        fn get_missing_directory_paths() -> Result<Vec<String>>;
+        fn get_distinct_tag_values(tag_name: &str) -> Result<Vec<(String, usize)>>;
+        fn get_distinct_inbox_tag_values(tag_name: &str) -> Result<Vec<(String, usize)>>;
+        fn get_inbox_inodes_for_tag_values(tag_name: &str, values: &[&str]) -> Result<Vec<i64>>;
+        fn get_album_values_with_inodes() -> Result<Vec<(i64, String)>>;
+        #[allow(clippy::type_complexity)]
+        fn get_album_data_for_collision_detection() -> Result<Vec<(String, String, String, String, String, String)>>;
+        #[allow(clippy::type_complexity)]
+        fn get_album_artist_data() -> Result<Vec<(i64, String, String, String, String, String, String, String)>>;
+        fn directory_entry_fresh(zone: &str, inode: i64, mtime_secs: i64, mtime_nanos: i64) -> bool;
     }
 
     // =========================================================================
     // CanonicalTag Queries
     // =========================================================================
 
-    /// Check if a CanonicalTag signal exists for this tag_name:tag_value.
-    pub fn is_canonical_tag(&self, tag_name: &str, tag_value: &str) -> Result<bool> {
-        self.db.is_canonical_tag(tag_name, tag_value)
-    }
-
-    /// Get all inodes that have a CompoundTag signal containing a specific compound value.
-    pub fn get_inodes_with_compound_value(
-        &self,
-        tag_name: &str,
-        compound_value: &str,
-    ) -> Result<Vec<i64>> {
-        self.db
-            .get_inodes_with_compound_value(tag_name, compound_value)
+    delegate_read! {
+        fn is_canonical_tag(tag_name: &str, tag_value: &str) -> Result<bool>;
+        fn get_inodes_with_compound_value(tag_name: &str, compound_value: &str) -> Result<Vec<i64>>;
     }
 
     // =========================================================================
-    // ExpectedOverlap Queries
+    // ExpectedOverlap / ExpectedDuplicate Queries
     // =========================================================================
 
-    /// Check if an ExpectedOverlap signal exists for this source pair key.
-    pub fn is_expected_overlap(&self, pair_key: &str) -> Result<bool> {
-        self.db.is_expected_overlap(pair_key)
-    }
-
-    // =========================================================================
-    // ExpectedDuplicate Queries
-    // =========================================================================
-
-    /// Check if an ExpectedDuplicate signal exists for this fingerprint key.
-    pub fn is_expected_duplicate(&self, fingerprint_key: &str) -> Result<bool> {
-        self.db.is_expected_duplicate(fingerprint_key)
+    delegate_read! {
+        fn is_expected_overlap(pair_key: &str) -> Result<bool>;
+        fn is_expected_duplicate(fingerprint_key: &str) -> Result<bool>;
     }
 
     // =========================================================================
-    // External Match Queries
+    // External Match / MusicBrainz Cache Queries
     // =========================================================================
 
-    /// Get external matches data bucketed for the External Matches lateral view.
-    pub fn get_external_matches_data(&self) -> Result<crate::meta::views::ExternalMatchesData> {
-        self.db.get_external_matches_data()
-    }
-
-    /// Get external matches for corpus files, for signal derivation.
-    pub fn get_external_matches_for_derivation(
-        &self,
-        source_key: i64,
-    ) -> Result<Vec<external::ExternalMatchRow>> {
-        self.db.get_external_matches_for_derivation(source_key)
-    }
-
-    /// Get cached MusicBrainz recording JSON by recording ID.
-    pub fn get_mb_recording_cache(&self, recording_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
-        self.db.get_mb_recording_cache(recording_id)
-    }
-
-    /// Get cached MusicBrainz artist JSON by artist ID.
-    pub fn get_mb_artist_cache(&self, artist_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
-        self.db.get_mb_artist_cache(artist_id)
-    }
-
-    /// Get the release packing manifest (populated by Stage 1).
-    pub fn get_packing_manifest(&self) -> Result<Vec<external::PackingManifestRow>> {
-        self.db.get_packing_manifest()
-    }
-
-    /// Get optimal packing scores (is_optimal=1, populated by Stage 2).
-    pub fn get_optimal_packing_scores(&self) -> Result<Vec<external::OptimalPackingScoreRow>> {
-        self.db.get_optimal_packing_scores()
-    }
-
-    /// Get cached MusicBrainz release JSON by release ID.
-    pub fn get_mb_release_cache(&self, release_id: &str) -> Result<Option<(Vec<u8>, i64)>> {
-        self.db.get_mb_release_cache(release_id)
-    }
-
-    /// Get external matches without raw_response blobs (for packing pipeline).
-    pub fn get_external_matches_slim(
-        &self,
-        source_key: i64,
-    ) -> Result<Vec<external::ExternalMatchRow>> {
-        self.db.get_external_matches_slim(source_key)
-    }
-
-    /// Get packing candidates for a specific release (indexed lookup).
-    pub fn get_packing_candidates_for_release(
-        &self,
-        release_id: &str,
-    ) -> Result<Vec<external::PackingCandidateRow>> {
-        self.db.get_packing_candidates_for_release(release_id)
-    }
-
-    /// Get (inode, path) pairs for all packing-relevant inodes (candidates + elimination).
-    pub fn get_packing_inode_paths(&self) -> Result<Vec<(i64, String)>> {
-        self.db.get_packing_inode_paths()
-    }
-
-    /// Load all packing knot signals with deserialized data.
-    pub fn get_packing_knots(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::PackingKnotData>> {
-        self.db.get_packing_knots()
-    }
-
-    /// Get (inode, parent_dir, dir_file_count) for all candidate inodes.
-    pub fn get_candidate_inode_dirs(&self) -> Result<Vec<(i64, String, i32)>> {
-        self.db.get_candidate_inode_dirs()
-    }
-
-    /// Get distinct (inode, recording_id) pairs from the candidates table.
-    pub fn get_candidate_inode_recordings(&self) -> Result<Vec<(i64, String)>> {
-        self.db.get_candidate_inode_recordings()
-    }
-
-    /// Read all release packing signal assignments.
-    pub fn get_release_packing_assignments(&self) -> Result<Vec<external::PackingAssignment>> {
-        self.db.get_release_packing_assignments()
-    }
-
-    /// Get unassigned corpus audio files in a directory.
-    pub fn get_unassigned_audio_in_directory(
-        &self,
-        parent_dir: &str,
-        assigned_inodes: &std::collections::HashSet<i64>,
-    ) -> Result<Vec<external::UnassignedAudioFile>> {
-        self.db
-            .get_unassigned_audio_in_directory(parent_dir, assigned_inodes)
-    }
-
-    /// Bulk-load cached MusicBrainz release JSON for a set of release IDs.
-    pub fn get_mb_release_cache_bulk(
-        &self,
-        release_ids: &[&str],
-    ) -> Result<Vec<(String, Vec<u8>)>> {
-        self.db.get_mb_release_cache_bulk(release_ids)
+    delegate_read! {
+        fn get_external_matches_data() -> Result<crate::meta::views::ExternalMatchesData>;
+        fn get_external_matches_for_derivation(source_key: i64) -> Result<Vec<external::ExternalMatchRow>>;
+        fn get_mb_recording_cache(recording_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
+        fn get_mb_artist_cache(artist_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
+        fn get_packing_manifest() -> Result<Vec<external::PackingManifestRow>>;
+        fn get_optimal_packing_scores() -> Result<Vec<external::OptimalPackingScoreRow>>;
+        fn get_mb_release_cache(release_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
+        fn get_external_matches_slim(source_key: i64) -> Result<Vec<external::ExternalMatchRow>>;
+        fn get_packing_candidates_for_release(release_id: &str) -> Result<Vec<external::PackingCandidateRow>>;
+        fn get_packing_inode_paths() -> Result<Vec<(i64, String)>>;
+        fn get_packing_knots() -> Result<Vec<crate::meta::signals::data::PackingKnotData>>;
+        fn get_candidate_inode_dirs() -> Result<Vec<(i64, String, i32)>>;
+        fn get_candidate_inode_recordings() -> Result<Vec<(i64, String)>>;
+        fn get_release_packing_assignments() -> Result<Vec<external::PackingAssignment>>;
+        fn get_unassigned_audio_in_directory(parent_dir: &str, assigned_inodes: &std::collections::HashSet<i64>) -> Result<Vec<external::UnassignedAudioFile>>;
+        fn get_mb_release_cache_bulk(release_ids: &[&str]) -> Result<Vec<(String, Vec<u8>)>>;
     }
 
     // =========================================================================
     // Release Packing Signal Data Queries
     // =========================================================================
 
-    /// Read all ReleasePackingSignal rows with deserialized data.
-    pub fn get_release_packing_signal_data(
-        &self,
-    ) -> Result<Vec<(i64, String, crate::meta::signals::data::ReleasePackingData)>> {
-        self.db.get_release_packing_signal_data()
-    }
-
-    /// Read UnmatchedCorpusTrackSignal rows for a specific unsolved category.
-    pub fn get_unmatched_corpus_track_signal_data_by_category(
-        &self,
-        category: &str,
-    ) -> Result<
-        Vec<(
-            i64,
-            String,
-            crate::meta::signals::data::UnmatchedCorpusTrackData,
-        )>,
-    > {
-        self.db
-            .get_unmatched_corpus_track_signal_data_by_category(category)
-    }
-
-    /// Read all UnfilledReleaseSlotSignal rows with deserialized data.
-    pub fn get_unfilled_release_slot_signal_data(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::UnfilledReleaseSlotData>> {
-        self.db.get_unfilled_release_slot_signal_data()
-    }
-
-    /// Get all fingerprinted corpus file inodes and paths.
-    pub fn get_fingerprinted_corpus_inodes(&self) -> Result<Vec<(i64, String)>> {
-        self.db.get_fingerprinted_corpus_inodes()
-    }
-
-    /// Get all inodes currently assigned by release packing.
-    pub fn get_assigned_packing_inodes(&self) -> Result<std::collections::HashSet<i64>> {
-        self.db.get_assigned_packing_inodes()
-    }
-
-    /// Get packed release signal data for a specific category prefix.
-    pub fn get_packed_releases_by_category(
-        &self,
-        category_prefix: &str,
-    ) -> Result<Vec<crate::meta::signals::data::PackedReleaseData>> {
-        self.db.get_packed_releases_by_category(category_prefix)
-    }
-
-    /// Load all alternative release packing signals.
-    pub fn get_alternative_release_packing_data(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::AlternativeReleasePackingData>> {
-        self.db.get_alternative_release_packing_data()
-    }
-
-    /// Load all various artists override signals.
-    pub fn get_various_artists_override_data(
-        &self,
-    ) -> Result<Vec<crate::meta::signals::data::VariousArtistsOverrideData>> {
-        self.db.get_various_artists_override_data()
-    }
-
-    /// Get paths of all files with release packing assignments.
-    pub fn get_packing_assigned_paths(
-        &self,
-    ) -> Result<std::collections::HashSet<std::path::PathBuf>> {
-        self.db.get_packing_assigned_paths()
-    }
-
-    /// Get parent directories mapped to their best packing category.
-    pub fn get_packing_directory_categories(
-        &self,
-    ) -> Result<
-        std::collections::HashMap<
-            std::path::PathBuf,
-            crate::meta::signals::packing_category::PackingCategory,
-        >,
-    > {
-        self.db.get_packing_directory_categories()
+    delegate_read! {
+        fn get_release_packing_signal_data() -> Result<Vec<(i64, String, crate::meta::signals::data::ReleasePackingData)>>;
+        fn get_unmatched_corpus_track_signal_data_by_category(category: &str) -> Result<Vec<(i64, String, crate::meta::signals::data::UnmatchedCorpusTrackData)>>;
+        fn get_unfilled_release_slot_signal_data() -> Result<Vec<crate::meta::signals::data::UnfilledReleaseSlotData>>;
+        fn get_fingerprinted_corpus_inodes() -> Result<Vec<(i64, String)>>;
+        fn get_assigned_packing_inodes() -> Result<std::collections::HashSet<i64>>;
+        fn get_packed_releases_by_category(category_prefix: &str) -> Result<Vec<crate::meta::signals::data::PackedReleaseData>>;
+        fn get_alternative_release_packing_data() -> Result<Vec<crate::meta::signals::data::AlternativeReleasePackingData>>;
+        fn get_various_artists_override_data() -> Result<Vec<crate::meta::signals::data::VariousArtistsOverrideData>>;
+        fn get_packing_assigned_paths() -> Result<std::collections::HashSet<std::path::PathBuf>>;
+        fn get_packing_directory_categories() -> Result<std::collections::HashMap<std::path::PathBuf, crate::meta::signals::packing_category::PackingCategory>>;
     }
 
     // =========================================================================
     // Redundant / Metadata Duplicate Queries
     // =========================================================================
 
-    /// Get all redundant duplicate groups with deserialized data.
-    pub fn get_redundant_duplicate_groups(
-        &self,
-    ) -> Result<Vec<(String, crate::meta::signals::data::RedundantDuplicateData)>> {
-        self.db.get_redundant_duplicate_groups()
-    }
-
-    /// Get all metadata duplicate groups with deserialized data.
-    pub fn get_metadata_duplicate_groups(
-        &self,
-    ) -> Result<Vec<(String, crate::meta::signals::data::MetadataDuplicateData)>> {
-        self.db.get_metadata_duplicate_groups()
+    delegate_read! {
+        fn get_redundant_duplicate_groups() -> Result<Vec<(String, crate::meta::signals::data::RedundantDuplicateData)>>;
+        fn get_metadata_duplicate_groups() -> Result<Vec<(String, crate::meta::signals::data::MetadataDuplicateData)>>;
     }
 
     // =========================================================================
     // Dirty Inode Queries (for incremental computations)
     // =========================================================================
 
-    /// Get all inodes marked dirty for a specific computation type.
-    ///
-    /// Used by per-inode computations (e.g., compound tag detection) to query
-    /// only the inodes that need reprocessing instead of the entire corpus.
-    pub fn get_dirty_inodes(&self, computation_type: &str) -> Result<Vec<i64>> {
-        self.db.get_dirty_inodes(computation_type)
-    }
-
-    /// Get corpus inodes whose tag values contain a given separator string.
-    pub fn get_corpus_inodes_with_tag_separator(
-        &self,
-        tag_name: &str,
-        separator: &str,
-    ) -> Result<Vec<i64>> {
-        self.db
-            .get_corpus_inodes_with_tag_separator(tag_name, separator)
-    }
-
-    // =========================================================================
-    // Directory Entry Freshness Check
-    // =========================================================================
-
-    /// Check if a directory entry already matches the given metadata.
-    ///
-    /// Used by `index_directory()` to skip unconditional writes.
-    pub fn directory_entry_fresh(
-        &self,
-        zone: &str,
-        inode: i64,
-        mtime_secs: i64,
-        mtime_nanos: i64,
-    ) -> bool {
-        self.db
-            .directory_entry_fresh(zone, inode, mtime_secs, mtime_nanos)
+    delegate_read! {
+        fn get_dirty_inodes(computation_type: &str) -> Result<Vec<i64>>;
+        fn get_corpus_inodes_with_tag_separator(tag_name: &str, separator: &str) -> Result<Vec<i64>>;
     }
 
     // =========================================================================
     // Library File Metadata (for reconciliation)
     // =========================================================================
 
-    /// Get all library file metadata for reconciliation.
-    ///
-    /// Returns a map of stored_path → (inode, mtime_secs, mtime_nanos, file_size).
-    pub fn get_library_file_metadata(
-        &self,
-    ) -> Result<std::collections::HashMap<String, (i64, i64, i64, i64)>> {
-        self.db.get_library_file_metadata()
+    delegate_read! {
+        fn get_library_file_metadata() -> Result<std::collections::HashMap<String, (i64, i64, i64, i64)>>;
     }
 
     // =========================================================================
     // Edit History Queries
     // =========================================================================
 
-    /// Get all edit sessions, most recent first.
-    pub fn get_edit_sessions(&self) -> Result<Vec<crate::meta::views::EditSessionSummary>> {
-        self.db.get_edit_sessions()
-    }
-
-    /// Get all edits within a single session.
-    pub fn get_session_edits(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<crate::meta::views::EditRecord>> {
-        self.db.get_session_edits(session_id)
-    }
-
-    /// Get all edit history rows for export (includes session_id).
-    pub fn get_all_edit_history(&self) -> Result<Vec<crate::meta::views::EditHistoryExportRow>> {
-        self.db.get_all_edit_history()
-    }
-
-    /// Get edit history rows for a single session, for export.
-    pub fn get_session_edit_history(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<crate::meta::views::EditHistoryExportRow>> {
-        self.db.get_session_edit_history(session_id)
+    delegate_read! {
+        fn get_edit_sessions() -> Result<Vec<crate::meta::views::EditSessionSummary>>;
+        fn get_session_edits(session_id: &str) -> Result<Vec<crate::meta::views::EditRecord>>;
+        fn get_all_edit_history() -> Result<Vec<crate::meta::views::EditHistoryExportRow>>;
+        fn get_session_edit_history(session_id: &str) -> Result<Vec<crate::meta::views::EditHistoryExportRow>>;
     }
 
     // =========================================================================
     // Health / Cache Queries
     // =========================================================================
 
-    /// Get insights data for the health view.
-    pub fn get_insights_data(&self) -> Result<crate::meta::views::InsightsData> {
-        self.db.get_insights_data()
-    }
-
-    /// Get inbox overview data.
-    pub fn get_inbox_overview_data(&self) -> Result<crate::meta::views::InboxOverviewData> {
-        self.db.get_inbox_overview_data()
-    }
-
-    /// Get deploy status.
-    pub fn get_deploy_status(&self) -> Result<crate::meta::views::DeployStatus> {
-        self.db.get_deploy_status()
+    delegate_read! {
+        fn get_insights_data() -> Result<crate::meta::views::InsightsData>;
+        fn get_inbox_overview_data() -> Result<crate::meta::views::InboxOverviewData>;
+        fn get_deploy_status() -> Result<crate::meta::views::DeployStatus>;
     }
 
     // =========================================================================
     // Image File Queries
     // =========================================================================
 
-    /// Check which inodes already have image_info rows (batch query).
-    pub fn get_image_info_exists_batch(
-        &self,
-        inodes: &[i64],
-    ) -> Result<std::collections::HashSet<i64>> {
-        self.db.get_image_info_exists_batch(inodes)
-    }
-
-    /// Get all corpus image files with inodes (batch query for sidecar deploy).
-    pub fn get_all_corpus_images(&self) -> Result<Vec<files::CorpusImageEntry>> {
-        self.db.get_all_corpus_images()
-    }
-
-    /// Find any single audio file in a corpus directory (for sidecar stale detection).
-    pub fn get_any_audio_sibling_in_directory(
-        &self,
-        corpus_dir: &str,
-    ) -> Result<Option<(i64, String)>> {
-        self.db.get_any_audio_sibling_in_directory(corpus_dir)
+    delegate_read! {
+        fn get_image_info_exists_batch(inodes: &[i64]) -> Result<std::collections::HashSet<i64>>;
+        fn get_all_corpus_images() -> Result<Vec<files::CorpusImageEntry>>;
+        fn get_any_audio_sibling_in_directory(corpus_dir: &str) -> Result<Option<(i64, String)>>;
     }
 }

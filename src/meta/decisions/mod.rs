@@ -87,6 +87,8 @@ pub enum DecisionKey {
     ConfigEdit,
     /// Directory config edit (per source dir path)
     DirConfigEdit { source_path: std::path::PathBuf },
+    /// MB release approval — bulk tag embedding from approved release packing.
+    MbReleaseApproval { release_id: String },
 }
 
 impl DecisionKey {
@@ -160,6 +162,9 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::ConfigEdit => write!(f, "Config Edit"),
             DecisionKey::DirConfigEdit { source_path } => {
                 write!(f, "Dir Config Edit:{}", source_path.display())
+            }
+            DecisionKey::MbReleaseApproval { release_id } => {
+                write!(f, "MB Release Approval:{}", release_id)
             }
         }
     }

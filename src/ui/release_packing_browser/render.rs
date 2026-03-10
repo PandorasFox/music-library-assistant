@@ -1,9 +1,10 @@
 //! Rendering for the Release Packing Browser.
 //!
-//! Three-pane layout:
-//! - Left (25%): flat release/unmatched list
-//! - Top-right (60%): tracks+unfilled for selected release
-//! - Bottom-right (40%): per-track detail with score breakdown
+//! Single-pane StandardList with wizard integration:
+//! - List rows: checkbox + marker + title + coverage
+//! - Wizard popup (z): release overview
+//! - Wizard pane (Z): interleaved tracks + score breakdown cards
+//! - Pin overlay: UUID input for manual release pinning
 
 use std::collections::HashMap;
 
@@ -11,7 +12,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
@@ -19,6 +20,11 @@ use super::types::*;
 use super::ReleasePackingBrowserState;
 use crate::meta::signals::packing_category::PackingCategory;
 use crate::ui::widgets::control_colors;
+use crate::ui::widgets::rich_text::{RichBlock, RichSpan};
+
+// ============================================================================
+// Top-Level Render
+// ============================================================================
 
 pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
     // Outer: title (1) + content (min) + controls (1)
@@ -32,24 +38,44 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState)
         .split(area);
 
     render_title_bar(f, outer[0], state);
+
     let has_release = state.pin_input.is_none() && state.selected_release().is_some();
-    render_controls(f, outer[2], has_release);
+    let is_release_category = matches!(
+        state.category,
+        PackingCategory::Perfect
+            | PackingCategory::FullMatches
+            | PackingCategory::Singles
+            | PackingCategory::Incomplete
+            | PackingCategory::LowConfidence
+    );
+    render_controls(f, outer[2], has_release, is_release_category);
 
-    // Content: left (25%) + right (75%)
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-        .split(outer[1]);
+    // StandardList renders the list + wizard popup/pane
+    let entries = &state.entries;
+    let releases = &state.releases;
+    let unmatched = &state.unmatched;
+    let category = state.category;
+    let pinned = &state.pinned_release_ids;
 
-    // Right side: tracks (60%) + detail (40%)
-    let right = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(panes[1]);
-
-    render_left_pane(f, panes[0], state);
-    render_tracks_pane(f, right[0], state);
-    render_detail_pane(f, right[1], state);
+    state.list_state.render(
+        f,
+        outer[1],
+        entries,
+        |idx, is_cursor, is_selected, width| {
+            render_list_row(
+                &entries[idx],
+                is_cursor,
+                is_selected,
+                width,
+                releases,
+                unmatched,
+                category,
+                pinned,
+            )
+        },
+        category.label(),
+        true,
+    );
 
     // Pin input overlay on top of everything
     if state.pin_input.is_some() {
@@ -57,10 +83,16 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState)
     }
 }
 
+// ============================================================================
+// Title Bar & Controls
+// ============================================================================
+
 fn render_title_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserState) {
     let title = state.category.label();
     let count = state.entries.len();
-    let line = Line::from(vec![
+    let selected_count = state.list_state.selected.len();
+
+    let mut spans = vec![
         Span::styled(
             format!(" {} ", title),
             Style::default()
@@ -71,98 +103,84 @@ fn render_title_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserStat
             format!("({} entries)", count),
             Style::default().fg(Color::DarkGray),
         ),
-    ]);
-    f.render_widget(Paragraph::new(vec![line]), area);
+    ];
+
+    if selected_count > 0 {
+        spans.push(Span::styled(
+            format!("  [{} selected]", selected_count),
+            Style::default().fg(Color::Cyan),
+        ));
+    }
+
+    f.render_widget(Paragraph::new(vec![Line::from(spans)]), area);
 }
 
-fn render_controls(f: &mut Frame, area: Rect, has_release: bool) {
+fn render_controls(f: &mut Frame, area: Rect, has_release: bool, is_release_category: bool) {
     let mut spans = vec![
         control_colors::text(" "),
         control_colors::nav("^v"),
         control_colors::text(" nav  "),
-        control_colors::nav("Shift+Arrow"),
-        control_colors::text(" switch pane  "),
     ];
+    if is_release_category {
+        spans.push(control_colors::nav("Space"));
+        spans.push(control_colors::text(" toggle  "));
+        spans.push(control_colors::confirm("Enter"));
+        spans.push(control_colors::text(" approve  "));
+    }
+    spans.push(control_colors::nav("z/Z"));
+    spans.push(control_colors::text(" info  "));
     if has_release {
         spans.push(control_colors::nav("p"));
-        spans.push(control_colors::text(" pin release  "));
+        spans.push(control_colors::text(" pin  "));
     }
     spans.push(control_colors::cancel("Esc"));
     spans.push(control_colors::text(" close"));
-    let line = Line::from(spans);
-    f.render_widget(Paragraph::new(vec![line]), area);
+    f.render_widget(Paragraph::new(vec![Line::from(spans)]), area);
 }
 
 // ============================================================================
-// Left Pane: Flat Release List
+// List Row Rendering (closure for StandardList)
 // ============================================================================
 
-fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
-    let focused = matches!(state.focused_pane, FocusedPane::LeftPane);
-    let block = crate::ui::helpers::focused_block(" Releases ", focused);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if inner.height < 2 || inner.width < 10 {
-        return;
-    }
-
-    state.click_targets.clear();
-    state.click_targets.set_list_area(inner);
-
-    let mut lines: Vec<Line> = Vec::new();
-
-    for (idx, entry) in state.entries.iter().enumerate() {
-        let is_selected = focused && state.cursor == idx;
-        let line = render_left_entry(entry, is_selected, state, inner.width as usize);
-        let line_idx = lines.len();
-
-        state
-            .click_targets
-            .add_row(idx.to_string(), inner.y + line_idx as u16);
-
-        lines.push(line);
-    }
-
-    // Scroll: ensure cursor is visible
-    let visible_height = inner.height as usize;
-    if visible_height > 0 && state.cursor >= state.scroll + visible_height {
-        state.scroll = state.cursor - visible_height + 1;
-    }
-    if state.cursor < state.scroll {
-        state.scroll = state.cursor;
-    }
-
-    let visible_lines: Vec<Line> = lines
-        .into_iter()
-        .skip(state.scroll)
-        .take(visible_height)
-        .collect();
-    f.render_widget(Paragraph::new(visible_lines), inner);
-}
-
-fn render_left_entry(
+fn render_list_row(
     entry: &PackingListEntry,
-    selected: bool,
-    state: &ReleasePackingBrowserState,
-    width: usize,
+    is_cursor: bool,
+    is_selected: bool,
+    width: u16,
+    releases: &[ReleaseGroup],
+    unmatched: &[UnmatchedEntry],
+    category: PackingCategory,
+    pinned: &std::collections::HashSet<String>,
 ) -> Line<'static> {
-    let title_max = width.saturating_sub(10); // room for marker + coverage
-    let marker = if selected { "▸ " } else { "  " };
+    let w = width as usize;
 
     match entry {
-        PackingListEntry::Release { idx } => {
-            let release = &state.releases[*idx];
-            let title_style = if selected {
+        PackingListEntry::Release { idx, .. } => {
+            let release = &releases[*idx];
+            let title_style = if is_cursor {
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
-            let coverage_color = coverage_color(release, state.category);
+            let coverage_color = coverage_color(release, category);
+
+            // Checkbox + marker
+            let checkbox = if is_selected { "[x] " } else { "[ ] " };
+            let marker = if is_cursor { "▸ " } else { "  " };
+            let prefix_len = 4 + 2; // checkbox + marker
+            let title_max = w.saturating_sub(prefix_len + 10); // room for coverage+badges
 
             let mut spans = vec![
+                Span::styled(
+                    checkbox,
+                    if is_selected {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                ),
                 Span::styled(marker.to_string(), title_style),
                 Span::styled(
                     crate::ui::helpers::truncate_right(&release.release_title, title_max),
@@ -185,7 +203,7 @@ fn render_left_entry(
                     Style::default().fg(Color::Yellow),
                 ));
             }
-            if state.pinned_release_ids.contains(&release.release_id) {
+            if pinned.contains(&release.release_id) {
                 spans.push(Span::styled(
                     " PIN",
                     Style::default().fg(Color::LightBlue),
@@ -194,9 +212,9 @@ fn render_left_entry(
             Line::from(spans)
         }
 
-        PackingListEntry::Unmatched { idx } => {
-            let um = &state.unmatched[*idx];
-            let label_style = if selected {
+        PackingListEntry::Unmatched { idx, .. } => {
+            let um = &unmatched[*idx];
+            let label_style = if is_cursor {
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD)
@@ -204,235 +222,34 @@ fn render_left_entry(
                 Style::default().fg(Color::DarkGray)
             };
             let filename = um.path.rsplit('/').next().unwrap_or(&um.path);
+            let title_max = w.saturating_sub(4);
 
             Line::from(vec![
-                Span::styled(marker.to_string(), label_style),
-                Span::styled(crate::ui::helpers::truncate_right(filename, title_max), label_style),
+                Span::styled("    ", Style::default()), // align with checkbox area
+                Span::styled(
+                    crate::ui::helpers::truncate_right(filename, title_max),
+                    label_style,
+                ),
             ])
         }
     }
 }
 
 // ============================================================================
-// Middle Pane: Tracks for Selected Release
+// Wizard Content Builders (called from mod.rs rebuild_entries)
 // ============================================================================
 
-fn render_tracks_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
-    let focused = matches!(state.focused_pane, FocusedPane::MiddlePane);
-    let block = crate::ui::helpers::focused_block(" Tracks ", focused);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if inner.height < 2 || inner.width < 10 {
-        return;
-    }
-
-    match state.selected_entry() {
-        Some(PackingListEntry::Release { idx }) => {
-            render_release_tracks(f, inner, state, *idx);
-        }
-        Some(PackingListEntry::Unmatched { idx }) => {
-            let lines = render_unmatched_detail(&state.unmatched[*idx]);
-            render_scrollable_lines(f, inner, &lines, 0);
-        }
-        None => {
-            let line = Line::from(Span::styled(
-                "No entries",
-                Style::default().fg(Color::DarkGray),
-            ));
-            f.render_widget(Paragraph::new(vec![line]), inner);
-        }
-    }
-}
-
-fn render_release_tracks(
-    f: &mut Frame,
-    area: Rect,
-    state: &mut ReleasePackingBrowserState,
-    idx: usize,
-) {
-    let focused = matches!(state.focused_pane, FocusedPane::MiddlePane);
-    let release = &state.releases[idx];
-    let track_count = release.tracks.len();
-    let unfilled_count = release.unfilled.len();
-    let total = track_count + unfilled_count;
-
-    // Build merged list: tracks and unfilled slots sorted by position
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Assigned tracks
-    for (i, track) in release.tracks.iter().enumerate() {
-        let is_selected = focused && state.track_cursor == i;
-        let filename = track.path.rsplit('/').next().unwrap_or(&track.path);
-
-        let label_style = if is_selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let marker = if is_selected { "▸ " } else { "  " };
-
-        lines.push(Line::from(vec![
-            Span::styled(marker.to_string(), label_style),
-            Span::styled(
-                format!("{:>2} ", track.track_number),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(crate::ui::helpers::truncate_right(filename, 30), label_style),
-            Span::styled(
-                format!("  {:.2}", track.score),
-                Style::default().fg(Color::Yellow),
-            ),
-        ]));
-    }
-
-    // Unfilled slots
-    for (i, slot) in release.unfilled.iter().enumerate() {
-        let idx = track_count + i;
-        let is_selected = focused && state.track_cursor == idx;
-        let label_style = if is_selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Red)
-        };
-        let marker = if is_selected { "▸ " } else { "  " };
-
-        lines.push(Line::from(vec![
-            Span::styled(marker.to_string(), label_style),
-            Span::styled(
-                format!("{:>2} ", slot.track_pos),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled("░ ", Style::default().fg(Color::Red)),
-            Span::styled(
-                crate::ui::helpers::truncate_right(&slot.track_title, 28),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-            Span::styled("  ----", Style::default().fg(Color::DarkGray)),
-        ]));
-    }
-
-    // Clamp track_cursor
-    if total > 0 && state.track_cursor >= total {
-        state.track_cursor = total - 1;
-    }
-
-    let visible_height = area.height as usize;
-    state.track_scroll = crate::ui::helpers::clamp_scroll(state.track_cursor, state.track_scroll, visible_height);
-
-    let visible_lines: Vec<Line> = lines
-        .into_iter()
-        .skip(state.track_scroll)
-        .take(visible_height)
-        .collect();
-    f.render_widget(Paragraph::new(visible_lines), area);
-}
-
-// ============================================================================
-// Detail Pane: Per-Track Detail
-// ============================================================================
-
-fn render_detail_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
-    let focused = matches!(state.focused_pane, FocusedPane::DetailPane);
-    let block = crate::ui::helpers::focused_block(" Detail ", focused);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if inner.height < 2 || inner.width < 10 {
-        return;
-    }
-
-    let lines = match state.selected_entry() {
-        Some(PackingListEntry::Release { idx }) => {
-            if matches!(state.focused_pane, FocusedPane::LeftPane) {
-                render_release_overview(&state.releases[*idx], state.category)
-            } else {
-                detail_for_release(&state.releases[*idx], state.track_cursor, state.category)
-            }
-        }
-        Some(PackingListEntry::Unmatched { idx }) => {
-            render_unmatched_detail(&state.unmatched[*idx])
-        }
-        None => vec![Line::from(Span::styled(
-            "No selection",
-            Style::default().fg(Color::DarkGray),
-        ))],
-    };
-
-    render_scrollable_lines(f, inner, &lines, state.detail_scroll);
-
-    // Clamp detail_scroll
-    let total_lines = lines.len();
-    let visible = inner.height as usize;
-    if total_lines > visible {
-        if state.detail_scroll > total_lines - visible {
-            state.detail_scroll = total_lines - visible;
-        }
-    } else {
-        state.detail_scroll = 0;
-    }
-}
-
-fn detail_for_release(
+/// Build release overview lines for the wizard popup (z key).
+pub fn build_release_overview_lines(
     release: &ReleaseGroup,
-    track_cursor: usize,
     category: PackingCategory,
 ) -> Vec<Line<'static>> {
-    let track_count = release.tracks.len();
-    if track_cursor < track_count {
-        render_track_detail(&release.tracks[track_cursor], release)
-    } else if track_cursor < track_count + release.unfilled.len() {
-        render_unfilled_detail(&release.unfilled[track_cursor - track_count], release)
-    } else {
-        render_release_summary(release, category)
-    }
-}
-
-fn render_scrollable_lines(f: &mut Frame, area: Rect, lines: &[Line<'static>], scroll: usize) {
-    let visible = area.height as usize;
-    let visible_lines: Vec<Line> = lines.iter().skip(scroll).take(visible).cloned().collect();
-    let paragraph = Paragraph::new(visible_lines).wrap(Wrap { trim: false });
-    f.render_widget(paragraph, area);
-}
-
-// ============================================================================
-// Detail Renderers (reused from original)
-// ============================================================================
-
-fn render_release_summary(release: &ReleaseGroup, category: PackingCategory) -> Vec<Line<'static>> {
-    vec![
-        kv_line("Release:", &release.release_title),
-        kv_line("Artist:", &release.release_artist),
-        kv_line("MBID:", &release.release_id),
-        Line::from(Span::raw("")),
-        Line::from(vec![
-            Span::styled("Coverage: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!(
-                    "{}/{} tracks ({:.0}%)",
-                    release.tracks.len(),
-                    release.total_tracks,
-                    release.coverage * 100.0
-                ),
-                Style::default().fg(coverage_color(release, category)),
-            ),
-        ]),
-    ]
-}
-
-fn render_release_overview(release: &ReleaseGroup, category: PackingCategory) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
-    // Low confidence warning banner — bright and prominent
+    // Low confidence warning banner
     if let Some(ref reason) = release.low_confidence_reason {
         lines.push(Line::from(Span::styled(
-            "⚠ LOW CONFIDENCE — PROBABLE MISPACK ⚠",
+            "\u{26a0} LOW CONFIDENCE \u{2014} PROBABLE MISPACK \u{26a0}",
             Style::default()
                 .fg(Color::Red)
                 .add_modifier(Modifier::BOLD),
@@ -489,12 +306,11 @@ fn render_release_overview(release: &ReleaseGroup, category: PackingCategory) ->
         ),
     ]));
 
-    // File type breakdown from assigned tracks
+    // File type breakdown
     let mut ext_counts: HashMap<String, usize> = HashMap::new();
     let mut dir_counts: HashMap<String, usize> = HashMap::new();
 
     for track in &release.tracks {
-        // Extension
         let ext = track
             .path
             .rsplit('.')
@@ -503,7 +319,6 @@ fn render_release_overview(release: &ReleaseGroup, category: PackingCategory) ->
             .to_lowercase();
         *ext_counts.entry(ext).or_default() += 1;
 
-        // Parent directory
         let dir = match track.path.rsplit_once('/') {
             Some((parent, _)) => parent.to_string(),
             None => "?".to_string(),
@@ -511,7 +326,6 @@ fn render_release_overview(release: &ReleaseGroup, category: PackingCategory) ->
         *dir_counts.entry(dir).or_default() += 1;
     }
 
-    // Format file types inline: "37 flac, 2 png"
     let mut ext_pairs: Vec<_> = ext_counts.into_iter().collect();
     ext_pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let ext_summary: String = ext_pairs
@@ -545,7 +359,7 @@ fn render_release_overview(release: &ReleaseGroup, category: PackingCategory) ->
     // Source directories
     lines.push(Line::from(Span::raw("")));
     lines.push(Line::from(Span::styled(
-        "── Source Directories ───────────────",
+        "\u{2500}\u{2500} Source Directories \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
         Style::default().fg(Color::DarkGray),
     )));
     lines.push(Line::from(Span::raw("")));
@@ -567,7 +381,7 @@ fn render_release_overview(release: &ReleaseGroup, category: PackingCategory) ->
     if let Some(va) = &release.va_override {
         lines.push(Line::from(Span::raw("")));
         lines.push(Line::from(Span::styled(
-            "── VA Override ─────────────────────",
+            "\u{2500}\u{2500} VA Override \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
             Style::default().fg(Color::DarkGray),
         )));
         lines.push(Line::from(Span::raw("")));
@@ -591,7 +405,7 @@ fn render_release_overview(release: &ReleaseGroup, category: PackingCategory) ->
         lines.push(Line::from(Span::raw("")));
         lines.push(Line::from(Span::styled(
             format!(
-                "── Alternatives ({}) ────────────────",
+                "\u{2500}\u{2500} Alternatives ({}) \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
                 release.alternatives.len()
             ),
             Style::default().fg(Color::DarkGray),
@@ -635,195 +449,146 @@ fn render_release_overview(release: &ReleaseGroup, category: PackingCategory) ->
     lines
 }
 
-fn render_track_detail(track: &AssignedTrackInfo, release: &ReleaseGroup) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "Track Assignment",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::raw("")),
-        kv_line("File:", &track.path),
-        Line::from(Span::raw("")),
-        kv_line("Release:", &release.release_title),
-        Line::from(vec![
-            Span::styled("Position:  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!(
-                    "Disc {}, Track {} ({})",
-                    track.medium_position,
-                    track.track_position,
-                    track.medium_format.as_deref().unwrap_or("?")
+/// Build interleaved track list + score breakdown cards for the wizard pane (Z key).
+pub fn build_track_pane_content(
+    release: &ReleaseGroup,
+    _category: PackingCategory,
+) -> Vec<RichBlock> {
+    let mut blocks = Vec::new();
+
+    // Unfilled slots at the top
+    if !release.unfilled.is_empty() {
+        blocks.push(RichBlock::Heading("Unfilled Slots".to_string()));
+        for slot in &release.unfilled {
+            blocks.push(RichBlock::Paragraph(vec![
+                RichSpan::new(
+                    format!("  {:>2}.{:>2}  ", slot.medium_pos, slot.track_pos),
+                    Style::default().fg(Color::DarkGray),
                 ),
-                Style::default().fg(Color::White),
+                RichSpan::new("\u{2591} ", Style::default().fg(Color::Red)),
+                RichSpan::new(
+                    slot.track_title.clone(),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+        }
+        blocks.push(RichBlock::Separator);
+    }
+
+    // Assigned tracks with score breakdown cards
+    blocks.push(RichBlock::Heading("Assigned Tracks".to_string()));
+    blocks.push(RichBlock::Blank);
+
+    for track in &release.tracks {
+        let filename = track.path.rsplit('/').next().unwrap_or(&track.path);
+
+        // Track row: [medium.track] Title - filename  score
+        blocks.push(RichBlock::Paragraph(vec![
+            RichSpan::new(
+                format!("{:>2}.{:>2}  ", track.medium_position, track.track_position),
+                Style::default().fg(Color::DarkGray),
             ),
-        ]),
-        kv_line("MB Track:", &track.track_title),
-        kv_line("Recording:", &track.recording_id),
-        Line::from(Span::raw("")),
-        Line::from(vec![
-            Span::styled("Score: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{:.3}", track.score),
+            RichSpan::new(
+                track.track_title.clone(),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
-        ]),
-        Line::from(Span::styled(
-            "── Score Breakdown ──────────────────",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::raw("")),
-    ];
+        ]));
+        blocks.push(RichBlock::Paragraph(vec![
+            RichSpan::new(
+                format!("        {}", filename),
+                Style::default().fg(Color::DarkGray),
+            ),
+            RichSpan::new(
+                format!("  score: {:.3}", track.score),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
 
-    let breakdown = &track.score_breakdown;
-    let scores = [
-        ("AcoustID confidence:", breakdown.acoustid_confidence),
-        ("Duration match:     ", breakdown.duration_match),
-        ("Title match:        ", breakdown.title_match),
-        ("Artist match:       ", breakdown.artist_match),
-        ("Album match:        ", breakdown.album_match),
-        ("Track number match: ", breakdown.track_number_match),
-    ];
+        // Score breakdown table
+        let breakdown = &track.score_breakdown;
+        let scores = [
+            ("AcoustID", breakdown.acoustid_confidence),
+            ("Duration", breakdown.duration_match),
+            ("Title", breakdown.title_match),
+            ("Artist", breakdown.artist_match),
+            ("Album", breakdown.album_match),
+            ("Track #", breakdown.track_number_match),
+        ];
 
-    for (label, value) in &scores {
-        lines.push(render_score_bar(label, *value));
+        let headers = vec![
+            RichSpan::new("Component", Style::default().fg(Color::DarkGray)),
+            RichSpan::new("Score", Style::default().fg(Color::DarkGray)),
+            RichSpan::new("Bar", Style::default().fg(Color::DarkGray)),
+        ];
+
+        let rows: Vec<Vec<Vec<RichSpan>>> = scores
+            .iter()
+            .map(|(label, value)| {
+                let bar = build_score_bar(*value);
+                vec![
+                    vec![RichSpan::new(
+                        format!("  {}", label),
+                        Style::default().fg(Color::DarkGray),
+                    )],
+                    vec![RichSpan::new(
+                        format!("{:.2}", value),
+                        Style::default().fg(score_color(*value)),
+                    )],
+                    vec![RichSpan::new(bar, Style::default().fg(score_color(*value)))],
+                ]
+            })
+            .collect();
+
+        blocks.push(RichBlock::Table {
+            headers,
+            rows,
+            col_ratio: vec![30, 20, 50],
+        });
+
+        // Extra info: alternatives, recording ID
+        blocks.push(RichBlock::Paragraph(vec![
+            RichSpan::new("        Rec: ", Style::default().fg(Color::DarkGray)),
+            RichSpan::new(
+                track.recording_id.clone(),
+                Style::default().fg(Color::DarkGray),
+            ),
+            RichSpan::new(
+                format!("  ({} alt)", track.alternatives_count),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+
+        blocks.push(RichBlock::Blank);
     }
 
-    lines.push(Line::from(Span::raw("")));
-    lines.push(Line::from(vec![
-        Span::styled(
-            "Alternatives considered: ",
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(
-            format!("{}", track.alternatives_count),
-            Style::default().fg(Color::White),
-        ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Release coverage: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!(
-                "{:.0}% ({}/{})",
-                release.coverage * 100.0,
-                release.tracks.len(),
-                release.total_tracks
-            ),
-            Style::default().fg(Color::White),
-        ),
-    ]));
-
-    lines
+    blocks
 }
 
-fn render_unfilled_detail(slot: &UnfilledSlotInfo, release: &ReleaseGroup) -> Vec<Line<'static>> {
-    let filled = release.tracks.len();
-    let total = release.total_tracks;
-    vec![
-        Line::from(Span::styled(
-            "Unfilled Release Slot",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::raw("")),
-        kv_line("Release:", &release.release_title),
-        kv_line("Artist:", &release.release_artist),
-        Line::from(vec![
-            Span::styled("Position:  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("Disc {}, Track {}", slot.medium_pos, slot.track_pos),
-                Style::default().fg(Color::White),
-            ),
-        ]),
-        kv_line("Expected:", &slot.track_title),
-        kv_line("Recording:", &slot.recording_id),
-        Line::from(Span::raw("")),
-        Line::from(Span::styled(
-            "This track position has no matching corpus file.",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            format!(
-                "{} of {} tracks are filled ({:.0}% coverage).",
-                filled,
-                total,
-                release.coverage * 100.0
-            ),
-            Style::default().fg(Color::DarkGray),
-        )),
-    ]
+/// Build a compact score bar string.
+fn build_score_bar(value: f64) -> String {
+    const BAR_WIDTH: usize = 12;
+    let filled = ((value * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
+    let empty = BAR_WIDTH - filled;
+    format!(
+        "{}{}",
+        "\u{2588}".repeat(filled),
+        "\u{2591}".repeat(empty)
+    )
 }
 
-fn render_unmatched_detail(um: &UnmatchedEntry) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "Unmatched Corpus Track",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::raw("")),
-        kv_line("File:", &um.path),
-        Line::from(Span::raw("")),
-    ];
-
-    let rec_count = um.data.recording_ids.len();
-
-    if rec_count > 0 {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "AcoustID matched {} recording{} but this file was not",
-                rec_count,
-                if rec_count == 1 { "" } else { "s" }
-            ),
-            Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(Span::styled(
-            "assigned to any release during conflict resolution.",
-            Style::default().fg(Color::DarkGray),
-        )));
+/// Color for a score value.
+fn score_color(value: f64) -> Color {
+    if value >= 0.8 {
+        Color::Green
+    } else if value >= 0.5 {
+        Color::Yellow
     } else {
-        lines.push(Line::from(Span::styled(
-            "No AcoustID recording matches found.",
-            Style::default().fg(Color::DarkGray),
-        )));
+        Color::Red
     }
-
-    lines.push(Line::from(Span::raw("")));
-
-    if !um.data.recording_ids.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "Matched recordings:",
-            Style::default().fg(Color::DarkGray),
-        )));
-        for rec_id in &um.data.recording_ids {
-            lines.push(Line::from(Span::styled(
-                format!("  {}", rec_id),
-                Style::default().fg(Color::White),
-            )));
-        }
-    }
-
-    if !um.data.considered_release_ids.is_empty() {
-        let rel_count = um.data.considered_release_ids.len();
-        lines.push(Line::from(Span::raw("")));
-        lines.push(Line::from(Span::styled(
-            format!("Considered releases: {}", rel_count),
-            Style::default().fg(Color::DarkGray),
-        )));
-        for rel_id in &um.data.considered_release_ids {
-            lines.push(Line::from(Span::styled(
-                format!("  {}", rel_id),
-                Style::default().fg(Color::White),
-            )));
-        }
-    }
-
-    lines
 }
 
 // ============================================================================
@@ -862,11 +627,17 @@ fn render_pin_overlay(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserSt
     let mut lines: Vec<Line> = Vec::new();
 
     // UUID template: ________-____-____-____-____________ with cursor
-    lines.push(render_uuid_template(input.value(), input.cursor, inner.width));
+    lines.push(render_uuid_template(
+        input.value(),
+        input.cursor,
+        inner.width,
+    ));
 
     // Error replaces the spacer line
     if let Some(ref err) = state.pin_error {
-        lines.push(Line::from(Span::styled(err.clone(), Style::default().fg(Color::Red))).centered());
+        lines.push(
+            Line::from(Span::styled(err.clone(), Style::default().fg(Color::Red))).centered(),
+        );
     } else {
         lines.push(Line::from(Span::raw("")));
     }
@@ -886,8 +657,6 @@ fn render_pin_overlay(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserSt
 }
 
 /// Render the UUID hex value as a `________-____-____-____-____________` template.
-/// Filled positions show the hex char in white, unfilled show `_` in dark gray.
-/// Dashes are always dark gray. The cursor position is inverted.
 fn render_uuid_template(hex: &str, cursor: usize, inner_width: u16) -> Line<'static> {
     const DASH_POSITIONS: [usize; 4] = [8, 13, 18, 23];
     let hex_chars: Vec<char> = hex.chars().collect();
@@ -956,12 +725,11 @@ fn hex_cursor_to_display(hex_pos: usize) -> usize {
 // Helpers
 // ============================================================================
 
-use crate::ui::helpers::{kv_line, render_score_bar};
+use crate::ui::helpers::kv_line;
 
 /// Coverage color: yellow for LowConfidence (never green), normal thresholds otherwise.
 fn coverage_color(release: &ReleaseGroup, category: PackingCategory) -> Color {
     if category == PackingCategory::LowConfidence {
-        // Low confidence releases should never look healthy
         if release.coverage >= 0.7 {
             Color::Yellow
         } else {
@@ -975,4 +743,3 @@ fn coverage_color(release: &ReleaseGroup, category: PackingCategory) -> Color {
         Color::Red
     }
 }
-

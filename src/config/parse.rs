@@ -418,6 +418,9 @@ fn parse_external_matching_opinions(node: &kdl::KdlNode, opinions: &mut External
                 ExternalMatchingConfig::KDL_TAG_TEMPLATES => {
                     parse_tag_templates(child, &mut opinions.tag_templates);
                 }
+                ExternalMatchingConfig::KDL_CREDIT_ROUTING => {
+                    parse_credit_routing(child, &mut opinions.credit_routing);
+                }
                 _ => {}
             }
         }
@@ -434,6 +437,46 @@ fn parse_tag_templates(node: &kdl::KdlNode, templates: &mut Vec<(String, String)
                     templates.push((tag_name, val.to_string()));
                 }
             }
+        }
+    }
+}
+
+/// Parse credit-routing block: each child node is a relation type with bool properties.
+///
+/// ```kdl
+/// credit-routing {
+///     performer artist=true
+///     vocal artist=true title=true
+///     instrument artist=true
+///     remixer title=true
+///     feat-format "feat. {artists}"
+/// }
+/// ```
+fn parse_credit_routing(node: &kdl::KdlNode, config: &mut CreditRoutingConfig) {
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            let name = child.name().value();
+            if name == CreditRoutingConfig::KDL_FEAT_FORMAT {
+                if let Some(entry) = child.entries().first() {
+                    if let Some(val) = entry.value().as_string() {
+                        config.feat_format = val.to_string();
+                    }
+                }
+                continue;
+            }
+            // Each relation type node has named bool properties: artist, title, composer
+            let get_bool = |prop_name: &str| -> bool {
+                child
+                    .get(prop_name)
+                    .and_then(|v| v.value().as_bool())
+                    .unwrap_or(false)
+            };
+            let routing = RelationRouting {
+                artist: get_bool("artist"),
+                title: get_bool("title"),
+                composer: get_bool("composer"),
+            };
+            config.routing.insert(name.to_string(), routing);
         }
     }
 }

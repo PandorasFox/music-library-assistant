@@ -1,22 +1,22 @@
-//! Release Packing Browser — read-only full-screen browser for packing results.
+//! Release Packing Browser — full-screen browser for packing results.
 //!
-//! Three-pane layout:
-//! - Left: flat list of releases, near-misses, and unmatched files
-//! - Middle: tracks/slots for the selected release
-//! - Bottom-right: per-track detail (score breakdown, file info)
+//! Single-pane StandardList with wizard integration:
+//! - List: release/unmatched entries with multi-select for bulk approval
+//! - Wizard popup (z): release overview
+//! - Wizard pane (Z): interleaved tracks + score breakdown cards
 
 pub mod render;
 pub mod types;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::meta::signals::data::{
     AlternativeReleasePackingData, PackedReleaseData, ReleasePackingData, UnfilledReleaseSlotData,
     UnmatchedCorpusTrackData, VariousArtistsOverrideData, VariousArtistsOverrideSource,
 };
 use crate::ui::input::InputAction;
+use crate::ui::widgets::standard_list::{ListInputResult, StandardListConfig, StandardListState};
 use crate::ui::widgets::TextInputState;
-use crate::ui::widgets::ListClickTargets;
 use types::*;
 
 // ============================================================================
@@ -30,6 +30,9 @@ pub(crate) enum ReleasePackingBrowserAction {
         release_id: String,
         track_paths: Vec<String>,
     },
+    ApproveSelected {
+        selected_indices: BTreeSet<usize>,
+    },
 }
 
 // ============================================================================
@@ -37,35 +40,23 @@ pub(crate) enum ReleasePackingBrowserAction {
 // ============================================================================
 
 pub(crate) struct ReleasePackingBrowserState {
-    // Which category this browser is showing
+    /// Which category this browser is showing.
     pub category: PackingCategory,
 
-    // Left pane (flat list)
+    /// Flat list of entries (releases or unmatched files).
     pub entries: Vec<PackingListEntry>,
-    pub cursor: usize,
-    pub scroll: usize,
 
-    // Middle pane (tracks for selected release)
-    pub track_cursor: usize,
-    pub track_scroll: usize,
+    /// StandardList state: cursor, scroll, selection, wizard.
+    pub list_state: StandardListState,
 
-    // Detail pane
-    pub detail_scroll: usize,
-
-    // Focus
-    pub focused_pane: FocusedPane,
-
-    // Click targets
-    pub click_targets: ListClickTargets,
-
-    // Pin release input overlay
+    /// Pin release input overlay.
     pub pin_input: Option<TextInputState>,
     pub pin_error: Option<String>,
 
-    // Release IDs pinned during this browser session (for visual feedback)
+    /// Release IDs pinned during this browser session (for visual feedback).
     pub pinned_release_ids: HashSet<String>,
 
-    // Source data (only the category being viewed is populated)
+    /// Source data (only the category being viewed is populated).
     pub releases: Vec<ReleaseGroup>,
     pub unmatched: Vec<UnmatchedEntry>,
 }
@@ -75,7 +66,7 @@ pub(crate) struct ReleasePackingBrowserState {
 // ============================================================================
 
 impl ReleasePackingBrowserState {
-    /// Build browser state for a release category (FullMatches, Singles, Incomplete)
+    /// Build browser state for a release category (FullMatches, Singles, Incomplete, etc.)
     /// from PackedReleaseData signals + per-inode track data + unfilled slots.
     pub fn build_releases(
         category: PackingCategory,
@@ -138,7 +129,7 @@ impl ReleasePackingBrowserState {
             );
         }
 
-        // Build release groups from PackedReleaseData (already categorized)
+        // Build release groups from PackedReleaseData
         let mut releases: Vec<ReleaseGroup> = Vec::new();
 
         for pr in packed {
@@ -146,7 +137,8 @@ impl ReleasePackingBrowserState {
                 .remove(&pr.release_id)
                 .unwrap_or_default()
                 .into_iter()
-                .map(|(_inode, path, data)| AssignedTrackInfo {
+                .map(|(inode, path, data)| AssignedTrackInfo {
+                    inode,
                     path,
                     track_number: data.track_number.clone(),
                     track_title: data.track_title.clone(),
@@ -234,13 +226,7 @@ impl ReleasePackingBrowserState {
         let mut state = Self {
             category,
             entries: Vec::new(),
-            cursor: 0,
-            scroll: 0,
-            track_cursor: 0,
-            track_scroll: 0,
-            detail_scroll: 0,
-            focused_pane: FocusedPane::LeftPane,
-            click_targets: Default::default(),
+            list_state: StandardListState::new(StandardListConfig { multi_select: true }),
             pin_input: None,
             pin_error: None,
             pinned_release_ids: HashSet::new(),
@@ -264,13 +250,7 @@ impl ReleasePackingBrowserState {
         let mut state = Self {
             category,
             entries: Vec::new(),
-            cursor: 0,
-            scroll: 0,
-            track_cursor: 0,
-            track_scroll: 0,
-            detail_scroll: 0,
-            focused_pane: FocusedPane::LeftPane,
-            click_targets: Default::default(),
+            list_state: StandardListState::new(StandardListConfig { multi_select: true }),
             pin_input: None,
             pin_error: None,
             pinned_release_ids: HashSet::new(),
@@ -292,7 +272,18 @@ impl ReleasePackingBrowserState {
             | PackingCategory::Incomplete
             | PackingCategory::LowConfidence => {
                 for idx in 0..self.releases.len() {
-                    entries.push(PackingListEntry::Release { idx });
+                    let release = &self.releases[idx];
+                    let popup_lines =
+                        render::build_release_overview_lines(release, self.category);
+                    let pane_title = format!("Tracks: {}", release.release_title);
+                    let pane_content =
+                        render::build_track_pane_content(release, self.category);
+                    entries.push(PackingListEntry::Release {
+                        idx,
+                        popup_lines,
+                        pane_title,
+                        pane_content,
+                    });
                 }
             }
             PackingCategory::UnsolvedConflict
@@ -308,26 +299,38 @@ impl ReleasePackingBrowserState {
         }
 
         self.entries = entries;
+
+        // Pre-select based on category
+        self.list_state.selected.clear();
+        match self.category {
+            PackingCategory::Perfect
+            | PackingCategory::FullMatches
+            | PackingCategory::Singles
+            | PackingCategory::Incomplete => {
+                // All release entries selected by default
+                for (i, entry) in self.entries.iter().enumerate() {
+                    if matches!(entry, PackingListEntry::Release { .. }) {
+                        self.list_state.selected.insert(i);
+                    }
+                }
+            }
+            PackingCategory::LowConfidence => {
+                // None selected by default — operator opts in
+            }
+            _ => {}
+        }
     }
 
     /// Get the currently selected entry.
     pub fn selected_entry(&self) -> Option<&PackingListEntry> {
-        self.entries.get(self.cursor)
+        self.entries.get(self.list_state.cursor)
     }
 
-    /// Get the release for the current left-pane selection, if any.
+    /// Get the release for the current selection, if any.
     pub fn selected_release(&self) -> Option<&ReleaseGroup> {
         match self.selected_entry()? {
-            PackingListEntry::Release { idx } => self.releases.get(*idx),
+            PackingListEntry::Release { idx, .. } => self.releases.get(*idx),
             _ => None,
-        }
-    }
-
-    /// Total track+unfilled count for the selected release (for middle pane bounds).
-    pub fn selected_release_item_count(&self) -> usize {
-        match self.selected_release() {
-            Some(r) => r.tracks.len() + r.unfilled.len(),
-            None => 0,
         }
     }
 }
@@ -343,18 +346,29 @@ impl ReleasePackingBrowserState {
             return self.handle_pin_input(action);
         }
 
-        match self.focused_pane {
-            FocusedPane::LeftPane => self.handle_left_input(action),
-            FocusedPane::MiddlePane => self.handle_middle_input(action),
-            FocusedPane::DetailPane => self.handle_detail_input(action),
+        // Pin release shortcut
+        if matches!(action, InputAction::Char('p')) && self.selected_release().is_some() {
+            self.pin_input = Some(TextInputState::new());
+            self.pin_error = None;
+            return ReleasePackingBrowserAction::None;
+        }
+
+        // Cancel
+        if matches!(action, InputAction::Cancel) {
+            return ReleasePackingBrowserAction::Cancel;
+        }
+
+        // Delegate to StandardList
+        match self.list_state.handle_input(action, &self.entries) {
+            ListInputResult::Confirm(action) => action,
+            ListInputResult::Consumed
+            | ListInputResult::CursorMoved
+            | ListInputResult::Toggled => ReleasePackingBrowserAction::None,
+            ListInputResult::Unhandled => ReleasePackingBrowserAction::None,
         }
     }
 
     /// Handle input for the pin release UUID field.
-    ///
-    /// The TextInputState stores raw hex characters only (no dashes, max 32).
-    /// Only hex chars are accepted; pasting a full UUID or MB URL is cleaned
-    /// automatically. On confirm, the 32 hex chars are formatted as a UUID.
     fn handle_pin_input(&mut self, action: &InputAction) -> ReleasePackingBrowserAction {
         match action {
             InputAction::Confirm => {
@@ -401,7 +415,6 @@ impl ReleasePackingBrowserState {
             }
             InputAction::Paste(text) => {
                 self.pin_error = None;
-                // Strip MB URL prefix, dashes; keep only hex chars
                 let trimmed = text.trim();
                 let stripped = trimmed
                     .strip_prefix("https://musicbrainz.org/release/")
@@ -435,151 +448,6 @@ impl ReleasePackingBrowserState {
                 ReleasePackingBrowserAction::None
             }
             _ => ReleasePackingBrowserAction::None,
-        }
-    }
-
-    /// Whether a release is selected (i.e., pinning is possible).
-    fn has_selected_release(&self) -> bool {
-        self.selected_release().is_some()
-    }
-
-    fn handle_left_input(&mut self, action: &InputAction) -> ReleasePackingBrowserAction {
-        match action {
-            InputAction::NavUp => {
-                self.move_cursor_up();
-                self.reset_middle_pane();
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::NavDown => {
-                self.move_cursor_down();
-                self.reset_middle_pane();
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::NavRight | InputAction::FocusRight => {
-                self.focused_pane = FocusedPane::MiddlePane;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::Home => {
-                self.cursor = 0;
-                self.reset_middle_pane();
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::End => {
-                if !self.entries.is_empty() {
-                    self.cursor = self.entries.len() - 1;
-                }
-                self.reset_middle_pane();
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::Char('p') if self.has_selected_release() => {
-                self.pin_input = Some(TextInputState::new());
-                self.pin_error = None;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::Cancel => ReleasePackingBrowserAction::Cancel,
-            _ => ReleasePackingBrowserAction::None,
-        }
-    }
-
-    fn handle_middle_input(&mut self, action: &InputAction) -> ReleasePackingBrowserAction {
-        let item_count = self.selected_release_item_count();
-
-        match action {
-            InputAction::NavUp => {
-                if self.track_cursor > 0 {
-                    self.track_cursor -= 1;
-                    self.detail_scroll = 0;
-                }
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::NavDown => {
-                if item_count > 0 && self.track_cursor < item_count - 1 {
-                    self.track_cursor += 1;
-                    self.detail_scroll = 0;
-                }
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::NavLeft | InputAction::FocusLeft => {
-                self.focused_pane = FocusedPane::LeftPane;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::FocusRight => {
-                self.focused_pane = FocusedPane::DetailPane;
-                self.detail_scroll = 0;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::Home => {
-                self.track_cursor = 0;
-                self.detail_scroll = 0;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::End => {
-                if item_count > 0 {
-                    self.track_cursor = item_count - 1;
-                }
-                self.detail_scroll = 0;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::Char('p') if self.has_selected_release() => {
-                self.pin_input = Some(TextInputState::new());
-                self.pin_error = None;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::Cancel => ReleasePackingBrowserAction::Cancel,
-            _ => ReleasePackingBrowserAction::None,
-        }
-    }
-
-    fn handle_detail_input(&mut self, action: &InputAction) -> ReleasePackingBrowserAction {
-        match action {
-            InputAction::NavUp => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(1);
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::NavDown => {
-                self.detail_scroll += 1;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::PageUp => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(20);
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::PageDown => {
-                self.detail_scroll += 20;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::Home => {
-                self.detail_scroll = 0;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::End => {
-                self.detail_scroll = usize::MAX / 2;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::NavLeft | InputAction::FocusLeft => {
-                self.focused_pane = FocusedPane::MiddlePane;
-                ReleasePackingBrowserAction::None
-            }
-            InputAction::Cancel => ReleasePackingBrowserAction::Cancel,
-            _ => ReleasePackingBrowserAction::None,
-        }
-    }
-
-    fn reset_middle_pane(&mut self) {
-        self.track_cursor = 0;
-        self.track_scroll = 0;
-        self.detail_scroll = 0;
-    }
-
-    fn move_cursor_up(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-        }
-    }
-
-    fn move_cursor_down(&mut self) {
-        if self.cursor + 1 < self.entries.len() {
-            self.cursor += 1;
         }
     }
 }

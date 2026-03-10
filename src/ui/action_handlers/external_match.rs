@@ -131,6 +131,14 @@ impl HandleAction for crate::ui::release_packing_browser::ReleasePackingBrowserA
                     app.pin_release_for_dirs(release_id, track_paths, gesture);
                 }
             }
+            crate::ui::release_packing_browser::ReleasePackingBrowserAction::ApproveSelected {
+                selected_indices,
+            } => {
+                if let Some(_gesture) = witness {
+                    let _ = selected_indices;
+                    todo!("approve_selected_releases: reconnect when release approval flow is implemented");
+                }
+            }
         }
     }
 }
@@ -483,5 +491,265 @@ impl App {
         } else {
             self.start_transaction_review();
         }
+    }
+
+    /// Approve selected releases from the packing browser: generate tag ops from MB cache.
+    fn approve_selected_releases(
+        &mut self,
+        selected_indices: std::collections::BTreeSet<usize>,
+        gesture: &witness::ConfirmationGesture,
+    ) {
+        use crate::external::musicbrainz;
+        use crate::external::tag_generation::{generate_tag_ops, MbTagInput};
+        use crate::meta::decisions::DecisionKey;
+        use crate::meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation};
+
+        // Extract release data from browser state
+        let release_data: Vec<(String, Vec<(i64, String, u32, u32, String)>)> =
+            if let ActiveView::ReleasePackingBrowser(ref state) = self.view {
+                selected_indices
+                    .iter()
+                    .filter_map(|&idx| {
+                        let entry = state.entries.get(idx)?;
+                        match entry {
+                            crate::ui::release_packing_browser::types::PackingListEntry::Release {
+                                idx: rel_idx,
+                                ..
+                            } => {
+                                let release = state.releases.get(*rel_idx)?;
+                                let tracks: Vec<_> = release
+                                    .tracks
+                                    .iter()
+                                    .map(|t| {
+                                        (
+                                            t.inode,
+                                            t.track_title.clone(),
+                                            t.track_position,
+                                            t.medium_position,
+                                            t.recording_id.clone(),
+                                        )
+                                    })
+                                    .collect();
+                                Some((release.release_id.clone(), tracks))
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect()
+            } else {
+                return;
+            };
+
+        if release_data.is_empty() {
+            self.status_message = Some("No releases selected".to_string());
+            return;
+        }
+
+        // Load config for locales and credit routing
+        let config = match crate::config::load_config() {
+            Ok(c) => c,
+            Err(_) => {
+                self.status_message = Some("Failed to load config".to_string());
+                return;
+            }
+        };
+        let locales = config.opinions.external_matching.preferred_locales.clone();
+        let routing = config.opinions.external_matching.credit_routing.clone();
+
+        // Collect all unique IDs we need to load
+        let mut all_release_ids: Vec<String> = Vec::new();
+        let mut all_recording_ids: Vec<String> = Vec::new();
+        let mut all_inodes: Vec<i64> = Vec::new();
+        let mut seen_releases = std::collections::HashSet::new();
+        let mut seen_recordings = std::collections::HashSet::new();
+
+        for (release_id, tracks) in &release_data {
+            if seen_releases.insert(release_id.clone()) {
+                all_release_ids.push(release_id.clone());
+            }
+            for (inode, _, _, _, recording_id) in tracks {
+                all_inodes.push(*inode);
+                if seen_recordings.insert(recording_id.clone()) {
+                    all_recording_ids.push(recording_id.clone());
+                }
+            }
+        }
+
+        // Batch query: load MB cache + current tags
+        let inodes_for_query = all_inodes.clone();
+        let cache_result = self
+            .cache
+            .query(move |db| {
+                let mut releases = std::collections::HashMap::new();
+                let mut recordings = std::collections::HashMap::new();
+                let mut artists = std::collections::HashMap::new();
+                let mut inode_tags: std::collections::HashMap<i64, Vec<(String, String)>> =
+                    std::collections::HashMap::new();
+
+                // Load releases
+                for rid in &all_release_ids {
+                    if let Ok(Some((json, _))) = db.get_mb_release_cache(rid) {
+                        if let Ok(rel) = musicbrainz::parse_release(&json) {
+                            for credit in &rel.artist_credit {
+                                let aid = &credit.artist.id;
+                                if !artists.contains_key(aid) {
+                                    if let Ok(Some((ajson, _))) = db.get_mb_artist_cache(aid) {
+                                        if let Ok(a) = musicbrainz::parse_artist(&ajson) {
+                                            artists.insert(aid.clone(), a);
+                                        }
+                                    }
+                                }
+                            }
+                            releases.insert(rid.clone(), rel);
+                        }
+                    }
+                }
+
+                // Load recordings + their artists
+                for rid in &all_recording_ids {
+                    if let Ok(Some((json, _))) = db.get_mb_recording_cache(rid) {
+                        if let Ok(rec) = musicbrainz::parse_recording(&json) {
+                            for credit in &rec.artist_credit {
+                                let aid = &credit.artist.id;
+                                if !artists.contains_key(aid) {
+                                    if let Ok(Some((ajson, _))) = db.get_mb_artist_cache(aid) {
+                                        if let Ok(a) = musicbrainz::parse_artist(&ajson) {
+                                            artists.insert(aid.clone(), a);
+                                        }
+                                    }
+                                }
+                            }
+                            for relation in &rec.relations {
+                                if let Some(ref ra) = relation.artist {
+                                    if !artists.contains_key(&ra.id) {
+                                        if let Ok(Some((ajson, _))) =
+                                            db.get_mb_artist_cache(&ra.id)
+                                        {
+                                            if let Ok(a) = musicbrainz::parse_artist(&ajson) {
+                                                artists.insert(ra.id.clone(), a);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            recordings.insert(rid.clone(), rec);
+                        }
+                    }
+                }
+
+                // Load current tags per inode
+                for inode in &inodes_for_query {
+                    let tags = db
+                        .get_tags::<crate::zones::CorpusZone>(*inode)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
+                        .collect();
+                    inode_tags.insert(*inode, tags);
+                }
+
+                (releases, recordings, artists, inode_tags)
+            })
+            .recv();
+
+        let (mb_releases, mb_recordings, mb_artists, inode_tags) = cache_result;
+
+        // Generate tag ops per release, stage one decision per release
+        let release_count = release_data.len();
+        let open_txn = self.open_txn_mode();
+        if !open_txn {
+            let label = format!(
+                "Approve {} release{}",
+                release_count,
+                if release_count == 1 { "" } else { "s" }
+            );
+            let _ = self.witch.start_transaction(&label);
+        }
+
+        let mut approved_count = 0usize;
+        let mut skipped_inodes = 0usize;
+
+        for (release_id, tracks) in &release_data {
+            let Some(release) = mb_releases.get(release_id) else {
+                skipped_inodes += tracks.len();
+                continue;
+            };
+
+            let total_media = release.media.len() as u32;
+            let mut all_ops = Vec::new();
+
+            for (inode, track_title, track_position, medium_position, recording_id) in tracks {
+                let Some(recording) = mb_recordings.get(recording_id) else {
+                    skipped_inodes += 1;
+                    continue;
+                };
+
+                let current_tags = inode_tags.get(inode).cloned().unwrap_or_default();
+
+                let input = MbTagInput {
+                    inode: *inode,
+                    recording_id: recording_id.clone(),
+                    release_id: release_id.clone(),
+                    track_title: track_title.clone(),
+                    track_position: *track_position,
+                    medium_position: *medium_position,
+                    total_media,
+                    current_tags,
+                };
+
+                let ops =
+                    generate_tag_ops(&input, recording, release, &mb_artists, &locales, &routing);
+                all_ops.extend(ops);
+            }
+
+            if all_ops.is_empty() {
+                continue;
+            }
+
+            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                ops: all_ops,
+                zone: crate::db::types::Zone::Corpus,
+            });
+
+            let key = DecisionKey::MbReleaseApproval {
+                release_id: release_id.clone(),
+            };
+            let label = format!(
+                "Approve MB release: {}",
+                &release_id[..8.min(release_id.len())]
+            );
+            let _ = crate::ui::operator_decisions::stage_decision(
+                &mut self.witch,
+                key,
+                &label,
+                vec![mutation],
+                gesture,
+            );
+            approved_count += 1;
+        }
+
+        if approved_count == 0 {
+            self.status_message =
+                Some("No releases could be approved (missing MB cache)".to_string());
+            return;
+        }
+
+        let msg = if skipped_inodes > 0 {
+            format!(
+                "Approved {} release{} ({} files skipped \u{2014} missing cache)",
+                approved_count,
+                if approved_count == 1 { "" } else { "s" },
+                skipped_inodes,
+            )
+        } else {
+            format!(
+                "Approved {} release{}",
+                approved_count,
+                if approved_count == 1 { "" } else { "s" },
+            )
+        };
+        self.status_message = Some(msg);
+
+        self.after_staging_decisions();
     }
 }

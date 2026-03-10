@@ -1,19 +1,16 @@
 //! View model types for the release packing browser.
 
+use std::collections::BTreeSet;
+
+use ratatui::text::Line;
+
 use crate::meta::signals::data::{PackingScoreBreakdown, UnmatchedCorpusTrackData};
+use crate::ui::widgets::rich_text::RichBlock;
+use crate::ui::widgets::standard_list::ListEntry;
+use crate::ui::widgets::{WizardItem, WizardOffer};
 
 // Re-export shared PackingCategory from its canonical location.
 pub use crate::meta::signals::packing_category::PackingCategory;
-
-/// Which pane currently has focus.
-pub enum FocusedPane {
-    /// Left pane: release/unmatched list.
-    LeftPane,
-    /// Middle pane: tracks list for selected release.
-    MiddlePane,
-    /// Bottom-right pane: per-track detail (scrollable).
-    DetailPane,
-}
 
 /// A release group with its assigned tracks and unfilled slots.
 pub struct ReleaseGroup {
@@ -54,6 +51,7 @@ pub struct VaOverrideInfo {
 
 /// An assigned track within a release.
 pub struct AssignedTrackInfo {
+    pub inode: i64,
     pub path: String,
     pub track_number: String,
     pub track_title: String,
@@ -80,11 +78,53 @@ pub struct UnmatchedEntry {
     pub data: UnmatchedCorpusTrackData,
 }
 
-/// An entry in the flat left-pane navigable list.
-/// Tracks are shown in the middle pane, not inline here.
-pub enum PackingListEntry {
-    /// A release row (perfect, full match, single, scattered, or incomplete).
-    Release { idx: usize },
+/// An entry in the flat navigable list.
+///
+/// Release entries carry pre-built wizard content (popup for release overview,
+/// pane for interleaved tracks + score breakdowns).
+pub(crate) enum PackingListEntry {
+    /// A release row with wizard content.
+    Release {
+        idx: usize,
+        /// Release overview for wizard popup (z key).
+        popup_lines: Vec<Line<'static>>,
+        /// Title for wizard pane.
+        pane_title: String,
+        /// Interleaved track list + score cards for wizard pane (Z key).
+        pane_content: Vec<RichBlock>,
+    },
     /// An unmatched corpus file.
     Unmatched { idx: usize },
+}
+
+impl WizardItem for PackingListEntry {
+    fn wizard(&self, _width: u16) -> Option<WizardOffer> {
+        match self {
+            PackingListEntry::Release {
+                popup_lines,
+                pane_title,
+                pane_content,
+                ..
+            } => Some(WizardOffer::Both {
+                popup: popup_lines.clone(),
+                pane_title: pane_title.clone(),
+                pane_content: pane_content.clone(),
+            }),
+            PackingListEntry::Unmatched { .. } => None,
+        }
+    }
+}
+
+impl ListEntry for PackingListEntry {
+    type Action = super::ReleasePackingBrowserAction;
+
+    fn on_confirm(&self, selected: &BTreeSet<usize>) -> Option<Self::Action> {
+        Some(super::ReleasePackingBrowserAction::ApproveSelected {
+            selected_indices: selected.clone(),
+        })
+    }
+
+    fn is_selectable(&self) -> bool {
+        matches!(self, PackingListEntry::Release { .. })
+    }
 }

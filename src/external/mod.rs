@@ -5,3 +5,4 @@
 
 pub mod acoustid;
 pub mod musicbrainz;
+pub mod tag_generation;

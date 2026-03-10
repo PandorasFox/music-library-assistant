@@ -23,10 +23,11 @@ pub use path_schema::parse_path_schema;
 pub use performance::{get_db_cache_kb, get_worker_thread_count, init_performance_config};
 pub use types::{
     read_shared_config, AlbumArtOpinions, CanonicalizationOpinions, Config,
-    DiscExtractionOpinions, DuplicateAnalysisOpinions, ExternalMatchingConfig,
-    HealthDetectionOpinions, InboxOrganizeGranularity, InboxOrganizeOpinions, Opinions,
-    PackingWeights, PerformanceOpinions, QualityResolutionOpinions, ReleasePackingOpinions,
-    SharedConfig, SidecarDeployMode, SourceDir, StartupOpinions, StartupView, TagSplittingOpinions,
+    CreditRoutingConfig, DiscExtractionOpinions, DuplicateAnalysisOpinions,
+    ExternalMatchingConfig, HealthDetectionOpinions, InboxOrganizeGranularity,
+    InboxOrganizeOpinions, Opinions, PackingWeights, PerformanceOpinions,
+    QualityResolutionOpinions, ReleasePackingOpinions, SharedConfig,
+    SidecarDeployMode, SourceDir, StartupOpinions, StartupView, TagSplittingOpinions,
 };
 
 use parse::parse_kdl_config;

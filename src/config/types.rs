@@ -439,6 +439,93 @@ impl InboxOrganizeOpinions {
     pub const KDL_DIR_GRANULARITY: &str = "directory-granularity";
 }
 
+/// How a recording-level MusicBrainz relation type maps to tag output.
+///
+/// Each relation type (e.g. "vocal", "performer", "producer") can be routed
+/// to zero or more tag destinations. This enables granular control over which
+/// credits end up as ARTIST tags, title suffixes, COMPOSER tags, or are skipped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationRouting {
+    /// Emit as a separate ARTIST tag value.
+    pub artist: bool,
+    /// Append to TITLE (e.g., "feat. Name").
+    pub title: bool,
+    /// Emit as a COMPOSER tag value.
+    pub composer: bool,
+}
+
+impl RelationRouting {
+    /// All destinations disabled — skip this relation type.
+    pub const SKIP: Self = Self {
+        artist: false,
+        title: false,
+        composer: false,
+    };
+}
+
+/// Per-relation-type routing rules for recording credits.
+///
+/// Controls how MusicBrainz recording relations (performer, vocal, instrument,
+/// producer, etc.) are translated into tag values during tag embedding.
+/// Unrecognized relation types default to all-false (skip).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreditRoutingConfig {
+    /// Map from MB relation type string → routing destinations.
+    pub routing: std::collections::HashMap<String, RelationRouting>,
+    /// Format string for vocalist title suffix. Default: "feat. {artists}".
+    /// `{artists}` expands to "A, B & C" (joined with commas and ampersand).
+    pub feat_format: String,
+}
+
+impl Default for CreditRoutingConfig {
+    fn default() -> Self {
+        let mut routing = std::collections::HashMap::new();
+        routing.insert(
+            "performer".to_string(),
+            RelationRouting {
+                artist: true,
+                title: false,
+                composer: false,
+            },
+        );
+        routing.insert(
+            "vocal".to_string(),
+            RelationRouting {
+                artist: true,
+                title: true,
+                composer: false,
+            },
+        );
+        routing.insert(
+            "instrument".to_string(),
+            RelationRouting {
+                artist: true,
+                title: false,
+                composer: false,
+            },
+        );
+        routing.insert("remixer".to_string(), RelationRouting {
+            artist: false,
+            title: true,
+            composer: false,
+        });
+        Self {
+            routing,
+            feat_format: "feat. {artists}".to_string(),
+        }
+    }
+}
+
+impl CreditRoutingConfig {
+    pub const KDL_CREDIT_ROUTING: &str = "credit-routing";
+    pub const KDL_FEAT_FORMAT: &str = "feat-format";
+
+    /// Look up routing for a relation type, defaulting to SKIP.
+    pub fn route_for(&self, relation_type: &str) -> &RelationRouting {
+        self.routing.get(relation_type).unwrap_or(&RelationRouting::SKIP)
+    }
+}
+
 /// Configuration for external metadata matching (AcoustID, MusicBrainz).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExternalMatchingConfig {
@@ -461,6 +548,8 @@ pub struct ExternalMatchingConfig {
     /// Tag templates: (UPPERCASE tag name, template string).
     /// Templates use `{var}` syntax for MB field substitution.
     pub tag_templates: Vec<(String, String)>,
+    /// Credit routing: how MB recording relations map to tag output.
+    pub credit_routing: CreditRoutingConfig,
 }
 
 /// Opinions for disc extraction from ALBUM and TRACKNUMBER tags.
@@ -527,6 +616,7 @@ impl Default for ExternalMatchingConfig {
             mb_cache_ttl_days: 30,
             preferred_locales: Vec::new(),
             tag_templates: Vec::new(),
+            credit_routing: CreditRoutingConfig::default(),
         }
     }
 }
@@ -542,6 +632,7 @@ impl ExternalMatchingConfig {
     pub const KDL_MB_CACHE_TTL: &str = "mb-cache-ttl-days";
     pub const KDL_PREFERRED_LOCALES: &str = "preferred-locales";
     pub const KDL_TAG_TEMPLATES: &str = "tag-templates";
+    pub const KDL_CREDIT_ROUTING: &str = "credit-routing";
 }
 
 impl Default for Opinions {

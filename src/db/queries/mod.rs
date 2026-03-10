@@ -345,7 +345,6 @@ impl<'a> ReadOnlyDb<'a> {
     // =========================================================================
 
     delegate_read! {
-        fn get_unindexed_file_signals() -> Result<Vec<crate::meta::signals::data::UnindexedFileSignal>>;
         fn get_healthy_file_signals() -> Result<Vec<crate::meta::signals::data::HealthyFileSignal>>;
         fn get_tag_canonicity_signal(key: &str) -> Result<Option<crate::meta::signals::data::TagCanonicitySignal>>;
         fn get_inconsistent_album_artist_signal(key: &str) -> Result<Option<crate::meta::signals::data::InconsistentAlbumArtistSignal>>;
@@ -494,6 +493,13 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_tags::<Z>(inode)
     }
 
+    /// Get all unindexed signal (inode, path) pairs for a zone.
+    pub fn get_unindexed_signals_for<Z: crate::zones::AudioZone>(
+        &self,
+    ) -> Result<Vec<(i64, String)>> {
+        self.db.get_unindexed_signals_for::<Z>()
+    }
+
     // =========================================================================
     // OOB / Tag Mismatch Queries
     // =========================================================================
@@ -544,7 +550,6 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_file_paths_batch(source: super::types::Zone, inodes: &[i64]) -> Result<std::collections::HashMap<i64, String>>;
         fn get_duplicate_inode_groups() -> Result<Vec<(i64, String)>>;
         fn get_compilation_albums() -> Result<std::collections::HashSet<String>>;
-        fn get_inbox_unindexed_files() -> Result<Vec<(i64, String)>>;
         fn get_all_tags_ordered() -> Result<Vec<(i64, String, String)>>;
         fn get_indexed_corpus_directories() -> Result<Vec<(std::path::PathBuf, i64)>>;
         fn get_missing_directory_paths() -> Result<Vec<String>>;

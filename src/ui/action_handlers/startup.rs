@@ -155,13 +155,11 @@ impl App {
     ///
     /// Gathers unindexed files and opens the intake confirmation modal.
     pub(super) fn start_intake_confirmation_from_health(&mut self) {
-        let corpus_root = self.config().corpus_dir();
         let intake_state = self
             .cache
             .query(move |db| {
-                crate::ui::startup::IntakeConfirmationState::gather(
+                crate::ui::startup::IntakeConfirmationState::gather_zone::<crate::zones::CorpusZone>(
                     db,
-                    &corpus_root,
                     crate::ui::startup::IntakeSource::Health,
                 )
             })

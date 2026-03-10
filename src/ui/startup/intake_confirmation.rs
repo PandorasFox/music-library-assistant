@@ -25,8 +25,6 @@ use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::mutations::indexing::IndexFileFromPathMutation;
 use crate::meta::mutations::Mutation;
-use crate::meta::signals::data::UnindexedFileSignal;
-
 /// Where the intake confirmation was triggered from.
 ///
 /// Replaces the old `zone: String` for post-action routing.
@@ -93,132 +91,30 @@ pub enum IntakeConfirmationAction {
 }
 
 impl IntakeConfirmationState {
-    /// Gather intake confirmation state from the database.
+    /// Gather intake confirmation state for a specific zone.
     ///
-    /// Queries UnindexedFile signals (created during second-level signal derivation)
-    /// to get the list of files that need indexing. Files are tracked by inode
-    /// (matching the signal key) with paths for display and mutation creation.
+    /// Queries unindexed signals for the given zone, verifies file existence
+    /// on disk, and groups files by directory for display.
     ///
     /// Returns None if there are no unindexed files.
-    pub fn gather(
+    pub fn gather_zone<Z: crate::zones::AudioZone>(
         read_db: &ReadOnlyDb<'_>,
-        _corpus_root: &std::path::Path,
         source: IntakeSource,
     ) -> Option<Self> {
-        // Get all UnindexedFile signals - these are pre-computed during Awakening
-        let signals: Vec<UnindexedFileSignal> = match read_db.get_unindexed_file_signals() {
-            Ok(s) => s,
-            Err(e) => {
-                crate::logging::log_error(format!(
-                    "IntakeConfirmation::gather: query failed: {:?}",
-                    e
-                ));
-                return None;
-            }
-        };
-
-        log_general(format!(
-            "IntakeConfirmation::gather: found {} UnindexedFile signals",
-            signals.len()
-        ));
-
-        if signals.is_empty() {
-            return None;
-        }
-
-        // Typed signals: inode and path available as direct fields
-        let resolver = paths::get_resolver();
-        let mut files: Vec<UnindexedFileEntry> = Vec::new();
-        let mut total_bytes: u64 = 0;
-        let mut directories: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-        // Group files by their relative directory path for display
-        let mut dir_to_files: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-        for signal in &signals {
-            let rel_path = std::path::Path::new(&signal.path);
-            let abs_path = resolver.resolve(rel_path);
-
-            // Verify file still exists and get size
-            if abs_path.exists() && abs_path.is_file() {
-                if let Ok(meta) = std::fs::metadata(&abs_path) {
-                    total_bytes += meta.len();
-                }
-
-                // Track unique directories
-                if let Some(parent) = abs_path.parent() {
-                    directories.insert(parent.to_path_buf());
-                }
-
-                // Group by relative directory for display
-                if let (Some(parent), Some(filename)) = (rel_path.parent(), rel_path.file_name()) {
-                    let dir_str = parent.to_string_lossy().to_string();
-                    let file_str = filename.to_string_lossy().to_string();
-                    dir_to_files.entry(dir_str).or_default().push(file_str);
-                }
-
-                files.push(UnindexedFileEntry {
-                    abs_path,
-                    zone: Zone::Corpus,
-                });
-            }
-        }
-
-        if files.is_empty() {
-            return None;
-        }
-
-        // Build grouped files list, sorting filenames within each directory
-        let grouped_files: Vec<DirectoryGroup> = dir_to_files
-            .into_iter()
-            .map(|(dir, mut filenames)| {
-                filenames.sort();
-                DirectoryGroup {
-                    display_path: dir,
-                    filenames,
-                    zone: Zone::Corpus,
-                }
-            })
-            .collect();
-
-        log_general(format!(
-            "IntakeConfirmation: gathered {} files ({} bytes) from {} directories",
-            files.len(),
-            total_bytes,
-            directories.len()
-        ));
-
-        Some(Self {
-            file_count: files.len(),
-            total_bytes,
-            files,
-            source,
-            multi_zone: false,
-            _directory_count: directories.len(),
-            grouped_files,
-            scroll_offset: 0,
-        })
-    }
-
-    /// Gather intake confirmation state for inbox unindexed files.
-    ///
-    /// Similar to `gather()` but queries `InboxUnindexedSignal` (inbox zone)
-    /// instead of `UnindexedFileSignal` (corpus zone).
-    ///
-    /// Returns None if there are no unindexed inbox files.
-    pub fn gather_inbox(read_db: &ReadOnlyDb<'_>, source: IntakeSource) -> Option<Self> {
-        let unindexed = match read_db.get_inbox_unindexed_files() {
+        let unindexed = match read_db.get_unindexed_signals_for::<Z>() {
             Ok(u) => u,
             Err(e) => {
                 crate::logging::log_error(format!(
-                    "IntakeConfirmation::gather_inbox: query failed: {:?}",
-                    e
+                    "IntakeConfirmation::gather_zone<{}>: query failed: {:?}",
+                    Z::ZONE_STR, e
                 ));
                 return None;
             }
         };
 
         log_general(format!(
-            "IntakeConfirmation::gather_inbox: found {} inbox unindexed files",
+            "IntakeConfirmation::gather_zone<{}>: found {} unindexed signals",
+            Z::ZONE_STR,
             unindexed.len()
         ));
 
@@ -253,7 +149,7 @@ impl IntakeConfirmationState {
 
                 files.push(UnindexedFileEntry {
                     abs_path,
-                    zone: Zone::Inbox,
+                    zone: Z::ZONE,
                 });
             }
         }
@@ -269,13 +165,14 @@ impl IntakeConfirmationState {
                 DirectoryGroup {
                     display_path: dir,
                     filenames,
-                    zone: Zone::Inbox,
+                    zone: Z::ZONE,
                 }
             })
             .collect();
 
         log_general(format!(
-            "IntakeConfirmation (inbox): gathered {} files ({} bytes) from {} directories",
+            "IntakeConfirmation ({}): gathered {} files ({} bytes) from {} directories",
+            Z::ZONE_STR,
             files.len(),
             total_bytes,
             directories.len()
@@ -295,13 +192,14 @@ impl IntakeConfirmationState {
 
     /// Gather intake confirmation state for startup: checks both corpus AND inbox.
     ///
-    /// Queries both `UnindexedFileSignal` (corpus zone) and inbox unindexed files,
-    /// merging results with corpus groups first, then inbox groups.
+    /// Queries unindexed signals for both zones, merging results with corpus
+    /// groups first, then inbox groups.
     ///
     /// Returns None if there are no unindexed files in either zone.
-    pub fn gather_startup(read_db: &ReadOnlyDb<'_>, corpus_root: &std::path::Path) -> Option<Self> {
-        let corpus_state = Self::gather(read_db, corpus_root, IntakeSource::Startup);
-        let inbox_state = Self::gather_inbox(read_db, IntakeSource::Startup);
+    pub fn gather_startup(read_db: &ReadOnlyDb<'_>) -> Option<Self> {
+        use crate::zones::{CorpusZone, InboxZone};
+        let corpus_state = Self::gather_zone::<CorpusZone>(read_db, IntakeSource::Startup);
+        let inbox_state = Self::gather_zone::<InboxZone>(read_db, IntakeSource::Startup);
 
         match (corpus_state, inbox_state) {
             (None, None) => None,

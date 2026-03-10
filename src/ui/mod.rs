@@ -456,7 +456,7 @@ impl App {
         let intake_state = self
             .cache
             .query(|db| {
-                startup::IntakeConfirmationState::gather_inbox(db, startup::IntakeSource::Inbox)
+                startup::IntakeConfirmationState::gather_zone::<crate::zones::InboxZone>(db, startup::IntakeSource::Inbox)
             })
             .recv();
 

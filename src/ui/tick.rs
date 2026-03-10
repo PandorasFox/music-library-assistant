@@ -204,8 +204,6 @@ impl App {
     /// Queries UnindexedFile signals (computed during second-level derivation).
     /// Returns Some if there are unindexed files to confirm, None otherwise.
     pub(super) fn check_for_unindexed_files(&mut self) -> Option<startup::IntakeConfirmationState> {
-        let corpus_root = self.config().corpus_dir();
-
         let reasoning = self.witch.reasoning_level();
         crate::logging::log_general(format!(
             "check_for_unindexed_files: reasoning_level={:?}",
@@ -213,7 +211,7 @@ impl App {
         ));
 
         self.cache
-            .query(move |db| startup::IntakeConfirmationState::gather_startup(db, &corpus_root))
+            .query(move |db| startup::IntakeConfirmationState::gather_startup(db))
             .recv()
     }
 

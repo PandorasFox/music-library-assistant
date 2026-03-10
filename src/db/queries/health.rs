@@ -38,7 +38,21 @@ impl Database {
     // Typed Signal Queries (direct struct access, no JSON)
     // ========================================================================
 
-    signal_query!(all, get_unindexed_file_signals, crate::meta::signals::data::UnindexedFileSignal);
+    /// Get all unindexed signal (inode, path) pairs for a zone.
+    pub fn get_unindexed_signals_for<Z: crate::zones::AudioZone>(
+        &self,
+    ) -> Result<Vec<(i64, String)>> {
+        use crate::meta::signals::store::CorpusSignalStore;
+        let sql = format!(
+            "SELECT inode, path FROM {} ORDER BY path",
+            Z::UnindexedSignal::TABLE_NAME
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     signal_query!(all, get_healthy_file_signals, crate::meta::signals::data::HealthyFileSignal);
     signal_query!(all, get_cross_source_overlap_signals, crate::meta::signals::data::CrossSourceOverlapSignal);
     signal_query!(all, get_release_overlap_signals, crate::meta::signals::data::ReleaseOverlapSignal);
@@ -259,16 +273,6 @@ impl Database {
             .flatten()
             .collect::<Vec<_>>();
         Ok(rows)
-    }
-
-    /// Get all inbox unindexed files as (inode, path) pairs.
-    pub fn get_inbox_unindexed_files(&self) -> Result<Vec<(i64, String)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT inode, path FROM signal_inbox_unindexed ORDER BY path")?;
-        let rows = stmt.query_map(params![], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
     }
 
     // ========================================================================

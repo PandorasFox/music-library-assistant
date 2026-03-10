@@ -33,7 +33,7 @@ impl HandleAction for super::super::inbox_view::InboxAction {
                 let intake_state = app
                     .cache
                     .query(|db| {
-                        startup::IntakeConfirmationState::gather_inbox(
+                        startup::IntakeConfirmationState::gather_zone::<crate::zones::InboxZone>(
                             db,
                             startup::IntakeSource::Inbox,
                         )

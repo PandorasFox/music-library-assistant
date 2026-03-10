@@ -13,7 +13,7 @@
 mod state;
 mod types;
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -471,17 +471,6 @@ impl TagSearchState {
     }
 
     fn render_results(&mut self, f: &mut Frame, area: Rect) {
-        // Two-pane layout: Results (60%) | Info (40%)
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(area);
-
-        self.render_results_list(f, chunks[0]);
-        self.render_results_info(f, chunks[1]);
-    }
-
-    fn render_results_list(&mut self, f: &mut Frame, area: Rect) {
         let title = format!("Results ({} tracks)", self.results.len());
 
         self.results_list.render(
@@ -489,7 +478,8 @@ impl TagSearchState {
             area,
             &self.results,
             |idx, is_cursor, _is_selected, _width| {
-                let path_str = self.results[idx].audio_file.path();
+                let full_path = self.results[idx].audio_file.path();
+                let path_str = full_path.strip_prefix("corpus/").unwrap_or(full_path);
                 let indicator = if is_cursor { "▶ " } else { "  " };
                 let style = if is_cursor {
                     Style::default()
@@ -503,56 +493,6 @@ impl TagSearchState {
             &title,
             true,
         );
-    }
-
-    fn render_results_info(&self, f: &mut Frame, area: Rect) {
-        let block = Block::default().borders(Borders::ALL).title("Track Info");
-        let inner = render_pane(f, area, block);
-
-        let lines: Vec<Line> = if let Some(twt) = self.selected_result() {
-            vec![
-                Line::from(vec![
-                    Span::styled("Title: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(twt.get_tag_display("title").unwrap_or_else(|| "-".into())),
-                ]),
-                Line::from(vec![
-                    Span::styled("Artist: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(twt.get_tag_display("artist").unwrap_or_else(|| "-".into())),
-                ]),
-                Line::from(vec![
-                    Span::styled("Album: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(twt.get_tag_display("album").unwrap_or_else(|| "-".into())),
-                ]),
-                Line::from(vec![
-                    Span::styled("Album Artist: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(
-                        twt.get_tag_display("album_artist")
-                            .unwrap_or_else(|| "-".into()),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::styled("Genre: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(twt.get_tag_display("genre").unwrap_or_else(|| "-".into())),
-                ]),
-                Line::raw(""),
-                Line::from(vec![
-                    Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
-                    Span::raw(twt.audio_file.path()),
-                ]),
-                Line::raw(""),
-                Line::styled(
-                    "Enter: Edit | B: Bulk edit all",
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]
-        } else {
-            vec![Line::styled(
-                "No track selected",
-                Style::default().fg(Color::DarkGray),
-            )]
-        };
-
-        f.render_widget(Paragraph::new(lines), inner);
     }
 }
 

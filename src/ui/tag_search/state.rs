@@ -30,7 +30,38 @@ impl AudioFileWithTags {
 
 impl WizardItem for AudioFileWithTags {
     fn wizard(&self, _width: u16) -> Option<WizardOffer> {
-        None
+        use ratatui::style::{Color, Style};
+        use ratatui::text::{Line, Span};
+
+        let tag_val = |tag: &str| -> String {
+            self.get_tag_display(tag).unwrap_or_else(|| "-".into())
+        };
+
+        let tag_line = |label: &'static str, value: String| -> Line<'static> {
+            Line::from(vec![
+                Span::styled(format!("{}: ", label), Style::default().fg(Color::DarkGray)),
+                Span::raw(value),
+            ])
+        };
+
+        let path = self.audio_file.path().to_string();
+        let lines = vec![
+            tag_line("Title", tag_val("title")),
+            tag_line("Artist", tag_val("artist")),
+            tag_line("Album", tag_val("album")),
+            tag_line("Album Artist", tag_val("album_artist")),
+            tag_line("Genre", tag_val("genre")),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(path),
+            ]),
+        ];
+
+        Some(WizardOffer::Pane {
+            title: "Track Info".to_string(),
+            lines,
+        })
     }
 }
 
@@ -539,11 +570,6 @@ impl TagSearchState {
                     && Self::like_match_recursive(&value[1..], &pattern[1..])
             }
         }
-    }
-
-    /// Get the currently selected result.
-    pub fn selected_result(&self) -> Option<&AudioFileWithTags> {
-        self.results.get(self.results_list.cursor)
     }
 
     /// Get all result audio files (without tags, for passing to tag editor).

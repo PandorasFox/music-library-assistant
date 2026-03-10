@@ -2,11 +2,18 @@
 //!
 //! Common helpers used across multiple UI modules to avoid code duplication.
 
+use std::path::PathBuf;
+
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear};
 use ratatui::Frame;
+
+use crate::corpus::paths;
+use crate::meta::mutations::file_ops::StashFromZoneMutation;
+use crate::meta::mutations::indexing::DropFromIndexMutation;
+use crate::meta::mutations::Mutation;
 
 // ============================================================================
 // Pane Rendering Utilities
@@ -324,6 +331,59 @@ pub fn pending_edits_from_mutations(
     }
 
     result
+}
+
+// ============================================================================
+// Modal Button State
+// ============================================================================
+
+/// Two-button state for resolution modals with a single action + cancel.
+///
+/// Used by corrupt file, subpar duplicate, and similar stash-all modals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StashCancelButton {
+    StashAll,
+    #[default]
+    Cancel,
+}
+
+impl StashCancelButton {
+    /// Move selection left (toward action button if available).
+    pub fn left(&mut self, has_items: bool) {
+        *self = match *self {
+            Self::Cancel if has_items => Self::StashAll,
+            other => other,
+        };
+    }
+
+    /// Move selection right (toward cancel).
+    pub fn right(&mut self) {
+        *self = Self::Cancel;
+    }
+}
+
+// ============================================================================
+// Mutation Helpers
+// ============================================================================
+
+/// Generate StashFromZone + DropFromIndex mutations for a single corpus file.
+///
+/// Used by resolution modals that stash problematic files (corrupt, subpar, etc.).
+pub fn stash_file_mutations(corpus_path: &str, inode: i64, stash_name: &str) -> Vec<Mutation> {
+    let resolver = paths::get_resolver();
+    let abs_path = resolver.resolve(std::path::Path::new(corpus_path));
+
+    vec![
+        Mutation::StashFromZone(StashFromZoneMutation {
+            path: abs_path,
+            stash_name: stash_name.to_string(),
+        }),
+        Mutation::DropFromIndex(DropFromIndexMutation {
+            path: PathBuf::from(corpus_path),
+            inode: Some(inode),
+            zone: Some("corpus".to_string()),
+        }),
+    ]
 }
 
 // ============================================================================

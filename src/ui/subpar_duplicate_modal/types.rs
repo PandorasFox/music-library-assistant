@@ -4,15 +4,13 @@
 //! file entries and button state.
 
 use std::os::unix::fs::MetadataExt;
-use std::path::PathBuf;
 
 use anyhow::Result;
 
 use crate::corpus::paths;
 use crate::db::ReadOnlyDb;
-use crate::meta::mutations::file_ops::StashFromZoneMutation;
-use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::meta::mutations::Mutation;
+use crate::ui::helpers::stash_file_mutations;
 
 /// A subpar duplicate file ready for stashing.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -102,64 +100,13 @@ impl SubparDuplicateModalData {
     }
 
     /// Generate StashFromZone + DropFromIndex mutations for all files.
-    ///
-    /// For each subpar file:
-    /// 1. StashFromZone to stash/subpar/
-    /// 2. DropFromIndex to remove from database
     pub fn stash_and_drop_mutations(&self) -> Vec<Mutation> {
-        let resolver = paths::get_resolver();
-        let mut mutations = Vec::new();
-
-        for file in &self.files {
-            // Resolve relative path to absolute for filesystem operations
-            let abs_path = resolver.resolve(std::path::Path::new(&file.corpus_path));
-
-            // StashFromZone mutation
-            mutations.push(Mutation::StashFromZone(StashFromZoneMutation {
-                path: abs_path.clone(),
-                stash_name: "subpar".to_string(),
-            }));
-
-            // DropFromIndex mutation
-            mutations.push(Mutation::DropFromIndex(DropFromIndexMutation {
-                path: PathBuf::from(&file.corpus_path),
-                inode: Some(file.inode),
-                zone: Some("corpus".to_string()),
-            }));
-        }
-
-        mutations
+        self.files
+            .iter()
+            .flat_map(|f| stash_file_mutations(&f.corpus_path, f.inode, "subpar"))
+            .collect()
     }
 }
 
-/// Which action button is selected in the modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SelectedButton {
-    StashAll,
-    #[default]
-    Cancel,
-}
-
-impl SelectedButton {
-    /// Move selection left.
-    pub fn left(&mut self, has_files: bool) {
-        *self = match *self {
-            Self::Cancel => {
-                if has_files {
-                    Self::StashAll
-                } else {
-                    Self::Cancel
-                }
-            }
-            Self::StashAll => Self::StashAll,
-        };
-    }
-
-    /// Move selection right.
-    pub fn right(&mut self, _has_files: bool) {
-        *self = match *self {
-            Self::StashAll => Self::Cancel,
-            Self::Cancel => Self::Cancel,
-        };
-    }
-}
+/// Re-export shared button state.
+pub type SelectedButton = crate::ui::helpers::StashCancelButton;

@@ -3,15 +3,9 @@
 //! Data structures for the manual review modal, including review groups,
 //! file entries, and data loading from signal tables.
 
-use std::path::PathBuf;
-
 use anyhow::Result;
 
-use crate::corpus::paths;
 use crate::db::ReadOnlyDb;
-use crate::meta::mutations::file_ops::StashFromZoneMutation;
-use crate::meta::mutations::indexing::DropFromIndexMutation;
-use crate::meta::mutations::Mutation;
 
 /// What kind of manual review this modal is performing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -72,6 +66,31 @@ pub struct FileMetaSummary {
     pub has_pictures: bool,
     /// Ordered list of (tag_name, tag_value).
     pub tags: Vec<(String, String)>,
+}
+
+/// Load audio metadata summary for a single inode from the database.
+///
+/// Returns `None` if no audio_info exists for this inode.
+pub fn load_file_meta_summary(read_db: &crate::db::ReadOnlyDb<'_>, inode: i64) -> Option<FileMetaSummary> {
+    let info = read_db.get_audio_info(inode).ok().flatten()?;
+    let tags = read_db.get_tags::<crate::zones::CorpusZone>(inode).ok().unwrap_or_default();
+    let has_pictures = read_db.get_has_pictures(inode).unwrap_or(false);
+    let file_size = read_db
+        .get_audio_file_by_inode(inode, crate::db::types::Zone::Corpus)
+        .ok()
+        .flatten()
+        .map(|af| af.entry.file_size)
+        .unwrap_or(0);
+
+    Some(FileMetaSummary {
+        file_type: info.file_type,
+        duration_ms: info.duration_ms,
+        bitrate_kbps: info.bitrate_kbps,
+        sample_rate: info.sample_rate,
+        file_size,
+        has_pictures,
+        tags: tags.into_iter().map(|t| (t.tag_name, t.tag_value)).collect(),
+    })
 }
 
 /// A single file entry within a review group.
@@ -228,51 +247,11 @@ impl ManualReviewData {
     fn enrich_with_metadata(&mut self, read_db: &ReadOnlyDb<'_>) {
         for group in &mut self.groups {
             for file in &mut group.files {
-                let audio_info = read_db.get_audio_info(file.inode).ok().flatten();
-                let tags = read_db.get_tags::<crate::zones::CorpusZone>(file.inode).ok().unwrap_or_default();
-                let has_pictures = read_db.get_has_pictures(file.inode).unwrap_or(false);
-
-                if let Some(info) = audio_info {
-                    // Get file_size from files table
-                    let file_size = read_db
-                        .get_audio_file_by_inode(file.inode, crate::db::types::Zone::Corpus)
-                        .ok()
-                        .flatten()
-                        .map(|af| af.entry.file_size)
-                        .unwrap_or(0);
-
-                    file.meta = Some(FileMetaSummary {
-                        file_type: info.file_type,
-                        duration_ms: info.duration_ms,
-                        bitrate_kbps: info.bitrate_kbps,
-                        sample_rate: info.sample_rate,
-                        file_size,
-                        has_pictures,
-                        tags: tags
-                            .into_iter()
-                            .map(|t| (t.tag_name, t.tag_value))
-                            .collect(),
-                    });
-                }
+                file.meta = load_file_meta_summary(read_db, file.inode);
             }
         }
     }
 }
 
-/// Generate StashFromZone + DropFromIndex mutations for a single file.
-pub fn stash_file_mutations(corpus_path: &str, inode: i64, stash_name: &str) -> Vec<Mutation> {
-    let resolver = paths::get_resolver();
-    let abs_path = resolver.resolve(std::path::Path::new(corpus_path));
-
-    vec![
-        Mutation::StashFromZone(StashFromZoneMutation {
-            path: abs_path,
-            stash_name: stash_name.to_string(),
-        }),
-        Mutation::DropFromIndex(DropFromIndexMutation {
-            path: PathBuf::from(corpus_path),
-            inode: Some(inode),
-            zone: Some("corpus".to_string()),
-        }),
-    ]
-}
+// Re-export from shared helpers for callers that import from here.
+pub use crate::ui::helpers::stash_file_mutations;

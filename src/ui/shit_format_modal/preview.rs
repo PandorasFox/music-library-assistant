@@ -22,7 +22,10 @@ use ratatui::{
 
 use super::types::{SelectedButton, ShitFormatModalData};
 use crate::ui::helpers::render_pane;
-use crate::ui::widgets::{render_file_path_list, ButtonRects, ListClickTargets, PathEntry};
+use crate::ui::widgets::{
+    render_button_row, render_file_path_list, ButtonRects, ConfirmationButton, ListClickTargets,
+    PathEntry,
+};
 
 /// Actions returned from the shit format preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -516,98 +519,65 @@ impl ShitFormatPreviewState {
             ..inner
         };
 
-        // Build button constraints and names dynamically
+        // Build button list and track click rects dynamically
+        let mut buttons = Vec::new();
         let mut button_names: Vec<&str> = Vec::new();
+
         if has_lossless {
             button_names.push("remux_lossless");
+            buttons.push(
+                ConfirmationButton::new(
+                    format!("Remux {} to FLAC", self.cached_data.lossless_files.len()),
+                    Color::Green,
+                )
+                .selected(self.selected_button == SelectedButton::RemuxLossless),
+            );
         }
         if has_lossy {
             button_names.push("transcode_lossy");
+            let label = if self.cached_data.lossy_to_flac {
+                format!("Capture {} to FLAC", self.cached_data.lossy_files.len())
+            } else {
+                format!(
+                    "Transcode {} to Opus ({} kbps)",
+                    self.cached_data.lossy_files.len(),
+                    self.cached_data.opus_bitrate_kbps
+                )
+            };
+            buttons.push(
+                ConfirmationButton::new(label, Color::Cyan)
+                    .selected(self.selected_button == SelectedButton::TranscodeLossy),
+            );
         }
         if has_both {
             button_names.push("convert_all");
+            buttons.push(
+                ConfirmationButton::new("Convert All", Color::Yellow)
+                    .selected(self.selected_button == SelectedButton::ConvertAll),
+            );
         }
         button_names.push("cancel");
+        buttons.push(
+            ConfirmationButton::new("Cancel", Color::White)
+                .selected(self.selected_button == SelectedButton::Cancel),
+        );
 
+        // Track click rects
         let n = button_names.len();
-        let constraints: Vec<Constraint> = (0..n).map(|_| Constraint::Ratio(1, n as u32)).collect();
-
-        let button_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(constraints)
-            .split(button_area);
-
-        // Track button rects and render each button
+        let chunk_width = button_area.width / n as u16;
         self.button_rects.clear();
         for (i, &name) in button_names.iter().enumerate() {
-            self.button_rects.set(name, button_chunks[i]);
-
-            let (label, style) = match name {
-                "remux_lossless" => {
-                    let label =
-                        format!(" Remux {} to FLAC ", self.cached_data.lossless_files.len());
-                    let style = if self.selected_button == SelectedButton::RemuxLossless {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Green)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Green)
-                    };
-                    (label, style)
-                }
-                "transcode_lossy" => {
-                    let label = if self.cached_data.lossy_to_flac {
-                        format!(" Capture {} to FLAC ", self.cached_data.lossy_files.len())
-                    } else {
-                        format!(
-                            " Transcode {} to Opus ({} kbps) ",
-                            self.cached_data.lossy_files.len(),
-                            self.cached_data.opus_bitrate_kbps
-                        )
-                    };
-                    let style = if self.selected_button == SelectedButton::TranscodeLossy {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Cyan)
-                    };
-                    (label, style)
-                }
-                "convert_all" => {
-                    let label = " Convert All ".to_string();
-                    let style = if self.selected_button == SelectedButton::ConvertAll {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Yellow)
-                    };
-                    (label, style)
-                }
-                "cancel" => {
-                    let label = " Cancel ".to_string();
-                    let style = if self.selected_button == SelectedButton::Cancel {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::White)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    (label, style)
-                }
-                _ => continue,
+            let x = button_area.x + (i as u16) * chunk_width;
+            let w = if i == n - 1 {
+                button_area.width - (i as u16) * chunk_width
+            } else {
+                chunk_width
             };
-
-            let text = Paragraph::new(label)
-                .style(style)
-                .alignment(ratatui::layout::Alignment::Center);
-            f.render_widget(text, button_chunks[i]);
+            self.button_rects
+                .set(name, Rect { x, width: w, ..button_area });
         }
+
+        render_button_row(f, button_area, &buttons);
 
         // Hints
         let mut hints = Vec::new();

@@ -22,31 +22,9 @@ use ratatui::{
 
 use super::types::{SelectedButton, SubparDuplicateModalData};
 use crate::ui::helpers::{render_pane, truncate_left};
-use crate::ui::widgets::{ListClickTargets, PathField, CURSOR_STYLE};
-
-/// Which pane has focus
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FocusPane {
-    #[default]
-    List,
-    Buttons,
-}
-
-impl FocusPane {
-    fn next(self) -> Self {
-        match self {
-            Self::List => Self::Buttons,
-            Self::Buttons => Self::Buttons,
-        }
-    }
-
-    fn prev(self) -> Self {
-        match self {
-            Self::List => Self::List,
-            Self::Buttons => Self::List,
-        }
-    }
-}
+use crate::ui::widgets::{
+    render_button_row, ConfirmationButton, FocusPane, ListClickTargets, PathField, CURSOR_STYLE,
+};
 
 /// Actions returned from the subpar duplicate preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,7 +136,7 @@ impl SubparDuplicatePreviewState {
                 SubparDuplicatePreviewAction::None
             }
             InputAction::NavRight if self.focus_pane == FocusPane::Buttons => {
-                self.selected_button.right(has_files);
+                self.selected_button.right();
                 SubparDuplicatePreviewAction::None
             }
 
@@ -398,51 +376,35 @@ impl SubparDuplicatePreviewState {
         let has_files = self.cached_data.has_files();
         let buttons_focused = self.focus_pane == FocusPane::Buttons;
 
-        // Build button line
-        let mut buttons = Vec::new();
+        let block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(if buttons_focused {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            }));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
 
-        // Stash All button
-        let stash_style = if !has_files {
-            Style::default().fg(Color::DarkGray)
-        } else if buttons_focused && self.selected_button == SelectedButton::StashAll {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Cyan)
-        };
-        buttons.push(Span::styled(" Stash & Drop All ", stash_style));
-        buttons.push(Span::raw("  "));
+        let inner_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .split(inner);
 
-        // Cancel button
-        let cancel_style = if buttons_focused && self.selected_button == SelectedButton::Cancel {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        buttons.push(Span::styled(" Cancel ", cancel_style));
+        let stash_color = if has_files { Color::Cyan } else { Color::DarkGray };
+        let buttons = vec![
+            ConfirmationButton::new("Stash & Drop All", stash_color)
+                .selected(buttons_focused && has_files && self.selected_button == SelectedButton::StashAll),
+            ConfirmationButton::new("Cancel", Color::White)
+                .selected(buttons_focused && self.selected_button == SelectedButton::Cancel),
+        ];
+        render_button_row(f, inner_chunks[0], &buttons);
 
-        // Hint text
-        buttons.push(Span::raw("    "));
-        buttons.push(Span::styled(
-            "[Shift+↑↓ focus] [←→ select] [Enter confirm]",
+        let hint = Paragraph::new(Line::from(Span::styled(
+            "Shift+\u{2191}\u{2193} focus  \u{2190}\u{2192} select  Enter confirm",
             Style::default().fg(Color::DarkGray),
-        ));
-
-        let controls = Paragraph::new(Line::from(buttons)).block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(if buttons_focused {
-                    Color::Cyan
-                } else {
-                    Color::DarkGray
-                })),
-        );
-
-        f.render_widget(controls, area);
+        )))
+        .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(hint, inner_chunks[1]);
     }
 }

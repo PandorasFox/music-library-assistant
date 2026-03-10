@@ -19,7 +19,7 @@ use ratatui::{
 
 use super::MissingDirectoryModalData;
 use crate::ui::helpers::{render_pane, truncate_left};
-use crate::ui::widgets::{ButtonRects, ListClickTargets};
+use crate::ui::widgets::{render_button_row, ButtonRects, ConfirmationButton, ListClickTargets};
 
 /// Actions returned from the missing directory preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,44 +297,21 @@ impl MissingDirectoryPreviewState {
         let block = Block::default().borders(Borders::TOP);
         let inner = render_pane(f, area, block);
 
-        let button_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(inner);
-
         // Track button rects for click detection
         self.button_rects.clear();
-        self.button_rects.set("drop", button_chunks[0]);
-        self.button_rects.set("cancel", button_chunks[1]);
+        let half = inner.width / 2;
+        let left = Rect { width: half, ..inner };
+        let right = Rect { x: inner.x + half, width: inner.width - half, ..inner };
+        self.button_rects.set("drop", left);
+        self.button_rects.set("cancel", right);
 
-        // Drop button
-        let drop_style = if !has_directories {
-            Style::default().fg(Color::DarkGray)
-        } else if self.selected_button == SelectedButton::Drop {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Yellow)
-        };
-        let drop_text = Paragraph::new(" Drop All ")
-            .style(drop_style)
-            .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(drop_text, button_chunks[0]);
-
-        // Cancel button
-        let cancel_style = if self.selected_button == SelectedButton::Cancel {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let cancel_text = Paragraph::new(" Cancel ")
-            .style(cancel_style)
-            .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(cancel_text, button_chunks[1]);
+        let drop_color = if has_directories { Color::Yellow } else { Color::DarkGray };
+        let buttons = vec![
+            ConfirmationButton::new("Drop All", drop_color)
+                .selected(has_directories && self.selected_button == SelectedButton::Drop),
+            ConfirmationButton::new("Cancel", Color::White)
+                .selected(self.selected_button == SelectedButton::Cancel),
+        ];
+        render_button_row(f, inner, &buttons);
     }
 }

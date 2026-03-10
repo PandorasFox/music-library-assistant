@@ -14,7 +14,7 @@ use crate::db::ReadOnlyDb;
 use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::meta::mutations::Mutation;
-use crate::ui::manual_review_modal::types::FileMetaSummary;
+use crate::ui::manual_review_modal::types::{load_file_meta_summary, FileMetaSummary};
 
 /// A source directory within an overlap cluster.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -63,6 +63,23 @@ pub enum ClusterResolutionOption {
 pub struct StashFileEntry {
     pub corpus_path: String,
     pub inode: i64,
+}
+
+/// Build a human-readable format summary from format counts (e.g., "FLAC (3)" or "MP3 (2), FLAC (1)").
+fn format_summary_from_counts(format_counts: &std::collections::HashMap<String, usize>) -> String {
+    if format_counts.len() == 1 {
+        let (fmt, count) = format_counts.iter().next().unwrap();
+        format!("{} ({})", fmt, count)
+    } else if format_counts.is_empty() {
+        "unknown".to_string()
+    } else {
+        let mut parts: Vec<String> = format_counts
+            .iter()
+            .map(|(fmt, count)| format!("{} ({})", fmt, count))
+            .collect();
+        parts.sort();
+        parts.join(", ")
+    }
 }
 
 /// Cached data for the cross-source overlap resolution modal.
@@ -140,20 +157,7 @@ impl DirectoryClusterModalData {
                     }
                 }
 
-                // Build format summary
-                let format_summary = if format_counts.len() == 1 {
-                    let (fmt, count) = format_counts.iter().next().unwrap();
-                    format!("{} ({})", fmt, count)
-                } else if format_counts.is_empty() {
-                    "unknown".to_string()
-                } else {
-                    let mut parts: Vec<String> = format_counts
-                        .iter()
-                        .map(|(fmt, count)| format!("{} ({})", fmt, count))
-                        .collect();
-                    parts.sort();
-                    parts.join(", ")
-                };
+                let format_summary = format_summary_from_counts(&format_counts);
 
                 directories.push(DirectoryGroupEntry {
                     path_suffix: source_path.clone(),
@@ -176,45 +180,7 @@ impl DirectoryClusterModalData {
             });
         }
 
-        // Enrich with audio metadata for all unique inodes across all clusters
-        let mut file_meta_cache = HashMap::new();
-        for cluster in &clusters {
-            for dir in &cluster.directories {
-                for &inode in &dir.inodes {
-                    if file_meta_cache.contains_key(&inode) {
-                        continue;
-                    }
-                    let audio_info = read_db.get_audio_info(inode).ok().flatten();
-                    let tags = read_db.get_tags::<crate::zones::CorpusZone>(inode).ok().unwrap_or_default();
-                    let has_pictures = read_db.get_has_pictures(inode).unwrap_or(false);
-
-                    if let Some(info) = audio_info {
-                        let file_size = read_db
-                            .get_audio_file_by_inode(inode, Zone::Corpus)
-                            .ok()
-                            .flatten()
-                            .map(|af| af.entry.file_size)
-                            .unwrap_or(0);
-
-                        file_meta_cache.insert(
-                            inode,
-                            FileMetaSummary {
-                                file_type: info.file_type,
-                                duration_ms: info.duration_ms,
-                                bitrate_kbps: info.bitrate_kbps,
-                                sample_rate: info.sample_rate,
-                                file_size,
-                                has_pictures,
-                                tags: tags
-                                    .into_iter()
-                                    .map(|t| (t.tag_name, t.tag_value))
-                                    .collect(),
-                            },
-                        );
-                    }
-                }
-            }
-        }
+        let file_meta_cache = Self::build_meta_cache(read_db, &clusters);
 
         Ok(Self {
             clusters,
@@ -275,19 +241,7 @@ impl DirectoryClusterModalData {
                     }
                 }
 
-                let format_summary = if format_counts.len() == 1 {
-                    let (fmt, count) = format_counts.iter().next().unwrap();
-                    format!("{} ({})", fmt, count)
-                } else if format_counts.is_empty() {
-                    "unknown".to_string()
-                } else {
-                    let mut parts: Vec<String> = format_counts
-                        .iter()
-                        .map(|(fmt, count)| format!("{} ({})", fmt, count))
-                        .collect();
-                    parts.sort();
-                    parts.join(", ")
-                };
+                let format_summary = format_summary_from_counts(&format_counts);
 
                 directories.push(DirectoryGroupEntry {
                     path_suffix,
@@ -309,50 +263,33 @@ impl DirectoryClusterModalData {
             });
         }
 
-        // Enrich with audio metadata
-        let mut file_meta_cache = HashMap::new();
-        for cluster in &clusters {
-            for dir in &cluster.directories {
-                for &inode in &dir.inodes {
-                    if file_meta_cache.contains_key(&inode) {
-                        continue;
-                    }
-                    let audio_info = read_db.get_audio_info(inode).ok().flatten();
-                    let tags = read_db.get_tags::<crate::zones::CorpusZone>(inode).ok().unwrap_or_default();
-                    let has_pictures = read_db.get_has_pictures(inode).unwrap_or(false);
-
-                    if let Some(info) = audio_info {
-                        let file_size = read_db
-                            .get_audio_file_by_inode(inode, Zone::Corpus)
-                            .ok()
-                            .flatten()
-                            .map(|af| af.entry.file_size)
-                            .unwrap_or(0);
-
-                        file_meta_cache.insert(
-                            inode,
-                            FileMetaSummary {
-                                file_type: info.file_type,
-                                duration_ms: info.duration_ms,
-                                bitrate_kbps: info.bitrate_kbps,
-                                sample_rate: info.sample_rate,
-                                file_size,
-                                has_pictures,
-                                tags: tags
-                                    .into_iter()
-                                    .map(|t| (t.tag_name, t.tag_value))
-                                    .collect(),
-                            },
-                        );
-                    }
-                }
-            }
-        }
+        let file_meta_cache = Self::build_meta_cache(read_db, &clusters);
 
         Ok(Self {
             clusters,
             file_meta_cache,
         })
+    }
+
+    /// Build a metadata cache for all unique inodes across clusters.
+    fn build_meta_cache(
+        read_db: &ReadOnlyDb<'_>,
+        clusters: &[DirectoryClusterEntry],
+    ) -> HashMap<i64, FileMetaSummary> {
+        let mut cache = HashMap::new();
+        for cluster in clusters {
+            for dir in &cluster.directories {
+                for &inode in &dir.inodes {
+                    if cache.contains_key(&inode) {
+                        continue;
+                    }
+                    if let Some(meta) = load_file_meta_summary(read_db, inode) {
+                        cache.insert(inode, meta);
+                    }
+                }
+            }
+        }
+        cache
     }
 
     /// Total number of clusters.

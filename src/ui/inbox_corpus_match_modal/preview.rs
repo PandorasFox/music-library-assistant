@@ -23,34 +23,10 @@ use ratatui::{
 use crate::meta::views::MatchClassification;
 use crate::ui::helpers::{render_pane, truncate_left};
 use crate::ui::widgets::{
-    render_button_row, ConfirmationButton, ListClickTargets, PathField, CURSOR_STYLE,
+    render_button_row, ConfirmationButton, FocusPane, ListClickTargets, PathField, CURSOR_STYLE,
 };
 
 use super::types::{InboxCorpusMatchModalData, SelectedButton};
-
-/// Which pane has focus
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FocusPane {
-    #[default]
-    List,
-    Buttons,
-}
-
-impl FocusPane {
-    fn next(self) -> Self {
-        match self {
-            Self::List => Self::Buttons,
-            Self::Buttons => Self::Buttons,
-        }
-    }
-
-    fn prev(self) -> Self {
-        match self {
-            Self::List => Self::List,
-            Self::Buttons => Self::List,
-        }
-    }
-}
 
 /// Actions returned from the inbox corpus match preview.
 #[derive(Debug, Clone, PartialEq, Eq)]

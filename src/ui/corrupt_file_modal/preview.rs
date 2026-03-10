@@ -20,7 +20,10 @@ use ratatui::{
 
 use super::types::{CorruptFileModalData, SelectedButton};
 use crate::ui::helpers::render_pane;
-use crate::ui::widgets::{render_file_path_list, ButtonRects, ListClickTargets, PathEntry};
+use crate::ui::widgets::{
+    render_button_row, render_file_path_list, ButtonRects, ConfirmationButton, ListClickTargets,
+    PathEntry,
+};
 
 /// Actions returned from the corrupt file preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,7 +138,7 @@ impl CorruptFilePreviewState {
                 CorruptFilePreviewAction::None
             }
             InputAction::NavRight => {
-                self.selected_button.right(has_files);
+                self.selected_button.right();
                 CorruptFilePreviewAction::None
             }
 
@@ -263,44 +266,21 @@ impl CorruptFilePreviewState {
         let block = Block::default().borders(Borders::TOP);
         let inner = render_pane(f, area, block);
 
-        let button_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(inner);
-
         // Track button rects for click detection
         self.button_rects.clear();
-        self.button_rects.set("stash_all", button_chunks[0]);
-        self.button_rects.set("cancel", button_chunks[1]);
+        let half = inner.width / 2;
+        let left = Rect { width: half, ..inner };
+        let right = Rect { x: inner.x + half, width: inner.width - half, ..inner };
+        self.button_rects.set("stash_all", left);
+        self.button_rects.set("cancel", right);
 
-        // Stash All button
-        let stash_style = if !has_files {
-            Style::default().fg(Color::DarkGray)
-        } else if self.selected_button == SelectedButton::StashAll {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Red)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Red)
-        };
-        let stash_text = Paragraph::new(" Stash & Drop All ")
-            .style(stash_style)
-            .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(stash_text, button_chunks[0]);
-
-        // Cancel button
-        let cancel_style = if self.selected_button == SelectedButton::Cancel {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::White)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let cancel_text = Paragraph::new(" Cancel ")
-            .style(cancel_style)
-            .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(cancel_text, button_chunks[1]);
+        let stash_color = if has_files { Color::Red } else { Color::DarkGray };
+        let buttons = vec![
+            ConfirmationButton::new("Stash & Drop All", stash_color)
+                .selected(has_files && self.selected_button == SelectedButton::StashAll),
+            ConfirmationButton::new("Cancel", Color::White)
+                .selected(self.selected_button == SelectedButton::Cancel),
+        ];
+        render_button_row(f, inner, &buttons);
     }
 }

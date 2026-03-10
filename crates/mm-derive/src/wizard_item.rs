@@ -231,7 +231,7 @@ fn gen_arm_body(mode: WizardMode, bindings: &FieldBindings) -> TokenStream2 {
             quote! {
                 Some(WizardOffer::Pane {
                     title: #pt.clone(),
-                    lines: #pc.clone(),
+                    content: #pc.clone(),
                 })
             }
         }
@@ -243,7 +243,7 @@ fn gen_arm_body(mode: WizardMode, bindings: &FieldBindings) -> TokenStream2 {
                 Some(WizardOffer::Both {
                     popup: #popup.clone(),
                     pane_title: #pt.clone(),
-                    pane_lines: #pc.clone(),
+                    pane_content: #pc.clone(),
                 })
             }
         }
@@ -341,7 +341,7 @@ fn derive_struct(name: &Ident, input: &DeriveInput, fields: &Fields) -> Result<T
             quote! {
                 Some(WizardOffer::Pane {
                     title: self.#pt.clone(),
-                    lines: self.#pc.clone(),
+                    content: self.#pc.clone(),
                 })
             }
         }
@@ -353,7 +353,7 @@ fn derive_struct(name: &Ident, input: &DeriveInput, fields: &Fields) -> Result<T
                 Some(WizardOffer::Both {
                     popup: self.#popup.clone(),
                     pane_title: self.#pt.clone(),
-                    pane_lines: self.#pc.clone(),
+                    pane_content: self.#pc.clone(),
                 })
             }
         }

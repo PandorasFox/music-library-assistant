@@ -5,10 +5,10 @@
 //! changes to indicate focus state.
 
 use crate::ui::input::InputAction;
+use crate::ui::widgets::rich_text::{render_rich, RichBlock};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
-    text::Line,
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
@@ -73,7 +73,7 @@ pub fn render_wizard_pane(
     f: &mut Frame,
     area: Rect,
     title: &str,
-    lines: &[Line<'_>],
+    content: &[RichBlock],
     state: &mut WizardPaneState,
     focused: bool,
 ) {
@@ -94,6 +94,10 @@ pub fn render_wizard_pane(
         }));
 
     let inner = block.inner(area);
+
+    // Render rich blocks to flat lines at inner width
+    let lines = render_rich(content, inner.width);
+
     state.content_height = lines.len();
     state.visible_height = inner.height as usize;
 
@@ -105,11 +109,10 @@ pub fn render_wizard_pane(
         state.scroll = max_scroll;
     }
 
-    let visible_lines: Vec<Line<'_>> = lines
-        .iter()
+    let visible_lines: Vec<_> = lines
+        .into_iter()
         .skip(state.scroll)
         .take(state.visible_height)
-        .cloned()
         .collect();
 
     f.render_widget(

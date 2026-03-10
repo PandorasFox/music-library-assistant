@@ -5,8 +5,8 @@ use ratatui::text::Line;
 #[derive(Debug, Clone)]
 pub enum WizardOffer {
     Popup(Vec<Line<'static>>),
-    Pane { title: String, lines: Vec<Line<'static>> },
-    Both { popup: Vec<Line<'static>>, pane_title: String, pane_lines: Vec<Line<'static>> },
+    Pane { title: String, content: Vec<String> },
+    Both { popup: Vec<Line<'static>>, pane_title: String, pane_content: Vec<String> },
 }
 
 pub trait WizardItem {

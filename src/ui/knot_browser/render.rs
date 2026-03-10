@@ -11,6 +11,8 @@ use ratatui::{
     Frame,
 };
 
+use crate::ui::widgets::rich_text::{RichBlock, RichSpan};
+
 use super::types::*;
 use super::KnotBrowserState;
 use crate::ui::widgets::control_colors;
@@ -141,7 +143,7 @@ fn render_proposal_item(
 // Proposal detail lines (used by WizardItem impl)
 // ============================================================================
 
-pub(super) fn build_proposal_detail_lines(proposal: &KnotProposal) -> Vec<Line<'static>> {
+pub(super) fn build_proposal_detail_blocks(proposal: &KnotProposal) -> Vec<RichBlock> {
     let status_text = if proposal.selected {
         "SELECTED"
     } else {
@@ -153,54 +155,53 @@ pub(super) fn build_proposal_detail_lines(proposal: &KnotProposal) -> Vec<Line<'
         Color::Red
     };
 
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(
+    let dim = Style::default().fg(Color::DarkGray);
+    let white = Style::default().fg(Color::White);
+
+    let detail_field = |label: &str, value: &str| -> RichBlock {
+        RichBlock::Paragraph(vec![
+            RichSpan::new(format!("  {}: ", label), dim),
+            RichSpan::new(value.to_string(), white),
+        ])
+    };
+
+    let mut blocks = vec![
+        RichBlock::Paragraph(vec![
+            RichSpan::new(
                 proposal.release_title.clone(),
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" "),
-            Span::styled(
-                format!("[{}]", status_text),
-                Style::default().fg(status_color),
-            ),
+            RichSpan::new(" ", Style::default()),
+            RichSpan::new(format!("[{}]", status_text), Style::default().fg(status_color)),
         ]),
-        Line::from(Span::raw("")),
-        render_detail_field("Artist", &proposal.release_artist),
-        render_detail_field("MBID", &proposal.release_id),
-        render_detail_field("Total tracks", &proposal.total_tracks.to_string()),
-        render_detail_field("Score", &format!("{:.2}", proposal.total_score)),
-        render_detail_field("Knot inodes", &proposal.covered_inode_count.to_string()),
-        Line::from(Span::raw("")),
-        Line::from(Span::styled(
-            "Track Assignments:".to_string(),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
+        RichBlock::Blank,
+        detail_field("Artist", &proposal.release_artist),
+        detail_field("MBID", &proposal.release_id),
+        detail_field("Total tracks", &proposal.total_tracks.to_string()),
+        detail_field("Score", &format!("{:.2}", proposal.total_score)),
+        detail_field("Knot inodes", &proposal.covered_inode_count.to_string()),
+        RichBlock::Blank,
+        RichBlock::Heading("Track Assignments:".to_string()),
     ];
 
     for track in &proposal.tracks {
-        lines.push(Line::from(vec![
-            Span::styled(
+        blocks.push(RichBlock::Paragraph(vec![
+            RichSpan::new(
                 format!("  {:>2}.{:>2} ", track.medium_pos, track.track_pos),
-                Style::default().fg(Color::DarkGray),
+                dim,
             ),
-            Span::styled(
-                track.track_title.clone(),
-                Style::default().fg(Color::White),
-            ),
-            Span::styled(
+            RichSpan::new(track.track_title.clone(), white),
+            RichSpan::new(
                 format!("  {:.2}", track.score),
                 Style::default().fg(Color::Yellow),
             ),
         ]));
-        lines.push(Line::from(Span::styled(
+        blocks.push(RichBlock::Paragraph(vec![RichSpan::new(
             format!("    {}", track.path),
-            Style::default().fg(Color::DarkGray),
-        )));
+            dim,
+        )]));
 
         // Score breakdown bars
         let scores = [
@@ -212,40 +213,31 @@ pub(super) fn build_proposal_detail_lines(proposal: &KnotProposal) -> Vec<Line<'
             ("  Track number: ", track.score_breakdown.track_number_match),
         ];
         for (label, value) in &scores {
-            lines.push(render_score_bar(label, *value));
+            blocks.push(render_score_bar_block(label, *value));
         }
-        lines.push(Line::from(Span::raw("")));
+        blocks.push(RichBlock::Blank);
     }
 
-    lines
+    blocks
 }
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-fn render_detail_field(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("  {}: ", label),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(value.to_string(), Style::default().fg(Color::White)),
-    ])
-}
-
-fn render_score_bar(label: &str, value: f64) -> Line<'static> {
+fn render_score_bar_block(label: &str, value: f64) -> RichBlock {
     const BAR_WIDTH: usize = 20;
     let filled = ((value * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
     let empty = BAR_WIDTH - filled;
     let bar = format!("{}{}", "\u{2588}".repeat(filled), " ".repeat(empty));
 
-    Line::from(vec![
-        Span::styled(format!("  {}", label), Style::default().fg(Color::DarkGray)),
-        Span::styled(
+    RichBlock::Paragraph(vec![
+        RichSpan::new(format!("  {}", label), Style::default().fg(Color::DarkGray)),
+        RichSpan::new(
             format!(" {:.2}  ", value),
             Style::default().fg(Color::White),
         ),
-        Span::styled(bar, Style::default().fg(Color::Yellow)),
+        RichSpan::new(bar, Style::default().fg(Color::Yellow)),
     ])
 }
+

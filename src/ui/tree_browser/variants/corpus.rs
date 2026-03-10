@@ -899,38 +899,43 @@ impl CorpusBrowserVariant {
                     ),
                 ];
 
-                let pane_lines = vec![
-                    Line::styled(
-                        format!("{} {}", symbol, label),
-                        ratatui::style::Style::default()
-                            .fg(color)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Line::raw(""),
-                    Line::styled(
-                        format!("Directory: {}", name),
-                        ratatui::style::Style::default().fg(Color::White),
-                    ),
-                    Line::raw(""),
-                    Line::styled(
-                        "Category indicates the best release match",
-                        ratatui::style::Style::default().fg(Color::DarkGray),
-                    ),
-                    Line::styled(
-                        "quality found in this directory's files.",
-                        ratatui::style::Style::default().fg(Color::DarkGray),
-                    ),
-                    Line::raw(""),
-                    Line::styled(
-                        "Open the packing browser for full details.",
-                        ratatui::style::Style::default().fg(Color::DarkGray),
-                    ),
+                use crate::ui::widgets::rich_text::{RichBlock, RichSpan};
+
+                let pane_content = vec![
+                    RichBlock::Heading(format!("{} {}", symbol, label)),
+                    RichBlock::Blank,
+                    RichBlock::Paragraph(vec![
+                        RichSpan::new(
+                            format!("Directory: {}", name),
+                            ratatui::style::Style::default().fg(Color::White),
+                        ),
+                    ]),
+                    RichBlock::Blank,
+                    RichBlock::Paragraph(vec![
+                        RichSpan::new(
+                            "Category indicates the best release match",
+                            ratatui::style::Style::default().fg(Color::DarkGray),
+                        ),
+                    ]),
+                    RichBlock::Paragraph(vec![
+                        RichSpan::new(
+                            "quality found in this directory's files.",
+                            ratatui::style::Style::default().fg(Color::DarkGray),
+                        ),
+                    ]),
+                    RichBlock::Blank,
+                    RichBlock::Paragraph(vec![
+                        RichSpan::new(
+                            "Open the packing browser for full details.",
+                            ratatui::style::Style::default().fg(Color::DarkGray),
+                        ),
+                    ]),
                 ];
 
                 WizardOffer::Both {
                     popup,
                     pane_title: format!("[MB{}] {}", symbol, name),
-                    pane_lines,
+                    pane_content,
                 }
             }
         }

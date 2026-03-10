@@ -5,8 +5,8 @@ use ratatui::text::Line;
 #[derive(Debug, Clone)]
 pub enum WizardOffer {
     Popup(Vec<Line<'static>>),
-    Pane { title: String, lines: Vec<Line<'static>> },
-    Both { popup: Vec<Line<'static>>, pane_title: String, pane_lines: Vec<Line<'static>> },
+    Pane { title: String, content: Vec<String> },
+    Both { popup: Vec<Line<'static>>, pane_title: String, pane_content: Vec<String> },
 }
 
 pub trait WizardItem {
@@ -20,14 +20,14 @@ struct DetailInfo {
     #[wizard(pane_title)]
     title: String,
     #[wizard(pane_content)]
-    lines: Vec<Line<'static>>,
+    lines: Vec<String>,
 }
 
 fn main() {
     let d = DetailInfo {
         name: "x".into(),
         title: "Title".into(),
-        lines: vec![Line::raw("content")],
+        lines: vec!["content".into()],
     };
     assert!(matches!(d.wizard(80), Some(WizardOffer::Pane { .. })));
 }

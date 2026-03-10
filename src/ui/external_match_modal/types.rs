@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span};
 use crate::external::musicbrainz::{MbArtist, MbRecording, MbRelease};
 use crate::meta::views::ExternalMatchReviewEntry;
 use crate::ui::input::InputAction;
+use crate::ui::widgets::rich_text::{RichBlock, RichSpan};
 use crate::ui::widgets::standard_list::{
     ListEntry, ListInputResult, StandardListConfig, StandardListState,
 };
@@ -42,29 +43,29 @@ pub struct RecordingDetail {
 }
 
 /// A single item in the external match review list.
-/// Wraps an entry with baked wizard lines.
+/// Wraps an entry with baked wizard content.
 pub struct MatchReviewItem {
     pub entry: ExternalMatchReviewEntry,
     /// Popup lines (recording summary).
     pub popup_lines: Vec<Line<'static>>,
-    /// Pane lines (full recording detail). Empty if no detail available.
-    pub pane_lines: Vec<Line<'static>>,
+    /// Pane content (full recording detail). Empty if no detail available.
+    pub pane_content: Vec<RichBlock>,
 }
 
 impl WizardItem for MatchReviewItem {
     fn wizard(&self, _width: u16) -> Option<WizardOffer> {
         let has_popup = !self.popup_lines.is_empty();
-        let has_pane = !self.pane_lines.is_empty();
+        let has_pane = !self.pane_content.is_empty();
         match (has_popup, has_pane) {
             (true, true) => Some(WizardOffer::Both {
                 popup: self.popup_lines.clone(),
                 pane_title: "Recording Detail".to_string(),
-                pane_lines: self.pane_lines.clone(),
+                pane_content: self.pane_content.clone(),
             }),
             (true, false) => Some(WizardOffer::Popup(self.popup_lines.clone())),
             (false, true) => Some(WizardOffer::Pane {
                 title: "Recording Detail".to_string(),
-                lines: self.pane_lines.clone(),
+                content: self.pane_content.clone(),
             }),
             (false, false) => None,
         }
@@ -137,11 +138,11 @@ fn build_items(
         .into_iter()
         .map(|entry| {
             let popup_lines = build_popup_lines(&entry, summaries);
-            let pane_lines = build_pane_lines(&entry, details);
+            let pane_content = build_pane_content(&entry, details);
             MatchReviewItem {
                 entry,
                 popup_lines,
-                pane_lines,
+                pane_content,
             }
         })
         .collect()
@@ -209,67 +210,61 @@ fn build_popup_lines(
     lines
 }
 
-fn build_pane_lines(
+fn build_pane_content(
     entry: &ExternalMatchReviewEntry,
     details: &[(String, RecordingDetail)],
-) -> Vec<Line<'static>> {
+) -> Vec<RichBlock> {
     let Some((_, detail)) = details.iter().find(|(id, _)| *id == entry.recording_id) else {
         return vec![];
     };
 
     let label = Style::default().fg(Color::DarkGray);
     let value = Style::default().fg(Color::White);
-    let heading = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
     let dim = Style::default().fg(Color::DarkGray);
 
     let rec = &detail.recording;
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut blocks: Vec<RichBlock> = Vec::new();
 
     // Recording title + length
-    lines.push(Line::from(vec![
-        Span::styled("Recording: ", label),
-        Span::styled(format!("\"{}\"", rec.title), value),
+    blocks.push(RichBlock::Paragraph(vec![
+        RichSpan::new("Recording: ", label),
+        RichSpan::new(format!("\"{}\"", rec.title), value),
     ]));
     if let Some(length_ms) = rec.length {
         let mins = length_ms / 60000;
         let secs = (length_ms % 60000) / 1000;
-        lines.push(Line::from(vec![
-            Span::styled("Length:    ", label),
-            Span::styled(format!("{}:{:02}", mins, secs), value),
+        blocks.push(RichBlock::Paragraph(vec![
+            RichSpan::new("Length:    ", label),
+            RichSpan::new(format!("{}:{:02}", mins, secs), value),
         ]));
     }
-    lines.push(Line::from(vec![
-        Span::styled("MBID:      ", label),
-        Span::styled(rec.id.clone(), dim),
+    blocks.push(RichBlock::Paragraph(vec![
+        RichSpan::new("MBID:      ", label),
+        RichSpan::new(rec.id.clone(), dim),
     ]));
-    lines.push(Line::raw(""));
+    blocks.push(RichBlock::Blank);
 
     // Artist credits
     if !rec.artist_credit.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "Artist Credits:".to_string(),
-            heading,
-        )));
+        blocks.push(RichBlock::Heading("Artist Credits:".to_string()));
         for credit in &rec.artist_credit {
             let mut spans = vec![
-                Span::styled("  ", label),
-                Span::styled(credit.name.clone(), value),
+                RichSpan::new("  ", label),
+                RichSpan::new(credit.name.clone(), value),
             ];
             if credit.artist.sort_name != credit.artist.name {
-                spans.push(Span::styled(
+                spans.push(RichSpan::new(
                     format!(" (sort: {})", credit.artist.sort_name),
                     dim,
                 ));
             }
             if !credit.joinphrase.is_empty() {
-                spans.push(Span::styled(
+                spans.push(RichSpan::new(
                     format!(" [join: \"{}\"]", credit.joinphrase.trim()),
                     dim,
                 ));
             }
-            lines.push(Line::from(spans));
+            blocks.push(RichBlock::Paragraph(spans));
 
             // Show aliases if we have cached artist data
             if let Some((_, Some(ref artist))) = detail
@@ -278,16 +273,16 @@ fn build_pane_lines(
                 .find(|(id, _)| *id == credit.artist.id)
             {
                 if artist.name != credit.name {
-                    lines.push(Line::from(vec![
-                        Span::styled("    canonical: ", dim),
-                        Span::styled(artist.name.clone(), dim),
-                        Span::styled(format!(" [{}]", artist.id), dim),
+                    blocks.push(RichBlock::Paragraph(vec![
+                        RichSpan::new("    canonical: ", dim),
+                        RichSpan::new(artist.name.clone(), dim),
+                        RichSpan::new(format!(" [{}]", artist.id), dim),
                     ]));
                 }
                 if artist.sort_name != artist.name {
-                    lines.push(Line::from(vec![
-                        Span::styled("    sort: ", dim),
-                        Span::styled(artist.sort_name.clone(), dim),
+                    blocks.push(RichBlock::Paragraph(vec![
+                        RichSpan::new("    sort: ", dim),
+                        RichSpan::new(artist.sort_name.clone(), dim),
                     ]));
                 }
                 if !artist.aliases.is_empty() {
@@ -308,14 +303,14 @@ fn build_pane_lines(
                             s
                         })
                         .collect();
-                    lines.push(Line::from(vec![
-                        Span::styled("    aka: ", dim),
-                        Span::styled(alias_strs.join(", "), dim),
+                    blocks.push(RichBlock::Paragraph(vec![
+                        RichSpan::new("    aka: ", dim),
+                        RichSpan::new(alias_strs.join(", "), dim),
                     ]));
                 }
             }
         }
-        lines.push(Line::raw(""));
+        blocks.push(RichBlock::Blank);
     }
 
     // Relations
@@ -325,26 +320,26 @@ fn build_pane_lines(
         .filter(|r| r.artist.is_some() && r.direction.as_deref() != Some("forward"))
         .collect();
     if !relevant_relations.is_empty() {
-        lines.push(Line::from(Span::styled("Relations:".to_string(), heading)));
+        blocks.push(RichBlock::Heading("Relations:".to_string()));
         for relation in &relevant_relations {
             if let Some(ref artist) = relation.artist {
                 let mut role = relation.type_.clone();
                 if !relation.attributes.is_empty() {
                     role = format!("{} ({})", role, relation.attributes.join(", "));
                 }
-                lines.push(Line::from(vec![
-                    Span::styled("  ", label),
-                    Span::styled(format!("{}: ", role), dim),
-                    Span::styled(artist.name.clone(), value),
+                blocks.push(RichBlock::Paragraph(vec![
+                    RichSpan::new("  ", label),
+                    RichSpan::new(format!("{}: ", role), dim),
+                    RichSpan::new(artist.name.clone(), value),
                 ]));
             }
         }
-        lines.push(Line::raw(""));
+        blocks.push(RichBlock::Blank);
     }
 
     // Releases
     if !detail.releases.is_empty() {
-        lines.push(Line::from(Span::styled("Releases:".to_string(), heading)));
+        blocks.push(RichBlock::Heading("Releases:".to_string()));
         for (id, parsed) in &detail.releases {
             match parsed {
                 Some(release) => {
@@ -355,16 +350,16 @@ fn build_pane_lines(
                         .collect::<Vec<_>>()
                         .join(", ");
                     let mut spans = vec![
-                        Span::styled("  ", label),
-                        Span::styled(release.title.clone(), value),
+                        RichSpan::new("  ", label),
+                        RichSpan::new(release.title.clone(), value),
                     ];
                     if !artist_str.is_empty() {
-                        spans.push(Span::styled(format!(" by {}", artist_str), dim));
+                        spans.push(RichSpan::new(format!(" by {}", artist_str), dim));
                     }
-                    lines.push(Line::from(spans));
-                    lines.push(Line::from(vec![
-                        Span::styled("    ", label),
-                        Span::styled(release.id.clone(), dim),
+                    blocks.push(RichBlock::Paragraph(spans));
+                    blocks.push(RichBlock::Paragraph(vec![
+                        RichSpan::new("    ", label),
+                        RichSpan::new(release.id.clone(), dim),
                     ]));
                 }
                 None => {
@@ -378,26 +373,26 @@ fn build_pane_lines(
                         .iter()
                         .find(|r| r.id == *id)
                         .and_then(|r| r.release_group.as_ref());
-                    let mut spans = vec![Span::styled("  ", label)];
+                    let mut spans = vec![RichSpan::new("  ", label)];
                     if let Some(title) = fallback_title {
-                        spans.push(Span::styled(title.to_string(), value));
-                        spans.push(Span::styled(" (not cached)", dim));
+                        spans.push(RichSpan::new(title.to_string(), value));
+                        spans.push(RichSpan::new(" (not cached)", dim));
                     } else {
-                        spans.push(Span::styled(id.clone(), dim));
-                        spans.push(Span::styled(" (not cached)", dim));
+                        spans.push(RichSpan::new(id.clone(), dim));
+                        spans.push(RichSpan::new(" (not cached)", dim));
                     }
-                    lines.push(Line::from(spans));
+                    blocks.push(RichBlock::Paragraph(spans));
                     if let Some(rg) = fallback_rg {
-                        lines.push(Line::from(vec![
-                            Span::styled("    release-group: ", dim),
-                            Span::styled(rg.id.clone(), dim),
+                        blocks.push(RichBlock::Paragraph(vec![
+                            RichSpan::new("    release-group: ", dim),
+                            RichSpan::new(rg.id.clone(), dim),
                         ]));
                     }
                 }
             }
         }
-        lines.push(Line::raw(""));
+        blocks.push(RichBlock::Blank);
     }
 
-    lines
+    blocks
 }

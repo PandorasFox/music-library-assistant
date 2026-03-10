@@ -26,6 +26,7 @@ pub mod standard_list;
 pub mod status_bar;
 pub mod tabbed_signal_list;
 mod text_input;
+pub mod rich_text;
 pub mod three_col_table;
 mod titlebar;
 pub mod wizard;

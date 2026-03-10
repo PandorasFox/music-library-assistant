@@ -31,36 +31,36 @@ impl AudioFileWithTags {
 impl WizardItem for AudioFileWithTags {
     fn wizard(&self, _width: u16) -> Option<WizardOffer> {
         use ratatui::style::{Color, Style};
-        use ratatui::text::{Line, Span};
+        use crate::ui::widgets::rich_text::{RichBlock, RichSpan};
 
         let tag_val = |tag: &str| -> String {
             self.get_tag_display(tag).unwrap_or_else(|| "-".into())
         };
 
-        let tag_line = |label: &'static str, value: String| -> Line<'static> {
-            Line::from(vec![
-                Span::styled(format!("{}: ", label), Style::default().fg(Color::DarkGray)),
-                Span::raw(value),
+        let tag_block = |label: &'static str, value: String| -> RichBlock {
+            RichBlock::Paragraph(vec![
+                RichSpan::new(format!("{}: ", label), Style::default().fg(Color::DarkGray)),
+                RichSpan::new(value, Style::default().fg(Color::White)),
             ])
         };
 
         let path = self.audio_file.path().to_string();
-        let lines = vec![
-            tag_line("Title", tag_val("title")),
-            tag_line("Artist", tag_val("artist")),
-            tag_line("Album", tag_val("album")),
-            tag_line("Album Artist", tag_val("album_artist")),
-            tag_line("Genre", tag_val("genre")),
-            Line::raw(""),
-            Line::from(vec![
-                Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
-                Span::raw(path),
+        let content = vec![
+            tag_block("Title", tag_val("title")),
+            tag_block("Artist", tag_val("artist")),
+            tag_block("Album", tag_val("album")),
+            tag_block("Album Artist", tag_val("album_artist")),
+            tag_block("Genre", tag_val("genre")),
+            RichBlock::Blank,
+            RichBlock::Paragraph(vec![
+                RichSpan::new("Path: ", Style::default().fg(Color::DarkGray)),
+                RichSpan::new(path, Style::default().fg(Color::White)),
             ]),
         ];
 
         Some(WizardOffer::Pane {
             title: "Track Info".to_string(),
-            lines,
+            content,
         })
     }
 }

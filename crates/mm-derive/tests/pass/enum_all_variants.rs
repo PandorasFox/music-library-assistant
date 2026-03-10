@@ -6,8 +6,8 @@ use ratatui::text::Line;
 #[derive(Debug, Clone)]
 pub enum WizardOffer {
     Popup(Vec<Line<'static>>),
-    Pane { title: String, lines: Vec<Line<'static>> },
-    Both { popup: Vec<Line<'static>>, pane_title: String, pane_lines: Vec<Line<'static>> },
+    Pane { title: String, content: Vec<String> },
+    Both { popup: Vec<Line<'static>>, pane_title: String, pane_content: Vec<String> },
 }
 
 pub trait WizardItem {
@@ -32,7 +32,7 @@ enum TestItem {
         #[wizard(pane_title)]
         detail_title: String,
         #[wizard(pane_content)]
-        detail_lines: Vec<Line<'static>>,
+        detail_lines: Vec<String>,
     },
 
     #[wizard(both)]
@@ -43,7 +43,7 @@ enum TestItem {
         #[wizard(pane_title)]
         detail_title: String,
         #[wizard(pane_content)]
-        detail_lines: Vec<Line<'static>>,
+        detail_lines: Vec<String>,
     },
 }
 
@@ -63,7 +63,7 @@ fn main() {
     let detail = TestItem::Detail {
         label: "x".into(),
         detail_title: "Title".into(),
-        detail_lines: vec![Line::raw("line")],
+        detail_lines: vec!["line".into()],
     };
     assert!(matches!(detail.wizard(80), Some(WizardOffer::Pane { .. })));
 
@@ -72,7 +72,7 @@ fn main() {
         label: "x".into(),
         summary: vec![Line::raw("sum")],
         detail_title: "Title".into(),
-        detail_lines: vec![Line::raw("line")],
+        detail_lines: vec!["line".into()],
     };
     assert!(matches!(full.wizard(80), Some(WizardOffer::Both { .. })));
 }

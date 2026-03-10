@@ -10,9 +10,7 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::ui::transaction_review::{
-    self, DecisionSummary, TransactionReviewAction, TransactionReviewState,
-};
+use crate::ui::transaction_review::{self, TransactionReviewAction, TransactionReviewState};
 
 // ============================================================================
 // State
@@ -65,21 +63,16 @@ pub enum TabbedTransactionReviewAction {
 // ============================================================================
 
 /// Render the tabbed transaction review (full-area, no modal frame).
-pub fn render(
-    f: &mut Frame,
-    area: Rect,
-    state: &TabbedTransactionReviewState,
-    decisions: &[DecisionSummary],
-) {
-    if decisions.is_empty() {
+pub fn render(f: &mut Frame, area: Rect, state: &mut TabbedTransactionReviewState) {
+    if state.review.decisions.is_empty() {
         let empty = Paragraph::new("No decisions staged")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::NONE));
         f.render_widget(empty, area);
     } else {
-        transaction_review::render_content(f, area, &state.review, decisions);
+        transaction_review::render_content(f, area, &mut state.review);
     }
 
-    transaction_review::render_removal_popup(f, area, &state.review, decisions);
+    transaction_review::render_removal_popup(f, area, &state.review);
 }

@@ -6,46 +6,24 @@
 //! - **TabbedTransactionReview** (`tabbed_transaction_review` module):
 //!   Persistent lateral tab. No Cancel, Tab/BackTab for cycling.
 
+use std::collections::BTreeSet;
+
 use crate::ui::input::InputAction;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::meta::decisions::DecisionKey;
 use crate::meta::mutations::{DiffEntry, Mutation};
-use crate::ui::widgets::{
-    centered_rect_fixed, render_button_row, ConfirmationButton, StyledCell, ThreeColTable,
+use crate::ui::widgets::rich_text::{RichBlock, RichSpan};
+use crate::ui::widgets::standard_list::{
+    ListEntry, ListInputResult, StandardListConfig, StandardListState,
 };
+use crate::ui::widgets::wizard::{WizardItem, WizardOffer};
+use crate::ui::widgets::{centered_rect_fixed, render_button_row, ConfirmationButton};
 use crate::witch::Witch;
-
-/// Focus pane for transaction review (3-pane: Decisions, Mutations, Buttons).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ReviewFocusPane {
-    #[default]
-    Decisions,
-    Mutations,
-    Buttons,
-}
-
-impl ReviewFocusPane {
-    fn next(self) -> Self {
-        match self {
-            Self::Decisions => Self::Mutations,
-            Self::Mutations => Self::Buttons,
-            Self::Buttons => Self::Buttons,
-        }
-    }
-
-    fn prev(self) -> Self {
-        match self {
-            Self::Decisions => Self::Decisions,
-            Self::Mutations => Self::Decisions,
-            Self::Buttons => Self::Mutations,
-        }
-    }
-}
 
 // ============================================================================
 // Types
@@ -59,6 +37,76 @@ pub struct DecisionSummary {
     pub mutation_count: usize,
     pub track_count: usize,
     pub diff_entries: Vec<DiffEntry>,
+}
+
+impl WizardItem for DecisionSummary {
+    fn wizard(&self, _width: u16) -> Option<WizardOffer> {
+        if self.diff_entries.is_empty() {
+            let content = vec![RichBlock::Paragraph(vec![RichSpan::new(
+                "No mutations to display",
+                Style::default().fg(Color::DarkGray),
+            )])];
+            return Some(WizardOffer::Pane {
+                title: self.label.clone(),
+                content,
+            });
+        }
+
+        let headers = vec![
+            RichSpan::new(
+                "Mutation",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            RichSpan::new(
+                "Before",
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            RichSpan::new(
+                "After",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+
+        let rows: Vec<Vec<Vec<RichSpan>>> = self
+            .diff_entries
+            .iter()
+            .map(|e| {
+                vec![
+                    vec![RichSpan::new(&e.label, Style::default().fg(Color::White))],
+                    vec![RichSpan::new(&e.old_value, Style::default().fg(Color::Red))],
+                    vec![RichSpan::new(
+                        &e.new_value,
+                        Style::default().fg(Color::Green),
+                    )],
+                ]
+            })
+            .collect();
+
+        let content = vec![RichBlock::Table {
+            headers,
+            rows,
+            col_ratio: vec![30, 35, 35],
+        }];
+
+        Some(WizardOffer::Pane {
+            title: self.label.clone(),
+            content,
+        })
+    }
+}
+
+impl ListEntry for DecisionSummary {
+    type Action = DecisionKey;
+
+    fn on_confirm(&self, _selected: &BTreeSet<usize>) -> Option<DecisionKey> {
+        None // Enter doesn't act on decisions directly
+    }
 }
 
 /// Which button is focused.
@@ -104,14 +152,13 @@ pub enum PostCommitPhase {
 }
 
 /// Core state for transaction review, shared by both suspending and tabbed modes.
-///
-/// Decision data is fetched from the Witch's active transaction at render time,
-/// NOT stored in this state. The Witch is the source of truth.
 pub struct TransactionReviewState {
-    pub cursor: usize,
-    pub scroll: usize,
-    pub mutations_scroll: usize,
-    pub focus_pane: ReviewFocusPane,
+    /// Cached decisions from the Witch's active transaction.
+    pub decisions: Vec<DecisionSummary>,
+    /// StandardList state for decisions navigation + wizard.
+    pub list: StandardListState,
+    /// Whether button row is focused.
+    pub buttons_focused: bool,
     pub button_focus: ReviewButtonFocus,
     pub post_commit_phase: PostCommitPhase,
     /// When set, a confirmation popup is shown for removing this decision.
@@ -124,10 +171,9 @@ impl TransactionReviewState {
     /// Create state for suspending mode (Cancel button available).
     pub fn new() -> Self {
         Self {
-            cursor: 0,
-            scroll: 0,
-            mutations_scroll: 0,
-            focus_pane: ReviewFocusPane::Decisions,
+            decisions: Vec::new(),
+            list: StandardListState::new(StandardListConfig::default()),
+            buttons_focused: false,
             button_focus: ReviewButtonFocus::Cancel,
             post_commit_phase: PostCommitPhase::SignalRefresh,
             pending_removal: None,
@@ -138,10 +184,9 @@ impl TransactionReviewState {
     /// Create state for tabbed mode (no Cancel button).
     pub fn new_tabbed() -> Self {
         Self {
-            cursor: 0,
-            scroll: 0,
-            mutations_scroll: 0,
-            focus_pane: ReviewFocusPane::Decisions,
+            decisions: Vec::new(),
+            list: StandardListState::new(StandardListConfig::default()),
+            buttons_focused: false,
             button_focus: ReviewButtonFocus::Confirm,
             post_commit_phase: PostCommitPhase::SignalRefresh,
             pending_removal: None,
@@ -152,6 +197,17 @@ impl TransactionReviewState {
     pub fn with_post_commit_phase(mut self, phase: PostCommitPhase) -> Self {
         self.post_commit_phase = phase;
         self
+    }
+
+    /// Refresh cached decisions from the Witch. Call after mutations or on tick.
+    pub fn refresh_decisions(&mut self, witch: &Witch) {
+        self.decisions = fetch_decision_summaries(witch);
+        self.list.clamp_cursor(&self.decisions);
+    }
+
+    /// Current cursor position (for action handler interop).
+    pub fn cursor(&self) -> usize {
+        self.list.cursor
     }
 
     /// Move button focus left (Cancel <- Discard <- Confirm).
@@ -191,73 +247,65 @@ impl TransactionReviewState {
             };
         }
 
-        // FocusUp/FocusDown: cycle focus between decisions, mutations, and buttons
+        // Button focus mode
+        if self.buttons_focused {
+            return self.handle_buttons_input(action);
+        }
+
+        // Global shortcuts (work regardless of pane focus)
         match action {
-            InputAction::FocusUp => {
-                self.focus_pane = self.focus_pane.prev();
-                return TransactionReviewAction::None;
+            InputAction::Char('y') | InputAction::Char('Y') => {
+                return TransactionReviewAction::Confirm;
             }
-            InputAction::FocusDown => {
-                self.focus_pane = self.focus_pane.next();
-                return TransactionReviewAction::None;
-            }
+            InputAction::Shortcut('d') => return TransactionReviewAction::Discard,
+            InputAction::Cancel => return TransactionReviewAction::Cancel,
             _ => {}
         }
 
-        // Normal mode — actions scoped to focused pane
+        // Delegate to StandardList
+        match self.list.handle_input(action, &self.decisions) {
+            ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
+                TransactionReviewAction::None
+            }
+            ListInputResult::Confirm(_) => {
+                // Enter on a decision — no action (read-only)
+                TransactionReviewAction::None
+            }
+            ListInputResult::Unhandled => {
+                // Handle remaining actions
+                match action {
+                    InputAction::Backspace | InputAction::Delete => {
+                        TransactionReviewAction::RequestRemoval
+                    }
+                    InputAction::FocusDown => {
+                        self.buttons_focused = true;
+                        TransactionReviewAction::None
+                    }
+                    _ => TransactionReviewAction::None,
+                }
+            }
+        }
+    }
+
+    fn handle_buttons_input(&mut self, action: &InputAction) -> TransactionReviewAction {
         match action {
-            // Decisions list navigation
-            InputAction::NavUp if self.focus_pane == ReviewFocusPane::Decisions => {
-                if self.cursor > 0 {
-                    self.cursor -= 1;
-                    self.mutations_scroll = 0; // reset mutations scroll on decision change
-                }
-                TransactionReviewAction::None
-            }
-            InputAction::NavDown if self.focus_pane == ReviewFocusPane::Decisions => {
-                // Cursor bounds checked at render time against actual decision count
-                let prev = self.cursor;
-                self.cursor = self.cursor.saturating_add(1);
-                if self.cursor != prev {
-                    self.mutations_scroll = 0;
-                }
-                TransactionReviewAction::None
-            }
-            // Mutations pane scrolling
-            InputAction::NavUp if self.focus_pane == ReviewFocusPane::Mutations => {
-                self.mutations_scroll = self.mutations_scroll.saturating_sub(1);
-                TransactionReviewAction::None
-            }
-            InputAction::NavDown if self.focus_pane == ReviewFocusPane::Mutations => {
-                self.mutations_scroll = self.mutations_scroll.saturating_add(1);
-                TransactionReviewAction::None
-            }
-            // Button navigation
-            InputAction::NavLeft if self.focus_pane == ReviewFocusPane::Buttons => {
+            InputAction::NavLeft => {
                 self.focus_left();
                 TransactionReviewAction::None
             }
-            InputAction::NavRight if self.focus_pane == ReviewFocusPane::Buttons => {
+            InputAction::NavRight => {
                 self.focus_right();
                 TransactionReviewAction::None
             }
-            // Remove decision (only when decisions list is focused)
-            InputAction::Backspace | InputAction::Delete
-                if self.focus_pane == ReviewFocusPane::Decisions =>
-            {
-                TransactionReviewAction::RequestRemoval
+            InputAction::FocusUp => {
+                self.buttons_focused = false;
+                TransactionReviewAction::None
             }
-            // Activate button (only when buttons are focused)
-            InputAction::Confirm | InputAction::Toggle
-                if self.focus_pane == ReviewFocusPane::Buttons =>
-            {
-                match self.button_focus {
-                    ReviewButtonFocus::Cancel => TransactionReviewAction::Cancel,
-                    ReviewButtonFocus::Discard => TransactionReviewAction::Discard,
-                    ReviewButtonFocus::Confirm => TransactionReviewAction::Confirm,
-                }
-            }
-            // Global shortcuts (work regardless of pane focus)
+            InputAction::Confirm | InputAction::Toggle => match self.button_focus {
+                ReviewButtonFocus::Cancel => TransactionReviewAction::Cancel,
+                ReviewButtonFocus::Discard => TransactionReviewAction::Discard,
+                ReviewButtonFocus::Confirm => TransactionReviewAction::Confirm,
+            },
             InputAction::Cancel => TransactionReviewAction::Cancel,
             InputAction::Char('y') | InputAction::Char('Y') => TransactionReviewAction::Confirm,
             InputAction::Shortcut('d') => TransactionReviewAction::Discard,
@@ -368,90 +416,82 @@ pub fn fetch_decision_summaries(witch: &Witch) -> Vec<DecisionSummary> {
 // Shared Rendering (used by both suspending and tabbed modes)
 // ============================================================================
 
-/// Render the content area: decisions pane + mutations pane + buttons + hints.
+/// Render the content area: decisions list (StandardList + wizard pane) + buttons + hints.
 ///
 /// Used directly by the tabbed wrapper, and inside the outer frame by
 /// `render_fullscreen`.
-pub(crate) fn render_content(
-    f: &mut Frame,
-    area: Rect,
-    state: &TransactionReviewState,
-    decisions: &[DecisionSummary],
-) {
-    let max_cursor = decisions.len().saturating_sub(1);
-    let cursor = state.cursor.min(max_cursor);
-
-    // Decide how much space the decision list gets vs the diff area.
-    // +2 accounts for the block border.
-    let list_rows = if decisions.len() <= 1 {
-        1
-    } else {
-        decisions.len().min(5) as u16
-    };
-    let list_block_height = list_rows + 2;
-
+pub(crate) fn render_content(f: &mut Frame, area: Rect, state: &mut TransactionReviewState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(list_block_height), // Decisions block (bordered)
-            Constraint::Min(5),                    // Mutations block (bordered)
-            Constraint::Length(1),                 // Buttons
-            Constraint::Length(1),                 // Hints
+            Constraint::Min(5),    // Decisions (StandardList + wizard pane)
+            Constraint::Length(1), // Buttons
+            Constraint::Length(1), // Hints
         ])
         .split(area);
 
-    // Decisions pane (blue border, highlighted when focused)
-    let decisions_focused = state.focus_pane == ReviewFocusPane::Decisions;
-    let decisions_border_color = if decisions_focused {
-        Color::Yellow
-    } else {
-        Color::Blue
-    };
-    let decisions_block = Block::default()
-        .title(" Decisions ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(decisions_border_color));
-    let decisions_inner = decisions_block.inner(chunks[0]);
-    f.render_widget(decisions_block, chunks[0]);
-    render_decision_list(f, decisions_inner, decisions, cursor, state.scroll);
+    let list_focused = !state.buttons_focused;
 
-    // Mutations pane (purple border, highlighted when focused)
-    let mutations_focused = state.focus_pane == ReviewFocusPane::Mutations;
-    let mutations_border_color = if mutations_focused {
-        Color::Yellow
-    } else {
-        Color::Magenta
-    };
-    let mutations_block = Block::default()
-        .title(" Mutations ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(mutations_border_color));
-    let mutations_inner = mutations_block.inner(chunks[1]);
-    f.render_widget(mutations_block, chunks[1]);
-    if let Some(decision) = decisions.get(cursor) {
-        render_diff_entries(
-            f,
-            mutations_inner,
-            &decision.diff_entries,
-            state.mutations_scroll,
-        );
-    }
+    state.list.render(
+        f,
+        chunks[0],
+        &state.decisions,
+        |idx, is_cursor, _is_selected, _width| {
+            render_decision_row(&state.decisions, idx, is_cursor)
+        },
+        "Decisions",
+        list_focused,
+    );
 
-    render_buttons_and_hints(f, chunks[2], chunks[3], state);
+    render_buttons_and_hints(f, chunks[1], chunks[2], state);
+}
+
+fn render_decision_row(
+    decisions: &[DecisionSummary],
+    idx: usize,
+    is_cursor: bool,
+) -> Line<'static> {
+    let Some(decision) = decisions.get(idx) else {
+        return Line::raw("");
+    };
+
+    let prefix = if is_cursor { "\u{25b8} " } else { "  " };
+    let base_style = if is_cursor {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let edit_s = if decision.mutation_count == 1 {
+        ""
+    } else {
+        "s"
+    };
+    let track_s = if decision.track_count == 1 { "" } else { "s" };
+
+    Line::from(vec![
+        Span::styled(prefix, base_style),
+        Span::styled(decision.label.clone(), base_style),
+        Span::styled(
+            format!(
+                "  ({} edit{}, {} track{})",
+                decision.mutation_count, edit_s, decision.track_count, track_s,
+            ),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ])
 }
 
 /// Render the removal confirmation popup overlay.
-pub(crate) fn render_removal_popup(
-    f: &mut Frame,
-    area: Rect,
-    state: &TransactionReviewState,
-    decisions: &[DecisionSummary],
-) {
+pub(crate) fn render_removal_popup(f: &mut Frame, area: Rect, state: &TransactionReviewState) {
     let Some(ref key) = state.pending_removal else {
         return;
     };
 
-    let label = decisions
+    let label = state
+        .decisions
         .iter()
         .find(|d| d.key == *key)
         .map(|d| d.label.as_str())
@@ -499,58 +539,13 @@ pub(crate) fn render_removal_popup(
     f.render_widget(hint, chunks[1]);
 }
 
-/// Wrap text into lines that fit within `width` characters, breaking at char boundaries.
-/// Render diff entries as a 3-column wrapped table (20/40/40: mutation/before/after).
-pub(crate) fn render_diff_entries(f: &mut Frame, area: Rect, entries: &[DiffEntry], scroll: usize) {
-    if entries.is_empty() {
-        let empty = Paragraph::new("No changes")
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center);
-        f.render_widget(empty, area);
-        return;
-    }
-
-    let bold = Modifier::BOLD;
-    let table = ThreeColTable {
-        headers: [
-            (
-                "Mutation".into(),
-                Style::default().fg(Color::Cyan).add_modifier(bold),
-            ),
-            (
-                "Before".into(),
-                Style::default().fg(Color::Red).add_modifier(bold),
-            ),
-            (
-                "After".into(),
-                Style::default().fg(Color::Green).add_modifier(bold),
-            ),
-        ],
-        rows: entries
-            .iter()
-            .map(|e| {
-                [
-                    StyledCell::new(&e.label, Style::default().fg(Color::White)),
-                    StyledCell::new(&e.old_value, Style::default().fg(Color::Red)),
-                    StyledCell::new(&e.new_value, Style::default().fg(Color::Green)),
-                ]
-            })
-            .collect(),
-        col_ratio: [20, 40, 40],
-        scroll,
-        separator_style: Style::default().fg(Color::DarkGray),
-        alternate_rows: true,
-    };
-    table.render(f, area);
-}
-
 fn render_buttons_and_hints(
     f: &mut Frame,
     button_area: Rect,
     hint_area: Rect,
     state: &TransactionReviewState,
 ) {
-    let bf = state.focus_pane == ReviewFocusPane::Buttons;
+    let bf = state.buttons_focused;
 
     let mut buttons = Vec::new();
     if state.show_cancel {
@@ -576,6 +571,8 @@ fn render_buttons_and_hints(
         cc::text(" pane  "),
         cc::nav("[↑↓/<>]"),
         cc::text(" navigate  "),
+        cc::toggle("[Z]"),
+        cc::text(" mutations  "),
         cc::confirm("[Enter]"),
         cc::text(" activate  "),
         cc::action("[Y]"),
@@ -594,118 +591,26 @@ fn render_buttons_and_hints(
     f.render_widget(hint, hint_area);
 }
 
-fn render_decision_list(
-    f: &mut Frame,
-    area: Rect,
-    decisions: &[DecisionSummary],
-    cursor: usize,
-    scroll: usize,
-) {
-    let visible_height = area.height as usize;
-
-    // Calculate scroll offset to keep cursor visible
-    let scroll_offset = if cursor >= scroll + visible_height {
-        cursor - visible_height + 1
-    } else if cursor < scroll {
-        cursor
-    } else {
-        scroll
-    };
-
-    let items: Vec<ListItem> = decisions
-        .iter()
-        .enumerate()
-        .skip(scroll_offset)
-        .take(visible_height)
-        .map(|(idx, decision)| {
-            let is_selected = idx == cursor;
-
-            let prefix = if is_selected { "> " } else { "  " };
-            let text = format!(
-                "{}{} ({} edit{}, {} track{})",
-                prefix,
-                decision.label,
-                decision.mutation_count,
-                if decision.mutation_count == 1 {
-                    ""
-                } else {
-                    "s"
-                },
-                decision.track_count,
-                if decision.track_count == 1 { "" } else { "s" },
-            );
-
-            let style = if is_selected {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            ListItem::new(text).style(style)
-        })
-        .collect();
-
-    let list = List::new(items);
-    f.render_widget(list, area);
-
-    // Show scroll indicator if needed
-    if decisions.len() > visible_height {
-        let indicator = if scroll_offset > 0 && scroll_offset + visible_height < decisions.len() {
-            "^v"
-        } else if scroll_offset > 0 {
-            "^"
-        } else {
-            "v"
-        };
-
-        let indicator_area = Rect {
-            x: area.x + area.width.saturating_sub(3),
-            y: area.y,
-            width: 2,
-            height: 1,
-        };
-
-        let indicator_widget =
-            Paragraph::new(indicator).style(Style::default().fg(Color::DarkGray));
-        f.render_widget(indicator_widget, indicator_area);
-    }
-}
-
 // ============================================================================
 // Suspending Mode Rendering (modal / fullscreen with outer frame)
 // ============================================================================
 
 /// Render the suspending transaction review (modal or fullscreen).
-pub fn render(
-    f: &mut Frame,
-    area: Rect,
-    state: &TransactionReviewState,
-    decisions: &[DecisionSummary],
-) {
-    let has_diffs = decisions.iter().any(|d| !d.diff_entries.is_empty());
+pub fn render(f: &mut Frame, area: Rect, state: &mut TransactionReviewState) {
+    let has_diffs = state.decisions.iter().any(|d| !d.diff_entries.is_empty());
 
     if has_diffs {
-        render_fullscreen(f, area, state, decisions);
+        render_fullscreen(f, area, state);
     } else {
-        render_modal(f, area, state, decisions);
+        render_modal(f, area, state);
     }
 
-    render_removal_popup(f, area, state, decisions);
+    render_removal_popup(f, area, state);
 }
 
 /// Standard centered modal for decisions without diffs (tag edits, etc.).
-fn render_modal(
-    f: &mut Frame,
-    area: Rect,
-    state: &TransactionReviewState,
-    decisions: &[DecisionSummary],
-) {
-    let max_cursor = decisions.len().saturating_sub(1);
-    let cursor = state.cursor.min(max_cursor);
-
-    let total_mutations: usize = decisions.iter().map(|d| d.mutation_count).sum();
+fn render_modal(f: &mut Frame, area: Rect, state: &mut TransactionReviewState) {
+    let total_mutations: usize = state.decisions.iter().map(|d| d.mutation_count).sum();
 
     let modal_width = 74.min(area.width.saturating_sub(4));
     let modal_height = 22.min(area.height.saturating_sub(2));
@@ -715,8 +620,8 @@ fn render_modal(
 
     let title = format!(
         " Review: {} decision{}, {} mutation{} ",
-        decisions.len(),
-        if decisions.len() == 1 { "" } else { "s" },
+        state.decisions.len(),
+        if state.decisions.len() == 1 { "" } else { "s" },
         total_mutations,
         if total_mutations == 1 { "" } else { "s" },
     );
@@ -730,47 +635,17 @@ fn render_modal(
     let inner = block.inner(modal_area);
     f.render_widget(block, modal_area);
 
-    // Layout: decisions block + buttons + hints
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(5),    // Decision list (bordered)
-            Constraint::Length(1), // Buttons
-            Constraint::Length(1), // Hints
-        ])
-        .split(inner);
-
-    // Decisions pane (blue border, highlighted when focused)
-    let decisions_focused = state.focus_pane == ReviewFocusPane::Decisions;
-    let decisions_border_color = if decisions_focused {
-        Color::Yellow
-    } else {
-        Color::Blue
-    };
-    let decisions_block = Block::default()
-        .title(" Decisions ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(decisions_border_color));
-    let decisions_inner = decisions_block.inner(chunks[0]);
-    f.render_widget(decisions_block, chunks[0]);
-    render_decision_list(f, decisions_inner, decisions, cursor, state.scroll);
-
-    render_buttons_and_hints(f, chunks[1], chunks[2], state);
+    render_content(f, inner, state);
 }
 
 /// Full-screen layout with outer frame, delegates content to `render_content`.
-fn render_fullscreen(
-    f: &mut Frame,
-    area: Rect,
-    state: &TransactionReviewState,
-    decisions: &[DecisionSummary],
-) {
-    let total_mutations: usize = decisions.iter().map(|d| d.mutation_count).sum();
+fn render_fullscreen(f: &mut Frame, area: Rect, state: &mut TransactionReviewState) {
+    let total_mutations: usize = state.decisions.iter().map(|d| d.mutation_count).sum();
 
     let title = format!(
         " Review: {} decision{}, {} mutation{} ",
-        decisions.len(),
-        if decisions.len() == 1 { "" } else { "s" },
+        state.decisions.len(),
+        if state.decisions.len() == 1 { "" } else { "s" },
         total_mutations,
         if total_mutations == 1 { "" } else { "s" },
     );
@@ -785,5 +660,5 @@ fn render_fullscreen(
     f.render_widget(Clear, area);
     f.render_widget(block, area);
 
-    render_content(f, inner, state, decisions);
+    render_content(f, inner, state);
 }

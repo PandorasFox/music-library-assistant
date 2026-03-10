@@ -414,9 +414,9 @@ impl App {
                 // Stack already holds compound split from the earlier push_and_switch.
                 // Push this (now-completed) progressive worker position so the
                 // TransactionReview Cancel pops back through it.
-                self.view = ActiveView::TransactionReview(
-                    transaction_review::TransactionReviewState::new(),
-                );
+                let mut review = transaction_review::TransactionReviewState::new();
+                review.refresh_decisions(&self.witch);
+                self.view = ActiveView::TransactionReview(review);
             }
         }
     }

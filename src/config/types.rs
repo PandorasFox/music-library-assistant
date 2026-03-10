@@ -613,6 +613,12 @@ pub struct SourceDir {
     /// Whether AcoustID lookups are enabled for this source directory.
     /// None = inherit from parent (system default: true).
     pub enable_acoustid: Option<bool>,
+    /// Pinned MusicBrainz release ID for this directory.
+    /// When set, release packing enforces a bidirectional constraint:
+    /// this directory's files are assigned ONLY to this release, and
+    /// this release ONLY receives files from directories that pin it.
+    /// Not inheritable — directory-specific.
+    pub pinned_release: Option<String>,
 }
 
 impl SourceDir {
@@ -627,6 +633,7 @@ impl SourceDir {
             && self.interior_dupes.is_none()
             && self.path_schema.is_none()
             && self.enable_acoustid.is_none()
+            && self.pinned_release.is_none()
     }
 }
 

@@ -564,9 +564,9 @@ impl App {
     /// Start the tabbed transaction review lateral view.
     pub(super) fn start_tabbed_transaction_review(&mut self) {
         self.last_lateral_view = widgets::LateralView::Transaction;
-        self.view = ActiveView::TabbedTransactionReview(
-            tabbed_transaction_review::TabbedTransactionReviewState::new(),
-        );
+        let mut state = tabbed_transaction_review::TabbedTransactionReviewState::new();
+        state.review.refresh_decisions(&self.witch);
+        self.view = ActiveView::TabbedTransactionReview(state);
     }
 
     /// Start the config editor view.
@@ -721,13 +721,6 @@ impl App {
 // ============================================================================
 
 fn render(f: &mut Frame, app: &mut App) {
-    // Fetch decision summaries from Witch if transaction review is active
-    let transaction_review_decisions = if matches!(app.view, ActiveView::TransactionReview(_)) {
-        transaction_review::fetch_decision_summaries(&app.witch)
-    } else {
-        Vec::new()
-    };
-
     // Build status bar lines
     let status_line_1 = if app.witch.idle_rescan_active() {
         Some("Refreshing corpus...".to_string())
@@ -743,13 +736,7 @@ fn render(f: &mut Frame, app: &mut App) {
         format!("Transaction \"{label}\": {dec} decision{pd}, {mut_} mutation{pm} staged")
     });
 
-    render::render_app(
-        f,
-        app,
-        transaction_review_decisions,
-        status_line_1,
-        status_line_2,
-    );
+    render::render_app(f, app, status_line_1, status_line_2);
 }
 
 // ============================================================================

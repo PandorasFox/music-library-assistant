@@ -27,7 +27,6 @@ use super::{
 pub fn render_app(
     f: &mut Frame,
     app: &mut super::App,
-    transaction_review_decisions: Vec<transaction_review::DecisionSummary>,
     status_line_1: Option<String>,
     status_line_2: Option<String>,
 ) {
@@ -92,7 +91,7 @@ pub fn render_app(
         titlebar.render(f, chunks[0]);
 
         let start = Instant::now();
-        render_content(f, app, &transaction_review_decisions, chunks[1]);
+        render_content(f, app, chunks[1]);
         let content_time = start.elapsed();
 
         let start = Instant::now();
@@ -128,7 +127,7 @@ pub fn render_app(
         let header_time = start.elapsed();
 
         let start = Instant::now();
-        render_content(f, app, &transaction_review_decisions, chunks[1]);
+        render_content(f, app, chunks[1]);
         let content_time = start.elapsed();
 
         let start = Instant::now();
@@ -178,7 +177,6 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, view: &ActiveView) 
 fn render_content(
     f: &mut Frame,
     app: &mut super::App,
-    transaction_review_decisions: &[transaction_review::DecisionSummary],
     area: ratatui::layout::Rect,
 ) {
     let start = Instant::now();
@@ -233,10 +231,9 @@ fn render_content(
             vname = "inbox";
             inbox_view::render_inbox_view(f, area, state);
         }
-        ActiveView::TabbedTransactionReview(ref state) => {
+        ActiveView::TabbedTransactionReview(ref mut state) => {
             vname = "tabbed_transaction_review";
-            let decisions = transaction_review::fetch_decision_summaries(&app.witch);
-            tabbed_transaction_review::render(f, area, state, &decisions);
+            tabbed_transaction_review::render(f, area, state);
         }
         ActiveView::TagSearch(ref mut state) => {
             vname = "tag_search";
@@ -294,9 +291,9 @@ fn render_content(
             vname = "moved_file_acknowledge";
             super::moved_file_modal::render(state, f, area);
         }
-        ActiveView::TransactionReview(ref review) => {
+        ActiveView::TransactionReview(ref mut review) => {
             vname = "transaction_review";
-            transaction_review::render(f, area, review, transaction_review_decisions);
+            transaction_review::render(f, area, review);
         }
         ActiveView::CorruptFileResolution(ref mut preview) => {
             vname = "corrupt_file_resolution";

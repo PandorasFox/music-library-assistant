@@ -12,7 +12,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use super::rich_text::{dim_style, pad_to_width, wrap_text};
 
 /// A single cell in the table with text and a style.
 pub struct StyledCell {
@@ -213,56 +213,3 @@ impl ThreeColTable {
     }
 }
 
-/// Wrap text to fit within `width` display columns, respecting wide (CJK) characters.
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return vec![String::new()];
-    }
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0;
-
-    for ch in text.chars() {
-        let ch_width = ch.width().unwrap_or(0);
-        if current_width + ch_width > width {
-            lines.push(current);
-            current = String::new();
-            current_width = 0;
-        }
-        current.push(ch);
-        current_width += ch_width;
-    }
-
-    if !current.is_empty() || lines.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
-
-/// Pad `text` with trailing spaces so its display width reaches `target_width`.
-fn pad_to_width(text: &str, target_width: usize) -> String {
-    let text_width = UnicodeWidthStr::width(text);
-    let padding = target_width.saturating_sub(text_width);
-    let mut s = String::with_capacity(text.len() + padding);
-    s.push_str(text);
-    for _ in 0..padding {
-        s.push(' ');
-    }
-    s
-}
-
-/// Produce a dimmed variant of a style for alternating rows.
-fn dim_style(style: Style) -> Style {
-    // Swap bright colors to their dimmer equivalents
-    match style.fg {
-        Some(Color::White) => style.fg(Color::Gray),
-        Some(Color::Green) => style.fg(Color::Green), // keep green distinguishable
-        Some(Color::Red) => style.fg(Color::Red),     // keep red distinguishable
-        Some(Color::Cyan) => style.fg(Color::Cyan),   // keep cyan distinguishable
-        _ => style,
-    }
-}

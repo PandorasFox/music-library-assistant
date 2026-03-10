@@ -33,13 +33,13 @@ pub(crate) enum KnotBrowserAction {
 
 impl WizardItem for KnotProposal {
     fn wizard(&self, _width: u16) -> Option<WizardOffer> {
-        let lines = render::build_proposal_detail_lines(self);
-        if lines.is_empty() {
+        let content = render::build_proposal_detail_blocks(self);
+        if content.is_empty() {
             None
         } else {
             Some(WizardOffer::Pane {
                 title: self.release_title.clone(),
-                lines,
+                content,
             })
         }
     }

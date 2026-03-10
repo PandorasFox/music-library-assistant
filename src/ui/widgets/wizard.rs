@@ -13,6 +13,8 @@
 
 use ratatui::text::Line;
 
+use super::rich_text::RichBlock;
+
 /// Guaranteed-non-empty wizard content. The enum shape enforces that if you
 /// return a `WizardOffer`, you've provided at least one container.
 ///
@@ -25,14 +27,14 @@ pub enum WizardOffer {
     /// Full pane only. Z opens pane directly.
     Pane {
         title: String,
-        lines: Vec<Line<'static>>,
+        content: Vec<RichBlock>,
     },
 
     /// Both containers. Z shows popup first, second Z escalates to pane.
     Both {
         popup: Vec<Line<'static>>,
         pane_title: String,
-        pane_lines: Vec<Line<'static>>,
+        pane_content: Vec<RichBlock>,
     },
 }
 
@@ -106,7 +108,9 @@ mod tests {
     fn pane_offer() -> WizardOffer {
         WizardOffer::Pane {
             title: "Title".into(),
-            lines: vec![Line::raw("detail")],
+            content: vec![RichBlock::Paragraph(vec![
+                super::super::rich_text::RichSpan::plain("detail"),
+            ])],
         }
     }
 
@@ -114,7 +118,9 @@ mod tests {
         WizardOffer::Both {
             popup: vec![Line::raw("summary")],
             pane_title: "Detail".into(),
-            pane_lines: vec![Line::raw("full detail")],
+            pane_content: vec![RichBlock::Paragraph(vec![
+                super::super::rich_text::RichSpan::plain("full detail"),
+            ])],
         }
     }
 

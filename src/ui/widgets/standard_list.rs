@@ -20,6 +20,7 @@ use ratatui::{
 
 use super::{
     ListClickTargets, WizardItem, WizardOffer, WizardState,
+    rich_text::RichBlock,
     wizard_pane::{WizardPaneState, render_wizard_pane},
     wizard_popup::WizardPopup,
 };
@@ -364,21 +365,21 @@ impl StandardListState {
         // Render wizard pane if active.
         if let Some(pane_rect) = pane_area {
             if let Some(ref offer) = offer {
-                let (pane_title, pane_lines) = match offer {
-                    WizardOffer::Pane { title, lines } => (title.as_str(), lines.as_slice()),
+                let (pane_title, pane_content) = match offer {
+                    WizardOffer::Pane { title, content } => (title.as_str(), content.as_slice()),
                     WizardOffer::Both {
                         pane_title,
-                        pane_lines,
+                        pane_content,
                         ..
-                    } => (pane_title.as_str(), pane_lines.as_slice()),
-                    _ => ("", &[] as &[Line<'_>]),
+                    } => (pane_title.as_str(), pane_content.as_slice()),
+                    _ => ("", &[] as &[RichBlock]),
                 };
                 let pane_focused = self.focus == ListFocus::WizardPane;
                 render_wizard_pane(
                     f,
                     pane_rect,
                     pane_title,
-                    pane_lines,
+                    pane_content,
                     &mut self.wizard_pane,
                     pane_focused,
                 );
@@ -534,6 +535,7 @@ impl StandardListState {
 mod tests {
     use super::*;
     use ratatui::text::Line;
+    use crate::ui::widgets::rich_text::{RichBlock, RichSpan};
     use crate::ui::widgets::wizard::{WizardOffer, WizardItem};
 
     // Simple test items.
@@ -777,7 +779,7 @@ mod tests {
             label: "test".into(),
             wizard_offer: Some(WizardOffer::Pane {
                 title: "Detail".into(),
-                lines: vec![Line::raw("info")],
+                content: vec![RichBlock::Paragraph(vec![RichSpan::plain("info")])],
             }),
         }];
 
@@ -793,7 +795,7 @@ mod tests {
             label: "test".into(),
             wizard_offer: Some(WizardOffer::Pane {
                 title: "Detail".into(),
-                lines: vec![Line::raw("info")],
+                content: vec![RichBlock::Paragraph(vec![RichSpan::plain("info")])],
             }),
         }];
 

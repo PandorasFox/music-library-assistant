@@ -1313,6 +1313,7 @@ impl App {
                     .as_ref()
                     .and_then(|t| crate::config::parse_path_schema(t).ok()),
                 enable_acoustid: panel.orig_enable_acoustid,
+                pinned_release: None,
             };
             let new_dir = crate::config::SourceDir {
                 path: panel.source_path.clone(),
@@ -1324,6 +1325,7 @@ impl App {
                     .as_ref()
                     .and_then(|t| crate::config::parse_path_schema(t).ok()),
                 enable_acoustid: panel.enable_acoustid,
+                pinned_release: None,
             };
             (panel.source_path.clone(), old_dir, new_dir)
         };
@@ -1647,16 +1649,9 @@ impl App {
 
             TransactionReviewAction::RequestRemoval => {
                 // Map cursor position to DecisionKey and set pending_removal
-                let key = if let ActiveView::TransactionReview(ref review) = self.view {
-                    let keys = self.witch.decision_keys();
-                    let cursor = review.cursor.min(keys.len().saturating_sub(1));
-                    keys.into_iter().nth(cursor)
-                } else {
-                    None
-                };
-                if let Some(key) = key {
-                    if let ActiveView::TransactionReview(ref mut review) = self.view {
-                        review.pending_removal = Some(key);
+                if let ActiveView::TransactionReview(ref mut review) = self.view {
+                    if let Some(d) = review.decisions.get(review.cursor()) {
+                        review.pending_removal = Some(d.key.clone());
                     }
                 }
             }
@@ -1673,12 +1668,9 @@ impl App {
                     self.status_message = Some("Decision removed, transaction empty".to_string());
                     return;
                 }
-                // Clamp cursor after removal
+                // Refresh decisions and clamp cursor after removal
                 if let ActiveView::TransactionReview(ref mut review) = self.view {
-                    let count = self.witch.decision_keys().len();
-                    if review.cursor >= count && count > 0 {
-                        review.cursor = count - 1;
-                    }
+                    review.refresh_decisions(&self.witch);
                 }
                 self.status_message = Some("Decision removed".to_string());
             }
@@ -1738,8 +1730,7 @@ impl App {
                 }
                 TransactionReviewAction::RequestRemoval => {
                     if let ActiveView::TabbedTransactionReview(ref mut state) = self.view {
-                        let decisions = transaction_review::fetch_decision_summaries(&self.witch);
-                        if let Some(d) = decisions.get(state.review.cursor) {
+                        if let Some(d) = state.review.decisions.get(state.review.cursor()) {
                             state.review.pending_removal = Some(d.key.clone());
                         }
                     }
@@ -1749,13 +1740,9 @@ impl App {
                     let _ = super::operator_decisions::remove_decision(&mut self.witch, &key, g);
                     self.status_message = Some("Decision removed".into());
                     self.sync_browser_pending_edits();
-                    // Clamp cursor
+                    // Refresh decisions and clamp cursor
                     if let ActiveView::TabbedTransactionReview(ref mut state) = self.view {
-                        let remaining =
-                            transaction_review::fetch_decision_summaries(&self.witch).len();
-                        if state.review.cursor >= remaining && remaining > 0 {
-                            state.review.cursor = remaining - 1;
-                        }
+                        state.review.refresh_decisions(&self.witch);
                     }
                 }
             },
@@ -1767,9 +1754,9 @@ impl App {
     /// Called after staging decisions to show the review before commit.
     /// Pushes the current view onto the view stack and switches to review.
     pub(in crate::ui) fn start_transaction_review(&mut self) {
-        self.push_and_switch(SuspendTarget::TransactionReview(
-            transaction_review::TransactionReviewState::new(),
-        ));
+        let mut review = transaction_review::TransactionReviewState::new();
+        review.refresh_decisions(&self.witch);
+        self.push_and_switch(SuspendTarget::TransactionReview(review));
     }
 
     /// Transition to transaction review modal with custom post-commit phase.
@@ -1779,9 +1766,10 @@ impl App {
         &mut self,
         phase: transaction_review::PostCommitPhase,
     ) {
-        self.push_and_switch(SuspendTarget::TransactionReview(
-            transaction_review::TransactionReviewState::new().with_post_commit_phase(phase),
-        ));
+        let mut review =
+            transaction_review::TransactionReviewState::new().with_post_commit_phase(phase);
+        review.refresh_decisions(&self.witch);
+        self.push_and_switch(SuspendTarget::TransactionReview(review));
     }
 
     // =========================================================================

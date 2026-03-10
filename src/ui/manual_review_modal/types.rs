@@ -14,7 +14,7 @@ use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::meta::mutations::Mutation;
 
 /// What kind of manual review this modal is performing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ReviewKind {
     /// Equivalent-quality duplicates (same fingerprint, same format/metric tier).
     /// Only stashing resolves these — tag edits cannot help.
@@ -62,7 +62,7 @@ impl ReviewKind {
 }
 
 /// Audio metadata summary for the detail pane (loaded once at modal init).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct FileMetaSummary {
     pub file_type: String,
     pub duration_ms: Option<i64>,
@@ -75,7 +75,7 @@ pub struct FileMetaSummary {
 }
 
 /// A single file entry within a review group.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ReviewFileEntry {
     /// Corpus-relative path.
     pub corpus_path: String,
@@ -90,7 +90,7 @@ pub struct ReviewFileEntry {
 }
 
 /// A group of files requiring review together.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ReviewGroup {
     /// Human-readable label for this group (fingerprint, deploy path, tag signature).
     pub label: String,
@@ -101,7 +101,7 @@ pub struct ReviewGroup {
 }
 
 /// Cached data for the manual review modal.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ManualReviewData {
     /// All groups to review.
     pub groups: Vec<ReviewGroup>,

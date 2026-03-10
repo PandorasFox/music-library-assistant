@@ -18,11 +18,7 @@ impl App {
     pub(in crate::ui) fn start_manual_review(&mut self, kind: types::ReviewKind) {
         let data = self
             .cache
-            .query(move |db| {
-                types::ManualReviewData::load(db, kind)
-                    .ok()
-                    .unwrap_or_default()
-            })
+            .domain_query(crate::db::domain::GetManualReviewData { kind })
             .recv();
 
         // Start transaction for the review session

@@ -413,6 +413,284 @@ impl DomainQuery for GetDiscExtractionWithPaths {
 }
 
 // ============================================================================
+// Detail Queries (Wave 3: modal init loaders)
+// ============================================================================
+
+use crate::ui::corrupt_file_modal;
+use crate::ui::deploy_modal;
+use crate::ui::directory_cluster_modal;
+use crate::ui::inbox_corpus_match_modal;
+use crate::ui::manual_review_modal;
+use crate::ui::missing_directory_modal;
+use crate::ui::missing_file_modal;
+use crate::ui::shit_format_modal;
+use crate::ui::subpar_duplicate_modal;
+
+define_domain_query! {
+    /// Missing file data: restorable and non-restorable missing corpus files.
+    GetMissingFileData => missing_file_modal::MissingFileModalData, uncached, |db| {
+        missing_file_modal::MissingFileModalData::load(db).ok().unwrap_or_default()
+    }
+}
+
+define_domain_query! {
+    /// Missing directory data: directories no longer present on disk.
+    GetMissingDirectoryData => missing_directory_modal::MissingDirectoryModalData, uncached, |db| {
+        missing_directory_modal::MissingDirectoryModalData::load(db).ok().unwrap_or_default()
+    }
+}
+
+define_domain_query! {
+    /// Corrupt file data: files that failed indexing.
+    GetCorruptFileData => corrupt_file_modal::CorruptFileModalData, uncached, |db| {
+        corrupt_file_modal::CorruptFileModalData::load(db).ok().unwrap_or_default()
+    }
+}
+
+define_domain_query! {
+    /// Subpar duplicate data: lower-quality versions of existing files.
+    GetSubparDuplicateData => subpar_duplicate_modal::SubparDuplicateModalData, uncached, |db| {
+        subpar_duplicate_modal::SubparDuplicateModalData::load(db).ok().unwrap_or_default()
+    }
+}
+
+define_domain_query! {
+    /// Cross-source directory overlap clusters.
+    GetDirectoryClusterData => directory_cluster_modal::DirectoryClusterModalData, uncached, |db| {
+        directory_cluster_modal::DirectoryClusterModalData::load(db).ok().unwrap_or_default()
+    }
+}
+
+define_domain_query! {
+    /// Release overlap clusters (reuses directory cluster modal data).
+    GetReleaseOverlapData => directory_cluster_modal::DirectoryClusterModalData, uncached, |db| {
+        directory_cluster_modal::DirectoryClusterModalData::load_release_overlaps(db).ok().unwrap_or_default()
+    }
+}
+
+define_domain_query! {
+    /// Shit format file data: non-Vorbis containers needing remux/transcode.
+    GetShitFormatData => shit_format_modal::ShitFormatModalData, uncached, |db| {
+        shit_format_modal::ShitFormatModalData::load(db).ok().unwrap_or_default()
+    }
+}
+
+/// Inbox corpus match data with configurable bitrate fuzz tolerance.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GetInboxCorpusMatchData {
+    pub bitrate_fuzz_percent: f64,
+}
+
+impl DomainQuery for GetInboxCorpusMatchData {
+    type Response = inbox_corpus_match_modal::InboxCorpusMatchModalData;
+
+    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+        inbox_corpus_match_modal::InboxCorpusMatchModalData::load(db, self.bitrate_fuzz_percent)
+            .ok()
+            .unwrap_or_default()
+    }
+}
+
+/// Deploy modal data with optional config for library assignment.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GetDeployData {
+    pub config: Option<crate::config::Config>,
+}
+
+impl DomainQuery for GetDeployData {
+    type Response = deploy_modal::DeployModalData;
+
+    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+        deploy_modal::DeployModalData::load(db, self.config.as_ref())
+            .unwrap_or_default()
+    }
+}
+
+/// Manual review data for a specific review kind.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GetManualReviewData {
+    pub kind: manual_review_modal::types::ReviewKind,
+}
+
+impl DomainQuery for GetManualReviewData {
+    type Response = manual_review_modal::types::ManualReviewData;
+
+    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+        manual_review_modal::types::ManualReviewData::load(db, self.kind)
+            .ok()
+            .unwrap_or_default()
+    }
+}
+
+/// Corpus tags for a single inode (for tag editor fill-from-DB).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GetCorpusTags {
+    pub inode: i64,
+}
+
+impl DomainQuery for GetCorpusTags {
+    type Response = Vec<(String, String)>;
+
+    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+        db.get_corpus_tags(self.inode)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| (t.tag_name, t.tag_value))
+            .collect()
+    }
+}
+
+/// Packed releases by category with all packing signal data for the browser.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GetPackingBrowserData {
+    pub category_prefix: String,
+}
+
+/// All data needed to build a release packing browser view.
+#[derive(serde::Serialize)]
+pub struct PackingBrowserData {
+    pub packed: Vec<crate::meta::signals::data::PackedReleaseData>,
+    pub packing: Vec<(i64, String, crate::meta::signals::data::ReleasePackingData)>,
+    pub unfilled: Vec<crate::meta::signals::data::UnfilledReleaseSlotData>,
+    pub alternatives: Vec<crate::meta::signals::data::AlternativeReleasePackingData>,
+    pub va_overrides: Vec<crate::meta::signals::data::VariousArtistsOverrideData>,
+}
+
+impl DomainQuery for GetPackingBrowserData {
+    type Response = PackingBrowserData;
+
+    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+        PackingBrowserData {
+            packed: db.get_packed_releases_by_category(&self.category_prefix).unwrap_or_default(),
+            packing: db.get_release_packing_signal_data().unwrap_or_default(),
+            unfilled: db.get_unfilled_release_slot_signal_data().unwrap_or_default(),
+            alternatives: db.get_alternative_release_packing_data().unwrap_or_default(),
+            va_overrides: db.get_various_artists_override_data().unwrap_or_default(),
+        }
+    }
+}
+
+/// Unmatched corpus tracks filtered by unsolved category.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GetUnsolvedPackingData {
+    pub category: String,
+}
+
+impl DomainQuery for GetUnsolvedPackingData {
+    type Response = Vec<(i64, String, crate::meta::signals::data::UnmatchedCorpusTrackData)>;
+
+    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+        db.get_unmatched_corpus_track_signal_data_by_category(&self.category)
+            .unwrap_or_default()
+    }
+}
+
+// ============================================================================
+// Detail Queries (Wave 4: composite queries collapsed into single execute)
+// ============================================================================
+
+/// Audio files by inodes for a specific zone (for tag editor launch).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GetAudioFilesByInodes {
+    pub inodes: Vec<i64>,
+    pub zone: crate::db::types::Zone,
+}
+
+impl DomainQuery for GetAudioFilesByInodes {
+    type Response = Vec<crate::db::types::AudioFile>;
+
+    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+        db.get_audio_files_by_inodes(&self.inodes, self.zone)
+            .unwrap_or_default()
+    }
+}
+
+/// Missing tag resolution: collect unique inodes from MissingTag signals, return audio files.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GetMissingTagAudioFiles;
+
+impl DomainQuery for GetMissingTagAudioFiles {
+    type Response = Vec<crate::db::types::AudioFile>;
+
+    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+        use std::collections::BTreeSet;
+        let signals = db.get_missing_tag_signals().unwrap_or_default();
+        let all_inodes: Vec<i64> = signals
+            .iter()
+            .flat_map(|s| s.data.inodes.iter().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        db.get_audio_files_by_inodes(&all_inodes, crate::db::types::Zone::Corpus)
+            .unwrap_or_default()
+    }
+}
+
+/// All audio files with tags for a zone (for tag search).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GetAllAudioFilesWithTags {
+    pub zone: crate::db::types::Zone,
+    pub include_library: bool,
+}
+
+impl DomainQuery for GetAllAudioFilesWithTags {
+    type Response = Vec<crate::db::queries::files::AudioFileWithTags>;
+
+    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+        db.get_all_audio_files_with_tags(self.zone, self.include_library)
+            .unwrap_or_default()
+    }
+}
+
+/// Session edit detail: edits + resolved inode paths (for history expansion).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GetSessionEditDetail {
+    pub session_id: String,
+}
+
+/// Response for session edit detail.
+#[derive(serde::Serialize)]
+pub struct SessionEditDetail {
+    pub edits: Vec<crate::meta::views::EditRecord>,
+    pub inode_paths: std::collections::HashMap<i64, String>,
+}
+
+impl DomainQuery for GetSessionEditDetail {
+    type Response = SessionEditDetail;
+
+    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+        let edits = db.get_session_edits(&self.session_id).unwrap_or_default();
+        let inodes: Vec<i64> = edits.iter().map(|e| e.inode).collect();
+        let inode_paths = db
+            .get_file_paths_batch(crate::db::types::Zone::Corpus, &inodes)
+            .unwrap_or_default();
+        SessionEditDetail { edits, inode_paths }
+    }
+}
+
+/// Resolve current tag values for a list of (inode, field_name) pairs.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GetCurrentTagValues {
+    pub queries: Vec<(i64, String)>,
+}
+
+impl DomainQuery for GetCurrentTagValues {
+    type Response = Vec<Option<String>>;
+
+    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+        self.queries
+            .iter()
+            .map(|(inode, field_name)| {
+                let tags = db.get_corpus_tags(*inode).unwrap_or_default();
+                tags.iter()
+                    .find(|t| t.tag_name.eq_ignore_ascii_case(field_name))
+                    .map(|t| t.tag_value.clone())
+            })
+            .collect()
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -600,6 +878,161 @@ mod tests {
         assert!(result.is_empty());
     }
 
+    // -- Wave 3 modal init loaders: empty DB returns defaults --
+
+    #[test]
+    fn get_missing_file_data_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetMissingFileData.execute(&read_db);
+        assert!(result.restorable.is_empty());
+        assert!(result.non_restorable.is_empty());
+    }
+
+    #[test]
+    fn get_missing_directory_data_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetMissingDirectoryData.execute(&read_db);
+        assert!(result.directories.is_empty());
+    }
+
+    #[test]
+    fn get_corrupt_file_data_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetCorruptFileData.execute(&read_db);
+        assert!(result.files.is_empty());
+    }
+
+    #[test]
+    fn get_subpar_duplicate_data_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetSubparDuplicateData.execute(&read_db);
+        assert!(result.files.is_empty());
+    }
+
+    #[test]
+    fn get_directory_cluster_data_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetDirectoryClusterData.execute(&read_db);
+        assert!(result.clusters.is_empty());
+    }
+
+    #[test]
+    fn get_release_overlap_data_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetReleaseOverlapData.execute(&read_db);
+        assert!(result.clusters.is_empty());
+    }
+
+    #[test]
+    fn get_shit_format_data_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetShitFormatData.execute(&read_db);
+        assert!(result.lossless_files.is_empty());
+        assert!(result.lossy_files.is_empty());
+    }
+
+    #[test]
+    fn get_inbox_corpus_match_data_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetInboxCorpusMatchData { bitrate_fuzz_percent: 5.0 }.execute(&read_db);
+        assert!(result.entries.is_empty());
+    }
+
+    #[test]
+    fn get_manual_review_data_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetManualReviewData {
+            kind: manual_review_modal::types::ReviewKind::RedundantDuplicate,
+        }.execute(&read_db);
+        assert!(result.groups.is_empty());
+    }
+
+    #[test]
+    fn get_corpus_tags_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetCorpusTags { inode: 999 }.execute(&read_db);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn get_packing_browser_data_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetPackingBrowserData { category_prefix: "full_match".to_string() }.execute(&read_db);
+        assert!(result.packed.is_empty());
+        assert!(result.packing.is_empty());
+    }
+
+    #[test]
+    fn get_unsolved_packing_data_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetUnsolvedPackingData { category: "conflict".to_string() }.execute(&read_db);
+        assert!(result.is_empty());
+    }
+
+    // -- Wave 4 composite queries: empty DB returns defaults --
+
+    #[test]
+    fn get_audio_files_by_inodes_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetAudioFilesByInodes {
+            inodes: vec![1, 2, 3],
+            zone: crate::db::types::Zone::Corpus,
+        }.execute(&read_db);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn get_missing_tag_audio_files_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetMissingTagAudioFiles.execute(&read_db);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn get_all_audio_files_with_tags_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetAllAudioFilesWithTags {
+            zone: crate::db::types::Zone::Corpus,
+            include_library: false,
+        }.execute(&read_db);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn get_session_edit_detail_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetSessionEditDetail { session_id: "nonexistent".to_string() }.execute(&read_db);
+        assert!(result.edits.is_empty());
+        assert!(result.inode_paths.is_empty());
+    }
+
+    #[test]
+    fn get_current_tag_values_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetCurrentTagValues {
+            queries: vec![(999, "ARTIST".to_string())],
+        }.execute(&read_db);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].is_none());
+    }
+
     // -- Serialize contract: all responses must serialize to JSON --
 
     #[test]
@@ -632,5 +1065,26 @@ mod tests {
         serde_json::to_string(&GetTagCanonicityKeys { tag_filter: None }.execute(&read_db)).unwrap();
         serde_json::to_string(&GetInboxTagCanonicityKeys.execute(&read_db)).unwrap();
         serde_json::to_string(&GetDiscExtractionWithPaths.execute(&read_db)).unwrap();
+
+        // Modal init loaders
+        serde_json::to_string(&GetMissingFileData.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetMissingDirectoryData.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetCorruptFileData.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetSubparDuplicateData.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetDirectoryClusterData.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetReleaseOverlapData.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetShitFormatData.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetInboxCorpusMatchData { bitrate_fuzz_percent: 5.0 }.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetManualReviewData {
+            kind: manual_review_modal::types::ReviewKind::RedundantDuplicate,
+        }.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetCorpusTags { inode: 1 }.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetPackingBrowserData { category_prefix: "x".to_string() }.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetUnsolvedPackingData { category: "x".to_string() }.execute(&read_db)).unwrap();
+
+        // Composite queries
+        serde_json::to_string(&GetMissingTagAudioFiles.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetSessionEditDetail { session_id: "x".to_string() }.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetCurrentTagValues { queries: vec![] }.execute(&read_db)).unwrap();
     }
 }

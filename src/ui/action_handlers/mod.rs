@@ -253,7 +253,7 @@ impl App {
         }
         let audio_files = self
             .cache
-            .query(move |db| db.get_audio_files_by_inodes(&inodes, zone).unwrap_or_default())
+            .domain_query(crate::db::domain::GetAudioFilesByInodes { inodes, zone })
             .recv();
         if !audio_files.is_empty() {
             self.open_embedded_tag_editor(mode, audio_files, key, label);
@@ -605,25 +605,9 @@ impl App {
     /// Loads all MissingTag signals, collects unique inodes, and opens
     /// the bulk tag editor so the operator can fill in missing tags.
     fn start_missing_tag_resolution(&mut self) {
-        use crate::db::types::Zone;
-        use std::collections::BTreeSet;
-
         let audio_files = self
             .cache
-            .query(|db| {
-                let signals = db.get_missing_tag_signals().unwrap_or_default();
-
-                // Collect all unique inodes across all signal groups
-                let all_inodes: Vec<i64> = signals
-                    .iter()
-                    .flat_map(|s| s.data.inodes.iter().copied())
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect();
-
-                db.get_audio_files_by_inodes(&all_inodes, Zone::Corpus)
-                    .unwrap_or_default()
-            })
+            .domain_query(crate::db::domain::GetMissingTagAudioFiles)
             .recv();
 
         if audio_files.is_empty() {
@@ -1015,9 +999,9 @@ impl App {
                 if let ActiveView::TagSearch(ref mut search) = self.view {
                     let all_files = self
                         .cache
-                        .query(|db| {
-                            db.get_all_audio_files_with_tags(crate::db::types::Zone::Corpus, false)
-                                .unwrap_or_default()
+                        .domain_query(crate::db::domain::GetAllAudioFilesWithTags {
+                            zone: crate::db::types::Zone::Corpus,
+                            include_library: false,
                         })
                         .recv();
                     search.execute_search(all_files);
@@ -1444,13 +1428,7 @@ impl App {
                 Some(inode) => {
                     let tag_pairs = self
                         .cache
-                        .query(move |db| {
-                            db.get_corpus_tags(inode)
-                                .unwrap_or_default()
-                                .into_iter()
-                                .map(|t| (t.tag_name, t.tag_value))
-                                .collect::<Vec<(String, String)>>()
-                        })
+                        .domain_query(crate::db::domain::GetCorpusTags { inode })
                         .recv();
 
                     if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {

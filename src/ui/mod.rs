@@ -345,7 +345,7 @@ impl App {
             }
             ActiveView::ExitConfirm(state) => {
                 let a = match action {
-                    InputAction::FocusLeft | InputAction::FocusRight => {
+                    InputAction::NavLeft | InputAction::NavRight | InputAction::FocusLeft | InputAction::FocusRight => {
                         state.selected_no = !state.selected_no;
                         ExitConfirmAction::None
                     }
@@ -589,9 +589,8 @@ impl App {
         if needs_action {
             let data = self
                 .cache
-                .query(|db| {
-                    let config = crate::config::load_config().ok();
-                    deploy_modal::DeployModalData::load(db, config.as_ref()).unwrap_or_default()
+                .domain_query(crate::db::domain::GetDeployData {
+                    config: crate::config::load_config().ok(),
                 })
                 .recv();
             let preview = deploy_modal::DeploymentPreviewState::new(data);

@@ -210,10 +210,19 @@ This is incremental work. The TUI continues functioning throughout. The trait-dr
 
 3. ~~**Extract `define_domain_query!` macro.**~~ **DONE.** `macro_rules!` macro in `src/db/domain.rs` handles simple/body × cached/uncached forms. All 6 summary queries use the macro.
 
-4. **Convert closure callsites to detail query structs.** **IN PROGRESS.** Each `cache.query(|db| ...)` becomes a named struct with fields for its parameters. `CacheHandle::domain_query()` method added as the typed entry point. 13 callsites converted across OOB resolution, moved files, packing knots/paths, compound splits, tag canonicity keys, missing album singles, and edit history export. Remaining ~22 callsites fall into three categories:
-   - **Modal init loaders** (5 via `start_resolution!` macro + 4 parameterized): return non-`Serialize` UI types containing `Mutation` variants. Need either `Serialize` cascade on modal types or a separate non-serializable query trait.
-   - **Composite two-step queries** (~8): signal load + inode/path resolution. Some (like disc extraction) have `GetDiscExtractionWithPaths` domain query ready but need modal code refactoring to consume the enriched type.
-   - **Stateful loaders** (~5): `IntakeConfirmationState::gather_*`, `InboxOrganizeState::load_*`, `CompoundSplitDataV2::from_compound_group`. Return live UI state objects, not pure data.
+4. **Convert closure callsites to detail query structs.** **MOSTLY DONE.** Each `cache.query(|db| ...)` becomes a named struct with fields for its parameters. `CacheHandle::domain_query()` method added as the typed entry point. 38 domain query types defined, 36 tests passing. Callsite conversions complete:
+   - **Wave 1** (13 callsites): OOB sync/bucketed/moved files, packing knots/paths, compound splits, tag canonicity keys, missing album singles, edit history export
+   - **Wave 2** (signal key queries): InconsistentAlbumArtist keys, TagCanonicity keys, InboxTagCanonicity keys, DiscExtraction with paths
+   - **Wave 3** (modal init loaders — 14 callsites): `start_resolution!` macro (5 uses), ShitFormat, ReleaseOverlap, InboxCorpusMatch, Deploy, ManualReview, CorpusTags, PackingBrowser, UnsolvedPacking
+   - **Wave 4** (composite queries — 5 callsites): MissingTagAudioFiles, AudioFilesByInodes (2 uses), SessionEditDetail, CurrentTagValues, AllAudioFilesWithTags
+   - `Serialize` added to `FileEntry`, `AudioInfo`, `AudioFile`, and ~30 modal/view types
+
+   **Remaining ~17 closures** — all require design work beyond mechanical conversion:
+   - **Stateful loaders** (6): `IntakeConfirmationState::gather_*` (3), `InboxOrganizeState::load_*` (1), `CompoundSplitDataV2::from_compound_group` (2 — filesystem I/O: read tags from disk)
+   - **Disk-touching queries** (2): `compute_tag_diff` (compares DB tags vs on-disk tags)
+   - **Complex composites** (4): tag editor ops (2, file resolution + tag loading), MusicBrainz recording detail (1, JSON parsing), tag search file matching (1, full corpus scan + tag resolution)
+   - **Tag canonicity signal dispatch** (1): dispatches to 3 different signal kinds each building modal data with secondary DB reads
+   - **Startup/tick** (2): startup intake gather, tick-based polling
 
 5. **Eliminate `get_audio_files_by_inodes` as a client-facing query.** It remains as an internal helper within `execute` implementations, but no client should ever call it directly.
 

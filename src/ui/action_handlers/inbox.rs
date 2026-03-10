@@ -103,10 +103,8 @@ impl App {
             .inbox_bitrate_fuzz_percent;
         let data = self
             .cache
-            .query(move |db| {
-                inbox_corpus_match_modal::InboxCorpusMatchModalData::load(db, fuzz)
-                    .ok()
-                    .unwrap_or_default()
+            .domain_query(crate::db::domain::GetInboxCorpusMatchData {
+                bitrate_fuzz_percent: fuzz,
             })
             .recv();
 

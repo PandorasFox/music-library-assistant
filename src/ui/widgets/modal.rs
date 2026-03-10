@@ -62,7 +62,7 @@ impl Default for ModalStyle {
     fn default() -> Self {
         Self {
             border_color: Color::Yellow,
-            background: Color::Black,
+            background: Color::Reset,
             title_style: Style::default().fg(Color::Yellow),
         }
     }
@@ -72,7 +72,7 @@ impl ModalStyle {
     pub fn warning() -> Self {
         Self {
             border_color: Color::Yellow,
-            background: Color::Black,
+            background: Color::Reset,
             title_style: Style::default().fg(Color::Yellow),
         }
     }
@@ -80,7 +80,7 @@ impl ModalStyle {
     pub fn info() -> Self {
         Self {
             border_color: Color::Cyan,
-            background: Color::Black,
+            background: Color::Reset,
             title_style: Style::default().fg(Color::Cyan),
         }
     }

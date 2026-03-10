@@ -253,29 +253,20 @@ impl App {
                     | PackingCategory::UnsolvedNoRelease
                     | PackingCategory::UnsolvedNoMatch => unreachable!(),
                 };
-                let prefix_owned = prefix.to_string();
-
                 let result = self
                     .cache
-                    .query(move |db| {
-                        let packed = db
-                            .get_packed_releases_by_category(&prefix_owned)
-                            .unwrap_or_default();
-                        let packing = db.get_release_packing_signal_data().unwrap_or_default();
-                        let unfilled = db
-                            .get_unfilled_release_slot_signal_data()
-                            .unwrap_or_default();
-                        let alternatives = db
-                            .get_alternative_release_packing_data()
-                            .unwrap_or_default();
-                        let va_overrides = db
-                            .get_various_artists_override_data()
-                            .unwrap_or_default();
-                        (packed, packing, unfilled, alternatives, va_overrides)
+                    .domain_query(crate::db::domain::GetPackingBrowserData {
+                        category_prefix: prefix.to_string(),
                     })
                     .recv();
 
-                let (packed, packing, unfilled, alternatives, va_overrides) = result;
+                let crate::db::domain::PackingBrowserData {
+                    packed,
+                    packing,
+                    unfilled,
+                    alternatives,
+                    va_overrides,
+                } = result;
 
                 if packed.is_empty() {
                     self.status_message = Some("No releases in this category".to_string());
@@ -301,12 +292,10 @@ impl App {
                     PackingCategory::UnsolvedNoMatch => UnsolvedCategory::NoMatch.as_str(),
                     _ => unreachable!(),
                 };
-                let cat_owned = cat_str.to_string();
                 let filtered = self
                     .cache
-                    .query(move |db| {
-                        db.get_unmatched_corpus_track_signal_data_by_category(&cat_owned)
-                            .unwrap_or_default()
+                    .domain_query(crate::db::domain::GetUnsolvedPackingData {
+                        category: cat_str.to_string(),
                     })
                     .recv();
 

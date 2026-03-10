@@ -16,7 +16,7 @@ use crate::meta::mutations::indexing::DropFromIndexMutation;
 ///
 /// The same inode exists in the files table (source='library'), meaning we can
 /// hard-link from library back to corpus.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct RestorableMissingFile {
     /// Corpus path where file should exist
     pub corpus_path: String,
@@ -29,7 +29,7 @@ pub struct RestorableMissingFile {
 /// A missing corpus file that cannot be restored.
 ///
 /// The inode doesn't exist in any library - data is gone.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct NonRestorableMissingFile {
     /// Corpus path where file was indexed
     pub corpus_path: String,
@@ -40,7 +40,7 @@ pub struct NonRestorableMissingFile {
 /// Cached data for the missing file resolution modal.
 ///
 /// Loaded once when the modal opens. All renders use this cached data.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct MissingFileModalData {
     /// Files that can be restored (inode exists in library)
     pub restorable: Vec<RestorableMissingFile>,

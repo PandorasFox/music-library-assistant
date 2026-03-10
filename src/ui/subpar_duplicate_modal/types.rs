@@ -15,7 +15,7 @@ use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::meta::mutations::Mutation;
 
 /// A subpar duplicate file ready for stashing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SubparFileEntry {
     /// Corpus path (the subpar file)
     pub corpus_path: String,
@@ -32,7 +32,7 @@ pub struct SubparFileEntry {
 /// Cached data for the subpar duplicate resolution modal.
 ///
 /// Loaded once when the modal opens. All renders use this cached data.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct SubparDuplicateModalData {
     /// Files with SubparDuplicate signals
     pub files: Vec<SubparFileEntry>,

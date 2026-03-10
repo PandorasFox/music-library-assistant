@@ -56,7 +56,7 @@ impl std::fmt::Display for Zone {
 ///
 /// Represents a single path (file or directory) in one of the source locations.
 /// Multiple paths can share the same inode (hard links across corpus + library).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FileEntry {
     /// The inode number (content identity)
     pub inode: i64,
@@ -76,7 +76,7 @@ pub struct FileEntry {
 ///
 /// Only audio file inodes have entries in audio_info.
 /// Directories do not have audio_info records.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AudioInfo {
     pub _inode: i64,
     /// Audio format (flac, mp3, opus, ogg, etc.)
@@ -95,7 +95,7 @@ pub struct AudioInfo {
 /// Combined view of a file entry with its audio info.
 ///
 /// Used for audio files that have both a files row and audio_info row.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AudioFile {
     pub entry: FileEntry,
     pub audio: AudioInfo,

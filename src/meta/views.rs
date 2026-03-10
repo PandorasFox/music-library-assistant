@@ -269,7 +269,7 @@ pub struct InboxOverviewData {
 // ============================================================================
 
 /// A file with deploy info (for healthy/new files).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DeploySignalFile {
     /// Target library name (e.g., "music", "soundtracks")
     pub library_name: String,
@@ -280,7 +280,7 @@ pub struct DeploySignalFile {
 }
 
 /// A stale library file (deployed path differs from expected).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct StaleSignalFile {
     /// Library this file belongs to (e.g., "music")
     pub library_name: String,
@@ -291,7 +291,7 @@ pub struct StaleSignalFile {
 }
 
 /// A leftover file (in library but no corpus backing).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct LeftoverSignalFile {
     /// Library this file belongs to (e.g., "music")
     pub library_name: String,
@@ -358,7 +358,7 @@ impl DeploySignalFile {
 }
 
 /// A deploy conflict group (multiple corpus files → same library path).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ConflictGroup {
     /// The library path they all would deploy to
     pub deploy_path: String,
@@ -367,7 +367,7 @@ pub struct ConflictGroup {
 }
 
 /// A sidecar deploy conflict group (multiple corpus images → same library sidecar path).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SidecarConflictGroup {
     /// The library-relative deploy path they all target (e.g. "Artist/Album/cover.jpg")
     pub deploy_path: String,
@@ -513,7 +513,7 @@ pub struct BucketedOobFile {
 // ============================================================================
 
 /// Classification of an inbox file relative to its corpus matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum MatchClassification {
     /// Inbox copy is better quality than all corpus matches
     Better,
@@ -524,7 +524,7 @@ pub enum MatchClassification {
 }
 
 /// Detail about a single corpus file matching an inbox file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CorpusMatchDetail {
     pub _corpus_inode: i64,
     pub corpus_path: String,
@@ -533,7 +533,7 @@ pub struct CorpusMatchDetail {
 }
 
 /// An inbox file with corpus fingerprint matches and quality classification.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct InboxCorpusMatchEntry {
     pub inbox_inode: i64,
     pub inbox_path: String,

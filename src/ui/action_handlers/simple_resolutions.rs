@@ -12,12 +12,12 @@ use crate::ui::{
     subpar_duplicate_modal, ActiveView,
 };
 
-/// Start a simple resolution modal: load data, create preview, set view.
+/// Start a simple resolution modal: load data via domain query, create preview, set view.
 macro_rules! start_resolution {
-    ($self:ident, $modal:path, $preview:path, $view:ident) => {{
+    ($self:ident, $query:expr, $preview:path, $view:ident) => {{
         let data = $self
             .cache
-            .query(|db| <$modal>::load(db).ok().unwrap_or_default())
+            .domain_query($query)
             .recv();
         let preview = <$preview>::new(data);
         $self.view = ActiveView::$view(preview);
@@ -41,7 +41,7 @@ impl App {
 
     pub(in crate::ui) fn start_missing_file_resolution(&mut self) {
         start_resolution!(self,
-            missing_file_modal::MissingFileModalData,
+            crate::db::domain::GetMissingFileData,
             missing_file_modal::MissingFilePreviewState,
             MissingFileResolution
         );
@@ -76,7 +76,7 @@ impl App {
 
     pub(in crate::ui) fn start_missing_directory_resolution(&mut self) {
         start_resolution!(self,
-            missing_directory_modal::MissingDirectoryModalData,
+            crate::db::domain::GetMissingDirectoryData,
             missing_directory_modal::MissingDirectoryPreviewState,
             MissingDirectoryResolution
         );
@@ -106,7 +106,7 @@ impl App {
 
     pub(in crate::ui) fn start_corrupt_file_resolution(&mut self) {
         start_resolution!(self,
-            corrupt_file_modal::CorruptFileModalData,
+            crate::db::domain::GetCorruptFileData,
             corrupt_file_modal::CorruptFilePreviewState,
             CorruptFileResolution
         );
@@ -137,11 +137,7 @@ impl App {
     pub(in crate::ui) fn start_shit_format_resolution(&mut self) {
         let mut data = self
             .cache
-            .query(|db| {
-                shit_format_modal::ShitFormatModalData::load(db)
-                    .ok()
-                    .unwrap_or_default()
-            })
+            .domain_query(crate::db::domain::GetShitFormatData)
             .recv();
         data.lossy_to_flac = self.config().opinions.lossy_shit_formats_to_flac;
         let preview = shit_format_modal::ShitFormatPreviewState::new(data);
@@ -196,7 +192,7 @@ impl App {
 
     pub(in crate::ui) fn start_subpar_duplicate_resolution(&mut self) {
         start_resolution!(self,
-            subpar_duplicate_modal::SubparDuplicateModalData,
+            crate::db::domain::GetSubparDuplicateData,
             subpar_duplicate_modal::SubparDuplicatePreviewState,
             SubparDuplicateResolution
         );
@@ -226,7 +222,7 @@ impl App {
 
     pub(in crate::ui) fn start_directory_overlap_resolution(&mut self) {
         start_resolution!(self,
-            super::super::directory_cluster_modal::DirectoryClusterModalData,
+            crate::db::domain::GetDirectoryClusterData,
             super::super::directory_cluster_modal::DirectoryClusterPreviewState,
             DirectoryClusterResolution
         );
@@ -278,12 +274,9 @@ impl App {
                     if !inodes.is_empty() {
                         let audio_files = self
                             .cache
-                            .query(move |db| {
-                                db.get_audio_files_by_inodes(
-                                    &inodes,
-                                    crate::db::types::Zone::Corpus,
-                                )
-                                .unwrap_or_default()
+                            .domain_query(crate::db::domain::GetAudioFilesByInodes {
+                                inodes,
+                                zone: crate::db::types::Zone::Corpus,
                             })
                             .recv();
                         if !audio_files.is_empty() {
@@ -403,11 +396,7 @@ impl App {
         use super::super::directory_cluster_modal;
         let data = self
             .cache
-            .query(|db| {
-                directory_cluster_modal::DirectoryClusterModalData::load_release_overlaps(db)
-                    .ok()
-                    .unwrap_or_default()
-            })
+            .domain_query(crate::db::domain::GetReleaseOverlapData)
             .recv();
         let preview = directory_cluster_modal::DirectoryClusterPreviewState::new(data);
         self.view = ActiveView::DirectoryClusterResolution(preview);

@@ -106,24 +106,15 @@ impl App {
 
     /// Expand a session: one-shot query for edits + inode paths.
     fn expand_history_session(&mut self, session_id: String) {
-        let sid = session_id.clone();
         let result = self
             .cache
-            .query(move |db| {
-                let edits = db.get_session_edits(&sid).unwrap_or_default();
-                let inodes: Vec<i64> = edits.iter().map(|e| e.inode).collect();
-
-                // Resolve inode → path for display (batch query)
-                let inode_paths = db
-                    .get_file_paths_batch(crate::db::types::Zone::Corpus, &inodes)
-                    .unwrap_or_default();
-
-                (edits, inode_paths)
+            .domain_query(crate::db::domain::GetSessionEditDetail {
+                session_id: session_id.clone(),
             })
             .recv();
 
         if let ActiveView::History(ref mut state) = self.view {
-            state.set_detail(session_id, result.0, result.1);
+            state.set_detail(session_id, result.edits, result.inode_paths);
         }
     }
 
@@ -155,22 +146,13 @@ impl App {
         }
 
         // Query current tag values for conflict detection
-        let edits_for_query = selected_edits.clone();
+        let queries: Vec<(i64, String)> = selected_edits
+            .iter()
+            .map(|e| (e.inode, e.field_name.clone()))
+            .collect();
         let current_values = self
             .cache
-            .query(move |db| {
-                let mut results = Vec::new();
-                for edit in &edits_for_query {
-                    // Look up the current value for this (inode, field_name)
-                    let tags = db.get_corpus_tags(edit.inode).unwrap_or_default();
-                    let current = tags
-                        .iter()
-                        .find(|t| t.tag_name.eq_ignore_ascii_case(&edit.field_name))
-                        .map(|t| t.tag_value.clone());
-                    results.push(current);
-                }
-                results
-            })
+            .domain_query(crate::db::domain::GetCurrentTagValues { queries })
             .recv();
 
         // Classify edits as clean reversals or conflicts

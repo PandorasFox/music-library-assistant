@@ -1,15 +1,12 @@
 //! Inbox View Rendering
 //!
-//! Renders the inbox view as an aggregate signal overview:
-//! - Corpus matches (magenta) — count of fingerprint matches
-//! - Unindexed (yellow) — count of files pending indexing
-//! - Files in inbox (gray) — total file count
+//! Renders the inbox view as a StandardList.
+//! Bucket entries show count + label with color coding.
 
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -17,92 +14,68 @@ use super::{InboxInsightAction, InboxViewState};
 
 /// Render the full inbox view (titlebar is rendered by render_app).
 pub fn render_inbox_view(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
-    render_inbox_content(f, area, state);
+    let busy = state.busy;
+
+    state.list.render(
+        f,
+        area,
+        &state.entries,
+        |idx, is_cursor, _is_selected, _width| {
+            render_item(&state.entries, idx, is_cursor, busy)
+        },
+        "Inbox Overview",
+        true, // always focused (only pane)
+    );
 }
 
-fn render_inbox_content(f: &mut Frame, area: Rect, state: &mut InboxViewState) {
-    let busy = state.busy;
-    let border_color = if busy { Color::DarkGray } else { Color::Gray };
+/// Render a single inbox bucket entry as a styled Line.
+fn render_item(
+    entries: &[super::InboxBucketEntry],
+    idx: usize,
+    is_cursor: bool,
+    busy: bool,
+) -> Line<'static> {
+    let entry = &entries[idx];
+    let count_str = format!("{:>6}", entry.count);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Inbox Overview ")
-        .border_style(Style::default().fg(border_color));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let (entry_color, label_style, arrow) = if busy {
+        (Color::DarkGray, Style::default().fg(Color::DarkGray), " ")
+    } else {
+        (
+            entry.color,
+            if is_cursor {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            },
+            if is_cursor { "▸" } else { " " },
+        )
+    };
 
-    // Populate click targets
-    state.click_targets.clear();
-    state.click_targets.set_list_area(inner);
-    for (i, _) in state.entries.iter().enumerate() {
-        if i >= inner.height as usize {
-            break;
+    let action_indicator = if busy {
+        ""
+    } else {
+        match entry.action {
+            InboxInsightAction::LaunchIntake
+            | InboxInsightAction::LaunchCorpusMatchResolution
+            | InboxInsightAction::LaunchInboxTagCanonicity
+            | InboxInsightAction::LaunchOrganize
+            | InboxInsightAction::LaunchInboxCompoundSplit => " \u{23CE}",
+            InboxInsightAction::Informational => "",
         }
-        state
-            .click_targets
-            .add_row(i.to_string(), inner.y + i as u16);
-    }
+    };
 
-    if state.entries.is_empty() {
-        let empty = Paragraph::new("No files in inbox").style(Style::default().fg(Color::DarkGray));
-        f.render_widget(empty, inner);
-        return;
-    }
-
-    let items: Vec<ListItem> = state
-        .entries
-        .iter()
-        .enumerate()
-        .map(|(i, entry)| {
-            let is_selected = i == state.selected;
-
-            let count_str = format!("{:>6}", entry.count);
-
-            let (entry_color, label_style, arrow) = if busy {
-                (Color::DarkGray, Style::default().fg(Color::DarkGray), " ")
-            } else {
-                (
-                    entry.color,
-                    if is_selected {
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Gray)
-                    },
-                    if is_selected { "▸" } else { " " },
-                )
-            };
-
-            let action_indicator = if busy {
-                ""
-            } else {
-                match entry.action {
-                    InboxInsightAction::LaunchIntake
-                    | InboxInsightAction::LaunchCorpusMatchResolution
-                    | InboxInsightAction::LaunchInboxTagCanonicity
-                    | InboxInsightAction::LaunchOrganize
-                    | InboxInsightAction::LaunchInboxCompoundSplit => " \u{23CE}",
-                    InboxInsightAction::Informational => "",
-                }
-            };
-
-            let line = Line::from(vec![
-                Span::styled(format!("  {} ", arrow), Style::default().fg(entry_color)),
-                Span::styled(
-                    format!("{} ", count_str),
-                    Style::default()
-                        .fg(entry_color)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(&entry.label, label_style),
-                Span::styled(action_indicator, Style::default().fg(Color::DarkGray)),
-            ]);
-
-            ListItem::new(line)
-        })
-        .collect();
-
-    let list = List::new(items);
-    f.render_widget(list, inner);
+    Line::from(vec![
+        Span::styled(format!("  {} ", arrow), Style::default().fg(entry_color)),
+        Span::styled(
+            format!("{} ", count_str),
+            Style::default()
+                .fg(entry_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(entry.label.clone(), label_style),
+        Span::styled(action_indicator, Style::default().fg(Color::DarkGray)),
+    ])
 }

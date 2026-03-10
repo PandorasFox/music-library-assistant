@@ -84,6 +84,7 @@ impl Default for StandardListConfig {
 }
 
 /// Unified list state machine.
+#[derive(Debug)]
 pub struct StandardListState {
     pub cursor: usize,
     pub scroll: usize,
@@ -502,7 +503,6 @@ impl StandardListState {
     }
 
     /// Reset state for new items (e.g., when list content changes).
-    #[cfg(test)]
     pub fn reset(&mut self) {
         self.cursor = 0;
         self.scroll = 0;

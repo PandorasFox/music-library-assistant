@@ -21,6 +21,7 @@ use ratatui::Frame;
 
 use crate::ui::helpers::render_pane;
 use crate::ui::input::InputAction;
+use crate::ui::widgets::standard_list::ListInputResult;
 
 // TODO: Re-enable when corpus::deploy is available
 // use crate::corpus::deploy::compute_deployment_path_with_tags;
@@ -147,50 +148,34 @@ impl TagSearchState {
     }
 
     fn handle_results_mode_input(&mut self, action: &InputAction) -> TagSearchAction {
-        match action {
-            // Tab/Shift-Tab for lateral view cycling
-            InputAction::CycleNext => TagSearchAction::CycleNext,
-            InputAction::CyclePrev => TagSearchAction::CyclePrev,
+        // Handle 'b'/'B' before StandardList (it would treat Char as Unhandled anyway)
+        if matches!(action, InputAction::Char('b' | 'B')) {
+            let audio_files = self.all_result_audio_files();
+            if !audio_files.is_empty() {
+                self.modal = Some(types::TagSearchModal::GatheringTags);
+                self.pending_bulk_edit = Some(audio_files);
+            }
+            return TagSearchAction::None;
+        }
 
-            // Escape returns to query builder
-            InputAction::Cancel => {
-                self.mode = TagSearchMode::QueryBuilder;
+        let result = self.results_list.handle_input(action, &self.results);
+
+        match result {
+            ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
                 TagSearchAction::None
             }
-
-            // Navigate results
-            InputAction::NavUp => {
-                self.results_select_prev();
-                TagSearchAction::None
+            ListInputResult::Confirm(audio_file) => {
+                TagSearchAction::EditAudioFile(audio_file)
             }
-            InputAction::NavDown => {
-                self.results_select_next();
-                TagSearchAction::None
-            }
-
-            // B = bulk edit all results (show gathering modal first)
-            InputAction::Char('b' | 'B') => {
-                let audio_files = self.all_result_audio_files();
-                if !audio_files.is_empty() {
-                    // Show gathering modal and store pending audio files
-                    self.modal = Some(types::TagSearchModal::GatheringTags);
-                    self.pending_bulk_edit = Some(audio_files);
-                    TagSearchAction::None
-                } else {
+            ListInputResult::Unhandled => match action {
+                InputAction::Cancel => {
+                    self.mode = TagSearchMode::QueryBuilder;
                     TagSearchAction::None
                 }
-            }
-
-            // Enter = edit single audio file
-            InputAction::Confirm => {
-                if let Some(aft) = self.selected_result() {
-                    TagSearchAction::EditAudioFile(aft.audio_file.clone())
-                } else {
-                    TagSearchAction::None
-                }
-            }
-
-            _ => TagSearchAction::None,
+                InputAction::CycleNext => TagSearchAction::CycleNext,
+                InputAction::CyclePrev => TagSearchAction::CyclePrev,
+                _ => TagSearchAction::None,
+            },
         }
     }
 
@@ -498,51 +483,26 @@ impl TagSearchState {
 
     fn render_results_list(&mut self, f: &mut Frame, area: Rect) {
         let title = format!("Results ({} tracks)", self.results.len());
-        let block = Block::default().borders(Borders::ALL).title(title);
-        let inner = render_pane(f, area, block);
 
-        // Render track list sorted by path
-        // TODO: Re-enable deployment path display when corpus::deploy is available
-        let visible_height = inner.height as usize;
-        let scroll = self.results_scroll;
-
-        // Populate click targets
-        self.click_targets.clear();
-        self.click_targets.set_list_area(inner);
-        for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-            if entry_idx >= self.results.len() {
-                break;
-            }
-            self.click_targets
-                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-        }
-
-        let lines: Vec<Line> = self
-            .results
-            .iter()
-            .enumerate()
-            .skip(scroll)
-            .take(visible_height)
-            .map(|(idx, twt)| {
-                // Use corpus path directly (deployment path display disabled)
-                let path_str = twt.audio_file.path();
-                let is_selected = idx == self.results_selected;
-
-                let indicator = if is_selected { "▶ " } else { "  " };
-                let style = if is_selected {
+        self.results_list.render(
+            f,
+            area,
+            &self.results,
+            |idx, is_cursor, _is_selected, _width| {
+                let path_str = self.results[idx].audio_file.path();
+                let indicator = if is_cursor { "▶ " } else { "  " };
+                let style = if is_cursor {
                     Style::default()
-                        .bg(Color::DarkGray)
                         .fg(Color::White)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
-
                 Line::styled(format!("{}{}", indicator, path_str), style)
-            })
-            .collect();
-
-        f.render_widget(Paragraph::new(lines), inner);
+            },
+            &title,
+            true,
+        );
     }
 
     fn render_results_info(&self, f: &mut Frame, area: Rect) {

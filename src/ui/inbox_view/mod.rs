@@ -17,7 +17,11 @@
 
 mod render;
 
+use std::collections::BTreeSet;
+
 use crate::ui::input::InputAction;
+use crate::ui::widgets::standard_list::{ListEntry, ListInputResult, StandardListConfig, StandardListState};
+use crate::ui::widgets::wizard::{WizardItem, WizardOffer};
 use ratatui::style::Color;
 
 use crate::meta::views::InboxOverviewData;
@@ -73,38 +77,46 @@ pub struct InboxBucketEntry {
     pub action: InboxInsightAction,
 }
 
+impl WizardItem for InboxBucketEntry {
+    fn wizard(&self, _width: u16) -> Option<WizardOffer> {
+        None
+    }
+}
+
+impl ListEntry for InboxBucketEntry {
+    type Action = InboxInsightAction;
+
+    fn on_confirm(&self, _selected: &BTreeSet<usize>) -> Option<InboxInsightAction> {
+        match self.action {
+            InboxInsightAction::Informational => None,
+            other => Some(other),
+        }
+    }
+}
+
 /// State for the inbox view.
 #[derive(Debug)]
 pub struct InboxViewState {
     /// Aggregate bucket entries (not individual files)
     pub entries: Vec<InboxBucketEntry>,
-    /// Currently selected index
-    pub selected: usize,
+    /// StandardList state machine
+    pub list: StandardListState,
     /// True when the Witch has pending work (dims UI, blocks actions).
     pub busy: bool,
-    /// Click targets for list items (set during render).
-    pub click_targets: crate::ui::widgets::ListClickTargets,
 }
 
 impl InboxViewState {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
-            selected: 0,
+            list: StandardListState::new(StandardListConfig::default()),
             busy: false,
-            click_targets: Default::default(),
         }
     }
 
     /// Handle mouse click for cursor selection.
     pub fn handle_click(&mut self, x: u16, y: u16) {
-        if let Some(id) = self.click_targets.hit_test(x, y) {
-            if let Ok(idx) = id.parse::<usize>() {
-                if idx < self.entries.len() {
-                    self.selected = idx;
-                }
-            }
-        }
+        self.list.handle_click(x, y, &self.entries);
     }
 
     /// Update entries from cached overview data.
@@ -177,71 +189,47 @@ impl InboxViewState {
         }
 
         self.entries = entries;
-        // Clamp selection
-        if !self.entries.is_empty() && self.selected >= self.entries.len() {
-            self.selected = self.entries.len() - 1;
-        }
+        self.list.clamp_cursor(&self.entries);
     }
 
     /// Get the currently selected entry, if any.
     pub fn selected_entry(&self) -> Option<&InboxBucketEntry> {
-        self.entries.get(self.selected)
+        self.entries.get(self.list.cursor)
     }
 
     /// Handle a semantic input action and return the resulting action.
     pub fn handle_input(&mut self, action: &InputAction) -> InboxAction {
-        match action {
-            InputAction::Cancel => InboxAction::RequestQuit,
-            InputAction::CycleNext => InboxAction::CycleNext,
-            InputAction::CyclePrev => InboxAction::CyclePrev,
+        let result = self.list.handle_input(action, &self.entries);
 
-            InputAction::Confirm => {
+        match result {
+            ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
+                InboxAction::None
+            }
+            ListInputResult::Confirm(insight_action) => {
                 if self.busy {
                     return InboxAction::None;
                 }
-                if let Some(entry) = self.selected_entry() {
-                    match entry.action {
-                        InboxInsightAction::LaunchIntake => InboxAction::LaunchIntake,
-                        InboxInsightAction::LaunchCorpusMatchResolution => {
-                            InboxAction::LaunchCorpusMatchResolution
-                        }
-                        InboxInsightAction::LaunchInboxTagCanonicity => {
-                            InboxAction::LaunchInboxTagCanonicity
-                        }
-                        InboxInsightAction::LaunchOrganize => InboxAction::LaunchOrganize,
-                        InboxInsightAction::LaunchInboxCompoundSplit => {
-                            InboxAction::LaunchInboxCompoundSplit
-                        }
-                        InboxInsightAction::Informational => InboxAction::None,
+                match insight_action {
+                    InboxInsightAction::LaunchIntake => InboxAction::LaunchIntake,
+                    InboxInsightAction::LaunchCorpusMatchResolution => {
+                        InboxAction::LaunchCorpusMatchResolution
                     }
-                } else {
-                    InboxAction::None
+                    InboxInsightAction::LaunchInboxTagCanonicity => {
+                        InboxAction::LaunchInboxTagCanonicity
+                    }
+                    InboxInsightAction::LaunchOrganize => InboxAction::LaunchOrganize,
+                    InboxInsightAction::LaunchInboxCompoundSplit => {
+                        InboxAction::LaunchInboxCompoundSplit
+                    }
+                    InboxInsightAction::Informational => InboxAction::None,
                 }
             }
-
-            InputAction::NavUp => {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                }
-                InboxAction::None
-            }
-            InputAction::NavDown => {
-                if !self.entries.is_empty() && self.selected < self.entries.len() - 1 {
-                    self.selected += 1;
-                }
-                InboxAction::None
-            }
-            InputAction::Home => {
-                self.selected = 0;
-                InboxAction::None
-            }
-            InputAction::End => {
-                if !self.entries.is_empty() {
-                    self.selected = self.entries.len() - 1;
-                }
-                InboxAction::None
-            }
-            _ => InboxAction::None,
+            ListInputResult::Unhandled => match action {
+                InputAction::Cancel => InboxAction::RequestQuit,
+                InputAction::CycleNext => InboxAction::CycleNext,
+                InputAction::CyclePrev => InboxAction::CyclePrev,
+                _ => InboxAction::None,
+            },
         }
     }
 }

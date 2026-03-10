@@ -2,11 +2,11 @@
 //!
 //! State management for the tag search query builder and results.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::db::types::AudioFile;
-// TODO: Re-enable when corpus::deploy is available
-// use crate::corpus::deploy::compute_deployment_path_with_tags;
+use crate::ui::widgets::standard_list::{ListEntry, StandardListConfig, StandardListState};
+use crate::ui::widgets::wizard::{WizardItem, WizardOffer};
 
 use super::types::{
     ConditionType, LogicalOperator, SearchCondition, TagSearchModal, TagSearchMode, SEARCHABLE_TAGS,
@@ -28,6 +28,20 @@ impl AudioFileWithTags {
     }
 }
 
+impl WizardItem for AudioFileWithTags {
+    fn wizard(&self, _width: u16) -> Option<WizardOffer> {
+        None
+    }
+}
+
+impl ListEntry for AudioFileWithTags {
+    type Action = AudioFile;
+
+    fn on_confirm(&self, _selected: &BTreeSet<usize>) -> Option<AudioFile> {
+        Some(self.audio_file.clone())
+    }
+}
+
 /// State for the tag search view.
 #[derive(Debug)]
 pub struct TagSearchState {
@@ -46,20 +60,14 @@ pub struct TagSearchState {
     /// Search results (audio files with tags matching query).
     pub results: Vec<AudioFileWithTags>,
 
-    /// Selected result index.
-    pub results_selected: usize,
-
-    /// Results scroll offset.
-    pub results_scroll: usize,
+    /// StandardList state for results navigation.
+    pub results_list: StandardListState,
 
     /// Active modal dialog (if any).
     pub modal: Option<TagSearchModal>,
 
     /// Pending bulk edit audio files (set when showing "gathering" modal).
     pub pending_bulk_edit: Option<Vec<AudioFile>>,
-
-    /// Click targets for results list items (set during render).
-    pub click_targets: crate::ui::widgets::ListClickTargets,
 }
 
 impl Default for TagSearchState {
@@ -77,11 +85,9 @@ impl TagSearchState {
             focused_condition: 0,
             field_focus: QueryFieldFocus::TagName,
             results: Vec::new(),
-            results_selected: 0,
-            results_scroll: 0,
+            results_list: StandardListState::new(StandardListConfig::default()),
             modal: None,
             pending_bulk_edit: None,
-            click_targets: Default::default(),
         }
     }
 
@@ -90,13 +96,7 @@ impl TagSearchState {
         if self.mode != TagSearchMode::Results {
             return;
         }
-        if let Some(id) = self.click_targets.hit_test(x, y) {
-            if let Ok(idx) = id.parse::<usize>() {
-                if idx < self.results.len() {
-                    self.results_selected = idx;
-                }
-            }
-        }
+        self.results_list.handle_click(x, y, &self.results);
     }
 
     /// Check if focus is on the search button.
@@ -350,8 +350,7 @@ impl TagSearchState {
         results.sort_by(|a, b| a.audio_file.path().cmp(b.audio_file.path()));
 
         self.results = results;
-        self.results_selected = 0;
-        self.results_scroll = 0;
+        self.results_list.reset();
 
         if self.results.is_empty() {
             self.modal = Some(TagSearchModal::NoResults);
@@ -542,36 +541,9 @@ impl TagSearchState {
         }
     }
 
-    /// Select previous result.
-    pub fn results_select_prev(&mut self) {
-        if self.results_selected > 0 {
-            self.results_selected -= 1;
-            self.ensure_results_visible();
-        }
-    }
-
-    /// Select next result.
-    pub fn results_select_next(&mut self) {
-        if self.results_selected + 1 < self.results.len() {
-            self.results_selected += 1;
-            self.ensure_results_visible();
-        }
-    }
-
-    /// Ensure selected result is visible.
-    fn ensure_results_visible(&mut self) {
-        // Assume visible height of ~20 for now
-        let visible_height = 20;
-        if self.results_selected < self.results_scroll {
-            self.results_scroll = self.results_selected;
-        } else if self.results_selected >= self.results_scroll + visible_height {
-            self.results_scroll = self.results_selected.saturating_sub(visible_height - 1);
-        }
-    }
-
     /// Get the currently selected result.
     pub fn selected_result(&self) -> Option<&AudioFileWithTags> {
-        self.results.get(self.results_selected)
+        self.results.get(self.results_list.cursor)
     }
 
     /// Get all result audio files (without tags, for passing to tag editor).

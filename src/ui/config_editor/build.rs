@@ -13,6 +13,66 @@ use crate::config::{
     StartupView, TagSplittingOpinions,
 };
 
+// =============================================================================
+// Declarative macros for config boilerplate reduction
+// =============================================================================
+
+/// Map a fieldless enum to index/from_index/OPTIONS for ConfigValue::Enum usage.
+macro_rules! config_enum_map {
+    ($ty:ty, $default:expr, [$($variant:path => $label:expr),+ $(,)?]) => {
+        impl ConfigEnumMap for $ty {
+            const OPTIONS: &'static [&'static str] = &[$($label),+];
+            fn to_index(self) -> usize {
+                let variants: &[Self] = &[$($variant),+];
+                variants.iter().position(|v| core::mem::discriminant(v) == core::mem::discriminant(&self)).unwrap_or(0)
+            }
+            fn from_index(i: usize) -> Self {
+                let variants: &[Self] = &[$($variant),+];
+                variants.get(i).copied().unwrap_or($default)
+            }
+        }
+    };
+}
+
+/// Trait for enums that can be mapped to/from config editor indices.
+trait ConfigEnumMap: Sized + Copy {
+    const OPTIONS: &'static [&'static str];
+    fn to_index(self) -> usize;
+    fn from_index(i: usize) -> Self;
+}
+
+config_enum_map!(StartupView, StartupView::Health, [
+    StartupView::Health => "Health",
+    StartupView::Search => "Search",
+    StartupView::Browser => "Browser",
+    StartupView::Inbox => "Inbox",
+    StartupView::ExternalMatches => "Ext Matches",
+]);
+
+config_enum_map!(InboxOrganizeGranularity, InboxOrganizeGranularity::Leaf, [
+    InboxOrganizeGranularity::Leaf => "Leaf",
+    InboxOrganizeGranularity::TopLevel => "TopLevel",
+]);
+
+config_enum_map!(SidecarDeployMode, SidecarDeployMode::PrimaryCover, [
+    SidecarDeployMode::Disabled => "Disabled",
+    SidecarDeployMode::PrimaryCover => "PrimaryCover",
+    SidecarDeployMode::All => "All",
+]);
+
+/// Generate a ConfigField for a PackingWeights float field.
+macro_rules! packing_weight {
+    ($source_for:expr, $w:expr, $d:expr, $path:ident . $field:ident, $label:expr, $desc:expr, $kdl:expr) => {
+        field(
+            $label, $desc,
+            ConfigValue::Float($w.$field),
+            $source_for(($w.$field - $d.$field).abs() < f64::EPSILON, $kdl),
+            false,
+            |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.$path.$field = *f; } },
+        )
+    };
+}
+
 /// Construct a ConfigField with original_value/original_source automatically
 /// snapshotted from the initial value/source.
 ///
@@ -121,8 +181,8 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     "Default view",
                     "View to open after startup progress completes",
                     ConfigValue::Enum {
-                        selected: startup_view_index(ops.startup.default_view),
-                        options: STARTUP_VIEW_OPTIONS.to_vec(),
+                        selected: ops.startup.default_view.to_index(),
+                        options: StartupView::OPTIONS.to_vec(),
                     },
                     source_for(
                         ops.startup.default_view == defaults.startup.default_view,
@@ -131,7 +191,7 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     false,
                     |v, c| {
                         if let ConfigValue::Enum { selected, .. } = v {
-                            c.opinions.startup.default_view = startup_view_from_index(*selected);
+                            c.opinions.startup.default_view = StartupView::from_index(*selected);
                         }
                     },
                 ),
@@ -364,105 +424,15 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             name: "Packing: Candidate Weights",
             collapsed: true,
             fields: {
-                let cw = &ops.release_packing.candidate_weights;
-                let cwd = PackingWeights::candidate_defaults();
+                let w = &ops.release_packing.candidate_weights;
+                let d = PackingWeights::candidate_defaults();
                 vec![
-                    field(
-                        "AcoustID confidence",
-                        "Weight for fingerprint confidence (0.0-1.0)",
-                        ConfigValue::Float(cw.acoustid_confidence),
-                        source_for(
-                            (cw.acoustid_confidence - cwd.acoustid_confidence).abs() < f64::EPSILON,
-                            PackingWeights::KDL_ACOUSTID_CONFIDENCE,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions
-                                    .release_packing
-                                    .candidate_weights
-                                    .acoustid_confidence = *f;
-                            }
-                        },
-                    ),
-                    field(
-                        "Duration match",
-                        "Weight for duration match quality (0.0-1.0)",
-                        ConfigValue::Float(cw.duration_match),
-                        source_for(
-                            (cw.duration_match - cwd.duration_match).abs() < f64::EPSILON,
-                            PackingWeights::KDL_DURATION_MATCH,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions.release_packing.candidate_weights.duration_match = *f;
-                            }
-                        },
-                    ),
-                    field(
-                        "Title match",
-                        "Weight for title similarity (0.0-1.0)",
-                        ConfigValue::Float(cw.title_match),
-                        source_for(
-                            (cw.title_match - cwd.title_match).abs() < f64::EPSILON,
-                            PackingWeights::KDL_TITLE_MATCH,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions.release_packing.candidate_weights.title_match = *f;
-                            }
-                        },
-                    ),
-                    field(
-                        "Artist match",
-                        "Weight for artist similarity (0.0-1.0)",
-                        ConfigValue::Float(cw.artist_match),
-                        source_for(
-                            (cw.artist_match - cwd.artist_match).abs() < f64::EPSILON,
-                            PackingWeights::KDL_ARTIST_MATCH,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions.release_packing.candidate_weights.artist_match = *f;
-                            }
-                        },
-                    ),
-                    field(
-                        "Album match",
-                        "Weight for album similarity (0.0-1.0)",
-                        ConfigValue::Float(cw.album_match),
-                        source_for(
-                            (cw.album_match - cwd.album_match).abs() < f64::EPSILON,
-                            PackingWeights::KDL_ALBUM_MATCH,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions.release_packing.candidate_weights.album_match = *f;
-                            }
-                        },
-                    ),
-                    field(
-                        "Track number match",
-                        "Weight for tracknumber matching slot position (0.0-1.0)",
-                        ConfigValue::Float(cw.track_number_match),
-                        source_for(
-                            (cw.track_number_match - cwd.track_number_match).abs() < f64::EPSILON,
-                            PackingWeights::KDL_TRACK_NUMBER_MATCH,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions
-                                    .release_packing
-                                    .candidate_weights
-                                    .track_number_match = *f;
-                            }
-                        },
-                    ),
+                    packing_weight!(source_for, w, d, candidate_weights.acoustid_confidence, "AcoustID confidence", "Weight for fingerprint confidence (0.0-1.0)", PackingWeights::KDL_ACOUSTID_CONFIDENCE),
+                    packing_weight!(source_for, w, d, candidate_weights.duration_match, "Duration match", "Weight for duration match quality (0.0-1.0)", PackingWeights::KDL_DURATION_MATCH),
+                    packing_weight!(source_for, w, d, candidate_weights.title_match, "Title match", "Weight for title similarity (0.0-1.0)", PackingWeights::KDL_TITLE_MATCH),
+                    packing_weight!(source_for, w, d, candidate_weights.artist_match, "Artist match", "Weight for artist similarity (0.0-1.0)", PackingWeights::KDL_ARTIST_MATCH),
+                    packing_weight!(source_for, w, d, candidate_weights.album_match, "Album match", "Weight for album similarity (0.0-1.0)", PackingWeights::KDL_ALBUM_MATCH),
+                    packing_weight!(source_for, w, d, candidate_weights.track_number_match, "Track number match", "Weight for tracknumber matching slot position (0.0-1.0)", PackingWeights::KDL_TRACK_NUMBER_MATCH),
                 ]
             },
         },
@@ -471,108 +441,15 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             name: "Packing: Elimination Weights",
             collapsed: true,
             fields: {
-                let ew = &ops.release_packing.elimination_weights;
-                let ewd = PackingWeights::elimination_defaults();
+                let w = &ops.release_packing.elimination_weights;
+                let d = PackingWeights::elimination_defaults();
                 vec![
-                    field(
-                        "AcoustID confidence",
-                        "Weight for fingerprint confidence — always 0 in elimination (0.0-1.0)",
-                        ConfigValue::Float(ew.acoustid_confidence),
-                        source_for(
-                            (ew.acoustid_confidence - ewd.acoustid_confidence).abs() < f64::EPSILON,
-                            PackingWeights::KDL_ACOUSTID_CONFIDENCE,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions
-                                    .release_packing
-                                    .elimination_weights
-                                    .acoustid_confidence = *f;
-                            }
-                        },
-                    ),
-                    field(
-                        "Duration match",
-                        "Weight for duration match quality (0.0-1.0)",
-                        ConfigValue::Float(ew.duration_match),
-                        source_for(
-                            (ew.duration_match - ewd.duration_match).abs() < f64::EPSILON,
-                            PackingWeights::KDL_DURATION_MATCH,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions
-                                    .release_packing
-                                    .elimination_weights
-                                    .duration_match = *f;
-                            }
-                        },
-                    ),
-                    field(
-                        "Title match",
-                        "Weight for title similarity (0.0-1.0)",
-                        ConfigValue::Float(ew.title_match),
-                        source_for(
-                            (ew.title_match - ewd.title_match).abs() < f64::EPSILON,
-                            PackingWeights::KDL_TITLE_MATCH,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions.release_packing.elimination_weights.title_match = *f;
-                            }
-                        },
-                    ),
-                    field(
-                        "Artist match",
-                        "Weight for artist similarity — 0 by default in elimination (0.0-1.0)",
-                        ConfigValue::Float(ew.artist_match),
-                        source_for(
-                            (ew.artist_match - ewd.artist_match).abs() < f64::EPSILON,
-                            PackingWeights::KDL_ARTIST_MATCH,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions.release_packing.elimination_weights.artist_match = *f;
-                            }
-                        },
-                    ),
-                    field(
-                        "Album match",
-                        "Weight for album similarity (0.0-1.0)",
-                        ConfigValue::Float(ew.album_match),
-                        source_for(
-                            (ew.album_match - ewd.album_match).abs() < f64::EPSILON,
-                            PackingWeights::KDL_ALBUM_MATCH,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions.release_packing.elimination_weights.album_match = *f;
-                            }
-                        },
-                    ),
-                    field(
-                        "Track number match",
-                        "Weight for tracknumber matching slot position (0.0-1.0)",
-                        ConfigValue::Float(ew.track_number_match),
-                        source_for(
-                            (ew.track_number_match - ewd.track_number_match).abs() < f64::EPSILON,
-                            PackingWeights::KDL_TRACK_NUMBER_MATCH,
-                        ),
-                        false,
-                        |v, c| {
-                            if let ConfigValue::Float(f) = v {
-                                c.opinions
-                                    .release_packing
-                                    .elimination_weights
-                                    .track_number_match = *f;
-                            }
-                        },
-                    ),
+                    packing_weight!(source_for, w, d, elimination_weights.acoustid_confidence, "AcoustID confidence", "Weight for fingerprint confidence (0.0-1.0)", PackingWeights::KDL_ACOUSTID_CONFIDENCE),
+                    packing_weight!(source_for, w, d, elimination_weights.duration_match, "Duration match", "Weight for duration match quality (0.0-1.0)", PackingWeights::KDL_DURATION_MATCH),
+                    packing_weight!(source_for, w, d, elimination_weights.title_match, "Title match", "Weight for title similarity (0.0-1.0)", PackingWeights::KDL_TITLE_MATCH),
+                    packing_weight!(source_for, w, d, elimination_weights.artist_match, "Artist match", "Weight for artist similarity (0.0-1.0)", PackingWeights::KDL_ARTIST_MATCH),
+                    packing_weight!(source_for, w, d, elimination_weights.album_match, "Album match", "Weight for album similarity (0.0-1.0)", PackingWeights::KDL_ALBUM_MATCH),
+                    packing_weight!(source_for, w, d, elimination_weights.track_number_match, "Track number match", "Weight for tracknumber matching slot position (0.0-1.0)", PackingWeights::KDL_TRACK_NUMBER_MATCH),
                 ]
             },
         },
@@ -777,8 +654,8 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                 "Sidecar deploy mode",
                 "Deploy sidecar cover images alongside audio files to libraries",
                 ConfigValue::Enum {
-                    selected: sidecar_deploy_index(ops.album_art.sidecar_deploy_mode),
-                    options: SIDECAR_DEPLOY_OPTIONS.to_vec(),
+                    selected: ops.album_art.sidecar_deploy_mode.to_index(),
+                    options: SidecarDeployMode::OPTIONS.to_vec(),
                 },
                 source_for(
                     ops.album_art.sidecar_deploy_mode == defaults.album_art.sidecar_deploy_mode,
@@ -788,7 +665,7 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                 |v, c| {
                     if let ConfigValue::Enum { selected, .. } = v {
                         c.opinions.album_art.sidecar_deploy_mode =
-                            sidecar_deploy_from_index(*selected);
+                            SidecarDeployMode::from_index(*selected);
                     }
                 },
             )],
@@ -908,8 +785,8 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                 "Directory granularity",
                 "How to group inbox directories for organize workflow",
                 ConfigValue::Enum {
-                    selected: granularity_index(ops.inbox_organize.directory_granularity),
-                    options: GRANULARITY_OPTIONS.to_vec(),
+                    selected: ops.inbox_organize.directory_granularity.to_index(),
+                    options: InboxOrganizeGranularity::OPTIONS.to_vec(),
                 },
                 source_for(
                     ops.inbox_organize.directory_granularity
@@ -920,7 +797,7 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                 |v, c| {
                     if let ConfigValue::Enum { selected, .. } = v {
                         c.opinions.inbox_organize.directory_granularity =
-                            granularity_from_index(*selected);
+                            InboxOrganizeGranularity::from_index(*selected);
                     }
                 },
             )],
@@ -1019,69 +896,6 @@ pub fn apply_groups_to_config(base: &Config, groups: &[ConfigGroup]) -> Config {
     }
 
     config
-}
-
-// =============================================================================
-// Enum mapping helpers
-// =============================================================================
-
-const STARTUP_VIEW_OPTIONS: &[&str] = &["Health", "Search", "Browser", "Inbox", "Ext Matches"];
-
-fn startup_view_index(v: StartupView) -> usize {
-    match v {
-        StartupView::Health => 0,
-        StartupView::Search => 1,
-        StartupView::Browser => 2,
-        StartupView::Inbox => 3,
-        StartupView::ExternalMatches => 4,
-    }
-}
-
-fn startup_view_from_index(i: usize) -> StartupView {
-    match i {
-        0 => StartupView::Health,
-        1 => StartupView::Search,
-        2 => StartupView::Browser,
-        3 => StartupView::Inbox,
-        4 => StartupView::ExternalMatches,
-        _ => StartupView::Health,
-    }
-}
-
-const GRANULARITY_OPTIONS: &[&str] = &["Leaf", "TopLevel"];
-
-fn granularity_index(g: InboxOrganizeGranularity) -> usize {
-    match g {
-        InboxOrganizeGranularity::Leaf => 0,
-        InboxOrganizeGranularity::TopLevel => 1,
-    }
-}
-
-fn granularity_from_index(i: usize) -> InboxOrganizeGranularity {
-    match i {
-        0 => InboxOrganizeGranularity::Leaf,
-        1 => InboxOrganizeGranularity::TopLevel,
-        _ => InboxOrganizeGranularity::Leaf,
-    }
-}
-
-const SIDECAR_DEPLOY_OPTIONS: &[&str] = &["Disabled", "PrimaryCover", "All"];
-
-fn sidecar_deploy_index(m: SidecarDeployMode) -> usize {
-    match m {
-        SidecarDeployMode::Disabled => 0,
-        SidecarDeployMode::PrimaryCover => 1,
-        SidecarDeployMode::All => 2,
-    }
-}
-
-fn sidecar_deploy_from_index(i: usize) -> SidecarDeployMode {
-    match i {
-        0 => SidecarDeployMode::Disabled,
-        1 => SidecarDeployMode::PrimaryCover,
-        2 => SidecarDeployMode::All,
-        _ => SidecarDeployMode::PrimaryCover,
-    }
 }
 
 #[cfg(test)]

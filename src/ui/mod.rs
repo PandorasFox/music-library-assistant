@@ -310,6 +310,13 @@ impl App {
             }
         }
 
+        // Macro for the common pattern: delegate handle_input, wrap in ViewAction
+        macro_rules! dispatch_input {
+            ($variant:ident, $state:expr) => {
+                ViewAction::$variant($state.handle_input(&action))
+            };
+        }
+
         // Phase 1: borrow view, produce view action
         let view_action = match &mut self.view {
             ActiveView::SchemaUpdate(s) => {
@@ -335,14 +342,12 @@ impl App {
             ActiveView::Progress { .. } => ViewAction::None,
             ActiveView::ProgressiveWork(_) => ViewAction::None,
             ActiveView::TagCanonicityLoading { .. } => ViewAction::None,
-            ActiveView::ConfigEditor(s) => ViewAction::ConfigEditor(s.handle_input(&action)),
-            ActiveView::Insights(s) => ViewAction::Insights(s.handle_input(&action)),
-            ActiveView::CorpusBrowser(s) => ViewAction::CorpusBrowser(s.handle_input(&action)),
-            ActiveView::TagSearch(s) => ViewAction::TagSearch(s.handle_input(&action)),
-            ActiveView::Inbox(s) => ViewAction::Inbox(s.handle_input(&action)),
-            ActiveView::TabbedTransactionReview(ref mut state) => {
-                ViewAction::TabbedTransactionReview(state.handle_input(&action))
-            }
+            ActiveView::ConfigEditor(s) => dispatch_input!(ConfigEditor, s),
+            ActiveView::Insights(s) => dispatch_input!(Insights, s),
+            ActiveView::CorpusBrowser(s) => dispatch_input!(CorpusBrowser, s),
+            ActiveView::TagSearch(s) => dispatch_input!(TagSearch, s),
+            ActiveView::Inbox(s) => dispatch_input!(Inbox, s),
+            ActiveView::TabbedTransactionReview(ref mut s) => dispatch_input!(TabbedTransactionReview, s),
             ActiveView::ExitConfirm(state) => {
                 let a = match action {
                     InputAction::NavLeft | InputAction::NavRight | InputAction::FocusLeft | InputAction::FocusRight => {
@@ -371,86 +376,35 @@ impl App {
                     .unwrap_or(10);
                 ViewAction::IntakeConfirmation(state.handle_input(&action, visible_height))
             }
-            ActiveView::UnifiedTagEditor(s) => {
-                ViewAction::UnifiedTagEditor(s.handle_input(&action))
-            }
-            ActiveView::Deploy(s) => ViewAction::Deploy(s.handle_input(&action)),
-            ActiveView::ExternalMatches(s) => ViewAction::ExternalMatches(s.handle_input(&action)),
-            ActiveView::MissingFileResolution(s) => {
-                ViewAction::MissingFileResolution(s.handle_input(&action))
-            }
-            ActiveView::MissingDirectoryResolution(s) => {
-                ViewAction::MissingDirectoryResolution(s.handle_input(&action))
-            }
-            ActiveView::CorruptFileResolution(s) => {
-                ViewAction::CorruptFileResolution(s.handle_input(&action))
-            }
-            ActiveView::ShitFormatResolution(s) => {
-                ViewAction::ShitFormatResolution(s.handle_input(&action))
-            }
-            ActiveView::SubparDuplicateResolution(s) => {
-                ViewAction::SubparDuplicateResolution(s.handle_input(&action))
-            }
-            ActiveView::InboxCorpusMatchResolution(s) => {
-                ViewAction::InboxCorpusMatchResolution(s.handle_input(&action))
-            }
-            ActiveView::InboxOrganize(s) => ViewAction::InboxOrganize(s.handle_input(&action)),
-            ActiveView::DirectoryClusterResolution(s) => {
-                ViewAction::DirectoryClusterResolution(s.handle_input(&action))
-            }
-            ActiveView::MovedFileAcknowledge(s) => {
-                ViewAction::MovedFileAcknowledge(s.handle_input(&action))
-            }
-            ActiveView::OobSyncResolution(s) => {
-                ViewAction::OobSyncResolution(s.handle_input(&action))
-            }
-            ActiveView::OobConflictInspection(s) => {
-                ViewAction::OobConflictInspection(s.handle_input(&action))
-            }
-            ActiveView::ExternalMatchReview(s) => {
-                ViewAction::ExternalMatchReview(s.handle_input(&action))
-            }
-            ActiveView::ReleasePackingBrowser(s) => {
-                ViewAction::ReleasePackingBrowser(s.handle_input(&action))
-            }
-            ActiveView::KnotBrowser(s) => {
-                ViewAction::KnotBrowser(s.handle_input(&action))
-            }
-            ActiveView::History(s) => ViewAction::History(s.handle_input(&action)),
-            ActiveView::TagCanonicityResolution { state, .. } => {
-                ViewAction::TagCanonicityResolution(state.handle_input(&action))
-            }
-            ActiveView::CompoundTagSplit { state, .. } => {
-                ViewAction::CompoundTagSplit(state.handle_input(&action))
-            }
-            ActiveView::MissingAlbumSingleResolution(s) => {
-                ViewAction::MissingAlbumSingleResolution(s.handle_input(&action))
-            }
-            ActiveView::DiscExtractionResolution(s) => {
-                ViewAction::DiscExtractionResolution(s.handle_input(&action))
-            }
-            ActiveView::ManualReview(s) => ViewAction::ManualReview(s.handle_input(&action)),
-            ActiveView::TransactionReview(review) => {
-                ViewAction::TransactionReview(review.handle_input(&action))
-            }
+            ActiveView::UnifiedTagEditor(s) => dispatch_input!(UnifiedTagEditor, s),
+            ActiveView::Deploy(s) => dispatch_input!(Deploy, s),
+            ActiveView::ExternalMatches(s) => dispatch_input!(ExternalMatches, s),
+            ActiveView::MissingFileResolution(s) => dispatch_input!(MissingFileResolution, s),
+            ActiveView::MissingDirectoryResolution(s) => dispatch_input!(MissingDirectoryResolution, s),
+            ActiveView::CorruptFileResolution(s) => dispatch_input!(CorruptFileResolution, s),
+            ActiveView::ShitFormatResolution(s) => dispatch_input!(ShitFormatResolution, s),
+            ActiveView::SubparDuplicateResolution(s) => dispatch_input!(SubparDuplicateResolution, s),
+            ActiveView::InboxCorpusMatchResolution(s) => dispatch_input!(InboxCorpusMatchResolution, s),
+            ActiveView::InboxOrganize(s) => dispatch_input!(InboxOrganize, s),
+            ActiveView::DirectoryClusterResolution(s) => dispatch_input!(DirectoryClusterResolution, s),
+            ActiveView::MovedFileAcknowledge(s) => dispatch_input!(MovedFileAcknowledge, s),
+            ActiveView::OobSyncResolution(s) => dispatch_input!(OobSyncResolution, s),
+            ActiveView::OobConflictInspection(s) => dispatch_input!(OobConflictInspection, s),
+            ActiveView::ExternalMatchReview(s) => dispatch_input!(ExternalMatchReview, s),
+            ActiveView::ReleasePackingBrowser(s) => dispatch_input!(ReleasePackingBrowser, s),
+            ActiveView::KnotBrowser(s) => dispatch_input!(KnotBrowser, s),
+            ActiveView::History(s) => dispatch_input!(History, s),
+            ActiveView::TagCanonicityResolution { state, .. } => dispatch_input!(TagCanonicityResolution, state),
+            ActiveView::CompoundTagSplit { state, .. } => dispatch_input!(CompoundTagSplit, state),
+            ActiveView::MissingAlbumSingleResolution(s) => dispatch_input!(MissingAlbumSingleResolution, s),
+            ActiveView::DiscExtractionResolution(s) => dispatch_input!(DiscExtractionResolution, s),
+            ActiveView::ManualReview(s) => dispatch_input!(ManualReview, s),
+            ActiveView::TransactionReview(s) => dispatch_input!(TransactionReview, s),
         };
 
         // Phase 2: dispatch with confirmation flag
         let is_confirmation = matches!(action, InputAction::Confirm);
         self.dispatch_action(view_action, is_confirmation);
-    }
-
-    /// Handle exit confirm modal action.
-    fn handle_exit_confirm_action(&mut self, action: ExitConfirmAction) {
-        match action {
-            ExitConfirmAction::None => {}
-            ExitConfirmAction::Quit => {
-                self.should_quit = true;
-            }
-            ExitConfirmAction::Cancel => {
-                self.start_health_view();
-            }
-        }
     }
 
     /// Check if there are any pending operations (Witch work).

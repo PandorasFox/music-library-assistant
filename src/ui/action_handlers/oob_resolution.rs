@@ -4,6 +4,7 @@
 
 use super::super::App;
 use super::witness;
+use super::HandleAction;
 use crate::corpus::paths;
 use crate::db::domain;
 use crate::meta::decisions::DecisionKey;
@@ -12,11 +13,103 @@ use crate::ui::{
     FilterPopupContext,
 };
 
-impl App {
-    // ========================================================================
-    // OOB Tag Sync
-    // ========================================================================
+// ========================================================================
+// OOB Tag Sync
+// ========================================================================
 
+impl HandleAction for oob_sync_modal::OobSyncAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
+            oob_sync_modal::OobSyncAction::None => {}
+            oob_sync_modal::OobSyncAction::AcceptDisk => {
+                let Some(w) = witness else { return };
+                app.stage_oob_sync_mutations(crate::meta::views::OobSyncDirection::DiskToIndex, w);
+                // Transition to review
+                app.after_staging_decisions();
+            }
+            oob_sync_modal::OobSyncAction::AcceptDb => {
+                let Some(w) = witness else { return };
+                app.stage_oob_sync_mutations(crate::meta::views::OobSyncDirection::IndexToDisk, w);
+                // Transition to review
+                app.after_staging_decisions();
+            }
+            oob_sync_modal::OobSyncAction::Cancel => {
+                app.cancel_and_return_to_source("OOB sync resolution cancelled");
+            }
+            oob_sync_modal::OobSyncAction::OpenFilter => {
+                // Open filter popup overlay
+                app.filter_overlay = Some(FilterOverlay {
+                    state: filter_popup::FilterPopupState::new(),
+                    context: FilterPopupContext::OobSync,
+                });
+            }
+        }
+    }
+}
+
+// ========================================================================
+// OOB Conflict Inspection
+// ========================================================================
+
+impl HandleAction for oob_conflict_modal::OobConflictAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
+            oob_conflict_modal::OobConflictAction::None => {}
+            oob_conflict_modal::OobConflictAction::Navigate => {
+                // File or bucket selection changed -- recompute diff for the new file
+                let diff = app.compute_current_conflict_diff();
+                if let ActiveView::OobConflictInspection(ref mut state) = app.view {
+                    state.current_diff = diff;
+                }
+            }
+            oob_conflict_modal::OobConflictAction::Resolve => {
+                let Some(w) = witness else { return };
+                app.stage_oob_bucket_resolution(w);
+            }
+            oob_conflict_modal::OobConflictAction::Acknowledge => {
+                let Some(w) = witness else { return };
+                app.stage_oob_mtime_acknowledgement(w);
+            }
+            oob_conflict_modal::OobConflictAction::Cancel => {
+                app.cancel_and_return_to_source("OOB conflict inspection closed");
+            }
+            oob_conflict_modal::OobConflictAction::OpenFilter => {
+                // Open filter popup overlay
+                app.filter_overlay = Some(FilterOverlay {
+                    state: filter_popup::FilterPopupState::new(),
+                    context: FilterPopupContext::OobConflict,
+                });
+            }
+        }
+    }
+}
+
+// ========================================================================
+// Moved File Acknowledgement
+// ========================================================================
+
+impl HandleAction for moved_file_modal::MovedFileAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
+            moved_file_modal::MovedFileAction::None => {}
+            moved_file_modal::MovedFileAction::Acknowledge => {
+                let Some(w) = witness else { return };
+                app.stage_moved_file_acknowledge(w);
+                // Transition to review
+                app.after_staging_decisions();
+            }
+            moved_file_modal::MovedFileAction::Cancel => {
+                app.cancel_and_return_to_source("Moved file acknowledgement cancelled");
+            }
+        }
+    }
+}
+
+// ========================================================================
+// App helper methods (start_* and private staging/computation helpers)
+// ========================================================================
+
+impl App {
     /// Start OOB tag sync resolution from Insights view.
     pub(in crate::ui) fn start_oob_sync_resolution(&mut self) {
         let files = self.cache.domain_query(domain::GetOobSyncFiles).recv();
@@ -26,39 +119,6 @@ impl App {
 
         let state = oob_sync_modal::OobSyncState::new(files);
         self.view = ActiveView::OobSyncResolution(state);
-    }
-
-    /// Handle OOB sync resolution actions.
-    pub(super) fn handle_oob_sync_action(
-        &mut self,
-        action: oob_sync_modal::OobSyncAction,
-        witness: Option<&witness::ConfirmationGesture>,
-    ) {
-        match action {
-            oob_sync_modal::OobSyncAction::None => {}
-            oob_sync_modal::OobSyncAction::AcceptDisk => {
-                let Some(w) = witness else { return };
-                self.stage_oob_sync_mutations(crate::meta::views::OobSyncDirection::DiskToIndex, w);
-                // Transition to review
-                self.after_staging_decisions();
-            }
-            oob_sync_modal::OobSyncAction::AcceptDb => {
-                let Some(w) = witness else { return };
-                self.stage_oob_sync_mutations(crate::meta::views::OobSyncDirection::IndexToDisk, w);
-                // Transition to review
-                self.after_staging_decisions();
-            }
-            oob_sync_modal::OobSyncAction::Cancel => {
-                self.cancel_and_return_to_source("OOB sync resolution cancelled");
-            }
-            oob_sync_modal::OobSyncAction::OpenFilter => {
-                // Open filter popup overlay
-                self.filter_overlay = Some(FilterOverlay {
-                    state: filter_popup::FilterPopupState::new(),
-                    context: FilterPopupContext::OobSync,
-                });
-            }
-        }
     }
 
     /// Stage mutations for OOB tag sync (accept one direction).
@@ -155,10 +215,6 @@ impl App {
         );
     }
 
-    // ========================================================================
-    // OOB Conflict Inspection
-    // ========================================================================
-
     /// Start OOB tag conflict inspection from Insights view.
     ///
     /// Loads all OOB signal files classified into four buckets, starts a
@@ -185,42 +241,6 @@ impl App {
         }
 
         self.view = ActiveView::OobConflictInspection(state);
-    }
-
-    /// Handle OOB conflict inspection actions.
-    pub(super) fn handle_oob_conflict_action(
-        &mut self,
-        action: oob_conflict_modal::OobConflictAction,
-        witness: Option<&witness::ConfirmationGesture>,
-    ) {
-        match action {
-            oob_conflict_modal::OobConflictAction::None => {}
-            oob_conflict_modal::OobConflictAction::Navigate => {
-                // File or bucket selection changed -- recompute diff for the new file
-                let diff = self.compute_current_conflict_diff();
-                if let ActiveView::OobConflictInspection(ref mut state) = self.view {
-                    state.current_diff = diff;
-                }
-            }
-            oob_conflict_modal::OobConflictAction::Resolve => {
-                let Some(w) = witness else { return };
-                self.stage_oob_bucket_resolution(w);
-            }
-            oob_conflict_modal::OobConflictAction::Acknowledge => {
-                let Some(w) = witness else { return };
-                self.stage_oob_mtime_acknowledgement(w);
-            }
-            oob_conflict_modal::OobConflictAction::Cancel => {
-                self.cancel_and_return_to_source("OOB conflict inspection closed");
-            }
-            oob_conflict_modal::OobConflictAction::OpenFilter => {
-                // Open filter popup overlay
-                self.filter_overlay = Some(FilterOverlay {
-                    state: filter_popup::FilterPopupState::new(),
-                    context: FilterPopupContext::OobConflict,
-                });
-            }
-        }
     }
 
     /// Compute the tag diff for the currently selected conflict file.
@@ -394,10 +414,6 @@ impl App {
         self.after_staging_decisions();
     }
 
-    // ========================================================================
-    // Moved File Acknowledgement
-    // ========================================================================
-
     /// Start moved file acknowledgement modal.
     pub(in crate::ui) fn start_moved_file_acknowledge(&mut self) {
         // Query files with moved_file signals
@@ -413,26 +429,6 @@ impl App {
 
         let state = moved_file_modal::MovedFileState::new(files);
         self.view = ActiveView::MovedFileAcknowledge(state);
-    }
-
-    /// Handle moved file acknowledgement actions.
-    pub(super) fn handle_moved_file_action(
-        &mut self,
-        action: moved_file_modal::MovedFileAction,
-        witness: Option<&witness::ConfirmationGesture>,
-    ) {
-        match action {
-            moved_file_modal::MovedFileAction::None => {}
-            moved_file_modal::MovedFileAction::Acknowledge => {
-                let Some(w) = witness else { return };
-                self.stage_moved_file_acknowledge(w);
-                // Transition to review
-                self.after_staging_decisions();
-            }
-            moved_file_modal::MovedFileAction::Cancel => {
-                self.cancel_and_return_to_source("Moved file acknowledgement cancelled");
-            }
-        }
     }
 
     /// Stage mutations for moved file acknowledgement.

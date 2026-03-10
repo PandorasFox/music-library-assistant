@@ -6,6 +6,7 @@
 //! - Enter on "Organize" bucket: launch inbox organize workflow
 
 use super::witness;
+use super::HandleAction;
 use super::App;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::active_view::ActiveView;
@@ -14,26 +15,22 @@ use crate::ui::inbox_organize;
 use crate::ui::startup;
 use crate::ui::{CanonicitySignalKind, TagCanonicityClusters};
 
-impl App {
-    pub(super) fn handle_inbox_action(
-        &mut self,
-        action: super::super::inbox_view::InboxAction,
-        _witness: Option<&witness::ConfirmationGesture>,
-    ) {
+impl HandleAction for super::super::inbox_view::InboxAction {
+    fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
         use super::super::inbox_view::InboxAction;
 
-        match action {
+        match self {
             InboxAction::None => {}
-            InboxAction::RequestQuit => self.handle_request_quit(),
+            InboxAction::RequestQuit => app.handle_request_quit(),
             InboxAction::CycleNext => {
-                self.handle_lateral_cycle(crate::ui::widgets::LateralView::Inbox, true);
+                app.handle_lateral_cycle(crate::ui::widgets::LateralView::Inbox, true);
             }
             InboxAction::CyclePrev => {
-                self.handle_lateral_cycle(crate::ui::widgets::LateralView::Inbox, false);
+                app.handle_lateral_cycle(crate::ui::widgets::LateralView::Inbox, false);
             }
             InboxAction::LaunchIntake => {
                 // Gather inbox unindexed files and show intake confirmation
-                let intake_state = self
+                let intake_state = app
                     .cache
                     .query(|db| {
                         startup::IntakeConfirmationState::gather_inbox(
@@ -44,20 +41,20 @@ impl App {
                     .recv();
 
                 if let Some(state) = intake_state {
-                    self.view = ActiveView::IntakeConfirmation(state);
+                    app.view = ActiveView::IntakeConfirmation(state);
                 }
             }
             InboxAction::LaunchCorpusMatchResolution => {
-                self.start_inbox_corpus_match_resolution();
+                app.start_inbox_corpus_match_resolution();
             }
             InboxAction::LaunchInboxTagCanonicity => {
-                self.start_inbox_tag_canonicity_resolution();
+                app.start_inbox_tag_canonicity_resolution();
             }
             InboxAction::LaunchOrganize => {
-                self.start_inbox_organize();
+                app.start_inbox_organize();
             }
             InboxAction::LaunchInboxCompoundSplit => {
-                self.start_compound_split_resolution_for_zone(
+                app.start_compound_split_resolution_for_zone(
                     false,
                     None,
                     crate::db::types::Zone::Inbox,
@@ -65,7 +62,65 @@ impl App {
             }
         }
     }
+}
 
+impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchPreviewAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
+            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::None => {}
+            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::ConfirmStash => {
+                let Some(w) = witness else { return };
+                let mutations = match &app.view {
+                    ActiveView::InboxCorpusMatchResolution(ref preview) => {
+                        preview.cached_data.stash_and_drop_mutations()
+                    }
+                    _ => Vec::new(),
+                };
+                app.stage_resolution(mutations, "Stash inbox corpus matches", DecisionKey::InboxCorpusMatch, "No files to stash", w);
+            }
+            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::ConfirmStashAll => {
+                let Some(w) = witness else { return };
+                let mutations = match &app.view {
+                    ActiveView::InboxCorpusMatchResolution(ref preview) => {
+                        preview.cached_data.stash_all_mutations()
+                    }
+                    _ => Vec::new(),
+                };
+                app.stage_resolution(mutations, "Stash all inbox duplicates", DecisionKey::InboxCorpusMatch, "No files to stash", w);
+            }
+            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::Cancel => {
+                app.cancel_and_return_to_source("Inbox corpus match resolution cancelled");
+            }
+        }
+    }
+}
+
+impl HandleAction for inbox_organize::InboxOrganizeAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
+            inbox_organize::InboxOrganizeAction::None => {}
+            inbox_organize::InboxOrganizeAction::Complete(mutations) => {
+                let Some(w) = witness else { return };
+                if !mutations.is_empty() {
+                    app.stage_mutations_with_transaction(
+                        mutations,
+                        "Organize inbox into corpus",
+                        DecisionKey::InboxOrganize,
+                        w,
+                    );
+                    app.after_staging_decisions();
+                } else {
+                    app.cancel_and_return_to_source("No mutations generated");
+                }
+            }
+            inbox_organize::InboxOrganizeAction::Cancel => {
+                app.cancel_and_return_to_source("Inbox organize cancelled");
+            }
+        }
+    }
+}
+
+impl App {
     /// Start inbox tag canonicity resolution using the shared tag canonicity modal.
     ///
     /// Gathers all inbox tag canonicity signal keys, creates clusters with
@@ -112,40 +167,6 @@ impl App {
         self.view = ActiveView::InboxCorpusMatchResolution(preview);
     }
 
-    /// Handle inbox corpus match preview actions.
-    pub(super) fn handle_inbox_corpus_match_preview_action(
-        &mut self,
-        action: inbox_corpus_match_modal::InboxCorpusMatchPreviewAction,
-        witness: Option<&witness::ConfirmationGesture>,
-    ) {
-        match action {
-            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::None => {}
-            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::ConfirmStash => {
-                let Some(w) = witness else { return };
-                let mutations = match &self.view {
-                    ActiveView::InboxCorpusMatchResolution(ref preview) => {
-                        preview.cached_data.stash_and_drop_mutations()
-                    }
-                    _ => Vec::new(),
-                };
-                self.stage_resolution(mutations, "Stash inbox corpus matches", DecisionKey::InboxCorpusMatch, "No files to stash", w);
-            }
-            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::ConfirmStashAll => {
-                let Some(w) = witness else { return };
-                let mutations = match &self.view {
-                    ActiveView::InboxCorpusMatchResolution(ref preview) => {
-                        preview.cached_data.stash_all_mutations()
-                    }
-                    _ => Vec::new(),
-                };
-                self.stage_resolution(mutations, "Stash all inbox duplicates", DecisionKey::InboxCorpusMatch, "No files to stash", w);
-            }
-            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::Cancel => {
-                self.cancel_and_return_to_source("Inbox corpus match resolution cancelled");
-            }
-        }
-    }
-
     /// Start the inbox organize workflow.
     fn start_inbox_organize(&mut self) {
         let config = self.config().clone();
@@ -156,34 +177,6 @@ impl App {
 
         if let Some(state) = state {
             self.view = ActiveView::InboxOrganize(state);
-        }
-    }
-
-    /// Handle inbox organize workflow actions.
-    pub(super) fn handle_inbox_organize_action(
-        &mut self,
-        action: inbox_organize::InboxOrganizeAction,
-        witness: Option<&witness::ConfirmationGesture>,
-    ) {
-        match action {
-            inbox_organize::InboxOrganizeAction::None => {}
-            inbox_organize::InboxOrganizeAction::Complete(mutations) => {
-                let Some(w) = witness else { return };
-                if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(
-                        mutations,
-                        "Organize inbox into corpus",
-                        DecisionKey::InboxOrganize,
-                        w,
-                    );
-                    self.after_staging_decisions();
-                } else {
-                    self.cancel_and_return_to_source("No mutations generated");
-                }
-            }
-            inbox_organize::InboxOrganizeAction::Cancel => {
-                self.cancel_and_return_to_source("Inbox organize cancelled");
-            }
         }
     }
 }

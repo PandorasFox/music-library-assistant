@@ -5,6 +5,7 @@
 
 use super::super::App;
 use super::witness;
+use super::HandleAction;
 use crate::db::types::Zone;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::{
@@ -75,50 +76,51 @@ impl App {
         }
     }
 
+}
+
+impl HandleAction for tag_canonicity_v2::TagCanonicalityActionV2 {
     /// Handle tag canonicity modal actions (three-pane layout).
-    pub(super) fn handle_tag_canonicity_action(
-        &mut self,
-        action: tag_canonicity_v2::TagCanonicalityActionV2,
-        witness: Option<&witness::ConfirmationGesture>,
-    ) {
-        match action {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
             tag_canonicity_v2::TagCanonicalityActionV2::None => {}
             tag_canonicity_v2::TagCanonicalityActionV2::Confirmed => {
                 let Some(w) = witness else { return };
                 // Stage decision and advance to next cluster
-                self.stage_canonicity_decision(w);
-                self.advance_to_next_cluster();
+                app.stage_canonicity_decision(w);
+                app.advance_to_next_cluster();
             }
             tag_canonicity_v2::TagCanonicalityActionV2::Cancelled => {
-                self.cancel_and_return_to_source("Tag canonicity resolution cancelled");
+                app.cancel_and_return_to_source("Tag canonicity resolution cancelled");
             }
             tag_canonicity_v2::TagCanonicalityActionV2::Navigate { forward } => {
                 // User navigated to next/prev cluster - do NOT stage decision
-                self.navigate_cluster(forward);
+                app.navigate_cluster(forward);
             }
             tag_canonicity_v2::TagCanonicalityActionV2::ShowReview => {
                 // Ctrl+R - show review with whatever has already been staged
-                self.after_staging_decisions();
+                app.after_staging_decisions();
             }
             tag_canonicity_v2::TagCanonicalityActionV2::OpenTagEditorIndividual => {
-                self.launch_tag_editor_from_canonicity(tag_editor::TagEditorMode::Individual);
+                app.launch_tag_editor_from_canonicity(tag_editor::TagEditorMode::Individual);
             }
             tag_canonicity_v2::TagCanonicalityActionV2::OpenTagEditorAggregated => {
-                self.launch_tag_editor_from_canonicity(tag_editor::TagEditorMode::Aggregated);
+                app.launch_tag_editor_from_canonicity(tag_editor::TagEditorMode::Aggregated);
             }
             tag_canonicity_v2::TagCanonicalityActionV2::FlagNonCompilation => {
                 let Some(w) = witness else { return };
-                self.stage_flag_non_compilation(w);
-                self.advance_to_next_cluster();
+                app.stage_flag_non_compilation(w);
+                app.advance_to_next_cluster();
             }
             tag_canonicity_v2::TagCanonicalityActionV2::FlagCanonical => {
                 let Some(w) = witness else { return };
-                self.stage_flag_canonical(w);
-                self.advance_to_next_cluster();
+                app.stage_flag_canonical(w);
+                app.advance_to_next_cluster();
             }
         }
     }
+}
 
+impl App {
     /// Launch embedded tag editor from the tag canonicity modal.
     fn launch_tag_editor_from_canonicity(&mut self, mode: tag_editor::TagEditorMode) {
         let (inodes, decision_key, decision_label, file_cursor_inode, zone) =

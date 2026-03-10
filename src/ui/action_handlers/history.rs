@@ -7,6 +7,7 @@ use std::io::Write;
 
 use super::super::App;
 use super::witness;
+use super::HandleAction;
 use crate::db::types::Zone;
 use crate::meta::decisions::DecisionKey;
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
@@ -19,27 +20,22 @@ use crate::ui::history_view::{
 };
 use crate::ui::{widgets, ActiveView};
 
-impl App {
-    /// Handle history view actions.
-    pub(super) fn handle_history_action(
-        &mut self,
-        action: HistoryAction,
-        witness: Option<&witness::ConfirmationGesture>,
-    ) {
-        match action {
+impl HandleAction for HistoryAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
             HistoryAction::None => {}
 
             HistoryAction::CycleNext => {
-                self.handle_lateral_cycle(widgets::LateralView::History, true);
+                app.handle_lateral_cycle(widgets::LateralView::History, true);
             }
             HistoryAction::CyclePrev => {
-                self.handle_lateral_cycle(widgets::LateralView::History, false);
+                app.handle_lateral_cycle(widgets::LateralView::History, false);
             }
 
-            HistoryAction::RequestQuit => self.handle_request_quit(),
+            HistoryAction::RequestQuit => app.handle_request_quit(),
 
             HistoryAction::ExpandSession(session_id) => {
-                self.expand_history_session(session_id);
+                app.expand_history_session(session_id);
             }
 
             HistoryAction::CollapseDetail => {
@@ -47,11 +43,11 @@ impl App {
             }
 
             HistoryAction::InitiateReversal => {
-                self.initiate_history_reversal();
+                app.initiate_history_reversal();
             }
 
             HistoryAction::ToggleConflictDisposition(idx) => {
-                if let ActiveView::History(ref mut state) = self.view {
+                if let ActiveView::History(ref mut state) = app.view {
                     if let HistoryPhase::ConflictResolution(ref mut cr) = state.phase {
                         if let Some(conflict) = cr.conflicts.get_mut(idx) {
                             conflict.disposition = match conflict.disposition {
@@ -65,27 +61,27 @@ impl App {
 
             HistoryAction::ConfirmReversal => {
                 if let Some(g) = witness {
-                    self.confirm_history_reversal(g);
+                    app.confirm_history_reversal(g);
                 }
             }
 
             HistoryAction::CancelConflictResolution => {
-                if let ActiveView::History(ref mut state) = self.view {
+                if let ActiveView::History(ref mut state) = app.view {
                     state.phase = HistoryPhase::SessionDetail;
                 }
             }
 
             HistoryAction::JettisonSession => {
-                self.enter_jettison_session();
+                app.enter_jettison_session();
             }
             HistoryAction::ConfirmJettisonSession => {
-                self.execute_jettison_session();
+                app.execute_jettison_session();
             }
             HistoryAction::JettisonAll => {
-                self.enter_jettison_all();
+                app.enter_jettison_all();
             }
             HistoryAction::AdvanceJettisonAll => {
-                if let ActiveView::History(ref mut state) = self.view {
+                if let ActiveView::History(ref mut state) = app.view {
                     if let HistoryPhase::ConfirmJettisonAll(ja) =
                         std::mem::replace(&mut state.phase, HistoryPhase::SessionList)
                     {
@@ -94,16 +90,18 @@ impl App {
                 }
             }
             HistoryAction::ConfirmJettisonAll => {
-                self.execute_jettison_all();
+                app.execute_jettison_all();
             }
             HistoryAction::CancelJettison => {
-                if let ActiveView::History(ref mut state) = self.view {
+                if let ActiveView::History(ref mut state) = app.view {
                     state.phase = HistoryPhase::SessionList;
                 }
             }
         }
     }
+}
 
+impl App {
     /// Expand a session: one-shot query for edits + inode paths.
     fn expand_history_session(&mut self, session_id: String) {
         let result = self

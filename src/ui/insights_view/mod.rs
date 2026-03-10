@@ -162,7 +162,7 @@ pub enum InsightAction {
     /// Launch subpar duplicate stash
     LaunchSubparDuplicateResolution,
     /// Launch manual review modal (redundant dups, deploy conflicts, metadata dups)
-    LaunchManualReview,
+    LaunchManualReview(crate::ui::manual_review_modal::ReviewKind),
     /// Launch missing tag resolution (opens tag editor with all affected files)
     LaunchMissingTagResolution,
     /// Launch missing album single resolution modal
@@ -235,7 +235,8 @@ impl BucketEntry {
             "TagCanonicity" | "InconsistentAlbumArtist" => InsightAction::LaunchTagCanonicityResolution,
             "CompoundTagValue" => InsightAction::LaunchCompoundTagSplitReview,
             "missing_tag" => InsightAction::LaunchMissingTagResolution,
-            "metadata_dup" | "deploy_conflict" => InsightAction::LaunchManualReview,
+            "metadata_dup" => InsightAction::LaunchManualReview(crate::ui::manual_review_modal::ReviewKind::MetadataDuplicate),
+            "deploy_conflict" => InsightAction::LaunchManualReview(crate::ui::manual_review_modal::ReviewKind::DeployConflict),
             _ => InsightAction::NotImplemented,
         };
         Self {
@@ -297,7 +298,7 @@ impl CachedBucketEntries {
             entries.push(BucketEntry::counted(InsightType::SubparDuplicates, "Subpar duplicates", bucket.subpar_duplicate_count, Color::Cyan, Color::Green, InsightAction::LaunchSubparDuplicateResolution));
         }
         if bucket.redundant_duplicate_count > 0 {
-            entries.push(BucketEntry::counted(InsightType::RedundantDuplicates, "Redundant duplicates", bucket.redundant_duplicate_count, Color::Yellow, Color::Green, InsightAction::LaunchManualReview));
+            entries.push(BucketEntry::counted(InsightType::RedundantDuplicates, "Redundant duplicates", bucket.redundant_duplicate_count, Color::Yellow, Color::Green, InsightAction::LaunchManualReview(crate::ui::manual_review_modal::ReviewKind::RedundantDuplicate)));
         }
         if bucket.inconsistent_album_artist_count > 0 {
             entries.push(BucketEntry::counted(InsightType::InconsistentAlbumArtist, "Inconsistent album_artist", bucket.inconsistent_album_artist_count, Color::Yellow, Color::Green, InsightAction::LaunchTagCanonicityResolution));

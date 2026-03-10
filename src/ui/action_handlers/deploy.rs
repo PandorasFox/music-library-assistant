@@ -5,47 +5,45 @@
 
 use super::super::App;
 use super::witness;
+use super::HandleAction;
 use crate::corpus::paths;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::{deploy_modal, ActiveView};
 
-impl App {
-    /// Handle Deploy lateral view actions.
-    pub(super) fn handle_deploy_action(
-        &mut self,
-        action: deploy_modal::DeployAction,
-        witness: Option<&witness::ConfirmationGesture>,
-    ) {
-        match action {
+impl HandleAction for deploy_modal::DeployAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
             deploy_modal::DeployAction::None => {}
             deploy_modal::DeployAction::CycleNext => {
-                self.handle_lateral_cycle(crate::ui::widgets::LateralView::Deploy, true);
+                app.handle_lateral_cycle(crate::ui::widgets::LateralView::Deploy, true);
             }
             deploy_modal::DeployAction::CyclePrev => {
-                self.handle_lateral_cycle(crate::ui::widgets::LateralView::Deploy, false);
+                app.handle_lateral_cycle(crate::ui::widgets::LateralView::Deploy, false);
             }
             deploy_modal::DeployAction::Confirm => {
                 let Some(w) = witness else { return };
                 // Extract cached data from Preview state
-                let cached_data = match &self.view {
+                let cached_data = match &app.view {
                     ActiveView::Deploy(deploy_modal::DeployViewState::Preview(ref preview)) => {
                         Some(preview.cached_data.clone())
                     }
                     _ => None,
                 };
                 if let Some(data) = cached_data {
-                    let mutation_count = self.stage_deploy_mutations(&data, w);
+                    let mutation_count = app.stage_deploy_mutations(&data, w);
                     if mutation_count > 0 {
-                        self.after_staging_decisions();
+                        app.after_staging_decisions();
                     } else {
-                        self.status_message = Some("No deploy operations needed".to_string());
+                        app.status_message = Some("No deploy operations needed".to_string());
                     }
                 }
             }
-            deploy_modal::DeployAction::RequestQuit => self.handle_request_quit(),
+            deploy_modal::DeployAction::RequestQuit => app.handle_request_quit(),
         }
     }
+}
 
+impl App {
     /// Stage deploy mutations for transaction review.
     ///
     /// Returns the number of mutations staged.

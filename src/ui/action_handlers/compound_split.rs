@@ -5,10 +5,54 @@
 
 use super::super::App;
 use super::witness;
+use super::HandleAction;
 use crate::db::types::Zone;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::suspended_views::SuspendTarget;
 use crate::ui::{compound_split_v2, helpers, progressive_worker, tag_editor, ActiveView};
+
+impl HandleAction for compound_split_v2::CompoundSplitActionV2 {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
+            compound_split_v2::CompoundSplitActionV2::None => {}
+            compound_split_v2::CompoundSplitActionV2::Confirmed => {
+                let Some(w) = witness else { return };
+                // Stage decision and advance to next signal
+                app.stage_compound_split_decision(w);
+                app.advance_to_next_compound_split();
+            }
+            compound_split_v2::CompoundSplitActionV2::Canonicalize => {
+                let Some(w) = witness else { return };
+                // Mark as canonical (don't split) and advance
+                app.stage_compound_canonicalize_decision(w);
+                app.advance_to_next_compound_split();
+            }
+            compound_split_v2::CompoundSplitActionV2::Cancelled => {
+                // Discard transaction if active
+                app.cancel_and_return_to_source("Compound tag split cancelled");
+            }
+            compound_split_v2::CompoundSplitActionV2::Navigate { forward } => {
+                // Navigate to next/prev signal without staging
+                app.navigate_compound_split(forward);
+            }
+            compound_split_v2::CompoundSplitActionV2::ShowReview => {
+                // Ctrl+R - show review with whatever has already been staged
+                app.after_staging_decisions();
+            }
+            compound_split_v2::CompoundSplitActionV2::StageAllAndReview => {
+                let Some(g) = witness else { return };
+                // Ctrl+A - stage ALL splits progressively with progress bar
+                app.start_progressive_compound_split_staging(*g);
+            }
+            compound_split_v2::CompoundSplitActionV2::OpenTagEditorIndividual => {
+                app.launch_tag_editor_from_compound_split(tag_editor::TagEditorMode::Individual);
+            }
+            compound_split_v2::CompoundSplitActionV2::OpenTagEditorAggregated => {
+                app.launch_tag_editor_from_compound_split(tag_editor::TagEditorMode::Aggregated);
+            }
+        }
+    }
+}
 
 impl App {
     /// Start compound tag split resolution modal.
@@ -101,52 +145,6 @@ impl App {
             safe_mode: safe_only,
             zone,
         };
-    }
-
-    /// Handle compound tag split modal actions (v2).
-    pub(super) fn handle_compound_split_action(
-        &mut self,
-        action: compound_split_v2::CompoundSplitActionV2,
-        witness: Option<&witness::ConfirmationGesture>,
-    ) {
-        match action {
-            compound_split_v2::CompoundSplitActionV2::None => {}
-            compound_split_v2::CompoundSplitActionV2::Confirmed => {
-                let Some(w) = witness else { return };
-                // Stage decision and advance to next signal
-                self.stage_compound_split_decision(w);
-                self.advance_to_next_compound_split();
-            }
-            compound_split_v2::CompoundSplitActionV2::Canonicalize => {
-                let Some(w) = witness else { return };
-                // Mark as canonical (don't split) and advance
-                self.stage_compound_canonicalize_decision(w);
-                self.advance_to_next_compound_split();
-            }
-            compound_split_v2::CompoundSplitActionV2::Cancelled => {
-                // Discard transaction if active
-                self.cancel_and_return_to_source("Compound tag split cancelled");
-            }
-            compound_split_v2::CompoundSplitActionV2::Navigate { forward } => {
-                // Navigate to next/prev signal without staging
-                self.navigate_compound_split(forward);
-            }
-            compound_split_v2::CompoundSplitActionV2::ShowReview => {
-                // Ctrl+R - show review with whatever has already been staged
-                self.after_staging_decisions();
-            }
-            compound_split_v2::CompoundSplitActionV2::StageAllAndReview => {
-                let Some(g) = witness else { return };
-                // Ctrl+A - stage ALL splits progressively with progress bar
-                self.start_progressive_compound_split_staging(*g);
-            }
-            compound_split_v2::CompoundSplitActionV2::OpenTagEditorIndividual => {
-                self.launch_tag_editor_from_compound_split(tag_editor::TagEditorMode::Individual);
-            }
-            compound_split_v2::CompoundSplitActionV2::OpenTagEditorAggregated => {
-                self.launch_tag_editor_from_compound_split(tag_editor::TagEditorMode::Aggregated);
-            }
-        }
     }
 
     /// Launch embedded tag editor from the compound split modal.

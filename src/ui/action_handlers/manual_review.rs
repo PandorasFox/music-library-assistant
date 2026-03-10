@@ -5,10 +5,66 @@
 
 use super::super::App;
 use super::witness;
+use super::HandleAction;
 use crate::db::types::Zone;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::manual_review_modal::types;
 use crate::ui::{manual_review_modal, tag_editor, ActiveView};
+
+impl HandleAction for manual_review_modal::ManualReviewAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        use manual_review_modal::ManualReviewAction;
+
+        match self {
+            ManualReviewAction::None => {}
+
+            ManualReviewAction::Cancel => {
+                app.cancel_and_return_to_source("Manual review cancelled");
+            }
+
+            ManualReviewAction::RequestStash => {
+                // Popup is already shown by the state - no action handler needed
+            }
+
+            ManualReviewAction::CancelStash => {
+                // Popup dismissed by state - no action handler needed
+            }
+
+            ManualReviewAction::ConfirmStash => {
+                let Some(g) = witness else { return };
+                app.stage_stash_for_selected_file(g);
+            }
+
+            ManualReviewAction::ConfirmStashAndAdvance => {
+                let Some(g) = witness else { return };
+                app.stage_stash_for_selected_file(g);
+                // Advance to next group
+                app.advance_manual_review_group(true);
+            }
+
+            ManualReviewAction::NavigateGroup(forward) => {
+                app.advance_manual_review_group(forward);
+            }
+
+            ManualReviewAction::ShowReview => {
+                app.after_staging_decisions();
+            }
+
+            ManualReviewAction::OpenTagEditorIndividual => {
+                app.open_manual_review_tag_editor(false);
+            }
+
+            ManualReviewAction::OpenTagEditorAggregated => {
+                app.open_manual_review_tag_editor(true);
+            }
+
+            ManualReviewAction::MarkExpectedDuplicate => {
+                let Some(g) = witness else { return };
+                app.stage_mark_expected_duplicate(g);
+            }
+        }
+    }
+}
 
 impl App {
     /// Start manual review modal from Insights view.
@@ -26,64 +82,6 @@ impl App {
 
         let state = manual_review_modal::ManualReviewState::new(kind, data);
         self.view = ActiveView::ManualReview(state);
-    }
-
-    /// Handle manual review actions.
-    pub(super) fn handle_manual_review_action(
-        &mut self,
-        action: manual_review_modal::ManualReviewAction,
-        witness: Option<&witness::ConfirmationGesture>,
-    ) {
-        use manual_review_modal::ManualReviewAction;
-
-        match action {
-            ManualReviewAction::None => {}
-
-            ManualReviewAction::Cancel => {
-                self.cancel_and_return_to_source("Manual review cancelled");
-            }
-
-            ManualReviewAction::RequestStash => {
-                // Popup is already shown by the state - no action handler needed
-            }
-
-            ManualReviewAction::CancelStash => {
-                // Popup dismissed by state - no action handler needed
-            }
-
-            ManualReviewAction::ConfirmStash => {
-                let Some(g) = witness else { return };
-                self.stage_stash_for_selected_file(g);
-            }
-
-            ManualReviewAction::ConfirmStashAndAdvance => {
-                let Some(g) = witness else { return };
-                self.stage_stash_for_selected_file(g);
-                // Advance to next group
-                self.advance_manual_review_group(true);
-            }
-
-            ManualReviewAction::NavigateGroup(forward) => {
-                self.advance_manual_review_group(forward);
-            }
-
-            ManualReviewAction::ShowReview => {
-                self.after_staging_decisions();
-            }
-
-            ManualReviewAction::OpenTagEditorIndividual => {
-                self.open_manual_review_tag_editor(false);
-            }
-
-            ManualReviewAction::OpenTagEditorAggregated => {
-                self.open_manual_review_tag_editor(true);
-            }
-
-            ManualReviewAction::MarkExpectedDuplicate => {
-                let Some(g) = witness else { return };
-                self.stage_mark_expected_duplicate(g);
-            }
-        }
     }
 
     /// Stage StashFromZone + DropFromIndex mutations for the currently selected file.

@@ -5,46 +5,44 @@
 //! - The External Match Review modal (read-only browser)
 
 use super::super::App;
+use super::witness;
+use super::HandleAction;
 use crate::meta::views::ExternalMatchReviewEntry;
 use crate::ui::{external_match_modal, external_match_view, widgets, ActiveView};
 
-impl App {
-    // =========================================================================
-    // External Matches Lateral View Actions
-    // =========================================================================
+// =========================================================================
+// External Matches Lateral View Actions
+// =========================================================================
 
-    /// Handle actions from the External Matches lateral view.
-    pub(super) fn handle_external_matches_action(
-        &mut self,
-        action: external_match_view::ExternalMatchesAction,
-    ) {
-        match action {
+impl HandleAction for external_match_view::ExternalMatchesAction {
+    fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
+        match self {
             external_match_view::ExternalMatchesAction::None => {}
             external_match_view::ExternalMatchesAction::CycleNext => {
-                self.handle_lateral_cycle(widgets::LateralView::ExternalMatches, true);
+                app.handle_lateral_cycle(widgets::LateralView::ExternalMatches, true);
             }
             external_match_view::ExternalMatchesAction::CyclePrev => {
-                self.handle_lateral_cycle(widgets::LateralView::ExternalMatches, false);
+                app.handle_lateral_cycle(widgets::LateralView::ExternalMatches, false);
             }
-            external_match_view::ExternalMatchesAction::RequestQuit => self.handle_request_quit(),
+            external_match_view::ExternalMatchesAction::RequestQuit => app.handle_request_quit(),
             external_match_view::ExternalMatchesAction::RequestFetch => {
-                self.witch.request_external_fetch();
-                self.status_message = Some("External fetch requested".to_string());
-                if let ActiveView::ExternalMatches(ref mut state) = self.view {
-                    state.fetch_active = self.witch.is_external_fetch_active();
+                app.witch.request_external_fetch();
+                app.status_message = Some("External fetch requested".to_string());
+                if let ActiveView::ExternalMatches(ref mut state) = app.view {
+                    state.fetch_active = app.witch.is_external_fetch_active();
                 }
             }
             external_match_view::ExternalMatchesAction::RequestReleasePacking => {
-                self.witch.request_release_packing();
-                self.transition_to_progress_after_mutations(
+                app.witch.request_release_packing();
+                app.transition_to_progress_after_mutations(
                     super::super::progress_screen::ProgressPhase::ContentAnalysis,
                 );
             }
             external_match_view::ExternalMatchesAction::LaunchPackingCategory(cat) => {
-                self.launch_release_packing_browser(cat);
+                app.launch_release_packing_browser(cat);
             }
             external_match_view::ExternalMatchesAction::LaunchUntaggedReview => {
-                let entries = if let ActiveView::ExternalMatches(ref state) = self.view {
+                let entries = if let ActiveView::ExternalMatches(ref state) = app.view {
                     state
                         .cached_data
                         .as_ref()
@@ -53,10 +51,10 @@ impl App {
                 } else {
                     vec![]
                 };
-                self.start_external_match_review_with(entries);
+                app.start_external_match_review_with(entries);
             }
             external_match_view::ExternalMatchesAction::LaunchTierReview(tier) => {
-                let entries = if let ActiveView::ExternalMatches(ref state) = self.view {
+                let entries = if let ActiveView::ExternalMatches(ref state) = app.view {
                     state
                         .cached_data
                         .as_ref()
@@ -70,11 +68,78 @@ impl App {
                 } else {
                     vec![]
                 };
-                self.start_external_match_review_with(entries);
+                app.start_external_match_review_with(entries);
             }
         }
     }
+}
 
+// =========================================================================
+// External Match Review Modal Actions (read-only)
+// =========================================================================
+
+impl HandleAction for external_match_modal::ExternalMatchReviewAction {
+    fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
+        match self {
+            external_match_modal::ExternalMatchReviewAction::None => {}
+            external_match_modal::ExternalMatchReviewAction::Cancel => {
+                app.cancel_and_return_to_source("External match browser closed");
+            }
+            external_match_modal::ExternalMatchReviewAction::OpenRecordingUrl(url) => {
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(&url)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            }
+        }
+    }
+}
+
+// =========================================================================
+// Knot Browser Actions
+// =========================================================================
+
+impl HandleAction for crate::ui::knot_browser::KnotBrowserAction {
+    fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
+        match self {
+            crate::ui::knot_browser::KnotBrowserAction::None => {}
+            crate::ui::knot_browser::KnotBrowserAction::Cancel => {
+                app.cancel_and_return_to_source("Knot browser closed");
+            }
+        }
+    }
+}
+
+// =========================================================================
+// Release Packing Browser Actions
+// =========================================================================
+
+impl HandleAction for crate::ui::release_packing_browser::ReleasePackingBrowserAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
+            crate::ui::release_packing_browser::ReleasePackingBrowserAction::None => {}
+            crate::ui::release_packing_browser::ReleasePackingBrowserAction::Cancel => {
+                app.cancel_and_return_to_source("Release packing browser closed");
+            }
+            crate::ui::release_packing_browser::ReleasePackingBrowserAction::PinRelease {
+                release_id,
+                track_paths,
+            } => {
+                if let Some(gesture) = witness {
+                    app.pin_release_for_dirs(release_id, track_paths, gesture);
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// Helper methods
+// =========================================================================
+
+impl App {
     /// Start external match review (read-only browser) with pre-filtered entries.
     /// Batch-loads both recording summaries and full detail data from cache.
     fn start_external_match_review_with(&mut self, entries: Vec<ExternalMatchReviewEntry>) {
@@ -196,36 +261,6 @@ impl App {
         self.view = ActiveView::ExternalMatchReview(state);
     }
 
-    // =========================================================================
-    // External Match Review Modal Actions (read-only)
-    // =========================================================================
-
-    /// Handle external match review actions.
-    pub(super) fn handle_external_match_review_action(
-        &mut self,
-        action: external_match_modal::ExternalMatchReviewAction,
-        _witness: Option<&super::witness::ConfirmationGesture>,
-    ) {
-        match action {
-            external_match_modal::ExternalMatchReviewAction::None => {}
-            external_match_modal::ExternalMatchReviewAction::Cancel => {
-                self.cancel_and_return_to_source("External match browser closed");
-            }
-            external_match_modal::ExternalMatchReviewAction::OpenRecordingUrl(url) => {
-                let _ = std::process::Command::new("xdg-open")
-                    .arg(&url)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn();
-            }
-        }
-    }
-
-    // =========================================================================
-    // Release Packing Browser
-    // =========================================================================
-
     /// Load packing signal data and launch the browser for a specific category.
     fn launch_release_packing_browser(
         &mut self,
@@ -338,47 +373,12 @@ impl App {
         self.view = crate::ui::active_view::ActiveView::KnotBrowser(state);
     }
 
-    /// Handle knot browser actions.
-    pub(super) fn handle_knot_browser_action(
-        &mut self,
-        action: crate::ui::knot_browser::KnotBrowserAction,
-    ) {
-        match action {
-            crate::ui::knot_browser::KnotBrowserAction::None => {}
-            crate::ui::knot_browser::KnotBrowserAction::Cancel => {
-                self.cancel_and_return_to_source("Knot browser closed");
-            }
-        }
-    }
-
-    /// Handle release packing browser actions.
-    pub(super) fn handle_release_packing_browser_action(
-        &mut self,
-        action: crate::ui::release_packing_browser::ReleasePackingBrowserAction,
-        witness: Option<&super::witness::ConfirmationGesture>,
-    ) {
-        match action {
-            crate::ui::release_packing_browser::ReleasePackingBrowserAction::None => {}
-            crate::ui::release_packing_browser::ReleasePackingBrowserAction::Cancel => {
-                self.cancel_and_return_to_source("Release packing browser closed");
-            }
-            crate::ui::release_packing_browser::ReleasePackingBrowserAction::PinRelease {
-                release_id,
-                track_paths,
-            } => {
-                if let Some(gesture) = witness {
-                    self.pin_release_for_dirs(release_id, track_paths, gesture);
-                }
-            }
-        }
-    }
-
     /// Pin a MusicBrainz release ID for all source dirs that contain the given track paths.
     fn pin_release_for_dirs(
         &mut self,
         release_id: String,
         track_paths: Vec<String>,
-        gesture: &super::witness::ConfirmationGesture,
+        gesture: &witness::ConfirmationGesture,
     ) {
         use crate::meta::decisions::DecisionKey;
 

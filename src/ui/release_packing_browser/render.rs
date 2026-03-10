@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 
@@ -855,63 +855,125 @@ fn render_unmatched_detail(um: &UnmatchedEntry) -> Vec<Line<'static>> {
 // ============================================================================
 
 fn render_pin_overlay(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserState) {
-    let input: &crate::ui::widgets::TextInputState = match &state.pin_input {
+    let input = match &state.pin_input {
         Some(input) => input,
         None => return,
     };
 
-    // Centered popup: 60 wide, 7 tall (or 8 with error)
-    let has_error = state.pin_error.is_some();
-    let height = if has_error { 8 } else { 7 };
-    let width = 60u16.min(area.width.saturating_sub(4));
+    // Height: border + uuid_line + (error|spacer) + hints + border = 5
+    let height = 5u16;
+    let width = 46u16.min(area.width.saturating_sub(4));
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     let popup_area = Rect::new(x, y, width, height);
 
-    // Clear background
-    let clear = Paragraph::new(vec![Line::from(""); height as usize])
-        .style(Style::default().bg(Color::Black));
-    f.render_widget(clear, popup_area);
+    // Clear one extra cell around the popup for visual separation
+    let padded_area = Rect::new(
+        popup_area.x.saturating_sub(1),
+        popup_area.y.saturating_sub(1),
+        (popup_area.width + 2).min(area.x + area.width - popup_area.x.saturating_sub(1)),
+        (popup_area.height + 2).min(area.y + area.height - popup_area.y.saturating_sub(1)),
+    );
+    f.render_widget(Clear, padded_area);
 
     let block = Block::default()
         .title(" Pin MusicBrainz Release ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(Color::LightBlue));
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Release ID label + text input
-    let (before, cursor_char, after) = input.cursor_splits();
-    lines.push(Line::from(vec![
-        Span::styled("Release ID: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(before.to_string(), Style::default().fg(Color::White)),
-        Span::styled(
-            cursor_char.to_string(),
-            Style::default().fg(Color::Black).bg(Color::White),
-        ),
-        Span::styled(after.to_string(), Style::default().fg(Color::White)),
-    ]));
+    // UUID template: ________-____-____-____-____________ with cursor
+    lines.push(render_uuid_template(input.value(), input.cursor, inner.width));
 
-    // Error message if present
+    // Error replaces the spacer line
     if let Some(ref err) = state.pin_error {
-        lines.push(Line::from(Span::styled(
-            err.clone(),
-            Style::default().fg(Color::Red),
-        )));
+        lines.push(Line::from(Span::styled(err.clone(), Style::default().fg(Color::Red))).centered());
+    } else {
+        lines.push(Line::from(Span::raw("")));
     }
 
-    // Spacer + hint
-    lines.push(Line::from(Span::raw("")));
-    lines.push(Line::from(vec![
-        control_colors::nav("Enter"),
-        control_colors::text(" confirm  "),
-        control_colors::cancel("Esc"),
-        control_colors::text(" cancel"),
-    ]));
+    // Centered hints
+    lines.push(
+        Line::from(vec![
+            control_colors::nav("Enter"),
+            control_colors::text(" confirm  "),
+            control_colors::cancel("Esc"),
+            control_colors::text(" cancel"),
+        ])
+        .centered(),
+    );
 
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Render the UUID hex value as a `________-____-____-____-____________` template.
+/// Filled positions show the hex char in white, unfilled show `_` in dark gray.
+/// Dashes are always dark gray. The cursor position is inverted.
+fn render_uuid_template(hex: &str, cursor: usize, inner_width: u16) -> Line<'static> {
+    const DASH_POSITIONS: [usize; 4] = [8, 13, 18, 23];
+    let hex_chars: Vec<char> = hex.chars().collect();
+    let cursor_display = hex_cursor_to_display(cursor);
+
+    let mut spans: Vec<Span> = Vec::new();
+
+    // Center the 36-char UUID template within the inner width
+    let uuid_width = 36usize;
+    let left_pad = (inner_width as usize).saturating_sub(uuid_width) / 2;
+    if left_pad > 0 {
+        spans.push(Span::raw(" ".repeat(left_pad)));
+    }
+
+    let mut hex_idx = 0;
+    for display_idx in 0..36usize {
+        let is_cursor = display_idx == cursor_display;
+
+        if DASH_POSITIONS.contains(&display_idx) {
+            let style = if is_cursor {
+                Style::default().fg(Color::Black).bg(Color::White)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            spans.push(Span::styled("-", style));
+        } else {
+            if hex_idx < hex_chars.len() {
+                let style = if is_cursor {
+                    Style::default().fg(Color::Black).bg(Color::White)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                spans.push(Span::styled(hex_chars[hex_idx].to_string(), style));
+            } else {
+                let style = if is_cursor {
+                    Style::default().fg(Color::Black).bg(Color::White)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                spans.push(Span::styled("_", style));
+            }
+            hex_idx += 1;
+        }
+    }
+
+    Line::from(spans)
+}
+
+/// Map a hex-only cursor position (0..32) to its display position (0..36)
+/// accounting for dash positions at display indices 8, 13, 18, 23.
+fn hex_cursor_to_display(hex_pos: usize) -> usize {
+    if hex_pos >= 20 {
+        hex_pos + 4
+    } else if hex_pos >= 16 {
+        hex_pos + 3
+    } else if hex_pos >= 12 {
+        hex_pos + 2
+    } else if hex_pos >= 8 {
+        hex_pos + 1
+    } else {
+        hex_pos
+    }
 }
 
 // ============================================================================

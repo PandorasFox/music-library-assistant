@@ -345,28 +345,40 @@ impl ReleasePackingBrowserState {
         }
     }
 
+    /// Handle input for the pin release UUID field.
+    ///
+    /// The TextInputState stores raw hex characters only (no dashes, max 32).
+    /// Only hex chars are accepted; pasting a full UUID or MB URL is cleaned
+    /// automatically. On confirm, the 32 hex chars are formatted as a UUID.
     fn handle_pin_input(&mut self, action: &InputAction) -> ReleasePackingBrowserAction {
         match action {
             InputAction::Confirm => {
-                let input = self.pin_input.as_ref().unwrap();
-                match Self::validate_release_id(input.value()) {
-                    Ok(release_id) => {
-                        // Collect track paths from the selected release
-                        let track_paths = self
-                            .selected_release()
-                            .map(|r| r.tracks.iter().map(|t| t.path.clone()).collect())
-                            .unwrap_or_default();
-                        self.pin_input = None;
-                        self.pin_error = None;
-                        ReleasePackingBrowserAction::PinRelease {
-                            release_id,
-                            track_paths,
-                        }
-                    }
-                    Err(msg) => {
-                        self.pin_error = Some(msg);
-                        ReleasePackingBrowserAction::None
-                    }
+                let hex = self.pin_input.as_ref().unwrap().value().to_string();
+                if hex.len() != 32 {
+                    self.pin_error = Some(format!(
+                        "Need 32 hex characters (have {})",
+                        hex.len()
+                    ));
+                    return ReleasePackingBrowserAction::None;
+                }
+                // Format as UUID: 8-4-4-4-12
+                let release_id = format!(
+                    "{}-{}-{}-{}-{}",
+                    &hex[0..8],
+                    &hex[8..12],
+                    &hex[12..16],
+                    &hex[16..20],
+                    &hex[20..32]
+                );
+                let track_paths = self
+                    .selected_release()
+                    .map(|r| r.tracks.iter().map(|t| t.path.clone()).collect())
+                    .unwrap_or_default();
+                self.pin_input = None;
+                self.pin_error = None;
+                ReleasePackingBrowserAction::PinRelease {
+                    release_id,
+                    track_paths,
                 }
             }
             InputAction::Cancel => {
@@ -374,46 +386,51 @@ impl ReleasePackingBrowserState {
                 self.pin_error = None;
                 ReleasePackingBrowserAction::None
             }
-            other => {
+            InputAction::Char(c) if c.is_ascii_hexdigit() => {
                 self.pin_error = None;
                 let input = self.pin_input.as_mut().unwrap();
-                input.handle_input(other);
+                if input.value().len() < 32 {
+                    input.insert_char(c.to_ascii_lowercase());
+                }
                 ReleasePackingBrowserAction::None
             }
+            InputAction::Paste(text) => {
+                self.pin_error = None;
+                // Strip MB URL prefix, dashes; keep only hex chars
+                let trimmed = text.trim();
+                let stripped = trimmed
+                    .strip_prefix("https://musicbrainz.org/release/")
+                    .or_else(|| trimmed.strip_prefix("http://musicbrainz.org/release/"))
+                    .unwrap_or(trimmed);
+                let hex: String = stripped
+                    .chars()
+                    .filter(|c| c.is_ascii_hexdigit())
+                    .map(|c| c.to_ascii_lowercase())
+                    .take(32)
+                    .collect();
+                let input = self.pin_input.as_mut().unwrap();
+                input.clear();
+                input.insert_str(&hex);
+                ReleasePackingBrowserAction::None
+            }
+            InputAction::Backspace
+            | InputAction::Delete
+            | InputAction::NavLeft
+            | InputAction::NavRight
+            | InputAction::Home
+            | InputAction::End
+            | InputAction::TextHome
+            | InputAction::TextEnd
+            | InputAction::WordLeft
+            | InputAction::WordRight
+            | InputAction::KillToStart
+            | InputAction::KillToEnd => {
+                self.pin_error = None;
+                self.pin_input.as_mut().unwrap().handle_input(action);
+                ReleasePackingBrowserAction::None
+            }
+            _ => ReleasePackingBrowserAction::None,
         }
-    }
-
-    /// Validate and normalize a MusicBrainz release ID from user input.
-    /// Accepts raw UUIDs or full musicbrainz.org URLs.
-    fn validate_release_id(raw: &str) -> Result<String, String> {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return Err("Release ID cannot be empty".to_string());
-        }
-
-        // Strip MB URL prefix if present
-        let id = trimmed
-            .strip_prefix("https://musicbrainz.org/release/")
-            .or_else(|| trimmed.strip_prefix("http://musicbrainz.org/release/"))
-            .unwrap_or(trimmed);
-
-        // Validate UUID format: 8-4-4-4-12 hex
-        let id_lower = id.to_lowercase();
-        let parts: Vec<&str> = id_lower.split('-').collect();
-        if parts.len() != 5
-            || parts[0].len() != 8
-            || parts[1].len() != 4
-            || parts[2].len() != 4
-            || parts[3].len() != 4
-            || parts[4].len() != 12
-        {
-            return Err("Invalid UUID format (expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)".to_string());
-        }
-        if !id_lower.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-            return Err("UUID contains invalid characters".to_string());
-        }
-
-        Ok(id_lower)
     }
 
     /// Whether a release is selected (i.e., pinning is possible).

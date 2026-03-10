@@ -35,6 +35,24 @@
 //! - `derivation/` - Derivation phase computations
 //! - `analysis/` - Analysis phase computations
 
+/// Acquire the DB write thread's signal sender, or return early with `Result::failure`.
+///
+/// Expands to a `let sender = ...;` binding. The caller's module must have
+/// `Result` and `Computation` in scope (each phase re-exports its own).
+macro_rules! require_sender {
+    ($computation:expr) => {
+        match $crate::db::write_thread::signal_sender() {
+            Some(s) => s.clone(),
+            None => {
+                return Result::failure(
+                    $computation,
+                    "DB thread not initialized".to_string(),
+                );
+            }
+        }
+    };
+}
+
 // Module declarations
 pub mod analysis;
 pub mod derivation;

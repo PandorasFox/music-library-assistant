@@ -9,7 +9,6 @@ use std::path::Path;
 
 use crate::corpus::paths;
 use crate::corpus::tags;
-use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
@@ -35,15 +34,7 @@ pub fn execute_index_image_file(
 ) -> Result {
     let computation = Computation::IndexImageFile;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let dirty_inodes = match read_only_db.get_dirty_inodes(INDEX_IMAGE_FILE_COMPUTATION) {
         Ok(inodes) => inodes,

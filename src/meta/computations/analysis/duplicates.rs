@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use mm_utils::tag_names::find_tag_in_map;
 
 use crate::db::types::Zone;
-use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
@@ -77,15 +76,7 @@ pub fn execute_detect_fingerprint_overlaps(
 
     let computation = Computation::DetectFingerprintOverlaps;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Load config for similarity threshold and duration tolerance
     let config = match crate::config::load_config() {
@@ -274,15 +265,7 @@ pub fn execute_detect_duplicate_inodes(
 ) -> Result {
     let computation = Computation::DetectDuplicateInodes;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let duplicate_groups = match read_only_db.get_duplicate_inode_groups() {
         Ok(groups) => groups,
@@ -335,15 +318,7 @@ pub fn execute_detect_metadata_duplicates(
 ) -> Result {
     let computation = Computation::DetectMetadataDuplicates;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let all_tags = match read_only_db.get_all_tags_ordered() {
         Ok(rows) => rows,
@@ -715,15 +690,7 @@ pub fn execute_analyze_fingerprint_overlaps(
 ) -> Result {
     let computation = Computation::AnalyzeFingerprintOverlaps;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Load configuration
     let config = match crate::config::load_config() {
@@ -1102,15 +1069,7 @@ pub fn execute_detect_cross_source_overlaps(
 ) -> Result {
     let computation = Computation::DetectCrossSourceOverlaps;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Load config to get source directories
     let config = match crate::config::load_config() {

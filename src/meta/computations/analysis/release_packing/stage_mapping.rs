@@ -37,15 +37,7 @@ pub fn execute_compute_release_mappings(
 ) -> Result {
     let computation = AnalysisComputation::ComputeReleaseMappings;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Bulk-clear all packing-related signal tables for clean re-emission.
     // Each tier will emit its signals per-component as it solves.
@@ -410,15 +402,7 @@ pub(crate) fn execute_map_perfect_releases(
     };
     let mut state = shared.take();
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let assigned_inodes = read_only_db
         .get_assigned_packing_inodes()
@@ -580,15 +564,7 @@ pub(crate) fn execute_map_full_match_releases(
     };
     let mut state = shared.take();
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let assigned_inodes = read_only_db
         .get_assigned_packing_inodes()
@@ -644,15 +620,7 @@ pub(crate) fn execute_map_incomplete_releases(
     };
     let mut state = shared.take();
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let assigned_inodes = read_only_db
         .get_assigned_packing_inodes()
@@ -711,15 +679,7 @@ pub(crate) fn execute_map_single_releases(
     };
     let mut state = shared.take();
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let assigned_inodes = read_only_db
         .get_assigned_packing_inodes()

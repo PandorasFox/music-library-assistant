@@ -7,7 +7,6 @@
 
 
 use crate::db::types::Zone;
-use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpusSignal};
@@ -31,15 +30,7 @@ pub fn execute_detect_inbox_corpus_matches(
 ) -> Result {
     let computation = Computation::DetectInboxCorpusMatches;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Load config for similarity threshold and duration tolerance
     let config = match crate::config::load_config() {

@@ -47,15 +47,7 @@ pub fn execute_detect_deploy_conflicts(
 ) -> Result {
     let computation = Computation::DetectDeployConflicts;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let healthy_signals = match read_only_db.get_healthy_file_signals() {
         Ok(v) => v,
@@ -148,15 +140,7 @@ pub fn execute_detect_release_overlaps(
 ) -> Result {
     let computation = Computation::DetectReleaseOverlaps;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let config = match crate::config::load_config() {
         Ok(c) => c,
@@ -352,15 +336,7 @@ pub fn execute_derive_deploy_health_signals(
         corpus_path_prefixes: corpus_path_prefixes.to_vec(),
     };
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     log_general(format!(
         "[COMPUTE] DeriveDeployHealthSignals '{}': starting (root={:?}, prefixes={:?})",
@@ -824,15 +800,7 @@ pub fn execute_derive_corpus_deploy_status(
 ) -> Result {
     let computation = Computation::DeriveCorpusDeployStatus;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Get all HealthyFile signals
     let healthy_signals = match read_only_db.get_healthy_file_signals() {

@@ -4,7 +4,6 @@
 
 
 use crate::db::types::Zone;
-use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::drop_stale_corpus_signal;
@@ -37,15 +36,7 @@ pub fn execute_detect_shit_formats(
 ) -> Result {
     let computation = Computation::DetectShitFormats;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let dirty_inodes = match read_only_db.get_dirty_inodes(SHIT_FORMAT_COMPUTATION) {
         Ok(inodes) => inodes,

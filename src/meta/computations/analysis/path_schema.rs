@@ -8,7 +8,6 @@ use std::path::Path;
 
 use crate::config::path_schema::PathSchemaMatchResult;
 use crate::db::types::Zone;
-use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpusSignal};
@@ -26,15 +25,7 @@ pub fn execute_detect_path_tag_mismatches(
 ) -> Result {
     let computation = Computation::DetectPathTagMismatches;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let config = match crate::config::load_config() {
         Ok(c) => c,

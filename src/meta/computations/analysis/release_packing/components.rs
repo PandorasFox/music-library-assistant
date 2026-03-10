@@ -815,15 +815,7 @@ pub(crate) fn execute_resolve_packing_component(
     let manifest_map_owned = component.manifest_map;
     let signature_siblings = component.signature_siblings;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     if proposals.is_empty() {
         return Result::success(computation, Vec::new());

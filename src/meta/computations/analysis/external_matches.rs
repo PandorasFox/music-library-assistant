@@ -8,7 +8,6 @@ use std::collections::HashMap;
 
 use crate::db::queries::external::ExternalMatchRow;
 use crate::db::types::Zone;
-use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
 use crate::external::acoustid::{self, AcoustIdRecording, AcoustIdResponse};
 use crate::logging::log_general;
@@ -28,15 +27,7 @@ pub fn execute_derive_external_matches(
 ) -> Result {
     let computation = Computation::DeriveExternalMatches;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let source_key = ExternalSource::AcoustID.to_key();
 

@@ -97,16 +97,7 @@ pub fn execute_scan_corpus_directory(
         force_check,
     };
 
-    // Get signal sender for async writes
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     if !directory.exists() {
         return Result::failure(

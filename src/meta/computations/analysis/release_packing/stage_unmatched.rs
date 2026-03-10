@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
 use crate::external::musicbrainz;
 use crate::logging::log_general;
@@ -29,15 +28,7 @@ pub fn execute_emit_unmatched_signals(
 ) -> Result {
     let computation = AnalysisComputation::EmitUnmatchedSignals;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Build set of assigned inodes (from ReleasePackingSignal, written by Stage 3)
     let assigned_inodes: HashSet<i64> = read_only_db

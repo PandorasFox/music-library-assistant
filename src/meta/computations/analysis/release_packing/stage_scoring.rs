@@ -39,15 +39,7 @@ pub fn execute_pack_releases(
 ) -> Result {
     let computation = AnalysisComputation::PackReleases;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let config = match crate::config::load_config() {
         Ok(c) => c,
@@ -526,15 +518,7 @@ pub fn execute_score_release_candidates(
         release_id: release_id.to_string(),
     };
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let config = match crate::config::load_config() {
         Ok(c) => c,

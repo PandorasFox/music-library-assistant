@@ -32,16 +32,7 @@ pub fn execute_schedule_second_level_derivations(
 ) -> Result {
     log_general("[COMPUTE] ScheduleSecondLevelDerivations: starting");
 
-    // Get signal sender for missing directory signals
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                Computation::ScheduleSecondLevelDerivations,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(Computation::ScheduleSecondLevelDerivations);
 
     // ========================================================================
     // Detect Missing Directories
@@ -143,18 +134,9 @@ pub fn execute_derive_corpus_signals(
 ) -> Result {
     log_general("[COMPUTE] DeriveCorpusSignals: starting global inode comparison");
 
-    // Get signal sender for async writes
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                Computation::DeriveCorpusSignals {
-                    observed_inodes: HashMap::new(),
-                },
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(Computation::DeriveCorpusSignals {
+        observed_inodes: HashMap::new(),
+    });
 
     // Reconcile FileInCorpus signals against observed disk state:
     // - Observed but no signal → write new FileInCorpus
@@ -338,17 +320,9 @@ pub fn execute_derive_inbox_signals(
 ) -> Result {
     log_general("[COMPUTE] DeriveInboxSignals: starting inbox inode comparison");
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                Computation::DeriveInboxSignals {
-                    observed_inodes: HashMap::new(),
-                },
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(Computation::DeriveInboxSignals {
+        observed_inodes: HashMap::new(),
+    });
 
     // Reconcile FileInInbox signals against observed disk state:
     // - Observed but no signal → write new FileInInbox
@@ -618,15 +592,7 @@ pub fn execute_update_corpus_file_signals(
         path: path.to_path_buf(),
     };
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Convert absolute path to relative for DB queries
     let resolver = paths::get_resolver();
@@ -744,15 +710,7 @@ pub fn execute_update_library_file_signals(
         path: path.to_path_buf(),
     };
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Convert absolute path to relative for signal keys
     let resolver = paths::get_resolver();
@@ -915,15 +873,7 @@ pub fn execute_reconcile_library_files(
         observed_files: observed_files.to_vec(),
     };
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Get existing library files from DB
     let existing = read_only_db.get_library_file_metadata().unwrap_or_default();
@@ -1013,15 +963,7 @@ pub fn execute_update_deploy_signals(
         library_path: library_path.to_path_buf(),
     };
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Convert absolute paths to relative for DB queries and signal keys
     let resolver = paths::get_resolver();

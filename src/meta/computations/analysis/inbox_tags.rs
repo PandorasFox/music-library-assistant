@@ -24,7 +24,6 @@ use crate::corpus::health::normalization::{
     normalize_album, normalize_album_artist, normalize_artist, normalize_genre,
 };
 use crate::db::types::Zone;
-use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{reconcile_aggregate_signals, ComputedAggregateSignal};
@@ -52,15 +51,7 @@ pub fn execute_detect_inbox_tag_canonicity(
 ) -> Result {
     let computation = Computation::DetectInboxTagCanonicity;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let config = match crate::config::load_config() {
         Ok(c) => c,
@@ -226,15 +217,7 @@ pub fn execute_detect_inbox_missing_tags(
 ) -> Result {
     let computation = Computation::DetectInboxMissingTags;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let config = match crate::config::load_config() {
         Ok(c) => c,
@@ -354,15 +337,7 @@ pub fn execute_detect_inbox_compound_tags(
 
     let computation = Computation::DetectInboxCompoundTags;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let config = match crate::config::load_config() {
         Ok(c) => c,

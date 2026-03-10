@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
@@ -36,15 +35,7 @@ pub fn execute_detect_missing_tags(
 
     let computation = Computation::DetectMissingTags;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let config = match crate::config::load_config() {
         Ok(c) => c,
@@ -244,15 +235,7 @@ pub fn execute_detect_tag_canonicalizations(
 
     let computation = Computation::DetectTagCanonicalizations;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let config = match crate::config::load_config() {
         Ok(c) => c,
@@ -417,15 +400,7 @@ pub fn execute_detect_compound_tags_for_inode(
 
     let computation = Computation::DetectCompoundTagsForInode { inode };
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     // Get the file path for this inode (needed for signal key)
     let corpus_path = match read_only_db.get_corpus_path_for_inode(inode) {
@@ -605,15 +580,7 @@ pub fn execute_seed_compound_tag_dirty_inodes(
         new_separators: new_separators.to_vec(),
     };
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let mut all_inodes: HashSet<i64> = HashSet::new();
 
@@ -661,15 +628,7 @@ pub fn execute_detect_inconsistent_album_artist(
 
     let computation = Computation::DetectInconsistentAlbumArtist;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let issues = match detect_inconsistent_album_artist(read_only_db) {
         Ok(i) => i,
@@ -735,15 +694,7 @@ pub fn execute_detect_disc_extractions(
 
     let computation = Computation::DetectDiscExtractions;
 
-    let sender = match write_thread::signal_sender() {
-        Some(s) => s.clone(),
-        None => {
-            return Result::failure(
-                computation,
-                "DB thread not initialized".to_string(),
-            );
-        }
-    };
+    let sender = require_sender!(computation);
 
     let mut computed: Vec<ComputedAggregateSignal> = Vec::new();
 

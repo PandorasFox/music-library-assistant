@@ -115,7 +115,9 @@ impl App {
             ViewAction::ExternalMatchReview(a) => {
                 self.handle_external_match_review_action(a, witness.as_ref())
             }
-            ViewAction::ReleasePackingBrowser(a) => self.handle_release_packing_browser_action(a),
+            ViewAction::ReleasePackingBrowser(a) => {
+                self.handle_release_packing_browser_action(a, witness.as_ref())
+            }
             ViewAction::KnotBrowser(a) => self.handle_knot_browser_action(a),
             ViewAction::History(a) => self.handle_history_action(a, witness.as_ref()),
             ViewAction::TransactionReview(a) => {

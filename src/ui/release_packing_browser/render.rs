@@ -32,7 +32,8 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState)
         .split(area);
 
     render_title_bar(f, outer[0], state);
-    render_controls(f, outer[2]);
+    let has_release = state.pin_input.is_none() && state.selected_release().is_some();
+    render_controls(f, outer[2], has_release);
 
     // Content: left (25%) + right (75%)
     let panes = Layout::default()
@@ -49,6 +50,11 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState)
     render_left_pane(f, panes[0], state);
     render_tracks_pane(f, right[0], state);
     render_detail_pane(f, right[1], state);
+
+    // Pin input overlay on top of everything
+    if state.pin_input.is_some() {
+        render_pin_overlay(f, area, state);
+    }
 }
 
 fn render_title_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserState) {
@@ -69,16 +75,21 @@ fn render_title_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserStat
     f.render_widget(Paragraph::new(vec![line]), area);
 }
 
-fn render_controls(f: &mut Frame, area: Rect) {
-    let line = Line::from(vec![
+fn render_controls(f: &mut Frame, area: Rect, has_release: bool) {
+    let mut spans = vec![
         control_colors::text(" "),
         control_colors::nav("^v"),
         control_colors::text(" nav  "),
         control_colors::nav("Shift+Arrow"),
         control_colors::text(" switch pane  "),
-        control_colors::cancel("Esc"),
-        control_colors::text(" close"),
-    ]);
+    ];
+    if has_release {
+        spans.push(control_colors::nav("p"));
+        spans.push(control_colors::text(" pin release  "));
+    }
+    spans.push(control_colors::cancel("Esc"));
+    spans.push(control_colors::text(" close"));
+    let line = Line::from(spans);
     f.render_widget(Paragraph::new(vec![line]), area);
 }
 
@@ -837,6 +848,70 @@ fn render_unmatched_detail(um: &UnmatchedEntry) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+// ============================================================================
+// Pin Release Overlay
+// ============================================================================
+
+fn render_pin_overlay(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserState) {
+    let input: &crate::ui::widgets::TextInputState = match &state.pin_input {
+        Some(input) => input,
+        None => return,
+    };
+
+    // Centered popup: 60 wide, 7 tall (or 8 with error)
+    let has_error = state.pin_error.is_some();
+    let height = if has_error { 8 } else { 7 };
+    let width = 60u16.min(area.width.saturating_sub(4));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let popup_area = Rect::new(x, y, width, height);
+
+    // Clear background
+    let clear = Paragraph::new(vec![Line::from(""); height as usize])
+        .style(Style::default().bg(Color::Black));
+    f.render_widget(clear, popup_area);
+
+    let block = Block::default()
+        .title(" Pin MusicBrainz Release ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Release ID label + text input
+    let (before, cursor_char, after) = input.cursor_splits();
+    lines.push(Line::from(vec![
+        Span::styled("Release ID: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(before.to_string(), Style::default().fg(Color::White)),
+        Span::styled(
+            cursor_char.to_string(),
+            Style::default().fg(Color::Black).bg(Color::White),
+        ),
+        Span::styled(after.to_string(), Style::default().fg(Color::White)),
+    ]));
+
+    // Error message if present
+    if let Some(ref err) = state.pin_error {
+        lines.push(Line::from(Span::styled(
+            err.clone(),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    // Spacer + hint
+    lines.push(Line::from(Span::raw("")));
+    lines.push(Line::from(vec![
+        control_colors::nav("Enter"),
+        control_colors::text(" confirm  "),
+        control_colors::cancel("Esc"),
+        control_colors::text(" cancel"),
+    ]));
+
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 // ============================================================================

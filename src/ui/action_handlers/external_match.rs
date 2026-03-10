@@ -369,12 +369,120 @@ impl App {
     pub(super) fn handle_release_packing_browser_action(
         &mut self,
         action: crate::ui::release_packing_browser::ReleasePackingBrowserAction,
+        witness: Option<&super::witness::ConfirmationGesture>,
     ) {
         match action {
             crate::ui::release_packing_browser::ReleasePackingBrowserAction::None => {}
             crate::ui::release_packing_browser::ReleasePackingBrowserAction::Cancel => {
                 self.cancel_and_return_to_source("Release packing browser closed");
             }
+            crate::ui::release_packing_browser::ReleasePackingBrowserAction::PinRelease {
+                release_id,
+                track_paths,
+            } => {
+                if let Some(gesture) = witness {
+                    self.pin_release_for_dirs(release_id, track_paths, gesture);
+                }
+            }
         }
+    }
+
+    /// Pin a MusicBrainz release ID for all source dirs that contain the given track paths.
+    fn pin_release_for_dirs(
+        &mut self,
+        release_id: String,
+        track_paths: Vec<String>,
+        gesture: &super::witness::ConfirmationGesture,
+    ) {
+        use crate::meta::decisions::DecisionKey;
+
+        let config = match crate::config::load_config() {
+            Ok(c) => c,
+            Err(_) => {
+                self.status_message = Some("Failed to load config".to_string());
+                return;
+            }
+        };
+
+        // Resolve unique source dirs from track paths
+        let mut seen_dirs = std::collections::HashSet::new();
+        let mut source_dirs: Vec<std::path::PathBuf> = Vec::new();
+        for path in &track_paths {
+            if let Some(resolved) = config.resolve_source_config_for_db_path(path) {
+                if seen_dirs.insert(resolved.source_path.clone()) {
+                    source_dirs.push(resolved.source_path);
+                }
+            }
+        }
+
+        if source_dirs.is_empty() {
+            self.status_message = Some("No source directories found for tracks".to_string());
+            return;
+        }
+
+        let label = format!("Pin release {} ({} dirs)", &release_id[..8], source_dirs.len());
+        let open_txn = self.open_txn_mode();
+        if !open_txn {
+            let _ = self.witch.start_transaction(&label);
+        }
+
+        for source_path in &source_dirs {
+            let old_dir = match config.get_raw_source_dir(source_path) {
+                Some(sd) => sd.clone(),
+                None => crate::config::SourceDir {
+                    path: source_path.clone(),
+                    libraries: vec![],
+                    can_stash_dupes: None,
+                    interior_dupes: None,
+                    path_schema: None,
+                    enable_acoustid: None,
+                    pinned_release: None,
+                },
+            };
+
+            let mut new_dir = old_dir.clone();
+            new_dir.pinned_release = Some(release_id.clone());
+
+            // Build the full new config with this edit applied
+            let new_config = {
+                let mut cfg = config.clone();
+                let mut found = false;
+                for sd in &mut cfg.source_dirs {
+                    if sd.path == *source_path {
+                        *sd = new_dir.clone();
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    cfg.source_dirs.push(new_dir.clone());
+                }
+                cfg.source_dirs.retain(|sd| !sd.is_default());
+                cfg
+            };
+
+            let mutation = crate::meta::mutations::Mutation::ApplyDirConfigEdit(Box::new(
+                crate::meta::mutations::dir_config_edit::ApplyDirConfigEditMutation {
+                    source_path: source_path.clone(),
+                    old_dir,
+                    new_dir,
+                    new_config,
+                },
+            ));
+
+            let key = DecisionKey::DirConfigEdit {
+                source_path: source_path.clone(),
+            };
+            let dir_label = format!("Pin release: {}", source_path.display());
+            let _ = crate::ui::operator_decisions::stage_decision(
+                &mut self.witch,
+                key,
+                &dir_label,
+                vec![mutation],
+                gesture,
+            );
+        }
+
+        self.after_staging_decisions();
     }
 }

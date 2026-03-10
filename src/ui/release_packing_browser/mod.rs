@@ -15,6 +15,7 @@ use crate::meta::signals::data::{
     UnmatchedCorpusTrackData, VariousArtistsOverrideData, VariousArtistsOverrideSource,
 };
 use crate::ui::input::InputAction;
+use crate::ui::widgets::TextInputState;
 use crate::ui::widgets::ListClickTargets;
 use types::*;
 
@@ -25,6 +26,10 @@ use types::*;
 pub(crate) enum ReleasePackingBrowserAction {
     None,
     Cancel,
+    PinRelease {
+        release_id: String,
+        track_paths: Vec<String>,
+    },
 }
 
 // ============================================================================
@@ -52,6 +57,10 @@ pub(crate) struct ReleasePackingBrowserState {
 
     // Click targets
     pub click_targets: ListClickTargets,
+
+    // Pin release input overlay
+    pub pin_input: Option<TextInputState>,
+    pub pin_error: Option<String>,
 
     // Source data (only the category being viewed is populated)
     pub releases: Vec<ReleaseGroup>,
@@ -229,6 +238,8 @@ impl ReleasePackingBrowserState {
             detail_scroll: 0,
             focused_pane: FocusedPane::LeftPane,
             click_targets: Default::default(),
+            pin_input: None,
+            pin_error: None,
             releases,
             unmatched: Vec::new(),
         };
@@ -256,6 +267,8 @@ impl ReleasePackingBrowserState {
             detail_scroll: 0,
             focused_pane: FocusedPane::LeftPane,
             click_targets: Default::default(),
+            pin_input: None,
+            pin_error: None,
             releases: Vec::new(),
             unmatched,
         };
@@ -320,11 +333,92 @@ impl ReleasePackingBrowserState {
 
 impl ReleasePackingBrowserState {
     pub fn handle_input(&mut self, action: &InputAction) -> ReleasePackingBrowserAction {
+        // When pin input is active, route all input there first
+        if self.pin_input.is_some() {
+            return self.handle_pin_input(action);
+        }
+
         match self.focused_pane {
             FocusedPane::LeftPane => self.handle_left_input(action),
             FocusedPane::MiddlePane => self.handle_middle_input(action),
             FocusedPane::DetailPane => self.handle_detail_input(action),
         }
+    }
+
+    fn handle_pin_input(&mut self, action: &InputAction) -> ReleasePackingBrowserAction {
+        match action {
+            InputAction::Confirm => {
+                let input = self.pin_input.as_ref().unwrap();
+                match Self::validate_release_id(input.value()) {
+                    Ok(release_id) => {
+                        // Collect track paths from the selected release
+                        let track_paths = self
+                            .selected_release()
+                            .map(|r| r.tracks.iter().map(|t| t.path.clone()).collect())
+                            .unwrap_or_default();
+                        self.pin_input = None;
+                        self.pin_error = None;
+                        ReleasePackingBrowserAction::PinRelease {
+                            release_id,
+                            track_paths,
+                        }
+                    }
+                    Err(msg) => {
+                        self.pin_error = Some(msg);
+                        ReleasePackingBrowserAction::None
+                    }
+                }
+            }
+            InputAction::Cancel => {
+                self.pin_input = None;
+                self.pin_error = None;
+                ReleasePackingBrowserAction::None
+            }
+            other => {
+                self.pin_error = None;
+                let input = self.pin_input.as_mut().unwrap();
+                input.handle_input(other);
+                ReleasePackingBrowserAction::None
+            }
+        }
+    }
+
+    /// Validate and normalize a MusicBrainz release ID from user input.
+    /// Accepts raw UUIDs or full musicbrainz.org URLs.
+    fn validate_release_id(raw: &str) -> Result<String, String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err("Release ID cannot be empty".to_string());
+        }
+
+        // Strip MB URL prefix if present
+        let id = trimmed
+            .strip_prefix("https://musicbrainz.org/release/")
+            .or_else(|| trimmed.strip_prefix("http://musicbrainz.org/release/"))
+            .unwrap_or(trimmed);
+
+        // Validate UUID format: 8-4-4-4-12 hex
+        let id_lower = id.to_lowercase();
+        let parts: Vec<&str> = id_lower.split('-').collect();
+        if parts.len() != 5
+            || parts[0].len() != 8
+            || parts[1].len() != 4
+            || parts[2].len() != 4
+            || parts[3].len() != 4
+            || parts[4].len() != 12
+        {
+            return Err("Invalid UUID format (expected: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)".to_string());
+        }
+        if !id_lower.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return Err("UUID contains invalid characters".to_string());
+        }
+
+        Ok(id_lower)
+    }
+
+    /// Whether a release is selected (i.e., pinning is possible).
+    fn has_selected_release(&self) -> bool {
+        self.selected_release().is_some()
     }
 
     fn handle_left_input(&mut self, action: &InputAction) -> ReleasePackingBrowserAction {
@@ -353,6 +447,11 @@ impl ReleasePackingBrowserState {
                     self.cursor = self.entries.len() - 1;
                 }
                 self.reset_middle_pane();
+                ReleasePackingBrowserAction::None
+            }
+            InputAction::Char('p') if self.has_selected_release() => {
+                self.pin_input = Some(TextInputState::new());
+                self.pin_error = None;
                 ReleasePackingBrowserAction::None
             }
             InputAction::Cancel => ReleasePackingBrowserAction::Cancel,
@@ -397,6 +496,11 @@ impl ReleasePackingBrowserState {
                     self.track_cursor = item_count - 1;
                 }
                 self.detail_scroll = 0;
+                ReleasePackingBrowserAction::None
+            }
+            InputAction::Char('p') if self.has_selected_release() => {
+                self.pin_input = Some(TextInputState::new());
+                self.pin_error = None;
                 ReleasePackingBrowserAction::None
             }
             InputAction::Cancel => ReleasePackingBrowserAction::Cancel,

@@ -18,8 +18,8 @@ use crate::meta::signals::data::{
     DiscExtractionSignal, DiscExtractionSource, InconsistentAlbumArtistData,
     InconsistentAlbumArtistSignal, MissingAlbumSingleData, MissingAlbumSingleSignal,
     MissingTagData, MissingTagSignal, SingleTrackInfo, TagCanonicityData, TagCanonicitySignal,
-    TrackNumberExtraction, TypedSignalWrite,
-};
+    TrackNumberExtraction};
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::{Computation, Result};
 

@@ -459,7 +459,7 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     /// Check if a TypedSignalWrite already exists in its typed table.
-    pub fn signal_exists(&self, signal: &crate::meta::signals::data::TypedSignalWrite) -> bool {
+    pub fn signal_exists(&self, signal: &crate::meta::signals::registry::TypedSignalWrite) -> bool {
         signal.exists(self.db.conn())
     }
 

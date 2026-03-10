@@ -20,9 +20,8 @@ use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
     CrossSourceOverlapData, CrossSourceOverlapSignal, CrossSourceTrackPair, DuplicateInodeSignal,
     FingerprintOverlapSignal, MetadataDuplicateData, MetadataDuplicateSignal,
-    RedundantDuplicateData, RedundantDuplicateSignal, SubparDuplicateData, SubparDuplicateSignal,
-    TypedSignalWrite,
-};
+    RedundantDuplicateData, RedundantDuplicateSignal, SubparDuplicateData, SubparDuplicateSignal};
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::{Computation, Result};
 

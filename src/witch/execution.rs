@@ -34,7 +34,7 @@ use crate::db::write_thread;
 use crate::meta::computations::{derivation, with_read_only_db, Computation};
 use crate::meta::mutations::{Mutation, PendingSignal};
 use crate::meta::recomputation::RecomputationScope;
-use crate::meta::signals::data::TypedSignalWrite;
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use crate::meta::maintenance::DbMaintenanceTask;
 

@@ -9,9 +9,8 @@ use crate::meta::computations::types::ComputationWitness;
 use crate::meta::computations::{Computation, PipelineStage};
 use crate::meta::signals::data::{
     AlternativeReleasePackingSignal, PackedReleaseSignal, PackingKnotSignal,
-    PinnedReleaseConflictData, PinnedReleaseConflictSignal, ReleasePackingSignal,
-    TypedSignalWrite, VariousArtistsOverrideSignal,
-};
+    PinnedReleaseConflictData, PinnedReleaseConflictSignal, ReleasePackingSignal, VariousArtistsOverrideSignal};
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::components::{
     emit_isolated_proposal_signals, find_conflict_components,

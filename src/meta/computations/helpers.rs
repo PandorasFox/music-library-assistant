@@ -12,7 +12,7 @@ use crate::config::AUDIO_EXTENSIONS;
 use crate::corpus::paths;
 use crate::db::write_thread::{self, SignalWitness};
 use crate::db::ReadOnlyDb;
-use crate::meta::signals::data::TypedSignalWrite;
+use crate::meta::signals::registry::TypedSignalWrite;
 use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
 
 use super::types::ComputationWitness;

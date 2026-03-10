@@ -9,7 +9,8 @@ use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::drop_stale_corpus_signal;
 use crate::meta::computations::types::ComputationWitness;
-use crate::meta::signals::data::{ShitFormatSignal, TypedSignalWrite};
+use crate::meta::signals::data::{ShitFormatSignal};
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::{Computation, Result};
 

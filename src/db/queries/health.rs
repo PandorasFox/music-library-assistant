@@ -913,53 +913,7 @@ impl Database {
 
     /// Count signals of a specific type using typed tables.
     fn count_signal_type(&self, signal_type: &str) -> Result<usize> {
-        use crate::meta::signals::data::*;
-        use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
-        let count = match signal_type {
-            "file_in_corpus" => FileInCorpusSignal::count(&self.conn)?,
-            "unindexed_file" => UnindexedFileSignal::count(&self.conn)?,
-            "healthy_file" => HealthyFileSignal::count(&self.conn)?,
-            "missing_file" => MissingFileSignal::count(&self.conn)?,
-            "missing_directory" => MissingDirectorySignal::count(&self.conn)?,
-            "moved_file" => MovedFileSignal::count(&self.conn)?,
-            "oob_tag_sync" => OutOfBandTagSyncSignal::count(&self.conn)?,
-            "oob_tag_conflict" => OutOfBandTagConflictSignal::count(&self.conn)?,
-            "mtime_only_mismatch" => MtimeOnlyMismatchSignal::count(&self.conn)?,
-            "corrupt_file" => CorruptFileSignal::count(&self.conn)?,
-            "shit_format" => ShitFormatSignal::count(&self.conn)?,
-            "subpar_duplicate" => SubparDuplicateSignal::count(&self.conn)?,
-            "compound_tag" => CompoundTagSignal::count(&self.conn)?,
-            "deploy_ready" => DeployReadySignal::count(&self.conn)?,
-            "deployed_healthy" => DeployedHealthySignal::count(&self.conn)?,
-            "fingerprint_dup" => FingerprintOverlapSignal::count(&self.conn)?,
-            "metadata_dup" => MetadataDuplicateSignal::count(&self.conn)?,
-            "duplicate_inode" => DuplicateInodeSignal::count(&self.conn)?,
-            "missing_tag" => MissingTagSignal::count(&self.conn)?,
-            "deploy_conflict" => DeployConflictSignal::count(&self.conn)?,
-            "sidecar_deploy_conflict" => SidecarDeployConflictSignal::count(&self.conn)?,
-            "tag_canonicity" => TagCanonicitySignal::count(&self.conn)?,
-            "inconsistent_album_artist" => InconsistentAlbumArtistSignal::count(&self.conn)?,
-            "cross_source_overlap" => CrossSourceOverlapSignal::count(&self.conn)?,
-            "release_overlap" => ReleaseOverlapSignal::count(&self.conn)?,
-            "redundant_duplicate" => RedundantDuplicateSignal::count(&self.conn)?,
-            "canonical_tag" => CanonicalTagSignal::count(&self.conn)?,
-            "library_leftover" => LibraryLeftoverSignal::count(&self.conn)?,
-            "library_stale" => LibraryStaleSignal::count(&self.conn)?,
-            "missing_album_single" => MissingAlbumSingleSignal::count(&self.conn)?,
-            "expected_missing_tag" => ExpectedMissingTagSignal::count(&self.conn)?,
-            "inbox_unindexed" => InboxUnindexedSignal::count(&self.conn)?,
-            "inbox_healthy" => InboxHealthySignal::count(&self.conn)?,
-            "inbox_corpus_match" => InboxCorpusMatchSignal::count(&self.conn)?,
-            "file_in_inbox" => FileInInboxSignal::count(&self.conn)?,
-            "inbox_tag_canonicity" => InboxTagCanonicitySignal::count(&self.conn)?,
-            "inbox_missing_tag" => InboxMissingTagSignal::count(&self.conn)?,
-            "inbox_compound_tag" => InboxCompoundTagSignal::count(&self.conn)?,
-            "disc_extraction" => DiscExtractionSignal::count(&self.conn)?,
-            "path_tag_mismatch" => PathTagMismatchSignal::count(&self.conn)?,
-            "external_match" => ExternalMatchSignal::count(&self.conn)?,
-            _ => 0,
-        };
-        Ok(count)
+        Ok(crate::meta::signals::registry::count_signal_type(&self.conn, signal_type)?)
     }
 
     /// Count tracks affected by aggregate signals.

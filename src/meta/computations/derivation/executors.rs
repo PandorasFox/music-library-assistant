@@ -16,6 +16,7 @@ use crate::meta::computations::helpers::{
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::*;
+use crate::meta::signals::registry::TypedSignalWrite;
 use crate::meta::signals::store::CorpusSignalStore;
 
 use super::{Computation, Result};

@@ -297,13 +297,13 @@ enum DbWriteOp {
     /// Bypasses JSON serialization entirely — the typed data struct is sent
     /// through the channel and inserted directly via CorpusSignalStore/AggregateSignalStore.
     WriteTypedSignal {
-        signal: crate::meta::signals::data::TypedSignalWrite,
+        signal: crate::meta::signals::registry::TypedSignalWrite,
     },
     /// Write a batch of typed signals in a single transaction.
     ///
     /// Reduces channel overhead for reconcile operations that emit many signals.
     WriteTypedSignalBatch {
-        signals: Vec<crate::meta::signals::data::TypedSignalWrite>,
+        signals: Vec<crate::meta::signals::registry::TypedSignalWrite>,
     },
     /// Update file mtime in files table (after OOB verification).
     /// Uses (zone, inode) as the unique key for reliable updates.
@@ -788,7 +788,7 @@ impl SignalWriteSender {
     /// Computations construct the typed data struct and send it directly.
     pub fn write_typed_signal(
         &self,
-        signal: crate::meta::signals::data::TypedSignalWrite,
+        signal: crate::meta::signals::registry::TypedSignalWrite,
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
@@ -801,7 +801,7 @@ impl SignalWriteSender {
     /// both channel overhead and SQLite transaction costs for bulk reconciliation.
     pub fn write_typed_signal_batch(
         &self,
-        signals: Vec<crate::meta::signals::data::TypedSignalWrite>,
+        signals: Vec<crate::meta::signals::registry::TypedSignalWrite>,
         _witness: &impl SignalWitness,
     ) {
         if signals.is_empty() {

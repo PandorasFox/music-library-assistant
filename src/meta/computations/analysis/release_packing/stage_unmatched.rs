@@ -12,9 +12,9 @@ use crate::meta::computations::helpers::{
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
-    ReleasePackingSignal, TypedSignalWrite, UnfilledReleaseSlotData, UnfilledReleaseSlotSignal,
-    UnmatchedCorpusTrackData, UnmatchedCorpusTrackSignal, UnsolvedCategory,
-};
+    ReleasePackingSignal, UnfilledReleaseSlotData, UnfilledReleaseSlotSignal,
+    UnmatchedCorpusTrackData, UnmatchedCorpusTrackSignal, UnsolvedCategory};
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use crate::meta::computations::analysis::{Computation as AnalysisComputation, Result};
 

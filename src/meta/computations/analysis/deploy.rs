@@ -21,8 +21,8 @@ use crate::meta::signals::data::{
     DeployConflictSignal, DeployLifecyclePhase, DeployReadySignal, DeployedHealthySignal,
     LibraryLeftoverSignal, LibraryStaleSignal, ReleaseOverlapData, ReleaseOverlapEntry,
     ReleaseOverlapSignal, SidecarDeployConflictSignal, SidecarDeployReadyData,
-    SidecarDeployReadySignal, TypedSignalWrite,
-};
+    SidecarDeployReadySignal};
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::{Computation, Result};
 

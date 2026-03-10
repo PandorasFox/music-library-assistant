@@ -10,9 +10,9 @@ use crate::meta::signals::data::{
     AlternativeReleasePackingData, AlternativeReleasePackingSignal,
     KnotAssignment, KnotClassification, KnotProposalEntry, MatchMethod, PackedReleaseCategory,
     PackedReleaseData, PackedReleaseSignal, PackingKnotData, PackingKnotSignal,
-    PackingScoreBreakdown, ReleasePackingData, ReleasePackingSignal, TypedSignalWrite,
-    VariousArtistsOverrideData, VariousArtistsOverrideSignal, VariousArtistsOverrideSource,
-};
+    PackingScoreBreakdown, ReleasePackingData, ReleasePackingSignal,
+    VariousArtistsOverrideData, VariousArtistsOverrideSignal, VariousArtistsOverrideSource};
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::mis::MisCandidate;
 use super::types::{

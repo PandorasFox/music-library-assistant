@@ -31,8 +31,8 @@ use crate::meta::computations::helpers::{reconcile_aggregate_signals, ComputedAg
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
     CompoundTagEntry as TypedCompoundEntry, InboxCompoundTagSignal, InboxMissingTagSignal,
-    InboxTagCanonicityData, InboxTagCanonicitySignal, MissingTagData, TypedSignalWrite,
-};
+    InboxTagCanonicityData, InboxTagCanonicitySignal, MissingTagData};
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::{Computation, Result};
 

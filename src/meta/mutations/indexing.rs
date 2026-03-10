@@ -20,6 +20,7 @@ use crate::db::types::Zone;
 use crate::db::ReadOnlyDb;
 use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::*;
+use crate::meta::signals::registry::TypedSignalWrite;
 use crate::witch::MutationExecutionWitness;
 
 use super::traits::{MutationContext, MutationExecutor};

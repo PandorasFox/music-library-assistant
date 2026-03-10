@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::corpus::tags::{PictureInfo, TagSet};
 use crate::meta::computations::Computation;
-use crate::meta::signals::data::TypedSignalWrite;
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::config_edit::ApplyConfigEditsMutation;
 use super::dir_config_edit::{ApplyBatchDirConfigEditsMutation, ApplyDirConfigEditMutation};

@@ -12,7 +12,7 @@
 //! - Aggregate signals are keyed by `key TEXT PRIMARY KEY`.
 
 use serde::{Deserialize, Serialize};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 // ============================================================================
 // Corpus File Signals (inode-keyed)
@@ -1194,418 +1194,110 @@ pub enum DeployLifecyclePhase {
 }
 
 // ============================================================================
-// Typed Signal Write Envelope
+// SignalContentHash implementations
 // ============================================================================
 
-/// Typed signal data for direct writes to per-signal tables.
-///
-/// Sent through the db_thread channel to avoid JSON serialization.
-/// Each variant wraps the typed signal data struct and maps 1:1 to a table.
-#[derive(Debug, Clone)]
-pub enum TypedSignalWrite {
-    // Corpus file signals (inode-keyed)
-    FileInCorpus(FileInCorpusSignal),
-    UnindexedFile(UnindexedFileSignal),
-    HealthyFile(HealthyFileSignal),
-    // Inbox file signals (inode-keyed)
-    FileInInbox(FileInInboxSignal),
-    InboxUnindexed(InboxUnindexedSignal),
-    InboxHealthy(InboxHealthySignal),
-    InboxCorpusMatch(InboxCorpusMatchSignal),
-    CorruptFile(CorruptFileSignal),
-    MtimeOnlyMismatch(MtimeOnlyMismatchSignal),
-    MissingDirectory(MissingDirectorySignal),
-    MissingFile(MissingFileSignal),
-    MovedFile(MovedFileSignal),
-    ShitFormat(ShitFormatSignal),
-    DeployReady(DeployReadySignal),
-    DeployedHealthy(DeployedHealthySignal),
-    SidecarDeployReady(SidecarDeployReadySignal),
-    OutOfBandTagSync(OutOfBandTagSyncSignal),
-    OutOfBandTagConflict(OutOfBandTagConflictSignal),
-    SubparDuplicate(SubparDuplicateSignal),
-    CompoundTag(CompoundTagSignal),
-    PathTagMismatch(PathTagMismatchSignal),
-    ExternalMatch(ExternalMatchSignal),
-    ReleasePacking(ReleasePackingSignal),
-    UnmatchedCorpusTrack(UnmatchedCorpusTrackSignal),
-    // Aggregate signals (semantic-keyed)
-    CanonicalTag(CanonicalTagSignal),
-    LibraryLeftover(LibraryLeftoverSignal),
-    LibraryStale(LibraryStaleSignal),
-    FingerprintOverlap(FingerprintOverlapSignal),
-    MetadataDuplicate(MetadataDuplicateSignal),
-    DuplicateInode(DuplicateInodeSignal),
-    MissingTag(MissingTagSignal),
-    DeployConflict(DeployConflictSignal),
-    SidecarDeployConflict(SidecarDeployConflictSignal),
-    TagCanonicity(TagCanonicitySignal),
-    InconsistentAlbumArtist(InconsistentAlbumArtistSignal),
-    CrossSourceOverlap(CrossSourceOverlapSignal),
-    ReleaseOverlap(ReleaseOverlapSignal),
-    RedundantDuplicate(RedundantDuplicateSignal),
-    ExpectedOverlap(ExpectedOverlapSignal),
-    ExpectedDuplicate(ExpectedDuplicateSignal),
-    MissingAlbumSingle(MissingAlbumSingleSignal),
-    ExpectedMissingTag(ExpectedMissingTagSignal),
-    InboxTagCanonicity(InboxTagCanonicitySignal),
-    InboxMissingTag(InboxMissingTagSignal),
-    InboxCompoundTag(InboxCompoundTagSignal),
-    DiscExtraction(DiscExtractionSignal),
-    UnfilledReleaseSlot(UnfilledReleaseSlotSignal),
-    PackedRelease(PackedReleaseSignal),
-    PackingKnot(PackingKnotSignal),
-    AlternativeReleasePacking(AlternativeReleasePackingSignal),
-    VariousArtistsOverride(VariousArtistsOverrideSignal),
-    PinnedReleaseConflict(PinnedReleaseConflictSignal),
-}
+use super::registry::SignalContentHash;
 
-impl TypedSignalWrite {
-    /// Insert this signal into its typed table.
-    pub fn insert(self, conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-        use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
-        match self {
-            Self::FileInCorpus(s) => s.insert(conn),
-            Self::UnindexedFile(s) => s.insert(conn),
-            Self::HealthyFile(s) => s.insert(conn),
-            Self::FileInInbox(s) => s.insert(conn),
-            Self::InboxUnindexed(s) => s.insert(conn),
-            Self::InboxHealthy(s) => s.insert(conn),
-            Self::InboxCorpusMatch(s) => s.insert(conn),
-            Self::CorruptFile(s) => s.insert(conn),
-            Self::MtimeOnlyMismatch(s) => s.insert(conn),
-            Self::MissingDirectory(s) => s.insert(conn),
-            Self::MissingFile(s) => s.insert(conn),
-            Self::MovedFile(s) => s.insert(conn),
-            Self::ShitFormat(s) => s.insert(conn),
-            Self::DeployReady(s) => s.insert(conn),
-            Self::DeployedHealthy(s) => s.insert(conn),
-            Self::SidecarDeployReady(s) => s.insert(conn),
-            Self::OutOfBandTagSync(s) => s.insert(conn),
-            Self::OutOfBandTagConflict(s) => s.insert(conn),
-            Self::SubparDuplicate(s) => s.insert(conn),
-            Self::CompoundTag(s) => s.insert(conn),
-            Self::PathTagMismatch(s) => s.insert(conn),
-            Self::ExternalMatch(s) => s.insert(conn),
-            Self::ReleasePacking(s) => s.insert(conn),
-            Self::UnmatchedCorpusTrack(s) => s.insert(conn),
-            Self::CanonicalTag(s) => s.insert(conn),
-            Self::LibraryLeftover(s) => s.insert(conn),
-            Self::LibraryStale(s) => s.insert(conn),
-            Self::FingerprintOverlap(s) => s.insert(conn),
-            Self::MetadataDuplicate(s) => s.insert(conn),
-            Self::DuplicateInode(s) => s.insert(conn),
-            Self::MissingTag(s) => s.insert(conn),
-            Self::DeployConflict(s) => s.insert(conn),
-            Self::SidecarDeployConflict(s) => s.insert(conn),
-            Self::TagCanonicity(s) => s.insert(conn),
-            Self::InconsistentAlbumArtist(s) => s.insert(conn),
-            Self::CrossSourceOverlap(s) => s.insert(conn),
-            Self::ReleaseOverlap(s) => s.insert(conn),
-            Self::RedundantDuplicate(s) => s.insert(conn),
-            Self::ExpectedOverlap(s) => s.insert(conn),
-            Self::ExpectedDuplicate(s) => s.insert(conn),
-            Self::MissingAlbumSingle(s) => s.insert(conn),
-            Self::ExpectedMissingTag(s) => s.insert(conn),
-            Self::InboxTagCanonicity(s) => s.insert(conn),
-            Self::InboxMissingTag(s) => s.insert(conn),
-            Self::InboxCompoundTag(s) => s.insert(conn),
-            Self::DiscExtraction(s) => s.insert(conn),
-            Self::UnfilledReleaseSlot(s) => s.insert(conn),
-            Self::PackedRelease(s) => s.insert(conn),
-            Self::PackingKnot(s) => s.insert(conn),
-            Self::AlternativeReleasePacking(s) => s.insert(conn),
-            Self::VariousArtistsOverride(s) => s.insert(conn),
-            Self::PinnedReleaseConflict(s) => s.insert(conn),
+/// Helper macro to implement SignalContentHash by hashing specified fields.
+macro_rules! impl_content_hash {
+    // Hash scalar fields (or empty for key/inode-only signals)
+    ($ty:ty => [$($field:ident),* $(,)?]) => {
+        impl SignalContentHash for $ty {
+            fn content_hash_fields(&self, _hasher: &mut std::hash::DefaultHasher) {
+                $(self.$field.hash(_hasher);)*
+            }
         }
-    }
-
-    /// Check if this signal already exists in its typed table.
-    pub fn exists(&self, conn: &rusqlite::Connection) -> bool {
-        use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
-        let result = match self {
-            Self::FileInCorpus(s) => FileInCorpusSignal::exists(conn, s.inode),
-            Self::UnindexedFile(s) => UnindexedFileSignal::exists(conn, s.inode),
-            Self::HealthyFile(s) => HealthyFileSignal::exists(conn, s.inode),
-            Self::FileInInbox(s) => FileInInboxSignal::exists(conn, s.inode),
-            Self::InboxUnindexed(s) => InboxUnindexedSignal::exists(conn, s.inode),
-            Self::InboxHealthy(s) => InboxHealthySignal::exists(conn, s.inode),
-            Self::InboxCorpusMatch(s) => InboxCorpusMatchSignal::exists(conn, s.inode),
-            Self::CorruptFile(s) => CorruptFileSignal::exists(conn, s.inode),
-            Self::MtimeOnlyMismatch(s) => MtimeOnlyMismatchSignal::exists(conn, s.inode),
-            Self::MissingDirectory(s) => MissingDirectorySignal::exists(conn, s.inode),
-            Self::MissingFile(s) => MissingFileSignal::exists(conn, s.inode),
-            Self::MovedFile(s) => MovedFileSignal::exists(conn, s.inode),
-            Self::ShitFormat(s) => ShitFormatSignal::exists(conn, s.inode),
-            Self::DeployReady(s) => DeployReadySignal::exists(conn, s.inode),
-            Self::DeployedHealthy(s) => DeployedHealthySignal::exists(conn, s.inode),
-            Self::SidecarDeployReady(s) => SidecarDeployReadySignal::exists(conn, s.inode),
-            Self::OutOfBandTagSync(s) => OutOfBandTagSyncSignal::exists(conn, s.inode),
-            Self::OutOfBandTagConflict(s) => OutOfBandTagConflictSignal::exists(conn, s.inode),
-            Self::SubparDuplicate(s) => SubparDuplicateSignal::exists(conn, s.inode),
-            Self::CompoundTag(s) => CompoundTagSignal::exists(conn, s.inode),
-            Self::PathTagMismatch(s) => PathTagMismatchSignal::exists(conn, s.inode),
-            Self::ExternalMatch(s) => ExternalMatchSignal::exists(conn, s.inode),
-            Self::ReleasePacking(s) => ReleasePackingSignal::exists(conn, s.inode),
-            Self::UnmatchedCorpusTrack(s) => UnmatchedCorpusTrackSignal::exists(conn, s.inode),
-            Self::CanonicalTag(s) => CanonicalTagSignal::exists(conn, &s.key),
-            Self::LibraryLeftover(s) => LibraryLeftoverSignal::exists(conn, &s.key),
-            Self::LibraryStale(s) => LibraryStaleSignal::exists(conn, &s.key),
-            Self::FingerprintOverlap(s) => FingerprintOverlapSignal::exists(conn, &s.key),
-            Self::MetadataDuplicate(s) => MetadataDuplicateSignal::exists(conn, &s.key),
-            Self::DuplicateInode(s) => DuplicateInodeSignal::exists(conn, &s.key),
-            Self::MissingTag(s) => MissingTagSignal::exists(conn, &s.key),
-            Self::DeployConflict(s) => DeployConflictSignal::exists(conn, &s.key),
-            Self::SidecarDeployConflict(s) => SidecarDeployConflictSignal::exists(conn, &s.key),
-            Self::TagCanonicity(s) => TagCanonicitySignal::exists(conn, &s.key),
-            Self::InconsistentAlbumArtist(s) => InconsistentAlbumArtistSignal::exists(conn, &s.key),
-            Self::CrossSourceOverlap(s) => CrossSourceOverlapSignal::exists(conn, &s.key),
-            Self::ReleaseOverlap(s) => ReleaseOverlapSignal::exists(conn, &s.key),
-            Self::RedundantDuplicate(s) => RedundantDuplicateSignal::exists(conn, &s.key),
-            Self::ExpectedOverlap(s) => ExpectedOverlapSignal::exists(conn, &s.key),
-            Self::ExpectedDuplicate(s) => ExpectedDuplicateSignal::exists(conn, &s.key),
-            Self::MissingAlbumSingle(s) => MissingAlbumSingleSignal::exists(conn, &s.key),
-            Self::ExpectedMissingTag(s) => ExpectedMissingTagSignal::exists(conn, s.inode),
-            Self::InboxTagCanonicity(s) => InboxTagCanonicitySignal::exists(conn, &s.key),
-            Self::InboxMissingTag(s) => InboxMissingTagSignal::exists(conn, &s.key),
-            Self::InboxCompoundTag(s) => InboxCompoundTagSignal::exists(conn, s.inode),
-            Self::DiscExtraction(s) => DiscExtractionSignal::exists(conn, &s.key),
-            Self::UnfilledReleaseSlot(s) => UnfilledReleaseSlotSignal::exists(conn, &s.key),
-            Self::PackedRelease(s) => PackedReleaseSignal::exists(conn, &s.key),
-            Self::PackingKnot(s) => PackingKnotSignal::exists(conn, &s.key),
-            Self::AlternativeReleasePacking(s) => AlternativeReleasePackingSignal::exists(conn, &s.key),
-            Self::VariousArtistsOverride(s) => VariousArtistsOverrideSignal::exists(conn, &s.key),
-            Self::PinnedReleaseConflict(s) => PinnedReleaseConflictSignal::exists(conn, &s.key),
-        };
-        result.unwrap_or(false)
-    }
-
-    /// Compute a content hash for change detection.
-    ///
-    /// For BLOB variants: bincode-serializes the data and hashes the bytes.
-    /// For scalar-only variants: hashes the non-PK fields.
-    /// Includes the enum discriminant for type safety.
-    pub fn content_hash(&self) -> u64 {
-        let mut hasher = std::hash::DefaultHasher::new();
-        // Hash the discriminant
-        std::mem::discriminant(self).hash(&mut hasher);
-        match self {
-            // BLOB corpus signals — hash serialized data
-            Self::InboxCorpusMatch(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::OutOfBandTagSync(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.mismatches) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::OutOfBandTagConflict(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.mismatches) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::SubparDuplicate(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::CompoundTag(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.compounds) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::PathTagMismatch(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::ExternalMatch(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::ReleasePacking(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::UnmatchedCorpusTrack(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            // BLOB aggregate signals — hash serialized data
-            Self::FingerprintOverlap(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.inodes) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::MetadataDuplicate(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::DuplicateInode(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.inodes) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::MissingTag(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::MissingAlbumSingle(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::DeployConflict(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.inodes) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::SidecarDeployConflict(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.inodes) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::TagCanonicity(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::InconsistentAlbumArtist(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::CrossSourceOverlap(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::ReleaseOverlap(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::RedundantDuplicate(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::InboxTagCanonicity(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::InboxMissingTag(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::InboxCompoundTag(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.compounds) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::DiscExtraction(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            // Scalar corpus signals — hash non-PK fields
-            Self::FileInCorpus(s) => s.path.hash(&mut hasher),
-            Self::UnindexedFile(s) => s.path.hash(&mut hasher),
-            Self::HealthyFile(s) => s.path.hash(&mut hasher),
-            Self::FileInInbox(s) => s.path.hash(&mut hasher),
-            Self::InboxUnindexed(s) => s.path.hash(&mut hasher),
-            Self::InboxHealthy(s) => s.path.hash(&mut hasher),
-            Self::CorruptFile(s) => s.path.hash(&mut hasher),
-            Self::MtimeOnlyMismatch(s) => s.path.hash(&mut hasher),
-            Self::MissingDirectory(s) => s.path.hash(&mut hasher),
-            Self::MissingFile(s) => {
-                s.path.hash(&mut hasher);
-                s.replaced_by_inode.hash(&mut hasher);
-            }
-            Self::MovedFile(s) => {
-                s.path.hash(&mut hasher);
-                s.old_path.hash(&mut hasher);
-                s.old_zone.hash(&mut hasher);
-                s.new_zone.hash(&mut hasher);
-            }
-            Self::ShitFormat(s) => {
-                s.path.hash(&mut hasher);
-                s.file_type.hash(&mut hasher);
-            }
-            Self::DeployReady(s) => {
-                s.path.hash(&mut hasher);
-                s.deploy_path.hash(&mut hasher);
-            }
-            Self::DeployedHealthy(s) => {
-                s.path.hash(&mut hasher);
-                s.library_path.hash(&mut hasher);
-            }
-            Self::SidecarDeployReady(s) => {
-                s.path.hash(&mut hasher);
-                s.deploy_path.hash(&mut hasher);
-                s.library_name.hash(&mut hasher);
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::ExpectedMissingTag(_) => {} // inode-only, no extra fields
-            // Scalar aggregate signals — hash non-PK fields
-            Self::CanonicalTag(s) => {
-                s.tag_name.hash(&mut hasher);
-                s.canonical_value.hash(&mut hasher);
-            }
-            Self::LibraryLeftover(_) => {} // key-only, no extra fields
-            Self::LibraryStale(s) => {
-                s.library_path.hash(&mut hasher);
-                s.expected_path.hash(&mut hasher);
-                s.corpus_path.hash(&mut hasher);
-                s.inode.hash(&mut hasher);
-            }
-            Self::ExpectedOverlap(s) => {
-                s.source_a.hash(&mut hasher);
-                s.source_b.hash(&mut hasher);
-            }
-            Self::ExpectedDuplicate(_) => {} // key + created_at only
-            Self::UnfilledReleaseSlot(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::PackedRelease(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::PackingKnot(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::AlternativeReleasePacking(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::VariousArtistsOverride(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
-                }
-            }
-            Self::PinnedReleaseConflict(s) => {
-                if let Ok(bytes) = bincode::serialize(&s.data) {
-                    bytes.hash(&mut hasher);
+    };
+    // Hash a blob field (bincode serialize)
+    ($ty:ty => blob($blob:ident)) => {
+        impl SignalContentHash for $ty {
+            fn content_hash_fields(&self, hasher: &mut std::hash::DefaultHasher) {
+                if let Ok(bytes) = bincode::serialize(&self.$blob) {
+                    bytes.hash(hasher);
                 }
             }
         }
-        hasher.finish()
-    }
+    };
+    // Hash scalar fields + blob field
+    ($ty:ty => [$($field:ident),+] + blob($blob:ident)) => {
+        impl SignalContentHash for $ty {
+            fn content_hash_fields(&self, hasher: &mut std::hash::DefaultHasher) {
+                $(self.$field.hash(hasher);)*
+                if let Ok(bytes) = bincode::serialize(&self.$blob) {
+                    bytes.hash(hasher);
+                }
+            }
+        }
+    };
+    // No fields to hash (inode-only or key-only)
+    ($ty:ty => []) => {
+        impl SignalContentHash for $ty {
+            fn content_hash_fields(&self, _: &mut std::hash::DefaultHasher) {}
+        }
+    };
 }
+
+// Corpus signals — scalar only
+impl_content_hash!(FileInCorpusSignal => [path]);
+impl_content_hash!(UnindexedFileSignal => [path]);
+impl_content_hash!(HealthyFileSignal => [path]);
+impl_content_hash!(FileInInboxSignal => [path]);
+impl_content_hash!(InboxUnindexedSignal => [path]);
+impl_content_hash!(InboxHealthySignal => [path]);
+impl_content_hash!(CorruptFileSignal => [path]);
+impl_content_hash!(MtimeOnlyMismatchSignal => [path]);
+impl_content_hash!(MissingDirectorySignal => [path]);
+impl_content_hash!(MissingFileSignal => [path, replaced_by_inode]);
+impl_content_hash!(MovedFileSignal => [path, old_path, old_zone, new_zone]);
+impl_content_hash!(ShitFormatSignal => [path, file_type]);
+impl_content_hash!(DeployReadySignal => [path, deploy_path]);
+impl_content_hash!(DeployedHealthySignal => [path, library_path]);
+impl_content_hash!(ExpectedMissingTagSignal => []);
+
+// Corpus signals — blob
+impl_content_hash!(InboxCorpusMatchSignal => blob(data));
+impl_content_hash!(OutOfBandTagSyncSignal => blob(mismatches));
+impl_content_hash!(OutOfBandTagConflictSignal => blob(mismatches));
+impl_content_hash!(SubparDuplicateSignal => blob(data));
+impl_content_hash!(CompoundTagSignal => blob(compounds));
+impl_content_hash!(PathTagMismatchSignal => blob(data));
+impl_content_hash!(ExternalMatchSignal => blob(data));
+impl_content_hash!(ReleasePackingSignal => blob(data));
+impl_content_hash!(UnmatchedCorpusTrackSignal => blob(data));
+impl_content_hash!(InboxCompoundTagSignal => blob(compounds));
+
+// Corpus signals — scalar + blob
+impl_content_hash!(SidecarDeployReadySignal => [path, deploy_path, library_name] + blob(data));
+
+// Aggregate signals — scalar only
+impl_content_hash!(CanonicalTagSignal => [tag_name, canonical_value]);
+impl_content_hash!(LibraryLeftoverSignal => []);
+impl_content_hash!(LibraryStaleSignal => [library_path, expected_path, corpus_path, inode]);
+impl_content_hash!(ExpectedOverlapSignal => [source_a, source_b]);
+impl_content_hash!(ExpectedDuplicateSignal => []);
+
+// Aggregate signals — blob
+impl_content_hash!(FingerprintOverlapSignal => blob(inodes));
+impl_content_hash!(MetadataDuplicateSignal => blob(data));
+impl_content_hash!(DuplicateInodeSignal => blob(inodes));
+impl_content_hash!(MissingTagSignal => blob(data));
+impl_content_hash!(MissingAlbumSingleSignal => blob(data));
+impl_content_hash!(DeployConflictSignal => blob(inodes));
+impl_content_hash!(SidecarDeployConflictSignal => blob(inodes));
+impl_content_hash!(TagCanonicitySignal => blob(data));
+impl_content_hash!(InconsistentAlbumArtistSignal => blob(data));
+impl_content_hash!(CrossSourceOverlapSignal => blob(data));
+impl_content_hash!(ReleaseOverlapSignal => blob(data));
+impl_content_hash!(RedundantDuplicateSignal => blob(data));
+impl_content_hash!(InboxTagCanonicitySignal => blob(data));
+impl_content_hash!(InboxMissingTagSignal => blob(data));
+impl_content_hash!(DiscExtractionSignal => blob(data));
+impl_content_hash!(UnfilledReleaseSlotSignal => blob(data));
+impl_content_hash!(PackedReleaseSignal => blob(data));
+impl_content_hash!(PackingKnotSignal => blob(data));
+impl_content_hash!(AlternativeReleasePackingSignal => blob(data));
+impl_content_hash!(VariousArtistsOverrideSignal => blob(data));
+impl_content_hash!(PinnedReleaseConflictSignal => blob(data));
+
+// TypedSignalWrite is now generated by signal_registry! in registry.rs

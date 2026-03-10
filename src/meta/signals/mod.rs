@@ -5,4 +5,5 @@
 
 pub mod data;
 pub mod packing_category;
+pub mod registry;
 pub mod store;

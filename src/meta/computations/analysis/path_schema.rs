@@ -14,9 +14,8 @@ use crate::logging::log_general;
 use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpusSignal};
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
-    PathMismatchKind, PathTagMismatchData, PathTagMismatchSignal, PathTagValueMismatch,
-    TypedSignalWrite,
-};
+    PathMismatchKind, PathTagMismatchData, PathTagMismatchSignal, PathTagValueMismatch};
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::{Computation, Result};
 

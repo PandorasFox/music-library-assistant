@@ -16,8 +16,8 @@ use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpu
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::external::ExternalSource;
 use crate::meta::signals::data::{
-    ExternalMatchData, ExternalMatchSignal, ExternalTagDiff, MatchClassification, TypedSignalWrite,
-};
+    ExternalMatchData, ExternalMatchSignal, ExternalTagDiff, MatchClassification};
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::{Computation, Result};
 

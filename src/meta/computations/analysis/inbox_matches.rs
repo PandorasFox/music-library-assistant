@@ -13,9 +13,8 @@ use crate::logging::log_general;
 use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpusSignal};
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
-    CorpusMatchQuality, InboxCorpusMatch, InboxCorpusMatchData, InboxCorpusMatchSignal,
-    TypedSignalWrite,
-};
+    CorpusMatchQuality, InboxCorpusMatch, InboxCorpusMatchData, InboxCorpusMatchSignal};
+use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::duplicates::{fingerprint_similarity, quality_tier_of};
 use super::{Computation, Result};

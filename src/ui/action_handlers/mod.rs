@@ -1215,6 +1215,7 @@ impl App {
             button_cursor: 0,
             lib_cursor: None,
             text_input: None,
+            wizard_state: crate::ui::widgets::wizard::WizardState::default(),
         };
 
         if let super::active_view::ActiveView::CorpusBrowser(ref mut browser) = self.view {

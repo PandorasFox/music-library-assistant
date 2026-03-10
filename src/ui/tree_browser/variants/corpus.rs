@@ -66,6 +66,16 @@ impl SearchState {
     }
 }
 
+/// Per-field help text for the directory config panel.
+const DIR_FIELD_HELP: [&[&str]; 6] = [
+    &["TODO"], // 0: Libraries
+    &["TODO"], // 1: Can stash dupes
+    &["TODO"], // 2: Interior dupes
+    &["TODO"], // 3: Path schema
+    &["TODO"], // 4: AcoustID lookup
+    &["TODO"], // 5: Pinned release
+];
+
 /// State for the directory config panel.
 #[derive(Debug)]
 pub struct DirConfigPanelState {
@@ -95,6 +105,8 @@ pub struct DirConfigPanelState {
     pub lib_cursor: Option<usize>,
     /// Active text input for library editing/adding.
     pub text_input: Option<TextInputState>,
+    /// Wizard popup state for Z-key help text.
+    pub wizard_state: WizardState,
 }
 
 impl DirConfigPanelState {
@@ -230,17 +242,20 @@ impl DirConfigPanelState {
             },
         ];
 
-        let hint = if self.text_input.is_some() {
-            Some("Enter confirm  Esc cancel")
+        let has_help = !DIR_FIELD_HELP[self.field_cursor].is_empty();
+        let z_suffix = if has_help { "  Z info" } else { "" };
+
+        let hint: Option<String> = if self.text_input.is_some() {
+            Some("Enter confirm  Esc cancel".to_string())
         } else if self.focus == PanelFocus::Buttons {
-            Some("Enter select  Up fields")
+            Some("Enter select  Up fields".to_string())
         } else if self.field_cursor == 0 {
-            Some("n add  x del  Enter edit  Tab buttons")
+            Some(format!("n add  x del  Enter edit  Tab buttons{z_suffix}"))
         } else if self.field_cursor == 3 || self.field_cursor == 5 {
-            Some("Enter edit  Tab buttons")
+            Some(format!("Enter edit  Tab buttons{z_suffix}"))
         } else {
             // Bool fields: can_stash_dupes, interior_dupes, enable_acoustid
-            Some("Enter/Space toggle  Tab buttons")
+            Some(format!("Enter/Space toggle  Tab buttons{z_suffix}"))
         };
 
         render_detail_panel(
@@ -253,9 +268,23 @@ impl DirConfigPanelState {
                 field_cursor: self.field_cursor,
                 buttons: &buttons,
                 focus_on_buttons: self.focus == PanelFocus::Buttons,
-                hint,
+                hint: hint.as_deref(),
             },
         );
+
+        // Render wizard popup if showing
+        if self.wizard_state.is_showing_popup() {
+            let help = DIR_FIELD_HELP[self.field_cursor];
+            if !help.is_empty() {
+                use crate::ui::widgets::wizard_popup::WizardPopup;
+                let popup_lines: Vec<Line<'_>> =
+                    help.iter().map(|s| Line::raw(s.to_string())).collect();
+                // Anchor to field cursor row within the panel (border=1, each field ~1 row)
+                let anchor_y = area.y + 1 + self.field_cursor as u16;
+                let anchor_x = area.x + area.width / 2;
+                WizardPopup::render(f, &popup_lines, anchor_x, anchor_y, area);
+            }
+        }
     }
 }
 
@@ -613,6 +642,7 @@ impl CorpusBrowserVariant {
         // Field focus
         match action {
             InputAction::NavUp => {
+                panel.wizard_state.dismiss();
                 if panel.field_cursor == 0 {
                     // Within libraries field, navigate items
                     if let Some(ref mut cursor) = panel.lib_cursor {
@@ -630,6 +660,7 @@ impl CorpusBrowserVariant {
                 TreeBrowserAction::None
             }
             InputAction::NavDown => {
+                panel.wizard_state.dismiss();
                 if panel.field_cursor == 0 {
                     // Navigate into library items first
                     if !panel.libraries.is_empty() {
@@ -720,6 +751,16 @@ impl CorpusBrowserVariant {
                             }
                         }
                     }
+                }
+                TreeBrowserAction::None
+            }
+            InputAction::Char('z') | InputAction::Char('Z') => {
+                let help = DIR_FIELD_HELP[panel.field_cursor];
+                if !help.is_empty() {
+                    let lines: Vec<Line<'static>> =
+                        help.iter().map(|s| Line::raw(s.to_string())).collect();
+                    let offer = WizardOffer::Popup(lines);
+                    panel.wizard_state.advance(&offer);
                 }
                 TreeBrowserAction::None
             }

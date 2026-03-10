@@ -105,6 +105,7 @@ impl ConfigValue {
 pub struct ConfigField {
     pub label: &'static str,
     pub description: &'static str,
+    pub help: &'static [&'static str],
     pub value: ConfigValue,
     pub source: FieldSource,
     /// Value when the editor was opened (for NOP detection and reset).

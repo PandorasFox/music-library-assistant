@@ -15,6 +15,7 @@ use ratatui::{
 use super::state::{CollectionPosition, ConfigEditorState, EditorButton, EditorFocus};
 use super::types::{ConfigField, ConfigValue, FieldSource};
 use crate::ui::widgets::control_colors;
+use crate::ui::widgets::wizard_popup::WizardPopup;
 
 /// Render the config editor view into the given content area.
 pub fn render(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
@@ -125,6 +126,21 @@ fn render_field_list(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
 
     let paragraph = Paragraph::new(visible_lines);
     f.render_widget(paragraph, area);
+
+    // Render wizard popup if showing
+    if state.wizard_state.is_showing_popup() {
+        if let Some((gi, fi)) = state.cursor_to_group_field() {
+            let help = state.groups[gi].fields[fi].help;
+            if !help.is_empty() {
+                let popup_lines: Vec<Line<'_>> =
+                    help.iter().map(|s| Line::raw(s.to_string())).collect();
+                let anchor_y = area.y + (target_line_idx.saturating_sub(scroll)) as u16;
+                // Anchor X after the label column (2 cursor + 38 label = 40)
+                let anchor_x = area.x + 40;
+                WizardPopup::render(f, &popup_lines, anchor_x, anchor_y, area);
+            }
+        }
+    }
 }
 
 /// Render a single field line.
@@ -527,20 +543,29 @@ fn render_hints(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
             .unwrap_or("");
 
         if !description.is_empty() {
-            Line::from(vec![
+            let has_help = state
+                .cursor_to_group_field()
+                .is_some_and(|(gi, fi)| !state.groups[gi].fields[fi].help.is_empty());
+
+            let mut spans = vec![
                 control_colors::nav("^v"),
                 control_colors::text(" nav  "),
                 control_colors::confirm("Enter"),
                 control_colors::text(" edit  "),
                 control_colors::edit("r"),
                 control_colors::text(" reset  "),
-                control_colors::cancel("Esc"),
-                control_colors::text(" discard  "),
-                Span::styled(
-                    format!("\u{2502} {}", description),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ])
+            ];
+            if has_help {
+                spans.push(control_colors::toggle("Z"));
+                spans.push(control_colors::text(" info  "));
+            }
+            spans.push(control_colors::cancel("Esc"));
+            spans.push(control_colors::text(" discard  "));
+            spans.push(Span::styled(
+                format!("\u{2502} {}", description),
+                Style::default().fg(Color::DarkGray),
+            ));
+            Line::from(spans)
         } else {
             Line::from(vec![
                 control_colors::nav("^v"),

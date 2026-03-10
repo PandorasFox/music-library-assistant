@@ -72,6 +72,7 @@ config_enum_map!(SidecarDeployMode, SidecarDeployMode::PrimaryCover, [
 fn field(
     label: &'static str,
     description: &'static str,
+    help: &'static [&'static str],
     value: ConfigValue,
     source: FieldSource,
     restart_required: bool,
@@ -80,6 +81,7 @@ fn field(
     ConfigField {
         label,
         description,
+        help,
         original_value: value.clone(),
         original_source: source,
         value,
@@ -118,77 +120,77 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
     // Type token determines ConfigValue variant, comparison, and applier shape.
     // Suffix `!` on the type token sets restart_required = true.
     macro_rules! cf {
-        (bool, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc, ConfigValue::Bool(ops.$($p).+),
+        (bool, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help, ConfigValue::Bool(ops.$($p).+),
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), false,
                 |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.$($p).+ = *b; } })
         };
-        (bool!, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc, ConfigValue::Bool(ops.$($p).+),
+        (bool!, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help, ConfigValue::Bool(ops.$($p).+),
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), true,
                 |v, c| { if let ConfigValue::Bool(b) = v { c.opinions.$($p).+ = *b; } })
         };
-        (float, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc, ConfigValue::Float(ops.$($p).+),
+        (float, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help, ConfigValue::Float(ops.$($p).+),
                 source_for((ops.$($p).+ - defaults.$($p).+).abs() < f64::EPSILON, $kdl), false,
                 |v, c| { if let ConfigValue::Float(f) = v { c.opinions.$($p).+ = *f; } })
         };
-        (u32, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc, ConfigValue::UintU32(ops.$($p).+),
+        (u32, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help, ConfigValue::UintU32(ops.$($p).+),
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), false,
                 |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.$($p).+ = *n; } })
         };
-        (u32!, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc, ConfigValue::UintU32(ops.$($p).+),
+        (u32!, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help, ConfigValue::UintU32(ops.$($p).+),
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), true,
                 |v, c| { if let ConfigValue::UintU32(n) = v { c.opinions.$($p).+ = *n; } })
         };
-        (i64, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc, ConfigValue::SignedInt(ops.$($p).+),
+        (i64, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help, ConfigValue::SignedInt(ops.$($p).+),
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), false,
                 |v, c| { if let ConfigValue::SignedInt(n) = v { c.opinions.$($p).+ = *n; } })
         };
-        (string, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc, ConfigValue::String(ops.$($p).+.clone()),
+        (string, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help, ConfigValue::String(ops.$($p).+.clone()),
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), false,
                 |v, c| { if let ConfigValue::String(s) = v { c.opinions.$($p).+ = s.clone(); } })
         };
-        (string_list, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc, ConfigValue::StringList(ops.$($p).+.clone()),
+        (string_list, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help, ConfigValue::StringList(ops.$($p).+.clone()),
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), false,
                 |v, c| { if let ConfigValue::StringList(list) = v { c.opinions.$($p).+ = list.clone(); } })
         };
-        (string_set, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc,
+        (string_set, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help,
                 ConfigValue::StringSet(ops.$($p).+.iter().cloned().collect()),
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), false,
                 |v, c| { if let ConfigValue::StringSet(items) = v {
                     c.opinions.$($p).+ = items.iter().cloned().collect();
                 } })
         };
-        (string_list_map, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc,
+        (string_list_map, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help,
                 ConfigValue::StringListMap(ops.$($p).+.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), false,
                 |v, c| { if let ConfigValue::StringListMap(items) = v {
                     c.opinions.$($p).+ = items.iter().cloned().collect();
                 } })
         };
-        (enum $ty:ty, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc,
+        (enum $ty:ty, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help,
                 ConfigValue::Enum { selected: ops.$($p).+.to_index(), options: <$ty>::OPTIONS.to_vec() },
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), false,
                 |v, c| { if let ConfigValue::Enum { selected, .. } = v {
                     c.opinions.$($p).+ = <$ty>::from_index(*selected);
                 } })
         };
-        (duration, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc, ConfigValue::Duration(ops.$($p).+),
+        (duration, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help, ConfigValue::Duration(ops.$($p).+),
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), false,
                 |v, c| { if let ConfigValue::Duration(secs) = v { c.opinions.$($p).+ = *secs; } })
         };
-        (optional_uint!, $($p:ident).+, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc, ConfigValue::OptionalUint(ops.$($p).+),
+        (optional_uint!, $($p:ident).+, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help, ConfigValue::OptionalUint(ops.$($p).+),
                 source_for(ops.$($p).+ == defaults.$($p).+, $kdl), true,
                 |v, c| { if let ConfigValue::OptionalUint(n) = v { c.opinions.$($p).+ = *n; } })
         };
@@ -197,8 +199,8 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
     // PackingWeights float field — takes explicit weight/default refs and a
     // two-segment path (weight_group.field) for the applier.
     macro_rules! pw {
-        ($w:expr, $d:expr, $path:ident . $field:ident, $label:expr, $desc:expr, $kdl:expr) => {
-            field($label, $desc, ConfigValue::Float($w.$field),
+        ($w:expr, $d:expr, $path:ident . $field:ident, $label:expr, $desc:expr, $help:expr, $kdl:expr) => {
+            field($label, $desc, $help, ConfigValue::Float($w.$field),
                 source_for(($w.$field - $d.$field).abs() < f64::EPSILON, $kdl), false,
                 |v, c| { if let ConfigValue::Float(f) = v { c.opinions.release_packing.$path.$field = *f; } })
         };
@@ -207,33 +209,44 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
     vec![
         ConfigGroup { name: "General", collapsed: false, fields: vec![
             cf!(bool, lossy_shit_formats_to_flac, "Lossy shit formats to FLAC",
-                "Capture lossy formats to FLAC instead of transcoding to Opus", Opinions::KDL_LOSSY_SHIT),
+                "Capture lossy formats to FLAC instead of transcoding to Opus",
+                &["TODO"], Opinions::KDL_LOSSY_SHIT),
         ]},
         ConfigGroup { name: "Startup", collapsed: false, fields: vec![
             cf!(bool, startup.force_check_all_files_at_startup, "Force check all files at startup",
-                "Bypass mtime optimization, verify all indexed files", StartupOpinions::KDL_FORCE_CHECK),
+                "Bypass mtime optimization, verify all indexed files",
+                &["TODO"], StartupOpinions::KDL_FORCE_CHECK),
             cf!(float, startup.vacuum_threshold, "Vacuum threshold",
-                "Free-page ratio threshold for DB compaction prompt (0.0 disables)", StartupOpinions::KDL_VACUUM_THRESHOLD),
+                "Free-page ratio threshold for DB compaction prompt (0.0 disables)",
+                &["TODO"], StartupOpinions::KDL_VACUUM_THRESHOLD),
             cf!(enum StartupView, startup.default_view, "Default view",
-                "View to open after startup progress completes", StartupOpinions::KDL_DEFAULT_VIEW),
+                "View to open after startup progress completes",
+                &["TODO"], StartupOpinions::KDL_DEFAULT_VIEW),
         ]},
         ConfigGroup { name: "Duplicate Analysis", collapsed: false, fields: vec![
             cf!(float, duplicate_analysis.fingerprint_similarity_threshold, "Fingerprint similarity threshold",
-                "Pairs below this similarity (0-100) are not duplicates", DuplicateAnalysisOpinions::KDL_FP_THRESHOLD),
+                "Pairs below this similarity (0-100) are not duplicates",
+                &["TODO"], DuplicateAnalysisOpinions::KDL_FP_THRESHOLD),
             cf!(i64, duplicate_analysis.duration_tolerance_ms, "Duration tolerance ms",
-                "Tracks with duration diff above this are clustered separately", DuplicateAnalysisOpinions::KDL_DURATION_TOLERANCE),
+                "Tracks with duration diff above this are clustered separately",
+                &["TODO"], DuplicateAnalysisOpinions::KDL_DURATION_TOLERANCE),
             cf!(bool, duplicate_analysis.elide_variant_titles, "Elide variant titles",
-                "Skip dupe pairs where titles differ and contain remix/live/etc.", DuplicateAnalysisOpinions::KDL_ELIDE_VARIANTS),
+                "Skip dupe pairs where titles differ and contain remix/live/etc.",
+                &["TODO"], DuplicateAnalysisOpinions::KDL_ELIDE_VARIANTS),
         ]},
         ConfigGroup { name: "Release Packing", collapsed: false, fields: vec![
             cf!(float, release_packing.duration_tolerance_pct, "Duration tolerance %",
-                "Discard recording matches with duration diff above this fraction (0.0-1.0)", ReleasePackingOpinions::KDL_DURATION_TOLERANCE_PCT),
+                "Discard recording matches with duration diff above this fraction (0.0-1.0)",
+                &["TODO"], ReleasePackingOpinions::KDL_DURATION_TOLERANCE_PCT),
             cf!(float, release_packing.min_confidence, "Min AcoustID confidence",
-                "Discard recording matches below this confidence (0.0-1.0)", ReleasePackingOpinions::KDL_MIN_CONFIDENCE),
+                "Discard recording matches below this confidence (0.0-1.0)",
+                &["TODO"], ReleasePackingOpinions::KDL_MIN_CONFIDENCE),
             cf!(float, release_packing.title_preassign_threshold, "Title pre-assign threshold",
-                "Title similarity threshold for elimination pre-assignment (0.0-1.0)", ReleasePackingOpinions::KDL_TITLE_PREASSIGN_THRESHOLD),
+                "Title similarity threshold for elimination pre-assignment (0.0-1.0)",
+                &["TODO"], ReleasePackingOpinions::KDL_TITLE_PREASSIGN_THRESHOLD),
             // Custom validation: only accept 0.0 or > 1.0
             field("Packing knot ratio", "Proposals/inodes ratio threshold for knot extraction (0 to disable)",
+                &["TODO"],
                 ConfigValue::Float(ops.release_packing.packing_knot_ratio),
                 source_for(ops.release_packing.packing_knot_ratio == defaults.release_packing.packing_knot_ratio,
                     ReleasePackingOpinions::KDL_PACKING_KNOT_RATIO),
@@ -242,6 +255,7 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                 } }),
             // usize <-> u32 cast
             field("Packing knot size limit", "Max component size before knot extraction (0 to disable)",
+                &["TODO"],
                 ConfigValue::UintU32(ops.release_packing.packing_knot_size_limit as u32),
                 source_for(ops.release_packing.packing_knot_size_limit == defaults.release_packing.packing_knot_size_limit,
                     ReleasePackingOpinions::KDL_PACKING_KNOT_SIZE_LIMIT),
@@ -249,57 +263,69 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                     c.opinions.release_packing.packing_knot_size_limit = *n as usize;
                 } }),
             cf!(bool, release_packing.singles_before_incompletes, "Singles before incompletes",
-                "Run single-track MIS round before incompletes", ReleasePackingOpinions::KDL_SINGLES_BEFORE_INCOMPLETES),
+                "Run single-track MIS round before incompletes",
+                &["TODO"], ReleasePackingOpinions::KDL_SINGLES_BEFORE_INCOMPLETES),
             cf!(bool, release_packing.allow_resolve_knots_with_discographies, "Resolve knots with discographies",
-                "Reduce knots to covering proposals (discography releases) when possible", ReleasePackingOpinions::KDL_ALLOW_DISCOGRAPHY_REDUCTION),
+                "Reduce knots to covering proposals (discography releases) when possible",
+                &["TODO"], ReleasePackingOpinions::KDL_ALLOW_DISCOGRAPHY_REDUCTION),
             cf!(float, release_packing.low_confidence_max_acoustid_ratio, "Low confidence max AcoustID ratio",
-                "Max AcoustID-matched fraction to trigger low-confidence downgrade (0.0-1.0)", ReleasePackingOpinions::KDL_LOW_CONFIDENCE_ACOUSTID_RATIO),
+                "Max AcoustID-matched fraction to trigger low-confidence downgrade (0.0-1.0)",
+                &["TODO"], ReleasePackingOpinions::KDL_LOW_CONFIDENCE_ACOUSTID_RATIO),
             cf!(float, release_packing.low_confidence_max_album_match, "Low confidence max album match",
-                "Max avg album_match score to trigger low-confidence downgrade (0.0-1.0)", ReleasePackingOpinions::KDL_LOW_CONFIDENCE_ALBUM_MATCH),
+                "Max avg album_match score to trigger low-confidence downgrade (0.0-1.0)",
+                &["TODO"], ReleasePackingOpinions::KDL_LOW_CONFIDENCE_ALBUM_MATCH),
         ]},
         ConfigGroup { name: "Packing: Candidate Weights", collapsed: true, fields: {
             let w = &ops.release_packing.candidate_weights;
             let d = PackingWeights::candidate_defaults();
             vec![
-                pw!(w, d, candidate_weights.acoustid_confidence, "AcoustID confidence", "Weight for fingerprint confidence (0.0-1.0)", PackingWeights::KDL_ACOUSTID_CONFIDENCE),
-                pw!(w, d, candidate_weights.duration_match, "Duration match", "Weight for duration match quality (0.0-1.0)", PackingWeights::KDL_DURATION_MATCH),
-                pw!(w, d, candidate_weights.title_match, "Title match", "Weight for title similarity (0.0-1.0)", PackingWeights::KDL_TITLE_MATCH),
-                pw!(w, d, candidate_weights.artist_match, "Artist match", "Weight for artist similarity (0.0-1.0)", PackingWeights::KDL_ARTIST_MATCH),
-                pw!(w, d, candidate_weights.album_match, "Album match", "Weight for album similarity (0.0-1.0)", PackingWeights::KDL_ALBUM_MATCH),
-                pw!(w, d, candidate_weights.track_number_match, "Track number match", "Weight for tracknumber matching slot position (0.0-1.0)", PackingWeights::KDL_TRACK_NUMBER_MATCH),
+                pw!(w, d, candidate_weights.acoustid_confidence, "AcoustID confidence", "Weight for fingerprint confidence (0.0-1.0)", &["TODO"], PackingWeights::KDL_ACOUSTID_CONFIDENCE),
+                pw!(w, d, candidate_weights.duration_match, "Duration match", "Weight for duration match quality (0.0-1.0)", &["TODO"], PackingWeights::KDL_DURATION_MATCH),
+                pw!(w, d, candidate_weights.title_match, "Title match", "Weight for title similarity (0.0-1.0)", &["TODO"], PackingWeights::KDL_TITLE_MATCH),
+                pw!(w, d, candidate_weights.artist_match, "Artist match", "Weight for artist similarity (0.0-1.0)", &["TODO"], PackingWeights::KDL_ARTIST_MATCH),
+                pw!(w, d, candidate_weights.album_match, "Album match", "Weight for album similarity (0.0-1.0)", &["TODO"], PackingWeights::KDL_ALBUM_MATCH),
+                pw!(w, d, candidate_weights.track_number_match, "Track number match", "Weight for tracknumber matching slot position (0.0-1.0)", &["TODO"], PackingWeights::KDL_TRACK_NUMBER_MATCH),
             ]
         }},
         ConfigGroup { name: "Packing: Elimination Weights", collapsed: true, fields: {
             let w = &ops.release_packing.elimination_weights;
             let d = PackingWeights::elimination_defaults();
             vec![
-                pw!(w, d, elimination_weights.acoustid_confidence, "AcoustID confidence", "Weight for fingerprint confidence (0.0-1.0)", PackingWeights::KDL_ACOUSTID_CONFIDENCE),
-                pw!(w, d, elimination_weights.duration_match, "Duration match", "Weight for duration match quality (0.0-1.0)", PackingWeights::KDL_DURATION_MATCH),
-                pw!(w, d, elimination_weights.title_match, "Title match", "Weight for title similarity (0.0-1.0)", PackingWeights::KDL_TITLE_MATCH),
-                pw!(w, d, elimination_weights.artist_match, "Artist match", "Weight for artist similarity (0.0-1.0)", PackingWeights::KDL_ARTIST_MATCH),
-                pw!(w, d, elimination_weights.album_match, "Album match", "Weight for album similarity (0.0-1.0)", PackingWeights::KDL_ALBUM_MATCH),
-                pw!(w, d, elimination_weights.track_number_match, "Track number match", "Weight for tracknumber matching slot position (0.0-1.0)", PackingWeights::KDL_TRACK_NUMBER_MATCH),
+                pw!(w, d, elimination_weights.acoustid_confidence, "AcoustID confidence", "Weight for fingerprint confidence (0.0-1.0)", &["TODO"], PackingWeights::KDL_ACOUSTID_CONFIDENCE),
+                pw!(w, d, elimination_weights.duration_match, "Duration match", "Weight for duration match quality (0.0-1.0)", &["TODO"], PackingWeights::KDL_DURATION_MATCH),
+                pw!(w, d, elimination_weights.title_match, "Title match", "Weight for title similarity (0.0-1.0)", &["TODO"], PackingWeights::KDL_TITLE_MATCH),
+                pw!(w, d, elimination_weights.artist_match, "Artist match", "Weight for artist similarity (0.0-1.0)", &["TODO"], PackingWeights::KDL_ARTIST_MATCH),
+                pw!(w, d, elimination_weights.album_match, "Album match", "Weight for album similarity (0.0-1.0)", &["TODO"], PackingWeights::KDL_ALBUM_MATCH),
+                pw!(w, d, elimination_weights.track_number_match, "Track number match", "Weight for tracknumber matching slot position (0.0-1.0)", &["TODO"], PackingWeights::KDL_TRACK_NUMBER_MATCH),
             ]
         }},
         ConfigGroup { name: "Tag Splitting", collapsed: false, fields: vec![
             cf!(string_set, tag_splitting.collaboration_keywords, "Collaboration keywords",
-                "Keywords like feat, ft, vs for artist collabs", TagSplittingOpinions::KDL_COLLAB),
+                "Keywords like feat, ft, vs for artist collabs",
+                &["TODO"], TagSplittingOpinions::KDL_COLLAB),
             cf!(string_list_map, tag_splitting.tag_separators, "Tag separators",
-                "Per-tag separator strings", Opinions::KDL_BLOCK_TAG_SPLITTING),
+                "Per-tag separator strings",
+                &["TODO"], Opinions::KDL_BLOCK_TAG_SPLITTING),
         ]},
         ConfigGroup { name: "External Matching", collapsed: false, fields: vec![
             cf!(string, external_matching.acoustid_api_key, "AcoustID API key",
-                "API key for AcoustID fingerprint lookups (empty = disabled)", ExternalMatchingConfig::KDL_ACOUSTID_KEY),
+                "API key for AcoustID fingerprint lookups (empty = disabled)",
+                &["TODO"], ExternalMatchingConfig::KDL_ACOUSTID_KEY),
             cf!(u32, external_matching.requests_per_second, "Requests per second",
-                "Rate limit for AcoustID API calls", ExternalMatchingConfig::KDL_REQ_PER_SEC),
+                "Rate limit for AcoustID API calls",
+                &["TODO"], ExternalMatchingConfig::KDL_REQ_PER_SEC),
             cf!(bool, external_matching.auto_enrich_on_match, "Auto-enrich on match",
-                "Auto-trigger MB enrichment when AcoustID matches arrive", ExternalMatchingConfig::KDL_AUTO_ENRICH),
+                "Auto-trigger MB enrichment when AcoustID matches arrive",
+                &["TODO"], ExternalMatchingConfig::KDL_AUTO_ENRICH),
             cf!(u32, external_matching.mb_cache_ttl_days, "MB cache TTL (days)",
-                "Days before re-fetching MusicBrainz cache entries", ExternalMatchingConfig::KDL_MB_CACHE_TTL),
+                "Days before re-fetching MusicBrainz cache entries",
+                &["TODO"], ExternalMatchingConfig::KDL_MB_CACHE_TTL),
             cf!(u32, external_matching.mb_requests_per_second, "MB requests per second",
-                "Rate limit ceiling for MusicBrainz API (adaptive backoff)", ExternalMatchingConfig::KDL_MB_REQ_PER_SEC),
+                "Rate limit ceiling for MusicBrainz API (adaptive backoff)",
+                &["TODO"], ExternalMatchingConfig::KDL_MB_REQ_PER_SEC),
             // Custom applier: trim trailing slash
             field("MB base URL", "MusicBrainz API base URL (use a local mirror to bypass rate limits)",
+                &["TODO"],
                 ConfigValue::String(ops.external_matching.mb_base_url.clone()),
                 source_for(ops.external_matching.mb_base_url == defaults.external_matching.mb_base_url,
                     ExternalMatchingConfig::KDL_MB_BASE_URL),
@@ -309,45 +335,58 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
         ]},
         ConfigGroup { name: "Disc Extraction", collapsed: false, fields: vec![
             cf!(string, disc_extraction.disc_tag_name, "Disc tag name",
-                "Tag name to write extracted disc identifier into", DiscExtractionOpinions::KDL_DISC_TAG_NAME),
+                "Tag name to write extracted disc identifier into",
+                &["TODO"], DiscExtractionOpinions::KDL_DISC_TAG_NAME),
             cf!(bool, disc_extraction.map_letters_to_numbers, "Map letters to numbers",
-                "Map letter prefixes to numbers (A\u{2192}1, B\u{2192}2, ...)", DiscExtractionOpinions::KDL_MAP_LETTERS),
+                "Map letter prefixes to numbers (A\u{2192}1, B\u{2192}2, ...)",
+                &["TODO"], DiscExtractionOpinions::KDL_MAP_LETTERS),
         ]},
         ConfigGroup { name: "Album Art", collapsed: false, fields: vec![
             cf!(enum SidecarDeployMode, album_art.sidecar_deploy_mode, "Sidecar deploy mode",
-                "Deploy sidecar cover images alongside audio files to libraries", AlbumArtOpinions::KDL_SIDECAR_DEPLOY),
+                "Deploy sidecar cover images alongside audio files to libraries",
+                &["TODO"], AlbumArtOpinions::KDL_SIDECAR_DEPLOY),
         ]},
         ConfigGroup { name: "Quality Resolution", collapsed: false, fields: vec![
             cf!(float, quality_resolution.inbox_bitrate_fuzz_percent, "Inbox bitrate fuzz percent",
-                "Inbox-to-corpus bitrate tolerance for equivalence", QualityResolutionOpinions::KDL_BITRATE_FUZZ),
+                "Inbox-to-corpus bitrate tolerance for equivalence",
+                &["TODO"], QualityResolutionOpinions::KDL_BITRATE_FUZZ),
         ]},
         ConfigGroup { name: "Canonicalization", collapsed: false, fields: vec![
             cf!(bool, canonicalization.strip_album_format_suffixes, "Strip album format suffixes",
-                "Normalize EP/LP suffixes during album collision detection", CanonicalizationOpinions::KDL_STRIP_SUFFIXES),
+                "Normalize EP/LP suffixes during album collision detection",
+                &["TODO"], CanonicalizationOpinions::KDL_STRIP_SUFFIXES),
         ]},
         ConfigGroup { name: "Health Detection", collapsed: false, fields: vec![
             cf!(string_list, health_detection.required_tags, "Required tags",
-                "Tags that must be present on every track", HealthDetectionOpinions::KDL_REQUIRED_TAGS),
+                "Tags that must be present on every track",
+                &["TODO"], HealthDetectionOpinions::KDL_REQUIRED_TAGS),
             cf!(bool, health_detection.album_artist_only_required_if_compilation, "Album artist only if compilation",
-                "Only require album_artist on multi-artist albums", HealthDetectionOpinions::KDL_ALBUM_ARTIST_COMPILATION),
+                "Only require album_artist on multi-artist albums",
+                &["TODO"], HealthDetectionOpinions::KDL_ALBUM_ARTIST_COMPILATION),
             cf!(string, health_detection.single_album_suffix, "Single album suffix",
-                "Suffix appended when tagging as single", HealthDetectionOpinions::KDL_SINGLE_ALBUM_SUFFIX),
+                "Suffix appended when tagging as single",
+                &["TODO"], HealthDetectionOpinions::KDL_SINGLE_ALBUM_SUFFIX),
         ]},
         ConfigGroup { name: "Inbox Organize", collapsed: false, fields: vec![
             cf!(enum InboxOrganizeGranularity, inbox_organize.directory_granularity, "Directory granularity",
-                "How to group inbox directories for organize workflow", InboxOrganizeOpinions::KDL_DIR_GRANULARITY),
+                "How to group inbox directories for organize workflow",
+                &["TODO"], InboxOrganizeOpinions::KDL_DIR_GRANULARITY),
         ]},
         ConfigGroup { name: "Advanced", collapsed: false, fields: vec![
             cf!(duration, idle_rescan_interval_secs, "Idle rescan interval",
-                "Idle time before auto-rescanning corpus/inbox (e.g. 3m, 180s, disabled)", Opinions::KDL_IDLE_RESCAN),
+                "Idle time before auto-rescanning corpus/inbox (e.g. 3m, 180s, disabled)",
+                &["TODO"], Opinions::KDL_IDLE_RESCAN),
             cf!(bool, leave_transactions_open, "Leave transactions open",
-                "Keep one open transaction; adds Transaction tab to view ring", Opinions::KDL_LEAVE_TXN_OPEN),
+                "Keep one open transaction; adds Transaction tab to view ring",
+                &["TODO"], Opinions::KDL_LEAVE_TXN_OPEN),
         ]},
         ConfigGroup { name: "Performance", collapsed: false, fields: vec![
             cf!(optional_uint!, performance.worker_threads, "Worker threads",
-                "Number of worker threads (auto = 2x logical cores)", PerformanceOpinions::KDL_WORKER_THREADS),
+                "Number of worker threads (auto = 2x logical cores)",
+                &["TODO"], PerformanceOpinions::KDL_WORKER_THREADS),
             cf!(u32!, performance.db_cache_mb, "DB cache MB",
-                "SQLite page cache size per connection in MB", PerformanceOpinions::KDL_DB_CACHE),
+                "SQLite page cache size per connection in MB",
+                &["TODO"], PerformanceOpinions::KDL_DB_CACHE),
         ]},
     ]
 }

@@ -6,6 +6,7 @@ use super::build;
 use super::types::*;
 use crate::config::Config;
 use crate::ui::input::InputAction;
+use crate::ui::widgets::wizard::{WizardOffer, WizardState};
 use crate::ui::widgets::TextInputState;
 
 /// Focus region within the config editor.
@@ -71,6 +72,8 @@ pub struct ConfigEditorState {
     /// When set, Discard navigates laterally instead of returning to Insights.
     /// Set by Tab/Shift-Tab when there are unsaved edits.
     pub pending_cycle: Option<CycleDirection>,
+    /// Wizard popup state for Z-key help text.
+    pub wizard_state: WizardState,
 }
 
 impl ConfigEditorState {
@@ -89,6 +92,7 @@ impl ConfigEditorState {
             focus: EditorFocus::Fields,
             selected_button: EditorButton::Save,
             pending_cycle: None,
+            wizard_state: WizardState::default(),
         }
     }
 
@@ -494,6 +498,7 @@ impl ConfigEditorState {
             InputAction::NavUp => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
+                    self.wizard_state.dismiss();
                 }
                 ConfigEditorAction::None
             }
@@ -504,6 +509,7 @@ impl ConfigEditorState {
             InputAction::NavDown => {
                 if self.cursor + 1 < total {
                     self.cursor += 1;
+                    self.wizard_state.dismiss();
                 }
                 ConfigEditorAction::None
             }
@@ -523,10 +529,12 @@ impl ConfigEditorState {
             }
             InputAction::Char('[') => {
                 self.jump_to_prev_group();
+                self.wizard_state.dismiss();
                 ConfigEditorAction::None
             }
             InputAction::Char(']') => {
                 self.jump_to_next_group();
+                self.wizard_state.dismiss();
                 ConfigEditorAction::None
             }
             InputAction::Char('r') => {
@@ -535,6 +543,18 @@ impl ConfigEditorState {
             }
             InputAction::Char('C') => {
                 self.toggle_current_group_collapse();
+                ConfigEditorAction::None
+            }
+            InputAction::Char('z') | InputAction::Char('Z') => {
+                if let Some((gi, fi)) = self.cursor_to_group_field() {
+                    let help = self.groups[gi].fields[fi].help;
+                    if !help.is_empty() {
+                        let lines: Vec<ratatui::text::Line<'static>> =
+                            help.iter().map(|s| ratatui::text::Line::raw(s.to_string())).collect();
+                        let offer = WizardOffer::Popup(lines);
+                        self.wizard_state.advance(&offer);
+                    }
+                }
                 ConfigEditorAction::None
             }
             InputAction::Cancel => ConfigEditorAction::Discard,

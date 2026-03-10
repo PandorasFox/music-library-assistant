@@ -69,7 +69,7 @@ impl TagCollision {
 
 /// Detect artist name collisions from the database.
 pub fn get_artist_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
-    let values = db.get_distinct_tag_values("artist")?;
+    let values = db.get_distinct_tag_values_for::<crate::zones::CorpusZone>("artist")?;
 
     // Group by normalized key
     let mut buckets: HashMap<String, HashMap<String, usize>> = HashMap::new();
@@ -94,7 +94,7 @@ pub fn get_album_artist_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollisi
     // Query all separator variants and merge — files may use ALBUMARTIST or ALBUM_ARTIST
     let mut buckets: HashMap<String, HashMap<String, usize>> = HashMap::new();
     for variant in mm_utils::tag_names::compound_tag_name_variants("ALBUM", "ARTIST") {
-        let values = db.get_distinct_tag_values(&variant)?;
+        let values = db.get_distinct_tag_values_for::<crate::zones::CorpusZone>(&variant)?;
         for (value, count) in values {
             let normalized = normalize_album_artist(&value);
             *buckets
@@ -274,7 +274,7 @@ fn variants_have_disjoint_release_ids(variants: &HashMap<String, VariantData>) -
 
 /// Detect genre collisions from the database.
 pub fn get_genre_collisions(db: &ReadOnlyDb<'_>) -> Result<Vec<TagCollision>> {
-    let values = db.get_distinct_tag_values("genre")?;
+    let values = db.get_distinct_tag_values_for::<crate::zones::CorpusZone>("genre")?;
 
     // Group by normalized key
     let mut buckets: HashMap<String, HashMap<String, usize>> = HashMap::new();

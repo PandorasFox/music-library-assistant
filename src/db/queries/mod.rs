@@ -528,25 +528,13 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_file_zone_and_path_by_inode(inode: i64) -> Result<Option<(String, String)>>;
         fn get_file_paths_batch(source: super::types::Zone, inodes: &[i64]) -> Result<std::collections::HashMap<i64, String>>;
         fn get_duplicate_inode_groups() -> Result<Vec<(i64, String)>>;
-        #[allow(clippy::type_complexity)]
-        fn get_audio_files_with_tag_presence() -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>;
-        #[allow(clippy::type_complexity)]
-        fn get_inbox_audio_files_with_tag_presence() -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>;
         fn get_inbox_path_for_inode(inode: i64) -> Result<Option<String>>;
         fn get_compilation_albums() -> Result<std::collections::HashSet<String>>;
-        fn get_inodes_for_tag_values(tag_name: &str, values: &[&str]) -> Result<Vec<i64>>;
-        fn get_all_corpus_inodes() -> Result<std::collections::HashMap<i64, String>>;
-        fn get_all_inbox_inodes() -> Result<std::collections::HashMap<i64, String>>;
-        fn get_file_in_corpus_inodes() -> Result<std::collections::HashMap<i64, String>>;
-        fn get_file_in_inbox_inodes() -> Result<std::collections::HashMap<i64, String>>;
         fn get_inbox_unindexed_files() -> Result<Vec<(i64, String)>>;
         fn get_corpus_path_for_inode(inode: i64) -> Result<Option<String>>;
         fn get_all_tags_ordered() -> Result<Vec<(i64, String, String)>>;
         fn get_indexed_corpus_directories() -> Result<Vec<(std::path::PathBuf, i64)>>;
         fn get_missing_directory_paths() -> Result<Vec<String>>;
-        fn get_distinct_tag_values(tag_name: &str) -> Result<Vec<(String, usize)>>;
-        fn get_distinct_inbox_tag_values(tag_name: &str) -> Result<Vec<(String, usize)>>;
-        fn get_inbox_inodes_for_tag_values(tag_name: &str, values: &[&str]) -> Result<Vec<i64>>;
         fn get_album_values_with_inodes() -> Result<Vec<(i64, String)>>;
         #[allow(clippy::type_complexity)]
         fn get_album_data_for_collision_detection() -> Result<Vec<(String, String, String, String, String, String)>>;

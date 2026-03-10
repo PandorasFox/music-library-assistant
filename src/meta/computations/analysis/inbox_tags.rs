@@ -82,7 +82,7 @@ pub fn execute_detect_inbox_tag_canonicity(
 
     for (tag_name, normalize_fn) in &tag_fields {
         // Get inbox values: (value, count)
-        let inbox_values = match read_only_db.get_distinct_inbox_tag_values(tag_name) {
+        let inbox_values = match read_only_db.get_distinct_tag_values_for::<crate::zones::InboxZone>(tag_name) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -92,7 +92,7 @@ pub fn execute_detect_inbox_tag_canonicity(
         }
 
         // Get corpus values: (value, count)
-        let corpus_values = match read_only_db.get_distinct_tag_values(tag_name) {
+        let corpus_values = match read_only_db.get_distinct_tag_values_for::<crate::zones::CorpusZone>(tag_name) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -166,7 +166,7 @@ pub fn execute_detect_inbox_tag_canonicity(
             // Get inbox inodes for these variant values
             let variant_refs: Vec<&str> = inbox_variants.iter().map(|(v, _)| v.as_str()).collect();
             let inbox_inodes = read_only_db
-                .get_inbox_inodes_for_tag_values(tag_name, &variant_refs)
+                .get_inodes_for_tag_values_in::<crate::zones::InboxZone>(tag_name, &variant_refs)
                 .unwrap_or_default();
 
             let key = format!("{}:{}", tag_name, norm_key);
@@ -246,7 +246,7 @@ pub fn execute_detect_inbox_missing_tags(
         required_tags.remove("ALBUM_ARTIST");
     }
 
-    let tracks_with_tags = match read_only_db.get_inbox_audio_files_with_tag_presence() {
+    let tracks_with_tags = match read_only_db.get_audio_files_with_tag_presence_for::<crate::zones::InboxZone>() {
         Ok(rows) => rows,
         Err(e) => {
             return Result::failure(
@@ -465,7 +465,7 @@ pub fn execute_detect_inbox_compound_tags(
             let tag_name = compound.tag_name.to_uppercase();
             let existing_values = tag_values_cache.entry(tag_name.clone()).or_insert_with(|| {
                 read_only_db
-                    .get_distinct_tag_values(&tag_name)
+                    .get_distinct_tag_values_for::<crate::zones::CorpusZone>(&tag_name)
                     .unwrap_or_default()
                     .into_iter()
                     .map(|(value, _count)| value)

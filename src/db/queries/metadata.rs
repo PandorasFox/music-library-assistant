@@ -14,13 +14,6 @@ impl Database {
     // Tag Collision Detection Queries (for canonicalization signals)
     // ========================================================================
 
-    /// Query distinct tag values with file counts from corpus_tags table.
-    /// Only considers corpus files.
-    /// Returns Vec of (tag_value, file_count).
-    pub fn get_distinct_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
-        self.get_distinct_tag_values_for::<crate::zones::CorpusZone>(tag_name)
-    }
-
     /// Query album data with artist context and release identifiers for collision detection.
     /// Returns file-level data to allow filtering by ISRC/catalog_number.
     /// Only considers corpus files.
@@ -87,26 +80,6 @@ impl Database {
             result.push(row?);
         }
         Ok(result)
-    }
-
-    // ========================================================================
-    // Inbox Tag Queries (for inbox tag canonicity detection)
-    // ========================================================================
-
-    /// Query distinct tag values with file counts from inbox_tags table.
-    /// Only considers inbox files.
-    /// Returns Vec of (tag_value, file_count).
-    pub fn get_distinct_inbox_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
-        self.get_distinct_tag_values_for::<crate::zones::InboxZone>(tag_name)
-    }
-
-    /// Get inbox inodes that have any of the given tag values for a specific tag name.
-    pub fn get_inbox_inodes_for_tag_values(
-        &self,
-        tag_name: &str,
-        values: &[&str],
-    ) -> Result<Vec<i64>> {
-        self.get_inodes_for_tag_values_in::<crate::zones::InboxZone>(tag_name, values)
     }
 
     // ========================================================================

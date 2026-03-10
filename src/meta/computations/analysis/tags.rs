@@ -72,7 +72,7 @@ pub fn execute_detect_missing_tags(
 
     // Build computed signals and reconcile (hash-based skip for unchanged signals)
 
-    let tracks_with_tags = match read_only_db.get_audio_files_with_tag_presence() {
+    let tracks_with_tags = match read_only_db.get_audio_files_with_tag_presence_for::<crate::zones::CorpusZone>() {
         Ok(rows) => rows,
         Err(e) => {
             return Result::failure(
@@ -267,7 +267,7 @@ pub fn execute_detect_tag_canonicalizations(
             // Get inodes for all variants in this collision
             let variant_refs: Vec<&str> = collision.variants.iter().map(|s| s.as_str()).collect();
             let inodes = read_only_db
-                .get_inodes_for_tag_values(&collision.tag_name, &variant_refs)
+                .get_inodes_for_tag_values_in::<crate::zones::CorpusZone>(&collision.tag_name, &variant_refs)
                 .unwrap_or_default();
 
             // Build sorted variant tuples (count DESC)
@@ -524,7 +524,7 @@ pub fn execute_detect_compound_tags_for_inode(
         // Get or fetch existing values for this tag type (reuses cache from above)
         let existing_values = tag_values_cache.entry(tag_name.clone()).or_insert_with(|| {
             read_only_db
-                .get_distinct_tag_values(&tag_name)
+                .get_distinct_tag_values_for::<crate::zones::CorpusZone>(&tag_name)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|(value, _count)| value)

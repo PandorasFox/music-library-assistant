@@ -365,15 +365,6 @@ impl Database {
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
     }
 
-    /// Get corpus audio files with their present tag names.
-    #[allow(clippy::type_complexity)]
-    pub fn get_audio_files_with_tag_presence(
-        &self,
-    ) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>
-    {
-        self.get_audio_files_with_tag_presence_for::<crate::zones::CorpusZone>()
-    }
-
     /// Get audio files with their present tag names for any tagged zone.
     #[allow(clippy::type_complexity)]
     pub fn get_audio_files_with_tag_presence_for<Z: crate::zones::TaggedZone>(
@@ -410,41 +401,6 @@ impl Database {
 
     /// Get inodes that have any of the given tag values for a specific tag name.
     ///
-    /// Uses normalized tag name matching (strips separators like `_`, `-`, ` `, `.`)
-    /// so that compound tag variants match: "album_artist" ≈ "ALBUMARTIST" ≈ "ALBUM_ARTIST".
-    pub fn get_inodes_for_tag_values(&self, tag_name: &str, values: &[&str]) -> Result<Vec<i64>> {
-        if values.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Normalize the tag name in Rust (strip separators + uppercase) and compare
-        // against the same normalization applied to the DB column in SQL.
-        let normalized_tag_name = mm_utils::tag_names::normalize_tag_name(tag_name);
-
-        let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
-        let sql = format!(
-            r#"SELECT DISTINCT ct.inode FROM corpus_tags ct
-               INNER JOIN files f ON ct.inode = f.inode AND f.zone = 'corpus'
-               WHERE REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ct.tag_name), '_', ''), '-', ''), ' ', ''), '.', '') = ?1
-               AND ct.tag_value IN ({})"#,
-            placeholders.join(",")
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-
-        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(values.len() + 1);
-        params.push(&normalized_tag_name);
-        for v in values {
-            params.push(v);
-        }
-
-        let ids = stmt
-            .query_map(params.as_slice(), |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<i64>>>()?;
-
-        Ok(ids)
-    }
-
     /// Get all audio file inodes mapped to their paths, zone-generic.
     pub fn get_all_inodes<Z: crate::zones::AudioZone>(&self) -> Result<HashMap<i64, String>> {
         self.get_all_inodes_for_zone(Z::ZONE_STR)
@@ -463,16 +419,6 @@ impl Database {
             result.insert(row.0, row.1);
         }
         Ok(result)
-    }
-
-    /// Get all corpus audio file inodes mapped to their paths.
-    pub fn get_all_corpus_inodes(&self) -> Result<HashMap<i64, String>> {
-        self.get_all_inodes_for_zone("corpus")
-    }
-
-    /// Get all inbox audio file inodes mapped to their paths.
-    pub fn get_all_inbox_inodes(&self) -> Result<HashMap<i64, String>> {
-        self.get_all_inodes_for_zone("inbox")
     }
 
     /// Check whether an audio file has embedded pictures.
@@ -504,13 +450,6 @@ impl Database {
     }
 
     /// Get inbox audio files with their present tag names.
-    #[allow(clippy::type_complexity)]
-    pub fn get_inbox_audio_files_with_tag_presence(
-        &self,
-    ) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>
-    {
-        self.get_audio_files_with_tag_presence_for::<crate::zones::InboxZone>()
-    }
 
     /// Get the inbox path for a single inode.
     pub fn get_inbox_path_for_inode(&self, inode: i64) -> Result<Option<String>> {

@@ -377,7 +377,7 @@ pub fn execute_derive_deploy_health_signals(
         .collect();
 
     // Get all corpus audio file inodes
-    let corpus_inodes = match read_only_db.get_all_corpus_inodes() {
+    let corpus_inodes = match read_only_db.get_all_inodes::<crate::zones::CorpusZone>() {
         Ok(v) => v,
         Err(e) => {
             log_error(format!(
@@ -853,7 +853,7 @@ pub fn execute_derive_corpus_deploy_status(
     // Only healthy, source-configured files go into `precomputed` for signal
     // emission, but deploy_path_counts covers the entire corpus.
 
-    let all_corpus_inodes = match read_only_db.get_all_corpus_inodes() {
+    let all_corpus_inodes = match read_only_db.get_all_inodes::<crate::zones::CorpusZone>() {
         Ok(v) => v,
         Err(e) => {
             log_error(format!(

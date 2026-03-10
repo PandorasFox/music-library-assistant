@@ -261,16 +261,6 @@ impl Database {
         Ok(rows)
     }
 
-    /// Get all FileInCorpus signal inodes with their paths.
-    pub fn get_file_in_corpus_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
-        self.get_signal_inode_paths("signal_file_in_corpus")
-    }
-
-    /// Get all FileInInbox signal inodes with their paths.
-    pub fn get_file_in_inbox_inodes(&self) -> Result<std::collections::HashMap<i64, String>> {
-        self.get_signal_inode_paths("signal_file_in_inbox")
-    }
-
     /// Get all inbox unindexed files as (inode, path) pairs.
     pub fn get_inbox_unindexed_files(&self) -> Result<Vec<(i64, String)>> {
         let mut stmt = self

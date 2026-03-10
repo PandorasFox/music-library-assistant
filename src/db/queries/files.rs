@@ -375,7 +375,16 @@ impl Database {
         &self,
     ) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>
     {
-        self.get_audio_files_with_tag_presence_for_zone("corpus_tags", "corpus")
+        self.get_audio_files_with_tag_presence_for::<crate::zones::CorpusZone>()
+    }
+
+    /// Get audio files with their present tag names for any tagged zone.
+    #[allow(clippy::type_complexity)]
+    pub fn get_audio_files_with_tag_presence_for<Z: crate::zones::TaggedZone>(
+        &self,
+    ) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>
+    {
+        self.get_audio_files_with_tag_presence_for_zone(Z::TAG_TABLE, Z::ZONE_STR)
     }
 
     /// Get albums that are compilations (more than one distinct ARTIST value).
@@ -440,6 +449,11 @@ impl Database {
         Ok(ids)
     }
 
+    /// Get all audio file inodes mapped to their paths, zone-generic.
+    pub fn get_all_inodes<Z: crate::zones::AudioZone>(&self) -> Result<HashMap<i64, String>> {
+        self.get_all_inodes_for_zone(Z::ZONE_STR)
+    }
+
     /// Get all audio file inodes mapped to their paths for a zone.
     fn get_all_inodes_for_zone(&self, zone: &str) -> Result<HashMap<i64, String>> {
         let mut stmt = self
@@ -499,7 +513,7 @@ impl Database {
         &self,
     ) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>
     {
-        self.get_audio_files_with_tag_presence_for_zone("inbox_tags", "inbox")
+        self.get_audio_files_with_tag_presence_for::<crate::zones::InboxZone>()
     }
 
     /// Get the inbox path for a single inode.

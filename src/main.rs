@@ -52,6 +52,7 @@ mod logging;
 mod meta;
 mod ui;
 mod witch;
+pub mod zones;
 
 use anyhow::Result;
 

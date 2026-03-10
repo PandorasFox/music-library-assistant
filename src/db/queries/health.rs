@@ -9,6 +9,7 @@ use rusqlite::params;
 
 use super::Database;
 use crate::db::types::Zone;
+use crate::meta::signals::store::CorpusSignalStore;
 
 /// Generate a typed signal query method on Database.
 macro_rules! signal_query {
@@ -218,6 +219,13 @@ impl Database {
             .query_map(params![], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
         Ok(results)
+    }
+
+    /// Get all file-presence signal inodes with their paths, zone-generic.
+    pub fn get_file_presence_inodes<Z: crate::zones::AudioZone>(
+        &self,
+    ) -> Result<std::collections::HashMap<i64, String>> {
+        self.get_signal_inode_paths(Z::FilePresenceSignal::TABLE_NAME)
     }
 
     /// Get all signal inodes with their paths from a given signal table.

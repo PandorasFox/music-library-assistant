@@ -19,6 +19,8 @@ use crate::meta::signals::data::*;
 use crate::meta::signals::registry::TypedSignalWrite;
 use crate::meta::signals::store::CorpusSignalStore;
 
+use crate::zones::{CorpusZone, DeriveZoneSignals, InboxZone};
+
 use super::{Computation, Result};
 
 // ============================================================================
@@ -611,6 +613,103 @@ fn gc_signal_table<S: CorpusSignalStore>(
         ));
     }
     cleared
+}
+
+// ============================================================================
+// DeriveZoneSignals Implementations
+// ============================================================================
+
+impl DeriveZoneSignals for CorpusZone {
+    fn on_file_gone(
+        inode: i64,
+        path: &str,
+        read_only_db: &ReadOnlyDb<'_>,
+        sender: &write_thread::SignalWriteSender,
+        witness: &ComputationWitness,
+    ) {
+        ensure_typed_signal(
+            read_only_db,
+            sender,
+            TypedSignalWrite::MissingFile(MissingFileSignal {
+                inode,
+                path: path.to_string(),
+                replaced_by_inode: None,
+            }),
+            witness,
+        );
+        drop_stale_corpus_signal::<HealthyFileSignal>(read_only_db, sender, inode, witness);
+    }
+
+    fn should_mark_healthy(inode: i64, read_only_db: &ReadOnlyDb<'_>) -> bool {
+        !inode_has_oob_signal(read_only_db, inode)
+    }
+
+    fn gc_orphaned_signals(
+        read_only_db: &ReadOnlyDb<'_>,
+        sender: &write_thread::SignalWriteSender,
+        known_inodes: &HashSet<i64>,
+        witness: &ComputationWitness,
+    ) -> usize {
+        // FileInCorpus excluded: it IS the disk observation, always part of known_inodes
+        gc_signal_tables!(read_only_db, sender, known_inodes, witness, [
+            UnindexedFileSignal,
+            MissingFileSignal,
+            MovedFileSignal,
+            HealthyFileSignal,
+            CorruptFileSignal,
+            ShitFormatSignal,
+            MtimeOnlyMismatchSignal,
+            OutOfBandTagSyncSignal,
+            OutOfBandTagConflictSignal,
+            SubparDuplicateSignal,
+            CompoundTagSignal,
+            DeployReadySignal,
+            DeployedHealthySignal,
+            SidecarDeployReadySignal,
+            MissingDirectorySignal,
+            ExternalMatchSignal,
+            ReleasePackingSignal,
+            UnmatchedCorpusTrackSignal,
+        ])
+    }
+
+    fn known_inodes_for_gc(disk_set: &HashSet<i64>, indexed_set: &HashSet<i64>) -> HashSet<i64> {
+        disk_set.union(indexed_set).copied().collect()
+    }
+}
+
+impl DeriveZoneSignals for InboxZone {
+    fn on_file_gone(
+        inode: i64,
+        _path: &str,
+        _read_only_db: &ReadOnlyDb<'_>,
+        sender: &write_thread::SignalWriteSender,
+        witness: &ComputationWitness,
+    ) {
+        sender.drop_inbox_file_state(inode, witness);
+    }
+
+    fn should_mark_healthy(_inode: i64, _read_only_db: &ReadOnlyDb<'_>) -> bool {
+        true
+    }
+
+    fn gc_orphaned_signals(
+        read_only_db: &ReadOnlyDb<'_>,
+        sender: &write_thread::SignalWriteSender,
+        known_inodes: &HashSet<i64>,
+        witness: &ComputationWitness,
+    ) -> usize {
+        // FileInInbox excluded: it IS the disk observation, always part of known_inodes
+        gc_signal_tables!(read_only_db, sender, known_inodes, witness, [
+            InboxUnindexedSignal,
+            InboxHealthySignal,
+            InboxCorpusMatchSignal,
+        ])
+    }
+
+    fn known_inodes_for_gc(disk_set: &HashSet<i64>, _indexed_set: &HashSet<i64>) -> HashSet<i64> {
+        disk_set.clone()
+    }
 }
 
 /// Update corpus signals for a single file after a mutation.

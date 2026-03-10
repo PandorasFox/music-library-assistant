@@ -436,6 +436,50 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     // =========================================================================
+    // Zone-Generic Queries
+    // =========================================================================
+
+    /// Get all audio file inodes mapped to their paths for a zone.
+    pub fn get_all_inodes<Z: crate::zones::AudioZone>(
+        &self,
+    ) -> Result<std::collections::HashMap<i64, String>> {
+        self.db.get_all_inodes::<Z>()
+    }
+
+    /// Get all file-presence signal inodes with their paths for a zone.
+    pub fn get_file_presence_inodes<Z: crate::zones::AudioZone>(
+        &self,
+    ) -> Result<std::collections::HashMap<i64, String>> {
+        self.db.get_file_presence_inodes::<Z>()
+    }
+
+    /// Get distinct tag values with file counts for a tagged zone.
+    pub fn get_distinct_tag_values_for<Z: crate::zones::TaggedZone>(
+        &self,
+        tag_name: &str,
+    ) -> Result<Vec<(String, usize)>> {
+        self.db.get_distinct_tag_values_for::<Z>(tag_name)
+    }
+
+    /// Get inodes matching tag values for a tagged zone (normalized tag name matching).
+    pub fn get_inodes_for_tag_values_in<Z: crate::zones::TaggedZone>(
+        &self,
+        tag_name: &str,
+        values: &[&str],
+    ) -> Result<Vec<i64>> {
+        self.db.get_inodes_for_tag_values_in::<Z>(tag_name, values)
+    }
+
+    /// Get audio files with tag presence info for a tagged zone.
+    #[allow(clippy::type_complexity)]
+    pub fn get_audio_files_with_tag_presence_for<Z: crate::zones::TaggedZone>(
+        &self,
+    ) -> Result<Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)>>
+    {
+        self.db.get_audio_files_with_tag_presence_for::<Z>()
+    }
+
+    // =========================================================================
     // OOB / Tag Mismatch Queries
     // =========================================================================
 

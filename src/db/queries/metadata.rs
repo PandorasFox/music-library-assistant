@@ -18,26 +18,7 @@ impl Database {
     /// Only considers corpus files.
     /// Returns Vec of (tag_value, file_count).
     pub fn get_distinct_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT ct.tag_value, COUNT(DISTINCT ct.inode) as file_count
-               FROM corpus_tags ct
-               INNER JOIN files f ON ct.inode = f.inode AND f.zone = 'corpus'
-               WHERE UPPER(ct.tag_name) = UPPER(?1) AND ct.tag_value IS NOT NULL AND ct.tag_value != ''
-               GROUP BY ct.tag_value
-               ORDER BY file_count DESC"#,
-        )?;
-
-        let rows = stmt.query_map(params![tag_name], |row| {
-            let value: String = row.get(0)?;
-            let count: i64 = row.get(1)?;
-            Ok((value, count as usize))
-        })?;
-
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
+        self.get_distinct_tag_values_for::<crate::zones::CorpusZone>(tag_name)
     }
 
     /// Query album data with artist context and release identifiers for collision detection.
@@ -116,16 +97,40 @@ impl Database {
     /// Only considers inbox files.
     /// Returns Vec of (tag_value, file_count).
     pub fn get_distinct_inbox_tag_values(&self, tag_name: &str) -> Result<Vec<(String, usize)>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT it.tag_value, COUNT(DISTINCT it.inode) as file_count
-               FROM inbox_tags it
-               INNER JOIN files f ON it.inode = f.inode AND f.zone = 'inbox'
-               WHERE UPPER(it.tag_name) = UPPER(?1) AND it.tag_value IS NOT NULL AND it.tag_value != ''
-               GROUP BY it.tag_value
-               ORDER BY file_count DESC"#,
-        )?;
+        self.get_distinct_tag_values_for::<crate::zones::InboxZone>(tag_name)
+    }
 
-        let rows = stmt.query_map(params![tag_name], |row| {
+    /// Get inbox inodes that have any of the given tag values for a specific tag name.
+    pub fn get_inbox_inodes_for_tag_values(
+        &self,
+        tag_name: &str,
+        values: &[&str],
+    ) -> Result<Vec<i64>> {
+        self.get_inodes_for_tag_values_in::<crate::zones::InboxZone>(tag_name, values)
+    }
+
+    // ========================================================================
+    // Zone-Generic Tag Queries
+    // ========================================================================
+
+    /// Query distinct tag values with file counts for any tagged zone.
+    /// Returns Vec of (tag_value, file_count).
+    pub fn get_distinct_tag_values_for<Z: crate::zones::TaggedZone>(
+        &self,
+        tag_name: &str,
+    ) -> Result<Vec<(String, usize)>> {
+        let sql = format!(
+            r#"SELECT t.tag_value, COUNT(DISTINCT t.inode) as file_count
+               FROM {} t
+               INNER JOIN files f ON t.inode = f.inode AND f.zone = ?1
+               WHERE UPPER(t.tag_name) = UPPER(?2) AND t.tag_value IS NOT NULL AND t.tag_value != ''
+               GROUP BY t.tag_value
+               ORDER BY file_count DESC"#,
+            Z::TAG_TABLE
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![Z::ZONE_STR, tag_name], |row| {
             let value: String = row.get(0)?;
             let count: i64 = row.get(1)?;
             Ok((value, count as usize))
@@ -138,8 +143,9 @@ impl Database {
         Ok(result)
     }
 
-    /// Get inbox inodes that have any of the given tag values for a specific tag name.
-    pub fn get_inbox_inodes_for_tag_values(
+    /// Get inodes that have any of the given tag values for a specific tag name in any tagged zone.
+    /// Uses normalized tag name matching (strips separators) for consistency.
+    pub fn get_inodes_for_tag_values_in<Z: crate::zones::TaggedZone>(
         &self,
         tag_name: &str,
         values: &[&str],
@@ -148,18 +154,24 @@ impl Database {
             return Ok(Vec::new());
         }
 
+        let normalized_tag_name = mm_utils::tag_names::normalize_tag_name(tag_name);
+
         let placeholders: Vec<&str> = values.iter().map(|_| "?").collect();
         let sql = format!(
-            r#"SELECT DISTINCT it.inode FROM inbox_tags it
-               INNER JOIN files f ON it.inode = f.inode AND f.zone = 'inbox'
-               WHERE UPPER(it.tag_name) = UPPER(?1) AND it.tag_value IN ({})"#,
+            r#"SELECT DISTINCT t.inode FROM {} t
+               INNER JOIN files f ON t.inode = f.inode AND f.zone = ?1
+               WHERE REPLACE(REPLACE(REPLACE(REPLACE(UPPER(t.tag_name), '_', ''), '-', ''), ' ', ''), '.', '') = ?2
+               AND t.tag_value IN ({})"#,
+            Z::TAG_TABLE,
             placeholders.join(",")
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
 
-        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(values.len() + 1);
-        params.push(&tag_name);
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(values.len() + 2);
+        let zone_str = Z::ZONE_STR;
+        params.push(&zone_str);
+        params.push(&normalized_tag_name);
         for v in values {
             params.push(v);
         }

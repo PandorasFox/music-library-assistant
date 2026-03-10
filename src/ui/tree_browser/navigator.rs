@@ -445,6 +445,7 @@ impl TreeNavigator {
                     let mut entry =
                         TreeEntry::directory(pending.clone(), name, depth, has_children, 0);
                     entry.deploy_marker = self.deploy_marker_for(pending);
+                    entry.packing_marker = self.packing_marker_for_dir(pending);
                     if is_root_parent
                         && !self.primary_zone_paths.is_empty()
                         && !self.primary_zone_paths.iter().any(|z| z == pending)
@@ -615,31 +616,50 @@ impl TreeNavigator {
         &self.root_path
     }
 
-    /// Update packing markers on all visible entries from cached data.
+    /// Set packing data and refresh markers on all visible entries.
     ///
     /// Called when fresh `PackingDirsData` arrives from the cache thread.
-    pub fn update_packing_markers(
+    pub fn set_packing_data(
         &mut self,
         file_paths: &HashSet<PathBuf>,
         dir_categories: &std::collections::HashMap<PathBuf, PackingCategory>,
     ) {
-        use super::entry::EntryKind;
+        self.packing_file_paths = file_paths.clone();
+        self.packing_dir_categories = dir_categories.clone();
+        // Refresh markers on all currently visible entries
         for entry in &mut self.entries {
             entry.packing_marker = match entry.kind {
-                EntryKind::AudioFile => {
+                super::entry::EntryKind::AudioFile => {
                     if file_paths.contains(&entry.path) {
                         PackingMarker::Matched
                     } else {
                         PackingMarker::None
                     }
                 }
-                EntryKind::Directory => dir_categories
+                super::entry::EntryKind::Directory => dir_categories
                     .get(&entry.path)
                     .map(|&cat| PackingMarker::Directory(cat))
                     .unwrap_or(PackingMarker::None),
-                EntryKind::ImageFile => PackingMarker::None,
+                super::entry::EntryKind::ImageFile => PackingMarker::None,
             };
         }
+    }
+
+    /// Compute packing marker for a file path.
+    fn packing_marker_for_file(&self, path: &Path) -> PackingMarker {
+        if self.packing_file_paths.contains(path) {
+            PackingMarker::Matched
+        } else {
+            PackingMarker::None
+        }
+    }
+
+    /// Compute packing marker for a directory path.
+    fn packing_marker_for_dir(&self, path: &Path) -> PackingMarker {
+        self.packing_dir_categories
+            .get(path)
+            .map(|&cat| PackingMarker::Directory(cat))
+            .unwrap_or(PackingMarker::None)
     }
 
     /// Compute deploy marker for a directory path.

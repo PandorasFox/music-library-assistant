@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
+use super::entry::PackingMarker;
 use crate::ui::widgets::control_colors;
 use crate::ui::widgets::CURSOR_STYLE;
 use crate::ui::widgets::{
@@ -23,6 +24,9 @@ use crate::ui::widgets::ListClickTargets;
 use super::entry::{DeployMarker, EntryKind, TreeEntry};
 use super::navigator::TreeNavigator;
 use super::variants::BrowserVariant;
+use crate::ui::widgets::wizard::WizardOffer;
+use crate::ui::widgets::wizard_pane::render_wizard_pane;
+use crate::ui::widgets::wizard_popup::WizardPopup;
 
 /// Render the tree browser (titlebar is rendered by render_app).
 pub fn render(
@@ -63,11 +67,19 @@ fn render_corpus_browser(
     let BrowserVariant::CorpusBrowser(ref v) = variant;
     let pending_edit_paths = v.pending_edit_paths().clone();
     let corpus_dir = v.corpus_dir().to_path_buf();
+    let wizard_state = v.wizard_state();
+    let wizard_offer_snapshot = v.wizard_offer().cloned();
 
     // Determine if we should show art preview:
     // - Config panel NOT open
+    // - Wizard pane NOT showing
     // - Selected entry is a file (not directory)
-    let show_art = v.config_panel.is_none() && nav.current_entry().is_some_and(|e| e.is_file());
+    let show_art = v.config_panel.is_none()
+        && !wizard_state.is_showing_pane()
+        && nav.current_entry().is_some_and(|e| e.is_file());
+
+    // Track tree_area for popup overlay
+    let mut tree_area = content_area;
 
     // Check if config panel is open for horizontal split
     if v.config_panel.is_some() {
@@ -77,6 +89,7 @@ fn render_corpus_browser(
             .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
             .split(content_area);
 
+        tree_area = h_chunks[0];
         render_corpus_tree(
             f,
             h_chunks[0],
@@ -92,6 +105,38 @@ fn render_corpus_browser(
         if let Some(ref panel) = v.config_panel {
             panel.render_config_panel(f, h_chunks[1]);
         }
+    } else if wizard_state.is_showing_pane() {
+        // Horizontal split: tree (60%) | wizard pane (40%)
+        let h_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(content_area);
+
+        tree_area = h_chunks[0];
+        render_corpus_tree(
+            f,
+            h_chunks[0],
+            nav,
+            variant,
+            &pending_edit_paths,
+            &corpus_dir,
+            click_targets,
+        );
+
+        // Render wizard pane
+        let BrowserVariant::CorpusBrowser(ref mut v) = variant;
+        if let Some(ref offer) = wizard_offer_snapshot {
+            let (title, lines) = match offer {
+                WizardOffer::Pane { title, lines } => (title.as_str(), lines.as_slice()),
+                WizardOffer::Both {
+                    pane_title,
+                    pane_lines,
+                    ..
+                } => (pane_title.as_str(), pane_lines.as_slice()),
+                WizardOffer::Popup(_) => ("Info", &[][..]),
+            };
+            render_wizard_pane(f, h_chunks[1], title, lines, v.wizard_pane_mut(), false);
+        }
     } else if show_art {
         // Horizontal split: tree (80%) | art preview (20%)
         let h_chunks = Layout::default()
@@ -99,6 +144,7 @@ fn render_corpus_browser(
             .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
             .split(content_area);
 
+        tree_area = h_chunks[0];
         render_corpus_tree(
             f,
             h_chunks[0],
@@ -131,6 +177,35 @@ fn render_corpus_browser(
             &corpus_dir,
             click_targets,
         );
+    }
+
+    // Overlay wizard popup when showing
+    if wizard_state.is_showing_popup() {
+        if let Some(ref offer) = wizard_offer_snapshot {
+            let popup_lines = match offer {
+                WizardOffer::Popup(lines) => lines.as_slice(),
+                WizardOffer::Both { popup, .. } => popup.as_slice(),
+                WizardOffer::Pane { .. } => &[],
+            };
+            if !popup_lines.is_empty() {
+                let cursor_idx = nav.cursor_idx();
+                let scroll = nav.scroll_offset();
+                // +1 for the block border
+                let anchor_y = tree_area.y + 1 + (cursor_idx.saturating_sub(scroll)) as u16;
+                // Anchor X: after the entry text (approximate)
+                let cursor_entry = nav.current_entry();
+                let entry_width = cursor_entry
+                    .map(|e| {
+                        let indent = e.depth * 2;
+                        let expand = 2;
+                        let name_len = e.name.chars().count();
+                        indent + expand + name_len + 10 // icon + count + marker
+                    })
+                    .unwrap_or(20);
+                let anchor_x = tree_area.x + 1 + entry_width as u16;
+                WizardPopup::render(f, popup_lines, anchor_x, anchor_y, tree_area);
+            }
+        }
     }
 
     // Render control hints
@@ -404,6 +479,27 @@ fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &Browse
             spans.push(control_colors::text(" review"));
         }
 
+        // Show Z hint when cursor is on an [MB] entry
+        let on_packing = cursor_entry
+            .map(|e| e.packing_marker != PackingMarker::None)
+            .unwrap_or(false);
+        if on_packing {
+            spans.push(control_colors::text("  "));
+            spans.push(control_colors::edit("Z"));
+            spans.push(control_colors::text(" info"));
+        }
+
+        // Show Tab hint when there are [MB] directories to cycle through
+        let has_packing_dirs = nav
+            .entries()
+            .iter()
+            .any(|e| matches!(e.packing_marker, PackingMarker::Directory(_)));
+        if has_packing_dirs {
+            spans.push(control_colors::text("  "));
+            spans.push(control_colors::nav("Tab"));
+            spans.push(control_colors::text(" next MB"));
+        }
+
         Line::from(spans)
     };
 
@@ -470,6 +566,20 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool, is_pending_edit: bool) 
         Span::styled(count_suffix, count_style),
         Span::styled(deploy_suffix, deploy_style),
     ];
+
+    // Packing marker: [MB] for files, [MB✓] etc. for directories
+    match &entry.packing_marker {
+        PackingMarker::None => {}
+        PackingMarker::Matched => {
+            spans.push(Span::styled("  [MB]", Style::default().fg(Color::Green)));
+        }
+        PackingMarker::Directory(cat) => {
+            spans.push(Span::styled(
+                format!("  [MB{}]", cat.marker_symbol()),
+                Style::default().fg(cat.color()),
+            ));
+        }
+    }
 
     if is_pending_edit {
         spans.push(Span::styled("  [*]", pending_style));

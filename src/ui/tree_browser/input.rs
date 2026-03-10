@@ -33,11 +33,14 @@ pub fn handle_input(
     // (config panel uses Tab internally for focus switching)
     if !variant_captures_nav {
         match action {
-            InputAction::CycleNext => {
-                return TreeBrowserAction::CycleNext;
-            }
-            InputAction::CyclePrev => {
-                return TreeBrowserAction::CyclePrev;
+            InputAction::CycleNext | InputAction::CyclePrev => {
+                // Let variant try to handle Tab first (e.g., cycling MB dirs).
+                // If variant returns CycleNext/CyclePrev, propagate as lateral ring.
+                let result = variant.handle_input(action, nav);
+                return match result {
+                    TreeBrowserAction::None => TreeBrowserAction::None,
+                    _ => result,
+                };
             }
             _ => {}
         }

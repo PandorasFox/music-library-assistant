@@ -38,7 +38,7 @@ pub use variants::{BrowserVariant, CorpusBrowserVariant};
 #[derive(Debug)]
 pub struct TreeBrowserState {
     /// Shared navigation state
-    navigator: TreeNavigator,
+    pub(crate) navigator: TreeNavigator,
     /// Variant-specific state and behavior
     variant: BrowserVariant,
     /// Click targets for tree entries (set during render).

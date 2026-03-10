@@ -21,7 +21,10 @@ use crate::ui::widgets::TextInputState;
 
 use crate::ui::tree_browser::actions::TreeBrowserAction;
 use crate::ui::tree_browser::config::CorpusBrowserConfig;
+use crate::ui::tree_browser::entry::PackingMarker;
 use crate::ui::tree_browser::navigator::TreeNavigator;
+use crate::ui::widgets::wizard::{WizardOffer, WizardState};
+use crate::ui::widgets::wizard_pane::WizardPaneState;
 
 /// Focus state for corpus browser
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -255,6 +258,12 @@ pub struct CorpusBrowserVariant {
     pub config_panel: Option<DirConfigPanelState>,
     /// Relative paths of dirs with staged config edits (for [*] marker).
     pending_edit_paths: HashSet<PathBuf>,
+    /// Wizard state for Z-key packing info popup/pane.
+    wizard_state: WizardState,
+    /// Current wizard offer (built from cursor entry's packing marker).
+    wizard_offer: Option<WizardOffer>,
+    /// Scroll state for wizard pane.
+    wizard_pane: WizardPaneState,
 }
 
 impl CorpusBrowserVariant {
@@ -270,6 +279,9 @@ impl CorpusBrowserVariant {
             match_selection_idx: 0,
             config_panel: None,
             pending_edit_paths: HashSet::new(),
+            wizard_state: WizardState::default(),
+            wizard_offer: None,
+            wizard_pane: WizardPaneState::new(),
         }
     }
 
@@ -303,13 +315,23 @@ impl CorpusBrowserVariant {
         !self.pending_edit_paths.is_empty()
     }
 
-    /// Called when cursor moves - no-op now that preview pane is removed.
+    /// Called when cursor moves — dismiss any active wizard.
     pub fn on_cursor_move(&mut self, _nav: &TreeNavigator) {
-        // Preview pane removed - nothing to update
+        self.wizard_state.dismiss();
+        self.wizard_offer = None;
+        self.wizard_pane.reset();
     }
 
-    /// Handle Escape - clear filter/search and return focus to tree.
+    /// Handle Escape - dismiss wizard, clear filter/search, return focus to tree.
     pub fn handle_escape(&mut self, nav: &mut TreeNavigator) -> bool {
+        // Wizard dismiss takes priority
+        if !self.wizard_state.is_idle() {
+            self.wizard_state.dismiss();
+            self.wizard_offer = None;
+            self.wizard_pane.reset();
+            return true;
+        }
+
         // Config panel escape
         if self.focus == CorpusBrowserFocus::ConfigPanel {
             if let Some(ref mut panel) = self.config_panel {
@@ -349,13 +371,14 @@ impl CorpusBrowserVariant {
     }
 
     /// Check if variant wants to capture navigation keys.
-    /// Returns true when search is active (search bar focused or has results)
-    /// or when config panel is focused.
+    /// Returns true when search is active (search bar focused or has results),
+    /// config panel is focused, or wizard pane is showing.
     pub fn wants_navigation_keys(&self) -> bool {
         self.focus == CorpusBrowserFocus::ConfigPanel
             || self.match_selection_mode
             || self.focus == CorpusBrowserFocus::SearchBar
             || !self.search.matches.is_empty()
+            || self.wizard_state.is_showing_pane()
     }
 
     /// Handle variant-specific input actions.
@@ -367,6 +390,14 @@ impl CorpusBrowserVariant {
         // Config panel has priority when focused
         if self.focus == CorpusBrowserFocus::ConfigPanel {
             return self.handle_config_panel_input(action);
+        }
+
+        // Wizard pane captures nav keys for scrolling
+        if self.wizard_state.is_showing_pane() {
+            if self.wizard_pane.handle_input(action) {
+                return TreeBrowserAction::None;
+            }
+            // Esc handled by handle_escape; other keys fall through to tree
         }
 
         // Match selection mode has priority (modal overlay)
@@ -439,6 +470,37 @@ impl CorpusBrowserVariant {
             // R opens transaction review when pending dir config edits exist
             InputAction::Char('R') if self.has_pending_edits() => {
                 TreeBrowserAction::ReviewTransaction
+            }
+            // Z opens/advances wizard popup/pane on entries with packing markers
+            InputAction::Char('Z') => {
+                if let Some(entry) = nav.current_entry() {
+                    if entry.packing_marker != PackingMarker::None {
+                        let offer = self
+                            .wizard_offer
+                            .get_or_insert_with(|| Self::build_wizard_offer(&entry.packing_marker, &entry.name));
+                        self.wizard_state.advance(offer);
+                        if self.wizard_state.is_idle() {
+                            self.wizard_offer = None;
+                            self.wizard_pane.reset();
+                        }
+                    }
+                }
+                TreeBrowserAction::None
+            }
+            // Tab cycles through [MB] directories
+            InputAction::CycleNext => {
+                if self.cycle_packing_dirs(nav, true) {
+                    TreeBrowserAction::None
+                } else {
+                    TreeBrowserAction::CycleNext
+                }
+            }
+            InputAction::CyclePrev => {
+                if self.cycle_packing_dirs(nav, false) {
+                    TreeBrowserAction::None
+                } else {
+                    TreeBrowserAction::CyclePrev
+                }
             }
             // Ctrl+/ opens filter popup
             InputAction::OpenFilter => TreeBrowserAction::OpenFilter,
@@ -782,6 +844,150 @@ impl CorpusBrowserVariant {
             }
             _ => TreeBrowserAction::None,
         }
+    }
+
+    // =========================================================================
+    // Wizard (Packing Info)
+    // =========================================================================
+
+    /// Build a wizard offer from a packing marker.
+    fn build_wizard_offer(marker: &PackingMarker, name: &str) -> WizardOffer {
+        match marker {
+            PackingMarker::None => unreachable!("called with None marker"),
+            PackingMarker::Matched => {
+                // File-level: simple popup
+                WizardOffer::Popup(vec![
+                    Line::styled(
+                        "MusicBrainz Match",
+                        ratatui::style::Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Line::raw(""),
+                    Line::styled(
+                        format!("♪ {}", name),
+                        ratatui::style::Style::default().fg(Color::White),
+                    ),
+                    Line::styled(
+                        "Assigned to a release via packing",
+                        ratatui::style::Style::default().fg(Color::DarkGray),
+                    ),
+                ])
+            }
+            PackingMarker::Directory(cat) => {
+                // Directory-level: popup + pane
+                let symbol = cat.marker_symbol();
+                let label = cat.label();
+                let color = cat.color();
+
+                let popup = vec![
+                    Line::styled(
+                        format!("{} {}", symbol, label),
+                        ratatui::style::Style::default()
+                            .fg(color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Line::raw(""),
+                    Line::styled(
+                        format!(" {}", name),
+                        ratatui::style::Style::default().fg(Color::Blue),
+                    ),
+                    Line::raw(""),
+                    Line::styled(
+                        "Z again for details",
+                        ratatui::style::Style::default().fg(Color::DarkGray),
+                    ),
+                ];
+
+                let pane_lines = vec![
+                    Line::styled(
+                        format!("{} {}", symbol, label),
+                        ratatui::style::Style::default()
+                            .fg(color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Line::raw(""),
+                    Line::styled(
+                        format!("Directory: {}", name),
+                        ratatui::style::Style::default().fg(Color::White),
+                    ),
+                    Line::raw(""),
+                    Line::styled(
+                        "Category indicates the best release match",
+                        ratatui::style::Style::default().fg(Color::DarkGray),
+                    ),
+                    Line::styled(
+                        "quality found in this directory's files.",
+                        ratatui::style::Style::default().fg(Color::DarkGray),
+                    ),
+                    Line::raw(""),
+                    Line::styled(
+                        "Open the packing browser for full details.",
+                        ratatui::style::Style::default().fg(Color::DarkGray),
+                    ),
+                ];
+
+                WizardOffer::Both {
+                    popup,
+                    pane_title: format!("[MB{}] {}", symbol, name),
+                    pane_lines,
+                }
+            }
+        }
+    }
+
+    /// Cycle to the next/previous [MB] directory. Returns true if cycled.
+    fn cycle_packing_dirs(&mut self, nav: &mut TreeNavigator, forward: bool) -> bool {
+        let entries = nav.entries();
+        let packing_indices: Vec<usize> = entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(e.packing_marker, PackingMarker::Directory(_)))
+            .map(|(i, _)| i)
+            .collect();
+
+        if packing_indices.is_empty() {
+            return false;
+        }
+
+        let cursor = nav.cursor_idx();
+        let target = if forward {
+            packing_indices
+                .iter()
+                .find(|&&idx| idx > cursor)
+                .or(packing_indices.first())
+                .copied()
+        } else {
+            packing_indices
+                .iter()
+                .rev()
+                .find(|&&idx| idx < cursor)
+                .or(packing_indices.last())
+                .copied()
+        };
+
+        if let Some(target_idx) = target {
+            nav.set_cursor(target_idx);
+            self.on_cursor_move(nav);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get wizard state for render access.
+    pub fn wizard_state(&self) -> WizardState {
+        self.wizard_state
+    }
+
+    /// Get wizard offer for render access.
+    pub fn wizard_offer(&self) -> Option<&WizardOffer> {
+        self.wizard_offer.as_ref()
+    }
+
+    /// Get wizard pane state for render access.
+    pub fn wizard_pane_mut(&mut self) -> &mut WizardPaneState {
+        &mut self.wizard_pane
     }
 
     // =========================================================================

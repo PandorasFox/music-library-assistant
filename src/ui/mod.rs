@@ -937,6 +937,12 @@ fn run_app<B: ratatui::backend::Backend>(
                     app.cached_external_matches = Some(data);
                 }
                 crate::witch::cache_thread::CacheReady::PackingDirs(data) => {
+                    // Update navigator's cached data and refresh markers on all entries
+                    if let ActiveView::CorpusBrowser(ref mut browser) = app.view {
+                        browser
+                            .navigator
+                            .set_packing_data(&data.file_paths, &data.dir_categories);
+                    }
                     app.cached_packing_dirs = Some(data);
                 }
             }

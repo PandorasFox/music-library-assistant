@@ -113,19 +113,7 @@ impl MutationExecutor for MoveMutation {
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_move(&self.source, &self.destination);
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::Move(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::Move(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -298,19 +286,7 @@ impl MutationExecutor for HardLinkMutation {
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_hard_link(&self.source, &self.destination);
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::HardLink(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::HardLink(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -357,19 +333,7 @@ impl MutationExecutor for LibraryMoveMutation {
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_library_move_impl(&self.source, &self.destination);
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::LibraryMove(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::LibraryMove(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -435,19 +399,7 @@ impl MutationExecutor for InboxToCorpusMutation {
             )
         });
 
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::InboxToCorpus(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::InboxToCorpus(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -501,19 +453,7 @@ impl MutationExecutor for InboxDirToCorpusMutation {
             Ok(())
         });
 
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::InboxDirToCorpus(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::InboxDirToCorpus(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {

@@ -44,11 +44,11 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
-        let result = (|| -> anyhow::Result<bool> {
+        let start = std::time::Instant::now();
+        let result = (|| -> anyhow::Result<()> {
             let config_dir = crate::config::get_config_dir()?;
             let dirs_path = config_dir.join("dirs.kdl");
 
-            // Load current dirs
             let mut dirs = if dirs_path.exists() {
                 let content = std::fs::read_to_string(&dirs_path)?;
                 crate::config::parse_dirs_kdl(&content)?
@@ -56,7 +56,6 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
                 Vec::new()
             };
 
-            // Find and replace the matching dir, or insert new
             let mut found = false;
             for dir in &mut dirs {
                 if dir.path == self.source_path {
@@ -65,45 +64,21 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
                     break;
                 }
             }
-
             if !found {
                 dirs.push(self.new_dir.clone());
             }
 
             crate::config::write_dirs_to_disk(&dirs)?;
-            Ok(found)
+            crate::logging::log_general(format!(
+                "[DIR CONFIG] {} config for {:?}",
+                if found { "Updated" } else { "Created" },
+                self.source_path
+            ));
+            Ok(())
         })();
-
-        match result {
-            Ok(was_update) => {
-                crate::logging::log_general(format!(
-                    "[DIR CONFIG] {} config for {:?}",
-                    if was_update { "Updated" } else { "Created" },
-                    self.source_path
-                ));
-                MutationResult {
-                    _mutation: super::Mutation::ApplyDirConfigEdit(Box::new(self.clone())),
-                    success: true,
-                    error: None,
-                    _duration_ms: 0,
-                    spawn_mutations: Vec::new(),
-                    pending_signals: Vec::new(),
-                    discovered_inodes: Vec::new(),
-                }
-            }
-            Err(e) => {
-                crate::logging::log_error(format!("[DIR CONFIG] Config write failed: {:#}", e));
-                MutationResult {
-                    _mutation: super::Mutation::ApplyDirConfigEdit(Box::new(self.clone())),
-                    success: false,
-                    error: Some(format!("Dir config write failed: {:#}", e)),
-                    _duration_ms: 0,
-                    spawn_mutations: Vec::new(),
-                    pending_signals: Vec::new(),
-                    discovered_inodes: Vec::new(),
-                }
-            }
-        }
+        MutationResult::from_unit_result(
+            super::Mutation::ApplyDirConfigEdit(Box::new(self.clone())), result, start,
+        )
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -240,11 +215,11 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
+        let start = std::time::Instant::now();
         let result = (|| -> anyhow::Result<()> {
             let config_dir = crate::config::get_config_dir()?;
             let dirs_path = config_dir.join("dirs.kdl");
 
-            // Load current dirs once
             let mut dirs = if dirs_path.exists() {
                 let content = std::fs::read_to_string(&dirs_path)?;
                 crate::config::parse_dirs_kdl(&content)?
@@ -252,7 +227,6 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
                 Vec::new()
             };
 
-            // Apply all edits
             for entry in &self.edits {
                 let mut found = false;
                 for dir in &mut dirs {
@@ -267,43 +241,16 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
                 }
             }
 
-            // Write once
             crate::config::write_dirs_to_disk(&dirs)?;
+            crate::logging::log_general(format!(
+                "[DIR CONFIG] Batch updated {} dir configs",
+                self.edits.len()
+            ));
             Ok(())
         })();
-
-        match result {
-            Ok(()) => {
-                crate::logging::log_general(format!(
-                    "[DIR CONFIG] Batch updated {} dir configs",
-                    self.edits.len()
-                ));
-                MutationResult {
-                    _mutation: super::Mutation::ApplyBatchDirConfigEdits(Box::new(self.clone())),
-                    success: true,
-                    error: None,
-                    _duration_ms: 0,
-                    spawn_mutations: Vec::new(),
-                    pending_signals: Vec::new(),
-                    discovered_inodes: Vec::new(),
-                }
-            }
-            Err(e) => {
-                crate::logging::log_error(format!(
-                    "[DIR CONFIG] Batch config write failed: {:#}",
-                    e
-                ));
-                MutationResult {
-                    _mutation: super::Mutation::ApplyBatchDirConfigEdits(Box::new(self.clone())),
-                    success: false,
-                    error: Some(format!("Batch dir config write failed: {:#}", e)),
-                    _duration_ms: 0,
-                    spawn_mutations: Vec::new(),
-                    pending_signals: Vec::new(),
-                    discovered_inodes: Vec::new(),
-                }
-            }
-        }
+        MutationResult::from_unit_result(
+            super::Mutation::ApplyBatchDirConfigEdits(Box::new(self.clone())), result, start,
+        )
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {

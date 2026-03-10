@@ -93,10 +93,14 @@ Analyzed 17 files totaling ~22k LoC. Findings ordered by impact.
 
 ## Status
 
-- [ ] Tier 1: `delegate_read!` macro
-- [ ] Tier 1: `write_thread.rs` GenericOp
+- [x] Tier 1: `delegate_read!` macro (-611 lines)
+- [x] Tier 1: `write_thread.rs` consolidation + module split (-64 lines + structural)
 - [ ] Tier 2: action_handlers split
 - [ ] Tier 2: `MutationResult::from_result()`
 - [ ] Tier 2: derivation/executors helpers
 - [ ] Tier 2: deploy+duplicates shared helpers
-- [ ] Tier 3+: remaining items
+- [ ] Tier 3: corpus/tags helpers
+- [ ] Tier 3: release_packing extract helpers
+- [ ] Tier 3: queries/health dedup
+- [ ] Tier 3: witch/mod unification
+- [ ] Tier 4: signals macros, domain macros, config_editor macros, etc.

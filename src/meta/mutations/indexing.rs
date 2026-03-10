@@ -236,26 +236,10 @@ impl MutationExecutor for UpdateFilePathMutation {
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_update_file_path(
-            ctx.read_db,
-            &self.zone,
-            self.inode,
-            &self.new_path,
-            self.new_zone.as_deref(),
-            ctx.witness,
+            ctx.read_db, &self.zone, self.inode, &self.new_path,
+            self.new_zone.as_deref(), ctx.witness,
         );
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::UpdateFilePath(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::UpdateFilePath(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -288,25 +272,9 @@ impl MutationExecutor for DropFromIndexMutation {
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_drop_from_index(
-            ctx.read_db,
-            &self.path,
-            self.inode,
-            self.zone.as_deref(),
-            ctx.witness,
+            ctx.read_db, &self.path, self.inode, self.zone.as_deref(), ctx.witness,
         );
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::DropFromIndex(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::DropFromIndex(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -338,21 +306,8 @@ impl MutationExecutor for DropDirectoryFromIndexMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result =
-            execute_drop_directory_from_index(ctx.read_db, &self.directory_path, ctx.witness);
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::DropDirectoryFromIndex(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        let result = execute_drop_directory_from_index(ctx.read_db, &self.directory_path, ctx.witness);
+        MutationResult::from_unit_result(Mutation::DropDirectoryFromIndex(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -384,20 +339,8 @@ impl MutationExecutor for AcknowledgeMtimeOnlyMutation {
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
-        let result = execute_acknowledge_mtime_only(ctx.read_db, &self.tracks, ctx.witness);
-        let (success, error) = match result {
-            Ok(_) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::AcknowledgeMtimeOnly(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        let result = execute_acknowledge_mtime_only(ctx.read_db, &self.tracks, ctx.witness).map(|_| ());
+        MutationResult::from_unit_result(Mutation::AcknowledgeMtimeOnly(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -435,25 +378,9 @@ impl MutationExecutor for ApplyDbTagsToDiskMutation {
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_apply_db_tags_to_disk(
-            ctx.read_db,
-            self.inode,
-            &self.path,
-            self.zone,
-            ctx.witness,
+            ctx.read_db, self.inode, &self.path, self.zone, ctx.witness,
         );
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::ApplyDbTagsToDisk(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::ApplyDbTagsToDisk(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -490,26 +417,9 @@ impl MutationExecutor for FlushTagsToDiskMutation {
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_flush_tags_to_disk(
-            self.inode,
-            &self.path,
-            &self.expected_tags,
-            self.zone,
-            ctx.read_db,
-            ctx.witness,
+            self.inode, &self.path, &self.expected_tags, self.zone, ctx.read_db, ctx.witness,
         );
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::FlushTagsToDisk(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::FlushTagsToDisk(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -538,26 +448,9 @@ impl MutationExecutor for AssimilateDiskTagsToDbMutation {
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_assimilate_disk_tags_to_db(
-            ctx.read_db,
-            self.inode,
-            &self.path,
-            self.zone.as_deref(),
-            ctx.session_id,
-            ctx.witness,
+            ctx.read_db, self.inode, &self.path, self.zone.as_deref(), ctx.session_id, ctx.witness,
         );
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::AssimilateDiskTagsToDb(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::AssimilateDiskTagsToDb(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -594,24 +487,9 @@ impl MutationExecutor for EmitCanonicalTagMutation {
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_emit_canonical_tag(
-            &self.tag_name,
-            &self.canonical_value,
-            ctx.read_db,
-            ctx.witness,
+            &self.tag_name, &self.canonical_value, ctx.read_db, ctx.witness,
         );
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::EmitCanonicalTag(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::EmitCanonicalTag(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -644,19 +522,7 @@ impl MutationExecutor for EmitExpectedOverlapMutation {
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_emit_expected_overlap(&self.source_a, &self.source_b, ctx.witness);
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::EmitExpectedOverlap(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::EmitExpectedOverlap(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -689,19 +555,7 @@ impl MutationExecutor for EmitExpectedDuplicateMutation {
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_emit_expected_duplicate(&self.fingerprint_key, ctx.witness);
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::EmitExpectedDuplicate(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::EmitExpectedDuplicate(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -734,19 +588,7 @@ impl MutationExecutor for DropExternalMatchMutation {
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_drop_external_match(self.inode, ctx.witness);
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::DropExternalMatch(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::DropExternalMatch(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {
@@ -779,19 +621,7 @@ impl MutationExecutor for EmitExpectedMissingTagMutation {
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
         let result = execute_emit_expected_missing_tag(&self.inodes, ctx.witness);
-        let (success, error) = match result {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("{:#}", e))),
-        };
-        MutationResult {
-            _mutation: Mutation::EmitExpectedMissingTag(self.clone()),
-            success,
-            error,
-            _duration_ms: start.elapsed().as_millis() as u64,
-            spawn_mutations: Vec::new(),
-            pending_signals: Vec::new(),
-            discovered_inodes: Vec::new(),
-        }
+        MutationResult::from_unit_result(Mutation::EmitExpectedMissingTag(self.clone()), result, start)
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {

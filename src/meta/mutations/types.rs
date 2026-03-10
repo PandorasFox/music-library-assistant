@@ -436,6 +436,31 @@ pub struct MutationResult {
     pub discovered_inodes: Vec<i64>,
 }
 
+impl MutationResult {
+    /// Construct from a `Result<(), _>` with timing — the common case where
+    /// the execute helper returns unit on success and there are no pending
+    /// signals, spawn mutations, or discovered inodes.
+    pub fn from_unit_result(
+        mutation: Mutation,
+        result: anyhow::Result<()>,
+        start: std::time::Instant,
+    ) -> Self {
+        let (success, error) = match result {
+            Ok(()) => (true, None),
+            Err(e) => (false, Some(format!("{:#}", e))),
+        };
+        Self {
+            _mutation: mutation,
+            success,
+            error,
+            _duration_ms: start.elapsed().as_millis() as u64,
+            spawn_mutations: Vec::new(),
+            pending_signals: Vec::new(),
+            discovered_inodes: Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -42,36 +42,18 @@ impl MutationExecutor for ApplyConfigEditsMutation {
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
-        match crate::config::write_config_to_disk(
-            &self.original_kdl,
-            &self.old_config,
-            &self.new_config,
-        ) {
-            Ok(()) => {
-                crate::logging::log_general("[CONFIG] Config written to disk successfully");
-                MutationResult {
-                    _mutation: super::Mutation::ApplyConfigEdits(Box::new(self.clone())),
-                    success: true,
-                    error: None,
-                    _duration_ms: 0, // Overwritten by caller
-                    spawn_mutations: Vec::new(),
-                    pending_signals: Vec::new(),
-                    discovered_inodes: Vec::new(),
-                }
-            }
-            Err(e) => {
-                crate::logging::log_error(format!("[CONFIG] Config write failed: {:#}", e));
-                MutationResult {
-                    _mutation: super::Mutation::ApplyConfigEdits(Box::new(self.clone())),
-                    success: false,
-                    error: Some(format!("Config write failed: {:#}", e)),
-                    _duration_ms: 0,
-                    spawn_mutations: Vec::new(),
-                    pending_signals: Vec::new(),
-                    discovered_inodes: Vec::new(),
-                }
-            }
+        let start = std::time::Instant::now();
+        let result = crate::config::write_config_to_disk(
+            &self.original_kdl, &self.old_config, &self.new_config,
+        );
+        if result.is_ok() {
+            crate::logging::log_general("[CONFIG] Config written to disk successfully");
+        } else {
+            crate::logging::log_error(format!("[CONFIG] Config write failed: {:#}", result.as_ref().unwrap_err()));
         }
+        MutationResult::from_unit_result(
+            super::Mutation::ApplyConfigEdits(Box::new(self.clone())), result, start,
+        )
     }
 
     fn signal_clear_scope(&self) -> SignalClearScope {

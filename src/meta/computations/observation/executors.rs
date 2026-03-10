@@ -517,9 +517,19 @@ pub fn execute_verify_mtime(
 ///
 /// Uses the portable API (extract_mtime) for consistency with ScanCorpusDirectory.
 /// Returns true if mtime differs or if we can't determine (fail-safe to emit signal).
+/// Resolves the file's zone from the DB rather than hardcoding, so this works
+/// correctly for both corpus and inbox files.
 fn check_mtime_differs(read_only_db: &ReadOnlyDb<'_>, inode: i64, path: &Path) -> bool {
+    // Resolve the file's zone from the DB
+    let zone = read_only_db
+        .get_file_zone_and_path_by_inode(inode)
+        .ok()
+        .flatten()
+        .and_then(|(z, _)| Zone::from_str(&z))
+        .unwrap_or(Zone::Corpus);
+
     // Get mtime info from files table for this inode
-    let mtime_info = match read_only_db.get_file_mtime_batch(Zone::Corpus, &[inode]) {
+    let mtime_info = match read_only_db.get_file_mtime_batch(zone, &[inode]) {
         Ok(map) => match map.get(&inode) {
             Some((db_secs, db_nanos)) => (*db_secs, *db_nanos),
             None => return true, // Not in files table, assume differs

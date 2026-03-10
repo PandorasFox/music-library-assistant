@@ -114,6 +114,7 @@ pub(crate) struct App {
     pub(super) cached_deploy: Option<crate::meta::views::DeployStatus>,
     pub(super) cached_history: Option<crate::meta::views::EditHistoryData>,
     pub(super) cached_external_matches: Option<crate::meta::views::ExternalMatchesData>,
+    pub(super) cached_packing_dirs: Option<crate::witch::cache_thread::PackingDirsData>,
 
     // Filter popup overlay (Ctrl+/ in resolution modals and corpus browser)
     pub(super) filter_overlay: Option<FilterOverlay>,
@@ -173,6 +174,7 @@ impl App {
             cached_deploy: None,
             cached_history: None,
             cached_external_matches: None,
+            cached_packing_dirs: None,
             filter_overlay: None,
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Health,
@@ -934,6 +936,9 @@ fn run_app<B: ratatui::backend::Backend>(
                 crate::witch::cache_thread::CacheReady::ExternalMatches(data) => {
                     app.cached_external_matches = Some(data);
                 }
+                crate::witch::cache_thread::CacheReady::PackingDirs(data) => {
+                    app.cached_packing_dirs = Some(data);
+                }
             }
         }
 
@@ -1007,6 +1012,9 @@ fn run_app<B: ratatui::backend::Backend>(
         }
         if matches!(app.view, ActiveView::History(_)) {
             app.cache.want_history();
+        }
+        if matches!(app.view, ActiveView::CorpusBrowser(_)) {
+            app.cache.want_packing_dirs();
         }
         if let ActiveView::ExternalMatches(ref view) = app.view {
             if view.fetch_active {

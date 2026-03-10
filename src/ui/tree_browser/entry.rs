@@ -4,6 +4,8 @@
 
 use std::path::PathBuf;
 
+use crate::meta::signals::packing_category::PackingCategory;
+
 /// The kind of entry in the tree browser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
@@ -21,6 +23,17 @@ pub enum DeployMarker {
     SourceRoot,
     /// Under a source directory (inherited deployment config).
     Inherited,
+}
+
+/// Packing marker for a tree entry, showing MusicBrainz release match status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PackingMarker {
+    #[default]
+    None,
+    /// File is mapped to a MusicBrainz recording via release packing.
+    Matched,
+    /// Directory contains matched files with this best category.
+    Directory(PackingCategory),
 }
 
 /// A single entry in the flattened tree view.
@@ -51,6 +64,8 @@ pub struct TreeEntry {
     pub is_synthetic: bool,
     /// Whether this entry should be visually dimmed (non-primary zone dirs)
     pub is_dimmed: bool,
+    /// Packing marker: None, Matched (file), or Directory(category)
+    pub packing_marker: PackingMarker,
 }
 
 impl TreeEntry {
@@ -74,6 +89,7 @@ impl TreeEntry {
             deploy_marker: DeployMarker::None,
             is_synthetic: false,
             is_dimmed: false,
+            packing_marker: PackingMarker::None,
         }
     }
 
@@ -91,6 +107,7 @@ impl TreeEntry {
             deploy_marker: DeployMarker::None,
             is_synthetic: false,
             is_dimmed: false,
+            packing_marker: PackingMarker::None,
         }
     }
 
@@ -108,6 +125,7 @@ impl TreeEntry {
             deploy_marker: DeployMarker::None,
             is_synthetic: false,
             is_dimmed: false,
+            packing_marker: PackingMarker::None,
         }
     }
 
@@ -125,6 +143,7 @@ impl TreeEntry {
             deploy_marker: DeployMarker::None,
             is_synthetic: true,
             is_dimmed: false,
+            packing_marker: PackingMarker::None,
         }
     }
 

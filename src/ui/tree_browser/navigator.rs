@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use crate::config::AUDIO_EXTENSIONS;
 use crate::meta::computations::helpers::IMAGE_EXTENSIONS;
 
-use super::entry::{DeployMarker, TreeEntry};
+use crate::meta::signals::packing_category::PackingCategory;
+use super::entry::{DeployMarker, PackingMarker, TreeEntry};
 
 /// Filter configuration for entry loading.
 #[derive(Debug, Clone, Copy, Default)]
@@ -78,6 +79,10 @@ pub struct TreeNavigator {
     /// Directories that don't exist on disk yet but should appear in the tree.
     /// Used by the inbox organize workflow for directories planned but not yet created.
     pending_dirs: Vec<PathBuf>,
+    /// Cached packing file paths (files with release packing assignments).
+    packing_file_paths: HashSet<PathBuf>,
+    /// Cached packing directory categories (dir → best category).
+    packing_dir_categories: std::collections::HashMap<PathBuf, PackingCategory>,
 }
 
 impl TreeNavigator {
@@ -106,6 +111,8 @@ impl TreeNavigator {
             show_new_dir_entry: false,
             primary_zone_paths,
             pending_dirs: Vec::new(),
+            packing_file_paths: HashSet::new(),
+            packing_dir_categories: std::collections::HashMap::new(),
         };
         nav.load_initial();
         nav
@@ -407,6 +414,7 @@ impl TreeNavigator {
                         entry.image_count = self.count_image_files(&path);
                     }
                     entry.deploy_marker = self.deploy_marker_for(&path);
+                    entry.packing_marker = self.packing_marker_for_dir(&path);
                     if is_root_parent
                         && !self.primary_zone_paths.is_empty()
                         && !self.primary_zone_paths.iter().any(|z| z == &path)
@@ -415,7 +423,9 @@ impl TreeNavigator {
                     }
                     dirs.push(entry);
                 } else if self.filter.include_files && self.is_audio_file(&path) {
-                    files.push(TreeEntry::audio_file(path, name, depth));
+                    let mut entry = TreeEntry::audio_file(path.clone(), name, depth);
+                    entry.packing_marker = self.packing_marker_for_file(&path);
+                    files.push(entry);
                 } else if self.filter.include_images && self.is_image_file(&path) {
                     files.push(TreeEntry::image_file(path, name, depth));
                 }
@@ -603,6 +613,33 @@ impl TreeNavigator {
     /// Get root path.
     pub fn root_path(&self) -> &PathBuf {
         &self.root_path
+    }
+
+    /// Update packing markers on all visible entries from cached data.
+    ///
+    /// Called when fresh `PackingDirsData` arrives from the cache thread.
+    pub fn update_packing_markers(
+        &mut self,
+        file_paths: &HashSet<PathBuf>,
+        dir_categories: &std::collections::HashMap<PathBuf, PackingCategory>,
+    ) {
+        use super::entry::EntryKind;
+        for entry in &mut self.entries {
+            entry.packing_marker = match entry.kind {
+                EntryKind::AudioFile => {
+                    if file_paths.contains(&entry.path) {
+                        PackingMarker::Matched
+                    } else {
+                        PackingMarker::None
+                    }
+                }
+                EntryKind::Directory => dir_categories
+                    .get(&entry.path)
+                    .map(|&cat| PackingMarker::Directory(cat))
+                    .unwrap_or(PackingMarker::None),
+                EntryKind::ImageFile => PackingMarker::None,
+            };
+        }
     }
 
     /// Compute deploy marker for a directory path.

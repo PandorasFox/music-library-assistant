@@ -846,4 +846,117 @@ impl Database {
         })?;
         Ok(rows.flatten().collect())
     }
+
+    /// Get paths of all files with release packing assignments.
+    ///
+    /// Used by tree browser to show `[MB]` markers on matched files.
+    pub fn get_packing_assigned_paths(&self) -> Result<std::collections::HashSet<std::path::PathBuf>>
+    {
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT path FROM signal_release_packing")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows.flatten().map(std::path::PathBuf::from).collect())
+    }
+
+    /// Get parent directories mapped to their best packing category.
+    ///
+    /// Joins signal_release_packing (file→release_id) with signal_packed_release
+    /// (release_id→category) to determine which category each directory's files
+    /// belong to. When a directory has files in multiple categories, the best
+    /// category wins (Perfect > FullMatches > Singles > Incomplete > LowConfidence).
+    pub fn get_packing_directory_categories(
+        &self,
+    ) -> Result<
+        std::collections::HashMap<
+            std::path::PathBuf,
+            crate::meta::signals::packing_category::PackingCategory,
+        >,
+    > {
+        use crate::meta::signals::packing_category::PackingCategory;
+
+        // Step 1: Build release_id → category from packed release signals.
+        // Keys are "{category_prefix}:{release_id}".
+        let mut release_category: std::collections::HashMap<String, PackingCategory> =
+            std::collections::HashMap::new();
+        {
+            let mut stmt = self
+                .conn()
+                .prepare("SELECT key, data FROM signal_packed_release")?;
+            let rows = stmt.query_map([], |row| {
+                let key: String = row.get(0)?;
+                let blob: Vec<u8> = row.get(1)?;
+                Ok((key, blob))
+            })?;
+            for row in rows.flatten() {
+                let (key, blob) = row;
+                // key format: "{prefix}:{release_id}"
+                if let Some(colon) = key.find(':') {
+                    let prefix = &key[..colon];
+                    if let Some(cat) = PackingCategory::from_key_prefix(prefix) {
+                        if let Ok(data) = bincode::deserialize::<
+                            crate::meta::signals::data::PackedReleaseData,
+                        >(&blob)
+                        {
+                            release_category.insert(data.release_id, cat);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Step 2: For each assigned file, determine its directory and the category
+        // of its release. Collect dir → best category.
+        let mut dir_categories: std::collections::HashMap<std::path::PathBuf, PackingCategory> =
+            std::collections::HashMap::new();
+
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT path, data FROM signal_release_packing")?;
+        let rows = stmt.query_map([], |row| {
+            let path: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((path, blob))
+        })?;
+
+        // Category priority (lower = better)
+        let priority = |cat: PackingCategory| -> u8 {
+            match cat {
+                PackingCategory::Perfect => 0,
+                PackingCategory::FullMatches => 1,
+                PackingCategory::Singles => 2,
+                PackingCategory::Incomplete => 3,
+                PackingCategory::LowConfidence => 4,
+                PackingCategory::Knots => 5,
+                PackingCategory::UnsolvedConflict => 6,
+                PackingCategory::UnsolvedNoRelease => 7,
+                PackingCategory::UnsolvedNoMatch => 8,
+            }
+        };
+
+        for row in rows.flatten() {
+            let (path_str, blob) = row;
+            let file_path = std::path::Path::new(&path_str);
+            if let Some(parent) = file_path.parent() {
+                if let Ok(data) = bincode::deserialize::<
+                    crate::meta::signals::data::ReleasePackingData,
+                >(&blob)
+                {
+                    if let Some(&cat) = release_category.get(&data.release_id) {
+                        let parent_buf = parent.to_path_buf();
+                        dir_categories
+                            .entry(parent_buf)
+                            .and_modify(|existing| {
+                                if priority(cat) < priority(*existing) {
+                                    *existing = cat;
+                                }
+                            })
+                            .or_insert(cat);
+                    }
+                }
+            }
+        }
+
+        Ok(dir_categories)
+    }
 }

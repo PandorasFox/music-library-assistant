@@ -1,21 +1,18 @@
 //! Rendering for the Knot Browser.
 //!
-//! Two-pane layout with header bar:
-//! - Header: knot identity, stats, position indicator
-//! - Left (50%): competing releases with selected/rejected icons
-//! - Right (50%): detail for selected release or knot overview
-//! - Bottom: controls hint with sort toggle
+//! Layout: header (1 line) + StandardList (proposals) + controls (1 line).
+//! Proposal detail shown via wizard pane (Z key).
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::Paragraph,
     Frame,
 };
 
 use super::types::*;
-use super::{FocusedPane, KnotBrowserState};
+use super::KnotBrowserState;
 use crate::ui::widgets::control_colors;
 use crate::ui::widgets::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 
@@ -40,14 +37,21 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut KnotBrowserState) {
     render_header(f, outer[0], state);
     render_controls(f, outer[2], state);
 
-    // Content: releases (50%) + detail (50%)
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(outer[1]);
+    let proposals = state
+        .knots
+        .get(state.knot_index)
+        .map(|k| k.proposals.as_slice())
+        .unwrap_or(&[]);
+    let sort_label = state.sort_mode.label();
 
-    render_releases_pane(f, panes[0], state);
-    render_detail_pane(f, panes[1], state);
+    state.list.render(
+        f,
+        outer[1],
+        proposals,
+        |idx, is_cursor, _is_selected, _width| render_proposal_item(proposals, idx, is_cursor),
+        &format!("Releases ({})", sort_label),
+        true,
+    );
 }
 
 fn render_header(f: &mut Frame, area: Rect, state: &KnotBrowserState) {
@@ -90,8 +94,8 @@ fn render_controls(f: &mut Frame, area: Rect, state: &KnotBrowserState) {
         control_colors::text(" knot  "),
         control_colors::nav("^v"),
         control_colors::text(" nav  "),
-        control_colors::nav("Shift+Arrow"),
-        control_colors::text(" pane  "),
+        control_colors::toggle("Z"),
+        control_colors::text(" detail  "),
         control_colors::toggle("s"),
         control_colors::text(&format!(" sort ({})", state.sort_mode.label())),
         control_colors::text("  "),
@@ -101,158 +105,43 @@ fn render_controls(f: &mut Frame, area: Rect, state: &KnotBrowserState) {
     f.render_widget(Paragraph::new(vec![line]), area);
 }
 
-// ============================================================================
-// Releases Pane
-// ============================================================================
-
-fn render_releases_pane(f: &mut Frame, area: Rect, state: &mut KnotBrowserState) {
-    let focused = matches!(state.focused_pane, FocusedPane::Releases);
-    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color))
-        .title(Span::styled(
-            format!(" Releases ({}) ", state.sort_mode.label()),
-            Style::default().fg(Color::White),
-        ));
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let proposal_count = match state.current_knot() {
-        Some(k) => k.proposals.len(),
-        None => return,
+fn render_proposal_item(
+    proposals: &[KnotProposal],
+    idx: usize,
+    is_cursor: bool,
+) -> Line<'static> {
+    let Some(proposal) = proposals.get(idx) else {
+        return Line::raw("");
     };
 
-    let visible_height = inner.height as usize;
-    if visible_height == 0 {
-        return;
-    }
-
-    // Adjust scroll to keep cursor visible
-    if state.release_cursor < state.release_scroll {
-        state.release_scroll = state.release_cursor;
-    }
-    if state.release_cursor >= state.release_scroll + visible_height {
-        state.release_scroll = state.release_cursor + 1 - visible_height;
-    }
-
-    state.click_targets.clear();
-    state.click_targets.set_list_area(inner);
-
-    let max_title_width = inner.width.saturating_sub(18) as usize; // icon(2) + score(7) + inodes(5) + padding(4)
-
-    let knot = &state.knots[state.knot_index];
-    for (vis_idx, prop_idx) in (state.release_scroll..)
-        .take(visible_height)
-        .enumerate()
-    {
-        if prop_idx >= proposal_count {
-            break;
-        }
-        let proposal = &knot.proposals[prop_idx];
-        let is_cursor = prop_idx == state.release_cursor && focused;
-
-        let icon = if proposal.selected { "✓ " } else { "✗ " };
-        let icon_color = if proposal.selected {
-            Color::Green
-        } else {
-            Color::Red
-        };
-
-        let title = truncate_for_width(&proposal.release_title, max_title_width);
-
-        let base_style = if is_cursor { CURSOR_STYLE } else { LIST_ITEM_STYLE };
-
-        let line = Line::from(vec![
-            Span::styled(icon.to_string(), Style::default().fg(icon_color)),
-            Span::styled(title, base_style),
-            Span::styled(
-                format!("  {:.1}", proposal.total_score),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                format!("  {}i", proposal.covered_inode_count),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]);
-
-        let y = inner.y + vis_idx as u16;
-        f.render_widget(Paragraph::new(vec![line]), Rect::new(inner.x, y, inner.width, 1));
-
-        state.click_targets.add_row(prop_idx.to_string(), y);
-    }
-}
-
-// ============================================================================
-// Detail Pane
-// ============================================================================
-
-fn render_detail_pane(f: &mut Frame, area: Rect, state: &KnotBrowserState) {
-    let focused = matches!(state.focused_pane, FocusedPane::Detail);
-    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color))
-        .title(Span::styled(" Detail ", Style::default().fg(Color::White)));
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let lines = if let Some(proposal) = state.selected_proposal() {
-        render_proposal_detail(proposal)
-    } else if let Some(knot) = state.current_knot() {
-        render_knot_overview(knot)
+    let icon = if proposal.selected { "✓ " } else { "✗ " };
+    let icon_color = if proposal.selected {
+        Color::Green
     } else {
-        vec![]
+        Color::Red
     };
 
-    let skip = state.detail_scroll.min(lines.len().saturating_sub(1));
-    let visible: Vec<Line> = lines.into_iter().skip(skip).collect();
+    let base_style = if is_cursor { CURSOR_STYLE } else { LIST_ITEM_STYLE };
 
-    let paragraph = Paragraph::new(visible).wrap(Wrap { trim: false });
-    f.render_widget(paragraph, inner);
+    Line::from(vec![
+        Span::styled(icon.to_string(), Style::default().fg(icon_color)),
+        Span::styled(proposal.release_title.clone(), base_style),
+        Span::styled(
+            format!("  {:.1}", proposal.total_score),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            format!("  {}i", proposal.covered_inode_count),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ])
 }
 
-fn render_knot_overview(knot: &KnotEntry) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "Knot Overview",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::raw("")),
-        render_detail_field("Tier", &knot.tier),
-        render_detail_field("Classification", &knot.classification),
-        render_detail_field("Ratio", &format!("{:.1}", knot.ratio)),
-        render_detail_field("Proposals", &knot.proposal_count.to_string()),
-        render_detail_field("Contested inodes", &knot.inode_count.to_string()),
-        Line::from(Span::raw("")),
-        Line::from(Span::styled(
-            "Contested Files:",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-    ];
+// ============================================================================
+// Proposal detail lines (used by WizardItem impl)
+// ============================================================================
 
-    for ci in &knot.contested_inodes {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {}x ", ci.claiming_release_count),
-                Style::default().fg(Color::Yellow),
-            ),
-            Span::styled(ci.path.clone(), Style::default().fg(Color::White)),
-        ]));
-    }
-
-    lines
-}
-
-fn render_proposal_detail(proposal: &KnotProposal) -> Vec<Line<'static>> {
+pub(super) fn build_proposal_detail_lines(proposal: &KnotProposal) -> Vec<Line<'static>> {
     let status_text = if proposal.selected {
         "SELECTED"
     } else {
@@ -286,7 +175,7 @@ fn render_proposal_detail(proposal: &KnotProposal) -> Vec<Line<'static>> {
         render_detail_field("Knot inodes", &proposal.covered_inode_count.to_string()),
         Line::from(Span::raw("")),
         Line::from(Span::styled(
-            "Track Assignments:",
+            "Track Assignments:".to_string(),
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
@@ -359,17 +248,4 @@ fn render_score_bar(label: &str, value: f64) -> Line<'static> {
         ),
         Span::styled(bar, Style::default().fg(Color::Yellow)),
     ])
-}
-
-fn truncate_for_width(s: &str, max_chars: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_chars {
-        s.to_string()
-    } else if max_chars <= 3 {
-        s.chars().take(max_chars).collect()
-    } else {
-        let mut result: String = s.chars().take(max_chars - 3).collect();
-        result.push_str("...");
-        result
-    }
 }

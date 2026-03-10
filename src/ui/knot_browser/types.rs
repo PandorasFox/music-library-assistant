@@ -35,7 +35,6 @@ pub struct KnotEntry {
     pub ratio: f64,
     pub classification: String,
     pub proposals: Vec<KnotProposal>,
-    pub contested_inodes: Vec<ContestedInode>,
 }
 
 /// A release proposal within a knot.
@@ -60,10 +59,4 @@ pub struct KnotProposalTrack {
     pub track_title: String,
     pub score: f64,
     pub score_breakdown: PackingScoreBreakdown,
-}
-
-/// An inode contested by multiple proposals within a knot.
-pub struct ContestedInode {
-    pub path: String,
-    pub claiming_release_count: usize,
 }

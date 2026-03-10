@@ -2,22 +2,8 @@
 
 use crate::meta::signals::data::{PackingScoreBreakdown, UnmatchedCorpusTrackData};
 
-/// Which category of packing results to display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PackingCategory {
-    Perfect,
-    FullMatches,
-    Singles,
-    Incomplete,
-    LowConfidence,
-    Knots,
-    /// Unsolved: had AcoustID match, was scored for releases, but lost conflict resolution.
-    UnsolvedConflict,
-    /// Unsolved: had AcoustID match but was never optimally scored for any release.
-    UnsolvedNoRelease,
-    /// Unsolved: fingerprinted but no AcoustID match at all.
-    UnsolvedNoMatch,
-}
+// Re-export shared PackingCategory from its canonical location.
+pub use crate::meta::signals::packing_category::PackingCategory;
 
 /// Which pane currently has focus.
 pub enum FocusedPane {

@@ -995,6 +995,25 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_various_artists_override_data()
     }
 
+    /// Get paths of all files with release packing assignments.
+    pub fn get_packing_assigned_paths(
+        &self,
+    ) -> Result<std::collections::HashSet<std::path::PathBuf>> {
+        self.db.get_packing_assigned_paths()
+    }
+
+    /// Get parent directories mapped to their best packing category.
+    pub fn get_packing_directory_categories(
+        &self,
+    ) -> Result<
+        std::collections::HashMap<
+            std::path::PathBuf,
+            crate::meta::signals::packing_category::PackingCategory,
+        >,
+    > {
+        self.db.get_packing_directory_categories()
+    }
+
     // =========================================================================
     // Redundant / Metadata Duplicate Queries
     // =========================================================================

@@ -86,31 +86,19 @@ impl App {
     }
 
     /// Start external match review (read-only browser) with pre-filtered entries.
+    /// Batch-loads both recording summaries and full detail data from cache.
     fn start_external_match_review_with(&mut self, entries: Vec<ExternalMatchReviewEntry>) {
         if entries.is_empty() {
             self.status_message = Some("No external matches to review".to_string());
             return;
         }
 
-        let mut state = external_match_modal::ExternalMatchReviewState::new(entries);
-
-        // Pre-load cached MB recording summaries for all entries
-        self.preload_recording_summaries(&mut state);
-
-        self.view = ActiveView::ExternalMatchReview(state);
-    }
-
-    /// Batch-load MB recording summaries from the cache thread.
-    fn preload_recording_summaries(
-        &mut self,
-        state: &mut external_match_modal::ExternalMatchReviewState,
-    ) {
         use crate::external::musicbrainz;
 
         // Collect unique recording IDs
         let mut recording_ids: Vec<String> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for entry in &state.entries {
+        for entry in &entries {
             if seen.insert(entry.recording_id.clone()) {
                 recording_ids.push(entry.recording_id.clone());
             }
@@ -121,56 +109,101 @@ impl App {
             .map(|c| c.opinions.external_matching.preferred_locales.clone())
             .unwrap_or_default();
 
-        // Query cache thread for all recording data in one batch
-        let ids = recording_ids.clone();
-        let result = self
+        // Batch query: load summaries + full detail for all recordings at once
+        let ids = recording_ids;
+        let (summaries, details) = self
             .cache
             .query(move |db| {
                 let mut summaries = Vec::new();
+                let mut details = Vec::new();
+
                 for rec_id in &ids {
                     let rec_cache = db.get_mb_recording_cache(rec_id).ok().flatten();
                     let recording =
                         rec_cache.and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
 
-                    if let Some(rec) = recording {
-                        // Load cached artist data for locale-aware name resolution.
-                        let artists: Vec<(String, Option<musicbrainz::MbArtist>)> = rec
-                            .artist_credit
-                            .iter()
-                            .map(|c| {
-                                let parsed = db
-                                    .get_mb_artist_cache(&c.artist.id)
-                                    .ok()
-                                    .flatten()
-                                    .and_then(|(json, _)| musicbrainz::parse_artist(&json).ok());
-                                (c.artist.id.clone(), parsed)
-                            })
-                            .collect();
+                    let Some(rec) = recording else {
+                        continue;
+                    };
 
-                        let artist_credit = musicbrainz::join_artist_credits_localized(
-                            &rec.artist_credit,
-                            &artists,
-                            &preferred_locales,
-                        );
-
-                        summaries.push((
-                            rec_id.clone(),
-                            external_match_modal::types::RecordingSummary {
-                                title: rec.title.clone(),
-                                artist_credit,
-                                length_ms: rec.length.map(|l| l as u64),
-                                release_count: rec.releases.len(),
-                            },
-                        ));
+                    // Collect unique artist IDs from credits + relations
+                    let mut artist_ids: Vec<String> = Vec::new();
+                    let mut artist_seen = std::collections::HashSet::new();
+                    for credit in &rec.artist_credit {
+                        if artist_seen.insert(credit.artist.id.clone()) {
+                            artist_ids.push(credit.artist.id.clone());
+                        }
                     }
+                    for relation in &rec.relations {
+                        if let Some(ref artist) = relation.artist {
+                            if artist_seen.insert(artist.id.clone()) {
+                                artist_ids.push(artist.id.clone());
+                            }
+                        }
+                    }
+
+                    // Load cached artist data
+                    let artists: Vec<(String, Option<musicbrainz::MbArtist>)> = artist_ids
+                        .into_iter()
+                        .map(|id| {
+                            let parsed = db
+                                .get_mb_artist_cache(&id)
+                                .ok()
+                                .flatten()
+                                .and_then(|(json, _)| musicbrainz::parse_artist(&json).ok());
+                            (id, parsed)
+                        })
+                        .collect();
+
+                    // Build summary
+                    let artist_credit = musicbrainz::join_artist_credits_localized(
+                        &rec.artist_credit,
+                        &artists,
+                        &preferred_locales,
+                    );
+
+                    summaries.push((
+                        rec_id.clone(),
+                        external_match_modal::types::RecordingSummary {
+                            title: rec.title.clone(),
+                            artist_credit,
+                            length_ms: rec.length.map(|l| l as u64),
+                            release_count: rec.releases.len(),
+                        },
+                    ));
+
+                    // Load cached release data for full detail
+                    let releases: Vec<_> = rec
+                        .releases
+                        .iter()
+                        .map(|r| {
+                            let parsed = db
+                                .get_mb_release_cache(&r.id)
+                                .ok()
+                                .flatten()
+                                .and_then(|(json, _)| musicbrainz::parse_release(&json).ok());
+                            (r.id.clone(), parsed)
+                        })
+                        .collect();
+
+                    details.push((
+                        rec_id.clone(),
+                        external_match_modal::types::RecordingDetail {
+                            recording: rec,
+                            artists,
+                            releases,
+                        },
+                    ));
                 }
-                summaries
+
+                (summaries, details)
             })
             .recv();
 
-        for (id, summary) in result {
-            state.recording_summaries.insert(id, summary);
-        }
+        let state =
+            external_match_modal::ExternalMatchReviewState::new(entries, summaries, details);
+
+        self.view = ActiveView::ExternalMatchReview(state);
     }
 
     // =========================================================================
@@ -195,106 +228,6 @@ impl App {
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .spawn();
-            }
-            external_match_modal::ExternalMatchReviewAction::ViewRecordingDetail => {
-                self.load_recording_detail();
-            }
-            external_match_modal::ExternalMatchReviewAction::CloseRecordingDetail => {
-                if let ActiveView::ExternalMatchReview(ref mut state) = self.view {
-                    state.viewing_detail = None;
-                }
-            }
-        }
-    }
-
-    /// Load MB recording detail for the current entry from cache.
-    fn load_recording_detail(&mut self) {
-        use crate::external::musicbrainz;
-
-        let recording_id = match self.view {
-            ActiveView::ExternalMatchReview(ref state) => {
-                if state.viewing_detail.is_some() {
-                    return; // Already viewing
-                }
-                match state.current_entry() {
-                    Some(entry) => entry.recording_id.clone(),
-                    None => return,
-                }
-            }
-            _ => return,
-        };
-
-        let rec_id = recording_id.clone();
-        let result = self
-            .cache
-            .query(move |db| {
-                let rec_cache = db.get_mb_recording_cache(&rec_id).ok().flatten();
-                let recording =
-                    rec_cache.and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
-
-                let recording = recording?;
-
-                // Collect unique artist IDs from credits + relations
-                let mut artist_ids: Vec<String> = Vec::new();
-                let mut seen = std::collections::HashSet::new();
-                for credit in &recording.artist_credit {
-                    if seen.insert(credit.artist.id.clone()) {
-                        artist_ids.push(credit.artist.id.clone());
-                    }
-                }
-                for relation in &recording.relations {
-                    if let Some(ref artist) = relation.artist {
-                        if seen.insert(artist.id.clone()) {
-                            artist_ids.push(artist.id.clone());
-                        }
-                    }
-                }
-
-                // Load cached artist data
-                let artists: Vec<_> = artist_ids
-                    .into_iter()
-                    .map(|id| {
-                        let parsed = db
-                            .get_mb_artist_cache(&id)
-                            .ok()
-                            .flatten()
-                            .and_then(|(json, _)| musicbrainz::parse_artist(&json).ok());
-                        (id, parsed)
-                    })
-                    .collect();
-
-                // Load cached release data
-                let releases: Vec<_> = recording
-                    .releases
-                    .iter()
-                    .map(|r| {
-                        let parsed = db
-                            .get_mb_release_cache(&r.id)
-                            .ok()
-                            .flatten()
-                            .and_then(|(json, _)| musicbrainz::parse_release(&json).ok());
-                        (r.id.clone(), parsed)
-                    })
-                    .collect();
-
-                Some((recording, artists, releases))
-            })
-            .recv();
-
-        match result {
-            Some((recording, artists, releases)) => {
-                if let ActiveView::ExternalMatchReview(ref mut state) = self.view {
-                    state.viewing_detail =
-                        Some(external_match_modal::types::RecordingDetailState {
-                            recording,
-                            artists,
-                            releases,
-                            scroll: 0,
-                        });
-                }
-            }
-            None => {
-                self.status_message = Some("No cached recording data available".to_string());
             }
         }
     }

@@ -51,17 +51,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState)
 }
 
 fn render_title_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserState) {
-    let title = match state.category {
-        PackingCategory::Perfect => "Perfect Matches",
-        PackingCategory::FullMatches => "Full Matches",
-        PackingCategory::Singles => "Singles",
-        PackingCategory::Incomplete => "Incomplete Releases",
-        PackingCategory::LowConfidence => "Low Confidence",
-        PackingCategory::UnsolvedConflict => "Unsolved — Lost Conflict",
-        PackingCategory::UnsolvedNoRelease => "Unsolved — No Viable Release",
-        PackingCategory::UnsolvedNoMatch => "Unsolved — No AcoustID Match",
-        PackingCategory::Knots => "Packing Knots",
-    };
+    let title = state.category.label();
     let count = state.entries.len();
     let line = Line::from(vec![
         Span::styled(

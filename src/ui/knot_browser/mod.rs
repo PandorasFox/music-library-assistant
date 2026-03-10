@@ -1,20 +1,22 @@
-//! Knot browser — read-only two-pane view for inspecting packing knot components.
+//! Knot browser — read-only view for inspecting packing knot components.
 //!
-//! Tab/Shift+Tab cycles between knots. Arrow keys navigate the releases pane
-//! or scroll the detail pane. Shift+Arrow switches pane focus.
+//! Tab/Shift+Tab cycles between knots. Arrow keys navigate proposals.
+//! Z opens wizard pane with full proposal detail.
 
 pub mod render;
 pub mod types;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+
 
 use crate::meta::signals::data::PackingKnotData;
 use crate::ui::input::InputAction;
-use crate::ui::widgets::ListClickTargets;
-
-use types::{
-    ContestedInode, KnotEntry, KnotProposal, KnotProposalTrack, KnotReleaseSortMode,
+use crate::ui::widgets::standard_list::{
+    ListEntry, ListInputResult, StandardListConfig, StandardListState,
 };
+use crate::ui::widgets::wizard::{WizardItem, WizardOffer};
+
+use types::{KnotEntry, KnotProposal, KnotProposalTrack, KnotReleaseSortMode};
 
 // ============================================================================
 // Actions
@@ -26,14 +28,29 @@ pub(crate) enum KnotBrowserAction {
 }
 
 // ============================================================================
-// Pane focus
+// WizardItem + ListEntry impls for KnotProposal
 // ============================================================================
 
-pub(crate) enum FocusedPane {
-    /// Left pane: release list.
-    Releases,
-    /// Right pane: detail (scrollable).
-    Detail,
+impl WizardItem for KnotProposal {
+    fn wizard(&self, _width: u16) -> Option<WizardOffer> {
+        let lines = render::build_proposal_detail_lines(self);
+        if lines.is_empty() {
+            None
+        } else {
+            Some(WizardOffer::Pane {
+                title: self.release_title.clone(),
+                lines,
+            })
+        }
+    }
+}
+
+impl ListEntry for KnotProposal {
+    type Action = ();
+
+    fn on_confirm(&self, _selected: &BTreeSet<usize>) -> Option<()> {
+        None // Read-only browser
+    }
 }
 
 // ============================================================================
@@ -44,14 +61,8 @@ pub(crate) struct KnotBrowserState {
     pub knots: Vec<KnotEntry>,
     /// Current knot index (Tab/Shift+Tab cycles this).
     pub knot_index: usize,
-    /// Cursor within the releases pane.
-    pub release_cursor: usize,
-    pub release_scroll: usize,
-    /// Scroll offset for the detail pane.
-    pub detail_scroll: usize,
-    pub focused_pane: FocusedPane,
     pub sort_mode: KnotReleaseSortMode,
-    pub click_targets: ListClickTargets,
+    pub list: StandardListState,
 }
 
 // ============================================================================
@@ -66,7 +77,6 @@ impl KnotBrowserState {
         let mut knots: Vec<KnotEntry> = knot_signals
             .into_iter()
             .map(|data| {
-                let contested_inodes = build_contested_inodes(&data, corpus_paths);
                 let proposals = build_proposals(&data, corpus_paths);
                 KnotEntry {
                     tier: data.tier,
@@ -82,7 +92,6 @@ impl KnotBrowserState {
                         }
                     },
                     proposals,
-                    contested_inodes,
                 }
             })
             .collect();
@@ -94,15 +103,12 @@ impl KnotBrowserState {
             vb.cmp(&va)
         });
 
+        let sort_mode = KnotReleaseSortMode::ByInodeCount;
         let mut state = Self {
             knots,
             knot_index: 0,
-            release_cursor: 0,
-            release_scroll: 0,
-            detail_scroll: 0,
-            focused_pane: FocusedPane::Releases,
-            sort_mode: KnotReleaseSortMode::ByInodeCount,
-            click_targets: Default::default(),
+            sort_mode,
+            list: StandardListState::new(StandardListConfig::default()),
         };
         state.sort_current_knot();
         state
@@ -138,10 +144,6 @@ impl KnotBrowserState {
         self.knots.get(self.knot_index)
     }
 
-    pub fn selected_proposal(&self) -> Option<&KnotProposal> {
-        self.current_knot()
-            .and_then(|k| k.proposals.get(self.release_cursor))
-    }
 }
 
 // ============================================================================
@@ -150,6 +152,21 @@ impl KnotBrowserState {
 
 impl KnotBrowserState {
     pub fn handle_input(&mut self, action: &InputAction) -> KnotBrowserAction {
+        let proposals = self
+            .knots
+            .get(self.knot_index)
+            .map(|k| k.proposals.as_slice())
+            .unwrap_or(&[]);
+
+        match self.list.handle_input(action, proposals) {
+            ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
+                return KnotBrowserAction::None;
+            }
+            ListInputResult::Confirm(()) => return KnotBrowserAction::None,
+            ListInputResult::Unhandled => {}
+        }
+
+        // Handle actions not consumed by StandardList
         match action {
             InputAction::Cancel => KnotBrowserAction::Cancel,
 
@@ -157,9 +174,7 @@ impl KnotBrowserState {
             InputAction::CycleNext => {
                 if !self.knots.is_empty() && self.knot_index + 1 < self.knots.len() {
                     self.knot_index += 1;
-                    self.release_cursor = 0;
-                    self.release_scroll = 0;
-                    self.detail_scroll = 0;
+                    self.list.reset();
                     self.sort_current_knot();
                 }
                 KnotBrowserAction::None
@@ -167,100 +182,19 @@ impl KnotBrowserState {
             InputAction::CyclePrev => {
                 if self.knot_index > 0 {
                     self.knot_index -= 1;
-                    self.release_cursor = 0;
-                    self.release_scroll = 0;
-                    self.detail_scroll = 0;
+                    self.list.reset();
                     self.sort_current_knot();
                 }
                 KnotBrowserAction::None
             }
 
-            // Arrow keys: navigate within focused pane
-            InputAction::NavUp => {
-                match self.focused_pane {
-                    FocusedPane::Releases => {
-                        if self.release_cursor > 0 {
-                            self.release_cursor -= 1;
-                            self.detail_scroll = 0;
-                        }
-                    }
-                    FocusedPane::Detail => {
-                        if self.detail_scroll > 0 {
-                            self.detail_scroll -= 1;
-                        }
-                    }
-                }
-                KnotBrowserAction::None
-            }
-            InputAction::NavDown => {
-                match self.focused_pane {
-                    FocusedPane::Releases => {
-                        if let Some(knot) = self.current_knot() {
-                            if !knot.proposals.is_empty()
-                                && self.release_cursor < knot.proposals.len() - 1
-                            {
-                                self.release_cursor += 1;
-                                self.detail_scroll = 0;
-                            }
-                        }
-                    }
-                    FocusedPane::Detail => {
-                        self.detail_scroll += 1;
-                    }
-                }
-                KnotBrowserAction::None
-            }
-
-            // Shift+Arrow: switch pane focus
-            InputAction::FocusRight => {
-                self.focused_pane = FocusedPane::Detail;
-                KnotBrowserAction::None
-            }
-            InputAction::FocusLeft => {
-                self.focused_pane = FocusedPane::Releases;
-                KnotBrowserAction::None
-            }
-
-            // Home/End in releases pane
-            InputAction::Home => {
-                if matches!(self.focused_pane, FocusedPane::Releases) {
-                    self.release_cursor = 0;
-                    self.detail_scroll = 0;
-                }
-                KnotBrowserAction::None
-            }
-            InputAction::End => {
-                if matches!(self.focused_pane, FocusedPane::Releases) {
-                    if let Some(knot) = self.current_knot() {
-                        if !knot.proposals.is_empty() {
-                            self.release_cursor = knot.proposals.len() - 1;
-                            self.detail_scroll = 0;
-                        }
-                    }
-                }
-                KnotBrowserAction::None
-            }
-
-            // PageUp/PageDown for detail scroll
-            InputAction::PageUp => {
-                if matches!(self.focused_pane, FocusedPane::Detail) {
-                    self.detail_scroll = self.detail_scroll.saturating_sub(10);
-                }
-                KnotBrowserAction::None
-            }
-            InputAction::PageDown => {
-                if matches!(self.focused_pane, FocusedPane::Detail) {
-                    self.detail_scroll += 10;
-                }
-                KnotBrowserAction::None
-            }
-
-            // Sort toggle (bound to 's' key for now)
+            // Sort toggle
             InputAction::Char('s') => {
                 self.sort_mode = self.sort_mode.toggle();
-                self.release_cursor = 0;
-                self.release_scroll = 0;
                 self.sort_current_knot();
+                if let Some(knot) = self.knots.get(self.knot_index) {
+                    self.list.clamp_cursor(&knot.proposals);
+                }
                 KnotBrowserAction::None
             }
 
@@ -270,15 +204,8 @@ impl KnotBrowserState {
 
     /// Handle mouse click for cursor selection.
     pub fn handle_click(&mut self, x: u16, y: u16) {
-        if let Some(id) = self.click_targets.hit_test(x, y) {
-            if let Ok(idx) = id.parse::<usize>() {
-                if let Some(knot) = self.current_knot() {
-                    if idx < knot.proposals.len() {
-                        self.release_cursor = idx;
-                        self.detail_scroll = 0;
-                    }
-                }
-            }
+        if let Some(knot) = self.knots.get(self.knot_index) {
+            self.list.handle_click(x, y, &knot.proposals);
         }
     }
 }
@@ -286,41 +213,6 @@ impl KnotBrowserState {
 // ============================================================================
 // Construction helpers
 // ============================================================================
-
-fn build_contested_inodes(
-    data: &PackingKnotData,
-    corpus_paths: &HashMap<i64, String>,
-) -> Vec<ContestedInode> {
-    // Count how many proposals claim each inode
-    let mut inode_claims: HashMap<i64, usize> = HashMap::new();
-    for proposal in &data.proposals {
-        let proposal_inodes: HashSet<i64> =
-            proposal.assignments.iter().map(|a| a.inode).collect();
-        for inode in proposal_inodes {
-            *inode_claims.entry(inode).or_default() += 1;
-        }
-    }
-
-    let mut contested: Vec<ContestedInode> = data
-        .contested_inodes
-        .iter()
-        .map(|&inode| ContestedInode {
-            path: corpus_paths
-                .get(&inode)
-                .cloned()
-                .unwrap_or_else(|| format!("<inode {}>", inode)),
-            claiming_release_count: inode_claims.get(&inode).copied().unwrap_or(0),
-        })
-        .collect();
-
-    // Sort by claim count descending, then path
-    contested.sort_by(|a, b| {
-        b.claiming_release_count
-            .cmp(&a.claiming_release_count)
-            .then_with(|| a.path.cmp(&b.path))
-    });
-    contested
-}
 
 fn build_proposals(
     data: &PackingKnotData,

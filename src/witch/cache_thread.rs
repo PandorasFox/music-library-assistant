@@ -43,6 +43,8 @@ pub(crate) enum CacheRequest {
     /// UI wants external matches data with urgency (shorter throttle).
     /// Used when fetch is actively running so confidence counts update in near-realtime.
     WantExternalMatchesUrgent,
+    /// UI wants fresh packing directory data (throttled).
+    WantPackingDirs,
     /// Invalidate all cached data (force re-query on next want).
     InvalidateAll,
     /// Execute a one-shot query on the read-only connection.
@@ -63,6 +65,16 @@ pub(crate) enum CacheReady {
     DeployStatus(DeployStatus),
     EditHistory(EditHistoryData),
     ExternalMatches(ExternalMatchesData),
+    PackingDirs(PackingDirsData),
+}
+
+/// Cached packing directory data for tree browser markers.
+pub(crate) struct PackingDirsData {
+    /// Paths of files with release packing assignments.
+    pub file_paths: std::collections::HashSet<std::path::PathBuf>,
+    /// Parent directories mapped to their best packing category.
+    pub dir_categories:
+        std::collections::HashMap<std::path::PathBuf, crate::meta::signals::packing_category::PackingCategory>,
 }
 
 // ============================================================================
@@ -96,6 +108,11 @@ impl CacheHandle {
     /// Signal demand for edit history data (throttled by cache thread).
     pub(crate) fn want_history(&self) {
         let _ = self.request_tx.send(CacheRequest::WantHistory);
+    }
+
+    /// Signal demand for packing directory data (throttled by cache thread).
+    pub(crate) fn want_packing_dirs(&self) {
+        let _ = self.request_tx.send(CacheRequest::WantPackingDirs);
     }
 
     /// Signal demand for external matches data (throttled by cache thread).
@@ -226,6 +243,7 @@ struct ThrottleState {
     deploy_wanted: bool,
     history_wanted: bool,
     external_matches_wanted: bool,
+    packing_dirs_wanted: bool,
     /// When true, external matches uses a 2s throttle instead of 15s.
     external_matches_urgent: bool,
     insights_at: Option<Instant>,
@@ -233,6 +251,7 @@ struct ThrottleState {
     deploy_at: Option<Instant>,
     history_at: Option<Instant>,
     external_matches_at: Option<Instant>,
+    packing_dirs_at: Option<Instant>,
 }
 
 impl ThrottleState {
@@ -241,6 +260,7 @@ impl ThrottleState {
     const DEPLOY_THROTTLE: Duration = Duration::from_secs(15);
     const HISTORY_THROTTLE: Duration = Duration::from_secs(30);
     const EXTERNAL_MATCHES_THROTTLE: Duration = Duration::from_secs(15);
+    const PACKING_DIRS_THROTTLE: Duration = Duration::from_secs(30);
     const EXTERNAL_MATCHES_URGENT_THROTTLE: Duration = Duration::from_secs(5);
 
     fn new() -> Self {
@@ -250,12 +270,14 @@ impl ThrottleState {
             deploy_wanted: false,
             history_wanted: false,
             external_matches_wanted: false,
+            packing_dirs_wanted: false,
             external_matches_urgent: false,
             insights_at: None,
             inbox_at: None,
             deploy_at: None,
             history_at: None,
             external_matches_at: None,
+            packing_dirs_at: None,
         }
     }
 
@@ -265,12 +287,14 @@ impl ThrottleState {
         self.deploy_at = None;
         self.history_at = None;
         self.external_matches_at = None;
+        self.packing_dirs_at = None;
         // Set wanted so next cycle refreshes everything
         self.insights_wanted = true;
         self.inbox_wanted = true;
         self.deploy_wanted = true;
         self.history_wanted = true;
         self.external_matches_wanted = true;
+        self.packing_dirs_wanted = true;
         self.external_matches_urgent = false;
     }
 
@@ -300,6 +324,13 @@ impl ThrottleState {
             && self
                 .history_at
                 .is_none_or(|t| t.elapsed() >= Self::HISTORY_THROTTLE)
+    }
+
+    fn should_refresh_packing_dirs(&self) -> bool {
+        self.packing_dirs_wanted
+            && self
+                .packing_dirs_at
+                .is_none_or(|t| t.elapsed() >= Self::PACKING_DIRS_THROTTLE)
     }
 
     fn should_refresh_external_matches(&self) -> bool {
@@ -410,6 +441,9 @@ fn process_request(
         CacheRequest::WantHistory => {
             throttle.history_wanted = true;
         }
+        CacheRequest::WantPackingDirs => {
+            throttle.packing_dirs_wanted = true;
+        }
         CacheRequest::WantExternalMatches => {
             throttle.external_matches_wanted = true;
             throttle.external_matches_urgent = false;
@@ -491,6 +525,19 @@ fn run_refreshes(
             throttle.history_at = Some(Instant::now());
             let _ = ready_tx.send(CacheReady::EditHistory(EditHistoryData { sessions }));
         }
+    }
+
+    if throttle.should_refresh_packing_dirs() {
+        throttle.packing_dirs_wanted = false;
+        let file_paths = read_db.get_packing_assigned_paths().unwrap_or_default();
+        let dir_categories = read_db
+            .get_packing_directory_categories()
+            .unwrap_or_default();
+        throttle.packing_dirs_at = Some(Instant::now());
+        let _ = ready_tx.send(CacheReady::PackingDirs(PackingDirsData {
+            file_paths,
+            dir_categories,
+        }));
     }
 
     if throttle.should_refresh_external_matches() {

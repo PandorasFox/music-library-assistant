@@ -4,4 +4,5 @@
 //! storage traits and implementations live in `store.rs`.
 
 pub mod data;
+pub mod packing_category;
 pub mod store;

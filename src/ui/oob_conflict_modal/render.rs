@@ -112,11 +112,6 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
 
 fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
     let is_focused = state.focus_pane == FocusPane::List;
-    let border_color = if is_focused {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
 
     let bucket_state = state.active_bucket_state();
 
@@ -131,10 +126,7 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
         format!("Files ({})", bucket_state.files.len())
     };
 
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+    let block = crate::ui::helpers::focused_block(&title, is_focused);
     let inner = render_pane(f, area, block);
 
     if bucket_state.files.is_empty() {

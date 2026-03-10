@@ -12,6 +12,7 @@
 //! 4. **Aggregate signal with BLOB** — semantic key + flat columns + bincode `data BLOB`
 
 use rusqlite::{Connection, Result};
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
@@ -358,6 +359,110 @@ macro_rules! impl_aggregate_signal {
     };
 }
 
+/// Deserialize a bincode BLOB from a SQLite row value.
+fn deserialize_blob<T: DeserializeOwned>(blob: &[u8]) -> Result<T> {
+    bincode::deserialize(blob)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Blob, Box::new(e)))
+}
+
+/// Generate typed query methods for signal structs.
+///
+/// Avoids hand-writing the identical `query_all`, `query_by_key`, and
+/// `query_by_inode` boilerplate on each signal type. Field names are used
+/// to build both the SELECT column list and the `Self { ... }` constructor.
+///
+/// # Arms
+/// - `all_flat` — `query_all` for flat corpus signals (no BLOB)
+/// - `all` — `query_all` for aggregate blob signals (ORDER BY key)
+/// - `by_key` — `query_by_key` for aggregate blob signals
+/// - `by_inode` — `query_by_inode` for corpus blob signals
+macro_rules! impl_signal_query {
+    (all_flat, $ty:ty, $table:literal, [$($field:ident),+]) => {
+        impl $ty {
+            pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
+                let mut stmt = conn.prepare(concat!(
+                    "SELECT ", impl_signal_query!(@join $($field),+),
+                    " FROM ", $table, " ORDER BY path"
+                ))?;
+                let rows = stmt.query_map([], |row| {
+                    let mut _idx = 0usize;
+                    $(let $field = row.get({ let i = _idx; _idx += 1; i })?;)*
+                    Ok(Self { $($field),+ })
+                })?;
+                rows.collect()
+            }
+        }
+    };
+
+    (all, $ty:ty, $table:literal, [$($field:ident),+], $blob_field:ident) => {
+        impl $ty {
+            pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
+                let mut stmt = conn.prepare(concat!(
+                    "SELECT ", impl_signal_query!(@join $($field),+),
+                    ", data FROM ", $table, " ORDER BY key"
+                ))?;
+                let rows = stmt.query_map([], |row| {
+                    let mut _idx = 0usize;
+                    $(let $field = row.get({ let i = _idx; _idx += 1; i })?;)*
+                    let _blob: Vec<u8> = row.get(_idx)?;
+                    let $blob_field = deserialize_blob(&_blob)?;
+                    Ok(Self { $($field,)+ $blob_field })
+                })?;
+                rows.collect()
+            }
+        }
+    };
+
+    (by_key, $ty:ty, $table:literal, [$($field:ident),+], $blob_field:ident) => {
+        impl $ty {
+            pub fn query_by_key(conn: &Connection, key: &str) -> Result<Option<Self>> {
+                use rusqlite::OptionalExtension;
+                conn.query_row(
+                    concat!(
+                        "SELECT ", impl_signal_query!(@join $($field),+),
+                        ", data FROM ", $table, " WHERE key = ?1"
+                    ),
+                    rusqlite::params![key],
+                    |row| {
+                        let mut _idx = 0usize;
+                        $(let $field = row.get({ let i = _idx; _idx += 1; i })?;)*
+                        let _blob: Vec<u8> = row.get(_idx)?;
+                        let $blob_field = deserialize_blob(&_blob)?;
+                        Ok(Self { $($field,)+ $blob_field })
+                    },
+                ).optional()
+            }
+        }
+    };
+
+    (by_inode, $ty:ty, $table:literal, [$($field:ident),+], $blob_field:ident) => {
+        impl $ty {
+            pub fn query_by_inode(conn: &Connection, inode: i64) -> Result<Option<Self>> {
+                use rusqlite::OptionalExtension;
+                conn.query_row(
+                    concat!(
+                        "SELECT ", impl_signal_query!(@join $($field),+),
+                        ", data FROM ", $table, " WHERE inode = ?1"
+                    ),
+                    rusqlite::params![inode],
+                    |row| {
+                        let mut _idx = 0usize;
+                        $(let $field = row.get({ let i = _idx; _idx += 1; i })?;)*
+                        let _blob: Vec<u8> = row.get(_idx)?;
+                        let $blob_field = deserialize_blob(&_blob)?;
+                        Ok(Self { $($field,)+ $blob_field })
+                    },
+                ).optional()
+            }
+        }
+    };
+
+    (@join $f:ident) => { stringify!($f) };
+    (@join $f:ident, $($rest:ident),+) => {
+        concat!(stringify!($f), ", ", impl_signal_query!(@join $($rest),+))
+    };
+}
+
 // ============================================================================
 // Corpus File Signal Implementations
 // ============================================================================
@@ -387,19 +492,7 @@ impl_corpus_signal!(UnindexedFileSignal, "signal_unindexed_file",
     fields: [inode, path],
 );
 
-impl UnindexedFileSignal {
-    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt =
-            conn.prepare("SELECT inode, path FROM signal_unindexed_file ORDER BY path")?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Self {
-                inode: row.get(0)?,
-                path: row.get(1)?,
-            })
-        })?;
-        rows.collect()
-    }
-}
+impl_signal_query!(all_flat, UnindexedFileSignal, "signal_unindexed_file", [inode, path]);
 
 impl_corpus_signal!(HealthyFileSignal, "signal_healthy_file",
     "CREATE TABLE IF NOT EXISTS signal_healthy_file (
@@ -411,18 +504,7 @@ impl_corpus_signal!(HealthyFileSignal, "signal_healthy_file",
     fields: [inode, path],
 );
 
-impl HealthyFileSignal {
-    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare("SELECT inode, path FROM signal_healthy_file ORDER BY path")?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Self {
-                inode: row.get(0)?,
-                path: row.get(1)?,
-            })
-        })?;
-        rows.collect()
-    }
-}
+impl_signal_query!(all_flat, HealthyFileSignal, "signal_healthy_file", [inode, path]);
 
 // ============================================================================
 // Inbox file signal stores
@@ -640,26 +722,7 @@ impl_corpus_signal!(CompoundTagSignal, "signal_compound_tag",
     blob: compounds,
 );
 
-impl CompoundTagSignal {
-    pub fn query_by_inode(conn: &Connection, inode: i64) -> Result<Option<Self>> {
-        use rusqlite::OptionalExtension;
-        conn.query_row(
-            "SELECT inode, path, data FROM signal_compound_tag WHERE inode = ?1",
-            rusqlite::params![inode],
-            |row| {
-                let blob: Vec<u8> = row.get(2)?;
-                let compounds: Vec<CompoundTagEntry> = bincode::deserialize(&blob)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                Ok(Self {
-                    inode: row.get(0)?,
-                    path: row.get(1)?,
-                    compounds,
-                })
-            },
-        )
-        .optional()
-    }
-}
+impl_signal_query!(by_inode, CompoundTagSignal, "signal_compound_tag", [inode, path], compounds);
 
 impl_corpus_signal!(PathTagMismatchSignal, "signal_path_tag_mismatch",
     "CREATE TABLE IF NOT EXISTS signal_path_tag_mismatch (
@@ -713,26 +776,7 @@ impl_corpus_signal!(InboxCompoundTagSignal, "signal_inbox_compound_tag",
     blob: compounds,
 );
 
-impl InboxCompoundTagSignal {
-    pub fn query_by_inode(conn: &Connection, inode: i64) -> Result<Option<Self>> {
-        use rusqlite::OptionalExtension;
-        conn.query_row(
-            "SELECT inode, path, data FROM signal_inbox_compound_tag WHERE inode = ?1",
-            rusqlite::params![inode],
-            |row| {
-                let blob: Vec<u8> = row.get(2)?;
-                let compounds: Vec<CompoundTagEntry> = bincode::deserialize(&blob)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                Ok(Self {
-                    inode: row.get(0)?,
-                    path: row.get(1)?,
-                    compounds,
-                })
-            },
-        )
-        .optional()
-    }
-}
+impl_signal_query!(by_inode, InboxCompoundTagSignal, "signal_inbox_compound_tag", [inode, path], compounds);
 
 impl_corpus_signal!(UnmatchedCorpusTrackSignal, "signal_unmatched_corpus_track",
     "CREATE TABLE IF NOT EXISTS signal_unmatched_corpus_track (
@@ -824,25 +868,7 @@ impl_aggregate_signal!(FingerprintOverlapSignal, "signal_fingerprint_overlap",
     blob: inodes,
 );
 
-impl FingerprintOverlapSignal {
-    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt =
-            conn.prepare("SELECT key, data FROM signal_fingerprint_overlap ORDER BY key")?;
-        let rows = stmt.query_map([], |row| {
-            let key: String = row.get(0)?;
-            let data: Vec<u8> = row.get(1)?;
-            let inodes: Vec<i64> = bincode::deserialize(&data).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    1,
-                    rusqlite::types::Type::Blob,
-                    Box::new(e),
-                )
-            })?;
-            Ok(Self { key, inodes })
-        })?;
-        rows.collect()
-    }
-}
+impl_signal_query!(all, FingerprintOverlapSignal, "signal_fingerprint_overlap", [key], inodes);
 
 impl_aggregate_signal!(MetadataDuplicateSignal, "signal_metadata_duplicate",
     "CREATE TABLE IF NOT EXISTS signal_metadata_duplicate (
@@ -881,24 +907,7 @@ impl_aggregate_signal!(MissingTagSignal, "signal_missing_tag",
     blob: data,
 );
 
-impl MissingTagSignal {
-    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare("SELECT key, data FROM signal_missing_tag ORDER BY key")?;
-        let rows = stmt.query_map([], |row| {
-            let key: String = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            let data: MissingTagData = bincode::deserialize(&blob).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    1,
-                    rusqlite::types::Type::Blob,
-                    Box::new(e),
-                )
-            })?;
-            Ok(Self { key, data })
-        })?;
-        rows.collect()
-    }
-}
+impl_signal_query!(all, MissingTagSignal, "signal_missing_tag", [key], data);
 
 impl_aggregate_signal!(MissingAlbumSingleSignal, "signal_missing_album_single",
     "CREATE TABLE IF NOT EXISTS signal_missing_album_single (
@@ -912,25 +921,7 @@ impl_aggregate_signal!(MissingAlbumSingleSignal, "signal_missing_album_single",
     blob: data,
 );
 
-impl MissingAlbumSingleSignal {
-    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt =
-            conn.prepare("SELECT key, data FROM signal_missing_album_single ORDER BY key")?;
-        let rows = stmt.query_map([], |row| {
-            let key: String = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            let data: MissingAlbumSingleData = bincode::deserialize(&blob).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    1,
-                    rusqlite::types::Type::Blob,
-                    Box::new(e),
-                )
-            })?;
-            Ok(Self { key, data })
-        })?;
-        rows.collect()
-    }
-}
+impl_signal_query!(all, MissingAlbumSingleSignal, "signal_missing_album_single", [key], data);
 
 impl_aggregate_signal!(DeployConflictSignal, "signal_deploy_conflict",
     "CREATE TABLE IF NOT EXISTS signal_deploy_conflict (
@@ -972,26 +963,7 @@ impl_aggregate_signal!(TagCanonicitySignal, "signal_tag_canonicity",
     blob: data,
 );
 
-impl TagCanonicitySignal {
-    pub fn query_by_key(conn: &Connection, key: &str) -> Result<Option<Self>> {
-        use rusqlite::OptionalExtension;
-        conn.query_row(
-            "SELECT key, tag_name, data FROM signal_tag_canonicity WHERE key = ?1",
-            rusqlite::params![key],
-            |row| {
-                let blob: Vec<u8> = row.get(2)?;
-                let data: TagCanonicityData = bincode::deserialize(&blob)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                Ok(Self {
-                    key: row.get(0)?,
-                    tag_name: row.get(1)?,
-                    data,
-                })
-            },
-        )
-        .optional()
-    }
-}
+impl_signal_query!(by_key, TagCanonicitySignal, "signal_tag_canonicity", [key, tag_name], data);
 
 impl_aggregate_signal!(InconsistentAlbumArtistSignal, "signal_inconsistent_album_artist",
     "CREATE TABLE IF NOT EXISTS signal_inconsistent_album_artist (
@@ -1005,25 +977,7 @@ impl_aggregate_signal!(InconsistentAlbumArtistSignal, "signal_inconsistent_album
     blob: data,
 );
 
-impl InconsistentAlbumArtistSignal {
-    pub fn query_by_key(conn: &Connection, key: &str) -> Result<Option<Self>> {
-        use rusqlite::OptionalExtension;
-        conn.query_row(
-            "SELECT key, data FROM signal_inconsistent_album_artist WHERE key = ?1",
-            rusqlite::params![key],
-            |row| {
-                let blob: Vec<u8> = row.get(1)?;
-                let data: InconsistentAlbumArtistData = bincode::deserialize(&blob)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                Ok(Self {
-                    key: row.get(0)?,
-                    data,
-                })
-            },
-        )
-        .optional()
-    }
-}
+impl_signal_query!(by_key, InconsistentAlbumArtistSignal, "signal_inconsistent_album_artist", [key], data);
 
 impl_aggregate_signal!(CrossSourceOverlapSignal, "signal_cross_source_overlap",
     "CREATE TABLE IF NOT EXISTS signal_cross_source_overlap (
@@ -1037,25 +991,7 @@ impl_aggregate_signal!(CrossSourceOverlapSignal, "signal_cross_source_overlap",
     blob: data,
 );
 
-impl CrossSourceOverlapSignal {
-    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt =
-            conn.prepare("SELECT key, data FROM signal_cross_source_overlap ORDER BY key")?;
-        let rows = stmt.query_map([], |row| {
-            let key: String = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            let data: CrossSourceOverlapData = bincode::deserialize(&blob).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    1,
-                    rusqlite::types::Type::Blob,
-                    Box::new(e),
-                )
-            })?;
-            Ok(Self { key, data })
-        })?;
-        rows.collect()
-    }
-}
+impl_signal_query!(all, CrossSourceOverlapSignal, "signal_cross_source_overlap", [key], data);
 
 impl_aggregate_signal!(ReleaseOverlapSignal, "signal_release_overlap",
     "CREATE TABLE IF NOT EXISTS signal_release_overlap (
@@ -1069,25 +1005,7 @@ impl_aggregate_signal!(ReleaseOverlapSignal, "signal_release_overlap",
     blob: data,
 );
 
-impl ReleaseOverlapSignal {
-    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt =
-            conn.prepare("SELECT key, data FROM signal_release_overlap ORDER BY key")?;
-        let rows = stmt.query_map([], |row| {
-            let key: String = row.get(0)?;
-            let blob: Vec<u8> = row.get(1)?;
-            let data: ReleaseOverlapData = bincode::deserialize(&blob).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    1,
-                    rusqlite::types::Type::Blob,
-                    Box::new(e),
-                )
-            })?;
-            Ok(Self { key, data })
-        })?;
-        rows.collect()
-    }
-}
+impl_signal_query!(all, ReleaseOverlapSignal, "signal_release_overlap", [key], data);
 
 impl_aggregate_signal!(RedundantDuplicateSignal, "signal_redundant_duplicate",
     "CREATE TABLE IF NOT EXISTS signal_redundant_duplicate (
@@ -1114,26 +1032,7 @@ impl_aggregate_signal!(InboxTagCanonicitySignal, "signal_inbox_tag_canonicity",
     blob: data,
 );
 
-impl InboxTagCanonicitySignal {
-    pub fn query_by_key(conn: &Connection, key: &str) -> Result<Option<Self>> {
-        use rusqlite::OptionalExtension;
-        conn.query_row(
-            "SELECT key, tag_name, data FROM signal_inbox_tag_canonicity WHERE key = ?1",
-            rusqlite::params![key],
-            |row| {
-                let blob: Vec<u8> = row.get(2)?;
-                let data: InboxTagCanonicityData = bincode::deserialize(&blob)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                Ok(Self {
-                    key: row.get(0)?,
-                    tag_name: row.get(1)?,
-                    data,
-                })
-            },
-        )
-        .optional()
-    }
-}
+impl_signal_query!(by_key, InboxTagCanonicitySignal, "signal_inbox_tag_canonicity", [key, tag_name], data);
 
 impl_aggregate_signal!(InboxMissingTagSignal, "signal_inbox_missing_tag",
     "CREATE TABLE IF NOT EXISTS signal_inbox_missing_tag (
@@ -1159,21 +1058,7 @@ impl_aggregate_signal!(DiscExtractionSignal, "signal_disc_extraction",
     blob: data,
 );
 
-impl DiscExtractionSignal {
-    pub fn query_all(conn: &Connection) -> Result<Vec<Self>> {
-        let mut stmt = conn.prepare("SELECT key, data FROM signal_disc_extraction ORDER BY key")?;
-        let rows = stmt.query_map([], |row| {
-            let blob: Vec<u8> = row.get(1)?;
-            let data: DiscExtractionData = bincode::deserialize(&blob)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            Ok(Self {
-                key: row.get(0)?,
-                data,
-            })
-        })?;
-        rows.collect()
-    }
-}
+impl_signal_query!(all, DiscExtractionSignal, "signal_disc_extraction", [key], data);
 
 // ============================================================================
 // Release Packing Gap Analysis Signal Implementations

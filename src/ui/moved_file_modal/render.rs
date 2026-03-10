@@ -63,17 +63,7 @@ fn render_file_list(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
 
     let inner = render_pane(f, area, block);
 
-    // Populate click targets for list items
-    state.click_targets.clear();
-    state.click_targets.set_list_area(inner);
-    for (vis_idx, entry_idx) in (0..state.files.len()).enumerate() {
-        if vis_idx >= inner.height as usize {
-            break;
-        }
-        state
-            .click_targets
-            .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-    }
+    state.click_targets.populate(inner, 0, state.files.len());
 
     if state.files.is_empty() {
         let empty = Paragraph::new("No moved files to acknowledge");

@@ -71,19 +71,8 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) 
         f.render_widget(empty, inner);
     } else {
         let visible_height = inner.height as usize;
-        let scroll = compute_scroll(state.cursor, state.scroll, visible_height);
-
-        // Populate click targets
-        state.click_targets.clear();
-        state.click_targets.set_list_area(inner);
-        for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-            if entry_idx >= state.sessions.len() {
-                break;
-            }
-            state
-                .click_targets
-                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-        }
+        let scroll = crate::ui::helpers::clamp_scroll(state.cursor, state.scroll, visible_height);
+        state.click_targets.populate(inner, scroll, state.sessions.len());
 
         let mut lines = Vec::new();
         for (i, session) in state
@@ -190,19 +179,9 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState
     f.render_widget(block, chunks[0]);
 
     let visible_height = inner.height as usize;
-    let scroll = compute_scroll(detail.detail_cursor, detail.detail_scroll, visible_height);
+    let scroll = crate::ui::helpers::clamp_scroll(detail.detail_cursor, detail.detail_scroll, visible_height);
 
-    // Populate click targets
-    state.click_targets.clear();
-    state.click_targets.set_list_area(inner);
-    for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-        if entry_idx >= detail.edits.len() {
-            break;
-        }
-        state
-            .click_targets
-            .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-    }
+    state.click_targets.populate(inner, scroll, detail.edits.len());
 
     let mut lines = Vec::new();
     for (i, edit) in detail
@@ -339,17 +318,9 @@ fn render_conflict_resolution(
         f.render_widget(msg, inner);
     } else {
         let visible_height = inner.height as usize;
-        let scroll = compute_scroll(state.conflict_cursor, state.conflict_scroll, visible_height);
+        let scroll = crate::ui::helpers::clamp_scroll(state.conflict_cursor, state.conflict_scroll, visible_height);
 
-        // Populate click targets
-        click_targets.clear();
-        click_targets.set_list_area(inner);
-        for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-            if entry_idx >= state.conflicts.len() {
-                break;
-            }
-            click_targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-        }
+        click_targets.populate(inner, scroll, state.conflicts.len());
 
         let mut lines = Vec::new();
         for (i, conflict) in state
@@ -502,15 +473,3 @@ fn render_confirm_jettison_all_final(f: &mut Frame, area: Rect, state: &Jettison
 // Helpers
 // ============================================================================
 
-fn compute_scroll(cursor: usize, current_scroll: usize, visible_height: usize) -> usize {
-    if visible_height == 0 {
-        return 0;
-    }
-    if cursor < current_scroll {
-        cursor
-    } else if cursor >= current_scroll + visible_height {
-        cursor - visible_height + 1
-    } else {
-        current_scroll
-    }
-}

@@ -187,11 +187,9 @@ fn build_popup_lines(
             Span::styled(summary.artist_credit.clone(), value),
         ]));
         if let Some(length_ms) = summary.length_ms {
-            let mins = length_ms / 60000;
-            let secs = (length_ms % 60000) / 1000;
             lines.push(Line::from(vec![
                 Span::styled("Length: ", label),
-                Span::styled(format!("{}:{:02}", mins, secs), value),
+                Span::styled(crate::ui::helpers::format_duration_ms(length_ms as i64), value),
             ]));
         }
         if summary.release_count > 0 {
@@ -231,11 +229,9 @@ fn build_pane_content(
         RichSpan::new(format!("\"{}\"", rec.title), value),
     ]));
     if let Some(length_ms) = rec.length {
-        let mins = length_ms / 60000;
-        let secs = (length_ms % 60000) / 1000;
         blocks.push(RichBlock::Paragraph(vec![
             RichSpan::new("Length:    ", label),
-            RichSpan::new(format!("{}:{:02}", mins, secs), value),
+            RichSpan::new(crate::ui::helpers::format_duration_ms(length_ms), value),
         ]));
     }
     blocks.push(RichBlock::Paragraph(vec![

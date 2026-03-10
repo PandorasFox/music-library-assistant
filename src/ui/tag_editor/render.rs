@@ -77,26 +77,17 @@ impl UnifiedTagEditorState {
         };
 
         let duration_str = duration_ms
-            .map(|ms| {
-                let total_seconds = ms / 1000;
-                format!("{}:{:02}", total_seconds / 60, total_seconds % 60)
-            })
+            .map(crate::ui::helpers::format_duration_ms)
             .unwrap_or_else(|| "Unknown".to_string());
 
-        let size_str = if file_size < 1024 {
-            format!("{} B", file_size)
-        } else if file_size < 1024 * 1024 {
-            format!("{:.1} KB", file_size as f64 / 1024.0)
-        } else {
-            format!("{:.2} MB", file_size as f64 / (1024.0 * 1024.0))
-        };
+        let size_str = crate::ui::helpers::format_bytes(file_size as u64);
 
         let bitrate_str = bitrate
-            .map(|b| format!("{} kbps", b))
+            .map(crate::ui::helpers::format_kbps)
             .unwrap_or_else(|| "Unknown".to_string());
 
         let sample_rate_str = sample_rate
-            .map(|sr| format!("{} Hz", sr))
+            .map(crate::ui::helpers::format_sample_rate)
             .unwrap_or_else(|| "Unknown".to_string());
 
         // Borders take 2 chars; path wrapping uses inner width

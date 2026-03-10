@@ -40,6 +40,29 @@ impl ListClickTargets {
         self.rows.push((id.into(), y));
     }
 
+    /// Clear, set list area, and register rows for the visible range.
+    ///
+    /// This replaces the common boilerplate of:
+    /// ```ignore
+    /// targets.clear();
+    /// targets.set_list_area(inner);
+    /// for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
+    ///     if entry_idx >= item_count { break; }
+    ///     targets.add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
+    /// }
+    /// ```
+    pub fn populate(&mut self, area: Rect, scroll: usize, item_count: usize) {
+        self.clear();
+        self.set_list_area(area);
+        let visible_height = area.height as usize;
+        for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
+            if entry_idx >= item_count {
+                break;
+            }
+            self.add_row(entry_idx.to_string(), area.y + vis_idx as u16);
+        }
+    }
+
     /// Check if a click position hits any row.
     /// Returns the identifier of the clicked row if hit.
     pub fn hit_test(&self, x: u16, y: u16) -> Option<&str> {

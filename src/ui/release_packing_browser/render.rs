@@ -99,15 +99,7 @@ fn render_controls(f: &mut Frame, area: Rect, has_release: bool) {
 
 fn render_left_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
     let focused = matches!(state.focused_pane, FocusedPane::LeftPane);
-    let border_color = if focused {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
-    let block = Block::default()
-        .title(" Releases ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+    let block = crate::ui::helpers::focused_block(" Releases ", focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -173,7 +165,7 @@ fn render_left_entry(
             let mut spans = vec![
                 Span::styled(marker.to_string(), title_style),
                 Span::styled(
-                    truncate_for_width(&release.release_title, title_max),
+                    crate::ui::helpers::truncate_right(&release.release_title, title_max),
                     title_style,
                 ),
                 Span::styled(
@@ -215,7 +207,7 @@ fn render_left_entry(
 
             Line::from(vec![
                 Span::styled(marker.to_string(), label_style),
-                Span::styled(truncate_for_width(filename, title_max), label_style),
+                Span::styled(crate::ui::helpers::truncate_right(filename, title_max), label_style),
             ])
         }
     }
@@ -227,15 +219,7 @@ fn render_left_entry(
 
 fn render_tracks_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
     let focused = matches!(state.focused_pane, FocusedPane::MiddlePane);
-    let border_color = if focused {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
-    let block = Block::default()
-        .title(" Tracks ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+    let block = crate::ui::helpers::focused_block(" Tracks ", focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -296,7 +280,7 @@ fn render_release_tracks(
                 format!("{:>2} ", track.track_number),
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(truncate_for_width(filename, 30), label_style),
+            Span::styled(crate::ui::helpers::truncate_right(filename, 30), label_style),
             Span::styled(
                 format!("  {:.2}", track.score),
                 Style::default().fg(Color::Yellow),
@@ -325,7 +309,7 @@ fn render_release_tracks(
             ),
             Span::styled("░ ", Style::default().fg(Color::Red)),
             Span::styled(
-                truncate_for_width(&slot.track_title, 28),
+                crate::ui::helpers::truncate_right(&slot.track_title, 28),
                 Style::default()
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::ITALIC),
@@ -339,14 +323,8 @@ fn render_release_tracks(
         state.track_cursor = total - 1;
     }
 
-    // Scroll: ensure track_cursor is visible
     let visible_height = area.height as usize;
-    if visible_height > 0 && state.track_cursor >= state.track_scroll + visible_height {
-        state.track_scroll = state.track_cursor - visible_height + 1;
-    }
-    if state.track_cursor < state.track_scroll {
-        state.track_scroll = state.track_cursor;
-    }
+    state.track_scroll = crate::ui::helpers::clamp_scroll(state.track_cursor, state.track_scroll, visible_height);
 
     let visible_lines: Vec<Line> = lines
         .into_iter()
@@ -362,15 +340,7 @@ fn render_release_tracks(
 
 fn render_detail_pane(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
     let focused = matches!(state.focused_pane, FocusedPane::DetailPane);
-    let border_color = if focused {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
-    let block = Block::default()
-        .title(" Detail ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+    let block = crate::ui::helpers::focused_block(" Detail ", focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -1030,16 +1000,3 @@ fn coverage_color(release: &ReleaseGroup, category: PackingCategory) -> Color {
     }
 }
 
-/// Truncate a string to max_chars, appending "..." if truncated.
-fn truncate_for_width(s: &str, max_chars: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_chars {
-        s.to_string()
-    } else if max_chars <= 3 {
-        s.chars().take(max_chars).collect()
-    } else {
-        let mut result: String = s.chars().take(max_chars - 3).collect();
-        result.push_str("...");
-        result
-    }
-}

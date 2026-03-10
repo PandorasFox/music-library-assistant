@@ -3,7 +3,8 @@
 //! Common helpers used across multiple UI modules to avoid code duplication.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::widgets::{Block, Clear};
+use ratatui::style::{Color, Style};
+use ratatui::widgets::{Block, Borders, Clear};
 use ratatui::Frame;
 
 // ============================================================================
@@ -53,6 +54,40 @@ pub fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+/// Compute scroll offset to keep cursor visible (edge-pinning).
+///
+/// The cursor scrolls the viewport only when it reaches the edge.
+/// This is distinct from center-biased scrolling (used by `StandardList`)
+/// where the cursor stays near the middle of the viewport.
+pub fn clamp_scroll(cursor: usize, scroll: usize, visible_height: usize) -> usize {
+    if visible_height == 0 {
+        return 0;
+    }
+    if cursor >= scroll + visible_height {
+        cursor.saturating_sub(visible_height - 1)
+    } else if cursor < scroll {
+        cursor
+    } else {
+        scroll
+    }
+}
+
+/// Create a bordered block with focus-aware border color.
+///
+/// Yellow border when focused, DarkGray when not. This is the standard
+/// pane border pattern used across all multi-pane views.
+pub fn focused_block(title: &str, is_focused: bool) -> Block<'_> {
+    let border_color = if is_focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+    Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+}
+
 // ============================================================================
 // Formatting Utilities
 // ============================================================================
@@ -79,7 +114,10 @@ pub fn truncate_right(s: &str, max_chars: usize) -> String {
     if char_count <= max_chars {
         return s.to_string();
     }
-    let take = max_chars.saturating_sub(3);
+    if max_chars <= 3 {
+        return s.chars().take(max_chars).collect();
+    }
+    let take = max_chars - 3;
     format!("{}...", s.chars().take(take).collect::<String>())
 }
 
@@ -109,6 +147,47 @@ pub fn format_si(n: usize) -> String {
     }
     // Fallback for astronomically large numbers
     format!("{:.0}P", value)
+}
+
+/// Format a duration in milliseconds as "M:SS".
+pub fn format_duration_ms(ms: i64) -> String {
+    let total_secs = ms / 1000;
+    let mins = total_secs / 60;
+    let secs = total_secs % 60;
+    format!("{}:{:02}", mins, secs)
+}
+
+/// Format a byte count with appropriate unit (bytes, KB, MB, GB).
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} bytes", bytes)
+    }
+}
+
+/// Format a sample rate as kHz or Hz.
+pub fn format_sample_rate(sr: i32) -> String {
+    if sr >= 1000 && sr % 1000 == 0 {
+        format!("{} kHz", sr / 1000)
+    } else if sr >= 1000 {
+        format!("{:.1} kHz", sr as f64 / 1000.0)
+    } else {
+        format!("{} Hz", sr)
+    }
+}
+
+/// Format a bitrate in kbps.
+pub fn format_kbps(br: i32) -> String {
+    format!("{} kbps", br)
 }
 
 // ============================================================================

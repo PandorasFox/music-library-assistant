@@ -103,47 +103,18 @@ fn render_three_panes(f: &mut Frame, area: Rect, state: &mut CompoundSplitStateV
 /// Render the split parts pane (left).
 fn render_parts_pane(f: &mut Frame, area: Rect, state: &mut CompoundSplitStateV2) {
     let is_focused = state.focus_pane == FocusPaneV2::Parts && !state.is_editing();
-    let border_color = if is_focused {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
 
     let title = format!(" SPLIT PARTS ({}) ", state.edited_parts.len());
 
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+    let block = crate::ui::helpers::focused_block(&title, is_focused);
 
     let inner = render_pane(f, area, block);
 
-    // Store pane rect and populate click targets
     state.parts_pane_rect = Some(area);
-    state.part_click_targets.clear();
-    state.part_click_targets.set_list_area(inner);
-
     let visible_height = inner.height as usize;
     let max_width = inner.width.saturating_sub(1) as usize;
-
-    // Calculate scroll
-    let scroll = if state.part_cursor >= state.part_scroll + visible_height {
-        state.part_cursor.saturating_sub(visible_height - 1)
-    } else if state.part_cursor < state.part_scroll {
-        state.part_cursor
-    } else {
-        state.part_scroll
-    };
-
-    // Register click target rows
-    for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-        if entry_idx >= state.edited_parts.len() {
-            break;
-        }
-        state
-            .part_click_targets
-            .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-    }
+    let scroll = crate::ui::helpers::clamp_scroll(state.part_cursor, state.part_scroll, visible_height);
+    state.part_click_targets.populate(inner, scroll, state.edited_parts.len());
 
     let items: Vec<ListItem> = state
         .edited_parts
@@ -189,49 +160,20 @@ fn render_parts_pane(f: &mut Frame, area: Rect, state: &mut CompoundSplitStateV2
 /// Render the files pane (middle) with selection checkboxes.
 fn render_files_pane(f: &mut Frame, area: Rect, state: &mut CompoundSplitStateV2) {
     let is_focused = state.focus_pane == FocusPaneV2::Files && !state.is_editing();
-    let border_color = if is_focused {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
 
     let selected_count = state.selected_files.len();
     let total_count = state.data.files.len();
     let title = format!(" TRACKS ({}/{}) ", selected_count, total_count);
 
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+    let block = crate::ui::helpers::focused_block(&title, is_focused);
 
     let inner = render_pane(f, area, block);
 
-    // Store pane rect and populate click targets
     state.files_pane_rect = Some(area);
-    state.file_click_targets.clear();
-    state.file_click_targets.set_list_area(inner);
-
     let visible_height = inner.height as usize;
     let max_width = inner.width.saturating_sub(1) as usize;
-
-    // Calculate scroll
-    let scroll = if state.file_cursor >= state.file_scroll + visible_height {
-        state.file_cursor.saturating_sub(visible_height - 1)
-    } else if state.file_cursor < state.file_scroll {
-        state.file_cursor
-    } else {
-        state.file_scroll
-    };
-
-    // Register click target rows
-    for (vis_idx, entry_idx) in (scroll..).take(visible_height).enumerate() {
-        if entry_idx >= state.data.files.len() {
-            break;
-        }
-        state
-            .file_click_targets
-            .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-    }
+    let scroll = crate::ui::helpers::clamp_scroll(state.file_cursor, state.file_scroll, visible_height);
+    state.file_click_targets.populate(inner, scroll, state.data.files.len());
 
     let items: Vec<ListItem> = state
         .data

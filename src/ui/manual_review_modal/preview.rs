@@ -439,45 +439,30 @@ fn render_detail_pane(f: &mut Frame, area: Rect, state: &ManualReviewState) {
             ]));
 
             if let Some(dur) = meta.duration_ms {
-                let secs = dur / 1000;
-                let mins = secs / 60;
-                let rem = secs % 60;
                 lines.push(Line::from(vec![
                     Span::styled("Duration: ", label_style),
-                    Span::styled(format!("{}:{:02}", mins, rem), value_style),
+                    Span::styled(crate::ui::helpers::format_duration_ms(dur), value_style),
                 ]));
             }
 
             if let Some(br) = meta.bitrate_kbps {
                 lines.push(Line::from(vec![
                     Span::styled("Bitrate: ", label_style),
-                    Span::styled(format!("{} kbps", br), value_style),
+                    Span::styled(crate::ui::helpers::format_kbps(br), value_style),
                 ]));
             }
 
             if let Some(sr) = meta.sample_rate {
-                let display = if sr >= 1000 && sr % 1000 == 0 {
-                    format!("{} kHz", sr / 1000)
-                } else if sr >= 1000 {
-                    format!("{:.1} kHz", sr as f64 / 1000.0)
-                } else {
-                    format!("{} Hz", sr)
-                };
                 lines.push(Line::from(vec![
                     Span::styled("Sample rate: ", label_style),
-                    Span::styled(display, value_style),
+                    Span::styled(crate::ui::helpers::format_sample_rate(sr), value_style),
                 ]));
             }
 
             if meta.file_size > 0 {
-                let size_str = if meta.file_size >= 1_048_576 {
-                    format!("{:.1} MB", meta.file_size as f64 / 1_048_576.0)
-                } else {
-                    format!("{:.0} KB", meta.file_size as f64 / 1024.0)
-                };
                 lines.push(Line::from(vec![
                     Span::styled("Size: ", label_style),
-                    Span::styled(size_str, value_style),
+                    Span::styled(crate::ui::helpers::format_bytes(meta.file_size as u64), value_style),
                 ]));
             }
 

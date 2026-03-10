@@ -392,16 +392,8 @@ impl DiscExtractionState {
 
     fn render_file_list(&mut self, f: &mut Frame, area: Rect) {
         let is_focused = self.focus_pane == FocusPane::List;
-        let border_color = if is_focused {
-            Color::Yellow
-        } else {
-            Color::DarkGray
-        };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Files ")
-            .border_style(Style::default().fg(border_color));
+        let block = crate::ui::helpers::focused_block(" Files ", is_focused);
         let inner = render_pane(f, area, block);
 
         let group = &self.data.groups[self.current_group];

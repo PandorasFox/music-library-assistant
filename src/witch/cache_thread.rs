@@ -19,6 +19,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::config;
+use crate::db::domain::DomainQuery;
 use crate::db::{Database, ReadOnlyDb};
 use crate::meta::views::{
     DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
@@ -513,7 +514,8 @@ fn run_refreshes(
 
     if throttle.should_refresh_deploy() {
         throttle.deploy_wanted = false;
-        if let Ok(data) = read_db.get_deploy_status() {
+        let data: DeployStatus = crate::db::domain::GetDeployStatus.execute(&read_db);
+        {
             throttle.deploy_at = Some(Instant::now());
             let _ = ready_tx.send(CacheReady::DeployStatus(data));
         }

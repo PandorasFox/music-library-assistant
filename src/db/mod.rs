@@ -16,6 +16,7 @@
 //! Variables holding `ReadOnlyDb` should be named `read_db` to make intent clear.
 
 pub mod data_migrations;
+pub mod domain;
 pub mod queries;
 pub mod reconciler;
 mod schema;

@@ -544,7 +544,7 @@ pub struct InboxCorpusMatchEntry {
 
 /// Deploy status for the Deploy view and titlebar indicator.
 /// Computed at cache refresh time, never in render.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct DeployStatus {
     /// Whether there is actionable deploy work (deploy_ready, stale, or leftover signals exist).
     pub needs_action: bool,

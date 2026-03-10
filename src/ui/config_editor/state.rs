@@ -50,6 +50,59 @@ pub enum CollectionPosition {
     AddNew,
 }
 
+/// Navigate a collection cursor up. Returns true if the cursor exited the collection.
+fn collection_nav_up(pos: &mut Option<CollectionPosition>, item_count: usize) -> bool {
+    match *pos {
+        Some(CollectionPosition::Item(0)) => {
+            *pos = None;
+            true
+        }
+        Some(CollectionPosition::Item(n)) => {
+            *pos = Some(CollectionPosition::Item(n - 1));
+            false
+        }
+        Some(CollectionPosition::AddNew) => {
+            *pos = if item_count > 0 {
+                Some(CollectionPosition::Item(item_count - 1))
+            } else {
+                None
+            };
+            pos.is_none()
+        }
+        None => false,
+    }
+}
+
+/// Navigate a collection cursor down. Returns true if the cursor exited the collection.
+fn collection_nav_down(pos: &mut Option<CollectionPosition>, item_count: usize) -> bool {
+    match *pos {
+        Some(CollectionPosition::Item(n)) => {
+            *pos = if n + 1 < item_count {
+                Some(CollectionPosition::Item(n + 1))
+            } else {
+                Some(CollectionPosition::AddNew)
+            };
+            false
+        }
+        Some(CollectionPosition::AddNew) => {
+            *pos = None;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Adjust cursor after deleting an item at the given index.
+fn adjust_cursor_after_delete(pos: &mut Option<CollectionPosition>, new_len: usize) {
+    if let Some(CollectionPosition::Item(idx)) = *pos {
+        if idx >= new_len && new_len > 0 {
+            *pos = Some(CollectionPosition::Item(new_len - 1));
+        } else if new_len == 0 {
+            *pos = Some(CollectionPosition::AddNew);
+        }
+    }
+}
+
 /// Full state for the config editor view.
 pub struct ConfigEditorState {
     pub groups: Vec<ConfigGroup>,
@@ -197,43 +250,16 @@ impl ConfigEditorState {
 
         match action {
             InputAction::NavUp => {
-                match self.collection_pos {
-                    Some(CollectionPosition::Item(0)) => {
-                        // Exit collection mode, stay on field
-                        self.collection_pos = None;
-                    }
-                    Some(CollectionPosition::Item(n)) => {
-                        self.collection_pos = Some(CollectionPosition::Item(n - 1));
-                    }
-                    Some(CollectionPosition::AddNew) => {
-                        if item_count > 0 {
-                            self.collection_pos = Some(CollectionPosition::Item(item_count - 1));
-                        } else {
-                            self.collection_pos = None;
-                        }
-                    }
-                    None => {}
-                }
+                collection_nav_up(&mut self.collection_pos, item_count);
                 ConfigEditorAction::None
             }
             InputAction::NavDown => {
-                match self.collection_pos {
-                    Some(CollectionPosition::Item(n)) => {
-                        if n + 1 < item_count {
-                            self.collection_pos = Some(CollectionPosition::Item(n + 1));
-                        } else {
-                            self.collection_pos = Some(CollectionPosition::AddNew);
-                        }
+                if collection_nav_down(&mut self.collection_pos, item_count) {
+                    // Exited collection, move to next field
+                    let total = self.visible_field_count();
+                    if self.cursor + 1 < total {
+                        self.cursor += 1;
                     }
-                    Some(CollectionPosition::AddNew) => {
-                        // Exit collection, move to next field
-                        self.collection_pos = None;
-                        let total = self.visible_field_count();
-                        if self.cursor + 1 < total {
-                            self.cursor += 1;
-                        }
-                    }
-                    None => {}
                 }
                 ConfigEditorAction::None
             }
@@ -278,48 +304,14 @@ impl ConfigEditorState {
 
         match action {
             InputAction::NavUp => {
-                match self.sub_collection_pos {
-                    Some(CollectionPosition::Item(0)) => {
-                        // Exit sub-collection, stay on the tag item
-                        self.sub_collection_pos = None;
-                    }
-                    Some(CollectionPosition::Item(n)) => {
-                        self.sub_collection_pos = Some(CollectionPosition::Item(n - 1));
-                    }
-                    Some(CollectionPosition::AddNew) => {
-                        if item_count > 0 {
-                            self.sub_collection_pos =
-                                Some(CollectionPosition::Item(item_count - 1));
-                        } else {
-                            self.sub_collection_pos = None;
-                        }
-                    }
-                    None => {}
-                }
+                collection_nav_up(&mut self.sub_collection_pos, item_count);
                 ConfigEditorAction::None
             }
             InputAction::NavDown => {
-                match self.sub_collection_pos {
-                    Some(CollectionPosition::Item(n)) => {
-                        if n + 1 < item_count {
-                            self.sub_collection_pos = Some(CollectionPosition::Item(n + 1));
-                        } else {
-                            self.sub_collection_pos = Some(CollectionPosition::AddNew);
-                        }
-                    }
-                    Some(CollectionPosition::AddNew) => {
-                        // Exit sub-collection, move to next tag in collection
-                        self.sub_collection_pos = None;
-                        let collection_len = self.current_collection_len();
-                        if let Some(CollectionPosition::Item(n)) = self.collection_pos {
-                            if n + 1 < collection_len {
-                                self.collection_pos = Some(CollectionPosition::Item(n + 1));
-                            } else {
-                                self.collection_pos = Some(CollectionPosition::AddNew);
-                            }
-                        }
-                    }
-                    None => {}
+                if collection_nav_down(&mut self.sub_collection_pos, item_count) {
+                    // Exited sub-collection, advance parent collection cursor
+                    let collection_len = self.current_collection_len();
+                    collection_nav_down(&mut self.collection_pos, collection_len);
                 }
                 ConfigEditorAction::None
             }
@@ -392,12 +384,7 @@ impl ConfigEditorState {
         if let Some(CollectionPosition::Item(sep_idx)) = self.sub_collection_pos {
             if sep_idx < items[tag_idx].1.len() {
                 items[tag_idx].1.remove(sep_idx);
-                if sep_idx >= items[tag_idx].1.len() && !items[tag_idx].1.is_empty() {
-                    self.sub_collection_pos =
-                        Some(CollectionPosition::Item(items[tag_idx].1.len() - 1));
-                } else if items[tag_idx].1.is_empty() {
-                    self.sub_collection_pos = Some(CollectionPosition::AddNew);
-                }
+                adjust_cursor_after_delete(&mut self.sub_collection_pos, items[tag_idx].1.len());
                 Self::recompute_source(field);
             }
         }
@@ -455,12 +442,7 @@ impl ConfigEditorState {
             (ConfigValue::StringSet(ref mut items), Some(CollectionPosition::Item(idx))) => {
                 if idx < items.len() {
                     items.remove(idx);
-                    // Adjust cursor
-                    if idx >= items.len() && !items.is_empty() {
-                        self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
-                    } else if items.is_empty() {
-                        self.collection_pos = Some(CollectionPosition::AddNew);
-                    }
+                    adjust_cursor_after_delete(&mut self.collection_pos, items.len());
                     true
                 } else {
                     false
@@ -469,11 +451,7 @@ impl ConfigEditorState {
             (ConfigValue::StringListMap(ref mut items), Some(CollectionPosition::Item(idx))) => {
                 if idx < items.len() {
                     items.remove(idx);
-                    if idx >= items.len() && !items.is_empty() {
-                        self.collection_pos = Some(CollectionPosition::Item(items.len() - 1));
-                    } else if items.is_empty() {
-                        self.collection_pos = Some(CollectionPosition::AddNew);
-                    }
+                    adjust_cursor_after_delete(&mut self.collection_pos, items.len());
                     true
                 } else {
                     false
@@ -732,31 +710,22 @@ impl ConfigEditorState {
         }
 
         let field = &mut self.groups[gi].fields[fi];
+
+        macro_rules! try_parse_into {
+            ($text:expr, $target:expr, $type:ty) => {
+                if let Ok(parsed) = $text.parse::<$type>() {
+                    *$target = parsed;
+                    true
+                } else {
+                    false
+                }
+            };
+        }
+
         let ok = match &mut field.value {
-            ConfigValue::Float(ref mut v) => {
-                if let Ok(parsed) = text.parse::<f64>() {
-                    *v = parsed;
-                    true
-                } else {
-                    false
-                }
-            }
-            ConfigValue::UintU32(ref mut v) => {
-                if let Ok(parsed) = text.parse::<u32>() {
-                    *v = parsed;
-                    true
-                } else {
-                    false
-                }
-            }
-            ConfigValue::SignedInt(ref mut v) => {
-                if let Ok(parsed) = text.parse::<i64>() {
-                    *v = parsed;
-                    true
-                } else {
-                    false
-                }
-            }
+            ConfigValue::Float(v) => try_parse_into!(text, v, f64),
+            ConfigValue::UintU32(v) => try_parse_into!(text, v, u32),
+            ConfigValue::SignedInt(v) => try_parse_into!(text, v, i64),
             ConfigValue::OptionalUint(ref mut v) => {
                 if text.trim().eq_ignore_ascii_case("auto") || text.trim().is_empty() {
                     *v = None;

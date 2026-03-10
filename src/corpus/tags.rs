@@ -24,6 +24,9 @@
 //! - Duplicate any of this logic
 
 use anyhow::{Context, Result};
+use lofty::config::{ParseOptions, WriteOptions};
+use lofty::file::AudioFile;
+use lofty::ogg::OggPictureStorage;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -32,6 +35,21 @@ use crate::db::write_thread;
 use crate::meta::mutations::MutationToken;
 use crate::meta::signals::data::*;
 use crate::witch::MutationExecutionWitness;
+
+/// Extract lowercase file extension from a path.
+fn path_ext(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default()
+}
+
+/// Open a file for buffered reading with context on failure.
+fn open_buffered(path: &Path) -> Result<std::io::BufReader<std::fs::File>> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open file: {}", path.display()))?;
+    Ok(std::io::BufReader::new(file))
+}
 
 // =============================================================================
 // PictureInfo - Embedded picture metadata
@@ -105,46 +123,21 @@ impl TagSet {
     /// For other formats (mp3, m4a, etc.), falls back to lofty's generic Tag/Probe.
     /// Binary tags (album art, etc.) are skipped.
     pub fn from_file(path: &Path) -> Result<Self> {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-
-        match ext.as_str() {
+        match path_ext(path).as_str() {
             "flac" => {
-                use lofty::config::ParseOptions;
-                use lofty::file::AudioFile;
-
-                let file = std::fs::File::open(path).with_context(|| {
-                    format!("Failed to open file for tag reading: {}", path.display())
-                })?;
-                let mut reader = std::io::BufReader::new(file);
-                let flac =
-                    lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
-                        .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
+                let mut reader = open_buffered(path)?;
+                let flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
+                    .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
                 Ok(Self::from_vorbis_comments(flac.vorbis_comments()))
             }
             "opus" => {
-                use lofty::config::ParseOptions;
-                use lofty::file::AudioFile;
-
-                let file = std::fs::File::open(path).with_context(|| {
-                    format!("Failed to open file for tag reading: {}", path.display())
-                })?;
-                let mut reader = std::io::BufReader::new(file);
+                let mut reader = open_buffered(path)?;
                 let opus = lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default())
                     .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
                 Ok(Self::from_vorbis_comments(Some(opus.vorbis_comments())))
             }
             "ogg" => {
-                use lofty::config::ParseOptions;
-                use lofty::file::AudioFile;
-
-                let file = std::fs::File::open(path).with_context(|| {
-                    format!("Failed to open file for tag reading: {}", path.display())
-                })?;
-                let mut reader = std::io::BufReader::new(file);
+                let mut reader = open_buffered(path)?;
                 let vorbis =
                     lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default())
                         .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
@@ -162,24 +155,13 @@ impl TagSet {
     ///
     /// Non-fatal — returns None on read errors.
     pub fn extract_picture_info(path: &Path) -> Option<PictureInfo> {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-
-        match ext.as_str() {
+        match path_ext(path).as_str() {
             "flac" => {
-                use lofty::config::ParseOptions;
-                use lofty::file::AudioFile;
-                use lofty::ogg::OggPictureStorage;
-
                 let file = std::fs::File::open(path).ok()?;
                 let mut reader = std::io::BufReader::new(file);
                 let flac =
                     lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default()).ok()?;
 
-                // Collect pictures from both standalone PICTURE blocks and VorbisComments
                 let mut all_pics: Vec<&(
                     lofty::picture::Picture,
                     lofty::picture::PictureInformation,
@@ -187,83 +169,21 @@ impl TagSet {
                 if let Some(vc) = flac.vorbis_comments() {
                     all_pics.extend(vc.pictures().iter());
                 }
-
-                if all_pics.is_empty() {
-                    return None;
-                }
-
-                let count = all_pics.len() as u32;
-                // Find CoverFront, or fall back to first picture
-                let (pic, info) = all_pics
-                    .iter()
-                    .find(|(p, _)| p.pic_type() == lofty::picture::PictureType::CoverFront)
-                    .or_else(|| all_pics.first())
-                    .unwrap();
-
-                Some(PictureInfo {
-                    format: mime_type_to_format(pic.mime_type()),
-                    width: info.width,
-                    height: info.height,
-                    count,
-                })
+                pick_picture_info(&all_pics)
             }
             "opus" => {
-                use lofty::config::ParseOptions;
-                use lofty::file::AudioFile;
-                use lofty::ogg::OggPictureStorage;
-
                 let file = std::fs::File::open(path).ok()?;
                 let mut reader = std::io::BufReader::new(file);
                 let opus =
                     lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default()).ok()?;
-
-                let pics = opus.vorbis_comments().pictures();
-                if pics.is_empty() {
-                    return None;
-                }
-
-                let count = pics.len() as u32;
-                let (pic, info) = pics
-                    .iter()
-                    .find(|(p, _)| p.pic_type() == lofty::picture::PictureType::CoverFront)
-                    .or_else(|| pics.first())
-                    .unwrap();
-
-                Some(PictureInfo {
-                    format: mime_type_to_format(pic.mime_type()),
-                    width: info.width,
-                    height: info.height,
-                    count,
-                })
+                pick_picture_info(opus.vorbis_comments().pictures())
             }
             "ogg" => {
-                use lofty::config::ParseOptions;
-                use lofty::file::AudioFile;
-                use lofty::ogg::OggPictureStorage;
-
                 let file = std::fs::File::open(path).ok()?;
                 let mut reader = std::io::BufReader::new(file);
                 let vorbis =
                     lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default()).ok()?;
-
-                let pics = vorbis.vorbis_comments().pictures();
-                if pics.is_empty() {
-                    return None;
-                }
-
-                let count = pics.len() as u32;
-                let (pic, info) = pics
-                    .iter()
-                    .find(|(p, _)| p.pic_type() == lofty::picture::PictureType::CoverFront)
-                    .or_else(|| pics.first())
-                    .unwrap();
-
-                Some(PictureInfo {
-                    format: mime_type_to_format(pic.mime_type()),
-                    width: info.width,
-                    height: info.height,
-                    count,
-                })
+                pick_picture_info(vorbis.vorbis_comments().pictures())
             }
             _ => {
                 use lofty::file::TaggedFileExt;
@@ -271,13 +191,8 @@ impl TagSet {
                 use lofty::probe::Probe;
 
                 let tagged_file = Probe::open(path).ok().and_then(|p| p.read().ok())?;
-
-                let mut all_pictures: Vec<&lofty::picture::Picture> = Vec::new();
-                for tag in tagged_file.tags() {
-                    for pic in tag.pictures() {
-                        all_pictures.push(pic);
-                    }
-                }
+                let all_pictures: Vec<&lofty::picture::Picture> =
+                    tagged_file.tags().iter().flat_map(|t| t.pictures()).collect();
 
                 if all_pictures.is_empty() {
                     return None;
@@ -291,7 +206,6 @@ impl TagSet {
                     .unwrap();
 
                 let info = PictureInformation::from_picture(pic).unwrap_or_default();
-
                 Some(PictureInfo {
                     format: mime_type_to_format(pic.mime_type()),
                     width: info.width,
@@ -520,13 +434,7 @@ pub enum DiffClassification {
 ///
 /// Used by both `write_file_tags()` (mutation context) and `copy_tags()` (transcode).
 pub(crate) fn write_tags_to_file(path: &Path, tags: &TagSet) -> Result<()> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_lowercase())
-        .unwrap_or_default();
-
-    match ext.as_str() {
+    match path_ext(path).as_str() {
         "flac" => write_vorbis_tags_flac(path, tags),
         "opus" => write_vorbis_tags_opus(path, tags),
         "ogg" => write_vorbis_tags_ogg(path, tags),
@@ -620,6 +528,30 @@ pub fn write_file_tags(
 // Internal Helpers - Binary tag filtering and format-specific writers
 // =============================================================================
 
+/// Pick the best picture from a list of (Picture, PictureInformation) pairs.
+///
+/// Prefers CoverFront, falls back to first picture. Returns None if empty.
+fn pick_picture_info<P: std::borrow::Borrow<(lofty::picture::Picture, lofty::picture::PictureInformation)>>(
+    pics: &[P],
+) -> Option<PictureInfo> {
+    if pics.is_empty() {
+        return None;
+    }
+    let count = pics.len() as u32;
+    let pair = pics
+        .iter()
+        .find(|p| p.borrow().0.pic_type() == lofty::picture::PictureType::CoverFront)
+        .or_else(|| pics.first())
+        .unwrap()
+        .borrow();
+    Some(PictureInfo {
+        format: mime_type_to_format(pair.0.mime_type()),
+        width: pair.1.width,
+        height: pair.1.height,
+        count,
+    })
+}
+
 /// Convert a lofty MimeType to a short format string for DB storage.
 fn mime_type_to_format(mime: Option<&lofty::picture::MimeType>) -> String {
     match mime {
@@ -639,12 +571,7 @@ fn mime_type_to_format(mime: Option<&lofty::picture::MimeType>) -> String {
 /// Returns (width, height, format_string). Returns (0, 0, format) if dimensions
 /// can't be determined.
 pub fn image_dimensions(path: &Path) -> (u32, u32, String) {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_lowercase())
-        .unwrap_or_default();
-
+    let ext = path_ext(path);
     let format = match ext.as_str() {
         "jpg" | "jpeg" => "jpeg",
         "png" => "png",
@@ -688,13 +615,9 @@ fn is_binary_tag_key(key: &str) -> bool {
 
 /// Write tags to a FLAC file via VorbisComments.
 fn write_vorbis_tags_flac(path: &Path, tags: &TagSet) -> Result<()> {
-    use lofty::config::{ParseOptions, WriteOptions};
-    use lofty::file::AudioFile;
     use lofty::ogg::VorbisComments;
 
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("Failed to open FLAC for tag writing: {}", path.display()))?;
-    let mut reader = std::io::BufReader::new(file);
+    let mut reader = open_buffered(path)?;
     let mut flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
         .with_context(|| format!("Failed to read FLAC: {}", path.display()))?;
 
@@ -718,46 +641,25 @@ fn write_vorbis_tags_flac(path: &Path, tags: &TagSet) -> Result<()> {
     Ok(())
 }
 
-/// Write tags to an Opus file via VorbisComments.
-fn write_vorbis_tags_opus(path: &Path, tags: &TagSet) -> Result<()> {
-    use lofty::config::{ParseOptions, WriteOptions};
-    use lofty::file::AudioFile;
-
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("Failed to open Opus for tag writing: {}", path.display()))?;
-    let mut reader = std::io::BufReader::new(file);
-    let mut opus = lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default())
-        .with_context(|| format!("Failed to read Opus: {}", path.display()))?;
-
-    let vc = opus.vorbis_comments_mut();
-    populate_vorbis_comments(vc, tags);
-
-    opus.save_to_path(path, WriteOptions::default())
-        .with_context(|| format!("Failed to save tags to Opus: {}", path.display()))?;
-
-    Ok(())
+/// Generate a write function for an OGG-based format (Opus, OGG Vorbis).
+macro_rules! write_vorbis_ogg_format {
+    ($fn_name:ident, $file_type:ty, $format_name:expr) => {
+        fn $fn_name(path: &Path, tags: &TagSet) -> Result<()> {
+            let mut reader = open_buffered(path)?;
+            let mut file = <$file_type>::read_from(&mut reader, ParseOptions::default())
+                .with_context(|| format!("Failed to read {}: {}", $format_name, path.display()))?;
+            populate_vorbis_comments(file.vorbis_comments_mut(), tags);
+            file.save_to_path(path, WriteOptions::default())
+                .with_context(|| {
+                    format!("Failed to save tags to {}: {}", $format_name, path.display())
+                })?;
+            Ok(())
+        }
+    };
 }
 
-/// Write tags to an OGG Vorbis file via VorbisComments.
-fn write_vorbis_tags_ogg(path: &Path, tags: &TagSet) -> Result<()> {
-    use lofty::config::{ParseOptions, WriteOptions};
-    use lofty::file::AudioFile;
-
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("Failed to open OGG for tag writing: {}", path.display()))?;
-    let mut reader = std::io::BufReader::new(file);
-    let mut vorbis = lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default())
-        .with_context(|| format!("Failed to read OGG: {}", path.display()))?;
-
-    let vc = vorbis.vorbis_comments_mut();
-    populate_vorbis_comments(vc, tags);
-
-    vorbis
-        .save_to_path(path, WriteOptions::default())
-        .with_context(|| format!("Failed to save tags to OGG: {}", path.display()))?;
-
-    Ok(())
-}
+write_vorbis_ogg_format!(write_vorbis_tags_opus, lofty::ogg::OpusFile, "Opus");
+write_vorbis_ogg_format!(write_vorbis_tags_ogg, lofty::ogg::VorbisFile, "OGG");
 
 /// Populate a VorbisComments with all tags from a TagSet.
 ///
@@ -765,7 +667,7 @@ fn write_vorbis_tags_ogg(path: &Path, tags: &TagSet) -> Result<()> {
 /// Multi-value fields (e.g., multiple genres) are naturally supported
 /// since push() allows duplicate keys.
 fn populate_vorbis_comments(vc: &mut lofty::ogg::VorbisComments, tags: &TagSet) {
-    use lofty::tag::TagExt;
+    use lofty::tag::TagExt as _;
     vc.clear();
     for (key, value) in tags.iter() {
         vc.push(key.to_uppercase(), value.to_string());
@@ -900,6 +802,18 @@ mod tests {
             ("date".to_string(), "2024".to_string()),
             ("comment".to_string(), "Test comment".to_string()),
         ])
+    }
+
+    /// Write tags to a file and verify they round-trip without loss.
+    fn assert_round_trip(path: &Path, tags: &TagSet, format_name: &str) {
+        write_tags_to_file(path, tags).unwrap_or_else(|e| panic!("write tags to {format_name}: {e}"));
+        let readback = TagSet::from_file(path).unwrap_or_else(|e| panic!("read tags from {format_name}: {e}"));
+        let diff = tags.diff(&readback);
+        assert!(
+            diff.only_left.is_empty(),
+            "Tags lost in {format_name} round-trip: {:?}",
+            diff.only_left.as_slice()
+        );
     }
 
     // =========================================================================
@@ -1059,15 +973,7 @@ mod tests {
         generate_flac_fixture(&path);
 
         let tags = standard_test_tags();
-        write_tags_to_file(&path, &tags).expect("write tags to FLAC");
-
-        let readback = TagSet::from_file(&path).expect("read tags from FLAC");
-        let diff = tags.diff(&readback);
-        assert!(
-            diff.only_left.is_empty(),
-            "Tags lost in FLAC round-trip: {:?}",
-            diff.only_left.as_slice()
-        );
+        assert_round_trip(&path, &tags, "FLAC");
     }
 
     #[test]
@@ -1086,15 +992,7 @@ mod tests {
             ("replaygain_track_peak".to_string(), "0.987654".to_string()),
             ("encoder".to_string(), "libFLAC 1.3.4".to_string()),
         ]);
-        write_tags_to_file(&path, &tags).expect("write nonstandard tags to FLAC");
-
-        let readback = TagSet::from_file(&path).expect("read back nonstandard tags from FLAC");
-        let diff = tags.diff(&readback);
-        assert!(
-            diff.only_left.is_empty(),
-            "Nonstandard tags lost in FLAC round-trip: {:?}",
-            diff.only_left.as_slice()
-        );
+        assert_round_trip(&path, &tags, "FLAC nonstandard");
     }
 
     #[test]
@@ -1174,9 +1072,6 @@ mod tests {
         write_tags_to_file(&path, &tags).expect("write tags to FLAC");
 
         // Verify lofty can still read the file as valid FLAC
-        use lofty::config::ParseOptions;
-        use lofty::file::AudioFile;
-
         let file = std::fs::File::open(&path).unwrap();
         let mut reader = std::io::BufReader::new(file);
         let flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default());
@@ -1206,15 +1101,7 @@ mod tests {
         generate_opus_fixture(&path);
 
         let tags = standard_test_tags();
-        write_tags_to_file(&path, &tags).expect("write tags to Opus");
-
-        let readback = TagSet::from_file(&path).expect("read tags from Opus");
-        let diff = tags.diff(&readback);
-        assert!(
-            diff.only_left.is_empty(),
-            "Tags lost in Opus round-trip: {:?}",
-            diff.only_left.as_slice()
-        );
+        assert_round_trip(&path, &tags, "Opus");
     }
 
     #[test]
@@ -1229,15 +1116,7 @@ mod tests {
             ("length".to_string(), "12345".to_string()),
             ("replaygain_track_gain".to_string(), "-6.5 dB".to_string()),
         ]);
-        write_tags_to_file(&path, &tags).expect("write nonstandard tags to Opus");
-
-        let readback = TagSet::from_file(&path).expect("read back");
-        let diff = tags.diff(&readback);
-        assert!(
-            diff.only_left.is_empty(),
-            "Nonstandard tags lost in Opus round-trip: {:?}",
-            diff.only_left.as_slice()
-        );
+        assert_round_trip(&path, &tags, "Opus nonstandard");
     }
 
     #[test]
@@ -1301,15 +1180,7 @@ mod tests {
         copy_ogg_vorbis_fixture(&path);
 
         let tags = standard_test_tags();
-        write_tags_to_file(&path, &tags).expect("write tags to OGG Vorbis");
-
-        let readback = TagSet::from_file(&path).expect("read tags from OGG Vorbis");
-        let diff = tags.diff(&readback);
-        assert!(
-            diff.only_left.is_empty(),
-            "Tags lost in OGG Vorbis round-trip: {:?}",
-            diff.only_left.as_slice()
-        );
+        assert_round_trip(&path, &tags, "OGG Vorbis");
     }
 
     #[test]
@@ -1324,15 +1195,7 @@ mod tests {
             ("length".to_string(), "12345".to_string()),
             ("replaygain_track_gain".to_string(), "-6.5 dB".to_string()),
         ]);
-        write_tags_to_file(&path, &tags).expect("write nonstandard to OGG Vorbis");
-
-        let readback = TagSet::from_file(&path).expect("read back");
-        let diff = tags.diff(&readback);
-        assert!(
-            diff.only_left.is_empty(),
-            "Nonstandard tags lost in OGG Vorbis round-trip: {:?}",
-            diff.only_left.as_slice()
-        );
+        assert_round_trip(&path, &tags, "OGG Vorbis nonstandard");
     }
 
     // =========================================================================
@@ -1380,15 +1243,7 @@ mod tests {
             ), // accented chars
             ("title".to_string(), "\u{1f3b5} Music \u{1f3b6}".to_string()), // emoji
         ]);
-        write_tags_to_file(&path, &tags).unwrap();
-
-        let readback = TagSet::from_file(&path).unwrap();
-        let diff = tags.diff(&readback);
-        assert!(
-            diff.only_left.is_empty(),
-            "Unicode tags lost: {:?}",
-            diff.only_left.as_slice()
-        );
+        assert_round_trip(&path, &tags, "FLAC unicode");
     }
 
     #[test]
@@ -1404,15 +1259,7 @@ mod tests {
             ),
             ("title".to_string(), "\u{1f3b5} Music".to_string()),
         ]);
-        write_tags_to_file(&path, &tags).unwrap();
-
-        let readback = TagSet::from_file(&path).unwrap();
-        let diff = tags.diff(&readback);
-        assert!(
-            diff.only_left.is_empty(),
-            "Unicode Opus tags lost: {:?}",
-            diff.only_left.as_slice()
-        );
+        assert_round_trip(&path, &tags, "Opus unicode");
     }
 
     // =========================================================================
@@ -1444,16 +1291,7 @@ mod tests {
                 .map(|i| (format!("custom_key_{}", i), format!("value_{}", i)))
                 .collect::<Vec<_>>(),
         );
-        write_tags_to_file(&path, &tags).unwrap();
-
-        let readback = TagSet::from_file(&path).unwrap();
-        assert_eq!(readback.len(), 100);
-        let diff = tags.diff(&readback);
-        assert!(
-            diff.only_left.is_empty(),
-            "Some of 100 keys lost: {:?}",
-            diff.only_left.as_slice()
-        );
+        assert_round_trip(&path, &tags, "FLAC 100 keys");
     }
 
     #[test]

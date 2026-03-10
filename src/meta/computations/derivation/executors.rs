@@ -22,6 +22,63 @@ use crate::meta::signals::store::CorpusSignalStore;
 use super::{Computation, Result};
 
 // ============================================================================
+// Shared Helpers
+// ============================================================================
+
+/// Convert an absolute path to a root-relative string via the corpus resolver.
+fn to_relative_str(resolver: &paths::PathResolver, path: &Path) -> String {
+    resolver
+        .to_relative(path)
+        .unwrap_or_else(|| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+/// Check if an inode has any out-of-band signal (tag conflict, tag sync, or mtime mismatch).
+fn inode_has_oob_signal(read_only_db: &ReadOnlyDb<'_>, inode: i64) -> bool {
+    read_only_db.corpus_signal_exists::<OutOfBandTagConflictSignal>(inode)
+        || read_only_db.corpus_signal_exists::<OutOfBandTagSyncSignal>(inode)
+        || read_only_db.corpus_signal_exists::<MtimeOnlyMismatchSignal>(inode)
+}
+
+/// Reconcile HealthyFile signal for an inode based on OOB signal presence.
+///
+/// If the inode has any OOB signal, clears any stale HealthyFile.
+/// Otherwise, ensures a HealthyFile signal exists with the given path.
+fn reconcile_healthy_file_signal(
+    read_only_db: &ReadOnlyDb<'_>,
+    sender: &write_thread::SignalWriteSender,
+    inode: i64,
+    path: &str,
+    witness: &ComputationWitness,
+) {
+    if inode_has_oob_signal(read_only_db, inode) {
+        drop_stale_corpus_signal::<HealthyFileSignal>(read_only_db, sender, inode, witness);
+    } else {
+        ensure_typed_signal(
+            read_only_db,
+            sender,
+            TypedSignalWrite::HealthyFile(HealthyFileSignal {
+                inode,
+                path: path.to_string(),
+            }),
+            witness,
+        );
+    }
+}
+
+/// GC orphaned signals from multiple signal tables in one call.
+macro_rules! gc_signal_tables {
+    ($read_only_db:expr, $sender:expr, $known_inodes:expr, $witness:expr, [ $($signal:ty),+ $(,)? ]) => {{
+        let mut total = 0usize;
+        $(
+            total += gc_signal_table::<$signal>($read_only_db, $sender, $known_inodes, $witness);
+        )+
+        total
+    }};
+}
+
+// ============================================================================
 // Second-Level Signal Derivations
 // ============================================================================
 
@@ -255,26 +312,7 @@ pub fn execute_derive_corpus_signals(
         drop_stale_corpus_signal::<MissingFileSignal>(read_only_db, &sender, *inode, witness);
         drop_stale_corpus_signal::<UnindexedFileSignal>(read_only_db, &sender, *inode, witness);
 
-        // Check if file has any OOB signal - if so, don't mark as HealthyFile
-        let has_oob_signal = read_only_db
-            .corpus_signal_exists::<OutOfBandTagConflictSignal>(*inode)
-            || read_only_db.corpus_signal_exists::<OutOfBandTagSyncSignal>(*inode)
-            || read_only_db.corpus_signal_exists::<MtimeOnlyMismatchSignal>(*inode);
-
-        if has_oob_signal {
-            // File has OOB signal - NOT healthy
-            drop_stale_corpus_signal::<HealthyFileSignal>(read_only_db, &sender, *inode, witness);
-        } else {
-            ensure_typed_signal(
-                read_only_db,
-                &sender,
-                TypedSignalWrite::HealthyFile(HealthyFileSignal {
-                    inode: *inode,
-                    path: path_str.to_string(),
-                }),
-                witness,
-            );
-        }
+        reconcile_healthy_file_signal(read_only_db, &sender, *inode, path_str, witness);
     }
 
     // ========================================================================
@@ -506,31 +544,27 @@ fn gc_orphaned_corpus_signals(
     known_inodes: &HashSet<i64>,
     witness: &ComputationWitness,
 ) -> usize {
-    let mut total = 0;
-    total += gc_signal_table::<UnindexedFileSignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<MissingFileSignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<MovedFileSignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<HealthyFileSignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<CorruptFileSignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<ShitFormatSignal>(read_only_db, sender, known_inodes, witness);
-    total +=
-        gc_signal_table::<MtimeOnlyMismatchSignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<OutOfBandTagSyncSignal>(read_only_db, sender, known_inodes, witness);
-    total +=
-        gc_signal_table::<OutOfBandTagConflictSignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<SubparDuplicateSignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<CompoundTagSignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<DeployReadySignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<DeployedHealthySignal>(read_only_db, sender, known_inodes, witness);
-    total +=
-        gc_signal_table::<SidecarDeployReadySignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<MissingDirectorySignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<ExternalMatchSignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<ReleasePackingSignal>(read_only_db, sender, known_inodes, witness);
-    total +=
-        gc_signal_table::<UnmatchedCorpusTrackSignal>(read_only_db, sender, known_inodes, witness);
     // FileInCorpus excluded: it IS the disk observation, always part of known_inodes
-    total
+    gc_signal_tables!(read_only_db, sender, known_inodes, witness, [
+        UnindexedFileSignal,
+        MissingFileSignal,
+        MovedFileSignal,
+        HealthyFileSignal,
+        CorruptFileSignal,
+        ShitFormatSignal,
+        MtimeOnlyMismatchSignal,
+        OutOfBandTagSyncSignal,
+        OutOfBandTagConflictSignal,
+        SubparDuplicateSignal,
+        CompoundTagSignal,
+        DeployReadySignal,
+        DeployedHealthySignal,
+        SidecarDeployReadySignal,
+        MissingDirectorySignal,
+        ExternalMatchSignal,
+        ReleasePackingSignal,
+        UnmatchedCorpusTrackSignal,
+    ])
 }
 
 /// GC orphaned inbox signals whose inodes are not in the known universe.
@@ -543,12 +577,12 @@ fn gc_orphaned_inbox_signals(
     known_inodes: &HashSet<i64>,
     witness: &ComputationWitness,
 ) -> usize {
-    let mut total = 0;
-    total += gc_signal_table::<InboxUnindexedSignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<InboxHealthySignal>(read_only_db, sender, known_inodes, witness);
-    total += gc_signal_table::<InboxCorpusMatchSignal>(read_only_db, sender, known_inodes, witness);
     // FileInInbox excluded: it IS the disk observation, always part of known_inodes
-    total
+    gc_signal_tables!(read_only_db, sender, known_inodes, witness, [
+        InboxUnindexedSignal,
+        InboxHealthySignal,
+        InboxCorpusMatchSignal,
+    ])
 }
 
 /// Clear signals from a single corpus signal table for inodes not in `known_inodes`.
@@ -596,10 +630,7 @@ pub fn execute_update_corpus_file_signals(
 
     // Convert absolute path to relative for DB queries
     let resolver = paths::get_resolver();
-    let relative_path = resolver
-        .to_relative(path)
-        .unwrap_or_else(|| path.to_path_buf());
-    let path_str = relative_path.to_string_lossy().to_string();
+    let path_str = to_relative_str(&resolver, path);
 
     let file_exists = path.exists() && is_audio_file(path);
 
@@ -637,31 +668,7 @@ pub fn execute_update_corpus_file_signals(
             drop_stale_corpus_signal::<UnindexedFileSignal>(read_only_db, &sender, inode, witness);
             drop_stale_corpus_signal::<MissingFileSignal>(read_only_db, &sender, inode, witness);
 
-            // Check if file has any OOB signal (using native inode column)
-            let has_oob_signal = read_only_db
-                .corpus_signal_exists::<OutOfBandTagConflictSignal>(inode)
-                || read_only_db.corpus_signal_exists::<OutOfBandTagSyncSignal>(inode)
-                || read_only_db.corpus_signal_exists::<MtimeOnlyMismatchSignal>(inode);
-
-            if has_oob_signal {
-                // File has OOB signal - NOT healthy
-                drop_stale_corpus_signal::<HealthyFileSignal>(
-                    read_only_db,
-                    &sender,
-                    inode,
-                    witness,
-                );
-            } else {
-                ensure_typed_signal(
-                    read_only_db,
-                    &sender,
-                    TypedSignalWrite::HealthyFile(HealthyFileSignal {
-                        inode,
-                        path: path_str.clone(),
-                    }),
-                    witness,
-                );
-            }
+            reconcile_healthy_file_signal(read_only_db, &sender, inode, &path_str, witness);
         } else {
             // File not indexed - mark as unindexed
             drop_stale_corpus_signal::<HealthyFileSignal>(read_only_db, &sender, inode, witness);
@@ -714,10 +721,7 @@ pub fn execute_update_library_file_signals(
 
     // Convert absolute path to relative for signal keys
     let resolver = paths::get_resolver();
-    let relative_path = resolver
-        .to_relative(path)
-        .unwrap_or_else(|| path.to_path_buf());
-    let path_str = relative_path.to_string_lossy().to_string();
+    let path_str = to_relative_str(&resolver, path);
 
     // For library files, we check if the file exists and clear any leftover/stale signals
     // The full library health is recomputed during the Analysis phase
@@ -967,15 +971,8 @@ pub fn execute_update_deploy_signals(
 
     // Convert absolute paths to relative for DB queries and signal keys
     let resolver = paths::get_resolver();
-    let relative_library_path = resolver
-        .to_relative(library_path)
-        .unwrap_or_else(|| library_path.to_path_buf());
-    let relative_corpus_path = resolver
-        .to_relative(corpus_path)
-        .unwrap_or_else(|| corpus_path.to_path_buf());
-
-    let library_path_str = relative_library_path.to_string_lossy().to_string();
-    let corpus_path_str = relative_corpus_path.to_string_lossy().to_string();
+    let library_path_str = to_relative_str(&resolver, library_path);
+    let corpus_path_str = to_relative_str(&resolver, corpus_path);
 
     log_general(format!(
         "[COMPUTE] UpdateDeploySignals: corpus={} library={}",

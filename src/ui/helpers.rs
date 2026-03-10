@@ -334,6 +334,45 @@ pub fn pending_edits_from_mutations(
 }
 
 // ============================================================================
+// Scroll Input Helpers
+// ============================================================================
+
+/// Handle standard scroll input (NavUp/NavDown/PageUp/PageDown) for a single list.
+///
+/// Updates `scroll` in-place. Returns `true` if the action was handled,
+/// `false` if the caller should continue matching other actions.
+/// `item_count` is the total number of items in the list.
+pub fn handle_scroll_input(
+    scroll: &mut usize,
+    action: &crate::ui::input::InputAction,
+    item_count: usize,
+) -> bool {
+    use crate::ui::input::InputAction;
+    let max = item_count.saturating_sub(1);
+    match action {
+        InputAction::NavUp => {
+            *scroll = scroll.saturating_sub(1);
+            true
+        }
+        InputAction::NavDown => {
+            if *scroll < max {
+                *scroll += 1;
+            }
+            true
+        }
+        InputAction::PageUp => {
+            *scroll = scroll.saturating_sub(10);
+            true
+        }
+        InputAction::PageDown => {
+            *scroll = (*scroll + 10).min(max);
+            true
+        }
+        _ => false,
+    }
+}
+
+// ============================================================================
 // Modal Button State
 // ============================================================================
 

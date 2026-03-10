@@ -760,16 +760,7 @@ impl DirectoryClusterPreviewState {
     fn render_file_list(&mut self, f: &mut Frame, area: Rect) {
         // Store pane rect for focus detection + populate click targets
         self.file_list_pane_rect = Some(area);
-        self.file_click_targets.clear();
-        self.file_click_targets.set_list_area(area);
-        let visible_height = area.height as usize;
-        for (vis_idx, entry_idx) in (self.file_scroll..).take(visible_height).enumerate() {
-            if entry_idx >= self.stash_files.len() {
-                break;
-            }
-            self.file_click_targets
-                .add_row(entry_idx.to_string(), area.y + vis_idx as u16);
-        }
+        self.file_click_targets.populate(area, self.file_scroll, self.stash_files.len());
 
         if self.stash_files.is_empty() {
             let empty =

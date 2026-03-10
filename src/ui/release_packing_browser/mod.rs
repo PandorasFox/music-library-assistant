@@ -140,11 +140,9 @@ impl ReleasePackingBrowserState {
                 .map(|(inode, path, data)| AssignedTrackInfo {
                     inode,
                     path,
-                    track_number: data.track_number.clone(),
                     track_title: data.track_title.clone(),
                     medium_position: data.medium_position,
                     track_position: data.track_position,
-                    medium_format: data.medium_format.clone(),
                     recording_id: data.recording_id.clone(),
                     score: data.score,
                     score_breakdown: data.score_breakdown.clone(),
@@ -165,7 +163,6 @@ impl ReleasePackingBrowserState {
                     medium_pos: s.medium_pos,
                     track_pos: s.track_pos,
                     track_title: s.track_title,
-                    recording_id: s.recording_id,
                 })
                 .collect();
             unfilled.sort_by(|a, b| {
@@ -244,7 +241,7 @@ impl ReleasePackingBrowserState {
     ) -> Self {
         let unmatched: Vec<UnmatchedEntry> = unmatched_rows
             .into_iter()
-            .map(|(_inode, path, data)| UnmatchedEntry { path, data })
+            .map(|(_inode, path, _data)| UnmatchedEntry { path })
             .collect();
 
         let mut state = Self {

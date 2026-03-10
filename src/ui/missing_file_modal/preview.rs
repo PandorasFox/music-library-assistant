@@ -153,34 +153,22 @@ impl MissingFilePreviewState {
         let has_restorable = self.cached_data.has_restorable();
         let has_non_restorable = self.cached_data.has_non_restorable();
 
+        // Scroll within focused list
+        let count = self.list_count(self.focused_list);
+        if crate::ui::helpers::handle_scroll_input(
+            &mut self.scroll[self.focused_list],
+            action,
+            count,
+        ) {
+            return MissingFilePreviewAction::None;
+        }
+
         match action {
             // Switch between lists
             InputAction::CycleNext | InputAction::CyclePrev => {
                 if has_restorable && has_non_restorable {
                     self.focused_list = 1 - self.focused_list;
                 }
-                MissingFilePreviewAction::None
-            }
-
-            // Scroll within focused list
-            InputAction::NavUp => {
-                self.scroll[self.focused_list] = self.scroll[self.focused_list].saturating_sub(1);
-                MissingFilePreviewAction::None
-            }
-            InputAction::NavDown => {
-                let max = self.max_scroll_for_list(self.focused_list);
-                if self.scroll[self.focused_list] < max {
-                    self.scroll[self.focused_list] += 1;
-                }
-                MissingFilePreviewAction::None
-            }
-            InputAction::PageUp => {
-                self.scroll[self.focused_list] = self.scroll[self.focused_list].saturating_sub(10);
-                MissingFilePreviewAction::None
-            }
-            InputAction::PageDown => {
-                let max = self.max_scroll_for_list(self.focused_list);
-                self.scroll[self.focused_list] = (self.scroll[self.focused_list] + 10).min(max);
                 MissingFilePreviewAction::None
             }
 
@@ -211,13 +199,12 @@ impl MissingFilePreviewState {
         }
     }
 
-    fn max_scroll_for_list(&self, list_idx: usize) -> usize {
-        let count = if list_idx == 0 {
+    fn list_count(&self, list_idx: usize) -> usize {
+        if list_idx == 0 {
             self.cached_data.restorable.len()
         } else {
             self.cached_data.non_restorable.len()
-        };
-        count.saturating_sub(1)
+        }
     }
 
     /// Render the missing file resolution modal.
@@ -299,17 +286,7 @@ impl MissingFilePreviewState {
 
         let inner = render_pane(f, area, block);
 
-        // Populate click targets for restorable list
-        self.click_targets_restorable.clear();
-        self.click_targets_restorable.set_list_area(inner);
-        let visible_height = inner.height as usize;
-        for (vis_idx, entry_idx) in (self.scroll[0]..).take(visible_height).enumerate() {
-            if entry_idx >= self.cached_data.restorable.len() {
-                break;
-            }
-            self.click_targets_restorable
-                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-        }
+        self.click_targets_restorable.populate(inner, self.scroll[0], self.cached_data.restorable.len());
 
         if self.cached_data.restorable.is_empty() {
             let empty =
@@ -351,17 +328,7 @@ impl MissingFilePreviewState {
 
         let inner = render_pane(f, area, block);
 
-        // Populate click targets for non-restorable list
-        self.click_targets_non_restorable.clear();
-        self.click_targets_non_restorable.set_list_area(inner);
-        let visible_height = inner.height as usize;
-        for (vis_idx, entry_idx) in (self.scroll[1]..).take(visible_height).enumerate() {
-            if entry_idx >= self.cached_data.non_restorable.len() {
-                break;
-            }
-            self.click_targets_non_restorable
-                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-        }
+        self.click_targets_non_restorable.populate(inner, self.scroll[1], self.cached_data.non_restorable.len());
 
         if self.cached_data.non_restorable.is_empty() {
             let empty = Paragraph::new("No non-restorable files")

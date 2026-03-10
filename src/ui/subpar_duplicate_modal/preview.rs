@@ -234,23 +234,11 @@ impl SubparDuplicatePreviewState {
 
         let inner = render_pane(f, chunks[0], block);
 
-        // Populate click targets for list items
-        self.click_targets.clear();
-        self.click_targets.set_list_area(inner);
+        self.click_targets.populate(inner, self.scroll, self.cached_data.files.len());
 
         if !self.cached_data.files.is_empty() {
-            // Calculate visible lines
             let visible_lines = inner.height as usize;
             let scroll = self.scroll;
-
-            // Track click target rows
-            for (vis_idx, entry_idx) in (scroll..).take(visible_lines).enumerate() {
-                if entry_idx >= self.cached_data.files.len() {
-                    break;
-                }
-                self.click_targets
-                    .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-            }
 
             // Four columns: 40% subpar path | 10% reason | 8% score | 42% superior path
             let total_width = inner.width as usize;

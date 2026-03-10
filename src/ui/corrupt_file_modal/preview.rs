@@ -109,29 +109,11 @@ impl CorruptFilePreviewState {
     pub fn handle_input(&mut self, action: &InputAction) -> CorruptFilePreviewAction {
         let has_files = self.cached_data.has_files();
 
-        match action {
-            // Scroll file list
-            InputAction::NavUp => {
-                self.scroll = self.scroll.saturating_sub(1);
-                CorruptFilePreviewAction::None
-            }
-            InputAction::NavDown => {
-                let max = self.cached_data.files.len().saturating_sub(1);
-                if self.scroll < max {
-                    self.scroll += 1;
-                }
-                CorruptFilePreviewAction::None
-            }
-            InputAction::PageUp => {
-                self.scroll = self.scroll.saturating_sub(10);
-                CorruptFilePreviewAction::None
-            }
-            InputAction::PageDown => {
-                let max = self.cached_data.files.len().saturating_sub(1);
-                self.scroll = (self.scroll + 10).min(max);
-                CorruptFilePreviewAction::None
-            }
+        if crate::ui::helpers::handle_scroll_input(&mut self.scroll, action, self.cached_data.files.len()) {
+            return CorruptFilePreviewAction::None;
+        }
 
+        match action {
             // Button navigation
             InputAction::NavLeft => {
                 self.selected_button.left(has_files);
@@ -231,17 +213,7 @@ impl CorruptFilePreviewState {
             height: inner.height.saturating_sub(desc_height),
         };
 
-        // Populate click targets for list items
-        self.click_targets.clear();
-        self.click_targets.set_list_area(list_area);
-        let visible_height = list_area.height as usize;
-        for (vis_idx, entry_idx) in (self.scroll..).take(visible_height).enumerate() {
-            if entry_idx >= self.cached_data.files.len() {
-                break;
-            }
-            self.click_targets
-                .add_row(entry_idx.to_string(), list_area.y + vis_idx as u16);
-        }
+        self.click_targets.populate(list_area, self.scroll, self.cached_data.files.len());
 
         let description = Paragraph::new(vec![
             Line::from("These files have corrupt tags or unreadable audio data."),

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use ratatui::text::Line;
 
-use crate::meta::signals::data::{PackingScoreBreakdown, UnmatchedCorpusTrackData};
+use crate::meta::signals::data::PackingScoreBreakdown;
 use crate::ui::widgets::rich_text::RichBlock;
 use crate::ui::widgets::standard_list::ListEntry;
 use crate::ui::widgets::{WizardItem, WizardOffer};
@@ -53,11 +53,9 @@ pub struct VaOverrideInfo {
 pub struct AssignedTrackInfo {
     pub inode: i64,
     pub path: String,
-    pub track_number: String,
     pub track_title: String,
     pub medium_position: u32,
     pub track_position: u32,
-    pub medium_format: Option<String>,
     pub recording_id: String,
     pub score: f64,
     pub score_breakdown: PackingScoreBreakdown,
@@ -69,13 +67,11 @@ pub struct UnfilledSlotInfo {
     pub medium_pos: u32,
     pub track_pos: u32,
     pub track_title: String,
-    pub recording_id: String,
 }
 
 /// An unmatched corpus file (not assigned to any release).
 pub struct UnmatchedEntry {
     pub path: String,
-    pub data: UnmatchedCorpusTrackData,
 }
 
 /// An entry in the flat navigable list.

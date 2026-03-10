@@ -398,17 +398,7 @@ impl DiscExtractionState {
 
         let group = &self.data.groups[self.current_group];
 
-        // Populate click targets for file list
-        self.click_targets.clear();
-        self.click_targets.set_list_area(inner);
-        let visible_height = inner.height as usize;
-        for (vis_idx, entry_idx) in (self.file_scroll..).take(visible_height).enumerate() {
-            if entry_idx >= group.files.len() {
-                break;
-            }
-            self.click_targets
-                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-        }
+        self.click_targets.populate(inner, self.file_scroll, group.files.len());
 
         let entries: Vec<PathEntry> = group
             .files

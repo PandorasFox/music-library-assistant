@@ -116,14 +116,6 @@ macro_rules! signal_registry {
             entries
         }
 
-        /// Returns all signal table names.
-        pub fn all_signal_tables() -> Vec<&'static str> {
-            use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
-            vec![
-                $(<$c_type as CorpusSignalStore>::TABLE_NAME,)*
-                $(<$a_type as AggregateSignalStore>::TABLE_NAME,)*
-            ]
-        }
     };
 
     // --- Internal helpers ---

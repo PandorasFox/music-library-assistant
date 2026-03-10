@@ -333,17 +333,7 @@ impl MissingAlbumState {
 
         let group = &self.data.groups[self.current_group];
 
-        // Populate click targets for track list
-        self.click_targets.clear();
-        self.click_targets.set_list_area(inner);
-        let visible_height = inner.height as usize;
-        for (vis_idx, entry_idx) in (self.track_scroll..).take(visible_height).enumerate() {
-            if entry_idx >= group.tracks.len() {
-                break;
-            }
-            self.click_targets
-                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-        }
+        self.click_targets.populate(inner, self.track_scroll, group.tracks.len());
 
         let entries: Vec<PathEntry> = group
             .tracks

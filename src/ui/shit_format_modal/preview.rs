@@ -149,29 +149,11 @@ impl ShitFormatPreviewState {
         let has_lossy = self.cached_data.has_lossy();
         let total_files = self.cached_data.total_count();
 
-        match action {
-            // Scroll file list
-            InputAction::NavUp => {
-                self.scroll = self.scroll.saturating_sub(1);
-                ShitFormatPreviewAction::None
-            }
-            InputAction::NavDown => {
-                let max = total_files.saturating_sub(1);
-                if self.scroll < max {
-                    self.scroll += 1;
-                }
-                ShitFormatPreviewAction::None
-            }
-            InputAction::PageUp => {
-                self.scroll = self.scroll.saturating_sub(10);
-                ShitFormatPreviewAction::None
-            }
-            InputAction::PageDown => {
-                let max = total_files.saturating_sub(1);
-                self.scroll = (self.scroll + 10).min(max);
-                ShitFormatPreviewAction::None
-            }
+        if crate::ui::helpers::handle_scroll_input(&mut self.scroll, action, total_files) {
+            return ShitFormatPreviewAction::None;
+        }
 
+        match action {
             // Bitrate adjustment (only when on lossy buttons, and not in FLAC capture mode)
             InputAction::NavLeft => {
                 let on_lossy_button = self.selected_button == SelectedButton::TranscodeLossy
@@ -453,17 +435,7 @@ impl ShitFormatPreviewState {
 
         let inner = render_pane(f, area, block);
 
-        // Populate click targets for file list
-        self.click_targets.clear();
-        self.click_targets.set_list_area(inner);
-        let visible_height = inner.height as usize;
-        for (vis_idx, entry_idx) in (self.scroll..).take(visible_height).enumerate() {
-            if entry_idx >= total {
-                break;
-            }
-            self.click_targets
-                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-        }
+        self.click_targets.populate(inner, self.scroll, total);
 
         if total == 0 {
             let empty = Paragraph::new("No shit format files found")

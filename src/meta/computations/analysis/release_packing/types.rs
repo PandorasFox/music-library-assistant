@@ -81,19 +81,19 @@ pub(crate) struct Proposal {
 /// Clone is cheap (Arc refcount). Serialize/Deserialize skip the inner state
 /// (these variants are transient pipeline state, never persisted).
 #[derive(Clone)]
-pub(crate) struct SharedMappingState(
+pub struct SharedMappingState(
     std::sync::Arc<std::sync::Mutex<Option<Box<ReleaseMappingState>>>>,
 );
 
 impl SharedMappingState {
-    pub fn new(state: ReleaseMappingState) -> Self {
+    pub(crate) fn new(state: ReleaseMappingState) -> Self {
         Self(std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
             state,
         )))))
     }
 
     /// Take the state out of the box. Panics if called twice (state already consumed).
-    pub fn take(&self) -> ReleaseMappingState {
+    pub(crate) fn take(&self) -> ReleaseMappingState {
         *self
             .0
             .lock()
@@ -151,18 +151,18 @@ pub(crate) struct ComponentData {
 /// Arc<Mutex<Option<Box<...>>>> wrapper for component data.
 /// Same transient-pipeline-state pattern as SharedMappingState.
 #[derive(Clone)]
-pub(crate) struct SharedComponentData(
+pub struct SharedComponentData(
     std::sync::Arc<std::sync::Mutex<Option<Box<ComponentData>>>>,
 );
 
 impl SharedComponentData {
-    pub fn new(data: ComponentData) -> Self {
+    pub(crate) fn new(data: ComponentData) -> Self {
         Self(std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
             data,
         )))))
     }
 
-    pub fn take(&self) -> ComponentData {
+    pub(crate) fn take(&self) -> ComponentData {
         *self
             .0
             .lock()

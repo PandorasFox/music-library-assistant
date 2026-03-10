@@ -27,6 +27,7 @@ impl RichSpan {
         }
     }
 
+    #[cfg(test)]
     pub fn plain(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),

@@ -128,29 +128,11 @@ impl MissingDirectoryPreviewState {
     pub fn handle_input(&mut self, action: &InputAction) -> MissingDirectoryPreviewAction {
         let has_directories = self.cached_data.count() > 0;
 
-        match action {
-            // Scroll within list
-            InputAction::NavUp => {
-                self.scroll = self.scroll.saturating_sub(1);
-                MissingDirectoryPreviewAction::None
-            }
-            InputAction::NavDown => {
-                let max = self.cached_data.count().saturating_sub(1);
-                if self.scroll < max {
-                    self.scroll += 1;
-                }
-                MissingDirectoryPreviewAction::None
-            }
-            InputAction::PageUp => {
-                self.scroll = self.scroll.saturating_sub(10);
-                MissingDirectoryPreviewAction::None
-            }
-            InputAction::PageDown => {
-                let max = self.cached_data.count().saturating_sub(1);
-                self.scroll = (self.scroll + 10).min(max);
-                MissingDirectoryPreviewAction::None
-            }
+        if crate::ui::helpers::handle_scroll_input(&mut self.scroll, action, self.cached_data.count()) {
+            return MissingDirectoryPreviewAction::None;
+        }
 
+        match action {
             // Button navigation
             InputAction::NavLeft => {
                 self.selected_button.left(has_directories);
@@ -263,18 +245,9 @@ impl MissingDirectoryPreviewState {
             height: inner.height.saturating_sub(3),
         };
 
-        // Populate click targets for list items
-        self.click_targets.clear();
-        self.click_targets.set_list_area(list_area);
-        let visible_lines = list_area.height as usize;
-        for (vis_idx, entry_idx) in (self.scroll..).take(visible_lines).enumerate() {
-            if entry_idx >= self.cached_data.count() {
-                break;
-            }
-            self.click_targets
-                .add_row(entry_idx.to_string(), list_area.y + vis_idx as u16);
-        }
+        self.click_targets.populate(list_area, self.scroll, self.cached_data.count());
 
+        let visible_lines = list_area.height as usize;
         let items: Vec<ListItem> = self
             .cached_data
             .directories

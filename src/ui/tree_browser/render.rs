@@ -397,14 +397,7 @@ fn render_tree_pane(
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
     };
-    click_targets.clear();
-    click_targets.set_list_area(inner_area);
-    for (vis_idx, entry_idx) in (scroll..).take(inner_height).enumerate() {
-        if entry_idx >= entries.len() {
-            break;
-        }
-        click_targets.add_row(entry_idx.to_string(), inner_area.y + vis_idx as u16);
-    }
+    click_targets.populate(inner_area, scroll, entries.len());
 
     let lines: Vec<Line> = entries
         .iter()

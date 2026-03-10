@@ -219,9 +219,7 @@ impl InboxCorpusMatchPreviewState {
 
         let inner = render_pane(f, chunks[1], block);
 
-        // Populate click targets for list items
-        self.click_targets.clear();
-        self.click_targets.set_list_area(inner);
+        self.click_targets.populate(inner, self.scroll, self.cached_data.entries.len());
 
         if self.cached_data.entries.is_empty() {
             let empty = Paragraph::new("No inbox corpus matches found")
@@ -232,15 +230,6 @@ impl InboxCorpusMatchPreviewState {
 
         let visible_lines = inner.height as usize;
         let scroll = self.scroll;
-
-        // Track click target rows
-        for (vis_idx, entry_idx) in (scroll..).take(visible_lines).enumerate() {
-            if entry_idx >= self.cached_data.entries.len() {
-                break;
-            }
-            self.click_targets
-                .add_row(entry_idx.to_string(), inner.y + vis_idx as u16);
-        }
 
         let total_width = inner.width as usize;
         let icon_width = 3;

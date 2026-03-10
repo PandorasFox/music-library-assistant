@@ -15,6 +15,38 @@ use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 
 // ============================================================================
+// Shared Macros
+// ============================================================================
+
+/// Generate an `as_str`-style method mapping enum variants to `&'static str`.
+macro_rules! impl_as_str {
+    ($ty:ty, $method:ident, [$($variant:ident => $s:literal),+ $(,)?]) => {
+        impl $ty {
+            pub fn $method(&self) -> &'static str {
+                match self { $(Self::$variant => $s,)+ }
+            }
+        }
+    };
+}
+
+/// Generate `make_key` and `key_prefix_for_library` for library-namespaced signal keys.
+macro_rules! impl_library_keyed {
+    ($ty:ty, $prefix:literal) => {
+        impl $ty {
+            const KEY_PREFIX: &'static str = $prefix;
+
+            pub fn make_key(library_name: &str, library_path: &str) -> String {
+                format!("{}:{}:{}", Self::KEY_PREFIX, library_name, library_path)
+            }
+
+            pub fn key_prefix_for_library(library_name: &str) -> String {
+                format!("{}:{}:", Self::KEY_PREFIX, library_name)
+            }
+        }
+    };
+}
+
+// ============================================================================
 // Corpus File Signals (inode-keyed)
 // ============================================================================
 
@@ -87,16 +119,11 @@ pub enum CorpusMatchQuality {
     Subpar,
 }
 
-impl CorpusMatchQuality {
-    /// SQL column value for this classification.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Better => "better",
-            Self::Equivalent => "equivalent",
-            Self::Subpar => "subpar",
-        }
-    }
-}
+impl_as_str!(CorpusMatchQuality, as_str, [
+    Better => "better",
+    Equivalent => "equivalent",
+    Subpar => "subpar",
+]);
 
 /// Inbox file has fingerprint+duration match against corpus file(s).
 /// Likely a duplicate — operator can stash the inbox copy.
@@ -485,17 +512,11 @@ pub enum UnsolvedCategory {
     NoMatch,
 }
 
-impl UnsolvedCategory {
-    /// String value stored in the `category` column.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Conflict => "conflict",
-            Self::NoRelease => "no_release",
-            Self::NoMatch => "no_match",
-        }
-    }
-
-}
+impl_as_str!(UnsolvedCategory, as_str, [
+    Conflict => "conflict",
+    NoRelease => "no_release",
+    NoMatch => "no_match",
+]);
 
 /// Fingerprinted corpus inode not assigned to any release after packing.
 /// (Corpus signal, inode PK)
@@ -566,18 +587,13 @@ pub enum PackedReleaseCategory {
     LowConfidence,
 }
 
-impl PackedReleaseCategory {
-    /// Key prefix for SQL LIKE filtering.
-    pub fn key_prefix(&self) -> &'static str {
-        match self {
-            Self::Perfect => "perfect",
-            Self::FullMatch => "full_match",
-            Self::Single => "single",
-            Self::Incomplete => "incomplete",
-            Self::LowConfidence => "low_confidence",
-        }
-    }
-}
+impl_as_str!(PackedReleaseCategory, key_prefix, [
+    Perfect => "perfect",
+    FullMatch => "full_match",
+    Single => "single",
+    Incomplete => "incomplete",
+    LowConfidence => "low_confidence",
+]);
 
 /// Bincode payload for PackedRelease.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -834,21 +850,9 @@ pub struct LibraryLeftoverSignal {
     pub key: String,
 }
 
+impl_library_keyed!(LibraryLeftoverSignal, "library_leftover");
+
 impl LibraryLeftoverSignal {
-    const KEY_PREFIX: &'static str = "library_leftover";
-
-    /// Construct the canonical key for a library file.
-    /// `library_name`: e.g. "music"
-    /// `library_path`: e.g. "music/Artist/Album/track.opus" (library-name-prefixed)
-    pub fn make_key(library_name: &str, library_path: &str) -> String {
-        format!("{}:{}:{}", Self::KEY_PREFIX, library_name, library_path)
-    }
-
-    /// Key prefix for bulk-clearing all signals for a specific library.
-    pub fn key_prefix_for_library(library_name: &str) -> String {
-        format!("{}:{}:", Self::KEY_PREFIX, library_name)
-    }
-
     /// Parse a key into (library_name, library_path). Returns None if malformed.
     pub fn parse_key(key: &str) -> Option<(&str, &str)> {
         let after = key.strip_prefix("library_leftover:")?;
@@ -869,21 +873,7 @@ pub struct LibraryStaleSignal {
     pub inode: i64,
 }
 
-impl LibraryStaleSignal {
-    const KEY_PREFIX: &'static str = "library_stale";
-
-    /// Construct the canonical key for a stale library file.
-    /// `library_name`: e.g. "music"
-    /// `library_path`: e.g. "music/Artist/Album/track.opus" (library-name-prefixed)
-    pub fn make_key(library_name: &str, library_path: &str) -> String {
-        format!("{}:{}:{}", Self::KEY_PREFIX, library_name, library_path)
-    }
-
-    /// Key prefix for bulk-clearing all signals for a specific library.
-    pub fn key_prefix_for_library(library_name: &str) -> String {
-        format!("{}:{}:", Self::KEY_PREFIX, library_name)
-    }
-}
+impl_library_keyed!(LibraryStaleSignal, "library_stale");
 
 // --- Aggregate signals with bincode BLOB data ---
 

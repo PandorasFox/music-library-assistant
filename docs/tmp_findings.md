@@ -100,7 +100,8 @@ Analyzed 17 files totaling ~22k LoC. Findings ordered by impact.
 - [x] Tier 2: derivation/executors helpers (-3 net lines, 4 helpers)
 - [x] Tier 2: deploy+duplicates shared helpers — `require_sender!` (-314 lines), `ReconcileStats` (-21 net lines)
 - [ ] Tier 3: corpus/tags helpers
-- [ ] Tier 3: release_packing extract helpers
-- [ ] Tier 3: queries/health dedup
-- [ ] Tier 3: witch/mod unification
-- [ ] Tier 4: signals macros, domain macros, config_editor macros, etc.
+- [x] Tier 3: release_packing — `PackingScoreBreakdown` Default (-23 lines)
+- [x] Tier 3: queries/health — `query_signal_paths()` + `count_by_category()` (-10 lines)
+- [x] Tier 3: witch/mod — `queue_walk_computations()` unification + awakening merge (-84 lines)
+- [x] Tier 4: `impl_as_str!` + `impl_library_keyed!` macros, domain query conversions, `InsightsModal` → bool, `.collect()` standardization (-76 lines)
+- [ ] Tier 4 remaining: config_editor `try_parse_into!`, collection cursor helpers, `dispatch_handle_input!`

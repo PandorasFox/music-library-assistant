@@ -253,16 +253,9 @@ impl DomainQuery for GetSessionEditHistory {
     }
 }
 
-/// Full edit history across all sessions (for export).
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct GetAllEditHistory;
-
-impl DomainQuery for GetAllEditHistory {
-    type Response = Vec<EditHistoryExportRow>;
-
-    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
-        db.get_all_edit_history().unwrap_or_default()
-    }
+define_domain_query! {
+    /// Full edit history across all sessions (for export).
+    GetAllEditHistory => Vec<EditHistoryExportRow>, uncached, db.get_all_edit_history()
 }
 
 /// Compound tag signal groups (for compound split resolution).
@@ -300,17 +293,11 @@ define_domain_query! {
 // Detail Queries (Wave 2: signal key queries for canonicity resolution)
 // ============================================================================
 
-/// Aggregate signal keys for InconsistentAlbumArtist signals.
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct GetInconsistentAlbumArtistKeys;
-
-impl DomainQuery for GetInconsistentAlbumArtistKeys {
-    type Response = Vec<String>;
-
-    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+define_domain_query! {
+    /// Aggregate signal keys for InconsistentAlbumArtist signals.
+    GetInconsistentAlbumArtistKeys => Vec<String>, uncached, |db| {
         use crate::meta::signals::data::InconsistentAlbumArtistSignal;
-        db.aggregate_signal_keys::<InconsistentAlbumArtistSignal>()
-            .unwrap_or_default()
+        db.aggregate_signal_keys::<InconsistentAlbumArtistSignal>().unwrap_or_default()
     }
 }
 
@@ -341,17 +328,11 @@ impl DomainQuery for GetTagCanonicityKeys {
     }
 }
 
-/// Aggregate signal keys for InboxTagCanonicity signals.
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct GetInboxTagCanonicityKeys;
-
-impl DomainQuery for GetInboxTagCanonicityKeys {
-    type Response = Vec<String>;
-
-    fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+define_domain_query! {
+    /// Aggregate signal keys for InboxTagCanonicity signals.
+    GetInboxTagCanonicityKeys => Vec<String>, uncached, |db| {
         use crate::meta::signals::data::InboxTagCanonicitySignal;
-        db.aggregate_signal_keys::<InboxTagCanonicitySignal>()
-            .unwrap_or_default()
+        db.aggregate_signal_keys::<InboxTagCanonicitySignal>().unwrap_or_default()
     }
 }
 

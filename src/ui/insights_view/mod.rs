@@ -57,18 +57,6 @@ pub enum InsightsAction {
     Launch,
 }
 
-/// State for the insights view modal/status
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[allow(non_camel_case_types)]
-pub enum InsightsModal {
-    /// Ready for user interaction
-    #[default]
-    Ready,
-    /// The Witch has operations in-flight - actions blocked
-    NotReady_WitchBusy,
-}
-
-
 // ============================================================================
 // Unified Bucket Entry System
 // ============================================================================
@@ -687,8 +675,8 @@ fn build_flat_items(
 
 /// State for the insights view
 pub struct InsightsViewState {
-    /// Modal state tracking Witch busy status
-    pub modal: InsightsModal,
+    /// Whether the Witch has operations in-flight (actions blocked).
+    pub witch_busy: bool,
     /// Cached insights data from UiReadCache
     pub cached_data: Option<InsightsData>,
     /// Pre-computed sorted entries - rebuilt when cached_data changes
@@ -704,7 +692,7 @@ pub struct InsightsViewState {
 impl Default for InsightsViewState {
     fn default() -> Self {
         Self {
-            modal: InsightsModal::Ready,
+            witch_busy: false,
             cached_data: None,
             cached_entries: CachedBucketEntries::default(),
             flat_items: Vec::new(),
@@ -741,11 +729,7 @@ impl InsightsViewState {
     ) {
         let busy = cache_stale || witch_status.map(|s| s.pending > 0).unwrap_or(false);
 
-        self.modal = if busy {
-            InsightsModal::NotReady_WitchBusy
-        } else {
-            InsightsModal::Ready
-        };
+        self.witch_busy = busy;
 
         let handled_changed = *handled_sources != self.last_handled_sources;
 
@@ -790,7 +774,7 @@ impl InsightsViewState {
 
     /// Check if the Witch is busy (actions should be blocked)
     pub fn is_witch_busy(&self) -> bool {
-        matches!(self.modal, InsightsModal::NotReady_WitchBusy)
+        self.witch_busy
     }
 
     /// Handle mouse click, updating selection if hit.
@@ -888,12 +872,12 @@ mod tests {
         let mut state = state_with_data();
 
         // Not busy - Enter should launch modal
-        state.modal = InsightsModal::Ready;
+        state.witch_busy = false;
         let action = state.handle_input(&InputAction::Confirm);
         assert_eq!(action, InsightsAction::Launch);
 
         // Busy - Enter should be blocked
-        state.modal = InsightsModal::NotReady_WitchBusy;
+        state.witch_busy = true;
         let action = state.handle_input(&InputAction::Confirm);
         assert_eq!(action, InsightsAction::None);
     }
@@ -905,7 +889,7 @@ mod tests {
 
         // No status - should be Ready
         state.update(None, None, &no_handled, false);
-        assert_eq!(state.modal, InsightsModal::Ready);
+        assert!(!state.witch_busy);
 
         // Pending > 0 - should be busy
         let busy_status = WorkStatus {
@@ -913,7 +897,7 @@ mod tests {
             ..Default::default()
         };
         state.update(Some(&busy_status), None, &no_handled, false);
-        assert_eq!(state.modal, InsightsModal::NotReady_WitchBusy);
+        assert!(state.witch_busy);
 
         // Pending = 0 - should be ready again
         let idle_status = WorkStatus {
@@ -921,7 +905,7 @@ mod tests {
             ..Default::default()
         };
         state.update(Some(&idle_status), None, &no_handled, false);
-        assert_eq!(state.modal, InsightsModal::Ready);
+        assert!(!state.witch_busy);
     }
 
     #[test]
@@ -1029,7 +1013,7 @@ mod tests {
     #[test]
     fn test_tab_navigation_not_blocked() {
         let mut state = InsightsViewState::new();
-        state.modal = InsightsModal::NotReady_WitchBusy;
+        state.witch_busy = true;
 
         // Tab should still work even when the Witch is busy
         let action = state.handle_input(&InputAction::CycleNext);

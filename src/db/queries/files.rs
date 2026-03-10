@@ -335,11 +335,7 @@ impl Database {
             Ok((inode, paths_str))
         })?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// Get audio files with their present tag names (for missing tag detection).
@@ -546,11 +542,7 @@ impl Database {
         let mut stmt = self.conn.prepare(query)?;
         let rows = stmt.query_map(params![], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// Get album/artist/album_artist data for all audio files (for inconsistent album artist detection, corpus only).
@@ -614,11 +606,7 @@ impl Database {
             ))
         })?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     // ========================================================================
@@ -905,12 +893,7 @@ impl Database {
 
         let rows = stmt.query_map(params![computation_type], |row| row.get(0))?;
 
-        let mut inodes = Vec::new();
-        for row in rows {
-            inodes.push(row?);
-        }
-
-        Ok(inodes)
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// Get corpus inodes whose tag values contain a given separator string.
@@ -934,12 +917,7 @@ impl Database {
 
         let rows = stmt.query_map(params![tag_name, like_pattern], |row| row.get(0))?;
 
-        let mut inodes = Vec::new();
-        for row in rows {
-            inodes.push(row?);
-        }
-
-        Ok(inodes)
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     // =========================================================================
@@ -998,12 +976,7 @@ impl Database {
 
         let rows = stmt.query_map(&params_vec[..], |row| row.get::<_, i64>(0))?;
 
-        let mut result = HashSet::new();
-        for row in rows {
-            result.insert(row?);
-        }
-
-        Ok(result)
+        Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
     }
 
     // =========================================================================
@@ -1033,11 +1006,7 @@ impl Database {
             })
         })?;
 
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
 

@@ -20,7 +20,7 @@ use ratatui::{
 };
 
 use crate::ui::helpers::format_si;
-use crate::ui::widgets::Modal;
+use crate::ui::widgets::{Modal, ModalStyle};
 
 /// Actions returned from the Deploy lateral view.
 #[derive(Debug, Clone)]
@@ -170,6 +170,11 @@ fn render_up_to_date(f: &mut Frame, area: Rect, library_file_counts: &[(String, 
     Modal::new()
         .title(" Deploy ")
         .content(content)
+        .style(ModalStyle {
+            border_color: Color::Green,
+            background: Color::Reset,
+            title_style: Style::default().fg(Color::Green),
+        })
         .fixed_size(width, height)
         .centered()
         .render(f, area);

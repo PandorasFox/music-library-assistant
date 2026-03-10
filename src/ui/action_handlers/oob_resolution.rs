@@ -5,6 +5,7 @@
 use super::super::App;
 use super::witness;
 use crate::corpus::paths;
+use crate::db::domain;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::{
     filter_popup, moved_file_modal, oob_conflict_modal, oob_sync_modal, ActiveView, FilterOverlay,
@@ -18,10 +19,7 @@ impl App {
 
     /// Start OOB tag sync resolution from Insights view.
     pub(in crate::ui) fn start_oob_sync_resolution(&mut self) {
-        let files = self
-            .cache
-            .query(|db| db.get_oob_sync_files().unwrap_or_default())
-            .recv();
+        let files = self.cache.domain_query(domain::GetOobSyncFiles).recv();
 
         // Start transaction for the sync resolution
         let _ = self.witch.start_transaction("OOB tag sync");
@@ -167,10 +165,7 @@ impl App {
     /// transaction for potential resolution, and computes the initial diff.
     pub(in crate::ui) fn start_oob_conflict_inspection(&mut self) {
         // Query bucketed files via cache thread
-        let files = self
-            .cache
-            .query(|db| db.get_oob_files_bucketed().unwrap_or_default())
-            .recv();
+        let files = self.cache.domain_query(domain::GetOobFilesBucketed).recv();
 
         // Start transaction for potential resolution
         let _ = self.witch.start_transaction("OOB tag resolution");
@@ -406,10 +401,7 @@ impl App {
     /// Start moved file acknowledgement modal.
     pub(in crate::ui) fn start_moved_file_acknowledge(&mut self) {
         // Query files with moved_file signals
-        let files = self
-            .cache
-            .query(|db| db.get_moved_files().unwrap_or_default())
-            .recv();
+        let files = self.cache.domain_query(domain::GetMovedFiles).recv();
 
         crate::logging::log_general(format!(
             "Starting moved file acknowledgement: {} files",

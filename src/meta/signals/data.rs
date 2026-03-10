@@ -768,7 +768,7 @@ pub struct PinnedReleaseConflictData {
 
 /// A group of inodes sharing the same compound tag value.
 /// Used to aggregate compound split resolution by value rather than per-file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CompoundGroup {
     pub tag_name: String,
     pub compound_value: String,
@@ -1052,7 +1052,7 @@ pub struct RedundantDuplicateData {
 }
 
 /// Tracks missing an ALBUM tag but having ARTIST and TITLE (album-less singles).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct MissingAlbumSingleSignal {
     pub key: String, // lowercased artist name for dedup
     /// Serialized as bincode BLOB.

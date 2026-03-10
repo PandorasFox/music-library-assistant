@@ -399,7 +399,7 @@ pub struct SubparDuplicateEntry {
 // ============================================================================
 
 /// Direction of a syncable OOB tag mismatch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum OobSyncDirection {
     /// Extra tags exist on disk only (db_value IS NULL) — sync disk -> index
     DiskToIndex,
@@ -412,7 +412,7 @@ pub enum OobSyncDirection {
 /// Contains both display strings (for UI) and individual values (for mutations).
 /// Multi-value tags (e.g., multiple TRACKNUMBER fields) are stored as individual
 /// values in the `*_values` vecs, joined for display in `*_value` fields.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TagMismatchEntry {
     pub field: String,
     /// Display string (values joined with "; ") - for UI
@@ -426,7 +426,7 @@ pub struct TagMismatchEntry {
 }
 
 /// A file with purely sync-direction tag mismatches (all extras in one direction).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct OobSyncFile {
     pub inode: i64,
     /// Relative path (as stored in signals/files)
@@ -442,7 +442,7 @@ pub struct OobSyncFile {
 /// - DbOnly: all mismatches have `disk_value IS NULL`
 /// - DiskOnly: all mismatches have `db_value IS NULL`
 /// - Conflict: both values present, or mixed null directions
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum ConflictBucket {
     MtimeOnly,
     DbOnly,
@@ -501,7 +501,7 @@ impl ConflictBucket {
 }
 
 /// A file with an OOB tag signal, classified into a conflict bucket.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BucketedOobFile {
     pub inode: i64,
     pub path: String,
@@ -566,7 +566,7 @@ pub struct EditSessionSummary {
 }
 
 /// Single edit record within a session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EditRecord {
     pub id: i64,
     pub inode: i64,
@@ -577,7 +577,7 @@ pub struct EditRecord {
 }
 
 /// Full edit history row for export (includes session_id).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct EditHistoryExportRow {
     pub id: i64,
     pub inode: i64,
@@ -595,7 +595,7 @@ pub struct EditHistoryData {
 }
 
 /// A file with a MovedFile signal (same inode, different path).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct MovedFileInfo {
     pub inode: i64,
     pub old_path: String,

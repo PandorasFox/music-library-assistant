@@ -32,16 +32,16 @@ impl App {
         zone: Zone,
     ) {
         // Load compound signal groups filtered by safety classification and tag
-        let tag_filter_owned = tag_filter.map(|s| s.to_string());
         let groups = if zone == Zone::Inbox {
             self.cache
-                .query(move |db| db.get_inbox_compound_signal_groups().unwrap_or_default())
+                .domain_query(crate::db::domain::GetInboxCompoundSignalGroups)
                 .recv()
         } else {
+            let tag_filter_owned = tag_filter.map(|s| s.to_string());
             self.cache
-                .query(move |db| {
-                    db.get_compound_signal_groups_by_safety(safe_only, tag_filter_owned.as_deref())
-                        .unwrap_or_default()
+                .domain_query(crate::db::domain::GetCompoundSignalGroups {
+                    safe_only,
+                    tag_filter: tag_filter_owned,
                 })
                 .recv()
         };

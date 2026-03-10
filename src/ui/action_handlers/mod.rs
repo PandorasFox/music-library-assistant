@@ -646,7 +646,7 @@ impl App {
 
         let signals = self
             .cache
-            .query(|db| db.get_missing_album_single_signals().unwrap_or_default())
+            .domain_query(crate::db::domain::GetMissingAlbumSingleSignals)
             .recv();
 
         let data = missing_album_modal::MissingAlbumData::from_signals(signals);

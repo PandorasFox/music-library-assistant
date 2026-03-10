@@ -169,6 +169,14 @@ impl CacheHandle {
         let _ = self.request_tx.send(CacheRequest::Query(boxed));
         DbQuery { rx }
     }
+
+    /// Submit a typed domain query to run on the cache thread's DB connection.
+    ///
+    /// Like `query()`, but takes a named `DomainQuery` struct instead of a closure.
+    /// This is the migration target for all closure callsites.
+    pub(crate) fn domain_query<Q: DomainQuery>(&self, q: Q) -> DbQuery<Q::Response> {
+        self.query(move |db| q.execute(db))
+    }
 }
 
 // ============================================================================

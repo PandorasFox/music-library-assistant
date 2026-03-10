@@ -210,7 +210,10 @@ This is incremental work. The TUI continues functioning throughout. The trait-dr
 
 3. ~~**Extract `define_domain_query!` macro.**~~ **DONE.** `macro_rules!` macro in `src/db/domain.rs` handles simple/body × cached/uncached forms. All 6 summary queries use the macro.
 
-4. **Convert closure callsites to detail query structs.** Each `cache.query(|db| ...)` becomes a named struct with fields for its parameters. Modal init loaders (`::load(db)`) wrap trivially. Signal-then-resolve two-step patterns collapse into single enriched detail queries.
+4. **Convert closure callsites to detail query structs.** **IN PROGRESS.** Each `cache.query(|db| ...)` becomes a named struct with fields for its parameters. `CacheHandle::domain_query()` method added as the typed entry point. 13 callsites converted across OOB resolution, moved files, packing knots/paths, compound splits, tag canonicity keys, missing album singles, and edit history export. Remaining ~22 callsites fall into three categories:
+   - **Modal init loaders** (5 via `start_resolution!` macro + 4 parameterized): return non-`Serialize` UI types containing `Mutation` variants. Need either `Serialize` cascade on modal types or a separate non-serializable query trait.
+   - **Composite two-step queries** (~8): signal load + inode/path resolution. Some (like disc extraction) have `GetDiscExtractionWithPaths` domain query ready but need modal code refactoring to consume the enriched type.
+   - **Stateful loaders** (~5): `IntakeConfirmationState::gather_*`, `InboxOrganizeState::load_*`, `CompoundSplitDataV2::from_compound_group`. Return live UI state objects, not pure data.
 
 5. **Eliminate `get_audio_files_by_inodes` as a client-facing query.** It remains as an internal helper within `execute` implementations, but no client should ever call it directly.
 

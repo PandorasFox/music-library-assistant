@@ -330,7 +330,7 @@ impl App {
     fn launch_knot_browser(&mut self) {
         let knots = self
             .cache
-            .query(|db| db.get_packing_knots().unwrap_or_default())
+            .domain_query(crate::db::domain::GetPackingKnots)
             .recv();
 
         if knots.is_empty() {
@@ -340,13 +340,10 @@ impl App {
 
         let corpus_paths: std::collections::HashMap<i64, String> = self
             .cache
-            .query(|db| {
-                db.get_packing_inode_paths()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .collect()
-            })
-            .recv();
+            .domain_query(crate::db::domain::GetPackingInodePaths)
+            .recv()
+            .into_iter()
+            .collect();
 
         let state = crate::ui::knot_browser::KnotBrowserState::build(knots, &corpus_paths);
         self.view = crate::ui::active_view::ActiveView::KnotBrowser(state);

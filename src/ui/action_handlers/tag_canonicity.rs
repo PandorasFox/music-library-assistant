@@ -21,8 +21,6 @@ impl App {
     ///
     /// Uses the V2 three-pane layout for tag canonicity resolution.
     pub(in crate::ui) fn start_tag_canonicity_resolution(&mut self) {
-        use crate::meta::signals::data::{InconsistentAlbumArtistSignal, TagCanonicitySignal};
-
         // Get the selected insight type to determine what to load
         let insight_type = match &self.view {
             ActiveView::Insights(v) => v.selected_insight_type(),
@@ -41,25 +39,15 @@ impl App {
             insights_view::InsightType::InconsistentAlbumArtist => {
                 let keys = self
                     .cache
-                    .query(|db| {
-                        db.aggregate_signal_keys::<InconsistentAlbumArtistSignal>()
-                            .unwrap_or_default()
-                    })
+                    .domain_query(crate::db::domain::GetInconsistentAlbumArtistKeys)
                     .recv();
                 (keys, CanonicitySignalKind::InconsistentAlbumArtist)
             }
             insights_view::InsightType::TagCanonicity { tag_name } => {
-                let tag_prefix = format!("{}:", tag_name);
                 let keys = self
                     .cache
-                    .query(move |db| {
-                        let all_keys = db
-                            .aggregate_signal_keys::<TagCanonicitySignal>()
-                            .unwrap_or_default();
-                        all_keys
-                            .into_iter()
-                            .filter(|k| k.starts_with(&tag_prefix))
-                            .collect::<Vec<String>>()
+                    .domain_query(crate::db::domain::GetTagCanonicityKeys {
+                        tag_filter: Some(tag_name.clone()),
                     })
                     .recv();
                 (keys, CanonicitySignalKind::TagCanonicity)

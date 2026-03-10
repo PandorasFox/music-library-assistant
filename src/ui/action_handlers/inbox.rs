@@ -8,7 +8,6 @@
 use super::witness;
 use super::App;
 use crate::meta::decisions::DecisionKey;
-use crate::meta::signals::data::InboxTagCanonicitySignal;
 use crate::ui::active_view::ActiveView;
 use crate::ui::inbox_corpus_match_modal;
 use crate::ui::inbox_organize;
@@ -74,10 +73,7 @@ impl App {
     fn start_inbox_tag_canonicity_resolution(&mut self) {
         let signal_keys = self
             .cache
-            .query(|db| {
-                db.aggregate_signal_keys::<InboxTagCanonicitySignal>()
-                    .unwrap_or_default()
-            })
+            .domain_query(crate::db::domain::GetInboxTagCanonicityKeys)
             .recv();
 
         if signal_keys.is_empty() {

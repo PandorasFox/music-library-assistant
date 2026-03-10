@@ -97,6 +97,26 @@ pub struct Database {
     conn: Connection,
 }
 
+#[cfg(test)]
+impl Database {
+    /// Create an in-memory database with full schema for testing.
+    ///
+    /// The connection is read-write (no `query_only` pragma) so tests can
+    /// insert fixture data, then wrap in `ReadOnlyDb` for query testing.
+    pub fn open_in_memory() -> Self {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             PRAGMA temp_store = MEMORY;",
+        )
+        .unwrap();
+        let db = Database { conn };
+        db.initialize_schema()
+            .expect("failed to initialize test schema");
+        db
+    }
+}
+
 impl Database {
     /// Raw connection access - **INTERNAL USE ONLY**.
     ///

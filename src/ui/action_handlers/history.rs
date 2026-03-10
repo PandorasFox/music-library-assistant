@@ -320,10 +320,11 @@ impl App {
             _ => return,
         };
 
-        let sid = session_id.clone();
         let rows = self
             .cache
-            .query(move |db| db.get_session_edit_history(&sid).unwrap_or_default())
+            .domain_query(crate::db::domain::GetSessionEditHistory {
+                session_id: session_id.clone(),
+            })
             .recv();
 
         self.finalize_jettison(rows, "Jettisoned", |sender| {
@@ -340,7 +341,7 @@ impl App {
     fn execute_jettison_all(&mut self) {
         let rows = self
             .cache
-            .query(move |db| db.get_all_edit_history().unwrap_or_default())
+            .domain_query(crate::db::domain::GetAllEditHistory)
             .recv();
 
         self.finalize_jettison(rows, "Jettisoned all", |sender| {

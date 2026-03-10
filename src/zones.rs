@@ -97,6 +97,18 @@ pub trait DeriveZoneSignals: AudioZone {
         witness: &ComputationWitness,
     ) -> usize;
 
+    /// Reconcile signals for a file present on both disk and index.
+    ///
+    /// Corpus: clear stale MissingFile/UnindexedFile, conditionally mark healthy (OOB gating).
+    /// Inbox: clear stale InboxUnindexed, unconditionally mark healthy.
+    fn on_file_present(
+        inode: i64,
+        path: &str,
+        read_only_db: &ReadOnlyDb<'_>,
+        sender: &SignalWriteSender,
+        witness: &ComputationWitness,
+    );
+
     /// How to compute "known inodes" for GC purposes.
     ///
     /// Corpus: disk ∪ indexed (both matter — index-only files get MissingFile).

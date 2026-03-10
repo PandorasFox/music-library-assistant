@@ -177,87 +177,82 @@ pub fn execute_schedule_second_level_derivations(
 }
 
 // ============================================================================
-// Global Corpus Signal Derivation
+// Zone-Generic Signal Derivation
 // ============================================================================
 
-/// Derive corpus signals via global inode set comparison.
+/// Derive zone signals via global inode set comparison.
 ///
-/// Compares disk inodes (from FileInCorpus signals) against indexed inodes:
-/// - disk_only = disk - indexed → UnindexedFile signals
-/// - index_only = indexed - disk → MissingFile signals
-/// - both = disk ∩ indexed → check OOB, emit HealthyFile
-pub fn execute_derive_corpus_signals(
+/// Compares disk inodes (from file-presence signals) against indexed inodes:
+/// - disk_only = disk - indexed → unindexed signals
+/// - index_only = indexed - disk → zone-specific gone handling
+/// - both = disk ∩ indexed → zone-specific present handling
+///
+/// Zone-specific behavior is encoded in the `DeriveZoneSignals` trait.
+fn derive_zone_signals<Z: DeriveZoneSignals>(
     read_only_db: &ReadOnlyDb<'_>,
     observed_inodes: HashMap<i64, String>,
+    sender: &write_thread::SignalWriteSender,
     witness: &ComputationWitness,
+    computation: Computation,
 ) -> Result {
-    log_general("[COMPUTE] DeriveCorpusSignals: starting global inode comparison");
+    let zone = Z::ZONE_STR;
+    log_general(format!(
+        "[COMPUTE] Derive({zone}): starting global inode comparison"
+    ));
 
-    let sender = require_sender!(Computation::DeriveCorpusSignals {
-        observed_inodes: HashMap::new(),
-    });
-
-    // Reconcile FileInCorpus signals against observed disk state:
-    // - Observed but no signal → write new FileInCorpus
-    // - Signal exists but not observed → stale, clear it
-    // - Both → already up to date
-    let existing_fic = read_only_db.get_file_in_corpus_inodes().unwrap_or_default();
-    let mut fic_new = 0usize;
-    let mut fic_stale = 0usize;
+    // ========================================================================
+    // Reconcile file-presence signals against observed disk state
+    // ========================================================================
+    let existing = read_only_db
+        .get_file_presence_inodes::<Z>()
+        .unwrap_or_default();
+    let mut fp_new = 0usize;
+    let mut fp_stale = 0usize;
 
     for (inode, path) in &observed_inodes {
-        if !existing_fic.contains_key(inode) {
-            // New file on disk with no FileInCorpus signal — write it
+        if !existing.contains_key(inode) {
             sender.write_typed_signal(
-                TypedSignalWrite::FileInCorpus(FileInCorpusSignal {
-                    inode: *inode,
-                    path: path.clone(),
-                    generation: 0,
-                }),
+                Z::file_presence_signal(*inode, path.clone(), 0),
                 witness,
             );
-            fic_new += 1;
+            fp_new += 1;
         }
     }
 
-    for inode in existing_fic.keys() {
+    for inode in existing.keys() {
         if !observed_inodes.contains_key(inode) {
-            // Stale FileInCorpus signal — file no longer on disk
-            sender.clear_corpus_signal::<FileInCorpusSignal>(*inode, witness);
-            fic_stale += 1;
+            sender.clear_corpus_signal::<Z::FilePresenceSignal>(*inode, witness);
+            fp_stale += 1;
         }
     }
 
-    if fic_new > 0 || fic_stale > 0 {
+    if fp_new > 0 || fp_stale > 0 {
         log_general(format!(
-            "[COMPUTE] DeriveCorpusSignals: FileInCorpus reconciled: {} new, {} stale cleared",
-            fic_new, fic_stale
+            "[COMPUTE] Derive({zone}): file-presence reconciled: {fp_new} new, {fp_stale} stale cleared"
         ));
     }
 
-    // Use observed inodes as the definitive disk state
+    // ========================================================================
+    // Get indexed state and compute set operations
+    // ========================================================================
     let disk_inodes = observed_inodes;
 
-    // Get indexed state: files table (inode -> path)
-    let indexed_inodes = match read_only_db.get_all_corpus_inodes() {
+    let indexed_inodes = match read_only_db.get_all_inodes::<Z>() {
         Ok(inodes) => inodes,
         Err(e) => {
             return Result::failure(
-                Computation::DeriveCorpusSignals {
-                    observed_inodes: HashMap::new(),
-                },
-                format!("Failed to get indexed inodes: {}", e),
+                computation,
+                format!("Failed to get indexed {zone} inodes: {e}"),
             );
         }
     };
 
     log_general(format!(
-        "[COMPUTE] DeriveCorpusSignals: {} disk inodes, {} indexed inodes",
+        "[COMPUTE] Derive({zone}): {} disk inodes, {} indexed inodes",
         disk_inodes.len(),
         indexed_inodes.len()
     ));
 
-    // Compute set operations
     let disk_set: HashSet<i64> = disk_inodes.keys().copied().collect();
     let indexed_set: HashSet<i64> = indexed_inodes.keys().copied().collect();
 
@@ -265,326 +260,98 @@ pub fn execute_derive_corpus_signals(
     let index_only: Vec<i64> = indexed_set.difference(&disk_set).copied().collect();
     let both: Vec<i64> = disk_set.intersection(&indexed_set).copied().collect();
 
+    // ========================================================================
+    // Emit unindexed signals for files on disk but not indexed
+    // ========================================================================
+    for inode in &disk_only {
+        if let Some(path) = disk_inodes.get(inode) {
+            ensure_typed_signal(
+                read_only_db,
+                sender,
+                Z::unindexed_signal(*inode, path.to_string()),
+                witness,
+            );
+        }
+    }
+
+    // ========================================================================
+    // Handle indexed files no longer on disk (zone-specific)
+    // ========================================================================
+    for inode in &index_only {
+        if let Some(path) = indexed_inodes.get(inode) {
+            Z::on_file_gone(*inode, path, read_only_db, sender, witness);
+        }
+    }
+
+    // ========================================================================
+    // Reconcile files present on both disk and index (zone-specific)
+    // ========================================================================
+    for inode in &both {
+        let path = disk_inodes.get(inode).or_else(|| indexed_inodes.get(inode));
+        let path_str = path.map(|p| p.as_str()).unwrap_or("");
+        Z::on_file_present(*inode, path_str, read_only_db, sender, witness);
+    }
+
     log_general(format!(
-        "[COMPUTE] DeriveCorpusSignals: {} unindexed, {} missing, {} present",
+        "[COMPUTE] Derive({zone}): {} unindexed, {} gone, {} present",
         disk_only.len(),
         index_only.len(),
         both.len()
     ));
 
-    // Emit UnindexedFile signals for files on disk but not indexed
-    for inode in &disk_only {
-        if let Some(path) = disk_inodes.get(inode) {
-            ensure_typed_signal(
-                read_only_db,
-                &sender,
-                TypedSignalWrite::UnindexedFile(UnindexedFileSignal {
-                    inode: *inode,
-                    path: path.to_string(),
-                }),
-                witness,
-            );
-        }
-    }
-
-    // Emit MissingFile signals for indexed files not on disk
-    for inode in &index_only {
-        if let Some(path) = indexed_inodes.get(inode) {
-            ensure_typed_signal(
-                read_only_db,
-                &sender,
-                TypedSignalWrite::MissingFile(MissingFileSignal {
-                    inode: *inode,
-                    path: path.to_string(),
-                    replaced_by_inode: None,
-                }),
-                witness,
-            );
-            // Clear any stale HealthyFile signal
-            drop_stale_corpus_signal::<HealthyFileSignal>(read_only_db, &sender, *inode, witness);
-        }
-    }
-
-    // Process files present in both disk and index
-    for inode in &both {
-        let path = disk_inodes.get(inode).or_else(|| indexed_inodes.get(inode));
-        let path_str = path.map(|p| p.as_str()).unwrap_or("");
-
-        // Clear any stale MissingFile/UnindexedFile signals
-        drop_stale_corpus_signal::<MissingFileSignal>(read_only_db, &sender, *inode, witness);
-        drop_stale_corpus_signal::<UnindexedFileSignal>(read_only_db, &sender, *inode, witness);
-
-        reconcile_healthy_file_signal(read_only_db, &sender, *inode, path_str, witness);
-    }
-
     // ========================================================================
-    // GC Backstop: Clear orphaned corpus signals for inodes no longer known
+    // GC Backstop: Clear orphaned signals for inodes no longer known
     // ========================================================================
-    // Any inode that is neither on disk nor in the index has no reason to have
-    // corpus signals. This catches signals that persisted due to mutations
-    // returning empty affected_inodes() (now fixed) or any future bugs.
-    let known_inodes: HashSet<i64> = disk_set.union(&indexed_set).copied().collect();
-    let gc_total = gc_orphaned_corpus_signals(read_only_db, &sender, &known_inodes, witness);
+    let known_inodes = Z::known_inodes_for_gc(&disk_set, &indexed_set);
+    let gc_total = Z::gc_orphaned_signals(read_only_db, sender, &known_inodes, witness);
     if gc_total > 0 {
         log_general(format!(
-            "[COMPUTE] DeriveCorpusSignals: GC cleared {} orphaned signal(s)",
-            gc_total
+            "[COMPUTE] Derive({zone}): GC cleared {gc_total} orphaned signal(s)"
         ));
     }
 
-    log_general("[COMPUTE] DeriveCorpusSignals: complete");
+    log_general(format!("[COMPUTE] Derive({zone}): complete"));
+    Result::success(computation, Vec::new())
+}
 
-    Result::success(
+/// Derive corpus signals via global inode set comparison.
+pub fn execute_derive_corpus_signals(
+    read_only_db: &ReadOnlyDb<'_>,
+    observed_inodes: HashMap<i64, String>,
+    witness: &ComputationWitness,
+) -> Result {
+    let sender = require_sender!(Computation::DeriveCorpusSignals {
+        observed_inodes: HashMap::new(),
+    });
+    derive_zone_signals::<CorpusZone>(
+        read_only_db,
+        observed_inodes,
+        &sender,
+        witness,
         Computation::DeriveCorpusSignals {
             observed_inodes: HashMap::new(),
         },
-        Vec::new(),
     )
 }
 
-// ============================================================================
-// Global Inbox Signal Derivation
-// ============================================================================
-
 /// Derive inbox signals via global inode set comparison.
-///
-/// Compares disk inodes (from FileInInbox signals) against inbox-indexed inodes:
-/// - disk_only (disk - indexed) → InboxUnindexed signals
-/// - both (disk ∩ indexed) → InboxHealthy signals
-///
-/// Inbox files don't produce MissingFile — missing inbox files are simply gone.
 pub fn execute_derive_inbox_signals(
     read_only_db: &ReadOnlyDb<'_>,
     observed_inodes: HashMap<i64, String>,
     witness: &ComputationWitness,
 ) -> Result {
-    log_general("[COMPUTE] DeriveInboxSignals: starting inbox inode comparison");
-
     let sender = require_sender!(Computation::DeriveInboxSignals {
         observed_inodes: HashMap::new(),
     });
-
-    // Reconcile FileInInbox signals against observed disk state:
-    // - Observed but no signal → write new FileInInbox
-    // - Signal exists but not observed → stale, clear it
-    // - Both → already up to date
-    let existing_fii = read_only_db.get_file_in_inbox_inodes().unwrap_or_default();
-    let mut fii_new = 0usize;
-    let mut fii_stale = 0usize;
-
-    for (inode, path) in &observed_inodes {
-        if !existing_fii.contains_key(inode) {
-            sender.write_typed_signal(
-                TypedSignalWrite::FileInInbox(FileInInboxSignal {
-                    inode: *inode,
-                    path: path.clone(),
-                    generation: 0,
-                }),
-                witness,
-            );
-            fii_new += 1;
-        }
-    }
-
-    for inode in existing_fii.keys() {
-        if !observed_inodes.contains_key(inode) {
-            sender.clear_corpus_signal::<FileInInboxSignal>(*inode, witness);
-            fii_stale += 1;
-        }
-    }
-
-    if fii_new > 0 || fii_stale > 0 {
-        log_general(format!(
-            "[COMPUTE] DeriveInboxSignals: FileInInbox reconciled: {} new, {} stale cleared",
-            fii_new, fii_stale
-        ));
-    }
-
-    // Use observed inodes as the definitive disk state
-    let disk_inodes = observed_inodes;
-
-    // No inbox files observed — cascade-drop any stale indexed inbox state, then GC
-    if disk_inodes.is_empty() {
-        log_general("[COMPUTE] DeriveInboxSignals: no inbox files on disk");
-
-        // Drop inbox state for any inodes still indexed as inbox
-        let indexed_inodes = read_only_db.get_all_inbox_inodes().unwrap_or_default();
-        if !indexed_inodes.is_empty() {
-            log_general(format!(
-                "[COMPUTE] DeriveInboxSignals: dropping inbox state for {} gone file(s)",
-                indexed_inodes.len()
-            ));
-            for inode in indexed_inodes.keys() {
-                sender.drop_inbox_file_state(*inode, witness);
-            }
-        }
-
-        let gc_total = gc_orphaned_inbox_signals(read_only_db, &sender, &HashSet::new(), witness);
-        if gc_total > 0 {
-            log_general(format!(
-                "[COMPUTE] DeriveInboxSignals: GC cleared {} orphaned signal(s)",
-                gc_total
-            ));
-        }
-        return Result::success(
-            Computation::DeriveInboxSignals {
-                observed_inodes: HashMap::new(),
-            },
-            Vec::new(),
-        );
-    }
-
-    // Get indexed state: files table WHERE zone='inbox' (inode -> path)
-    let indexed_inodes = match read_only_db.get_all_inbox_inodes() {
-        Ok(inodes) => inodes,
-        Err(e) => {
-            return Result::failure(
-                Computation::DeriveInboxSignals {
-                    observed_inodes: HashMap::new(),
-                },
-                format!("Failed to get indexed inbox inodes: {}", e),
-            );
-        }
-    };
-
-    log_general(format!(
-        "[COMPUTE] DeriveInboxSignals: {} disk inodes, {} indexed inodes",
-        disk_inodes.len(),
-        indexed_inodes.len()
-    ));
-
-    let disk_set: HashSet<i64> = disk_inodes.keys().copied().collect();
-    let indexed_set: HashSet<i64> = indexed_inodes.keys().copied().collect();
-
-    let disk_only: Vec<i64> = disk_set.difference(&indexed_set).copied().collect();
-    let both: Vec<i64> = disk_set.intersection(&indexed_set).copied().collect();
-
-    // Emit InboxUnindexed signals for files on disk but not indexed
-    for inode in &disk_only {
-        if let Some(path) = disk_inodes.get(inode) {
-            ensure_typed_signal(
-                read_only_db,
-                &sender,
-                TypedSignalWrite::InboxUnindexed(InboxUnindexedSignal {
-                    inode: *inode,
-                    path: path.to_string(),
-                }),
-                witness,
-            );
-        }
-    }
-
-    // Emit InboxHealthy for files present in both disk and index
-    for inode in &both {
-        let path = disk_inodes.get(inode).or_else(|| indexed_inodes.get(inode));
-        let path_str = path.map(|p| p.as_str()).unwrap_or("");
-
-        // Clear stale InboxUnindexed signal
-        drop_stale_corpus_signal::<InboxUnindexedSignal>(read_only_db, &sender, *inode, witness);
-
-        ensure_typed_signal(
-            read_only_db,
-            &sender,
-            TypedSignalWrite::InboxHealthy(InboxHealthySignal {
-                inode: *inode,
-                path: path_str.to_string(),
-            }),
-            witness,
-        );
-    }
-
-    // ========================================================================
-    // Cascade-drop inbox state for files gone from disk
-    // ========================================================================
-    let index_only: Vec<i64> = indexed_set.difference(&disk_set).copied().collect();
-    if !index_only.is_empty() {
-        log_general(format!(
-            "[COMPUTE] DeriveInboxSignals: dropping inbox state for {} gone file(s)",
-            index_only.len()
-        ));
-        for inode in &index_only {
-            sender.drop_inbox_file_state(*inode, witness);
-        }
-    }
-
-    log_general(format!(
-        "[COMPUTE] DeriveInboxSignals: {} unindexed, {} healthy, {} gone",
-        disk_only.len(),
-        both.len(),
-        index_only.len()
-    ));
-
-    // ========================================================================
-    // GC Backstop: Clear orphaned inbox signals for inodes no longer known
-    // ========================================================================
-    // Disk presence is the sole authority — only disk inodes are "known"
-    let known_inodes: HashSet<i64> = disk_set;
-    let gc_total = gc_orphaned_inbox_signals(read_only_db, &sender, &known_inodes, witness);
-    if gc_total > 0 {
-        log_general(format!(
-            "[COMPUTE] DeriveInboxSignals: GC cleared {} orphaned signal(s)",
-            gc_total
-        ));
-    }
-
-    log_general("[COMPUTE] DeriveInboxSignals: complete");
-
-    Result::success(
+    derive_zone_signals::<InboxZone>(
+        read_only_db,
+        observed_inodes,
+        &sender,
+        witness,
         Computation::DeriveInboxSignals {
             observed_inodes: HashMap::new(),
         },
-        Vec::new(),
     )
-}
-
-/// GC orphaned corpus signals whose inodes are not in the known universe.
-///
-/// Returns the total number of orphaned signals cleared.
-fn gc_orphaned_corpus_signals(
-    read_only_db: &ReadOnlyDb<'_>,
-    sender: &write_thread::SignalWriteSender,
-    known_inodes: &HashSet<i64>,
-    witness: &ComputationWitness,
-) -> usize {
-    // FileInCorpus excluded: it IS the disk observation, always part of known_inodes
-    gc_signal_tables!(read_only_db, sender, known_inodes, witness, [
-        UnindexedFileSignal,
-        MissingFileSignal,
-        MovedFileSignal,
-        HealthyFileSignal,
-        CorruptFileSignal,
-        ShitFormatSignal,
-        MtimeOnlyMismatchSignal,
-        OutOfBandTagSyncSignal,
-        OutOfBandTagConflictSignal,
-        SubparDuplicateSignal,
-        CompoundTagSignal,
-        DeployReadySignal,
-        DeployedHealthySignal,
-        SidecarDeployReadySignal,
-        MissingDirectorySignal,
-        ExternalMatchSignal,
-        ReleasePackingSignal,
-        UnmatchedCorpusTrackSignal,
-    ])
-}
-
-/// GC orphaned inbox signals whose inodes are not in the known universe.
-///
-/// Returns the total number of orphaned signals cleared.
-/// FileInInbox excluded: it IS the disk observation, same reason FileInCorpus is excluded.
-fn gc_orphaned_inbox_signals(
-    read_only_db: &ReadOnlyDb<'_>,
-    sender: &write_thread::SignalWriteSender,
-    known_inodes: &HashSet<i64>,
-    witness: &ComputationWitness,
-) -> usize {
-    // FileInInbox excluded: it IS the disk observation, always part of known_inodes
-    gc_signal_tables!(read_only_db, sender, known_inodes, witness, [
-        InboxUnindexedSignal,
-        InboxHealthySignal,
-        InboxCorpusMatchSignal,
-    ])
 }
 
 /// Clear signals from a single corpus signal table for inodes not in `known_inodes`.
@@ -673,6 +440,18 @@ impl DeriveZoneSignals for CorpusZone {
         ])
     }
 
+    fn on_file_present(
+        inode: i64,
+        path: &str,
+        read_only_db: &ReadOnlyDb<'_>,
+        sender: &write_thread::SignalWriteSender,
+        witness: &ComputationWitness,
+    ) {
+        drop_stale_corpus_signal::<MissingFileSignal>(read_only_db, sender, inode, witness);
+        drop_stale_corpus_signal::<UnindexedFileSignal>(read_only_db, sender, inode, witness);
+        reconcile_healthy_file_signal(read_only_db, sender, inode, path, witness);
+    }
+
     fn known_inodes_for_gc(disk_set: &HashSet<i64>, indexed_set: &HashSet<i64>) -> HashSet<i64> {
         disk_set.union(indexed_set).copied().collect()
     }
@@ -705,6 +484,25 @@ impl DeriveZoneSignals for InboxZone {
             InboxHealthySignal,
             InboxCorpusMatchSignal,
         ])
+    }
+
+    fn on_file_present(
+        inode: i64,
+        path: &str,
+        read_only_db: &ReadOnlyDb<'_>,
+        sender: &write_thread::SignalWriteSender,
+        witness: &ComputationWitness,
+    ) {
+        drop_stale_corpus_signal::<InboxUnindexedSignal>(read_only_db, sender, inode, witness);
+        ensure_typed_signal(
+            read_only_db,
+            sender,
+            TypedSignalWrite::InboxHealthy(InboxHealthySignal {
+                inode,
+                path: path.to_string(),
+            }),
+            witness,
+        );
     }
 
     fn known_inodes_for_gc(disk_set: &HashSet<i64>, _indexed_set: &HashSet<i64>) -> HashSet<i64> {

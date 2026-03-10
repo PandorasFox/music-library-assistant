@@ -126,16 +126,16 @@ fn render_corpus_browser(
         // Render wizard pane
         let BrowserVariant::CorpusBrowser(ref mut v) = variant;
         if let Some(ref offer) = wizard_offer_snapshot {
-            let (title, lines) = match offer {
-                WizardOffer::Pane { title, lines } => (title.as_str(), lines.as_slice()),
+            let (title, content) = match offer {
+                WizardOffer::Pane { title, content } => (title.as_str(), content.as_slice()),
                 WizardOffer::Both {
                     pane_title,
-                    pane_lines,
+                    pane_content,
                     ..
-                } => (pane_title.as_str(), pane_lines.as_slice()),
+                } => (pane_title.as_str(), pane_content.as_slice()),
                 WizardOffer::Popup(_) => ("Info", &[][..]),
             };
-            render_wizard_pane(f, h_chunks[1], title, lines, v.wizard_pane_mut(), false);
+            render_wizard_pane(f, h_chunks[1], title, content, v.wizard_pane_mut(), false);
         }
     } else if show_art {
         // Horizontal split: tree (80%) | art preview (20%)

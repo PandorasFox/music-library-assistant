@@ -768,15 +768,13 @@ impl Database {
             .prepare("SELECT data FROM signal_packed_release WHERE key LIKE ?1")?;
         let rows = stmt.query_map(params![pattern], |row| {
             let blob: Vec<u8> = row.get(0)?;
-            let data: crate::meta::signals::data::PackedReleaseData = bincode::deserialize(&blob)
-                .map_err(|e| {
+            crate::meta::signals::data::PackedReleaseData::deserialize_compat(&blob).map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
                     0,
                     rusqlite::types::Type::Blob,
                     Box::new(e),
                 )
-            })?;
-            Ok(data)
+            })
         })?;
         Ok(rows.flatten().collect())
     }
@@ -894,9 +892,8 @@ impl Database {
                 if let Some(colon) = key.find(':') {
                     let prefix = &key[..colon];
                     if let Some(cat) = PackingCategory::from_key_prefix(prefix) {
-                        if let Ok(data) = bincode::deserialize::<
-                            crate::meta::signals::data::PackedReleaseData,
-                        >(&blob)
+                        if let Ok(data) =
+                            crate::meta::signals::data::PackedReleaseData::deserialize_compat(&blob)
                         {
                             release_category.insert(data.release_id, cat);
                         }

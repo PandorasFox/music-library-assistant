@@ -318,6 +318,20 @@ fn parse_release_packing_opinions(node: &kdl::KdlNode, opinions: &mut ReleasePac
                         }
                     }
                 }
+                ReleasePackingOpinions::KDL_LOW_CONFIDENCE_ACOUSTID_RATIO => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            opinions.low_confidence_max_acoustid_ratio = val;
+                        }
+                    }
+                }
+                ReleasePackingOpinions::KDL_LOW_CONFIDENCE_ALBUM_MATCH => {
+                    if let Some(entry) = child.entries().first() {
+                        if let Some(val) = entry.value().as_f64() {
+                            opinions.low_confidence_max_album_match = val;
+                        }
+                    }
+                }
                 _ => {}
             }
         }

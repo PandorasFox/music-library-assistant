@@ -191,6 +191,8 @@ pub struct ExternalMatchesData {
     pub packing_singles_count: usize,
     /// Incomplete releases (some but not all tracks assigned).
     pub packing_incomplete_count: usize,
+    /// Low-confidence releases (poor AcoustID coverage + low album match).
+    pub packing_low_confidence_count: usize,
     /// Packing knot components (conflict tangles requiring review).
     pub packing_knots_count: usize,
     /// Unsolved: had AcoustID match, was scored, lost conflict resolution.

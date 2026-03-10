@@ -316,13 +316,15 @@ impl App {
             PackingCategory::Perfect
             | PackingCategory::FullMatches
             | PackingCategory::Singles
-            | PackingCategory::Incomplete => {
+            | PackingCategory::Incomplete
+            | PackingCategory::LowConfidence => {
                 // Map UI category to signal category prefix
                 let prefix = match category {
                     PackingCategory::Perfect => PackedReleaseCategory::Perfect.key_prefix(),
                     PackingCategory::FullMatches => PackedReleaseCategory::FullMatch.key_prefix(),
                     PackingCategory::Singles => PackedReleaseCategory::Single.key_prefix(),
                     PackingCategory::Incomplete => PackedReleaseCategory::Incomplete.key_prefix(),
+                    PackingCategory::LowConfidence => PackedReleaseCategory::LowConfidence.key_prefix(),
                     PackingCategory::Knots
                     | PackingCategory::UnsolvedConflict
                     | PackingCategory::UnsolvedNoRelease

@@ -9,6 +9,7 @@ pub enum PackingCategory {
     FullMatches,
     Singles,
     Incomplete,
+    LowConfidence,
     Knots,
     /// Unsolved: had AcoustID match, was scored for releases, but lost conflict resolution.
     UnsolvedConflict,

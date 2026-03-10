@@ -216,6 +216,8 @@ pub fn execute_compute_release_mappings(
         knot_size_limit: rp.packing_knot_size_limit,
         singles_before_incompletes: rp.singles_before_incompletes,
         allow_resolve_knots_with_discographies: rp.allow_resolve_knots_with_discographies,
+        low_confidence_max_acoustid_ratio: rp.low_confidence_max_acoustid_ratio,
+        low_confidence_max_album_match: rp.low_confidence_max_album_match,
     });
 
     let deferred = vec![(
@@ -338,7 +340,7 @@ pub(crate) fn execute_map_perfect_releases(
         if component.len() == 1 {
             let eligible_idx = component[0];
             let siblings = eligible_siblings.get(&eligible_idx).map(|v| v.as_slice()).unwrap_or(&[]);
-            // Isolated node — emit directly
+            // Isolated node — emit directly (Perfect tier never triggers low-confidence)
             isolated_signals += emit_isolated_proposal_signals(
                 &eligible[eligible_idx],
                 ProposalTier::Perfect,
@@ -347,6 +349,8 @@ pub(crate) fn execute_map_perfect_releases(
                 siblings,
                 &sender,
                 witness,
+                0.0, // Perfect tier won't downgrade
+                0.0,
             );
             isolated_count += 1;
         } else {
@@ -447,6 +451,8 @@ pub(crate) fn execute_map_full_match_releases(
         read_only_db,
         &sender,
         witness,
+        state.low_confidence_max_acoustid_ratio,
+        state.low_confidence_max_album_match,
     );
 
     log_general(format!("[COMPUTE] MapFullMatchReleases: {}", log_msg));
@@ -512,6 +518,8 @@ pub(crate) fn execute_map_incomplete_releases(
         read_only_db,
         &sender,
         witness,
+        state.low_confidence_max_acoustid_ratio,
+        state.low_confidence_max_album_match,
     );
 
     log_general(format!("[COMPUTE] MapIncompleteReleases: {}", log_msg));
@@ -580,6 +588,8 @@ pub(crate) fn execute_map_single_releases(
         read_only_db,
         &sender,
         witness,
+        state.low_confidence_max_acoustid_ratio,
+        state.low_confidence_max_album_match,
     );
 
     log_general(format!("[COMPUTE] MapSingleReleases: {}", log_msg));

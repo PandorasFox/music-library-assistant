@@ -257,7 +257,8 @@ impl ReleasePackingBrowserState {
             PackingCategory::Perfect
             | PackingCategory::FullMatches
             | PackingCategory::Singles
-            | PackingCategory::Incomplete => {
+            | PackingCategory::Incomplete
+            | PackingCategory::LowConfidence => {
                 for idx in 0..self.releases.len() {
                     entries.push(PackingListEntry::Release { idx });
                 }

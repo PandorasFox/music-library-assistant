@@ -56,6 +56,7 @@ fn render_title_bar(f: &mut Frame, area: Rect, state: &ReleasePackingBrowserStat
         PackingCategory::FullMatches => "Full Matches",
         PackingCategory::Singles => "Singles",
         PackingCategory::Incomplete => "Incomplete Releases",
+        PackingCategory::LowConfidence => "Low Confidence",
         PackingCategory::UnsolvedConflict => "Unsolved — Lost Conflict",
         PackingCategory::UnsolvedNoRelease => "Unsolved — No Viable Release",
         PackingCategory::UnsolvedNoMatch => "Unsolved — No AcoustID Match",

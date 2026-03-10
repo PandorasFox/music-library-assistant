@@ -850,6 +850,14 @@ impl Database {
                 |row| row.get(0),
             )
             .unwrap_or(0);
+        let packing_low_confidence_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_packed_release WHERE key LIKE 'low_confidence:%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
         let packing_knots_count: usize = self
             .conn
             .query_row(
@@ -901,6 +909,7 @@ impl Database {
             packing_full_match_count,
             packing_singles_count,
             packing_incomplete_count,
+            packing_low_confidence_count,
             packing_knots_count,
             unsolved_conflict_count,
             unsolved_no_release_count,

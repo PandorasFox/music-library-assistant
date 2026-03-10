@@ -321,6 +321,42 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                         }
                     },
                 ),
+                field(
+                    "Low confidence max AcoustID ratio",
+                    "Max AcoustID-matched fraction to trigger low-confidence downgrade (0.0-1.0)",
+                    ConfigValue::Float(ops.release_packing.low_confidence_max_acoustid_ratio),
+                    source_for(
+                        (ops.release_packing.low_confidence_max_acoustid_ratio
+                            - defaults.release_packing.low_confidence_max_acoustid_ratio)
+                            .abs()
+                            < f64::EPSILON,
+                        ReleasePackingOpinions::KDL_LOW_CONFIDENCE_ACOUSTID_RATIO,
+                    ),
+                    false,
+                    |v, c| {
+                        if let ConfigValue::Float(f) = v {
+                            c.opinions.release_packing.low_confidence_max_acoustid_ratio = *f;
+                        }
+                    },
+                ),
+                field(
+                    "Low confidence max album match",
+                    "Max avg album_match score to trigger low-confidence downgrade (0.0-1.0)",
+                    ConfigValue::Float(ops.release_packing.low_confidence_max_album_match),
+                    source_for(
+                        (ops.release_packing.low_confidence_max_album_match
+                            - defaults.release_packing.low_confidence_max_album_match)
+                            .abs()
+                            < f64::EPSILON,
+                        ReleasePackingOpinions::KDL_LOW_CONFIDENCE_ALBUM_MATCH,
+                    ),
+                    false,
+                    |v, c| {
+                        if let ConfigValue::Float(f) = v {
+                            c.opinions.release_packing.low_confidence_max_album_match = *f;
+                        }
+                    },
+                ),
             ],
         },
         // Candidate Weights (AcoustID-backed scoring)

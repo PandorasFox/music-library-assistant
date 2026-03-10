@@ -181,6 +181,16 @@ When a winning release has "Various Artists" as its album artist, a more specifi
 | FullMatch | `full_match:` | All slots filled, at least one via elimination |
 | Single | `single:` | Single-track release |
 | Incomplete | `incomplete:` | Partial coverage |
+| LowConfidence | `low_confidence:` | FullMatch/Incomplete downgraded: AcoustID ratio < threshold AND avg album_match < threshold |
+
+### Low-Confidence Detection
+
+After tier classification, FullMatch and Incomplete proposals are checked for low-confidence indicators. When both conditions are met simultaneously:
+
+1. **AcoustID ratio** (rows with `match_method == AcoustId` / total rows) is below `low-confidence-max-acoustid-ratio` (default 0.25)
+2. **Average album_match** (mean of `album_match` from all row score breakdowns) is below `low-confidence-max-album-match` (default 0.30)
+
+...the proposal's category is downgraded from FullMatch/Incomplete to **LowConfidence**. This catches false matches where a small number of garbage AcoustID hits led elimination to fill the remaining slots on an unrelated release (e.g., OutRun 20th Anniversary Box mapped to Bayonetta OST). Perfect and Single tiers are never downgraded.
 
 ---
 
@@ -219,6 +229,8 @@ All configurable under `release-packing` in `config.kdl`:
 | `packing-knot-size-limit` | 50 | Max component size before forced knot extraction (0 to disable) |
 | `singles-before-incompletes` | true | Run singles MIS round before incompletes |
 | `allow-resolve-knots-with-discographies` | true | Reduce knots to covering proposals when possible |
+| `low-confidence-max-acoustid-ratio` | 0.25 | Max AcoustID-matched fraction for low-confidence downgrade |
+| `low-confidence-max-album-match` | 0.30 | Max avg album_match score for low-confidence downgrade |
 | ~~`ELIMINATION_SCORE_THRESHOLD`~~ | Removed | No threshold — directory constraint provides the quality gate |
 
 ---

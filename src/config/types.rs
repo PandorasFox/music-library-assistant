@@ -377,6 +377,13 @@ pub struct ReleasePackingOpinions {
     /// are reduced to only those covering proposals before greedy resolution.
     /// A lazy alternative to manual knot review for discography releases. Default: true.
     pub allow_resolve_knots_with_discographies: bool,
+    /// Maximum AcoustID ratio (matched-via-AcoustID / total rows) below which
+    /// a FullMatch or Incomplete proposal is downgraded to LowConfidence. Default: 0.25.
+    pub low_confidence_max_acoustid_ratio: f64,
+    /// Maximum average album_match score below which a FullMatch or Incomplete
+    /// proposal is downgraded to LowConfidence. Default: 0.30.
+    /// Both thresholds must be met simultaneously for the downgrade.
+    pub low_confidence_max_album_match: f64,
 }
 
 impl Default for ReleasePackingOpinions {
@@ -391,6 +398,8 @@ impl Default for ReleasePackingOpinions {
             packing_knot_size_limit: Self::DEFAULT_PACKING_KNOT_SIZE_LIMIT,
             singles_before_incompletes: true,
             allow_resolve_knots_with_discographies: true,
+            low_confidence_max_acoustid_ratio: Self::DEFAULT_LOW_CONFIDENCE_MAX_ACOUSTID_RATIO,
+            low_confidence_max_album_match: Self::DEFAULT_LOW_CONFIDENCE_MAX_ALBUM_MATCH,
         }
     }
 }
@@ -399,6 +408,8 @@ impl ReleasePackingOpinions {
     pub const DEFAULT_TITLE_PREASSIGN_THRESHOLD: f64 = 0.95;
     pub const DEFAULT_PACKING_KNOT_RATIO: f64 = 3.0;
     pub const DEFAULT_PACKING_KNOT_SIZE_LIMIT: usize = 50;
+    pub const DEFAULT_LOW_CONFIDENCE_MAX_ACOUSTID_RATIO: f64 = 0.25;
+    pub const DEFAULT_LOW_CONFIDENCE_MAX_ALBUM_MATCH: f64 = 0.30;
 
     pub const KDL_DURATION_TOLERANCE_PCT: &str = "duration-tolerance-pct";
     pub const KDL_MIN_CONFIDENCE: &str = "min-confidence";
@@ -409,6 +420,8 @@ impl ReleasePackingOpinions {
     pub const KDL_PACKING_KNOT_SIZE_LIMIT: &str = "packing-knot-size-limit";
     pub const KDL_SINGLES_BEFORE_INCOMPLETES: &str = "singles-before-incompletes";
     pub const KDL_ALLOW_DISCOGRAPHY_REDUCTION: &str = "allow-resolve-knots-with-discographies";
+    pub const KDL_LOW_CONFIDENCE_ACOUSTID_RATIO: &str = "low-confidence-max-acoustid-ratio";
+    pub const KDL_LOW_CONFIDENCE_ALBUM_MATCH: &str = "low-confidence-max-album-match";
 }
 
 /// Directory granularity for inbox organize workflow.

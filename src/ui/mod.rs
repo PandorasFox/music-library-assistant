@@ -962,10 +962,15 @@ fn run_app<B: ratatui::backend::Backend>(
             if let Some(ref data) = app.cached_external_matches {
                 view.update(data.clone());
             }
-            view.fetch_active = app.witch.is_external_fetch_active();
+            let new_fetch_active = app.witch.is_external_fetch_active();
+            let fetch_changed = view.fetch_active != new_fetch_active;
+            view.fetch_active = new_fetch_active;
             view.fetch_progress = app.witch.external_fetch_progress().cloned();
             if view.fetch_active {
                 view.tick_count = view.tick_count.wrapping_add(1);
+            }
+            if fetch_changed {
+                view.rebuild_items();
             }
         }
         if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate {

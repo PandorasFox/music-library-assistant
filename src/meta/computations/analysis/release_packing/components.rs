@@ -83,6 +83,56 @@ pub(super) fn find_conflict_components(proposals: &[Proposal]) -> Vec<Vec<usize>
     components
 }
 
+/// Check whether a proposal should be downgraded to LowConfidence.
+///
+/// Only applies to FullMatch and Incomplete tiers. Returns true when the
+/// AcoustID ratio (rows matched via AcoustID / total rows) and the average
+/// album_match score are both below the configured thresholds.
+fn should_downgrade_to_low_confidence(
+    proposal: &Proposal,
+    tier: ProposalTier,
+    low_confidence_max_acoustid_ratio: f64,
+    low_confidence_max_album_match: f64,
+) -> bool {
+    match tier {
+        ProposalTier::FullMatch | ProposalTier::Incomplete => {}
+        _ => return false,
+    }
+
+    if proposal.rows.is_empty() {
+        return false;
+    }
+
+    let total = proposal.rows.len() as f64;
+    let acoustid_count = proposal
+        .rows
+        .iter()
+        .filter(|r| r.match_method == 0) // 0 = AcoustId
+        .count() as f64;
+    let acoustid_ratio = acoustid_count / total;
+
+    if acoustid_ratio >= low_confidence_max_acoustid_ratio {
+        return false;
+    }
+
+    // Compute average album_match from score breakdowns
+    let mut album_match_sum = 0.0f64;
+    let mut decoded_count = 0usize;
+    for row in &proposal.rows {
+        if let Ok(breakdown) = bincode::deserialize::<PackingScoreBreakdown>(&row.score_breakdown) {
+            album_match_sum += breakdown.album_match;
+            decoded_count += 1;
+        }
+    }
+
+    if decoded_count == 0 {
+        return false;
+    }
+
+    let avg_album_match = album_match_sum / decoded_count as f64;
+    avg_album_match < low_confidence_max_album_match
+}
+
 /// Emit signals for a single isolated proposal (component of size 1).
 ///
 /// Used by tier orchestrators to handle trivially-selected proposals without
@@ -95,6 +145,8 @@ pub(super) fn emit_isolated_proposal_signals(
     siblings: &[AlternativeRelease],
     sender: &write_thread::SignalWriteSender,
     witness: &ComputationWitness,
+    low_confidence_max_acoustid_ratio: f64,
+    low_confidence_max_album_match: f64,
 ) -> usize {
     let release_id = &proposal.rows[0].release_id;
     let (release_title, release_artist, total_tracks) =
@@ -104,12 +156,21 @@ pub(super) fn emit_isolated_proposal_signals(
         };
 
     let filled = proposal.rows.len() as u32;
-    let category = match tier {
+    let mut category = match tier {
         ProposalTier::Perfect => PackedReleaseCategory::Perfect,
         ProposalTier::FullMatch => PackedReleaseCategory::FullMatch,
         ProposalTier::Incomplete => PackedReleaseCategory::Incomplete,
         ProposalTier::Single => PackedReleaseCategory::Single,
     };
+
+    if should_downgrade_to_low_confidence(
+        proposal,
+        tier,
+        low_confidence_max_acoustid_ratio,
+        low_confidence_max_album_match,
+    ) {
+        category = PackedReleaseCategory::LowConfidence;
+    }
 
     log_general(format!(
         "[PACKING-PICK] tier={} release={} score={:.4} inodes={} filled={}/{}",
@@ -241,6 +302,8 @@ pub(super) fn emit_knot_component_signals(
     corpus_paths: &HashMap<i64, String>,
     sender: &write_thread::SignalWriteSender,
     witness: &ComputationWitness,
+    low_confidence_max_acoustid_ratio: f64,
+    low_confidence_max_album_match: f64,
 ) -> Vec<usize> {
     // Collect contested inodes
     let mut comp_inodes: HashSet<i64> = HashSet::new();
@@ -325,6 +388,8 @@ pub(super) fn emit_knot_component_signals(
                     &siblings,
                     sender,
                     witness,
+                    low_confidence_max_acoustid_ratio,
+                    low_confidence_max_album_match,
                 );
             }
             return selected;
@@ -461,6 +526,8 @@ pub(super) fn orchestrate_partial_tier(
     read_only_db: &ReadOnlyDb<'_>,
     sender: &write_thread::SignalWriteSender,
     witness: &ComputationWitness,
+    low_confidence_max_acoustid_ratio: f64,
+    low_confidence_max_album_match: f64,
 ) -> (Vec<AnalysisComputation>, String) {
     let pool_size = pool.len();
 
@@ -621,6 +688,8 @@ pub(super) fn orchestrate_partial_tier(
                 siblings,
                 sender,
                 witness,
+                low_confidence_max_acoustid_ratio,
+                low_confidence_max_album_match,
             );
             isolated_count += 1;
             continue;
@@ -658,6 +727,8 @@ pub(super) fn orchestrate_partial_tier(
                 &corpus_paths,
                 sender,
                 witness,
+                low_confidence_max_acoustid_ratio,
+                low_confidence_max_album_match,
             );
 
             knot_component_count += 1;
@@ -778,11 +849,16 @@ pub(crate) fn execute_resolve_packing_component(
         .map(|(k, (t, a, tt))| (k.as_str(), (t.as_str(), a.as_str(), *tt)))
         .collect();
 
-    let category = match tier {
-        ProposalTier::Perfect => PackedReleaseCategory::Perfect,
-        ProposalTier::FullMatch => PackedReleaseCategory::FullMatch,
-        ProposalTier::Incomplete => PackedReleaseCategory::Incomplete,
-        ProposalTier::Single => PackedReleaseCategory::Single,
+    // Load low-confidence thresholds from config
+    let (lc_acoustid_ratio, lc_album_match) = match crate::config::load_config() {
+        Ok(c) => (
+            c.opinions.release_packing.low_confidence_max_acoustid_ratio,
+            c.opinions.release_packing.low_confidence_max_album_match,
+        ),
+        Err(_) => {
+            let d = crate::config::ReleasePackingOpinions::default();
+            (d.low_confidence_max_acoustid_ratio, d.low_confidence_max_album_match)
+        }
     };
 
     let mut total_assigned = 0usize;
@@ -802,6 +878,16 @@ pub(crate) fn execute_resolve_packing_component(
             };
 
         let filled = proposal.rows.len() as u32;
+
+        let mut category = match tier {
+            ProposalTier::Perfect => PackedReleaseCategory::Perfect,
+            ProposalTier::FullMatch => PackedReleaseCategory::FullMatch,
+            ProposalTier::Incomplete => PackedReleaseCategory::Incomplete,
+            ProposalTier::Single => PackedReleaseCategory::Single,
+        };
+        if should_downgrade_to_low_confidence(proposal, tier, lc_acoustid_ratio, lc_album_match) {
+            category = PackedReleaseCategory::LowConfidence;
+        }
 
         log_general(format!(
             "[PACKING-PICK] tier={} release={} score={:.4} inodes={} filled={}/{}",

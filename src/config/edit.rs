@@ -248,6 +248,25 @@ pub fn apply_config_edits_to_kdl(
                 new_rp.allow_resolve_knots_with_discographies,
             );
         }
+        if (new_rp.low_confidence_max_acoustid_ratio - old_rp.low_confidence_max_acoustid_ratio)
+            .abs()
+            > f64::EPSILON
+        {
+            set_or_create_float_node(
+                block,
+                ReleasePackingOpinions::KDL_LOW_CONFIDENCE_ACOUSTID_RATIO,
+                new_rp.low_confidence_max_acoustid_ratio,
+            );
+        }
+        if (new_rp.low_confidence_max_album_match - old_rp.low_confidence_max_album_match).abs()
+            > f64::EPSILON
+        {
+            set_or_create_float_node(
+                block,
+                ReleasePackingOpinions::KDL_LOW_CONFIDENCE_ALBUM_MATCH,
+                new_rp.low_confidence_max_album_match,
+            );
+        }
     }
 
     // --- Idle Rescan Interval ---

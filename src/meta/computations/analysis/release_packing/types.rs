@@ -221,6 +221,10 @@ pub(crate) struct ReleaseMappingState {
     /// When true, knots containing proposals that cover ALL contested inodes
     /// are reduced to only those covering proposals before greedy resolution.
     pub allow_resolve_knots_with_discographies: bool,
+    /// Low-confidence downgrade: max AcoustID ratio threshold.
+    pub low_confidence_max_acoustid_ratio: f64,
+    /// Low-confidence downgrade: max average album_match threshold.
+    pub low_confidence_max_album_match: f64,
 }
 
 

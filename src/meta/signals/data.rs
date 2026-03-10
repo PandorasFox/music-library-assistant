@@ -561,6 +561,9 @@ pub enum PackedReleaseCategory {
     Single,
     /// Some but not all slots filled (includes former near-misses).
     Incomplete,
+    /// FullMatch/Incomplete with poor AcoustID coverage and low album match —
+    /// likely mispack from elimination filling slots on wrong release.
+    LowConfidence,
 }
 
 impl PackedReleaseCategory {
@@ -571,6 +574,7 @@ impl PackedReleaseCategory {
             Self::FullMatch => "full_match",
             Self::Single => "single",
             Self::Incomplete => "incomplete",
+            Self::LowConfidence => "low_confidence",
         }
     }
 }

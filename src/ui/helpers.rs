@@ -2,7 +2,7 @@
 //!
 //! Common helpers used across multiple UI modules to avoid code duplication.
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear};
@@ -27,32 +27,6 @@ pub fn render_pane(f: &mut Frame, area: Rect, block: Block) -> Rect {
     f.render_widget(block, area);
     f.render_widget(Clear, inner);
     inner
-}
-
-/// Compute a centered rectangle with fixed dimensions within an area.
-///
-/// If the fixed dimensions exceed the area, the modal is clamped to fit.
-pub fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
-    let actual_width = width.min(area.width);
-    let actual_height = height.min(area.height);
-
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length((area.height.saturating_sub(actual_height)) / 2),
-            Constraint::Length(actual_height),
-            Constraint::Min(0),
-        ])
-        .split(area);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length((area.width.saturating_sub(actual_width)) / 2),
-            Constraint::Length(actual_width),
-            Constraint::Min(0),
-        ])
-        .split(popup_layout[1])[1]
 }
 
 /// Compute scroll offset to keep cursor visible (edge-pinning).

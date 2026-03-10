@@ -7,8 +7,8 @@
 //!
 //! ## Controls (Corpus Browsing Phase)
 //!
-//! - Up/Down/j/k: Navigate corpus tree
-//! - Left/Right/h/l: Collapse/expand directories
+//! - Up/Down: Navigate corpus tree
+//! - Left/Right: Collapse/expand directories
 //! - Enter: Select directory (opens emplace popup), or create new directory
 //! - S: Skip current directory
 //! - Escape: Cancel entire workflow

@@ -881,7 +881,7 @@ impl UnifiedTagEditorState {
         // Size modal based on content
         let height = (values.len() + 5).min(15) as u16; // values + add entry + padding + controls
         let width = 50u16;
-        let modal_area = crate::ui::helpers::centered_rect_fixed(width, height, area);
+        let modal_area = crate::ui::widgets::centered_rect_fixed(width, height, area);
         f.render_widget(Clear, modal_area);
 
         let modal_block = Block::default()

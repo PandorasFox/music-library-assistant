@@ -523,6 +523,17 @@ pub enum MatchClassification {
     Subpar,
 }
 
+impl From<crate::meta::signals::data::CorpusMatchQuality> for MatchClassification {
+    fn from(q: crate::meta::signals::data::CorpusMatchQuality) -> Self {
+        use crate::meta::signals::data::CorpusMatchQuality;
+        match q {
+            CorpusMatchQuality::Better => Self::Better,
+            CorpusMatchQuality::Equivalent => Self::Equivalent,
+            CorpusMatchQuality::Subpar => Self::Subpar,
+        }
+    }
+}
+
 /// Detail about a single corpus file matching an inbox file.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CorpusMatchDetail {

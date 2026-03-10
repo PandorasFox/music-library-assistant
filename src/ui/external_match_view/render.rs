@@ -129,16 +129,7 @@ fn render_fetch_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static> {
         ("Idle".to_string(), Color::Green)
     };
 
-    let marker = if is_cursor { "▸ " } else { "  " };
-    let label_style = if is_cursor {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else if !snap.has_api_key || snap.fetch_active {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default().fg(Color::White)
-    };
+    let (marker, label_style) = cursor_marker_style(is_cursor, !snap.has_api_key || snap.fetch_active);
 
     Line::from(vec![
         Span::styled(marker, label_style),
@@ -167,16 +158,7 @@ fn render_pack_releases_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'st
         ("Ready", Color::Green)
     };
 
-    let marker = if is_cursor { "▸ " } else { "  " };
-    let label_style = if is_cursor {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else if snap.fetch_active || !has_data {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default().fg(Color::White)
-    };
+    let (marker, label_style) = cursor_marker_style(is_cursor, snap.fetch_active || !has_data);
 
     Line::from(vec![
         Span::styled(marker, label_style),
@@ -196,16 +178,7 @@ fn render_bucket_line(
     count: usize,
     dim: bool,
 ) -> Line<'static> {
-    let cursor_marker = if is_cursor { "▸ " } else { "  " };
-    let label_style = if is_cursor {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else if dim {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default().fg(Color::White)
-    };
+    let (cursor_marker, label_style) = cursor_marker_style(is_cursor, dim);
 
     Line::from(vec![
         Span::styled(cursor_marker.to_string(), label_style),
@@ -222,14 +195,7 @@ fn render_packing_line(
     label: &str,
     count: usize,
 ) -> Line<'static> {
-    let marker = if is_cursor { "▸ " } else { "  " };
-    let label_style = if is_cursor {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::White)
-    };
+    let (marker, label_style) = cursor_marker_style(is_cursor, false);
 
     Line::from(vec![
         Span::styled(marker.to_string(), label_style),
@@ -237,6 +203,23 @@ fn render_packing_line(
         Span::styled(format!("{:<24}", label), label_style),
         Span::styled(format!("{:>6}", count), Style::default().fg(color)),
     ])
+}
+
+/// Compute cursor marker ("▸ " or "  ") and label style for list rows.
+///
+/// Cursor row is always Cyan+Bold. Non-cursor: DarkGray if `dim`, White otherwise.
+fn cursor_marker_style(is_cursor: bool, dim: bool) -> (&'static str, Style) {
+    let marker = if is_cursor { "▸ " } else { "  " };
+    let style = if is_cursor {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else if dim {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    (marker, style)
 }
 
 fn packing_entry_info(

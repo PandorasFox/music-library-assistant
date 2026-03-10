@@ -1315,7 +1315,7 @@ impl Database {
         &self,
         _bitrate_fuzz_percent: f64,
     ) -> Result<Vec<crate::meta::views::InboxCorpusMatchEntry>> {
-        use crate::meta::signals::data::{CorpusMatchQuality, InboxCorpusMatchData};
+        use crate::meta::signals::data::InboxCorpusMatchData;
         use crate::meta::views::{CorpusMatchDetail, InboxCorpusMatchEntry, MatchClassification};
 
         let mut stmt = self
@@ -1342,12 +1342,7 @@ impl Database {
                 continue;
             }
 
-            // Read pre-computed classification from signal data
-            let classification = match match_data.classification {
-                CorpusMatchQuality::Better => MatchClassification::Better,
-                CorpusMatchQuality::Equivalent => MatchClassification::Equivalent,
-                CorpusMatchQuality::Subpar => MatchClassification::Subpar,
-            };
+            let classification: MatchClassification = match_data.classification.into();
 
             // Look up quality strings for display only
             let inbox_quality = self.get_quality_string(inbox_inode);

@@ -84,8 +84,6 @@ pub struct Eye {
     current_blink_type: BlinkType,
     /// Remaining flutter blinks in a flutter sequence
     flutter_count: u8,
-    /// Set to true when a blink just completed (for d20 roll trigger in UI)
-    blink_completed: bool,
 }
 
 impl Default for Eye {
@@ -96,7 +94,6 @@ impl Default for Eye {
             next_blink_delay_secs: Self::random_blink_delay(),
             current_blink_type: BlinkType::Normal,
             flutter_count: 0,
-            blink_completed: false,
         }
     }
 }
@@ -129,9 +126,6 @@ impl Eye {
     /// Pass `can_animate=false` to keep the eye closed (used when daemon's
     /// eye_state is Closed or during eyeballing).
     pub fn update(&mut self, can_animate: bool) {
-        // Clear blink_completed flag at start of each update
-        self.blink_completed = false;
-
         if !can_animate {
             // Force closed state, don't advance animation
             self.state = EyeAnimationState::Closed;
@@ -230,7 +224,6 @@ impl Eye {
         self.state = EyeAnimationState::Idle;
         self.state_start_time = now;
         self.next_blink_delay_secs = Self::random_blink_delay();
-        self.blink_completed = true;
     }
 
     // ========================================================================

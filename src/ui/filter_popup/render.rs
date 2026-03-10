@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::ui::helpers::centered_rect_fixed;
+use crate::ui::widgets::centered_rect_fixed;
 
 use super::state::{FilterConditionType, FilterFieldFocus, FilterPopupState};
 

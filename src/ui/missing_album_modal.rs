@@ -6,8 +6,8 @@
 //! ## Controls
 //!
 //! - Shift+Up/Down: Cycle focus between track list and resolution buttons
-//! - Up/Down/j/k: Navigate track list (List focus)
-//! - Left/Right/h/l: Cycle resolution option (Buttons focus)
+//! - Up/Down: Navigate track list (List focus)
+//! - Left/Right: Cycle resolution option (Buttons focus)
 //! - Enter: Confirm selected resolution (Buttons focus)
 //! - Tab/Shift-Tab: Navigate between artist groups
 //! - t: Edit selected track in tag editor

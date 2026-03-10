@@ -23,9 +23,6 @@ use crate::ui::helpers::render_pane;
 use crate::ui::input::InputAction;
 use crate::ui::widgets::standard_list::ListInputResult;
 
-// TODO: Re-enable when corpus::deploy is available
-// use crate::corpus::deploy::compute_deployment_path_with_tags;
-
 pub use state::TagSearchState;
 pub use types::{
     ComparisonOperator, FileTypeCategory, SearchCondition, TagSearchAction, TagSearchMode,

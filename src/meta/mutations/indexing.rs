@@ -29,6 +29,67 @@ use super::types::{
     SignalClearScope,
 };
 
+/// Macro to reduce boilerplate for the common `MutationExecutor` pattern where
+/// `execute` delegates to a helper function and wraps the result via
+/// `MutationResult::from_unit_result`.
+///
+/// All 6 required trait methods are specified positionally. The two optional
+/// methods (`paths_for_signal_updates` and `diff_entries`) are provided via
+/// trailing `key => expr` arms — omit them to keep the trait defaults.
+///
+/// Expressions in the body can use `self` (the mutation struct) and `ctx`
+/// (the `MutationContext` passed to `execute`).
+macro_rules! impl_mutation_executor {
+    (
+        $struct_name:ident, $variant:ident,
+        label: $label:expr,
+        staging: $staging:expr,
+        signal_clear_scope: $scope:expr,
+        recomputation_scope: $recomp:expr,
+        execute: |$self_:ident, $ctx:ident| $execute_expr:expr,
+        affected_inodes: |$self_i:ident| $inodes:expr
+        $(, paths_for_signal_updates: |$self_p:ident| $paths:expr)?
+        $(, diff_entries: |$self_d:ident| $diff:expr)?
+        $(,)?
+    ) => {
+        impl MutationExecutor for $struct_name {
+            fn label(&self) -> &'static str { $label }
+            fn staging(&self) -> super::traits::MutationStaging { $staging }
+
+            fn execute(&self, ctx: &MutationContext) -> MutationResult {
+                let $self_ = self;
+                let $ctx = ctx;
+                let start = std::time::Instant::now();
+                let result = $execute_expr;
+                MutationResult::from_unit_result(Mutation::$variant(self.clone()), result, start)
+            }
+
+            fn signal_clear_scope(&self) -> SignalClearScope { $scope }
+
+            fn affected_inodes(&self) -> Vec<i64> {
+                let $self_i = self;
+                $inodes
+            }
+
+            fn recomputation_scope(&self) -> RecomputationScope { $recomp }
+
+            $(
+                fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
+                    let $self_p = self;
+                    $paths
+                }
+            )?
+
+            $(
+                fn diff_entries(&self) -> Vec<DiffEntry> {
+                    let $self_d = self;
+                    $diff
+                }
+            )?
+        }
+    };
+}
+
 /// File types that should trigger ShitFormat signal (non-Vorbis containers).
 /// Includes lossy formats with poor metadata and lossless needing remux.
 const SHIT_FORMAT_TYPES: &[&str] = &[
@@ -225,423 +286,198 @@ impl MutationExecutor for IndexFileFromPathMutation {
     }
 }
 
-impl MutationExecutor for UpdateFilePathMutation {
-    fn label(&self) -> &'static str {
-        "Path update"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
-    }
+impl_mutation_executor!(
+    UpdateFilePathMutation, UpdateFilePath,
+    label: "Path update",
+    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    signal_clear_scope: SignalClearScope::MutableOnly,
+    recomputation_scope: RecomputationScope::FILES | RecomputationScope::TAGS,
+    execute: |s, ctx| execute_update_file_path(
+        ctx.read_db, &s.zone, s.inode, &s.new_path,
+        s.new_zone.as_deref(), ctx.witness,
+    ),
+    affected_inodes: |s| vec![s.inode],
+    diff_entries: |s| vec![DiffEntry::new(
+        path_filename(&s.new_path),
+        &s.zone,
+        s.new_path.display(),
+    )],
+);
 
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_update_file_path(
-            ctx.read_db, &self.zone, self.inode, &self.new_path,
-            self.new_zone.as_deref(), ctx.witness,
-        );
-        MutationResult::from_unit_result(Mutation::UpdateFilePath(self.clone()), result, start)
-    }
+impl_mutation_executor!(
+    DropFromIndexMutation, DropFromIndex,
+    label: "Drop from index",
+    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush),
+    signal_clear_scope: SignalClearScope::All,
+    recomputation_scope: RecomputationScope::FILES | RecomputationScope::DEPLOY,
+    execute: |s, ctx| execute_drop_from_index(
+        ctx.read_db, &s.path, s.inode, s.zone.as_deref(), ctx.witness,
+    ),
+    affected_inodes: |s| s.inode.into_iter().collect(),
+    diff_entries: |s| vec![DiffEntry::new(
+        path_filename(&s.path),
+        s.path.display(),
+        "[removed]",
+    )],
+);
 
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::MutableOnly
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        vec![self.inode]
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::FILES | RecomputationScope::TAGS
-    }
+impl_mutation_executor!(
+    DropDirectoryFromIndexMutation, DropDirectoryFromIndex,
+    label: "Drop directory from index",
+    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush),
+    signal_clear_scope: SignalClearScope::All,
+    recomputation_scope: RecomputationScope::FILES | RecomputationScope::DEPLOY,
+    execute: |s, ctx| execute_drop_directory_from_index(ctx.read_db, &s.directory_path, ctx.witness),
+    affected_inodes: |_s| Vec::new(),
+    diff_entries: |s| vec![DiffEntry::new(
+        path_filename(&s.directory_path),
+        "[indexed]",
+        "[removed]",
+    )],
+);
 
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.new_path),
-            &self.zone,
-            self.new_path.display(),
-        )]
-    }
-}
+impl_mutation_executor!(
+    AcknowledgeMtimeOnlyMutation, AcknowledgeMtimeOnly,
+    label: "Acknowledge mtime",
+    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    signal_clear_scope: SignalClearScope::MutableOnly,
+    recomputation_scope: RecomputationScope::EMPTY,
+    execute: |s, ctx| execute_acknowledge_mtime_only(ctx.read_db, &s.tracks, ctx.witness).map(|_| ()),
+    affected_inodes: |s| s.tracks.iter().map(|(inode, _)| *inode).collect(),
+    paths_for_signal_updates: |s| s.tracks.iter().map(|(_, path)| path.clone()).collect(),
+    diff_entries: |s| s.tracks
+        .iter()
+        .map(|(_, path)| {
+            DiffEntry::new(path_filename(path), "[mtime mismatch]", "acknowledged")
+        })
+        .collect(),
+);
 
-impl MutationExecutor for DropFromIndexMutation {
-    fn label(&self) -> &'static str {
-        "Drop from index"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush)
-    }
+impl_mutation_executor!(
+    ApplyDbTagsToDiskMutation, ApplyDbTagsToDisk,
+    label: "Tag sync (DB→disk)",
+    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    signal_clear_scope: SignalClearScope::MutableOnly,
+    recomputation_scope: RecomputationScope::TAGS,
+    execute: |s, ctx| execute_apply_db_tags_to_disk(
+        ctx.read_db, s.inode, &s.path, s.zone, ctx.witness,
+    ),
+    affected_inodes: |s| vec![s.inode],
+    paths_for_signal_updates: |s| vec![s.path.clone()],
+    diff_entries: |s| vec![DiffEntry::new(
+        path_filename(&s.path),
+        "disk tags",
+        "overwrite \u{2192} DB",
+    )],
+);
 
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_drop_from_index(
-            ctx.read_db, &self.path, self.inode, self.zone.as_deref(), ctx.witness,
-        );
-        MutationResult::from_unit_result(Mutation::DropFromIndex(self.clone()), result, start)
-    }
+impl_mutation_executor!(
+    FlushTagsToDiskMutation, FlushTagsToDisk,
+    label: "Tag flush",
+    staging: super::traits::MutationStaging::ChainEmitted,
+    signal_clear_scope: SignalClearScope::MutableOnly,
+    recomputation_scope: RecomputationScope::TAGS,
+    execute: |s, ctx| execute_flush_tags_to_disk(
+        s.inode, &s.path, &s.expected_tags, s.zone, ctx.read_db, ctx.witness,
+    ),
+    affected_inodes: |s| vec![s.inode],
+    paths_for_signal_updates: |s| vec![s.path.clone()],
+);
 
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::All
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        self.inode.into_iter().collect()
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::FILES | RecomputationScope::DEPLOY
-    }
+impl_mutation_executor!(
+    AssimilateDiskTagsToDbMutation, AssimilateDiskTagsToDb,
+    label: "Tag sync (disk→DB)",
+    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    signal_clear_scope: SignalClearScope::MutableOnly,
+    recomputation_scope: RecomputationScope::TAGS,
+    execute: |s, ctx| execute_assimilate_disk_tags_to_db(
+        ctx.read_db, s.inode, &s.path, s.zone.as_deref(), ctx.session_id, ctx.witness,
+    ),
+    affected_inodes: |s| vec![s.inode],
+    paths_for_signal_updates: |s| vec![s.path.clone()],
+    diff_entries: |s| vec![DiffEntry::new(
+        path_filename(&s.path),
+        "DB tags",
+        "accept \u{2190} disk",
+    )],
+);
 
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.path),
-            self.path.display(),
-            "[removed]",
-        )]
-    }
-}
+impl_mutation_executor!(
+    EmitCanonicalTagMutation, EmitCanonicalTag,
+    label: "Mark canonical",
+    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    signal_clear_scope: SignalClearScope::None,
+    recomputation_scope: RecomputationScope::TAGS,
+    execute: |s, ctx| execute_emit_canonical_tag(
+        &s.tag_name, &s.canonical_value, ctx.read_db, ctx.witness,
+    ),
+    affected_inodes: |_s| Vec::new(),
+    diff_entries: |s| vec![DiffEntry::new(
+        &s.tag_name,
+        "[non-canonical]",
+        &s.canonical_value,
+    )],
+);
 
-impl MutationExecutor for DropDirectoryFromIndexMutation {
-    fn label(&self) -> &'static str {
-        "Drop directory from index"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush)
-    }
+impl_mutation_executor!(
+    EmitExpectedOverlapMutation, EmitExpectedOverlap,
+    label: "Mark expected overlap",
+    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    signal_clear_scope: SignalClearScope::None,
+    recomputation_scope: RecomputationScope::FILES,
+    execute: |s, ctx| execute_emit_expected_overlap(&s.source_a, &s.source_b, ctx.witness),
+    affected_inodes: |_s| Vec::new(),
+    diff_entries: |s| vec![DiffEntry::new(
+        "Expected overlap",
+        &s.source_a,
+        &s.source_b,
+    )],
+);
 
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_drop_directory_from_index(ctx.read_db, &self.directory_path, ctx.witness);
-        MutationResult::from_unit_result(Mutation::DropDirectoryFromIndex(self.clone()), result, start)
-    }
+impl_mutation_executor!(
+    EmitExpectedDuplicateMutation, EmitExpectedDuplicate,
+    label: "Mark expected duplicate",
+    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    signal_clear_scope: SignalClearScope::None,
+    recomputation_scope: RecomputationScope::FILES,
+    execute: |s, ctx| execute_emit_expected_duplicate(&s.fingerprint_key, ctx.witness),
+    affected_inodes: |_s| Vec::new(),
+    diff_entries: |s| vec![DiffEntry::new(
+        "Expected duplicate",
+        "[flagged]",
+        &s.fingerprint_key,
+    )],
+);
 
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::All
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        Vec::new()
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::FILES | RecomputationScope::DEPLOY
-    }
+impl_mutation_executor!(
+    DropExternalMatchMutation, DropExternalMatch,
+    label: "Drop external match",
+    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    signal_clear_scope: SignalClearScope::None,
+    recomputation_scope: RecomputationScope::EMPTY,
+    execute: |s, ctx| execute_drop_external_match(s.inode, ctx.witness),
+    affected_inodes: |s| vec![s.inode],
+    diff_entries: |s| vec![DiffEntry::new(
+        format!("inode {}", s.inode),
+        "[external match]",
+        "[dropped]",
+    )],
+);
 
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.directory_path),
-            "[indexed]",
-            "[removed]",
-        )]
-    }
-}
-
-impl MutationExecutor for AcknowledgeMtimeOnlyMutation {
-    fn label(&self) -> &'static str {
-        "Acknowledge mtime"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
-    }
-
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_acknowledge_mtime_only(ctx.read_db, &self.tracks, ctx.witness).map(|_| ());
-        MutationResult::from_unit_result(Mutation::AcknowledgeMtimeOnly(self.clone()), result, start)
-    }
-
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::MutableOnly
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        self.tracks.iter().map(|(inode, _)| *inode).collect()
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::EMPTY
-    }
-
-    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
-        self.tracks.iter().map(|(_, path)| path.clone()).collect()
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        self.tracks
-            .iter()
-            .map(|(_, path)| {
-                DiffEntry::new(path_filename(path), "[mtime mismatch]", "acknowledged")
-            })
-            .collect()
-    }
-}
-
-impl MutationExecutor for ApplyDbTagsToDiskMutation {
-    fn label(&self) -> &'static str {
-        "Tag sync (DB→disk)"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
-    }
-
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_apply_db_tags_to_disk(
-            ctx.read_db, self.inode, &self.path, self.zone, ctx.witness,
-        );
-        MutationResult::from_unit_result(Mutation::ApplyDbTagsToDisk(self.clone()), result, start)
-    }
-
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::MutableOnly
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        vec![self.inode]
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::TAGS
-    }
-
-    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
-        vec![self.path.clone()]
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.path),
-            "disk tags",
-            "overwrite \u{2192} DB",
-        )]
-    }
-}
-
-impl MutationExecutor for FlushTagsToDiskMutation {
-    fn label(&self) -> &'static str {
-        "Tag flush"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::ChainEmitted
-    }
-
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_flush_tags_to_disk(
-            self.inode, &self.path, &self.expected_tags, self.zone, ctx.read_db, ctx.witness,
-        );
-        MutationResult::from_unit_result(Mutation::FlushTagsToDisk(self.clone()), result, start)
-    }
-
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::MutableOnly
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        vec![self.inode]
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::TAGS
-    }
-
-    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
-        vec![self.path.clone()]
-    }
-}
-
-impl MutationExecutor for AssimilateDiskTagsToDbMutation {
-    fn label(&self) -> &'static str {
-        "Tag sync (disk→DB)"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
-    }
-
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_assimilate_disk_tags_to_db(
-            ctx.read_db, self.inode, &self.path, self.zone.as_deref(), ctx.session_id, ctx.witness,
-        );
-        MutationResult::from_unit_result(Mutation::AssimilateDiskTagsToDb(self.clone()), result, start)
-    }
-
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::MutableOnly
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        vec![self.inode]
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::TAGS
-    }
-
-    fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
-        vec![self.path.clone()]
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.path),
-            "DB tags",
-            "accept \u{2190} disk",
-        )]
-    }
-}
-
-impl MutationExecutor for EmitCanonicalTagMutation {
-    fn label(&self) -> &'static str {
-        "Mark canonical"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
-    }
-
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_emit_canonical_tag(
-            &self.tag_name, &self.canonical_value, ctx.read_db, ctx.witness,
-        );
-        MutationResult::from_unit_result(Mutation::EmitCanonicalTag(self.clone()), result, start)
-    }
-
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::None
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        Vec::new()
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::TAGS
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            &self.tag_name,
-            "[non-canonical]",
-            &self.canonical_value,
-        )]
-    }
-}
-
-impl MutationExecutor for EmitExpectedOverlapMutation {
-    fn label(&self) -> &'static str {
-        "Mark expected overlap"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
-    }
-
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_emit_expected_overlap(&self.source_a, &self.source_b, ctx.witness);
-        MutationResult::from_unit_result(Mutation::EmitExpectedOverlap(self.clone()), result, start)
-    }
-
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::None
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        Vec::new()
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::FILES
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            "Expected overlap",
-            &self.source_a,
-            &self.source_b,
-        )]
-    }
-}
-
-impl MutationExecutor for EmitExpectedDuplicateMutation {
-    fn label(&self) -> &'static str {
-        "Mark expected duplicate"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
-    }
-
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_emit_expected_duplicate(&self.fingerprint_key, ctx.witness);
-        MutationResult::from_unit_result(Mutation::EmitExpectedDuplicate(self.clone()), result, start)
-    }
-
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::None
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        Vec::new()
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::FILES
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            "Expected duplicate",
-            "[flagged]",
-            &self.fingerprint_key,
-        )]
-    }
-}
-
-impl MutationExecutor for DropExternalMatchMutation {
-    fn label(&self) -> &'static str {
-        "Drop external match"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
-    }
-
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_drop_external_match(self.inode, ctx.witness);
-        MutationResult::from_unit_result(Mutation::DropExternalMatch(self.clone()), result, start)
-    }
-
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::None
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        vec![self.inode]
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::EMPTY
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            format!("inode {}", self.inode),
-            "[external match]",
-            "[dropped]",
-        )]
-    }
-}
-
-impl MutationExecutor for EmitExpectedMissingTagMutation {
-    fn label(&self) -> &'static str {
-        "Mark expected missing tag"
-    }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
-    }
-
-    fn execute(&self, ctx: &MutationContext) -> MutationResult {
-        let start = std::time::Instant::now();
-        let result = execute_emit_expected_missing_tag(&self.inodes, ctx.witness);
-        MutationResult::from_unit_result(Mutation::EmitExpectedMissingTag(self.clone()), result, start)
-    }
-
-    fn signal_clear_scope(&self) -> SignalClearScope {
-        SignalClearScope::None
-    }
-    fn affected_inodes(&self) -> Vec<i64> {
-        Vec::new()
-    }
-    fn recomputation_scope(&self) -> RecomputationScope {
-        RecomputationScope::TAGS
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            "Expected missing tag",
-            "[flagged]",
-            format!("{} inodes", self.inodes.len()),
-        )]
-    }
-}
+impl_mutation_executor!(
+    EmitExpectedMissingTagMutation, EmitExpectedMissingTag,
+    label: "Mark expected missing tag",
+    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    signal_clear_scope: SignalClearScope::None,
+    recomputation_scope: RecomputationScope::TAGS,
+    execute: |s, ctx| execute_emit_expected_missing_tag(&s.inodes, ctx.witness),
+    affected_inodes: |_s| Vec::new(),
+    diff_entries: |s| vec![DiffEntry::new(
+        "Expected missing tag",
+        "[flagged]",
+        format!("{} inodes", s.inodes.len()),
+    )],
+);
 
 /// Index a track from extracted metadata (internal helper).
 ///

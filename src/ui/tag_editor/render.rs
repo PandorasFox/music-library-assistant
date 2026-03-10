@@ -288,25 +288,13 @@ impl UnifiedTagEditorState {
         let visible_height = area.height.saturating_sub(2) as usize;
         self.field_visible_height = visible_height;
 
-        // Populate field click targets
-        self.field_click_targets.clear();
         let inner_area = Rect {
             x: area.x + 1,
             y: area.y + 1,
             width: area.width.saturating_sub(2),
             height: area.height.saturating_sub(2),
         };
-        self.field_click_targets.set_list_area(inner_area);
-        for (vis_idx, entry_idx) in (self.field_scroll_offset..)
-            .take(visible_height)
-            .enumerate()
-        {
-            if entry_idx >= fields.len() {
-                break;
-            }
-            self.field_click_targets
-                .add_row(entry_idx.to_string(), inner_area.y + vis_idx as u16);
-        }
+        self.field_click_targets.populate(inner_area, self.field_scroll_offset, fields.len());
 
         // Build field lines
         let field_lines: Vec<Line> = fields
@@ -460,25 +448,13 @@ impl UnifiedTagEditorState {
         let visible_height = area.height.saturating_sub(2) as usize;
         self.field_visible_height = visible_height;
 
-        // Populate field click targets for aggregated mode
-        self.field_click_targets.clear();
         let inner_area = Rect {
             x: area.x + 1,
             y: area.y + 1,
             width: area.width.saturating_sub(2),
             height: area.height.saturating_sub(2),
         };
-        self.field_click_targets.set_list_area(inner_area);
-        for (vis_idx, entry_idx) in (self.field_scroll_offset..)
-            .take(visible_height)
-            .enumerate()
-        {
-            if entry_idx >= agg_fields.len() {
-                break;
-            }
-            self.field_click_targets
-                .add_row(entry_idx.to_string(), inner_area.y + vis_idx as u16);
-        }
+        self.field_click_targets.populate(inner_area, self.field_scroll_offset, agg_fields.len());
 
         let field_lines: Vec<Line> = agg_fields
             .iter()

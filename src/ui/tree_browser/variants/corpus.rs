@@ -404,7 +404,7 @@ impl CorpusBrowserVariant {
         }
 
         if self.match_selection_mode {
-            self.cancel_match_selection();
+            self.reset_match_selection();
             true
         } else if self.focus == CorpusBrowserFocus::SearchBar || !self.search_input.is_empty() {
             // Clear search and return to tree
@@ -474,19 +474,11 @@ impl CorpusBrowserVariant {
         if !self.search.matches.is_empty() {
             match action {
                 InputAction::NavUp => {
-                    if !self.match_selection_mode {
-                        self.match_selection_mode = true;
-                        self.match_selection_idx = 0;
-                    }
-                    self.match_selection_up();
+                    self.enter_match_and_up();
                     return TreeBrowserAction::None;
                 }
                 InputAction::NavDown => {
-                    if !self.match_selection_mode {
-                        self.match_selection_mode = true;
-                        self.match_selection_idx = 0;
-                    }
-                    self.match_selection_down();
+                    self.enter_match_and_down();
                     return TreeBrowserAction::None;
                 }
                 // Consume Left/Right to prevent tree navigation when search results visible
@@ -799,23 +791,13 @@ impl CorpusBrowserVariant {
             // Up/Down navigate search results (if any), or do nothing
             InputAction::NavUp => {
                 if !self.search.matches.is_empty() {
-                    // Enter match selection mode and navigate
-                    if !self.match_selection_mode {
-                        self.match_selection_mode = true;
-                        self.match_selection_idx = 0;
-                    }
-                    self.match_selection_up();
+                    self.enter_match_and_up();
                 }
                 TreeBrowserAction::None
             }
             InputAction::NavDown => {
                 if !self.search.matches.is_empty() {
-                    // Enter match selection mode and navigate
-                    if !self.match_selection_mode {
-                        self.match_selection_mode = true;
-                        self.match_selection_idx = 0;
-                    }
-                    self.match_selection_down();
+                    self.enter_match_and_down();
                 }
                 TreeBrowserAction::None
             }
@@ -828,9 +810,7 @@ impl CorpusBrowserVariant {
             InputAction::Char(c) => {
                 self.search_input.insert_char(*c);
                 self.update_search_matches(nav);
-                // Reset match selection when typing
-                self.match_selection_mode = false;
-                self.match_selection_idx = 0;
+                self.reset_match_selection();
                 TreeBrowserAction::None
             }
             InputAction::Backspace => {
@@ -840,9 +820,7 @@ impl CorpusBrowserVariant {
                 } else {
                     self.update_search_matches(nav);
                 }
-                // Reset match selection when typing
-                self.match_selection_mode = false;
-                self.match_selection_idx = 0;
+                self.reset_match_selection();
                 TreeBrowserAction::None
             }
             InputAction::Delete => {
@@ -852,17 +830,14 @@ impl CorpusBrowserVariant {
                 } else {
                     self.update_search_matches(nav);
                 }
-                // Reset match selection when typing
-                self.match_selection_mode = false;
-                self.match_selection_idx = 0;
+                self.reset_match_selection();
                 TreeBrowserAction::None
             }
             // Ctrl+U clears input
             InputAction::KillToStart => {
                 self.search_input.clear();
                 self.search.clear();
-                self.match_selection_mode = false;
-                self.match_selection_idx = 0;
+                self.reset_match_selection();
                 TreeBrowserAction::None
             }
             _ => TreeBrowserAction::None,
@@ -901,11 +876,11 @@ impl CorpusBrowserVariant {
     ) -> TreeBrowserAction {
         match action {
             InputAction::NavUp => {
-                self.match_selection_up();
+                self.enter_match_and_up();
                 TreeBrowserAction::None
             }
             InputAction::NavDown => {
-                self.match_selection_down();
+                self.enter_match_and_down();
                 TreeBrowserAction::None
             }
             InputAction::Confirm => {
@@ -913,7 +888,7 @@ impl CorpusBrowserVariant {
                 TreeBrowserAction::None
             }
             InputAction::Cancel => {
-                self.cancel_match_selection();
+                self.reset_match_selection();
                 TreeBrowserAction::None
             }
             _ => TreeBrowserAction::None,
@@ -1148,13 +1123,28 @@ impl CorpusBrowserVariant {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
     }
 
-    fn match_selection_up(&mut self) {
+    fn reset_match_selection(&mut self) {
+        self.match_selection_mode = false;
+        self.match_selection_idx = 0;
+    }
+
+    /// Enter match selection mode (if not already) and move up.
+    fn enter_match_and_up(&mut self) {
+        if !self.match_selection_mode {
+            self.match_selection_mode = true;
+            self.match_selection_idx = 0;
+        }
         if self.match_selection_idx > 0 {
             self.match_selection_idx -= 1;
         }
     }
 
-    fn match_selection_down(&mut self) {
+    /// Enter match selection mode (if not already) and move down.
+    fn enter_match_and_down(&mut self) {
+        if !self.match_selection_mode {
+            self.match_selection_mode = true;
+            self.match_selection_idx = 0;
+        }
         if self.match_selection_idx + 1 < self.search.matches.len() {
             self.match_selection_idx += 1;
         }
@@ -1164,7 +1154,7 @@ impl CorpusBrowserVariant {
         if let Some(path) = self.search.matches.get(self.match_selection_idx).cloned() {
             nav.navigate_to_path(&path);
         }
-        self.cancel_match_selection();
+        self.reset_match_selection();
         // Clear search and return to tree
         self.search_input.clear();
         self.search.clear();
@@ -1172,10 +1162,6 @@ impl CorpusBrowserVariant {
         self.search_input.focused = false;
     }
 
-    fn cancel_match_selection(&mut self) {
-        self.match_selection_mode = false;
-        self.match_selection_idx = 0;
-    }
 
     // =========================================================================
     /// Render variant-specific overlays.

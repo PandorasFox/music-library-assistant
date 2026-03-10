@@ -234,6 +234,37 @@ pub struct Witch {
     fetch_progress: Option<external_fetch::FetchProgress>,
 }
 
+/// Deferred follow-up work accumulated during `transition_to_completed()`.
+///
+/// The match on (is_checking_inodes, reasoning_level) sets flags for what
+/// computations to queue after the work state resets to Done. This struct
+/// collects those flags so `dispatch_post_transition_work()` can act on
+/// them in a single place.
+#[derive(Default)]
+struct PostTransitionWork {
+    /// Queue full awakening computations (DeriveCorpusSignals + second-level).
+    awakening: bool,
+    /// Queue lightweight idle-rescan awakening (corpus+inbox signals only).
+    idle_rescan_awakening: bool,
+    /// Queue ScheduleContentAnalysis after full awakening completes.
+    content_analysis: bool,
+    /// Queue re-observation (WalkCorpus) after mutations complete.
+    reobservation: bool,
+    /// Queue ReconcileLibraryFiles with these observed files (Inodes stage 1).
+    reconcile_library: Option<Vec<derivation::ObservedLibraryFile>>,
+}
+
+impl PostTransitionWork {
+    /// Whether any follow-up work is pending.
+    fn has_work(&self) -> bool {
+        self.awakening
+            || self.idle_rescan_awakening
+            || self.content_analysis
+            || self.reobservation
+            || self.reconcile_library.is_some()
+    }
+}
+
 impl Witch {
     /// Linger duration for completed session display.
     const LINGER_DURATION: Duration = Duration::from_secs(30);
@@ -711,17 +742,7 @@ impl Witch {
         // post-execution pipeline already handles everything they need.
         let had_mutations = !self.session_recomputation_scope.is_empty();
 
-        // Flag to queue awakening computations after session reset
-        let mut queue_awakening_after_reset = false;
-        // Flag to queue idle-rescan-only awakening (corpus+inbox signals, no second-level)
-        let mut queue_idle_rescan_awakening_after_reset = false;
-        // Flag to auto-queue content analysis after mutations drain
-        let mut queue_content_analysis_after_reset = false;
-        // Flag to queue re-observation (WalkCorpus) after mutations complete
-        let mut queue_reobservation_after_reset = false;
-        // Flag to queue ReconcileLibraryFiles after awakening stage 1
-        let mut queue_reconcile_library_after_reset = false;
-        let mut reconcile_library_observed: Option<Vec<derivation::ObservedLibraryFile>> = None;
+        let mut work = PostTransitionWork::default();
 
         // Extract session counters before transitioning
         let session_processed = match &self.work_state {
@@ -741,7 +762,7 @@ impl Witch {
                     session_processed
                 ));
                 self.reasoning_level = ReasoningLevel::Inodes;
-                queue_awakening_after_reset = true;
+                work.awakening = true;
             }
 
             // Re-observing completed while Full: sync signals via awakening
@@ -753,14 +774,14 @@ impl Witch {
                          Processed {} tasks.",
                         session_processed
                     ));
-                    queue_idle_rescan_awakening_after_reset = true;
+                    work.idle_rescan_awakening = true;
                 } else {
                     crate::logging::log_general(format!(
                         "[STATE] Re-observing complete while Full. Queueing awakening to sync signals. \
                          Processed {} tasks.",
                         session_processed
                     ));
-                    queue_awakening_after_reset = true;
+                    work.awakening = true;
                 }
             }
 
@@ -772,7 +793,7 @@ impl Witch {
                      Processed {} tasks.",
                     session_processed
                 ));
-                queue_awakening_after_reset = true;
+                work.awakening = true;
             }
 
             // Inodes completed: two-stage transition
@@ -788,8 +809,7 @@ impl Witch {
                          Staying in Inodes. Processed {} tasks.",
                         observed.len(), session_processed
                     ));
-                    queue_reconcile_library_after_reset = true;
-                    reconcile_library_observed = Some(observed);
+                    work.reconcile_library = Some(observed);
                 } else {
                     // Stage 2: Library reconciliation done, NOW transition to Full
                     self.library_reconciliation_done = false;
@@ -807,7 +827,7 @@ impl Witch {
                     }
 
                     // Queue content analysis after full awakening
-                    queue_content_analysis_after_reset = true;
+                    work.content_analysis = true;
                 }
             }
 
@@ -837,7 +857,7 @@ impl Witch {
                     ));
                     self.reasoning_level = ReasoningLevel::Inodes;
                     self.inode_awareness = InodeAwarenessLevel::Checking;
-                    queue_reobservation_after_reset = true;
+                    work.reobservation = true;
                 }
                 // If no mutations and not idle rescan, stay Full (normal work completion)
             }
@@ -873,43 +893,47 @@ impl Witch {
         self.recent_errors.clear();
         self.session_recomputation_scope = crate::meta::recomputation::RecomputationScope::EMPTY;
 
+        self.dispatch_post_transition_work(work);
+    }
+
+    /// Dispatch deferred work after a session transition to Done.
+    ///
+    /// Called at the end of `transition_to_completed()` after the work state
+    /// has been reset. Flushes the db_thread write queue if any follow-up work
+    /// is pending, then queues the appropriate computations.
+    fn dispatch_post_transition_work(&mut self, work: PostTransitionWork) {
+        if !work.has_work() {
+            return;
+        }
+
         // Flush all pending db_thread writes before queueing the next phase.
         // Computation tasks fire writes asynchronously via db_thread (fire-and-forget).
         // The task completes when the worker returns, NOT when db_thread commits the
         // writes. Without this barrier, the next phase's computations could read stale
         // data (e.g., DeriveDeployHealthSignals reading library files written by
         // ScanLibraryDirectory, or Awake-phase computations reading Awakening signals).
-        if queue_awakening_after_reset
-            || queue_idle_rescan_awakening_after_reset
-            || queue_content_analysis_after_reset
-            || queue_reobservation_after_reset
-            || queue_reconcile_library_after_reset
-        {
-            write_thread::wait_for_queue_drain();
-        }
+        write_thread::wait_for_queue_drain();
 
         // Queue follow-up computations AFTER reset to fix off-by-one counting
         // (if queued before reset, the task's queue count gets wiped but it still completes)
-        if queue_reobservation_after_reset {
+        if work.reobservation {
             self.queue_reobservation_computations();
         }
-        if queue_awakening_after_reset {
+        if work.awakening {
             self.queue_awakening_computations(true);
         }
-        if queue_idle_rescan_awakening_after_reset {
+        if work.idle_rescan_awakening {
             self.queue_awakening_computations(false);
         }
-        if queue_reconcile_library_after_reset {
-            if let Some(observed) = reconcile_library_observed {
-                self.queue_computation_with_label(
-                    Computation::Derivation(derivation::Computation::ReconcileLibraryFiles {
-                        observed_files: observed,
-                    }),
-                    Some("Reconciling library files".to_string()),
-                );
-            }
+        if let Some(observed) = work.reconcile_library {
+            self.queue_computation_with_label(
+                Computation::Derivation(derivation::Computation::ReconcileLibraryFiles {
+                    observed_files: observed,
+                }),
+                Some("Reconciling library files".to_string()),
+            );
         }
-        if queue_content_analysis_after_reset {
+        if work.content_analysis {
             // Create witness here - this is the ONLY valid call site
             let witness = ContentAnalysisWitness::new();
             self.queue_content_analysis(witness);
@@ -1307,12 +1331,6 @@ impl Witch {
             label
         ));
 
-        let count = mutations.len();
-        self.work_state.inc_queued(count);
-        for _ in 0..count {
-            self.work_state.inc_in_flight();
-        }
-
         // Store label in WorkState for phase advancement
         if let WorkState::Working {
             label: ref mut ws_label,
@@ -1325,10 +1343,7 @@ impl Witch {
         }
 
         for mutation in mutations {
-            let task = Task::Mutation(Box::new(mutation));
-            let task_label = self.resolve_label(label.clone(), &task);
-            self.work_state.inc_label(&task_label);
-            self.spawn_task(task, task_label);
+            self.enqueue_one(Task::Mutation(Box::new(mutation)), label.clone());
         }
     }
 

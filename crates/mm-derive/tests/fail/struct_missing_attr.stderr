@@ -1,0 +1,5 @@
+error: struct-level #[wizard(...)] attribute required (e.g., #[wizard(popup)])
+  --> tests/fail/struct_missing_attr.rs:17:8
+   |
+17 | struct Bad {
+   |        ^^^

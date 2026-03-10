@@ -14,8 +14,9 @@
 //!
 //! ## Navigation
 //!
-//! - Up/Down: Navigate within and between buckets
+//! - Up/Down: Navigate within flat list (headers skipped automatically)
 //! - Enter: Launch modal for selected insight (blocked when Witch is busy)
+//! - Z: Show detail pane for selected insight (wizard system)
 //! - Tab/Shift-Tab: Cycle to adjacent view
 //! - Esc: Return to main menu
 //!
@@ -26,15 +27,17 @@
 
 mod render;
 
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 
 use crate::ui::input::InputAction;
-use ratatui::layout::Rect;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 
 use crate::meta::decisions::DecisionKeyKind;
 use crate::meta::views::{CorpusFilesBucket, InsightsData, OtherSignalsBucket, TagSquashBucket};
-use crate::ui::widgets::ListClickTargets;
+use crate::ui::widgets::standard_list::{ListEntry, ListInputResult, StandardListConfig, StandardListState};
+use crate::ui::widgets::wizard::{WizardItem, WizardOffer};
 use crate::witch::WorkStatus;
 
 pub use render::render_insights_view;
@@ -65,7 +68,7 @@ pub enum InsightsModal {
     NotReady_WitchBusy,
 }
 
-/// Which bucket currently has focus for navigation
+/// Which bucket an entry or header belongs to (preserved for rendering)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FocusedBucket {
     #[default]
@@ -83,33 +86,6 @@ impl FocusedBucket {
             FocusedBucket::Other => 2,
         }
     }
-
-    /// Get the next bucket in order
-    fn next(self) -> Self {
-        match self {
-            FocusedBucket::Corpus => FocusedBucket::Placeholder,
-            FocusedBucket::Placeholder => FocusedBucket::Other,
-            FocusedBucket::Other => FocusedBucket::Other, // Stay at end
-        }
-    }
-
-    /// Get the previous bucket in order
-    fn prev(self) -> Self {
-        match self {
-            FocusedBucket::Corpus => FocusedBucket::Corpus, // Stay at start
-            FocusedBucket::Placeholder => FocusedBucket::Corpus,
-            FocusedBucket::Other => FocusedBucket::Placeholder,
-        }
-    }
-}
-
-/// Selection state within a single bucket
-#[derive(Debug, Clone, Default)]
-pub struct BucketSelection {
-    /// Index of selected item within this bucket
-    pub selected: usize,
-    /// Scroll offset for rendering
-    pub scroll: usize,
 }
 
 // ============================================================================
@@ -525,8 +501,6 @@ impl CachedBucketEntries {
                 },
                 InsightAction::LaunchOobTagConflict,
             ),
-            // Note: InodeChanged was removed in v3 migration
-            // Inode changes are now exposed as MissingFile + UnindexedFile pair
             BucketEntry::corpus(
                 InsightType::CorpusFilesInCorpus,
                 "Files in corpus",
@@ -752,91 +726,373 @@ impl CachedBucketEntries {
 }
 
 // ============================================================================
-// Click Target System
+// Flat List Item (StandardList integration)
 // ============================================================================
 
-/// Click target result for insights list
-#[derive(Debug, Clone, Copy)]
-pub struct InsightClickTarget {
-    pub bucket: FocusedBucket,
-    pub item_index: usize,
+/// A single item in the flattened insights list.
+/// Headers are non-selectable separators; entries carry wizard detail panes.
+pub enum InsightListItem {
+    Header {
+        title: String,
+        bucket: FocusedBucket,
+    },
+    Entry {
+        entry: BucketEntry,
+        detail_lines: Vec<Line<'static>>,
+    },
 }
 
-/// Maps row IDs to bucket+index for click detection.
-#[derive(Debug, Clone, Default)]
-pub struct InsightsClickTargets {
-    inner: ListClickTargets,
+impl WizardItem for InsightListItem {
+    fn wizard(&self, _width: u16) -> Option<WizardOffer> {
+        match self {
+            Self::Header { .. } => None,
+            Self::Entry {
+                detail_lines,
+                ..
+            } => {
+                if detail_lines.is_empty() {
+                    None
+                } else {
+                    Some(WizardOffer::Popup(detail_lines.clone()))
+                }
+            }
+        }
+    }
 }
 
-impl InsightsClickTargets {
-    /// Create new empty click targets.
-    pub fn new() -> Self {
-        Self {
-            inner: ListClickTargets::new(),
+impl ListEntry for InsightListItem {
+    type Action = InsightType;
+
+    fn on_confirm(&self, _selected: &BTreeSet<usize>) -> Option<InsightType> {
+        match self {
+            Self::Header { .. } => None,
+            Self::Entry { entry, .. } => Some(entry.insight_type.clone()),
         }
     }
 
-    /// Clear all stored targets (call at start of each render).
-    pub fn clear(&mut self) {
-        self.inner.clear();
-    }
-
-    /// Set the list area for bounds checking.
-    pub fn set_list_area(&mut self, area: Rect) {
-        self.inner.set_list_area(area);
-    }
-
-    /// Add a header row (not clickable for selection).
-    /// We don't add headers to targets - they're not selectable.
-    pub fn add_header(&mut self, _bucket: FocusedBucket, _y: u16) {
-        // Headers are not clickable - intentionally empty
-    }
-
-    /// Add an item row target.
-    pub fn add_item(&mut self, bucket: FocusedBucket, index: usize, y: u16) {
-        // Encode bucket + index as "bucket_index" string
-        let id = format!("{}_{}", bucket.index(), index);
-        self.inner.add_row(id, y);
-    }
-
-    /// Check if a click hits an item, returning the bucket and index if so.
-    pub fn hit_test(&self, x: u16, y: u16) -> Option<InsightClickTarget> {
-        let id = self.inner.hit_test(x, y)?;
-
-        // Parse "bucket_index" format
-        let parts: Vec<&str> = id.split('_').collect();
-        if parts.len() != 2 {
-            return None;
-        }
-
-        let bucket_idx: usize = parts[0].parse().ok()?;
-        let item_index: usize = parts[1].parse().ok()?;
-
-        let bucket = match bucket_idx {
-            0 => FocusedBucket::Corpus,
-            1 => FocusedBucket::Placeholder,
-            2 => FocusedBucket::Other,
-            _ => return None,
-        };
-
-        Some(InsightClickTarget { bucket, item_index })
+    fn is_selectable(&self) -> bool {
+        matches!(self, Self::Entry { .. })
     }
 }
+
+// ============================================================================
+// Detail Line Generation (baked at construction time)
+// ============================================================================
+
+/// Generate detail lines for a bucket entry's popup. Called once during list construction.
+/// Returns popup content lines with a styled title header.
+fn detail_lines_for_entry(
+    entry: &BucketEntry,
+    data: Option<&InsightsData>,
+    busy: bool,
+) -> Vec<Line<'static>> {
+    let text_color = if busy { Color::DarkGray } else { Color::White };
+    let title_color = if busy { Color::DarkGray } else { Color::Yellow };
+
+    let mut lines = Vec::new();
+    let title;
+
+    match entry.insight_type {
+        InsightType::CorpusMtimeOnly => {
+            title = "Mtime-Only Changes".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Files touched but tags unchanged.", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("Acknowledge to update scan state", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("without modifying files.", Style::default().fg(text_color))));
+        }
+        InsightType::CorpusOobTagSync => {
+            title = "Tags Syncable (Out-of-Band)".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Files have extra tags in one direction", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("only: either on disk or in the index.", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("Can be synced to bring both in line.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to resolve.", Style::default().fg(Color::Cyan))));
+        }
+        InsightType::CorpusOobTagConflict => {
+            title = "Tag Conflicts (Out-of-Band)".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Files have tag values that differ", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("between disk and database, or have", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("extras in both directions.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to inspect.", Style::default().fg(Color::Cyan))));
+        }
+        InsightType::CorpusCorruptFiles => {
+            title = "Corrupt Files".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Files that failed to read during", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("tag verification or waveform decoding.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to stash and drop.", Style::default().fg(Color::Cyan))));
+        }
+        InsightType::CorpusShitFormatFiles => {
+            title = "Shit Format Files".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Non-Vorbis container files (MP3, M4A,", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("WAV, etc.) with poor metadata support.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to transcode to Opus.", Style::default().fg(Color::Cyan))));
+        }
+        InsightType::CorpusFilesInCorpus => {
+            title = "Files in Corpus".to_string();
+            lines.push(Line::from(""));
+            if let Some(data) = data {
+                if !data.bucket_corpus.file_type_breakdown.is_empty() {
+                    lines.push(Line::from(Span::styled("By file type:", Style::default().fg(text_color))));
+                    for (ext, count) in &data.bucket_corpus.file_type_breakdown {
+                        lines.push(Line::from(Span::styled(format!("  .{}: {}", ext, count), Style::default().fg(text_color))));
+                    }
+                } else {
+                    lines.push(Line::from(Span::styled("No files found.", Style::default().fg(text_color))));
+                }
+            } else {
+                lines.push(Line::from(Span::styled("Loading...", Style::default().fg(Color::DarkGray))));
+            }
+        }
+        InsightType::CorpusFilesIndexed => {
+            title = "Files Indexed".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Audio files with complete metadata", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("in the database.", Style::default().fg(text_color))));
+        }
+        InsightType::CorpusImagesInCorpus => {
+            title = "Images in Corpus".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Image files (sidecar album art, etc.)", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("indexed in the corpus.", Style::default().fg(text_color))));
+        }
+        InsightType::CorpusFilesUnindexed => {
+            title = "Files Unindexed".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Audio files in corpus not yet", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("indexed. Run indexing to process.", Style::default().fg(text_color))));
+        }
+        InsightType::CorpusFilesMissing => {
+            title = "Files Missing".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Indexed files no longer found", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("at expected path. May have been", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("moved or deleted.", Style::default().fg(text_color))));
+        }
+        InsightType::CorpusDirectoriesMissing => {
+            title = "Directories Missing".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Indexed directories no longer found", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("on disk. May have been moved or", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("deleted externally.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to drop from index.", Style::default().fg(Color::Cyan))));
+        }
+        InsightType::CorpusFilesRelocated => {
+            title = "Files Relocated (Moved)".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Files moved within corpus (same inode,", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("different path). Database paths need", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("updating to match new locations.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to acknowledge and update paths.", Style::default().fg(Color::Cyan))));
+        }
+        InsightType::CrossSourceOverlaps => {
+            title = "Cross-Source Overlaps".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Same tracks exist in different source", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("directories (e.g., bandcamp vs indie).", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to resolve by source.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
+        }
+        InsightType::ReleaseOverlaps => {
+            title = "Release Overlaps".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Multiple releases deploy into the", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("same album directory. Stash the", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("inferior release or fix tags.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to resolve.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
+        }
+        InsightType::SubparDuplicates => {
+            title = "Subpar Duplicates".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Lower quality versions of tracks", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("identified by fingerprint analysis.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to stash subpar copies.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
+        }
+        InsightType::RedundantDuplicates => {
+            title = "Redundant Duplicates".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Same fingerprint, identical quality.", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("Neither file is subpar — requires", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("operator choice.", Style::default().fg(text_color))));
+        }
+        InsightType::InconsistentAlbumArtist => {
+            title = "Inconsistent Album Artist".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Albums with multiple artists but", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("missing or inconsistent album_artist.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to resolve.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
+        }
+        InsightType::TagCanonicity { ref tag_name } => {
+            title = format!("{} Canonicity", tag_name);
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(format!("Variants of {} tags that should", tag_name), Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("be unified (e.g., spelling differences).", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to resolve.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
+        }
+        InsightType::CompoundTagValueSafe { ref tag_name } => {
+            title = format!("{} Compound Splits (Safe)", tag_name);
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(format!("All split parts for {} tags already", tag_name), Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("exist in corpus. Safe to split in bulk.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to bulk split.", Style::default().fg(if busy { Color::DarkGray } else { Color::Green }))));
+        }
+        InsightType::CompoundTagValueReview { ref tag_name } => {
+            title = format!("{} Compound Splits (Review)", tag_name);
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(format!("Some split parts for {} tags are", tag_name), Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("new to corpus. Review each to verify.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to review.", Style::default().fg(if busy { Color::DarkGray } else { Color::Yellow }))));
+        }
+        InsightType::MissingAlbumSingle => {
+            title = "Missing Album Singles".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Tracks with ARTIST and TITLE but no", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("ALBUM tag, grouped by artist.", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Press Enter to assign album values.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
+        }
+        InsightType::DiscExtraction => {
+            title = "Disc Extractions".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Disc values embedded in ALBUM or", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("TRACKNUMBER tags (e.g., \"Album, Disc 2\"", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("or track number \"A01\").", Style::default().fg(text_color))));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Extract to DISCNUMBER + clean source tag.", Style::default().fg(if busy { Color::DarkGray } else { Color::Cyan }))));
+        }
+        InsightType::PathTagMismatch => {
+            title = "Filename Tag Schema Issues".to_string();
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Files where tags derived from the", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("filename path don't match embedded", Style::default().fg(text_color))));
+            lines.push(Line::from(Span::styled("tag values.", Style::default().fg(text_color))));
+        }
+        InsightType::OtherSignal { index } => {
+            // Get extended info from cached_data if available
+            if let Some(data) = data {
+                if let Some(signal_entry) = data.bucket_other.entries.get(index) {
+                    title = signal_entry.display_label.clone();
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(format!("Count: {}", signal_entry.count), Style::default().fg(text_color))));
+                    if let Some(affected) = signal_entry.affected_count {
+                        lines.push(Line::from(Span::styled(format!("Affected tracks: {}", affected), Style::default().fg(text_color))));
+                    }
+                    lines.insert(0, Line::from(Span::styled(title, Style::default().fg(title_color).add_modifier(Modifier::BOLD))));
+                    return lines;
+                }
+            }
+            // Fallback
+            title = entry.label.clone();
+            lines.push(Line::from(""));
+            if let Some(count) = entry.count {
+                lines.push(Line::from(Span::styled(format!("Count: {}", count), Style::default().fg(text_color))));
+            }
+        }
+    }
+
+    lines.insert(0, Line::from(Span::styled(title, Style::default().fg(title_color).add_modifier(Modifier::BOLD))));
+    lines
+}
+
+// ============================================================================
+// Flat List Building
+// ============================================================================
+
+/// Build the flat list of items from cached bucket entries.
+fn build_flat_items(
+    entries: &CachedBucketEntries,
+    data: Option<&InsightsData>,
+    busy: bool,
+) -> Vec<InsightListItem> {
+    let mut items = Vec::new();
+
+    // Corpus Files bucket
+    items.push(InsightListItem::Header {
+        title: "Corpus Files".to_string(),
+        bucket: FocusedBucket::Corpus,
+    });
+    for entry in &entries.corpus {
+        let detail_lines = detail_lines_for_entry(entry, data, busy);
+        items.push(InsightListItem::Entry {
+            entry: entry.clone(),
+            detail_lines,
+        });
+    }
+
+    // Tag health bucket
+    items.push(InsightListItem::Header {
+        title: "Tag health".to_string(),
+        bucket: FocusedBucket::Placeholder,
+    });
+    for entry in &entries.placeholder {
+        let detail_lines = detail_lines_for_entry(entry, data, busy);
+        items.push(InsightListItem::Entry {
+            entry: entry.clone(),
+            detail_lines,
+        });
+    }
+
+    // Other Signals bucket
+    items.push(InsightListItem::Header {
+        title: "Other Signals".to_string(),
+        bucket: FocusedBucket::Other,
+    });
+    if entries.other.is_empty() {
+        // Empty placeholder — show as a dimmed non-actionable entry
+        items.push(InsightListItem::Entry {
+            entry: BucketEntry {
+                insight_type: InsightType::OtherSignal { index: 0 },
+                label: "(no other signals)".to_string(),
+                count: None,
+                color: Color::DarkGray,
+                rank: 0,
+                action: InsightAction::Informational,
+            },
+            detail_lines: vec![],
+        });
+    } else {
+        for entry in &entries.other {
+            let detail_lines = detail_lines_for_entry(entry, data, busy);
+            items.push(InsightListItem::Entry {
+                entry: entry.clone(),
+                detail_lines,
+            });
+        }
+    }
+
+    items
+}
+
+// ============================================================================
+// Insights View State
+// ============================================================================
 
 /// State for the insights view
 pub struct InsightsViewState {
     /// Modal state tracking Witch busy status
     pub modal: InsightsModal,
-    /// Which bucket currently has navigation focus
-    pub focused_bucket: FocusedBucket,
-    /// Selection state for each bucket (indexed by FocusedBucket::index())
-    pub bucket_selections: [BucketSelection; 3],
     /// Cached insights data from UiReadCache
     pub cached_data: Option<InsightsData>,
     /// Pre-computed sorted entries - rebuilt when cached_data changes
     pub cached_entries: CachedBucketEntries,
-    /// Click targets for mouse selection (populated during render)
-    pub click_targets: InsightsClickTargets,
+    /// Flattened list items (headers + entries)
+    pub flat_items: Vec<InsightListItem>,
+    /// StandardList state machine
+    pub list: StandardListState,
     /// Last handled-kinds set, for change detection
     last_handled_sources: HashSet<DecisionKeyKind>,
 }
@@ -845,11 +1101,10 @@ impl Default for InsightsViewState {
     fn default() -> Self {
         Self {
             modal: InsightsModal::Ready,
-            focused_bucket: FocusedBucket::default(),
-            bucket_selections: Default::default(),
             cached_data: None,
             cached_entries: CachedBucketEntries::default(),
-            click_targets: InsightsClickTargets::new(),
+            flat_items: Vec::new(),
+            list: StandardListState::new(StandardListConfig::default()),
             last_handled_sources: HashSet::new(),
         }
     }
@@ -861,15 +1116,18 @@ impl InsightsViewState {
         Self::default()
     }
 
+    /// Rebuild the flat item list from cached entries.
+    fn rebuild_flat_items(&mut self) {
+        let busy = self.is_witch_busy();
+        self.flat_items = build_flat_items(
+            &self.cached_entries,
+            self.cached_data.as_ref(),
+            busy,
+        );
+        self.list.clamp_cursor(&self.flat_items);
+    }
+
     /// Update state every tick - checks Witch status and caches insights data.
-    ///
-    /// `handled_kinds` is the set of `DecisionKeyKind`s with staged decisions
-    /// in the active transaction. Entries whose single-decision kind is in
-    /// this set are filtered out so the operator sees only unhandled insights.
-    ///
-    /// `cache_stale` is true when `MutationsCompleted` has fired but fresh
-    /// `CacheReady` results haven't arrived yet. Keeps the view greyed-out
-    /// so the operator never sees stale counts on an interactive overlay.
     pub fn update(
         &mut self,
         witch_status: Option<&WorkStatus>,
@@ -904,32 +1162,16 @@ impl InsightsViewState {
                 self.last_handled_sources = handled_sources.clone();
             }
 
-            self.clamp_all_selections();
+            self.rebuild_flat_items();
         }
     }
 
-    /// Clamp all bucket selection indices to stay within bounds after filtering.
-    fn clamp_all_selections(&mut self) {
-        for bucket in [
-            FocusedBucket::Corpus,
-            FocusedBucket::Placeholder,
-            FocusedBucket::Other,
-        ] {
-            let count = self.cached_entries.entries_for(bucket).len();
-            let sel = &mut self.bucket_selections[bucket.index()];
-            if count == 0 {
-                sel.selected = 0;
-            } else if sel.selected >= count {
-                sel.selected = count - 1;
-            }
-        }
-    }
-
-    /// Get the currently selected entry (unified across all buckets)
+    /// Get the currently selected entry
     pub fn selected_entry(&self) -> Option<&BucketEntry> {
-        let entries = self.cached_entries.entries_for(self.focused_bucket);
-        let selected_idx = self.bucket_selections[self.focused_bucket.index()].selected;
-        entries.get(selected_idx)
+        match self.flat_items.get(self.list.cursor) {
+            Some(InsightListItem::Entry { entry, .. }) => Some(entry),
+            _ => None,
+        }
     }
 
     /// Get the action for the currently selected entry
@@ -947,147 +1189,36 @@ impl InsightsViewState {
         matches!(self.modal, InsightsModal::NotReady_WitchBusy)
     }
 
-    /// Get the entry count for a specific bucket
-    pub fn get_bucket_entry_count(&self, bucket: FocusedBucket) -> usize {
-        self.cached_entries.entries_for(bucket).len()
-    }
-
-    /// Get current bucket's selection state (test-only)
-    #[cfg(test)]
-    fn current_selection(&self) -> &BucketSelection {
-        &self.bucket_selections[self.focused_bucket.index()]
-    }
-
-    /// Get current bucket's selection state mutably
-    fn current_selection_mut(&mut self) -> &mut BucketSelection {
-        &mut self.bucket_selections[self.focused_bucket.index()]
-    }
-
-    /// Navigate up within the current bucket, or move to previous bucket
-    fn navigate_up(&mut self) {
-        let selection = self.current_selection_mut();
-
-        if selection.selected > 0 {
-            // Move up within current bucket
-            selection.selected -= 1;
-        } else {
-            // At top of bucket - try to move to previous bucket
-            let prev_bucket = self.focused_bucket.prev();
-            if prev_bucket != self.focused_bucket {
-                self.focused_bucket = prev_bucket;
-                // Position at end of previous bucket
-                let prev_count = self.get_bucket_entry_count(prev_bucket);
-                self.current_selection_mut().selected = prev_count.saturating_sub(1);
-            }
-        }
-
-        // Ensure selection is within bounds (in case entry count changed)
-        let current_count = self.get_bucket_entry_count(self.focused_bucket);
-        let selection = self.current_selection_mut();
-        if selection.selected >= current_count && current_count > 0 {
-            selection.selected = current_count - 1;
-        }
-    }
-
-    /// Navigate down within the current bucket, or move to next bucket
-    fn navigate_down(&mut self) {
-        let entry_count = self.get_bucket_entry_count(self.focused_bucket);
-        let selection = self.current_selection_mut();
-
-        if selection.selected + 1 < entry_count {
-            // Move down within current bucket
-            selection.selected += 1;
-        } else {
-            // At bottom of bucket - try to move to next bucket
-            let next_bucket = self.focused_bucket.next();
-            if next_bucket != self.focused_bucket {
-                self.focused_bucket = next_bucket;
-                // Position at start of next bucket
-                self.current_selection_mut().selected = 0;
-            }
-        }
-    }
-
-    /// Navigate to the very first entry (bucket 1, item 0)
-    fn navigate_to_start(&mut self) {
-        self.focused_bucket = FocusedBucket::Corpus;
-        for selection in &mut self.bucket_selections {
-            selection.selected = 0;
-            selection.scroll = 0;
-        }
-    }
-
-    /// Navigate to the very last entry (last bucket, last item)
-    fn navigate_to_end(&mut self) {
-        // Find last non-empty bucket
-        for bucket in [
-            FocusedBucket::Other,
-            FocusedBucket::Placeholder,
-            FocusedBucket::Corpus,
-        ] {
-            let count = self.get_bucket_entry_count(bucket);
-            if count > 0 {
-                self.focused_bucket = bucket;
-                self.bucket_selections[bucket.index()].selected = count - 1;
-                return;
-            }
-        }
-    }
-
     /// Handle mouse click, updating selection if hit.
     /// Returns true if selection changed.
     pub fn handle_click(&mut self, x: u16, y: u16) -> bool {
-        if let Some(target) = self.click_targets.hit_test(x, y) {
-            // Check if the bucket has items at this index
-            let bucket_entry_count = self.get_bucket_entry_count(target.bucket);
-            if target.item_index < bucket_entry_count {
-                self.focused_bucket = target.bucket;
-                self.bucket_selections[target.bucket.index()].selected = target.item_index;
-                return true;
-            }
-        }
-        false
+        self.list.handle_click(x, y, &self.flat_items).is_some()
     }
 
     /// Handle semantic input action
     pub fn handle_input(&mut self, action: &InputAction) -> InsightsAction {
-        match action {
-            InputAction::Cancel => InsightsAction::RequestQuit,
+        let result = self.list.handle_input(action, &self.flat_items);
 
-            InputAction::NavUp => {
-                self.navigate_up();
+        match result {
+            ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
                 InsightsAction::None
             }
-
-            InputAction::NavDown => {
-                self.navigate_down();
-                InsightsAction::None
-            }
-
-            InputAction::Home => {
-                self.navigate_to_start();
-                InsightsAction::None
-            }
-
-            InputAction::End => {
-                self.navigate_to_end();
-                InsightsAction::None
-            }
-
-            InputAction::Confirm => {
+            ListInputResult::Confirm(_insight_type) => {
                 // Block launch if the Witch is busy
                 if self.is_witch_busy() {
                     return InsightsAction::None;
                 }
-                // TODO: Launch modal when implemented
                 InsightsAction::Launch
             }
-
-            InputAction::CycleNext => InsightsAction::CycleNext,
-
-            InputAction::CyclePrev => InsightsAction::CyclePrev,
-
-            _ => InsightsAction::None,
+            ListInputResult::Unhandled => {
+                // Handle actions that StandardList doesn't know about
+                match action {
+                    InputAction::Cancel => InsightsAction::RequestQuit,
+                    InputAction::CycleNext => InsightsAction::CycleNext,
+                    InputAction::CyclePrev => InsightsAction::CyclePrev,
+                    _ => InsightsAction::None,
+                }
+            }
         }
     }
 }
@@ -1137,6 +1268,7 @@ mod tests {
         let data = mock_insights_data();
         state.cached_entries = CachedBucketEntries::from_insights_data(&data);
         state.cached_data = Some(data);
+        state.rebuild_flat_items();
         state
     }
 
@@ -1149,7 +1281,7 @@ mod tests {
 
     #[test]
     fn test_witch_busy_blocks_enter() {
-        let mut state = InsightsViewState::new();
+        let mut state = state_with_data();
 
         // Not busy - Enter should launch modal
         state.modal = InsightsModal::Ready;
@@ -1246,10 +1378,10 @@ mod tests {
         let data = mock_insights_data();
         let no_handled = HashSet::new();
 
-        // Populate and select last corpus entry
+        // Populate and select last item
         state.update(None, Some(data.clone()), &no_handled, false);
-        let last_idx = state.cached_entries.corpus.len() - 1;
-        state.bucket_selections[FocusedBucket::Corpus.index()].selected = last_idx;
+        // Move to end
+        state.list.cursor = state.flat_items.len().saturating_sub(1);
 
         // Handle multiple sources to shrink the list
         let mut handled = HashSet::new();
@@ -1265,10 +1397,8 @@ mod tests {
 
         state.update(None, None, &handled, false);
 
-        // Selection should be clamped to new bounds
-        let new_count = state.cached_entries.corpus.len();
-        assert!(new_count > 0); // Still have informational entries
-        assert!(state.bucket_selections[FocusedBucket::Corpus.index()].selected < new_count);
+        // Cursor should be within bounds
+        assert!(state.list.cursor < state.flat_items.len());
     }
 
     #[test]
@@ -1306,130 +1436,54 @@ mod tests {
     }
 
     #[test]
-    fn test_bucket_navigation() {
-        let mut state = state_with_data();
-
-        // Start at Corpus bucket, item 0
-        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 0);
-
-        // Navigate down within corpus bucket
-        state.navigate_down();
-        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 1);
-
-        // Navigate to end of corpus bucket (12 items: 0-11)
-        for _ in 0..10 {
-            state.navigate_down();
-        }
-        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 11);
-
-        // Navigate down should move to Placeholder bucket (no Library bucket between)
-        state.navigate_down();
-        assert_eq!(state.focused_bucket, FocusedBucket::Placeholder);
-        assert_eq!(state.current_selection().selected, 0);
-
-        // Navigate up should return to Corpus bucket at last item
-        state.navigate_up();
-        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 11);
+    fn test_flat_items_have_headers() {
+        let state = state_with_data();
+        // Should have 3 headers + entries
+        let header_count = state
+            .flat_items
+            .iter()
+            .filter(|i| matches!(i, InsightListItem::Header { .. }))
+            .count();
+        assert_eq!(header_count, 3);
     }
 
     #[test]
-    fn test_navigate_to_start_and_end() {
+    fn test_cursor_skips_headers() {
         let mut state = state_with_data();
-
-        // Move around a bit
-        state.focused_bucket = FocusedBucket::Placeholder;
-        state.bucket_selections[FocusedBucket::Placeholder.index()].selected = 0;
-
-        // Navigate to start
-        state.navigate_to_start();
-        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 0);
-
-        // Navigate to end - with no Other or Placeholder entries, Corpus is last non-empty bucket (12 items, so last is index 11)
-        state.navigate_to_end();
-        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(state.current_selection().selected, 11);
+        // Cursor should start on first selectable item (index 1, after first header)
+        state.list.clamp_cursor(&state.flat_items);
+        assert!(matches!(
+            state.flat_items[state.list.cursor],
+            InsightListItem::Entry { .. }
+        ));
     }
 
     #[test]
-    fn test_insights_click_targets() {
-        use ratatui::layout::Rect;
+    fn test_navigation_down_and_up() {
+        let mut state = state_with_data();
+        state.list.set_visible_height(30);
+        state.list.clamp_cursor(&state.flat_items);
+        let start = state.list.cursor;
 
-        let mut targets = InsightsClickTargets::new();
-        targets.set_list_area(Rect::new(0, 0, 100, 50));
+        // Navigate down
+        state.handle_input(&InputAction::NavDown);
+        assert!(state.list.cursor > start);
+        // Should still be on an entry, not a header
+        assert!(matches!(
+            state.flat_items[state.list.cursor],
+            InsightListItem::Entry { .. }
+        ));
 
-        // Simulate Y positions like render would produce:
-        // Y=0: Corpus header (not clickable)
-        // Y=1: Corpus item 0
-        // Y=2: Corpus item 1
-        // Y=3: Other header (not clickable)
-        // Y=4: Other item 0
-        targets.add_header(FocusedBucket::Corpus, 0);
-        targets.add_item(FocusedBucket::Corpus, 0, 1);
-        targets.add_item(FocusedBucket::Corpus, 1, 2);
-        targets.add_header(FocusedBucket::Other, 3);
-        targets.add_item(FocusedBucket::Other, 0, 4);
-
-        // Click on header - should not hit
-        assert!(targets.hit_test(10, 0).is_none());
-
-        // Click on Corpus item 0
-        let hit = targets.hit_test(10, 1).unwrap();
-        assert_eq!(hit.bucket, FocusedBucket::Corpus);
-        assert_eq!(hit.item_index, 0);
-
-        // Click on Corpus item 1
-        let hit = targets.hit_test(10, 2).unwrap();
-        assert_eq!(hit.bucket, FocusedBucket::Corpus);
-        assert_eq!(hit.item_index, 1);
-
-        // Click on Other header - should not hit
-        assert!(targets.hit_test(10, 3).is_none());
-
-        // Click on Other item 0
-        let hit = targets.hit_test(10, 4).unwrap();
-        assert_eq!(hit.bucket, FocusedBucket::Other);
-        assert_eq!(hit.item_index, 0);
-
-        // Click outside the list area
-        assert!(targets.hit_test(150, 1).is_none());
+        // Navigate back up
+        state.handle_input(&InputAction::NavUp);
+        assert_eq!(state.list.cursor, start);
     }
 
     #[test]
-    fn test_handle_click() {
-        use ratatui::layout::Rect;
-
-        let mut state = state_with_data();
-
-        // Set up click targets manually (normally done by render)
-        state.click_targets.clear();
-        state.click_targets.set_list_area(Rect::new(0, 0, 100, 50));
-        state.click_targets.add_item(FocusedBucket::Corpus, 0, 1);
-        state.click_targets.add_item(FocusedBucket::Corpus, 1, 2);
-        state.click_targets.add_item(FocusedBucket::Other, 0, 5);
-
-        // Start at default (Corpus bucket, item 0)
-        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(
-            state.bucket_selections[FocusedBucket::Corpus.index()].selected,
-            0
-        );
-
-        // Click on Corpus item 1
-        assert!(state.handle_click(10, 2));
-        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
-        assert_eq!(
-            state.bucket_selections[FocusedBucket::Corpus.index()].selected,
-            1
-        );
-
-        // Click outside - should return false (Other bucket has no entries in mock data)
-        assert!(!state.handle_click(200, 200));
-        // Selection should not change
-        assert_eq!(state.focused_bucket, FocusedBucket::Corpus);
+    fn test_selected_entry_returns_bucket_entry() {
+        let state = state_with_data();
+        // Should be able to get the selected entry
+        let entry = state.selected_entry();
+        assert!(entry.is_some());
     }
 }

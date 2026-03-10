@@ -1,0 +1,5 @@
+error: #[wizard(popup)] requires a #[wizard(popup_content)] field
+  --> tests/fail/popup_missing_content.rs:19:5
+   |
+19 |     Info {
+   |     ^^^^

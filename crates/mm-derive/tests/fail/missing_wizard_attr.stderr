@@ -1,0 +1,5 @@
+error: variant `Entry` is missing a #[wizard(...)] attribute; use #[wizard(skip)] if it should not offer wizard content
+  --> tests/fail/missing_wizard_attr.rs:22:5
+   |
+22 |     Entry { label: String },
+   |     ^^^^^^^^^^^^^^^^^^^^^^^

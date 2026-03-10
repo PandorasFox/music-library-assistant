@@ -22,11 +22,15 @@ pub mod path_display;
 mod resolution_layout;
 pub mod selection_styles;
 pub mod signal_info_pane;
+pub mod standard_list;
 pub mod status_bar;
 pub mod tabbed_signal_list;
 mod text_input;
 pub mod three_col_table;
 mod titlebar;
+pub mod wizard;
+pub mod wizard_pane;
+pub mod wizard_popup;
 
 // Layout widgets
 pub use layout::{PaneConfig, ThreePaneLayout};
@@ -63,3 +67,13 @@ pub use selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 
 // Three-column table
 pub use three_col_table::{StyledCell, ThreeColTable};
+
+// Wizard system
+pub use wizard::{WizardItem, WizardOffer, WizardState};
+pub use wizard_pane::{render_wizard_pane, WizardPaneState};
+pub use wizard_popup::WizardPopup;
+
+// StandardList
+pub use standard_list::{
+    ListEntry, ListFocus, ListInputResult, StandardListConfig, StandardListState,
+};

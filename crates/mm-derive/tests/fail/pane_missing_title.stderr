@@ -1,0 +1,5 @@
+error: #[wizard(pane)] requires a #[wizard(pane_title)] field
+  --> tests/fail/pane_missing_title.rs:19:5
+   |
+19 |     Detail {
+   |     ^^^^^^

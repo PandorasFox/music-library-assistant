@@ -1,0 +1,17 @@
+[package]
+name = "mm-derive"
+version = "0.1.0"
+edition = "2021"
+description = "Derive macros for MM (Music Magic)"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+[dev-dependencies]
+trybuild = "1"
+ratatui = "0.29"

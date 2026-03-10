@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/mm-utils"]
+members = [".", "crates/mm-utils", "crates/mm-derive"]
 
 [package]
 name = "mm"
@@ -9,6 +9,7 @@ edition = "2021"
 [dependencies]
 # Internal crates
 mm-utils = { path = "crates/mm-utils" }
+mm-derive = { path = "crates/mm-derive" }
 
 # Config parsing
 kdl = "4.7.0"

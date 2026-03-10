@@ -307,6 +307,14 @@ impl super::Witch {
         let decision_count = txn.decision_count();
         let mut mutation_count = 0;
 
+        // Collect decision labels (sorted for stable ordering) before consuming decisions
+        let mut decision_labels: Vec<String> = txn
+            .decisions
+            .values()
+            .map(|d| d.label.clone())
+            .collect();
+        decision_labels.sort();
+
         // Collect all mutations from all decisions
         let raw_mutations: Vec<Mutation> = txn
             .decisions
@@ -364,10 +372,17 @@ impl super::Witch {
         ));
 
         // Generate a timestamped session label so tag_edit_history rows from this
-        // transaction are grouped into a unique session (not one giant "Tag edit" bucket).
+        // transaction are grouped into a unique session. Composite label is derived
+        // from the individual decision labels rather than the transaction label, so
+        // open_txn_mode ("Open") transactions still get descriptive history entries.
+        let composite_label = if decision_labels.is_empty() {
+            txn.label.clone()
+        } else {
+            decision_labels.join(" + ")
+        };
         let session_label = format!(
             "{} @ {}",
-            txn.label,
+            composite_label,
             chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
         );
 

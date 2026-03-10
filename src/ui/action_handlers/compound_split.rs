@@ -133,7 +133,7 @@ impl App {
             }
             compound_split_v2::CompoundSplitActionV2::ShowReview => {
                 // Ctrl+R - show review with whatever has already been staged
-                self.show_transaction_review_for_compound_split();
+                self.after_staging_decisions();
             }
             compound_split_v2::CompoundSplitActionV2::StageAllAndReview => {
                 let Some(g) = witness else { return };
@@ -150,12 +150,7 @@ impl App {
     }
 
     /// Launch embedded tag editor from the compound split modal.
-    ///
-    /// Extracts the current group's file inodes, queries for AudioFile objects,
-    /// and opens an embedded tag editor. The editor's file cursor is positioned
-    /// to match the health modal's current file selection.
     fn launch_tag_editor_from_compound_split(&mut self, mode: tag_editor::TagEditorMode) {
-        // Extract data from current view
         let (inodes, decision_key, decision_label, file_cursor_inode, zone) =
             if let ActiveView::CompoundTagSplit {
                 ref state,
@@ -168,48 +163,19 @@ impl App {
                 let inodes: Vec<i64> = state.data.files.iter().map(|f| f.inode).collect();
                 let tag_name = state.data.compound.tag_name.clone();
                 let cluster_index = clusters.current_index();
-                let decision_key = compound_split_key(zone, safe_mode, tag_name, cluster_index);
+                let key = compound_split_key(zone, safe_mode, tag_name, cluster_index);
                 let label = format!(
                     "Tag edit: {} \"{}\"",
                     state.data.compound.tag_name, state.data.compound.compound_value,
                 );
                 let cursor_inode = state.data.files.get(state.file_cursor).map(|f| f.inode);
-                (inodes, decision_key, label, cursor_inode, zone)
+                (inodes, key, label, cursor_inode, zone)
             } else {
                 return;
             };
 
-        // Query audio files by inodes
-        let audio_files = self
-            .cache
-            .query(move |db| {
-                db.get_audio_files_by_inodes(&inodes, zone)
-                    .unwrap_or_default()
-            })
-            .recv();
-
-        if audio_files.is_empty() {
-            self.status_message = Some("No indexed files found for this group".to_string());
-            return;
-        }
-
-        // Open embedded tag editor (suspends current view on stack)
-        self.open_embedded_tag_editor(mode, audio_files, decision_key, decision_label);
-
-        // Position editor cursor on the file matching the health modal's selection
-        if let Some(target_inode) = file_cursor_inode {
-            if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
-                if let tag_editor::types::TagEditContext::BulkEdit {
-                    ref audio_files, ..
-                } = editor.context
-                {
-                    if let Some(idx) = audio_files.iter().position(|af| af.inode() == target_inode)
-                    {
-                        editor.current_item_idx = idx;
-                    }
-                }
-            }
-        }
+        self.open_tag_editor_for_inodes(inodes, zone, decision_key, decision_label, mode);
+        self.position_editor_cursor(file_cursor_inode);
     }
 
     /// Navigate to next/prev compound split signal without staging.
@@ -229,7 +195,7 @@ impl App {
 
         if forward && is_last {
             // Tab from last = show review screen
-            self.show_transaction_review_for_compound_split();
+            self.after_staging_decisions();
             return;
         }
 
@@ -260,7 +226,7 @@ impl App {
     /// EmitCanonicalTag mutation covers all inodes with that value globally).
     fn advance_to_next_compound_split(&mut self) {
         if !matches!(&self.view, ActiveView::CompoundTagSplit { .. }) {
-            self.show_transaction_review_for_compound_split();
+            self.after_staging_decisions();
             return;
         }
 
@@ -271,7 +237,7 @@ impl App {
             let is_last = matches!(&self.view, ActiveView::CompoundTagSplit { clusters, .. } if clusters.is_last());
 
             if is_last {
-                self.show_transaction_review_for_compound_split();
+                self.after_staging_decisions();
                 return;
             }
 
@@ -285,12 +251,12 @@ impl App {
             };
 
             if !advanced {
-                self.show_transaction_review_for_compound_split();
+                self.after_staging_decisions();
                 return;
             }
 
             if !self.load_current_compound_split_signal() {
-                self.show_transaction_review_for_compound_split();
+                self.after_staging_decisions();
                 return;
             }
 
@@ -326,11 +292,6 @@ impl App {
                 })
             })
             .collect()
-    }
-
-    /// Show the transaction review screen for compound tag splits.
-    pub(in crate::ui) fn show_transaction_review_for_compound_split(&mut self) {
-        self.after_staging_decisions();
     }
 
     /// Stage the current compound split decision (v2).

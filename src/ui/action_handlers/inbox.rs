@@ -25,24 +25,12 @@ impl App {
 
         match action {
             InboxAction::None => {}
-            InboxAction::RequestQuit => {
-                if self.has_pending_operations() {
-                    self.status_message =
-                        Some("Cannot quit while operations are pending".to_string());
-                } else {
-                    self.view =
-                        ActiveView::ExitConfirm(super::super::ExitConfirmModalState::default());
-                }
-            }
+            InboxAction::RequestQuit => self.handle_request_quit(),
             InboxAction::CycleNext => {
-                self.start_lateral_view(
-                    crate::ui::widgets::LateralView::Inbox.next(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(crate::ui::widgets::LateralView::Inbox, true);
             }
             InboxAction::CyclePrev => {
-                self.start_lateral_view(
-                    crate::ui::widgets::LateralView::Inbox.prev(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(crate::ui::widgets::LateralView::Inbox, false);
             }
             InboxAction::LaunchIntake => {
                 // Gather inbox unindexed files and show intake confirmation
@@ -146,17 +134,7 @@ impl App {
                     }
                     _ => Vec::new(),
                 };
-                if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(
-                        mutations,
-                        "Stash inbox corpus matches",
-                        DecisionKey::InboxCorpusMatch,
-                        w,
-                    );
-                    self.after_staging_decisions();
-                } else {
-                    self.status_message = Some("No files to stash".to_string());
-                }
+                self.stage_resolution(mutations, "Stash inbox corpus matches", DecisionKey::InboxCorpusMatch, "No files to stash", w);
             }
             inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
@@ -166,17 +144,7 @@ impl App {
                     }
                     _ => Vec::new(),
                 };
-                if !mutations.is_empty() {
-                    self.stage_mutations_with_transaction(
-                        mutations,
-                        "Stash all inbox duplicates",
-                        DecisionKey::InboxCorpusMatch,
-                        w,
-                    );
-                    self.after_staging_decisions();
-                } else {
-                    self.status_message = Some("No files to stash".to_string());
-                }
+                self.stage_resolution(mutations, "Stash all inbox duplicates", DecisionKey::InboxCorpusMatch, "No files to stash", w);
             }
             inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::Cancel => {
                 self.cancel_and_return_to_source("Inbox corpus match resolution cancelled");

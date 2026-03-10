@@ -30,25 +30,13 @@ impl App {
             HistoryAction::None => {}
 
             HistoryAction::CycleNext => {
-                self.start_lateral_view(
-                    widgets::LateralView::History.next(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(widgets::LateralView::History, true);
             }
             HistoryAction::CyclePrev => {
-                self.start_lateral_view(
-                    widgets::LateralView::History.prev(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(widgets::LateralView::History, false);
             }
 
-            HistoryAction::RequestQuit => {
-                if self.has_pending_operations() {
-                    self.status_message =
-                        Some("Cannot quit while operations are pending".to_string());
-                } else {
-                    self.view =
-                        ActiveView::ExitConfirm(super::super::ExitConfirmModalState::default());
-                }
-            }
+            HistoryAction::RequestQuit => self.handle_request_quit(),
 
             HistoryAction::ExpandSession(session_id) => {
                 self.expand_history_session(session_id);
@@ -332,63 +320,46 @@ impl App {
             _ => return,
         };
 
-        // Query the session's edit records for export
         let sid = session_id.clone();
         let rows = self
             .cache
             .query(move |db| db.get_session_edit_history(&sid).unwrap_or_default())
             .recv();
 
-        if rows.is_empty() {
-            self.status_message = Some("No records to export".to_string());
-            if let ActiveView::History(ref mut state) = self.view {
-                state.phase = HistoryPhase::SessionList;
+        self.finalize_jettison(rows, "Jettisoned", |sender| {
+            sender.clear_tag_edit_history_session(&session_id);
+        }, |state| {
+            state.sessions.retain(|s| s.session_id != session_id);
+            if !state.sessions.is_empty() && state.cursor >= state.sessions.len() {
+                state.cursor = state.sessions.len() - 1;
             }
-            return;
-        }
-
-        // Export to log file
-        match export_to_log(&rows) {
-            Ok(path) => {
-                // Send delete to write thread
-                if let Some(sender) = crate::db::write_thread::signal_sender() {
-                    sender.clear_tag_edit_history_session(&session_id);
-                }
-
-                let count = rows.len();
-                self.status_message = Some(format!(
-                    "Jettisoned {} record{} → {}",
-                    count,
-                    if count == 1 { "" } else { "s" },
-                    path,
-                ));
-
-                // Reset view state
-                if let ActiveView::History(ref mut state) = self.view {
-                    state.sessions.retain(|s| s.session_id != session_id);
-                    if !state.sessions.is_empty() && state.cursor >= state.sessions.len() {
-                        state.cursor = state.sessions.len() - 1;
-                    }
-                    state.phase = HistoryPhase::SessionList;
-                }
-            }
-            Err(e) => {
-                self.status_message = Some(format!("Export failed: {}", e));
-                if let ActiveView::History(ref mut state) = self.view {
-                    state.phase = HistoryPhase::SessionList;
-                }
-            }
-        }
+        });
     }
 
     /// Execute jettison-all: export everything to log, delete all from DB.
     fn execute_jettison_all(&mut self) {
-        // Query all edit history for export
         let rows = self
             .cache
             .query(move |db| db.get_all_edit_history().unwrap_or_default())
             .recv();
 
+        self.finalize_jettison(rows, "Jettisoned all", |sender| {
+            sender.clear_tag_edit_history();
+        }, |state| {
+            state.sessions.clear();
+            state.cursor = 0;
+            state.detail = None;
+        });
+    }
+
+    /// Shared jettison logic: export rows, send delete, update status and state.
+    fn finalize_jettison(
+        &mut self,
+        rows: Vec<EditHistoryExportRow>,
+        prefix: &str,
+        delete_fn: impl FnOnce(&crate::db::write_thread::SignalWriteSender),
+        reset_fn: impl FnOnce(&mut crate::ui::history_view::HistoryViewState),
+    ) {
         if rows.is_empty() {
             self.status_message = Some("No records to export".to_string());
             if let ActiveView::History(ref mut state) = self.view {
@@ -397,27 +368,18 @@ impl App {
             return;
         }
 
-        // Export to log file
         match export_to_log(&rows) {
             Ok(path) => {
-                // Send delete-all to write thread
                 if let Some(sender) = crate::db::write_thread::signal_sender() {
-                    sender.clear_tag_edit_history();
+                    delete_fn(sender);
                 }
-
                 let count = rows.len();
                 self.status_message = Some(format!(
-                    "Jettisoned all {} record{} → {}",
-                    count,
-                    if count == 1 { "" } else { "s" },
-                    path,
+                    "{} {} record{} → {}",
+                    prefix, count, if count == 1 { "" } else { "s" }, path,
                 ));
-
-                // Reset view state
                 if let ActiveView::History(ref mut state) = self.view {
-                    state.sessions.clear();
-                    state.cursor = 0;
-                    state.detail = None;
+                    reset_fn(state);
                     state.phase = HistoryPhase::SessionList;
                 }
             }

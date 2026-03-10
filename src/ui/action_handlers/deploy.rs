@@ -16,19 +16,13 @@ impl App {
         action: deploy_modal::DeployAction,
         witness: Option<&witness::ConfirmationGesture>,
     ) {
-        use crate::ui::widgets;
-
         match action {
             deploy_modal::DeployAction::None => {}
             deploy_modal::DeployAction::CycleNext => {
-                self.start_lateral_view(
-                    widgets::LateralView::Deploy.next(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(crate::ui::widgets::LateralView::Deploy, true);
             }
             deploy_modal::DeployAction::CyclePrev => {
-                self.start_lateral_view(
-                    widgets::LateralView::Deploy.prev(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(crate::ui::widgets::LateralView::Deploy, false);
             }
             deploy_modal::DeployAction::Confirm => {
                 let Some(w) = witness else { return };
@@ -48,15 +42,7 @@ impl App {
                     }
                 }
             }
-            deploy_modal::DeployAction::RequestQuit => {
-                if self.has_pending_operations() {
-                    self.status_message =
-                        Some("Cannot quit while operations are pending".to_string());
-                } else {
-                    self.view =
-                        ActiveView::ExitConfirm(super::super::ExitConfirmModalState::default());
-                }
-            }
+            deploy_modal::DeployAction::RequestQuit => self.handle_request_quit(),
         }
     }
 

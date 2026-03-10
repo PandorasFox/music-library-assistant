@@ -207,6 +207,89 @@ impl App {
         }
     }
 
+    /// Stage mutations for a simple resolution modal and transition to review.
+    ///
+    /// Returns early if `mutations` is empty (setting a status message instead).
+    fn stage_resolution(
+        &mut self,
+        mutations: Vec<crate::meta::mutations::Mutation>,
+        label: &str,
+        key: DecisionKey,
+        empty_msg: &str,
+        gesture: &witness::ConfirmationGesture,
+    ) {
+        if mutations.is_empty() {
+            self.status_message = Some(empty_msg.to_string());
+        } else {
+            self.stage_mutations_with_transaction(mutations, label, key, gesture);
+            self.after_staging_decisions();
+        }
+    }
+
+    /// Handle RequestQuit action (shared across all lateral views).
+    pub(in crate::ui) fn handle_request_quit(&mut self) {
+        if self.has_pending_operations() {
+            self.status_message = Some("Cannot quit while operations are pending".to_string());
+        } else {
+            self.view = ActiveView::ExitConfirm(super::ExitConfirmModalState::default());
+        }
+    }
+
+    /// Open an embedded tag editor for a set of inodes.
+    ///
+    /// Common helper for EditTracks/EditTracksAggregated actions across modals.
+    fn open_tag_editor_for_inodes(
+        &mut self,
+        inodes: Vec<i64>,
+        zone: crate::db::types::Zone,
+        key: DecisionKey,
+        label: String,
+        mode: tag_editor::TagEditorMode,
+    ) {
+        if inodes.is_empty() {
+            return;
+        }
+        let audio_files = self
+            .cache
+            .query(move |db| db.get_audio_files_by_inodes(&inodes, zone).unwrap_or_default())
+            .recv();
+        if !audio_files.is_empty() {
+            self.open_embedded_tag_editor(mode, audio_files, key, label);
+        }
+    }
+
+    /// Position the tag editor cursor on a specific inode after opening.
+    fn position_editor_cursor(&mut self, target_inode: Option<i64>) {
+        if let Some(target_inode) = target_inode {
+            if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
+                if let tag_editor::types::TagEditContext::BulkEdit {
+                    ref audio_files, ..
+                } = editor.context
+                {
+                    if let Some(idx) = audio_files.iter().position(|af| af.inode() == target_inode)
+                    {
+                        editor.current_item_idx = idx;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle CycleNext/CyclePrev for a lateral view.
+    pub(in crate::ui) fn handle_lateral_cycle(
+        &mut self,
+        lateral: super::widgets::LateralView,
+        forward: bool,
+    ) {
+        let txn = self.transactions_open();
+        let target = if forward {
+            lateral.next(txn)
+        } else {
+            lateral.prev(txn)
+        };
+        self.start_lateral_view(target);
+    }
+
     // =========================================================================
     // Post-Mutation Helpers
     // =========================================================================
@@ -352,14 +435,10 @@ impl App {
                 self.start_health_view();
             }
             super::config_editor::ConfigEditorAction::CycleNext => {
-                self.start_lateral_view(
-                    widgets::LateralView::Config.next(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(widgets::LateralView::Config, true);
             }
             super::config_editor::ConfigEditorAction::CyclePrev => {
-                self.start_lateral_view(
-                    widgets::LateralView::Config.prev(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(widgets::LateralView::Config, false);
             }
         }
     }
@@ -367,25 +446,12 @@ impl App {
     pub(super) fn handle_health_action(&mut self, action: insights_view::InsightsAction) {
         match action {
             insights_view::InsightsAction::None => {}
-            insights_view::InsightsAction::RequestQuit => {
-                // Check if operations are pending
-                if self.has_pending_operations() {
-                    self.status_message =
-                        Some("Cannot quit while operations are pending".to_string());
-                } else {
-                    // Show exit confirmation modal
-                    self.view = ActiveView::ExitConfirm(super::ExitConfirmModalState::default());
-                }
-            }
+            insights_view::InsightsAction::RequestQuit => self.handle_request_quit(),
             insights_view::InsightsAction::CycleNext => {
-                self.start_lateral_view(
-                    widgets::LateralView::Health.next(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(widgets::LateralView::Health, true);
             }
             insights_view::InsightsAction::CyclePrev => {
-                self.start_lateral_view(
-                    widgets::LateralView::Health.prev(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(widgets::LateralView::Health, false);
             }
             insights_view::InsightsAction::Launch => {
                 // Use selected_action() to dispatch to appropriate modal
@@ -627,8 +693,8 @@ impl App {
                 };
 
                 match resolution {
-                    AlbumResolution::PerTrackTitle => {
-                        let ops: Vec<TagOp> = {
+                    AlbumResolution::PerTrackTitle | AlbumResolution::AllSingles => {
+                        let (ops, label): (Vec<TagOp>, &str) = {
                             let ActiveView::MissingAlbumSingleResolution(ref state) = self.view
                             else {
                                 return;
@@ -636,17 +702,18 @@ impl App {
                             let Some(group) = state.current_group_data() else {
                                 return;
                             };
-                            group
-                                .tracks
-                                .iter()
-                                .map(|t| {
-                                    TagOp::add_tag(
-                                        t.inode,
-                                        "ALBUM",
-                                        format!("{}{}", t.title, state.suffix),
-                                    )
-                                })
-                                .collect()
+                            match resolution {
+                                AlbumResolution::PerTrackTitle => (
+                                    group.tracks.iter().map(|t| {
+                                        TagOp::add_tag(t.inode, "ALBUM", format!("{}{}", t.title, state.suffix))
+                                    }).collect(),
+                                    "Tag as singles",
+                                ),
+                                _ => (
+                                    group.tracks.iter().map(|t| TagOp::add_tag(t.inode, "ALBUM", "Singles")).collect(),
+                                    "Tag all as Singles",
+                                ),
+                            }
                         };
                         if !ops.is_empty() {
                             let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation {
@@ -658,39 +725,7 @@ impl App {
                                 DecisionKey::MissingAlbum {
                                     group_index: group_idx,
                                 },
-                                "Tag as singles",
-                                vec![mutation],
-                                g,
-                            );
-                        }
-                    }
-
-                    AlbumResolution::AllSingles => {
-                        let ops: Vec<TagOp> = {
-                            let ActiveView::MissingAlbumSingleResolution(ref state) = self.view
-                            else {
-                                return;
-                            };
-                            let Some(group) = state.current_group_data() else {
-                                return;
-                            };
-                            group
-                                .tracks
-                                .iter()
-                                .map(|t| TagOp::add_tag(t.inode, "ALBUM", "Singles"))
-                                .collect()
-                        };
-                        if !ops.is_empty() {
-                            let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation {
-                                ops,
-                                zone: Zone::Corpus,
-                            });
-                            let _ = super::operator_decisions::stage_decision(
-                                &mut self.witch,
-                                DecisionKey::MissingAlbum {
-                                    group_index: group_idx,
-                                },
-                                "Tag all as Singles",
+                                label,
                                 vec![mutation],
                                 g,
                             );
@@ -756,44 +791,12 @@ impl App {
                 self.after_staging_decisions();
             }
 
-            MissingAlbumAction::EditTracks => {
-                let (inodes, decision_key, label) = {
-                    let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else {
-                        return;
-                    };
-                    let group = match state.current_group_data() {
-                        Some(g) => g,
-                        None => return,
-                    };
-                    // Use a distinct key to avoid colliding with resolution decisions
-                    let key = DecisionKey::TagEdit {
-                        key_item: format!("missing_album_{}", state.current_group),
-                    };
-                    let label = format!("Manual tag edits: {}", group.artist);
-                    (state.current_group_inodes(), key, label)
+            MissingAlbumAction::EditTracks | MissingAlbumAction::EditTracksAggregated => {
+                let mode = match action {
+                    MissingAlbumAction::EditTracks => tag_editor::TagEditorMode::Individual,
+                    _ => tag_editor::TagEditorMode::Aggregated,
                 };
-                if inodes.is_empty() {
-                    return;
-                }
-                let audio_files = self
-                    .cache
-                    .query(move |db| {
-                        db.get_audio_files_by_inodes(&inodes, crate::db::types::Zone::Corpus)
-                            .unwrap_or_default()
-                    })
-                    .recv();
-                if !audio_files.is_empty() {
-                    self.open_embedded_tag_editor(
-                        tag_editor::TagEditorMode::Individual,
-                        audio_files,
-                        decision_key,
-                        label,
-                    );
-                }
-            }
-
-            MissingAlbumAction::EditTracksAggregated => {
-                let (inodes, decision_key, label) = {
+                let (inodes, key, label) = {
                     let ActiveView::MissingAlbumSingleResolution(ref state) = self.view else {
                         return;
                     };
@@ -807,24 +810,7 @@ impl App {
                     let label = format!("Manual tag edits: {}", group.artist);
                     (state.current_group_inodes(), key, label)
                 };
-                if inodes.is_empty() {
-                    return;
-                }
-                let audio_files = self
-                    .cache
-                    .query(move |db| {
-                        db.get_audio_files_by_inodes(&inodes, crate::db::types::Zone::Corpus)
-                            .unwrap_or_default()
-                    })
-                    .recv();
-                if !audio_files.is_empty() {
-                    self.open_embedded_tag_editor(
-                        tag_editor::TagEditorMode::Aggregated,
-                        audio_files,
-                        decision_key,
-                        label,
-                    );
-                }
+                self.open_tag_editor_for_inodes(inodes, crate::db::types::Zone::Corpus, key, label, mode);
             }
         }
     }
@@ -984,8 +970,12 @@ impl App {
                 self.after_staging_decisions();
             }
 
-            DiscExtractionAction::EditTracks => {
-                let (inodes, decision_key, label) = {
+            DiscExtractionAction::EditTracks | DiscExtractionAction::EditTracksAggregated => {
+                let mode = match action {
+                    DiscExtractionAction::EditTracks => tag_editor::TagEditorMode::Individual,
+                    _ => tag_editor::TagEditorMode::Aggregated,
+                };
+                let (inodes, key, label) = {
                     let ActiveView::DiscExtractionResolution(ref state) = self.view else {
                         return;
                     };
@@ -999,59 +989,7 @@ impl App {
                     let label = format!("Manual tag edits: {}", group.description);
                     (state.current_group_inodes(), key, label)
                 };
-                if inodes.is_empty() {
-                    return;
-                }
-                let audio_files = self
-                    .cache
-                    .query(move |db| {
-                        db.get_audio_files_by_inodes(&inodes, crate::db::types::Zone::Corpus)
-                            .unwrap_or_default()
-                    })
-                    .recv();
-                if !audio_files.is_empty() {
-                    self.open_embedded_tag_editor(
-                        tag_editor::TagEditorMode::Individual,
-                        audio_files,
-                        decision_key,
-                        label,
-                    );
-                }
-            }
-
-            DiscExtractionAction::EditTracksAggregated => {
-                let (inodes, decision_key, label) = {
-                    let ActiveView::DiscExtractionResolution(ref state) = self.view else {
-                        return;
-                    };
-                    let group = match state.current_group_data() {
-                        Some(g) => g,
-                        None => return,
-                    };
-                    let key = DecisionKey::TagEdit {
-                        key_item: format!("disc_extraction_{}", state.current_group),
-                    };
-                    let label = format!("Manual tag edits: {}", group.description);
-                    (state.current_group_inodes(), key, label)
-                };
-                if inodes.is_empty() {
-                    return;
-                }
-                let audio_files = self
-                    .cache
-                    .query(move |db| {
-                        db.get_audio_files_by_inodes(&inodes, crate::db::types::Zone::Corpus)
-                            .unwrap_or_default()
-                    })
-                    .recv();
-                if !audio_files.is_empty() {
-                    self.open_embedded_tag_editor(
-                        tag_editor::TagEditorMode::Aggregated,
-                        audio_files,
-                        decision_key,
-                        label,
-                    );
-                }
+                self.open_tag_editor_for_inodes(inodes, crate::db::types::Zone::Corpus, key, label, mode);
             }
         }
     }
@@ -1065,14 +1003,10 @@ impl App {
                 self.start_health_view();
             }
             tag_search::TagSearchAction::CycleNext => {
-                self.start_lateral_view(
-                    widgets::LateralView::Search.next(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(widgets::LateralView::Search, true);
             }
             tag_search::TagSearchAction::CyclePrev => {
-                self.start_lateral_view(
-                    widgets::LateralView::Search.prev(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(widgets::LateralView::Search, false);
             }
             tag_search::TagSearchAction::ExecuteSearch => {
                 // Execute search via cache thread (blocking — fast single query)
@@ -1198,10 +1132,10 @@ impl App {
                 self.start_tag_editor_for_path(&path, false);
             }
             tree_browser::TreeBrowserAction::CycleNext => {
-                self.start_lateral_view(widgets::LateralView::Files.next(self.transactions_open()));
+                self.handle_lateral_cycle(widgets::LateralView::Files, true);
             }
             tree_browser::TreeBrowserAction::CyclePrev => {
-                self.start_lateral_view(widgets::LateralView::Files.prev(self.transactions_open()));
+                self.handle_lateral_cycle(widgets::LateralView::Files, false);
             }
             tree_browser::TreeBrowserAction::OpenFilter => {
                 // Open filter popup for corpus browser
@@ -1695,23 +1629,12 @@ impl App {
 
         match action {
             TabbedTransactionReviewAction::CycleNext => {
-                self.start_lateral_view(
-                    widgets::LateralView::Transaction.next(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(widgets::LateralView::Transaction, true);
             }
             TabbedTransactionReviewAction::CyclePrev => {
-                self.start_lateral_view(
-                    widgets::LateralView::Transaction.prev(self.transactions_open()),
-                );
+                self.handle_lateral_cycle(widgets::LateralView::Transaction, false);
             }
-            TabbedTransactionReviewAction::RequestQuit => {
-                if self.has_pending_operations() {
-                    self.status_message =
-                        Some("Cannot quit while operations are pending".to_string());
-                } else {
-                    self.view = ActiveView::ExitConfirm(super::ExitConfirmModalState::default());
-                }
-            }
+            TabbedTransactionReviewAction::RequestQuit => self.handle_request_quit(),
             TabbedTransactionReviewAction::Review(review_action) => match review_action {
                 TransactionReviewAction::None => {}
                 TransactionReviewAction::Cancel => {} // No cancel in tabbed mode

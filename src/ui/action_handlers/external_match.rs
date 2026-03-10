@@ -21,22 +21,12 @@ impl App {
         match action {
             external_match_view::ExternalMatchesAction::None => {}
             external_match_view::ExternalMatchesAction::CycleNext => {
-                let txn = self.transactions_open();
-                self.start_lateral_view(widgets::LateralView::ExternalMatches.next(txn));
+                self.handle_lateral_cycle(widgets::LateralView::ExternalMatches, true);
             }
             external_match_view::ExternalMatchesAction::CyclePrev => {
-                let txn = self.transactions_open();
-                self.start_lateral_view(widgets::LateralView::ExternalMatches.prev(txn));
+                self.handle_lateral_cycle(widgets::LateralView::ExternalMatches, false);
             }
-            external_match_view::ExternalMatchesAction::RequestQuit => {
-                if self.has_pending_operations() {
-                    self.status_message =
-                        Some("Cannot quit while operations are pending".to_string());
-                } else {
-                    self.view =
-                        ActiveView::ExitConfirm(super::super::ExitConfirmModalState::default());
-                }
-            }
+            external_match_view::ExternalMatchesAction::RequestQuit => self.handle_request_quit(),
             external_match_view::ExternalMatchesAction::RequestFetch => {
                 self.witch.request_external_fetch();
                 self.status_message = Some("External fetch requested".to_string());

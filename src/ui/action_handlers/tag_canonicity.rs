@@ -110,7 +110,7 @@ impl App {
             }
             tag_canonicity_v2::TagCanonicalityActionV2::ShowReview => {
                 // Ctrl+R - show review with whatever has already been staged
-                self.show_transaction_review_for_canonicity();
+                self.after_staging_decisions();
             }
             tag_canonicity_v2::TagCanonicalityActionV2::OpenTagEditorIndividual => {
                 self.launch_tag_editor_from_canonicity(tag_editor::TagEditorMode::Individual);
@@ -132,12 +132,7 @@ impl App {
     }
 
     /// Launch embedded tag editor from the tag canonicity modal.
-    ///
-    /// Extracts the current group's inodes, queries for AudioFile objects,
-    /// and opens an embedded tag editor. The editor's file cursor is positioned
-    /// to match the health modal's current file selection.
     fn launch_tag_editor_from_canonicity(&mut self, mode: tag_editor::TagEditorMode) {
-        // Extract data from current view
         let (inodes, decision_key, decision_label, file_cursor_inode, zone) =
             if let ActiveView::TagCanonicityResolution {
                 ref state,
@@ -145,48 +140,19 @@ impl App {
             } = self.view
             {
                 let inodes: Vec<i64> = state.data.inodes.clone();
-                let decision_key = DecisionKey::TagCanonicity {
+                let key = DecisionKey::TagCanonicity {
                     tag_name: state.data.tag_name.clone(),
                     cluster_index: clusters.current_index,
                 };
                 let label = format!("Tag edit: {} canonicity", state.data.tag_name);
                 let cursor_inode = state.data.files.get(state.file_cursor).map(|f| f.inode);
-                (inodes, decision_key, label, cursor_inode, state.zone)
+                (inodes, key, label, cursor_inode, state.zone)
             } else {
                 return;
             };
 
-        // Query audio files by inodes
-        let audio_files = self
-            .cache
-            .query(move |db| {
-                db.get_audio_files_by_inodes(&inodes, zone)
-                    .unwrap_or_default()
-            })
-            .recv();
-
-        if audio_files.is_empty() {
-            self.status_message = Some("No indexed files found for this group".to_string());
-            return;
-        }
-
-        // Open embedded tag editor (suspends current view on stack)
-        self.open_embedded_tag_editor(mode, audio_files, decision_key, decision_label);
-
-        // Position editor cursor on the file matching the health modal's selection
-        if let Some(target_inode) = file_cursor_inode {
-            if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
-                if let tag_editor::types::TagEditContext::BulkEdit {
-                    ref audio_files, ..
-                } = editor.context
-                {
-                    if let Some(idx) = audio_files.iter().position(|af| af.inode() == target_inode)
-                    {
-                        editor.current_item_idx = idx;
-                    }
-                }
-            }
-        }
+        self.open_tag_editor_for_inodes(inodes, zone, decision_key, decision_label, mode);
+        self.position_editor_cursor(file_cursor_inode);
     }
 
     /// Navigate to next/prev cluster without staging a decision.
@@ -206,7 +172,7 @@ impl App {
 
         if forward && is_last {
             // Tab from last group = show review screen
-            self.show_transaction_review_for_canonicity();
+            self.after_staging_decisions();
             return;
         }
 
@@ -235,13 +201,13 @@ impl App {
         let is_last = matches!(&self.view, ActiveView::TagCanonicityResolution { clusters, .. } if clusters.is_last());
 
         if !matches!(&self.view, ActiveView::TagCanonicityResolution { .. }) {
-            self.show_transaction_review_for_canonicity();
+            self.after_staging_decisions();
             return;
         }
 
         if is_last {
             // At last cluster - show review screen
-            self.show_transaction_review_for_canonicity();
+            self.after_staging_decisions();
         } else {
             let advanced = if let ActiveView::TagCanonicityResolution {
                 ref mut clusters, ..
@@ -256,18 +222,13 @@ impl App {
                 // Load next signal
                 if !self.load_current_cluster_signal() {
                     // Signal load failed - show review with what we have
-                    self.show_transaction_review_for_canonicity();
+                    self.after_staging_decisions();
                 }
             } else {
                 // No more clusters - show review
-                self.show_transaction_review_for_canonicity();
+                self.after_staging_decisions();
             }
         }
-    }
-
-    /// Show the transaction review screen for tag canonicity.
-    fn show_transaction_review_for_canonicity(&mut self) {
-        self.after_staging_decisions();
     }
 
     /// Stage a decision for the current canonicity cluster (V2).

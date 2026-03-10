@@ -210,7 +210,6 @@ impl App {
             let inodes = if aggregated {
                 group_inodes
             } else {
-                // Single file mode: just the selected file
                 state
                     .selected_file()
                     .filter(|f| !f.stashed)
@@ -236,26 +235,11 @@ impl App {
             )
         };
 
-        // Load audio files from database
-        let audio_files = self
-            .cache
-            .query(move |db| {
-                db.get_audio_files_by_inodes(&inodes, Zone::Corpus)
-                    .unwrap_or_default()
-            })
-            .recv();
-
-        if audio_files.is_empty() {
-            self.status_message = Some("No indexed audio files found for editing".to_string());
-            return;
-        }
-
         let mode = if aggregated {
             tag_editor::TagEditorMode::Aggregated
         } else {
             tag_editor::TagEditorMode::Individual
         };
-
-        self.open_embedded_tag_editor(mode, audio_files, decision_key, decision_label);
+        self.open_tag_editor_for_inodes(inodes, Zone::Corpus, decision_key, decision_label, mode);
     }
 }

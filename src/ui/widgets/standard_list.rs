@@ -112,12 +112,14 @@ impl StandardListState {
         }
     }
 
-    /// Total number of items the list can display.
+    /// Total number of items the list can display (test-only; render sets this).
+    #[cfg(test)]
     pub fn visible_height(&self) -> usize {
         self.visible_height
     }
 
-    /// Set visible height (for testing or pre-render initialization).
+    /// Set visible height (test-only; render sets this from inner area).
+    #[cfg(test)]
     pub fn set_visible_height(&mut self, h: usize) {
         self.visible_height = h;
     }
@@ -500,6 +502,7 @@ impl StandardListState {
     }
 
     /// Reset state for new items (e.g., when list content changes).
+    #[cfg(test)]
     pub fn reset(&mut self) {
         self.cursor = 0;
         self.scroll = 0;

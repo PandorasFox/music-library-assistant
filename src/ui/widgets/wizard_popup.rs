@@ -83,6 +83,7 @@ impl WizardPopup {
 }
 
 /// Compute the popup Rect without rendering (for testing).
+#[cfg(test)]
 pub fn compute_popup_rect(
     content_lines: usize,
     max_content_width: u16,

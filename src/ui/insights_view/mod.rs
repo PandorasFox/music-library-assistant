@@ -68,25 +68,6 @@ pub enum InsightsModal {
     NotReady_WitchBusy,
 }
 
-/// Which bucket an entry or header belongs to (preserved for rendering)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FocusedBucket {
-    #[default]
-    Corpus,
-    Placeholder,
-    Other,
-}
-
-impl FocusedBucket {
-    /// Get the index of this bucket (0-2)
-    pub fn index(self) -> usize {
-        match self {
-            FocusedBucket::Corpus => 0,
-            FocusedBucket::Placeholder => 1,
-            FocusedBucket::Other => 2,
-        }
-    }
-}
 
 // ============================================================================
 // Unified Bucket Entry System
@@ -715,14 +696,6 @@ impl CachedBucketEntries {
         self.other.retain(|e| !dominated(e));
     }
 
-    /// Get entries for a specific bucket
-    pub fn entries_for(&self, bucket: FocusedBucket) -> &[BucketEntry] {
-        match bucket {
-            FocusedBucket::Corpus => &self.corpus,
-            FocusedBucket::Placeholder => &self.placeholder,
-            FocusedBucket::Other => &self.other,
-        }
-    }
 }
 
 // ============================================================================
@@ -734,7 +707,6 @@ impl CachedBucketEntries {
 pub enum InsightListItem {
     Header {
         title: String,
-        bucket: FocusedBucket,
     },
     Entry {
         entry: BucketEntry,
@@ -1023,7 +995,6 @@ fn build_flat_items(
     // Corpus Files bucket
     items.push(InsightListItem::Header {
         title: "Corpus Files".to_string(),
-        bucket: FocusedBucket::Corpus,
     });
     for entry in &entries.corpus {
         let detail_lines = detail_lines_for_entry(entry, data, busy);
@@ -1036,7 +1007,6 @@ fn build_flat_items(
     // Tag health bucket
     items.push(InsightListItem::Header {
         title: "Tag health".to_string(),
-        bucket: FocusedBucket::Placeholder,
     });
     for entry in &entries.placeholder {
         let detail_lines = detail_lines_for_entry(entry, data, busy);
@@ -1049,7 +1019,6 @@ fn build_flat_items(
     // Other Signals bucket
     items.push(InsightListItem::Header {
         title: "Other Signals".to_string(),
-        bucket: FocusedBucket::Other,
     });
     if entries.other.is_empty() {
         // Empty placeholder — show as a dimmed non-actionable entry

@@ -9,7 +9,8 @@ use crate::meta::computations::types::ComputationWitness;
 use crate::meta::computations::{Computation, PipelineStage};
 use crate::meta::signals::data::{
     AlternativeReleasePackingSignal, PackedReleaseSignal, PackingKnotSignal,
-    ReleasePackingSignal, VariousArtistsOverrideSignal,
+    PinnedReleaseConflictData, PinnedReleaseConflictSignal, ReleasePackingSignal,
+    TypedSignalWrite, VariousArtistsOverrideSignal,
 };
 
 use super::components::{
@@ -54,6 +55,7 @@ pub fn execute_compute_release_mappings(
     sender.clear_aggregate_signal_table::<PackingKnotSignal>(witness);
     sender.clear_aggregate_signal_table::<AlternativeReleasePackingSignal>(witness);
     sender.clear_aggregate_signal_table::<VariousArtistsOverrideSignal>(witness);
+    sender.clear_aggregate_signal_table::<PinnedReleaseConflictSignal>(witness);
     write_thread::wait_for_queue_drain();
 
     // Read all optimal picks from scoring table
@@ -90,6 +92,12 @@ pub fn execute_compute_release_mappings(
                 ),
             )
         })
+        .collect();
+
+    // Media count lookup for pinned release conflict detection
+    let release_media_counts: HashMap<&str, i32> = manifest
+        .iter()
+        .map(|r| (r.release_id.as_str(), r.media_count))
         .collect();
 
     if optimal_scores.is_empty() {
@@ -160,91 +168,160 @@ pub fn execute_compute_release_mappings(
     // === Pre-accept pinned release proposals ===
     // Pinned proposals are operator decisions — they win unconditionally.
     // We emit their signals now and remove them from tier pools before MIS.
-    let pinned_release_ids: HashSet<String> = match crate::config::load_config() {
-        Ok(cfg) => cfg
-            .source_dirs
-            .iter()
-            .filter_map(|sd| sd.pinned_release.clone())
-            .collect(),
-        Err(_) => HashSet::new(),
+    //
+    // Conflict detection: if a release is pinned by more directories than it has
+    // media (e.g., 1-medium release pinned by 2 dirs), that's an invariant violation.
+    // We emit a hard-stop PinnedReleaseConflict signal and skip that release entirely.
+    let pinned_release_dirs: HashMap<String, Vec<String>> = match crate::config::load_config() {
+        Ok(cfg) => {
+            let mut map: HashMap<String, Vec<String>> = HashMap::new();
+            for sd in &cfg.source_dirs {
+                if let Some(ref release_id) = sd.pinned_release {
+                    map.entry(release_id.clone())
+                        .or_default()
+                        .push(format!("corpus/{}", sd.path.display()));
+                }
+            }
+            map
+        }
+        Err(_) => HashMap::new(),
     };
 
-    if !pinned_release_ids.is_empty() {
-        // Load data needed for signal emission
-        let corpus_paths: HashMap<i64, String> = read_only_db
-            .get_packing_inode_paths()
-            .unwrap_or_default()
-            .into_iter()
+    if !pinned_release_dirs.is_empty() {
+        // Detect conflicts: more pinning dirs than release media
+        let mut conflicted_releases: HashSet<String> = HashSet::new();
+        for (release_id, dirs) in &pinned_release_dirs {
+            let media_count = release_media_counts
+                .get(release_id.as_str())
+                .copied()
+                .unwrap_or(1);
+            if dirs.len() as i32 > media_count {
+                conflicted_releases.insert(release_id.clone());
+                let (title, artist) = manifest_map
+                    .get(release_id.as_str())
+                    .map(|&(t, a, _)| (t.to_string(), a.to_string()))
+                    .unwrap_or_else(|| (release_id.clone(), String::new()));
+                log_general(format!(
+                    "[COMPUTE] ComputeReleaseMappings: CONFLICT — release {} pinned by {} dirs but has only {} media",
+                    release_id, dirs.len(), media_count,
+                ));
+                sender.write_typed_signal(
+                    TypedSignalWrite::PinnedReleaseConflict(PinnedReleaseConflictSignal {
+                        key: release_id.clone(),
+                        data: PinnedReleaseConflictData {
+                            release_id: release_id.clone(),
+                            release_title: title,
+                            release_artist: artist,
+                            media_count,
+                            directories: dirs.clone(),
+                            reason: format!(
+                                "Release has {} media but is pinned by {} directories. Pick one directory or reorganize to conform to multi-disc layout.",
+                                media_count, dirs.len()
+                            ),
+                        },
+                    }),
+                    witness,
+                );
+            }
+        }
+
+        // Build set of non-conflicted pinned release IDs
+        let pinned_release_ids: HashSet<String> = pinned_release_dirs
+            .keys()
+            .filter(|id| !conflicted_releases.contains(*id))
+            .cloned()
             .collect();
 
-        let mut pinned_inodes: HashSet<i64> = HashSet::new();
-        let mut pinned_accepted = 0usize;
+        if !pinned_release_ids.is_empty() {
+            // Load data needed for signal emission
+            let corpus_paths: HashMap<i64, String> = read_only_db
+                .get_packing_inode_paths()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
 
-        // Drain pinned proposals from all pools and emit signals
-        let drain_pinned = |pool: &mut Vec<Proposal>, tier: ProposalTier| -> Vec<Proposal> {
-            let mut pinned = Vec::new();
-            pool.retain(|p| {
-                if !p.rows.is_empty() && pinned_release_ids.contains(&p.rows[0].release_id) {
-                    pinned.push(Proposal {
-                        total_tracks: p.total_tracks,
-                        rows: p.rows.clone(),
-                        inode_set: p.inode_set.clone(),
-                        total_score: p.total_score,
-                        tier,
-                    });
-                    false
-                } else {
-                    true
-                }
-            });
-            pinned
-        };
+            let mut pinned_inodes: HashSet<i64> = HashSet::new();
+            let mut pinned_accepted = 0usize;
 
-        let mut all_pinned: Vec<(Proposal, ProposalTier)> = Vec::new();
-        for p in drain_pinned(&mut perfect_pool, ProposalTier::Perfect) {
-            all_pinned.push((p, ProposalTier::Perfect));
-        }
-        for p in drain_pinned(&mut full_match_pool, ProposalTier::FullMatch) {
-            all_pinned.push((p, ProposalTier::FullMatch));
-        }
-        for p in drain_pinned(&mut incomplete_pool, ProposalTier::Incomplete) {
-            all_pinned.push((p, ProposalTier::Incomplete));
-        }
-        for p in drain_pinned(&mut single_pool, ProposalTier::Single) {
-            all_pinned.push((p, ProposalTier::Single));
-        }
-
-        for (proposal, tier) in &all_pinned {
-            emit_isolated_proposal_signals(
-                proposal,
-                *tier,
-                &manifest_map,
-                &corpus_paths,
-                &[], // no siblings for pinned proposals
-                &sender,
-                witness,
-                0.0, // no low-confidence downgrade for pinned
-                0.0,
-            );
-            pinned_inodes.extend(&proposal.inode_set);
-            pinned_accepted += 1;
-        }
-
-        if pinned_accepted > 0 {
-            log_general(format!(
-                "[COMPUTE] ComputeReleaseMappings: pre-accepted {} pinned proposal(s) ({} inodes)",
-                pinned_accepted,
-                pinned_inodes.len(),
-            ));
-
-            // Reverse constraint: reject non-pinned proposals that overlap with pinned dirs
-            let reject_overlapping = |pool: &mut Vec<Proposal>| {
-                pool.retain(|p| !p.inode_set.iter().any(|i| pinned_inodes.contains(i)));
+            // Drain pinned proposals from all pools and emit signals
+            let drain_pinned = |pool: &mut Vec<Proposal>, tier: ProposalTier| -> Vec<Proposal> {
+                let mut pinned = Vec::new();
+                pool.retain(|p| {
+                    if !p.rows.is_empty() && pinned_release_ids.contains(&p.rows[0].release_id) {
+                        pinned.push(Proposal {
+                            total_tracks: p.total_tracks,
+                            rows: p.rows.clone(),
+                            inode_set: p.inode_set.clone(),
+                            total_score: p.total_score,
+                            tier,
+                        });
+                        false
+                    } else {
+                        true
+                    }
+                });
+                pinned
             };
-            reject_overlapping(&mut perfect_pool);
-            reject_overlapping(&mut full_match_pool);
-            reject_overlapping(&mut incomplete_pool);
-            reject_overlapping(&mut single_pool);
+
+            let mut all_pinned: Vec<(Proposal, ProposalTier)> = Vec::new();
+            for p in drain_pinned(&mut perfect_pool, ProposalTier::Perfect) {
+                all_pinned.push((p, ProposalTier::Perfect));
+            }
+            for p in drain_pinned(&mut full_match_pool, ProposalTier::FullMatch) {
+                all_pinned.push((p, ProposalTier::FullMatch));
+            }
+            for p in drain_pinned(&mut incomplete_pool, ProposalTier::Incomplete) {
+                all_pinned.push((p, ProposalTier::Incomplete));
+            }
+            for p in drain_pinned(&mut single_pool, ProposalTier::Single) {
+                all_pinned.push((p, ProposalTier::Single));
+            }
+
+            for (proposal, tier) in &all_pinned {
+                emit_isolated_proposal_signals(
+                    proposal,
+                    *tier,
+                    &manifest_map,
+                    &corpus_paths,
+                    &[], // no siblings for pinned proposals
+                    &sender,
+                    witness,
+                    0.0, // no low-confidence downgrade for pinned
+                    0.0,
+                );
+                pinned_inodes.extend(&proposal.inode_set);
+                pinned_accepted += 1;
+            }
+
+            if pinned_accepted > 0 {
+                log_general(format!(
+                    "[COMPUTE] ComputeReleaseMappings: pre-accepted {} pinned proposal(s) ({} inodes)",
+                    pinned_accepted,
+                    pinned_inodes.len(),
+                ));
+
+                // Reverse constraint: reject non-pinned proposals that overlap with pinned dirs
+                let reject_overlapping = |pool: &mut Vec<Proposal>| {
+                    pool.retain(|p| !p.inode_set.iter().any(|i| pinned_inodes.contains(i)));
+                };
+                reject_overlapping(&mut perfect_pool);
+                reject_overlapping(&mut full_match_pool);
+                reject_overlapping(&mut incomplete_pool);
+                reject_overlapping(&mut single_pool);
+            }
+        }
+
+        // Also reject proposals for conflicted releases — neither dir gets packed
+        if !conflicted_releases.is_empty() {
+            let reject_conflicted = |pool: &mut Vec<Proposal>| {
+                pool.retain(|p| {
+                    p.rows.is_empty() || !conflicted_releases.contains(&p.rows[0].release_id)
+                });
+            };
+            reject_conflicted(&mut perfect_pool);
+            reject_conflicted(&mut full_match_pool);
+            reject_conflicted(&mut incomplete_pool);
+            reject_conflicted(&mut single_pool);
         }
     }
 

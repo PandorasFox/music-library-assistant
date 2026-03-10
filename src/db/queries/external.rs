@@ -36,6 +36,7 @@ pub struct PackingManifestRow {
     pub total_tracks: i32,
     pub release_title: String,
     pub release_artist: String,
+    pub media_count: i32,
 }
 
 /// An optimal packing score row (is_optimal=1 or per-inode query).
@@ -394,7 +395,7 @@ impl Database {
     /// Get the full packing manifest (all releases in the current pipeline run).
     pub fn get_packing_manifest(&self) -> Result<Vec<PackingManifestRow>> {
         let mut stmt = self.conn().prepare(
-            "SELECT release_id, total_tracks, release_title, release_artist FROM release_packing_manifest",
+            "SELECT release_id, total_tracks, release_title, release_artist, media_count FROM release_packing_manifest",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(PackingManifestRow {
@@ -402,6 +403,7 @@ impl Database {
                 total_tracks: row.get(1)?,
                 release_title: row.get(2)?,
                 release_artist: row.get(3)?,
+                media_count: row.get(4)?,
             })
         })?;
         let mut results = Vec::new();

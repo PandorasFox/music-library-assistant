@@ -566,7 +566,7 @@ enum DbWriteOp {
 
     /// Write a batch of rows to release_packing_manifest.
     WritePackingManifest {
-        rows: Vec<(String, i32, String, String)>, // (release_id, total_tracks, title, artist)
+        rows: Vec<(String, i32, String, String, i32)>, // (release_id, total_tracks, title, artist, media_count)
     },
 
     /// Write a batch of scored candidates to release_packing_scores.
@@ -1331,7 +1331,7 @@ impl SignalWriteSender {
     /// Write a batch of rows to release_packing_manifest.
     pub fn write_packing_manifest(
         &self,
-        rows: Vec<(String, i32, String, String)>,
+        rows: Vec<(String, i32, String, String, i32)>,
         _witness: &impl SignalWitness,
     ) {
         self.mark_enqueued();
@@ -2073,10 +2073,10 @@ fn execute_signal_op(db: &Database, op: &DbWriteOp) {
         DbWriteOp::WritePackingManifest { rows } => {
             with_retry("write_packing_manifest", "batch", || {
                 let mut stmt = db.conn().prepare(
-                    "INSERT OR REPLACE INTO release_packing_manifest (release_id, total_tracks, release_title, release_artist) VALUES (?1, ?2, ?3, ?4)"
+                    "INSERT OR REPLACE INTO release_packing_manifest (release_id, total_tracks, release_title, release_artist, media_count) VALUES (?1, ?2, ?3, ?4, ?5)"
                 )?;
-                for (release_id, total_tracks, title, artist) in rows {
-                    stmt.execute(rusqlite::params![release_id, total_tracks, title, artist])?;
+                for (release_id, total_tracks, title, artist, media_count) in rows {
+                    stmt.execute(rusqlite::params![release_id, total_tracks, title, artist, media_count])?;
                 }
                 Ok(())
             });

@@ -1243,7 +1243,7 @@ impl App {
 
         // Find exact matching SourceDir (raw, with Option fields) for editing.
         // We show what THIS dir explicitly sets, not the resolved/inherited values.
-        let (libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid) =
+        let (libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid, pinned_release) =
             match config.get_raw_source_dir(&relative) {
                 Some(sd) => (
                     sd.libraries.clone(),
@@ -1251,10 +1251,11 @@ impl App {
                     sd.interior_dupes,
                     sd.path_schema.as_ref().map(|s| s.template.clone()),
                     sd.enable_acoustid,
+                    sd.pinned_release.clone(),
                 ),
                 None => {
                     // Defaults for a new (unconfigured) directory
-                    (vec![], None, None, None, None)
+                    (vec![], None, None, None, None, None)
                 }
             };
         drop(config);
@@ -1266,11 +1267,13 @@ impl App {
             interior_dupes,
             path_schema: path_schema.clone(),
             enable_acoustid,
+            pinned_release: pinned_release.clone(),
             orig_libraries: libraries,
             orig_can_stash_dupes: can_stash_dupes,
             orig_interior_dupes: interior_dupes,
             orig_path_schema: path_schema,
             orig_enable_acoustid: enable_acoustid,
+            orig_pinned_release: pinned_release,
             field_cursor: 0,
             focus: tree_browser::variants::corpus::PanelFocus::default(),
             button_cursor: 0,
@@ -1313,7 +1316,7 @@ impl App {
                     .as_ref()
                     .and_then(|t| crate::config::parse_path_schema(t).ok()),
                 enable_acoustid: panel.orig_enable_acoustid,
-                pinned_release: None,
+                pinned_release: panel.orig_pinned_release.clone(),
             };
             let new_dir = crate::config::SourceDir {
                 path: panel.source_path.clone(),
@@ -1325,7 +1328,7 @@ impl App {
                     .as_ref()
                     .and_then(|t| crate::config::parse_path_schema(t).ok()),
                 enable_acoustid: panel.enable_acoustid,
-                pinned_release: None,
+                pinned_release: panel.pinned_release.clone(),
             };
             (panel.source_path.clone(), old_dir, new_dir)
         };

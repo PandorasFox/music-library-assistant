@@ -310,17 +310,18 @@ pub fn execute_pack_releases(
     sender.truncate_packing_tables(witness);
 
     // === Write manifest ===
-    let manifest_rows: Vec<(String, i32, String, String)> = release_tracklists
+    let manifest_rows: Vec<(String, i32, String, String, i32)> = release_tracklists
         .iter()
         .map(|(release_id, release)| {
             let total: i32 = release.media.iter().map(|m| m.tracks.len() as i32).sum();
+            let media_count = release.media.len() as i32;
             let artist = localized_release_artist(
                 &release.artist_credit,
                 &release_artist_data,
                 release_id,
                 &preferred_locales,
             );
-            (release_id.clone(), total, release.title.clone(), artist)
+            (release_id.clone(), total, release.title.clone(), artist, media_count)
         })
         .collect();
     sender.write_packing_manifest(manifest_rows, witness);

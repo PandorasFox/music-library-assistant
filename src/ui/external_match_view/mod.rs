@@ -268,6 +268,22 @@ impl ExternalMatchesViewState {
                         }
                     }
 
+                    // Pinned release conflict info (non-navigable, critical)
+                    if data.pinned_conflict_count > 0 {
+                        items.push(ExternalMatchListItem::InfoLine(Line::from(vec![
+                            Span::styled("  ", Style::default()),
+                            Span::styled("✗ ", Style::default().fg(Color::Red)),
+                            Span::styled(
+                                format!(
+                                    "{} pinned release conflict{}",
+                                    data.pinned_conflict_count,
+                                    if data.pinned_conflict_count == 1 { "" } else { "s" }
+                                ),
+                                Style::default().fg(Color::Red),
+                            ),
+                        ])));
+                    }
+
                     // VA override info (non-navigable)
                     if data.va_override_count > 0 {
                         items.push(ExternalMatchListItem::InfoLine(Line::from(vec![
@@ -490,6 +506,11 @@ impl ExternalMatchesViewState {
             .as_ref()
             .is_some_and(|d| !d.confidence_buckets.is_empty());
 
+        let stale = self
+            .cached_data
+            .as_ref()
+            .is_some_and(|d| d.pinned_releases_stale);
+
         if self.fetch_active {
             lines.push(Line::from(Span::styled(
                 "Wait for the external fetch to",
@@ -513,6 +534,17 @@ impl ExternalMatchesViewState {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
+            if stale {
+                lines.push(Line::from(Span::styled(
+                    "Pinned releases changed — re-run",
+                    Style::default().fg(Color::Yellow),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "analysis to update packing results.",
+                    Style::default().fg(Color::Yellow),
+                )));
+                lines.push(Line::from(""));
+            }
             lines.push(Line::from(Span::styled(
                 "Bin-pack recordings into releases",
                 Style::default().fg(Color::White),

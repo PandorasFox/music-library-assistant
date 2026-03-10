@@ -671,6 +671,13 @@ pub fn schema_inventory() -> Vec<TableEntry> {
         index_sql: &[],
     });
 
+    tables.push(TableEntry {
+        name: "signal_pinned_release_conflict",
+        kind: TableKind::Computed,
+        create_sql: <PinnedReleaseConflictSignal as store::AggregateSignalStore>::TABLE_SQL,
+        index_sql: &[],
+    });
+
     // =================================================================
     // Intermediate computed tables (pipeline scratch data)
     // =================================================================
@@ -682,7 +689,8 @@ pub fn schema_inventory() -> Vec<TableEntry> {
             release_id TEXT PRIMARY KEY,
             total_tracks INTEGER NOT NULL,
             release_title TEXT NOT NULL,
-            release_artist TEXT NOT NULL
+            release_artist TEXT NOT NULL,
+            media_count INTEGER NOT NULL DEFAULT 1
         )",
         index_sql: &[],
     });

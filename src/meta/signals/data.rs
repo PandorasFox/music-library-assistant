@@ -742,6 +742,30 @@ pub enum VariousArtistsOverrideSource {
     CompetingProposal,
 }
 
+// ============================================================================
+// Pinned Release Conflict signal (aggregate, key-keyed)
+// ============================================================================
+
+/// Invariant violation: a release is pinned by more directories than it has media.
+/// Key = release_id. This is a hard stop — the release is skipped entirely.
+#[derive(Debug, Clone)]
+pub struct PinnedReleaseConflictSignal {
+    pub key: String,
+    /// Serialized as bincode BLOB.
+    pub data: PinnedReleaseConflictData,
+}
+
+/// Bincode payload for PinnedReleaseConflict.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinnedReleaseConflictData {
+    pub release_id: String,
+    pub release_title: String,
+    pub release_artist: String,
+    pub media_count: i32,
+    pub directories: Vec<String>,
+    pub reason: String,
+}
+
 /// A group of inodes sharing the same compound tag value.
 /// Used to aggregate compound split resolution by value rather than per-file.
 #[derive(Debug, Clone)]
@@ -1233,6 +1257,7 @@ pub enum TypedSignalWrite {
     PackingKnot(PackingKnotSignal),
     AlternativeReleasePacking(AlternativeReleasePackingSignal),
     VariousArtistsOverride(VariousArtistsOverrideSignal),
+    PinnedReleaseConflict(PinnedReleaseConflictSignal),
 }
 
 impl TypedSignalWrite {
@@ -1291,6 +1316,7 @@ impl TypedSignalWrite {
             Self::PackingKnot(s) => s.insert(conn),
             Self::AlternativeReleasePacking(s) => s.insert(conn),
             Self::VariousArtistsOverride(s) => s.insert(conn),
+            Self::PinnedReleaseConflict(s) => s.insert(conn),
         }
     }
 
@@ -1349,6 +1375,7 @@ impl TypedSignalWrite {
             Self::PackingKnot(s) => PackingKnotSignal::exists(conn, &s.key),
             Self::AlternativeReleasePacking(s) => AlternativeReleasePackingSignal::exists(conn, &s.key),
             Self::VariousArtistsOverride(s) => VariousArtistsOverrideSignal::exists(conn, &s.key),
+            Self::PinnedReleaseConflict(s) => PinnedReleaseConflictSignal::exists(conn, &s.key),
         };
         result.unwrap_or(false)
     }
@@ -1569,6 +1596,11 @@ impl TypedSignalWrite {
                 }
             }
             Self::VariousArtistsOverride(s) => {
+                if let Ok(bytes) = bincode::serialize(&s.data) {
+                    bytes.hash(&mut hasher);
+                }
+            }
+            Self::PinnedReleaseConflict(s) => {
                 if let Ok(bytes) = bincode::serialize(&s.data) {
                     bytes.hash(&mut hasher);
                 }

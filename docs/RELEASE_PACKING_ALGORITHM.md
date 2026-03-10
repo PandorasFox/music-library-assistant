@@ -27,15 +27,17 @@ Stages are barrier-separated: each defers the next via `SharedMappingState`, ens
 1. Load all AcoustID external matches for corpus files
 2. Filter recordings by `min_confidence` (from config). Duration is not filtered — it is a scoring dimension in Stage 2.
 3. Parse release tracklists from MB cache (locale-resolved artist names)
-4. Write manifest rows (`release_id`, `total_tracks`, `title`, `artist`) to `packing_manifest` table
+4. Write manifest rows (`release_id`, `total_tracks`, `media_count`, `title`, `artist`) to `packing_manifest` table
 5. Deduplicate candidates per `(release_id, inode)` — keep highest-confidence recording
 6. Write candidate rows to `release_packing_candidates` intermediate table
-7. Spawn N `ScoreReleaseCandidates` computations (one per release with candidates)
-8. Defer `ComputeReleaseMappings` via barrier
+7. **Pinned release injection**: For each source dir with a `pinned_release` configured, add the pinned release ID to `all_release_ids` to ensure its tracklist is fetched. For inodes in that dir that have no AcoustID candidate for the pinned release, inject a synthetic candidate row (`confidence = 1.0`, empty `recording_id`). This guarantees every file in a pinned dir participates in scoring for the pinned release regardless of fingerprint match quality.
+8. Spawn N `ScoreReleaseCandidates` computations (one per release with candidates)
+9. Defer `ComputeReleaseMappings` via barrier
 
 **Key data:**
 - `CorpusFileInfo`: `parent_dir`, tags (`TITLE`/`ARTIST`/`ALBUM`/`TRACKNUMBER`), `duration_ms`
 - `dir_file_count`: total audio files per directory (written to candidates table)
+- `pinned_release`: `Option<String>` on `SourceDir` in `dirs.kdl` config — operator-asserted release MBID for a directory
 
 ---
 
@@ -49,9 +51,10 @@ All packing is constrained to target directory(ies) selected by `score_all_direc
 
 **Algorithm:**
 1. Collect all unique directories containing candidate inodes
-2. **Multi-medium** (`media.len() > 1`): try `find_sibling_dir_mapping()` to detect sibling directories (same parent) with candidates for different media. If found, filter candidates to the sibling set and run Hungarian — record as a candidate result.
-3. **Per-directory**: for each individual directory, filter candidates to that directory, run Hungarian, compute total assignment score.
-4. Select the `(TargetDirs, optimal_pairs)` with:
+2. **Pinned release**: If this release is pinned by one or more source dirs, `dir_candidate_inodes` is restricted to only those pinned dirs. Scoring and directory selection proceed normally within that constraint. For multi-medium pinned releases, each pinned dir maps to a medium in the `PerMedium` target via the standard sibling-dir mapping — coalescing works naturally without special-casing.
+3. **Multi-medium** (`media.len() > 1`): try `find_sibling_dir_mapping()` to detect sibling directories (same parent) with candidates for different media. If found, filter candidates to the sibling set and run Hungarian — record as a candidate result.
+4. **Per-directory**: for each individual directory, filter candidates to that directory, run Hungarian, compute total assignment score.
+5. Select the `(TargetDirs, optimal_pairs)` with:
    - Most assigned slots (primary)
    - Highest total assignment score (secondary)
    - Lexicographic smallest directory path (deterministic tiebreak)
@@ -125,6 +128,16 @@ Loads optimal picks from scoring table. Groups into per-release `Proposal` objec
 | Single | Single-track release |
 
 Proposals are sorted into 4 pools and processed in priority order.
+
+**Pinned release handling in Stage 3a:**
+
+Before MIS rounds begin, pinned proposals are pre-accepted:
+
+1. **Conflict detection**: If a release is pinned by more dirs than it has media (e.g., two dirs both pinning a single-medium release), it is a conflict. `PinnedReleaseConflict` is emitted for the release and it is skipped entirely — neither dir gets packed.
+2. **Pre-acceptance**: Non-conflicted pinned proposals are accepted immediately and their inodes are marked claimed before any MIS round runs.
+3. **Conflict rejection**: During subsequent MIS rounds, any non-pinned proposal that overlaps claimed (pinned) inodes is rejected outright — pinned assignments cannot be displaced.
+
+This ensures operator-asserted release assignments are always honored, at the cost of a hard stop when the operator's configuration is self-contradictory.
 
 ### 3b–3e: MIS Rounds
 

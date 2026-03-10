@@ -203,6 +203,10 @@ pub struct ExternalMatchesData {
     pub unsolved_no_match_count: usize,
     /// Count of releases with VA override suggestions.
     pub va_override_count: usize,
+    /// Count of pinned release conflict signals (invariant violations).
+    pub pinned_conflict_count: usize,
+    /// True if any pinned release in config lacks a matching packed_release signal.
+    pub pinned_releases_stale: bool,
 }
 
 /// Bucket 3: Other signals (sorted by magnitude)

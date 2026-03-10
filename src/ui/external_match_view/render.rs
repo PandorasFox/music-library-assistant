@@ -154,8 +154,13 @@ fn render_pack_releases_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'st
     let has_data = snap
         .cached_data
         .is_some_and(|d| !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty());
+    let stale = snap
+        .cached_data
+        .is_some_and(|d| d.pinned_releases_stale);
     let (status_label, status_color) = if snap.fetch_active {
         ("Fetch active", Color::DarkGray)
+    } else if stale {
+        ("Stale", Color::Yellow)
     } else if !has_data {
         ("No data", Color::DarkGray)
     } else {

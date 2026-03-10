@@ -176,6 +176,13 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
                 format_opt_bool(new.enable_acoustid),
             ));
         }
+        if old.pinned_release != new.pinned_release {
+            diffs.push(DiffEntry::new(
+                "Pinned release",
+                old.pinned_release.as_deref().unwrap_or("(none)"),
+                new.pinned_release.as_deref().unwrap_or("(none)"),
+            ));
+        }
 
         diffs
     }
@@ -377,6 +384,13 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
                     format!("{}: Enable AcoustID", prefix),
                     format_opt_bool(old.enable_acoustid),
                     format_opt_bool(new.enable_acoustid),
+                ));
+            }
+            if old.pinned_release != new.pinned_release {
+                diffs.push(DiffEntry::new(
+                    format!("{}: Pinned release", prefix),
+                    old.pinned_release.as_deref().unwrap_or("(none)"),
+                    new.pinned_release.as_deref().unwrap_or("(none)"),
                 ));
             }
         }

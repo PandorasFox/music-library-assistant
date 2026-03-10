@@ -857,6 +857,42 @@ impl Database {
             )
             .unwrap_or(0);
 
+        let pinned_conflict_count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM signal_pinned_release_conflict",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        // Check staleness: any pinned release without a matching packed_release signal?
+        let pinned_releases_stale = match crate::config::load_config() {
+            Ok(cfg) => {
+                let pinned_ids: Vec<String> = cfg
+                    .source_dirs
+                    .iter()
+                    .filter_map(|sd| sd.pinned_release.clone())
+                    .collect();
+                if pinned_ids.is_empty() {
+                    false
+                } else {
+                    pinned_ids.iter().any(|rid| {
+                        let exists: bool = self
+                            .conn
+                            .query_row(
+                                "SELECT EXISTS(SELECT 1 FROM signal_packed_release WHERE key LIKE '%:' || ?1)",
+                                [rid],
+                                |row| row.get(0),
+                            )
+                            .unwrap_or(false);
+                        !exists
+                    })
+                }
+            }
+            Err(_) => false,
+        };
+
         Ok(ExternalMatchesData {
             untagged_entries,
             confidence_buckets,
@@ -870,6 +906,8 @@ impl Database {
             unsolved_no_release_count,
             unsolved_no_match_count,
             va_override_count,
+            pinned_conflict_count,
+            pinned_releases_stale,
         })
     }
 

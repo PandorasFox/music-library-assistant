@@ -435,12 +435,13 @@ impl Database {
         }
     }
 
-    /// Get the corpus path for a single inode.
-    pub fn get_corpus_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT path FROM files WHERE inode = ?1 AND zone = 'corpus' AND is_dir = 0 LIMIT 1",
-        )?;
-
+    /// Get the file path for a single inode in the given zone.
+    pub fn get_path_for_inode<Z: crate::zones::AudioZone>(&self, inode: i64) -> Result<Option<String>> {
+        let sql = format!(
+            "SELECT path FROM files WHERE inode = ?1 AND zone = '{}' AND is_dir = 0 LIMIT 1",
+            Z::ZONE_STR
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query(params![inode])?;
         if let Some(row) = rows.next()? {
             Ok(Some(row.get(0)?))
@@ -449,20 +450,9 @@ impl Database {
         }
     }
 
-    /// Get inbox audio files with their present tag names.
-
-    /// Get the inbox path for a single inode.
-    pub fn get_inbox_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT path FROM files WHERE inode = ?1 AND zone = 'inbox' AND is_dir = 0 LIMIT 1",
-        )?;
-
-        let mut rows = stmt.query(params![inode])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some(row.get(0)?))
-        } else {
-            Ok(None)
-        }
+    /// Get the corpus path for a single inode.
+    pub fn get_corpus_path_for_inode(&self, inode: i64) -> Result<Option<String>> {
+        self.get_path_for_inode::<crate::zones::CorpusZone>(inode)
     }
 
     /// Get all tags ordered by inode and tag name (for metadata duplicate detection, corpus only).
@@ -552,12 +542,13 @@ impl Database {
     // Tag Queries (Corpus)
     // ========================================================================
 
-    /// Get all tags for an audio file (corpus).
-    pub fn get_corpus_tags(&self, inode: i64) -> Result<Vec<AudioTag>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT inode, tag_name, tag_value FROM corpus_tags WHERE inode = ?1 ORDER BY tag_name, tag_value"
-        )?;
-
+    /// Get all tags for an audio file in the given tagged zone.
+    pub fn get_tags<Z: crate::zones::TaggedZone>(&self, inode: i64) -> Result<Vec<AudioTag>> {
+        let sql = format!(
+            "SELECT inode, tag_name, tag_value FROM {} WHERE inode = ?1 ORDER BY tag_name, tag_value",
+            Z::TAG_TABLE
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
         let tags = stmt
             .query_map(params![inode], |row| {
                 Ok(AudioTag {
@@ -567,8 +558,12 @@ impl Database {
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-
         Ok(tags)
+    }
+
+    /// Get all tags for an audio file (corpus).
+    pub fn get_corpus_tags(&self, inode: i64) -> Result<Vec<AudioTag>> {
+        self.get_tags::<crate::zones::CorpusZone>(inode)
     }
 
     /// Get all tags for an audio file from the tag table appropriate for its zone.

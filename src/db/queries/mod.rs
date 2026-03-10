@@ -479,6 +479,22 @@ impl<'a> ReadOnlyDb<'a> {
         self.db.get_audio_files_with_tag_presence_for::<Z>()
     }
 
+    /// Get the file path for a single inode in the given zone.
+    pub fn get_path_for_inode<Z: crate::zones::AudioZone>(
+        &self,
+        inode: i64,
+    ) -> Result<Option<String>> {
+        self.db.get_path_for_inode::<Z>(inode)
+    }
+
+    /// Get all tags for an audio file in the given tagged zone.
+    pub fn get_tags<Z: crate::zones::TaggedZone>(
+        &self,
+        inode: i64,
+    ) -> Result<Vec<super::types::AudioTag>> {
+        self.db.get_tags::<Z>(inode)
+    }
+
     // =========================================================================
     // OOB / Tag Mismatch Queries
     // =========================================================================
@@ -528,7 +544,6 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_file_zone_and_path_by_inode(inode: i64) -> Result<Option<(String, String)>>;
         fn get_file_paths_batch(source: super::types::Zone, inodes: &[i64]) -> Result<std::collections::HashMap<i64, String>>;
         fn get_duplicate_inode_groups() -> Result<Vec<(i64, String)>>;
-        fn get_inbox_path_for_inode(inode: i64) -> Result<Option<String>>;
         fn get_compilation_albums() -> Result<std::collections::HashSet<String>>;
         fn get_inbox_unindexed_files() -> Result<Vec<(i64, String)>>;
         fn get_corpus_path_for_inode(inode: i64) -> Result<Option<String>>;

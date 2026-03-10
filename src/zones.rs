@@ -27,7 +27,7 @@ use crate::db::write_thread::SignalWriteSender;
 use crate::db::ReadOnlyDb;
 use crate::meta::computations::ComputationWitness;
 use crate::meta::signals::registry::TypedSignalWrite;
-use crate::meta::signals::store::CorpusSignalStore;
+use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
 
 /// Marker: this zone has indexed audio files in the `files` table.
 pub trait AudioZone: Send + Sync + 'static {
@@ -52,6 +52,24 @@ pub trait AudioZone: Send + Sync + 'static {
 /// This zone has a tag table and supports tag queries.
 pub trait TaggedZone: AudioZone {
     const TAG_TABLE: &'static str;
+
+    /// Per-inode compound tag detection signal for this zone.
+    type CompoundTagSignal: CorpusSignalStore;
+    /// Aggregate missing tag signal for this zone.
+    type MissingTagSignal: AggregateSignalStore;
+
+    /// Construct the compound tag signal write for this zone.
+    fn compound_tag_signal(
+        inode: i64,
+        path: String,
+        compounds: Vec<crate::meta::signals::data::CompoundTagEntry>,
+    ) -> TypedSignalWrite;
+
+    /// Construct the missing tag signal write for this zone.
+    fn missing_tag_signal(
+        key: String,
+        data: crate::meta::signals::data::MissingTagData,
+    ) -> TypedSignalWrite;
 }
 
 /// This zone's tags are the canonical vocabulary. Only Corpus.
@@ -159,6 +177,27 @@ impl AudioZone for CorpusZone {
 
 impl TaggedZone for CorpusZone {
     const TAG_TABLE: &'static str = "corpus_tags";
+    type CompoundTagSignal = crate::meta::signals::data::CompoundTagSignal;
+    type MissingTagSignal = crate::meta::signals::data::MissingTagSignal;
+
+    fn compound_tag_signal(
+        inode: i64,
+        path: String,
+        compounds: Vec<crate::meta::signals::data::CompoundTagEntry>,
+    ) -> TypedSignalWrite {
+        TypedSignalWrite::CompoundTag(crate::meta::signals::data::CompoundTagSignal {
+            inode,
+            path,
+            compounds,
+        })
+    }
+
+    fn missing_tag_signal(
+        key: String,
+        data: crate::meta::signals::data::MissingTagData,
+    ) -> TypedSignalWrite {
+        TypedSignalWrite::MissingTag(crate::meta::signals::data::MissingTagSignal { key, data })
+    }
 }
 
 impl CanonicalTagSource for CorpusZone {}
@@ -197,6 +236,30 @@ impl AudioZone for InboxZone {
 
 impl TaggedZone for InboxZone {
     const TAG_TABLE: &'static str = "inbox_tags";
+    type CompoundTagSignal = crate::meta::signals::data::InboxCompoundTagSignal;
+    type MissingTagSignal = crate::meta::signals::data::InboxMissingTagSignal;
+
+    fn compound_tag_signal(
+        inode: i64,
+        path: String,
+        compounds: Vec<crate::meta::signals::data::CompoundTagEntry>,
+    ) -> TypedSignalWrite {
+        TypedSignalWrite::InboxCompoundTag(crate::meta::signals::data::InboxCompoundTagSignal {
+            inode,
+            path,
+            compounds,
+        })
+    }
+
+    fn missing_tag_signal(
+        key: String,
+        data: crate::meta::signals::data::MissingTagData,
+    ) -> TypedSignalWrite {
+        TypedSignalWrite::InboxMissingTag(crate::meta::signals::data::InboxMissingTagSignal {
+            key,
+            data,
+        })
+    }
 }
 
 impl ExternallyMatchable for InboxZone {}

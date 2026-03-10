@@ -384,71 +384,23 @@ pub(super) fn determine_collab_separator_label(value: &str, keywords: &[String])
     "feat.".to_string()
 }
 
-/// Execute DetectCompoundTagsForInode - detect compound tags for a single inode.
+/// Core compound tag detection for a single file's tags.
 ///
-/// Checks all tags for separator patterns and featuring patterns, emitting
-/// a per-file CompoundTag signal if any compound values are found. Clears the
-/// dirty flag after processing regardless of outcome.
-pub fn execute_detect_compound_tags_for_inode(
+/// Checks collaboration keywords and per-tag separators, populates
+/// matching_parts against corpus vocabulary. Zone-agnostic — used by both
+/// corpus (per-inode) and inbox (single-pass) compound tag detection.
+pub(super) fn detect_compounds_in_tags(
+    tags: &[crate::db::types::AudioTag],
+    tag_splitting: &crate::config::TagSplittingOpinions,
+    collab_keywords: &[String],
+    tag_values_cache: &mut HashMap<String, std::collections::HashSet<String>>,
     read_only_db: &ReadOnlyDb<'_>,
-    inode: i64,
-    witness: &ComputationWitness,
-) -> Result {
+) -> Vec<TypedCompoundEntry> {
     use crate::corpus::health::compound::{detect_featuring_pattern, CompoundTagValue};
-
-    let computation = Computation::DetectCompoundTagsForInode { inode };
-
-    let sender = require_sender!(computation);
-
-    // Get the file path for this inode (needed for signal key)
-    let corpus_path = match read_only_db.get_corpus_path_for_inode(inode) {
-        Ok(Some(path)) => path,
-        Ok(None) => {
-            // File no longer in corpus - clear dirty and skip silently
-            sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
-            return Result::success(computation, Vec::new());
-        }
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to get path for inode {}: {}", inode, e),
-            );
-        }
-    };
-
-    // Get tags for this inode
-    let tags = read_only_db.get_corpus_tags(inode).unwrap_or_default();
-    if tags.is_empty() {
-        // No tags - clear any existing signal and dirty flag
-        sender.clear_corpus_signal::<CompoundTagSignal>(inode, witness);
-        sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
-        return Result::success(computation, Vec::new());
-    }
-
-    // Get tag splitting config from opinions
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(_) => {
-            sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
-            return Result::success(computation, Vec::new());
-        }
-    };
-    let tag_splitting = &config.opinions.tag_splitting;
-
-    // Cache of known tag values per tag name — used for matching_parts pass
-    let mut tag_values_cache: std::collections::HashMap<String, std::collections::HashSet<String>> =
-        std::collections::HashMap::new();
 
     let mut compounds: Vec<TypedCompoundEntry> = Vec::new();
 
-    // Convert collaboration_keywords HashSet to Vec for detect_featuring_pattern
-    let collab_keywords: Vec<String> = tag_splitting
-        .collaboration_keywords
-        .iter()
-        .cloned()
-        .collect();
-
-    for tag in &tags {
+    for tag in tags {
         let tag_name_upper = tag.tag_name.to_uppercase();
         let is_artist_tag = matches!(tag_name_upper.as_str(), "ARTIST" | "ALBUMARTIST");
 
@@ -465,11 +417,11 @@ pub fn execute_detect_compound_tags_for_inode(
         // 1. Collaboration keywords (artist tags only)
         if is_artist_tag && !collab_keywords.is_empty() {
             if let Some((main_part, secondary_parts)) =
-                detect_featuring_pattern(&tag.tag_value, &collab_keywords)
+                detect_featuring_pattern(&tag.tag_value, collab_keywords)
             {
                 let mut split_parts = vec![main_part];
                 split_parts.extend(secondary_parts);
-                let separator = determine_collab_separator_label(&tag.tag_value, &collab_keywords);
+                let separator = determine_collab_separator_label(&tag.tag_value, collab_keywords);
                 matched_entry = Some(TypedCompoundEntry {
                     tag_name: tag.tag_name.clone(),
                     compound_value: tag.tag_value.clone(),
@@ -493,7 +445,7 @@ pub fn execute_detect_compound_tags_for_inode(
                             separator: sep.clone(),
                             matching_parts: Vec::new(),
                         });
-                        break; // First matching separator wins
+                        break;
                     }
                 }
             }
@@ -504,24 +456,9 @@ pub fn execute_detect_compound_tags_for_inode(
         }
     }
 
-    // If no compounds found, clear any existing signal (only if one exists)
-    if compounds.is_empty() {
-        helpers::drop_stale_corpus_signal::<CompoundTagSignal>(
-            read_only_db,
-            &sender,
-            inode,
-            witness,
-        );
-        sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
-        return Result::success(computation, Vec::new());
-    }
-
-    // Populate matching_parts for each compound by checking which split parts
-    // exist as standalone values in the corpus. This enables "safe split" detection.
+    // Populate matching_parts against corpus vocabulary
     for compound in &mut compounds {
         let tag_name = compound.tag_name.to_uppercase();
-
-        // Get or fetch existing values for this tag type (reuses cache from above)
         let existing_values = tag_values_cache.entry(tag_name.clone()).or_insert_with(|| {
             read_only_db
                 .get_distinct_tag_values_for::<crate::zones::CorpusZone>(&tag_name)
@@ -530,14 +467,85 @@ pub fn execute_detect_compound_tags_for_inode(
                 .map(|(value, _count)| value)
                 .collect()
         });
-
-        // Find which split parts exist as standalone values
         compound.matching_parts = compound
             .split_parts
             .iter()
             .filter(|part| existing_values.contains(*part))
             .cloned()
             .collect();
+    }
+
+    compounds
+}
+
+/// Execute DetectCompoundTagsForInode - detect compound tags for a single inode.
+///
+/// Checks all tags for separator patterns and featuring patterns, emitting
+/// a per-file CompoundTag signal if any compound values are found. Clears the
+/// dirty flag after processing regardless of outcome.
+pub fn execute_detect_compound_tags_for_inode(
+    read_only_db: &ReadOnlyDb<'_>,
+    inode: i64,
+    witness: &ComputationWitness,
+) -> Result {
+    let computation = Computation::DetectCompoundTagsForInode { inode };
+
+    let sender = require_sender!(computation);
+
+    // Get the file path for this inode (needed for signal key)
+    let corpus_path = match read_only_db.get_path_for_inode::<crate::zones::CorpusZone>(inode) {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            // File no longer in corpus - clear dirty and skip silently
+            sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
+            return Result::success(computation, Vec::new());
+        }
+        Err(e) => {
+            return Result::failure(
+                computation,
+                format!("Failed to get path for inode {}: {}", inode, e),
+            );
+        }
+    };
+
+    // Get tags for this inode
+    let tags = read_only_db.get_tags::<crate::zones::CorpusZone>(inode).unwrap_or_default();
+    if tags.is_empty() {
+        // No tags - clear any existing signal and dirty flag
+        sender.clear_corpus_signal::<CompoundTagSignal>(inode, witness);
+        sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
+        return Result::success(computation, Vec::new());
+    }
+
+    // Get tag splitting config from opinions
+    let config = match crate::config::load_config() {
+        Ok(c) => c,
+        Err(_) => {
+            sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
+            return Result::success(computation, Vec::new());
+        }
+    };
+    let tag_splitting = &config.opinions.tag_splitting;
+    let collab_keywords: Vec<String> = tag_splitting
+        .collaboration_keywords
+        .iter()
+        .cloned()
+        .collect();
+
+    let mut tag_values_cache: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+
+    let compounds = detect_compounds_in_tags(
+        &tags, tag_splitting, &collab_keywords, &mut tag_values_cache, read_only_db,
+    );
+
+    // If no compounds found, clear any existing signal (only if one exists)
+    if compounds.is_empty() {
+        helpers::drop_stale_corpus_signal::<CompoundTagSignal>(
+            read_only_db, &sender, inode, witness,
+        );
+        sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
+        return Result::success(computation, Vec::new());
     }
 
     // Emit per-file CompoundTag signal (skip if unchanged via hash comparison)

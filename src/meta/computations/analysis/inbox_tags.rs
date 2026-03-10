@@ -23,13 +23,13 @@ type TagNormalizer<'a> = Vec<(&'a str, Box<dyn Fn(&str) -> String>)>;
 use crate::corpus::health::normalization::{
     normalize_album, normalize_album_artist, normalize_artist, normalize_genre,
 };
-use crate::db::types::Zone;
 use crate::db::ReadOnlyDb;
+use crate::zones::TaggedZone;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{reconcile_aggregate_signals, ComputedAggregateSignal};
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
-    CompoundTagEntry as TypedCompoundEntry, InboxCompoundTagSignal, InboxMissingTagSignal,
+    InboxCompoundTagSignal, InboxMissingTagSignal,
     InboxTagCanonicityData, InboxTagCanonicitySignal, MissingTagData};
 use crate::meta::signals::registry::TypedSignalWrite;
 
@@ -333,8 +333,6 @@ pub fn execute_detect_inbox_compound_tags(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,
 ) -> Result {
-    use crate::corpus::health::compound::{detect_featuring_pattern, CompoundTagValue};
-
     let computation = Computation::DetectInboxCompoundTags;
 
     let sender = require_sender!(computation);
@@ -378,7 +376,7 @@ pub fn execute_detect_inbox_compound_tags(
 
     for &inode in &inbox_healthy_inodes {
         let tags = read_only_db
-            .get_tags_for_zone(inode, Zone::Inbox)
+            .get_tags::<crate::zones::InboxZone>(inode)
             .unwrap_or_default();
         if tags.is_empty() {
             if existing_signal_inodes.contains(&inode) {
@@ -389,68 +387,13 @@ pub fn execute_detect_inbox_compound_tags(
         }
 
         let inbox_path = read_only_db
-            .get_inbox_path_for_inode(inode)
+            .get_path_for_inode::<crate::zones::InboxZone>(inode)
             .unwrap_or_default()
             .unwrap_or_default();
 
-        let mut compounds: Vec<TypedCompoundEntry> = Vec::new();
-
-        for tag in &tags {
-            let tag_name_upper = tag.tag_name.to_uppercase();
-            let is_artist_tag = matches!(tag_name_upper.as_str(), "ARTIST" | "ALBUMARTIST");
-
-            // Skip if whitelisted canonical
-            if read_only_db
-                .is_canonical_tag(&tag.tag_name, &tag.tag_value)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-
-            let mut matched_entry: Option<TypedCompoundEntry> = None;
-
-            // 1. Collaboration keywords (artist tags only)
-            if is_artist_tag && !collab_keywords.is_empty() {
-                if let Some((main_part, secondary_parts)) =
-                    detect_featuring_pattern(&tag.tag_value, &collab_keywords)
-                {
-                    let mut split_parts = vec![main_part];
-                    split_parts.extend(secondary_parts);
-                    let separator =
-                        super::determine_collab_separator_label(&tag.tag_value, &collab_keywords);
-                    matched_entry = Some(TypedCompoundEntry {
-                        tag_name: tag.tag_name.clone(),
-                        compound_value: tag.tag_value.clone(),
-                        split_parts,
-                        separator,
-                        matching_parts: Vec::new(),
-                    });
-                }
-            }
-
-            // 2. Per-tag separators (if no collab match)
-            if matched_entry.is_none() {
-                if let Some(separators) = tag_splitting.tag_separators.get(&tag_name_upper) {
-                    for sep in separators {
-                        if CompoundTagValue::is_compound(&tag.tag_value, sep) {
-                            let split_parts = CompoundTagValue::split_value(&tag.tag_value, sep);
-                            matched_entry = Some(TypedCompoundEntry {
-                                tag_name: tag.tag_name.clone(),
-                                compound_value: tag.tag_value.clone(),
-                                split_parts,
-                                separator: sep.clone(),
-                                matching_parts: Vec::new(),
-                            });
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if let Some(entry) = matched_entry {
-                compounds.push(entry);
-            }
-        }
+        let compounds = super::detect_compounds_in_tags(
+            &tags, tag_splitting, &collab_keywords, &mut tag_values_cache, read_only_db,
+        );
 
         if compounds.is_empty() {
             if existing_signal_inodes.contains(&inode) {
@@ -460,32 +403,8 @@ pub fn execute_detect_inbox_compound_tags(
             continue;
         }
 
-        // Populate matching_parts against corpus vocabulary
-        for compound in &mut compounds {
-            let tag_name = compound.tag_name.to_uppercase();
-            let existing_values = tag_values_cache.entry(tag_name.clone()).or_insert_with(|| {
-                read_only_db
-                    .get_distinct_tag_values_for::<crate::zones::CorpusZone>(&tag_name)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(value, _count)| value)
-                    .collect()
-            });
-
-            compound.matching_parts = compound
-                .split_parts
-                .iter()
-                .filter(|part| existing_values.contains(*part))
-                .cloned()
-                .collect();
-        }
-
         sender.write_typed_signal(
-            TypedSignalWrite::InboxCompoundTag(InboxCompoundTagSignal {
-                inode,
-                path: inbox_path,
-                compounds,
-            }),
+            crate::zones::InboxZone::compound_tag_signal(inode, inbox_path, compounds),
             witness,
         );
         emitted += 1;

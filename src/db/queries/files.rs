@@ -806,6 +806,22 @@ impl Database {
     // Dirty Inode Queries (for incremental computations)
     // ========================================================================
 
+    /// Check whether an inode has a pending_write marker.
+    ///
+    /// Returns true if this inode was recently written to by MM (via
+    /// `write_file_tags`) and the write has not yet been reconciled by
+    /// VerifyTags. Uses `dirty_inodes` with `computation_type = 'pending_write'`.
+    pub fn is_pending_write(&self, inode: i64) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM dirty_inodes WHERE inode = ?1 AND computation_type = 'pending_write'",
+                params![inode],
+                |_| Ok(()),
+            )
+            .is_ok())
+    }
+
     /// Get all inodes marked dirty for a specific computation type.
     ///
     /// Used by per-inode computations (e.g., compound tag detection) to query

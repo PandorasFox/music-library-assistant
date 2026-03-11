@@ -940,10 +940,11 @@ pub fn execute_acknowledge_mtime_only(
 /// Execute ApplyDbTagsToDisk mutation (single-track).
 ///
 /// - Reads tags from database (source of truth)
-/// - Writes to disk via write_file_tags()
-/// - Updates file mtime after write (handled by write_file_tags)
+/// - Writes to disk via write_file_tags() (marks pending_write)
 /// - Clears needs_disk_flush flag
-/// - Clears OOB signals (handled by write_file_tags)
+///
+/// Post-write reconciliation (mtime update, OOB signal clearing) is handled
+/// by VerifyTags when the FS watcher detects the change.
 ///
 /// Used for:
 /// - OOB sync resolution (reject disk changes, restore DB state to disk)
@@ -970,8 +971,7 @@ pub fn execute_apply_db_tags_to_disk(
     let db_tags = db.get_tags_for_zone(inode, zone)?;
     let tag_set = TagSet::new(db_tags.into_iter().map(|t| (t.tag_name, t.tag_value)));
 
-    // Write tags to disk using the consolidated write path
-    // (also clears OOB signals and updates file mtime)
+    // Write tags to disk (marks pending_write; mtime/signal cleanup via watcher→VerifyTags)
     let token = super::sealed::MutationToken::new();
     write_file_tags(abs_path, &tag_set, &token, witness)
         .with_context(|| format!("Failed to write tags to {}", abs_path.display()))?;
@@ -987,9 +987,12 @@ pub fn execute_apply_db_tags_to_disk(
 /// 1. Blocks until the DB write queue drains (all pending writes commit).
 /// 2. Reads committed tags from DB via `read_db`.
 /// 3. Compares committed tags against `expected_tags`.
-/// 4. On match: writes committed tags to disk and clears `needs_disk_flush`.
+/// 4. On match: writes committed tags to disk (marks pending_write) and clears `needs_disk_flush`.
 /// 5. On mismatch: returns error, leaves `needs_disk_flush` raised for OOB
 ///    resolution.
+///
+/// Post-write reconciliation (mtime update, OOB signal clearing) is handled
+/// by VerifyTags when the FS watcher detects the change.
 pub fn execute_flush_tags_to_disk(
     inode: i64,
     abs_path: &std::path::Path,
@@ -1024,7 +1027,7 @@ pub fn execute_flush_tags_to_disk(
         );
     }
 
-    // 4. Write validated committed tags to disk (includes read-back validation)
+    // 4. Write validated committed tags to disk (marks pending_write; mtime/signal cleanup via watcher→VerifyTags)
     let token = super::sealed::MutationToken::new();
     write_file_tags(abs_path, &committed_tags, &token, witness)
         .with_context(|| format!("Failed to flush tags to {}", abs_path.display()))?;

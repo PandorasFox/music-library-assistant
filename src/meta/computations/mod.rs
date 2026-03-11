@@ -18,7 +18,7 @@
 //!
 //! Computations are organized into three phases with compile-time enforced boundaries:
 //!
-//! - **Observation** (`observation/`) - Per-file verification (VerifyMtime, VerifyTags, VerifyAudio)
+//! - **Observation** (`observation/`) - Per-file verification (VerifyTags, VerifyAudio)
 //! - **Derivation** (`derivation/`) - First-level derivations (DeriveDirectorySignals, etc.)
 //! - **Analysis** (`analysis/`) - Full-corpus analysis (DetectFingerprintDuplicates, etc.)
 //!

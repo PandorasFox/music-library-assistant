@@ -49,8 +49,7 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 |-------------|-------------|
 | WalkCorpus | Enumerate directories, spawn per-directory scans. Has `force_check` parameter. |
 | ScanCorpusDirectory | Collect disk state, emit FileInCorpus signals, return observed inodes to Witch. Has `force_check` parameter. |
-| VerifyMtime | Check file modification times for changes |
-| VerifyTags | Verify disk tags match indexed tags, emit classification signals |
+| VerifyTags | Verify disk tags match indexed tags, emit classification signals. Pending-write aware. |
 
 ### Derivation Phase
 
@@ -112,9 +111,8 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
 | WalkCorpus | ScanCorpusDirectory × N (propagates `force_check`) | — | — |
-| ScanCorpusDirectory | VerifyMtime (if mtime changed, normal mode) or VerifyTags + VerifyAudio (all indexed, if `force_check=true`) | FileInCorpus (corpus zone), FileInInbox (inbox zone) | — | Also indexes directory entry (is_dir=1) in files table with read guard (skips write if entry already matches by zone+inode+mtime). Returns observed inodes to the Witch via Result (accumulated in tick(), consumed by queue_derivation_computations()). |
-| VerifyMtime | VerifyTags (if mtime differs) | — | — |
-| VerifyTags | — | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch, CorruptFile | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch (mutual exclusion) |
+| ScanCorpusDirectory | VerifyTags + VerifyAudio (all indexed, if `force_check=true`) | FileInCorpus (corpus zone), FileInInbox (inbox zone) | — | Also indexes directory entry (is_dir=1) in files table with read guard (skips write if entry already matches by zone+inode+mtime). Returns observed inodes to the Witch via Result (accumulated in tick(), consumed by queue_derivation_computations()). |
+| VerifyTags | — | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch, CorruptFile | OutOfBandTagConflict, OutOfBandTagSync, MtimeOnlyMismatch (mutual exclusion) | Pending-write aware: when `pending_write` marker exists and tags are clean, skips mtime check and clears all OOB signals. Always updates `files.mtime` from disk. |
 | VerifyAudio | — | CorruptFile | CorruptFile (if audio valid) |
 
 ### Derivation Phase Computations

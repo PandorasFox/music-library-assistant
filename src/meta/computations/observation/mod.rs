@@ -11,7 +11,6 @@
 //!
 //! ## Computations
 //!
-//! - `VerifyMtime` - Check file modification time
 //! - `VerifyTags` - Compare disk tags to indexed tags
 //! - `VerifyAudio` - Deep audio integrity check (decodes entire file)
 
@@ -32,20 +31,10 @@ pub use executors::*;
 /// They can only spawn other Observation computations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Computation {
-    /// Verify single file mtime.
-    ///
-    /// Checks if current mtime differs from expected (from files table).
-    /// Spawns VerifyTags if mtime mismatched.
-    VerifyMtime {
-        inode: i64,
-        path: PathBuf,
-        expected_mtime_secs: i64,
-        expected_mtime_nanos: i64,
-    },
-
     /// Verify tags on disk match database.
     ///
     /// Compares the actual file tags to what's stored in the index.
+    /// Pending-write aware: distinguishes MM-initiated writes from external changes.
     VerifyTags { inode: i64, path: PathBuf },
 
     /// Verify audio stream integrity by decoding the entire file.
@@ -59,7 +48,6 @@ impl Computation {
     /// Get a human-readable label for this computation.
     pub fn label(&self) -> &'static str {
         match self {
-            Computation::VerifyMtime { .. } => "Verifying mtime",
             Computation::VerifyTags { .. } => "Tag verification",
             Computation::VerifyAudio { .. } => "Audio verification",
         }
@@ -68,18 +56,6 @@ impl Computation {
     /// Execute this computation.
     pub fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
         match self {
-            Computation::VerifyMtime {
-                inode,
-                path,
-                expected_mtime_secs,
-                expected_mtime_nanos,
-            } => execute_verify_mtime(
-                ctx.read_db,
-                *inode,
-                path,
-                *expected_mtime_secs,
-                *expected_mtime_nanos,
-            ),
             Computation::VerifyTags { inode, path } => {
                 execute_verify_tags(ctx.read_db, *inode, path, ctx.witness)
             }

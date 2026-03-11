@@ -30,10 +30,8 @@ use lofty::ogg::OggPictureStorage;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::corpus::paths;
 use crate::db::write_thread;
 use crate::meta::mutations::MutationToken;
-use crate::meta::signals::data::*;
 use crate::witch::MutationExecutionWitness;
 
 /// Extract lowercase file extension from a path.
@@ -442,15 +440,16 @@ pub(crate) fn write_tags_to_file(path: &Path, tags: &TagSet) -> Result<()> {
     }
 }
 
-/// Write a complete TagSet to an audio file, with DB side effects.
+/// Write a complete TagSet to an audio file, with pending_write marker.
 ///
 /// THIS IS THE ONLY FUNCTION THAT WRITES TAGS TO FILES FROM MUTATION CONTEXT.
 ///
-/// After successful disk write, automatically:
-/// - Updates file mtime in files table to match the new file mtime
-/// - Clears all OOB signals (OutOfBandTagSync, OutOfBandTagConflict, MtimeOnlyMismatch)
+/// Marks the inode as `pending_write` in `dirty_inodes` before writing, so
+/// that when the FS watcher detects the change and VerifyTags runs, it can
+/// distinguish MM-initiated writes from external changes.
 ///
-/// Signals will be recomputed by VerifyTags in the next computation cycle.
+/// All post-write reconciliation (mtime update, signal clearing) is handled
+/// by VerifyTags via the watcher path — this function only writes tags.
 ///
 /// # Authorization
 ///
@@ -463,52 +462,17 @@ pub fn write_file_tags(
     _token: &MutationToken,
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
-    write_tags_to_file(path, tags)?;
-
-    // Read back and verify tags actually persisted
-    let readback = TagSet::from_file(path)
-        .with_context(|| format!("Failed to read back tags after write: {}", path.display()))?;
-
-    let diff = tags.diff(&readback);
-    let missing_count = diff.only_left.iter().count();
-    if missing_count > 0 {
-        // Tags we tried to write that aren't in the file
-        let missing_sample: Vec<_> = diff.only_left.iter().take(5).collect();
-        return Err(anyhow::anyhow!(
-            "Tag write verification failed for {}: {} tag(s) not persisted. Missing: {:?}",
-            path.display(),
-            missing_count,
-            missing_sample,
-        ));
-    }
-
-    // Update file mtime after successful disk write
+    // Mark pending_write before disk write so VerifyTags knows this is ours.
+    // Fire-and-forget to db_thread — wait_for_queue_drain() in VerifyTags
+    // guarantees this row is committed before it checks.
     let sender = write_thread::require_sender()?;
-    let rel_path = paths::resolve_relative(path)?;
-    let rel_path_str = rel_path.to_string_lossy();
     let file_metadata = std::fs::metadata(path)
-        .with_context(|| format!("Failed to read metadata after write: {}", path.display()))?;
-
-    // Determine source from relative path (first component: corpus, legacy, libraries, etc.)
-    let source = rel_path
-        .components()
-        .next()
-        .and_then(|c| c.as_os_str().to_str())
-        .unwrap_or("corpus");
-
+        .with_context(|| format!("Failed to read metadata before write: {}", path.display()))?;
     use std::os::unix::fs::MetadataExt;
     let inode = file_metadata.ino() as i64;
-    let (mtime_secs, mtime_nanos) = paths::read_mtime(&file_metadata);
+    sender.mark_dirty_inodes(vec![inode], "pending_write", witness);
 
-    sender.update_file_mtime(source, inode, mtime_secs, mtime_nanos, witness);
-
-    // Clear OOB/tag signals after successful write - they'll be recomputed next cycle
-    // This ensures mutations don't leave stale signals behind (inode-keyed)
-    sender.clear_corpus_signal::<OutOfBandTagSyncSignal>(inode, witness);
-    sender.clear_corpus_signal::<OutOfBandTagConflictSignal>(inode, witness);
-    sender.clear_corpus_signal::<MtimeOnlyMismatchSignal>(inode, witness);
-    // Clear tag mismatches - will be recomputed by VerifyTags
-    sender.clear_tag_mismatches_for_track(&rel_path_str, witness);
+    write_tags_to_file(path, tags)?;
 
     Ok(())
 }

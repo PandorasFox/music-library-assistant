@@ -16,51 +16,6 @@ use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::{Computation, Result};
 
-// ============================================================================
-// Verify Mtime
-// ============================================================================
-
-/// Phase 3: Verify single file mtime.
-pub fn execute_verify_mtime(
-    _read_only_db: &ReadOnlyDb<'_>,
-    inode: i64,
-    path: &Path,
-    expected_mtime_secs: i64,
-    expected_mtime_nanos: i64,
-) -> Result {
-    let computation = Computation::VerifyMtime {
-        inode,
-        path: path.to_path_buf(),
-        expected_mtime_secs,
-        expected_mtime_nanos,
-    };
-
-    // Read current mtime from disk
-    let metadata = match std::fs::metadata(path) {
-        Ok(m) => m,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to read file metadata: {}", e),
-            );
-        }
-    };
-
-    let (current_secs, current_nanos) = extract_mtime(&metadata);
-
-    // If mtime differs from expected, spawn VerifyTags to check actual content
-    let spawn = if current_secs != expected_mtime_secs || current_nanos != expected_mtime_nanos {
-        vec![Computation::VerifyTags {
-            inode,
-            path: path.to_path_buf(),
-        }]
-    } else {
-        Vec::new()
-    };
-
-    Result::success(computation, spawn)
-}
-
 /// Check if a file's disk mtime differs from what's stored in files table.
 ///
 /// Uses the portable API (extract_mtime) for consistency across the codebase.
@@ -108,6 +63,14 @@ fn check_mtime_differs(read_only_db: &ReadOnlyDb<'_>, inode: i64, path: &Path) -
 /// - `OutOfBandTagConflict`: value conflicts or mixed-direction extras (requires operator decision)
 ///
 /// These three signal types are mutually exclusive - emitting one clears the others.
+///
+/// **Pending write awareness**: When a `pending_write` marker exists for this inode
+/// (set by `write_file_tags()` before MM writes), the mtime check is skipped on
+/// clean tags (expected: MM just wrote them). This prevents spurious MtimeOnlyMismatch
+/// signals for MM-initiated writes.
+///
+/// **Mtime update**: All branches update `files.mtime` from current disk state,
+/// since `write_file_tags()` no longer handles mtime updates.
 pub fn execute_verify_tags(
     read_only_db: &ReadOnlyDb<'_>,
     inode: i64,
@@ -133,9 +96,11 @@ pub fn execute_verify_tags(
     };
 
     // Wait for pending DB writes to drain before reading audio_info.
-    // This prevents a race where VerifyTags runs before IndexFileFromPath's
-    // fire-and-forget write is processed, causing spurious "Audio file not found" errors.
+    // This also guarantees any pending_write marker from write_file_tags() is committed.
     crate::db::write_thread::wait_for_queue_drain();
+
+    // Check for pending_write marker (MM-initiated write)
+    let has_pending_write = read_only_db.is_pending_write(inode).unwrap_or(false);
 
     // Get relative path for signal keys
     let resolver = crate::corpus::paths::get_resolver();
@@ -150,72 +115,86 @@ pub fn execute_verify_tags(
     };
     let rel_str = rel_path.to_string_lossy().to_string();
 
+    // Resolve zone for mtime update (needed in all branches)
+    let zone_str = read_only_db
+        .get_file_zone_and_path_by_inode(inode)
+        .ok()
+        .flatten()
+        .map(|(z, _)| z)
+        .unwrap_or_else(|| "corpus".to_string());
+
     match indexing::execute_verify_tags(read_only_db, inode, path) {
         Ok(verify_result) => {
-            // Full classification based on TagVerifyResult
-            // All signals are now keyed by inode with path in metadata
             if verify_result.is_clean() {
-                // Tags match exactly - but we need to check if mtime actually differs
-                // (in force_check mode, VerifyTags runs even when mtime matches)
-                let mtime_actually_differs = check_mtime_differs(read_only_db, inode, path);
-
-                if mtime_actually_differs {
-                    // Mtime changed but tags are identical - requires operator acknowledgement
+                if has_pending_write {
+                    // MM wrote tags and they match — write succeeded. No signal needed.
                     log_general(format!(
-                        "[COMPUTE] VerifyTags: mtime-only change for inode {} ({})",
+                        "[COMPUTE] VerifyTags: pending_write succeeded for inode {} ({})",
                         inode,
                         path.display()
                     ));
-                    ensure_typed_signal(
-                        read_only_db,
-                        &sender,
-                        TypedSignalWrite::MtimeOnlyMismatch(MtimeOnlyMismatchSignal {
-                            inode,
-                            path: rel_str.clone(),
-                        }),
-                        witness,
+                    // Clear all OOB signals (MM write reconciled everything)
+                    drop_stale_corpus_signal::<MtimeOnlyMismatchSignal>(
+                        read_only_db, &sender, inode, witness,
                     );
-                    // Clear mutually exclusive signals
                     drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
-                        read_only_db,
-                        &sender,
-                        inode,
-                        witness,
+                        read_only_db, &sender, inode, witness,
                     );
                     drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
-                        read_only_db,
-                        &sender,
-                        inode,
-                        witness,
+                        read_only_db, &sender, inode, witness,
                     );
                 } else {
-                    // Tags match AND mtime matches - file is healthy, clear all OOB signals
-                    log_general(format!(
-                        "[COMPUTE] VerifyTags: file healthy for inode {} ({})",
-                        inode,
-                        path.display()
-                    ));
-                    drop_stale_corpus_signal::<MtimeOnlyMismatchSignal>(
-                        read_only_db,
-                        &sender,
-                        inode,
-                        witness,
-                    );
-                    drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
-                        read_only_db,
-                        &sender,
-                        inode,
-                        witness,
-                    );
-                    drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
-                        read_only_db,
-                        &sender,
-                        inode,
-                        witness,
-                    );
+                    // No pending_write — external or idle rescan path
+                    let mtime_actually_differs = check_mtime_differs(read_only_db, inode, path);
+
+                    if mtime_actually_differs {
+                        // Mtime changed but tags identical — external touch
+                        log_general(format!(
+                            "[COMPUTE] VerifyTags: mtime-only change for inode {} ({})",
+                            inode,
+                            path.display()
+                        ));
+                        ensure_typed_signal(
+                            read_only_db,
+                            &sender,
+                            TypedSignalWrite::MtimeOnlyMismatch(MtimeOnlyMismatchSignal {
+                                inode,
+                                path: rel_str.clone(),
+                            }),
+                            witness,
+                        );
+                        drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
+                            read_only_db, &sender, inode, witness,
+                        );
+                        drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
+                            read_only_db, &sender, inode, witness,
+                        );
+                    } else {
+                        // Tags match AND mtime matches — file is healthy
+                        log_general(format!(
+                            "[COMPUTE] VerifyTags: file healthy for inode {} ({})",
+                            inode,
+                            path.display()
+                        ));
+                        drop_stale_corpus_signal::<MtimeOnlyMismatchSignal>(
+                            read_only_db, &sender, inode, witness,
+                        );
+                        drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
+                            read_only_db, &sender, inode, witness,
+                        );
+                        drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
+                            read_only_db, &sender, inode, witness,
+                        );
+                    }
                 }
             } else if verify_result.is_conflict() {
-                // Value conflicts or mixed-direction extras - requires operator decision
+                if has_pending_write {
+                    log_general(format!(
+                        "[COMPUTE] VerifyTags: pending_write but tags conflict for inode {} ({}) — post-write external modification or write failure",
+                        inode, path.display()
+                    ));
+                }
+                // Value conflicts or mixed-direction extras — requires operator decision
                 log_general(format!(
                     "[COMPUTE] VerifyTags: tag conflict for inode {} ({})",
                     inode,
@@ -223,24 +202,14 @@ pub fn execute_verify_tags(
                 ));
                 // Clear all OOB signals first (including target type to refresh metadata)
                 drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
-                    read_only_db,
-                    &sender,
-                    inode,
-                    witness,
+                    read_only_db, &sender, inode, witness,
                 );
                 drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
-                    read_only_db,
-                    &sender,
-                    inode,
-                    witness,
+                    read_only_db, &sender, inode, witness,
                 );
                 drop_stale_corpus_signal::<MtimeOnlyMismatchSignal>(
-                    read_only_db,
-                    &sender,
-                    inode,
-                    witness,
+                    read_only_db, &sender, inode, witness,
                 );
-                // Create fresh signal with mismatch metadata (keyed by inode)
                 let mismatches: Vec<TagMismatchEntry> = verify_result
                     .mismatches
                     .into_iter()
@@ -259,32 +228,27 @@ pub fn execute_verify_tags(
                     witness,
                 );
             } else {
-                // One-direction extras only - can be synced without conflict
+                if has_pending_write {
+                    log_general(format!(
+                        "[COMPUTE] VerifyTags: pending_write but syncable diff for inode {} ({}) — post-write external modification or write failure",
+                        inode, path.display()
+                    ));
+                }
+                // One-direction extras only — can be synced without conflict
                 log_general(format!(
                     "[COMPUTE] VerifyTags: syncable tag diff for inode {} ({})",
                     inode,
                     path.display()
                 ));
-                // Clear all OOB signals first (including target type to refresh metadata)
                 drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
-                    read_only_db,
-                    &sender,
-                    inode,
-                    witness,
+                    read_only_db, &sender, inode, witness,
                 );
                 drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
-                    read_only_db,
-                    &sender,
-                    inode,
-                    witness,
+                    read_only_db, &sender, inode, witness,
                 );
                 drop_stale_corpus_signal::<MtimeOnlyMismatchSignal>(
-                    read_only_db,
-                    &sender,
-                    inode,
-                    witness,
+                    read_only_db, &sender, inode, witness,
                 );
-                // Create fresh signal with mismatch metadata (keyed by inode)
                 let mismatches: Vec<TagMismatchEntry> = verify_result
                     .mismatches
                     .into_iter()
@@ -304,11 +268,21 @@ pub fn execute_verify_tags(
                 );
             }
 
+            // Consume pending_write marker regardless of outcome
+            if has_pending_write {
+                sender.clear_dirty_inode(inode, "pending_write", witness);
+            }
+
+            // Update DB mtime from current disk state (all branches)
+            if let Ok(metadata) = std::fs::metadata(path) {
+                let (secs, nanos) = extract_mtime(&metadata);
+                sender.update_file_mtime(&zone_str, inode, secs, nanos, witness);
+            }
+
             Result::success(computation, Vec::new())
         }
         Err(e) => {
             // Emit CorruptFile signal so the issue is tracked in the DB (actionable)
-            // Log to both general and errors so we can diagnose why this file is flagged
             let err_msg = format!(
                 "[COMPUTE] VerifyTags FAILED for inode {} ({}): {:#}",
                 inode,
@@ -326,25 +300,28 @@ pub fn execute_verify_tags(
                 }),
                 witness,
             );
-            // Clear OOB signals on parse error - we can't classify what we can't read
+            // Clear OOB signals on parse error — can't classify what we can't read
             drop_stale_corpus_signal::<OutOfBandTagConflictSignal>(
-                read_only_db,
-                &sender,
-                inode,
-                witness,
+                read_only_db, &sender, inode, witness,
             );
             drop_stale_corpus_signal::<OutOfBandTagSyncSignal>(
-                read_only_db,
-                &sender,
-                inode,
-                witness,
+                read_only_db, &sender, inode, witness,
             );
             drop_stale_corpus_signal::<MtimeOnlyMismatchSignal>(
-                read_only_db,
-                &sender,
-                inode,
-                witness,
+                read_only_db, &sender, inode, witness,
             );
+
+            // Consume pending_write marker regardless
+            if has_pending_write {
+                sender.clear_dirty_inode(inode, "pending_write", witness);
+            }
+
+            // Update DB mtime even on error (prevents re-triggering)
+            if let Ok(metadata) = std::fs::metadata(path) {
+                let (secs, nanos) = extract_mtime(&metadata);
+                sender.update_file_mtime(&zone_str, inode, secs, nanos, witness);
+            }
+
             // Return success so computation continues processing other files
             Result::success(computation, Vec::new())
         }

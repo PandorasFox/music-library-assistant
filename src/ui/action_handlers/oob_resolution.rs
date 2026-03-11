@@ -8,10 +8,7 @@ use super::HandleAction;
 use crate::corpus::paths;
 use crate::db::domain;
 use crate::meta::decisions::DecisionKey;
-use crate::ui::{
-    filter_popup, moved_file_modal, oob_conflict_modal, oob_sync_modal, ActiveView, FilterOverlay,
-    FilterPopupContext,
-};
+use crate::ui::{moved_file_modal, oob_conflict_modal, oob_sync_modal, ActiveView};
 
 // ========================================================================
 // OOB Tag Sync
@@ -35,13 +32,6 @@ impl HandleAction for oob_sync_modal::OobSyncAction {
             }
             oob_sync_modal::OobSyncAction::Cancel => {
                 app.cancel_and_return_to_source("OOB sync resolution cancelled");
-            }
-            oob_sync_modal::OobSyncAction::OpenFilter => {
-                // Open filter popup overlay
-                app.filter_overlay = Some(FilterOverlay {
-                    state: filter_popup::FilterPopupState::new(),
-                    context: FilterPopupContext::OobSync,
-                });
             }
         }
     }
@@ -72,13 +62,6 @@ impl HandleAction for oob_conflict_modal::OobConflictAction {
             }
             oob_conflict_modal::OobConflictAction::Cancel => {
                 app.cancel_and_return_to_source("OOB conflict inspection closed");
-            }
-            oob_conflict_modal::OobConflictAction::OpenFilter => {
-                // Open filter popup overlay
-                app.filter_overlay = Some(FilterOverlay {
-                    state: filter_popup::FilterPopupState::new(),
-                    context: FilterPopupContext::OobConflict,
-                });
             }
         }
     }

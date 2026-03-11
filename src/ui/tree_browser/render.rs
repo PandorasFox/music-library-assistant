@@ -329,7 +329,7 @@ fn render_corpus_tree(
         .split(area);
 
     // Filter bar - show filter status or hint
-    render_filter_bar(f, main_chunks[0], nav);
+    render_filter_bar(f, main_chunks[0], nav, variant);
 
     // Tree pane at full width
     render_tree_pane(
@@ -346,32 +346,55 @@ fn render_corpus_tree(
 }
 
 /// Render the filter status bar for corpus browser.
-fn render_filter_bar(f: &mut Frame, area: Rect, nav: &TreeNavigator) {
-    let (content, style) = if nav.has_path_filter() {
-        // Active filter - show count and hint to clear
+fn render_filter_bar(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &BrowserVariant) {
+    let BrowserVariant::CorpusBrowser(ref v) = variant;
+
+    if v.filter_active() {
+        // Active text input mode
+        let input = v.filter_input();
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title("Filter");
+
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        // Render "Filter: " label + input text
+        let label = Span::styled("Filter: ", Style::default().fg(Color::Yellow));
+        let text = Span::styled(input.value(), Style::default().fg(Color::White));
+        let line = Line::from(vec![label, text]);
+        f.render_widget(Paragraph::new(line), inner);
+
+        // Position cursor after the text
+        let cursor_x = inner.x + 8 + input.cursor as u16; // "Filter: " = 8 chars
+        if cursor_x < inner.x + inner.width {
+            f.set_cursor_position((cursor_x, inner.y));
+        }
+    } else if nav.has_path_filter() {
+        // Filter applied — show count and hint to clear
         let count = nav.filtered_file_count().unwrap_or(0);
-        (
-            format!(
-                "Filtered: {} files  (Ctrl+/ to change, Esc to clear)",
-                count
-            ),
-            Style::default().fg(Color::Green),
-        )
+        let content = format!("Filtered: {} files  (Esc to clear)", count);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green))
+            .title("Filter");
+        let paragraph =
+            Paragraph::new(Span::styled(content, Style::default().fg(Color::Green))).block(block);
+        f.render_widget(paragraph, area);
     } else {
-        // No filter - show hint
-        (
-            "Press Ctrl+/ to filter files".to_string(),
+        // No filter — show hint
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title("Filter");
+        let paragraph = Paragraph::new(Span::styled(
+            "Ctrl+/ to filter",
             Style::default().fg(Color::DarkGray),
-        )
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title("Filter");
-
-    let paragraph = Paragraph::new(Span::styled(content, style)).block(block);
-    f.render_widget(paragraph, area);
+        ))
+        .block(block);
+        f.render_widget(paragraph, area);
+    }
 }
 
 /// Render the tree pane.

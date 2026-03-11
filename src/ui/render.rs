@@ -16,7 +16,7 @@ use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::startup;
 use super::widgets::{status_bar, Modal, ModalButton, ModalStyle, UnifiedTitleBar};
 use super::{
-    compound_split_v2, config_editor, external_match_modal, filter_popup, inbox_view,
+    compound_split_v2, config_editor, external_match_modal, inbox_view,
     insights_view, manual_review_modal, oob_conflict_modal, oob_sync_modal, progressive_worker,
     tabbed_transaction_review, tag_canonicity_v2, transaction_review,
 };
@@ -244,10 +244,6 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         }
     }
 
-    // Render filter popup overlay if active
-    if let Some(ref overlay) = app.filter_overlay {
-        filter_popup::render(f, area, &overlay.state);
-    }
 }
 
 fn render_exit_confirm_modal(

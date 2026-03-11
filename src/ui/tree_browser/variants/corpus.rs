@@ -315,6 +315,10 @@ pub struct CorpusBrowserVariant {
     wizard_offer: Option<WizardOffer>,
     /// Scroll state for wizard pane.
     wizard_pane: WizardPaneState,
+    /// Text input state for inline filter bar (Ctrl+/)
+    filter_input: TextInputState,
+    /// Whether the inline filter bar is actively accepting input
+    filter_active: bool,
 }
 
 impl CorpusBrowserVariant {
@@ -333,6 +337,8 @@ impl CorpusBrowserVariant {
             wizard_state: WizardState::default(),
             wizard_offer: None,
             wizard_pane: WizardPaneState::new(),
+            filter_input: TextInputState::new(),
+            filter_active: false,
         }
     }
 
@@ -364,6 +370,43 @@ impl CorpusBrowserVariant {
     /// Whether there are any pending dir config edits.
     pub fn has_pending_edits(&self) -> bool {
         !self.pending_edit_paths.is_empty()
+    }
+
+    /// Whether the inline filter bar is actively accepting input.
+    pub fn filter_active(&self) -> bool {
+        self.filter_active
+    }
+
+    /// Get a reference to the filter input state (for rendering).
+    pub fn filter_input(&self) -> &TextInputState {
+        &self.filter_input
+    }
+
+    /// Activate the inline filter bar.
+    fn activate_filter(&mut self) {
+        self.filter_active = true;
+        self.filter_input.focused = true;
+        self.focus = CorpusBrowserFocus::TreeBrowser;
+    }
+
+    /// Apply the current filter text to the tree navigator.
+    fn apply_filter(&mut self, nav: &mut TreeNavigator) {
+        let query = self.filter_input.value().trim().to_lowercase();
+        if query.is_empty() {
+            nav.clear_path_filter();
+        } else {
+            nav.apply_text_filter(&query);
+        }
+        self.filter_active = false;
+        self.filter_input.focused = false;
+    }
+
+    /// Deactivate the filter bar and clear any active filter.
+    fn deactivate_filter(&mut self, nav: &mut TreeNavigator) {
+        self.filter_active = false;
+        self.filter_input.focused = false;
+        self.filter_input.clear();
+        nav.clear_path_filter();
     }
 
     /// Called when cursor moves — dismiss any active wizard.
@@ -403,6 +446,12 @@ impl CorpusBrowserVariant {
             return true;
         }
 
+        // Inline filter bar: Esc clears filter and deactivates
+        if self.filter_active || nav.has_path_filter() {
+            self.deactivate_filter(nav);
+            return true;
+        }
+
         if self.match_selection_mode {
             self.reset_match_selection();
             true
@@ -412,10 +461,6 @@ impl CorpusBrowserVariant {
             self.search.clear();
             self.focus = CorpusBrowserFocus::TreeBrowser;
             true
-        } else if nav.has_path_filter() {
-            // Clear active filter
-            nav.clear_path_filter();
-            true
         } else {
             false
         }
@@ -423,9 +468,10 @@ impl CorpusBrowserVariant {
 
     /// Check if variant wants to capture navigation keys.
     /// Returns true when search is active (search bar focused or has results),
-    /// config panel is focused, or wizard pane is showing.
+    /// config panel is focused, filter is active, or wizard pane is showing.
     pub fn wants_navigation_keys(&self) -> bool {
-        self.focus == CorpusBrowserFocus::ConfigPanel
+        self.filter_active
+            || self.focus == CorpusBrowserFocus::ConfigPanel
             || self.match_selection_mode
             || self.focus == CorpusBrowserFocus::SearchBar
             || !self.search.matches.is_empty()
@@ -441,6 +487,24 @@ impl CorpusBrowserVariant {
         // Config panel has priority when focused
         if self.focus == CorpusBrowserFocus::ConfigPanel {
             return self.handle_config_panel_input(action);
+        }
+
+        // Inline filter bar captures all input when active
+        if self.filter_active {
+            match action {
+                InputAction::Confirm => {
+                    self.apply_filter(nav);
+                    return TreeBrowserAction::None;
+                }
+                InputAction::Cancel => {
+                    // Esc handled by handle_escape
+                    return TreeBrowserAction::None;
+                }
+                other => {
+                    self.filter_input.handle_input(other);
+                    return TreeBrowserAction::None;
+                }
+            }
         }
 
         // Wizard pane captures nav keys for scrolling
@@ -545,8 +609,11 @@ impl CorpusBrowserVariant {
                     TreeBrowserAction::CyclePrev
                 }
             }
-            // Ctrl+/ opens filter popup
-            InputAction::OpenFilter => TreeBrowserAction::OpenFilter,
+            // Ctrl+/ activates inline filter
+            InputAction::OpenFilter => {
+                self.activate_filter();
+                TreeBrowserAction::None
+            }
             _ => TreeBrowserAction::None,
         }
     }

@@ -5,8 +5,7 @@ use crate::ui::input::InputAction;
 
 use crate::meta::views::{OobSyncDirection, OobSyncFile};
 use crate::ui::bulk_selection::BulkSelectionState;
-use crate::ui::filter_popup::FilterCondition;
-use crate::ui::widgets::{ButtonRects, FocusPane};
+use crate::ui::widgets::{ButtonRects, FocusPane, TextInputState};
 
 // ============================================================================
 // Button Selection
@@ -50,8 +49,6 @@ pub enum OobSyncAction {
     AcceptDb,
     /// Cancel and return to Insights
     Cancel,
-    /// Open filter popup (Ctrl+/)
-    OpenFilter,
 }
 
 // ============================================================================
@@ -73,8 +70,12 @@ pub struct OobSyncState {
     pub button_rects: ButtonRects,
     /// Bulk selection state for multi-file operations
     pub selection: BulkSelectionState,
-    /// Active filter condition (from Ctrl+/ popup)
-    pub filter: Option<FilterCondition>,
+    /// Inline text filter input
+    pub filter_input: TextInputState,
+    /// Whether the inline filter bar is actively accepting input
+    pub filter_active: bool,
+    /// Active filter text (applied on Enter)
+    pub filter_text: Option<String>,
     /// Filtered indices (cached, updated when filter changes)
     pub filtered_indices: Option<Vec<usize>>,
 }
@@ -108,7 +109,9 @@ impl OobSyncState {
             focus_pane: FocusPane::List,
             button_rects: ButtonRects::new(),
             selection,
-            filter: None,
+            filter_input: TextInputState::new(),
+            filter_active: false,
+            filter_text: None,
             filtered_indices: None,
         }
     }
@@ -122,33 +125,33 @@ impl OobSyncState {
         }
     }
 
-    /// Apply a filter condition and compute filtered indices.
-    pub fn apply_filter(&mut self, condition: FilterCondition) {
-        if condition.is_active() {
+    /// Apply the current filter input text as a path substring filter.
+    pub fn apply_filter(&mut self) {
+        let query = self.filter_input.value().trim().to_lowercase();
+        if query.is_empty() {
+            self.clear_filter();
+        } else {
             let indices: Vec<usize> = self
                 .files
                 .iter()
                 .enumerate()
-                .filter(|(_, _f)| {
-                    // OobSyncFile doesn't have sample_rate/bitrate/duration,
-                    // so we only filter by file type based on path extension
-                    // TODO: Add full metadata filtering when track info is available
-                    true // For now, accept all
-                })
+                .filter(|(_, f)| f.path.to_lowercase().contains(&query))
                 .map(|(idx, _)| idx)
                 .collect();
             self.filtered_indices = Some(indices);
-            self.filter = Some(condition);
-        } else {
-            self.filter = None;
-            self.filtered_indices = None;
+            self.filter_text = Some(query);
         }
+        self.filter_active = false;
+        self.filter_input.focused = false;
     }
 
     /// Clear the current filter.
     pub fn clear_filter(&mut self) {
-        self.filter = None;
+        self.filter_text = None;
         self.filtered_indices = None;
+        self.filter_active = false;
+        self.filter_input.focused = false;
+        self.filter_input.clear();
     }
 
     /// Count of files by direction.
@@ -196,6 +199,24 @@ impl OobSyncState {
     }
 
     pub fn handle_input(&mut self, action: &InputAction) -> OobSyncAction {
+        // Inline filter bar captures all input when active
+        if self.filter_active {
+            match action {
+                InputAction::Confirm => {
+                    self.apply_filter();
+                    return OobSyncAction::None;
+                }
+                InputAction::Cancel => {
+                    self.clear_filter();
+                    return OobSyncAction::None;
+                }
+                other => {
+                    self.filter_input.handle_input(other);
+                    return OobSyncAction::None;
+                }
+            }
+        }
+
         match action {
             // Shift+Up / Shift+Down: cycle focus pane
             InputAction::FocusUp => {
@@ -214,8 +235,12 @@ impl OobSyncState {
                 OobSyncAction::None
             }
 
-            // Ctrl+/: open filter popup
-            InputAction::OpenFilter => OobSyncAction::OpenFilter,
+            // Ctrl+/: activate inline filter
+            InputAction::OpenFilter => {
+                self.filter_active = true;
+                self.filter_input.focused = true;
+                OobSyncAction::None
+            }
 
             // Space: toggle selection on current file
             InputAction::Toggle => {

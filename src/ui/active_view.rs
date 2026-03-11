@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use crate::ui::{
     compound_split_v2, config_editor, corrupt_file_modal, deploy_modal, directory_cluster_modal,
-    disc_extraction_modal, external_match_modal, external_match_view, eye::Eye, filter_popup,
+    disc_extraction_modal, external_match_modal, external_match_view, eye::Eye,
     history_view, inbox_corpus_match_modal, inbox_organize, inbox_view, insights_view,
     manual_review_modal, missing_album_modal, missing_directory_modal, missing_file_modal,
     moved_file_modal, oob_conflict_modal, oob_sync_modal, progress_screen, progressive_worker,
@@ -285,27 +285,6 @@ pub(crate) struct ExitConfirmModalState {
     pub has_operations: bool,
     /// Click target rects for buttons, populated during render.
     pub button_rects: crate::ui::widgets::ButtonRects,
-}
-
-// ============================================================================
-// FilterOverlay - bundles filter popup state + context
-// ============================================================================
-
-/// Overlay for the filter popup (Ctrl+/). Always paired: state + context.
-pub(crate) struct FilterOverlay {
-    pub state: filter_popup::FilterPopupState,
-    pub context: FilterPopupContext,
-}
-
-/// Context for filter popup - determines where to apply filter results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FilterPopupContext {
-    /// Filter for corpus browser tree
-    CorpusBrowser,
-    /// Filter for OOB sync resolution modal
-    OobSync,
-    /// Filter for OOB conflict resolution modal
-    OobConflict,
 }
 
 // ============================================================================

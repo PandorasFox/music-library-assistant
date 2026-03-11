@@ -35,7 +35,6 @@ pub mod disc_extraction_modal;
 pub mod external_match_modal;
 pub mod external_match_view;
 pub mod eye;
-pub mod filter_popup;
 pub mod helpers;
 pub mod history_view;
 pub mod inbox_corpus_match_modal;
@@ -66,8 +65,8 @@ pub mod widgets;
 
 // Re-export for convenience
 pub(crate) use active_view::{
-    ActiveView, CanonicitySignalKind, ExitConfirmAction, ExitConfirmModalState, FilterOverlay,
-    FilterPopupContext, SchemaUpdateAction, SchemaUpdatePhase, SchemaUpdateState, SuspendedView,
+    ActiveView, CanonicitySignalKind, ExitConfirmAction, ExitConfirmModalState,
+    SchemaUpdateAction, SchemaUpdatePhase, SchemaUpdateState, SuspendedView,
     TagCanonicityClusters, VacuumAction, VacuumPhase, VacuumPromptState, ViewAction,
 };
 use types::ProgressStatsUpdater;
@@ -115,9 +114,6 @@ pub(crate) struct App {
     pub(super) cached_history: Option<crate::meta::views::EditHistoryData>,
     pub(super) cached_external_matches: Option<crate::meta::views::ExternalMatchesData>,
     pub(super) cached_packing_dirs: Option<crate::witch::cache_thread::PackingDirsData>,
-
-    // Filter popup overlay (Ctrl+/ in resolution modals and corpus browser)
-    pub(super) filter_overlay: Option<FilterOverlay>,
 
     // View stack for push/pop navigation (TransactionReview, ProgressiveWork, etc.)
     pub(super) view_stack: Vec<SuspendedView>,
@@ -173,7 +169,6 @@ impl App {
             cached_history: None,
             cached_external_matches: None,
             cached_packing_dirs: None,
-            filter_overlay: None,
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Health,
             db_path: std::path::PathBuf::new(),
@@ -208,108 +203,6 @@ impl App {
     }
 
     fn handle_input(&mut self, action: InputAction) {
-        // Filter popup intercepts when active
-        if let Some(ref mut overlay) = self.filter_overlay {
-            let action = overlay.state.handle_input(&action);
-            match action {
-                filter_popup::FilterPopupAction::None => return,
-                filter_popup::FilterPopupAction::Apply => {
-                    let condition = overlay.state.condition.clone();
-                    let context = overlay.context;
-                    self.filter_overlay = None;
-                    match context {
-                        FilterPopupContext::CorpusBrowser => {
-                            if !condition.is_active() {
-                                if let ActiveView::CorpusBrowser(ref mut browser) = self.view {
-                                    browser.clear_filter();
-                                }
-                            } else {
-                                let matching_paths = self
-                                    .cache
-                                    .query(move |db| {
-                                        let audio_files = db
-                                            .get_all_audio_files(
-                                                crate::db::types::Zone::Corpus,
-                                                false,
-                                            )
-                                            .unwrap_or_default();
-                                        let mut paths = Vec::new();
-                                        for audio_file in audio_files {
-                                            let mut tags: std::collections::HashMap<
-                                                String,
-                                                Vec<String>,
-                                            > = std::collections::HashMap::new();
-                                            for t in db
-                                                .get_tags::<crate::zones::CorpusZone>(audio_file.inode())
-                                                .unwrap_or_default()
-                                            {
-                                                tags.entry(t.tag_name.to_uppercase())
-                                                    .or_default()
-                                                    .push(t.tag_value);
-                                            }
-                                            if condition.matches(
-                                                audio_file.path(),
-                                                &audio_file.audio.file_type,
-                                                audio_file.audio.sample_rate,
-                                                audio_file.audio.bitrate_kbps,
-                                                audio_file.audio.duration_ms,
-                                                &tags,
-                                            ) {
-                                                paths.push(std::path::PathBuf::from(
-                                                    audio_file.path(),
-                                                ));
-                                            }
-                                        }
-                                        paths
-                                    })
-                                    .recv();
-                                if let ActiveView::CorpusBrowser(ref mut browser) = self.view {
-                                    browser.apply_filter_results(matching_paths);
-                                }
-                            }
-                        }
-                        FilterPopupContext::OobSync => {
-                            if let ActiveView::OobSyncResolution(ref mut state) = self.view {
-                                state.apply_filter(condition);
-                            }
-                        }
-                        FilterPopupContext::OobConflict => {
-                            if let ActiveView::OobConflictInspection(ref mut state) = self.view {
-                                state.apply_filter(condition);
-                            }
-                        }
-                    }
-                    return;
-                }
-                filter_popup::FilterPopupAction::Clear => {
-                    let context = overlay.context;
-                    self.filter_overlay = None;
-                    match context {
-                        FilterPopupContext::CorpusBrowser => {
-                            if let ActiveView::CorpusBrowser(ref mut browser) = self.view {
-                                browser.clear_filter();
-                            }
-                        }
-                        FilterPopupContext::OobSync => {
-                            if let ActiveView::OobSyncResolution(ref mut state) = self.view {
-                                state.clear_filter();
-                            }
-                        }
-                        FilterPopupContext::OobConflict => {
-                            if let ActiveView::OobConflictInspection(ref mut state) = self.view {
-                                state.clear_filter();
-                            }
-                        }
-                    }
-                    return;
-                }
-                filter_popup::FilterPopupAction::Cancel => {
-                    self.filter_overlay = None;
-                    return;
-                }
-            }
-        }
-
         // Macro for the common pattern: delegate handle_input, wrap in ViewAction
         macro_rules! dispatch_input {
             ($variant:ident, $state:expr) => {

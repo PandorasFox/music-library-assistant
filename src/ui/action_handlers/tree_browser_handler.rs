@@ -4,8 +4,8 @@ use super::super::App;
 use super::witness;
 use super::HandleAction;
 use crate::meta::decisions::DecisionKey;
-use crate::ui::active_view::{ActiveView, FilterOverlay, FilterPopupContext};
-use crate::ui::{filter_popup, tree_browser, widgets};
+use crate::ui::active_view::ActiveView;
+use crate::ui::{tree_browser, widgets};
 
 impl HandleAction for tree_browser::TreeBrowserAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
@@ -27,13 +27,6 @@ impl HandleAction for tree_browser::TreeBrowserAction {
             }
             tree_browser::TreeBrowserAction::CyclePrev => {
                 app.handle_lateral_cycle(widgets::LateralView::Files, false);
-            }
-            tree_browser::TreeBrowserAction::OpenFilter => {
-                // Open filter popup for corpus browser
-                app.filter_overlay = Some(FilterOverlay {
-                    state: filter_popup::FilterPopupState::new(),
-                    context: FilterPopupContext::CorpusBrowser,
-                });
             }
             tree_browser::TreeBrowserAction::OpenDirConfig(path) => {
                 app.open_dir_config_panel(path);

@@ -40,7 +40,7 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobSyncState) {
     let db_count = state.index_to_disk_count();
 
     // Title with counts and filter indicator
-    let filter_indicator = if state.filter.is_some() {
+    let filter_indicator = if state.filter_text.is_some() {
         let filtered_count = state.get_filtered_indices().len();
         format!(" [filtered: {}/{}]", filtered_count, state.files.len())
     } else {

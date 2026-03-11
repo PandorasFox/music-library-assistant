@@ -26,9 +26,6 @@ pub enum TreeBrowserAction {
     /// Edit single file (Enter on file)
     EditFile(PathBuf),
 
-    /// Open filter popup (Ctrl+/)
-    OpenFilter,
-
     /// Open directory config panel (C on source root)
     OpenDirConfig(PathBuf),
 

@@ -107,50 +107,6 @@ impl TreeBrowserState {
         );
     }
 
-    // =========================================================================
-    // Filtering
-    // =========================================================================
-
-    /// Apply a filter condition, showing only matching files and their ancestors.
-    ///
-    /// Queries the database for tracks matching the filter condition, then
-    /// computes the set of matching paths plus all ancestor directories.
-    /// Apply filter results (matching paths) to the tree browser.
-    ///
-    /// Call with paths computed via the cache thread. If empty, the
-    /// filter is not applied (existing view retained).
-    pub fn apply_filter_results(&mut self, matching_paths: Vec<PathBuf>) {
-        if matching_paths.is_empty() {
-            return;
-        }
-
-        // Build set of matching paths plus all ancestor directories
-        let mut all_paths: HashSet<PathBuf> = HashSet::new();
-        let root = self.navigator.root_path().clone();
-
-        for path in &matching_paths {
-            all_paths.insert(path.clone());
-
-            // Add all ancestor directories up to (but not including) root
-            let mut current = path.parent();
-            while let Some(parent) = current {
-                if parent == root {
-                    break;
-                }
-                all_paths.insert(parent.to_path_buf());
-                current = parent.parent();
-            }
-        }
-
-        // Apply filter to navigator
-        self.navigator.set_path_filter(all_paths);
-    }
-
-    /// Clear any active filter, restoring full tree view.
-    pub fn clear_filter(&mut self) {
-        self.navigator.clear_path_filter();
-    }
-
     /// Get the path of the currently selected entry (if any).
     pub fn selected_path(&self) -> Option<&std::path::Path> {
         self.navigator.current_entry().map(|e| e.path.as_path())

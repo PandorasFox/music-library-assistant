@@ -5,8 +5,7 @@ use crate::ui::input::InputAction;
 
 use crate::meta::views::{BucketedOobFile, ConflictBucket, TagMismatchEntry};
 use crate::ui::bulk_selection::BulkSelectionState;
-use crate::ui::filter_popup::FilterCondition;
-use crate::ui::widgets::{ButtonRects, FocusPane};
+use crate::ui::widgets::{ButtonRects, FocusPane, TextInputState};
 
 // ============================================================================
 // Resolution Button
@@ -39,8 +38,12 @@ pub struct BucketFileState {
     pub scroll: usize,
     /// Per-bucket selection state
     pub selection: BulkSelectionState,
-    /// Per-bucket filter condition
-    pub filter: Option<FilterCondition>,
+    /// Inline text filter input
+    pub filter_input: TextInputState,
+    /// Whether the inline filter bar is actively accepting input
+    pub filter_active: bool,
+    /// Active filter text (applied on Enter)
+    pub filter_text: Option<String>,
     /// Per-bucket filtered indices (cached)
     pub filtered_indices: Option<Vec<usize>>,
 }
@@ -56,7 +59,9 @@ impl BucketFileState {
             cursor: 0,
             scroll: 0,
             selection,
-            filter: None,
+            filter_input: TextInputState::new(),
+            filter_active: false,
+            filter_text: None,
             filtered_indices: None,
         }
     }
@@ -74,24 +79,33 @@ impl BucketFileState {
         }
     }
 
-    /// Apply a filter condition and compute filtered indices.
-    pub fn apply_filter(&mut self, condition: FilterCondition) {
-        if condition.is_active() {
-            // For now, accept all (bucket files don't have full metadata)
-            // TODO: Add full metadata filtering when track info is available
-            let indices: Vec<usize> = (0..self.files.len()).collect();
-            self.filtered_indices = Some(indices);
-            self.filter = Some(condition);
+    /// Apply the current filter input text as a path substring filter.
+    pub fn apply_filter(&mut self) {
+        let query = self.filter_input.value().trim().to_lowercase();
+        if query.is_empty() {
+            self.clear_filter();
         } else {
-            self.filter = None;
-            self.filtered_indices = None;
+            let indices: Vec<usize> = self
+                .files
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.path.to_lowercase().contains(&query))
+                .map(|(idx, _)| idx)
+                .collect();
+            self.filtered_indices = Some(indices);
+            self.filter_text = Some(query);
         }
+        self.filter_active = false;
+        self.filter_input.focused = false;
     }
 
     /// Clear the current filter.
     pub fn clear_filter(&mut self) {
-        self.filter = None;
+        self.filter_text = None;
         self.filtered_indices = None;
+        self.filter_active = false;
+        self.filter_input.focused = false;
+        self.filter_input.clear();
     }
 
     fn navigate_up(&mut self) -> bool {
@@ -140,8 +154,6 @@ pub enum OobConflictAction {
     Acknowledge,
     /// Close inspector and return to Insights
     Cancel,
-    /// Open filter popup (Ctrl+/)
-    OpenFilter,
 }
 
 // ============================================================================
@@ -227,16 +239,6 @@ impl OobConflictState {
         self.bucket_counts.iter().sum()
     }
 
-    /// Apply a filter condition to the active bucket.
-    pub fn apply_filter(&mut self, condition: FilterCondition) {
-        self.active_bucket_state_mut().apply_filter(condition);
-    }
-
-    /// Clear the filter from the active bucket.
-    pub fn clear_filter(&mut self) {
-        self.active_bucket_state_mut().clear_filter();
-    }
-
     /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
     pub fn handle_click(
         &mut self,
@@ -265,6 +267,25 @@ impl OobConflictState {
     }
 
     pub fn handle_input(&mut self, action: &InputAction) -> OobConflictAction {
+        // Inline filter bar captures all input when active
+        let bucket = self.active_bucket_state_mut();
+        if bucket.filter_active {
+            match action {
+                InputAction::Confirm => {
+                    bucket.apply_filter();
+                    return OobConflictAction::None;
+                }
+                InputAction::Cancel => {
+                    bucket.clear_filter();
+                    return OobConflictAction::None;
+                }
+                other => {
+                    bucket.filter_input.handle_input(other);
+                    return OobConflictAction::None;
+                }
+            }
+        }
+
         match action {
             // Shift+Up / Shift+Down: cycle focus pane
             InputAction::FocusUp => {
@@ -284,8 +305,13 @@ impl OobConflictState {
                 OobConflictAction::None
             }
 
-            // Ctrl+/: open filter popup
-            InputAction::OpenFilter => OobConflictAction::OpenFilter,
+            // Ctrl+/: activate inline filter on active bucket
+            InputAction::OpenFilter => {
+                let bucket = self.active_bucket_state_mut();
+                bucket.filter_active = true;
+                bucket.filter_input.focused = true;
+                OobConflictAction::None
+            }
 
             // Space: toggle selection on current file in active bucket
             InputAction::Toggle => {

@@ -143,6 +143,89 @@ impl TreeNavigator {
             .map(|paths| paths.iter().filter(|p| p.is_file()).count())
     }
 
+    /// Apply a text substring filter: walk the filesystem under root, collect
+    /// all paths whose full path contains the query (case-insensitive), plus
+    /// their ancestor directories, then set the path filter.
+    pub fn apply_text_filter(&mut self, query: &str) {
+        let mut matching_files = Vec::new();
+        Self::walk_filter_recursive(
+            &self.root_path,
+            query,
+            &self.filter,
+            &mut matching_files,
+        );
+
+        if matching_files.is_empty() {
+            // No matches — clear any existing filter, keep full tree
+            self.clear_path_filter();
+            return;
+        }
+
+        let mut all_paths: HashSet<PathBuf> = HashSet::new();
+        let root = self.root_path.clone();
+        for path in &matching_files {
+            all_paths.insert(path.clone());
+            // Add all ancestor directories up to root
+            let mut current = path.parent();
+            while let Some(parent) = current {
+                if parent == root {
+                    break;
+                }
+                all_paths.insert(parent.to_path_buf());
+                current = parent.parent();
+            }
+        }
+
+        self.set_path_filter(all_paths);
+    }
+
+    /// Walk the filesystem recursively, collecting paths whose full path
+    /// contains the query substring (case-insensitive).
+    fn walk_filter_recursive(
+        dir: &Path,
+        query: &str,
+        filter: &EntryFilter,
+        matches: &mut Vec<PathBuf>,
+    ) {
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            // Skip hidden
+            if !filter.include_hidden && name.starts_with('.') {
+                continue;
+            }
+
+            if path.is_dir() {
+                // Check directory name for match
+                if name.to_lowercase().contains(query) {
+                    matches.push(path.clone());
+                }
+                Self::walk_filter_recursive(&path, query, filter, matches);
+            } else {
+                // Check if this file type is included
+                let ext = path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                let is_audio = AUDIO_EXTENSIONS.contains(&ext.as_str());
+                let is_image = IMAGE_EXTENSIONS.contains(&ext.as_str());
+                let included = (filter.include_files && is_audio)
+                    || (filter.include_images && is_image);
+                if included && path.to_string_lossy().to_lowercase().contains(query) {
+                    matches.push(path);
+                }
+            }
+        }
+    }
+
     /// Load initial entries based on configuration.
     fn load_initial(&mut self) {
         self.entries.clear();

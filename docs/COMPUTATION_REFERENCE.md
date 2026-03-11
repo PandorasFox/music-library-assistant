@@ -122,8 +122,8 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
 | ScheduleSecondLevelDerivations | WalkLibrary × N | MissingDirectory | MissingDirectory (if dir exists again) |
-| DeriveCorpusSignals | — | UnindexedFile, MissingFile, HealthyFile | UnindexedFile, MissingFile, HealthyFile (stale); skips HealthyFile for OOB-flagged files. **GC backstop**: clears orphaned signals for inodes not in disk ∪ index. Receives observed inodes from the Witch (accumulated from ScanCorpusDirectory results). |
-| DeriveInboxSignals | — | InboxUnindexed, InboxHealthy | InboxUnindexed (stale). **Cascade-drop**: for indexed inbox inodes no longer on disk, drops all inbox state via DropInboxFileState (inbox_tags, files zone='inbox', FileInInbox, InboxUnindexed, InboxHealthy, InboxCorpusMatch, MovedFile). Disk presence is sole authority — GC backstop uses disk_set only (not disk ∪ indexed). Receives observed inodes from the Witch (accumulated from ScanCorpusDirectory results). |
+| DeriveCorpusSignals | — | UnindexedFile, MissingFile, HealthyFile, MovedFile | UnindexedFile, MissingFile, HealthyFile (stale); skips HealthyFile for OOB-flagged files. **Move detection**: same-zone (disk path ≠ indexed path in `both` set) and cross-zone (inode in `disk_only` indexed in different zone). **GC backstop**: clears orphaned signals for inodes not in disk ∪ index. Receives observed inodes from the Witch (accumulated from FS watcher). |
+| DeriveInboxSignals | — | InboxUnindexed, InboxHealthy, MovedFile | InboxUnindexed (stale). **Move detection**: same as DeriveCorpusSignals. **Cascade-drop**: for indexed inbox inodes no longer on disk, drops all inbox state via DropInboxFileState (inbox_tags, files zone='inbox', FileInInbox, InboxUnindexed, InboxHealthy, InboxCorpusMatch, MovedFile). Disk presence is sole authority — GC backstop uses disk_set only (not disk ∪ indexed). Receives observed inodes from the Witch (accumulated from FS watcher). |
 | UpdateCorpusFileSignals | — | FileInCorpus, UnindexedFile, MissingFile, HealthyFile | FileInCorpus, UnindexedFile, MissingFile, HealthyFile |
 | UpdateLibraryFileSignals | — | — | LibraryLeftover, LibraryStale |
 | UpdateDeploySignals | — | DeployedHealthy | DeployReady, LibraryLeftover, LibraryStale |
@@ -135,7 +135,7 @@ This follows the same pattern as `pending_mutation_phases` (used for two-stage d
 
 | Computation | Spawns | Signals Emitted | Signals Cleared |
 |-------------|--------|-----------------|-----------------|
-| ScheduleContentAnalysis | All detection computations (except fingerprint-dependent: AnalyzeFingerprintOverlaps and DetectCrossSourceOverlaps are deferred phases of DetectFingerprintOverlaps), IndexImageFile (FILES scope) | — | — |
+| ScheduleContentAnalysis | All detection computations (except fingerprint-dependent: AnalyzeFingerprintOverlaps and DetectCrossSourceOverlaps are deferred phases of DetectFingerprintOverlaps) | — | — |
 | DetectFingerprintOverlaps | Defers AnalyzeFingerprintOverlaps + DetectCrossSourceOverlaps (DependentAnalysis pipeline barrier) | FingerprintOverlap | FingerprintOverlap (stale) |
 | DetectDuplicateInodes | — | DuplicateInode | DuplicateInode (stale) |
 | DetectMissingTags | — | MissingTag, MissingAlbumSingleSignal | MissingTag (via hash-based reconciliation), MissingAlbumSingleSignal (via hash-based reconciliation). Files with ALBUM missing but ARTIST+TITLE present are routed to MissingAlbumSingleSignal (keyed by lowercased artist) instead of MissingTag. Checks ExpectedMissingTag to suppress known-acceptable missing-album inodes |

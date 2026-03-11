@@ -264,12 +264,38 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
     // Emit unindexed signals for audio files on disk but not indexed.
     // Image files in disk_only are expected — they get indexed separately
     // by IndexObservedImages, not through the audio indexing pipeline.
+    //
+    // Cross-zone move detection: if the inode is indexed in a different zone,
+    // emit MovedFileSignal to inform the operator.
     // ========================================================================
+    let mut moved = 0usize;
     for inode in &disk_only {
         if let Some(path) = disk_inodes.get(inode) {
             if is_image_file(Path::new(path)) {
                 continue;
             }
+
+            // Check if this inode is indexed in a different zone (cross-zone move)
+            if let Ok(Some((old_zone_str, old_path))) =
+                read_only_db.get_file_zone_and_path_by_inode(*inode)
+            {
+                if old_zone_str != zone {
+                    ensure_typed_signal(
+                        read_only_db,
+                        sender,
+                        TypedSignalWrite::MovedFile(MovedFileSignal {
+                            inode: *inode,
+                            path: path.clone(),
+                            old_path,
+                            old_zone: old_zone_str,
+                            new_zone: zone.to_string(),
+                        }),
+                        witness,
+                    );
+                    moved += 1;
+                }
+            }
+
             ensure_typed_signal(
                 read_only_db,
                 sender,
@@ -290,11 +316,37 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
 
     // ========================================================================
     // Reconcile files present on both disk and index (zone-specific)
+    //
+    // Same-zone move detection: if disk path differs from indexed path,
+    // the file was renamed/moved within the zone.
     // ========================================================================
     for inode in &both {
-        let path = disk_inodes.get(inode).or_else(|| indexed_inodes.get(inode));
-        let path_str = path.map(|p| p.as_str()).unwrap_or("");
-        Z::on_file_present(*inode, path_str, read_only_db, sender, witness);
+        let disk_path = disk_inodes.get(inode).map(|p| p.as_str()).unwrap_or("");
+        let indexed_path = indexed_inodes.get(inode).map(|p| p.as_str()).unwrap_or("");
+
+        if !disk_path.is_empty() && !indexed_path.is_empty() && disk_path != indexed_path {
+            ensure_typed_signal(
+                read_only_db,
+                sender,
+                TypedSignalWrite::MovedFile(MovedFileSignal {
+                    inode: *inode,
+                    path: disk_path.to_string(),
+                    old_path: indexed_path.to_string(),
+                    old_zone: zone.to_string(),
+                    new_zone: zone.to_string(),
+                }),
+                witness,
+            );
+            moved += 1;
+        }
+
+        Z::on_file_present(*inode, disk_path, read_only_db, sender, witness);
+    }
+
+    if moved > 0 {
+        log_general(format!(
+            "[COMPUTE] Derive({zone}): detected {moved} moved file(s)"
+        ));
     }
 
     log_general(format!(

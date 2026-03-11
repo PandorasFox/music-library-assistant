@@ -32,6 +32,18 @@ use crate::db::types::Zone;
 // Public Types
 // ============================================================================
 
+/// A file observed on disk during initial scan or steady-state monitoring.
+///
+/// Carries FS-level metadata only (stat data). The watcher never reads file
+/// content — semantic analysis (tags, audio info) happens in computations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservedFile {
+    pub path: String, // relative to zone root
+    pub mtime_secs: i64,
+    pub mtime_nanos: i64,
+    pub file_size: i64,
+}
+
 /// Image file observed on disk by the watcher thread.
 ///
 /// Contains only FS-level data (no file content reads). Format, dimensions,
@@ -60,10 +72,10 @@ pub(super) enum WatcherCommand {
 /// Message from watcher thread to Witch.
 #[derive(Debug)]
 pub(super) enum WatcherMessage {
-    /// Initial scan complete for one zone. Full inode→(path, mtime_s, mtime_ns, size) map.
+    /// Initial scan complete for one zone. Full inode→ObservedFile map.
     InitialScanComplete {
         zone: Zone,
-        inodes: HashMap<i64, (String, i64, i64, i64)>,
+        inodes: HashMap<i64, ObservedFile>,
     },
     /// All zones' initial scans done.
     AllInitialScansComplete,
@@ -293,26 +305,26 @@ fn run_scan_and_monitor(
 
         // Populate zone state and send image metadata for image files
         let mut image_count = 0;
-        for (inode, (rel_path, mtime_s, mtime_ns, size)) in &raw_inodes {
+        for (inode, observed) in &raw_inodes {
             zone_state.insert(
                 *inode,
-                rel_path.clone(),
+                observed.path.clone(),
                 CachedFileState {
-                    mtime_secs: *mtime_s,
-                    mtime_nanos: *mtime_ns,
-                    file_size: *size,
+                    mtime_secs: observed.mtime_secs,
+                    mtime_nanos: observed.mtime_nanos,
+                    file_size: observed.file_size,
                 },
             );
 
             // For image files, report to Witch (no content reads — just FS-level data)
-            if crate::meta::computations::helpers::is_image_file_ext_from_path(rel_path) {
+            if crate::meta::computations::helpers::is_image_file_ext_from_path(&observed.path) {
                 let _ = message_tx.send(WatcherMessage::ImageFileObserved(ObservedImage {
                     zone: *zone,
                     inode: *inode,
-                    path: rel_path.clone(),
-                    mtime_secs: *mtime_s,
-                    mtime_nanos: *mtime_ns,
-                    file_size: *size,
+                    path: observed.path.clone(),
+                    mtime_secs: observed.mtime_secs,
+                    mtime_nanos: observed.mtime_nanos,
+                    file_size: observed.file_size,
                 }));
                 image_count += 1;
             }
@@ -397,14 +409,14 @@ fn run_scan_and_monitor(
                     let mut zone_state = ZoneState::new(*zone, root.clone());
                     let raw_inodes = walk_zone_root(root);
 
-                    for (inode, (rel_path, mtime_s, mtime_ns, size)) in &raw_inodes {
+                    for (inode, observed) in &raw_inodes {
                         zone_state.insert(
                             *inode,
-                            rel_path.clone(),
+                            observed.path.clone(),
                             CachedFileState {
-                                mtime_secs: *mtime_s,
-                                mtime_nanos: *mtime_ns,
-                                file_size: *size,
+                                mtime_secs: observed.mtime_secs,
+                                mtime_nanos: observed.mtime_nanos,
+                                file_size: observed.file_size,
                             },
                         );
                     }
@@ -717,14 +729,14 @@ fn handle_notify_error(
             zs.files.clear();
             zs.path_to_inode.clear();
 
-            for (inode, (rel_path, mtime_s, mtime_ns, size)) in &raw_inodes {
+            for (inode, observed) in &raw_inodes {
                 zs.insert(
                     *inode,
-                    rel_path.clone(),
+                    observed.path.clone(),
                     CachedFileState {
-                        mtime_secs: *mtime_s,
-                        mtime_nanos: *mtime_ns,
-                        file_size: *size,
+                        mtime_secs: observed.mtime_secs,
+                        mtime_nanos: observed.mtime_nanos,
+                        file_size: observed.file_size,
                     },
                 );
             }
@@ -791,10 +803,8 @@ fn maybe_send_image_observed(
 // Directory Walking
 // ============================================================================
 
-/// Walk a zone root and collect all audio files with metadata.
-///
-/// Returns inode → (relative_path, mtime_secs, mtime_nanos, file_size).
-fn walk_zone_root(root: &Path) -> HashMap<i64, (String, i64, i64, i64)> {
+/// Walk a zone root and collect all tracked files (audio + images) with metadata.
+fn walk_zone_root(root: &Path) -> HashMap<i64, ObservedFile> {
     let mut result = HashMap::new();
 
     // Enumerate all directories (including root itself)
@@ -877,7 +887,7 @@ fn enumerate_directories_recursive(
 /// Collect tracked files (audio + images) from a single directory into the result map.
 ///
 /// Paths are stored relative to `root`.
-fn collect_tracked_files(dir: &Path, root: &Path, result: &mut HashMap<i64, (String, i64, i64, i64)>) {
+fn collect_tracked_files(dir: &Path, root: &Path, result: &mut HashMap<i64, ObservedFile>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -903,7 +913,12 @@ fn collect_tracked_files(dir: &Path, root: &Path, result: &mut HashMap<i64, (Str
                     .to_string_lossy()
                     .to_string();
 
-                result.insert(inode, (relative, mtime_secs, mtime_nanos, file_size));
+                result.insert(inode, ObservedFile {
+                    path: relative,
+                    mtime_secs,
+                    mtime_nanos,
+                    file_size,
+                });
             }
         }
     }

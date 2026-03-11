@@ -100,6 +100,64 @@ fn check_mount_violation() -> Option<&'static str> {
 }
 
 // ============================================================================
+// Zone-Keyed Observation State
+// ============================================================================
+
+/// Authoritative inode→path maps for watched zones (corpus + inbox).
+///
+/// Library files are tracked separately via `observed_library_files` and
+/// `ScanLibraryDirectory` — library has no watcher integration because
+/// library files are deployment targets, not source material.
+///
+/// The watcher thread populates these maps during initial scan and updates
+/// them incrementally via steady-state events. Derivation computations
+/// receive cloned snapshots.
+struct ObservedInodes {
+    corpus: HashMap<i64, String>,
+    inbox: HashMap<i64, String>,
+}
+
+impl ObservedInodes {
+    fn new() -> Self {
+        Self {
+            corpus: HashMap::new(),
+            inbox: HashMap::new(),
+        }
+    }
+
+    /// Runtime zone dispatch — returns the inode map for corpus/inbox,
+    /// `None` for library (library has no watcher-driven observation).
+    fn for_zone_mut(&mut self, zone: crate::db::types::Zone) -> Option<&mut HashMap<i64, String>> {
+        match zone {
+            crate::db::types::Zone::Corpus => Some(&mut self.corpus),
+            crate::db::types::Zone::Inbox => Some(&mut self.inbox),
+            crate::db::types::Zone::Library => None,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.corpus.clear();
+        self.inbox.clear();
+    }
+}
+
+/// Build the zone→root list for watcher start commands.
+///
+/// Always includes corpus. Includes inbox if its directory exists on disk.
+/// Library is excluded — library observation uses ScanLibraryDirectory.
+fn watched_zones() -> Vec<(crate::db::types::Zone, std::path::PathBuf)> {
+    let resolver = crate::corpus::paths::get_resolver();
+    let mut zones = vec![(crate::db::types::Zone::Corpus, resolver.corpus_dir())];
+
+    let inbox_dir = resolver.inbox_dir();
+    if inbox_dir.is_dir() {
+        zones.push((crate::db::types::Zone::Inbox, inbox_dir));
+    }
+
+    zones
+}
+
+// ============================================================================
 // The Witch
 // ============================================================================
 
@@ -185,14 +243,10 @@ pub struct Witch {
     /// Used by the insights view to hide entries already handled.
     handled_sources: std::collections::HashSet<crate::meta::decisions::DecisionKeyKind>,
 
-    /// Authoritative set of corpus inodes observed on disk.
+    /// Authoritative inode→path maps for watched zones (corpus + inbox).
     /// Populated by watcher initial scan, updated incrementally by steady-state events.
     /// Cloned (not taken) when queuing derivation computations.
-    observed_corpus_inodes: HashMap<i64, String>,
-    /// Authoritative set of inbox inodes observed on disk.
-    /// Populated by watcher initial scan, updated incrementally by steady-state events.
-    /// Cloned (not taken) when queuing derivation computations.
-    observed_inbox_inodes: HashMap<i64, String>,
+    observed_inodes: ObservedInodes,
 
     /// Library files observed on disk during the current awakening cycle.
     /// Accumulated from ScanLibraryDirectory results in tick().
@@ -334,8 +388,7 @@ impl Witch {
             cache_thread_handle: cache_witch_handle,
             notice_tx,
             handled_sources: std::collections::HashSet::new(),
-            observed_corpus_inodes: HashMap::new(),
-            observed_inbox_inodes: HashMap::new(),
+            observed_inodes: ObservedInodes::new(),
             observed_library_files: Vec::new(),
             library_reconciliation_done: false,
             log_thread_handle,
@@ -465,23 +518,13 @@ impl Witch {
             return false;
         }
 
-        let resolver = crate::corpus::paths::get_resolver();
-
-        let mut zones = vec![(crate::db::types::Zone::Corpus, resolver.corpus_dir())];
-
-        let inbox_dir = resolver.inbox_dir();
-        if inbox_dir.is_dir() {
-            zones.push((crate::db::types::Zone::Inbox, inbox_dir));
-        }
-
         // Clear accumulated observation state before fresh scan
-        self.observed_corpus_inodes.clear();
-        self.observed_inbox_inodes.clear();
+        self.observed_inodes.clear();
         self.observed_library_files.clear();
         self.library_reconciliation_done = false;
 
         self.watcher_state = WatcherState::InitialScan;
-        self.fs_watcher.start(zones);
+        self.fs_watcher.start(watched_zones());
 
         crate::logging::log_general("[WITCH] Watcher started — initial scan in progress");
         true
@@ -895,8 +938,8 @@ impl Witch {
         // Clone maps rather than take — the observed inode sets must persist for
         // steady-state watcher events to incrementally update them. Derivation
         // gets a snapshot; the Witch keeps the authoritative live set.
-        let observed_corpus = self.observed_corpus_inodes.clone();
-        let observed_inbox = self.observed_inbox_inodes.clone();
+        let observed_corpus = self.observed_inodes.corpus.clone();
+        let observed_inbox = self.observed_inodes.inbox.clone();
 
         let label = if include_second_level { "Awakening" } else { "idle rescan awakening" };
         crate::logging::log_general(format!(
@@ -976,18 +1019,9 @@ impl Witch {
         self.idle_since = None;
         self.watcher_state = WatcherState::InitialScan;
 
-        // Request watcher re-scan (corpus + inbox only, no legacy)
-        let resolver = crate::corpus::paths::get_resolver();
-        let mut zones = vec![(crate::db::types::Zone::Corpus, resolver.corpus_dir())];
-        let inbox_dir = resolver.inbox_dir();
-        if inbox_dir.is_dir() {
-            zones.push((crate::db::types::Zone::Inbox, inbox_dir));
-        }
+        self.observed_inodes.clear();
 
-        self.observed_corpus_inodes.clear();
-        self.observed_inbox_inodes.clear();
-
-        self.fs_watcher.start(zones);
+        self.fs_watcher.start(watched_zones());
     }
 
     // =========================================================================
@@ -1053,7 +1087,7 @@ impl Witch {
             match msg {
                 fs_watcher::WatcherMessage::InitialScanComplete { zone, inodes } => {
                     crate::logging::log_general(format!(
-                        "[WITCH] Watcher initial scan complete for {:?}: {} inodes",
+                        "[WITCH] Watcher initial scan complete for {}: {} inodes",
                         zone,
                         inodes.len()
                     ));
@@ -1062,32 +1096,20 @@ impl Witch {
                     // Watcher paths are zone-relative (e.g. "digital/releases/...").
                     // DB paths are archive-root-relative (e.g. "corpus/digital/releases/...").
                     // Prepend zone name to match DB convention.
-                    let zone_prefix = zone.as_str();
-                    match zone {
-                        crate::db::types::Zone::Corpus => {
-                            for (inode, (path, _mtime_s, _mtime_ns, _size)) in inodes {
-                                self.observed_corpus_inodes.insert(inode, format!("{}/{}", zone_prefix, path));
-                            }
-                        }
-                        crate::db::types::Zone::Inbox => {
-                            for (inode, (path, _mtime_s, _mtime_ns, _size)) in inodes {
-                                self.observed_inbox_inodes.insert(inode, format!("{}/{}", zone_prefix, path));
-                            }
-                        }
-                        crate::db::types::Zone::Library => {
-                            // Library files handled separately via ScanLibraryDirectory
-                            crate::logging::log_general(
-                                "[WITCH] Library zone scan from watcher — ignoring (handled separately)"
-                            );
+                    if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
+                        let zone_prefix = zone.as_str();
+                        for (inode, observed) in inodes {
+                            map.insert(inode, format!("{}/{}", zone_prefix, observed.path));
                         }
                     }
+                    // Library files handled separately via ScanLibraryDirectory
                 }
                 fs_watcher::WatcherMessage::AllInitialScansComplete => {
                     crate::logging::log_general(format!(
                         "[WITCH] All watcher initial scans complete. \
                          Corpus: {} inodes, Inbox: {} inodes",
-                        self.observed_corpus_inodes.len(),
-                        self.observed_inbox_inodes.len()
+                        self.observed_inodes.corpus.len(),
+                        self.observed_inodes.inbox.len()
                     ));
                     self.watcher_state = WatcherState::Watching;
 
@@ -1097,7 +1119,6 @@ impl Witch {
                     // computations drained.
                     match self.reasoning_level {
                         ReasoningLevel::None => {
-                            // First startup: None → Inodes, queue awakening
                             crate::logging::log_general(
                                 "[STATE] Watcher scan complete. Transitioning None -> Inodes."
                             );
@@ -1105,7 +1126,6 @@ impl Witch {
                             self.queue_awakening_computations(true);
                         }
                         ReasoningLevel::Inodes => {
-                            // Re-observation during Inodes: queue awakening
                             crate::logging::log_general(
                                 "[STATE] Re-observation complete during Inodes. Queueing derivations."
                             );
@@ -1113,13 +1133,11 @@ impl Witch {
                         }
                         ReasoningLevel::Full => {
                             if self.idle_rescan_active {
-                                // Idle rescan: lightweight awakening
                                 crate::logging::log_general(
                                     "[STATE] Idle rescan observation complete. Queueing lightweight signal derivation."
                                 );
                                 self.queue_awakening_computations(false);
                             } else {
-                                // Post-mutation re-observation: full awakening
                                 crate::logging::log_general(
                                     "[STATE] Re-observing complete while Full. Queueing awakening to sync signals."
                                 );
@@ -1135,28 +1153,23 @@ impl Witch {
                     // Phase 4: mtime/tags used for pending-write reconciliation
                 } => {
                     crate::logging::log_general(format!(
-                        "[WITCH] Watcher: file changed — zone={:?} inode={} path={:?}",
+                        "[WITCH] Watcher: file changed — zone={} inode={} path={:?}",
                         zone, inode, path
                     ));
 
                     // Update observed map with current path (may have been renamed)
-                    let rel_path = crate::corpus::paths::get_resolver()
-                        .to_relative(&path)
-                        .unwrap_or_else(|| path.clone())
-                        .to_string_lossy()
-                        .to_string();
-
-                    match zone {
-                        crate::db::types::Zone::Corpus => {
-                            self.observed_corpus_inodes.insert(inode, rel_path);
-                        }
-                        crate::db::types::Zone::Inbox => {
-                            self.observed_inbox_inodes.insert(inode, rel_path);
-                        }
-                        crate::db::types::Zone::Library => {}
+                    if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
+                        let rel_path = crate::corpus::paths::get_resolver()
+                            .to_relative(&path)
+                            .unwrap_or_else(|| path.clone())
+                            .to_string_lossy()
+                            .to_string();
+                        map.insert(inode, rel_path);
                     }
 
-                    // Queue per-inode tag verification (compares disk tags vs DB)
+                    // Queue per-inode tag verification (compares disk tags vs DB).
+                    // Only corpus files have tag verification — inbox files are
+                    // reconciled entirely through derivation.
                     if zone == crate::db::types::Zone::Corpus {
                         self.queue_computation_with_label(
                             Computation::Observation(
@@ -1165,7 +1178,6 @@ impl Witch {
                             Some("Verify tags (watcher)".to_string()),
                         );
                     }
-                    // Inbox files don't have tag verification — derivation handles them
                 }
                 fs_watcher::WatcherMessage::FileCreated {
                     zone, inode, path,
@@ -1173,24 +1185,17 @@ impl Witch {
                     // Phase 4: mtime/size used for files table update
                 } => {
                     crate::logging::log_general(format!(
-                        "[WITCH] Watcher: file created — zone={:?} inode={} path={:?}",
+                        "[WITCH] Watcher: file created — zone={} inode={} path={:?}",
                         zone, inode, path
                     ));
 
-                    let rel_path = crate::corpus::paths::get_resolver()
-                        .to_relative(&path)
-                        .unwrap_or_else(|| path.clone())
-                        .to_string_lossy()
-                        .to_string();
-
-                    match zone {
-                        crate::db::types::Zone::Corpus => {
-                            self.observed_corpus_inodes.insert(inode, rel_path);
-                        }
-                        crate::db::types::Zone::Inbox => {
-                            self.observed_inbox_inodes.insert(inode, rel_path);
-                        }
-                        crate::db::types::Zone::Library => {}
+                    if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
+                        let rel_path = crate::corpus::paths::get_resolver()
+                            .to_relative(&path)
+                            .unwrap_or_else(|| path.clone())
+                            .to_string_lossy()
+                            .to_string();
+                        map.insert(inode, rel_path);
                     }
 
                     // Derivation will detect this as disk-only and emit UnindexedFileSignal
@@ -1198,18 +1203,12 @@ impl Witch {
                 }
                 fs_watcher::WatcherMessage::FileRemoved { zone, inode, path } => {
                     crate::logging::log_general(format!(
-                        "[WITCH] Watcher: file removed — zone={:?} inode={} path={:?}",
+                        "[WITCH] Watcher: file removed — zone={} inode={} path={:?}",
                         zone, inode, path
                     ));
 
-                    match zone {
-                        crate::db::types::Zone::Corpus => {
-                            self.observed_corpus_inodes.remove(&inode);
-                        }
-                        crate::db::types::Zone::Inbox => {
-                            self.observed_inbox_inodes.remove(&inode);
-                        }
-                        crate::db::types::Zone::Library => {}
+                    if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
+                        map.remove(&inode);
                     }
 
                     // Derivation will detect this as index-only and emit MissingFileSignal
@@ -1225,8 +1224,7 @@ impl Witch {
                     crate::logging::log_general(
                         "[WITCH] Watcher requested rescan — clearing observed inodes for fresh accumulation"
                     );
-                    self.observed_corpus_inodes.clear();
-                    self.observed_inbox_inodes.clear();
+                    self.observed_inodes.clear();
                     self.watcher_state = WatcherState::InitialScan;
                 }
             }
@@ -1330,21 +1328,12 @@ impl Witch {
             "[STATE] Re-observation: requesting watcher re-scan for post-mutation re-awakening",
         );
 
-        let resolver = crate::corpus::paths::get_resolver();
-        let mut zones = vec![(crate::db::types::Zone::Corpus, resolver.corpus_dir())];
-
-        let inbox_dir = resolver.inbox_dir();
-        if inbox_dir.is_dir() {
-            zones.push((crate::db::types::Zone::Inbox, inbox_dir));
-        }
-
         // Clear accumulated observation state before fresh scan
-        self.observed_corpus_inodes.clear();
-        self.observed_inbox_inodes.clear();
+        self.observed_inodes.clear();
         self.observed_library_files.clear();
         self.library_reconciliation_done = false;
 
-        self.fs_watcher.start(zones);
+        self.fs_watcher.start(watched_zones());
     }
 
     /// Queue content analysis computations (internal only).

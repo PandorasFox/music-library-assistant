@@ -1,24 +1,33 @@
 //! History lateral view — browse tag edit sessions and reverse edits.
 //!
-//! Two-phase navigation:
-//! - **SessionList**: browse sessions from `tag_edit_history`, grouped by session_id
-//! - **SessionDetail**: expand a session to see individual edits, select for reversal
+//! Two-level StandardList navigation:
+//! - **Level 1 (SessionList)**: browse sessions, Z for summary popup, Enter to drill in
+//! - **Level 2 (SessionDetail)**: individual edits with multi-select, Z for diff pane,
+//!   Enter to initiate reversal
 //!
 //! Reversal generates standard `TagOp`s routed through the witnessed-decision pipeline.
 
 pub mod render;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
-use crate::ui::input::InputAction;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
 
 use crate::meta::views::{EditHistoryData, EditRecord, EditSessionSummary};
+use crate::ui::input::InputAction;
+use crate::ui::widgets::ListClickTargets;
+use crate::ui::widgets::rich_text::{RichBlock, RichSpan};
+use crate::ui::widgets::standard_list::{
+    ListEntry, ListInputResult, StandardListConfig, StandardListState,
+};
+use crate::ui::widgets::wizard::{WizardItem, WizardOffer};
 
 // ============================================================================
 // Actions
 // ============================================================================
 
-/// Actions produced by Phase 1 key dispatch.
+/// Actions produced by history view key dispatch.
 pub(crate) enum HistoryAction {
     None,
     /// Tab → next lateral view
@@ -54,6 +63,135 @@ pub(crate) enum HistoryAction {
 }
 
 // ============================================================================
+// List Entry Types
+// ============================================================================
+
+/// Level 1 list entry: an edit session.
+pub(crate) struct SessionListEntry {
+    pub summary: EditSessionSummary,
+}
+
+/// Action from confirming a session list entry.
+pub(crate) enum SessionAction {
+    Expand(String),
+}
+
+impl WizardItem for SessionListEntry {
+    fn wizard(&self, _width: u16) -> Option<WizardOffer> {
+        let s = &self.summary;
+        Some(WizardOffer::Popup(vec![
+            Line::styled(
+                crate::ui::helpers::truncate_right(&s.earliest_at, 19),
+                Style::default().fg(Color::Cyan),
+            ),
+            Line::styled(
+                format!(
+                    "{} edit{}, {} file{}",
+                    s.edit_count,
+                    if s.edit_count == 1 { "" } else { "s" },
+                    s.inode_count,
+                    if s.inode_count == 1 { "" } else { "s" },
+                ),
+                Style::default().fg(Color::White),
+            ),
+        ]))
+    }
+}
+
+impl ListEntry for SessionListEntry {
+    type Action = SessionAction;
+
+    fn on_confirm(&self, _selected: &BTreeSet<usize>) -> Option<SessionAction> {
+        Some(SessionAction::Expand(self.summary.session_id.clone()))
+    }
+}
+
+/// Level 2 list entry: an individual edit within a session.
+pub(crate) struct EditDetailEntry {
+    pub edit: EditRecord,
+    pub path: String,
+}
+
+/// Action from confirming in the edit detail list.
+pub(crate) enum EditDetailAction {
+    InitiateReversal,
+}
+
+impl WizardItem for EditDetailEntry {
+    fn wizard(&self, _width: u16) -> Option<WizardOffer> {
+        let e = &self.edit;
+        let old_val = e.old_value.as_deref().unwrap_or("∅");
+        let new_val = e.new_value.as_deref().unwrap_or("∅");
+
+        let headers = vec![
+            RichSpan::new(
+                "",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            RichSpan::new(
+                "",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+
+        let rows = vec![
+            vec![
+                vec![RichSpan::new("Field", Style::default().fg(Color::DarkGray))],
+                vec![RichSpan::new(
+                    &e.field_name,
+                    Style::default().fg(Color::Cyan),
+                )],
+            ],
+            vec![
+                vec![RichSpan::new("File", Style::default().fg(Color::DarkGray))],
+                vec![RichSpan::new(&self.path, Style::default().fg(Color::White))],
+            ],
+            vec![
+                vec![RichSpan::new("Old", Style::default().fg(Color::DarkGray))],
+                vec![RichSpan::new(old_val, Style::default().fg(Color::Red))],
+            ],
+            vec![
+                vec![RichSpan::new("New", Style::default().fg(Color::DarkGray))],
+                vec![RichSpan::new(new_val, Style::default().fg(Color::Green))],
+            ],
+            vec![
+                vec![RichSpan::new("Time", Style::default().fg(Color::DarkGray))],
+                vec![RichSpan::new(
+                    crate::ui::helpers::truncate_right(&e.edited_at, 19),
+                    Style::default().fg(Color::White),
+                )],
+            ],
+        ];
+
+        let title = format!("{} — {}", e.field_name, self.path);
+
+        Some(WizardOffer::Pane {
+            title,
+            content: vec![RichBlock::Table {
+                headers,
+                rows,
+                col_ratio: vec![20, 80],
+            }],
+        })
+    }
+}
+
+impl ListEntry for EditDetailEntry {
+    type Action = EditDetailAction;
+
+    fn on_confirm(&self, selected: &BTreeSet<usize>) -> Option<EditDetailAction> {
+        if selected.is_empty() {
+            return None;
+        }
+        Some(EditDetailAction::InitiateReversal)
+    }
+}
+
+// ============================================================================
 // State Types
 // ============================================================================
 
@@ -85,34 +223,26 @@ pub(crate) struct JettisonAllState {
     pub session_count: usize,
 }
 
-/// Main view state for the History lateral view.
-pub(crate) struct HistoryViewState {
-    /// Session list (from cache)
-    pub sessions: Vec<EditSessionSummary>,
-    /// Selected session index
-    pub cursor: usize,
-    pub scroll: usize,
-    /// Expanded session detail (loaded on-demand via one-shot query)
-    pub detail: Option<SessionDetail>,
-    /// Phase of the view
-    pub phase: HistoryPhase,
-    /// Click targets for the currently visible list (set during render).
-    pub click_targets: crate::ui::widgets::ListClickTargets,
-}
-
 /// Expanded detail of a single session.
-pub(crate) struct SessionDetail {
+pub(crate) struct EditDetailState {
     /// The session_id being viewed
     pub session_id: String,
-    /// All edits in the session
-    pub edits: Vec<EditRecord>,
-    /// Resolved paths for inodes (for display)
-    pub inode_paths: HashMap<i64, String>,
-    /// Which individual edits are selected for reversal (indices into edits)
-    pub selected: HashSet<usize>,
-    /// Cursor within the detail list
-    pub detail_cursor: usize,
-    pub detail_scroll: usize,
+    /// List entries for individual edits
+    pub entries: Vec<EditDetailEntry>,
+    /// StandardList state for detail navigation
+    pub detail_list: StandardListState,
+}
+
+/// Main view state for the History lateral view.
+pub(crate) struct HistoryViewState {
+    /// Session list entries
+    pub sessions: Vec<SessionListEntry>,
+    /// StandardList state for session navigation
+    pub session_list: StandardListState,
+    /// Expanded session detail (loaded on-demand via one-shot query)
+    pub detail: Option<EditDetailState>,
+    /// Phase of the view
+    pub phase: HistoryPhase,
 }
 
 /// State for conflict resolution before reversal.
@@ -121,6 +251,7 @@ pub(crate) struct ConflictResolutionState {
     pub conflicts: Vec<ConflictItem>,
     pub conflict_cursor: usize,
     pub conflict_scroll: usize,
+    pub click_targets: ListClickTargets,
 }
 
 /// An edit that can be cleanly reversed (current value matches what the edit set).
@@ -152,50 +283,46 @@ impl HistoryViewState {
     pub fn new() -> Self {
         Self {
             sessions: Vec::new(),
-            cursor: 0,
-            scroll: 0,
+            session_list: StandardListState::new(StandardListConfig::default()),
             detail: None,
             phase: HistoryPhase::SessionList,
-            click_targets: Default::default(),
         }
     }
 
-    /// Handle mouse click for cursor selection.
+    /// Handle mouse click (delegates to appropriate StandardList).
     pub fn handle_click(&mut self, x: u16, y: u16) {
-        if let Some(id) = self.click_targets.hit_test(x, y) {
-            if let Ok(idx) = id.parse::<usize>() {
-                match &mut self.phase {
-                    HistoryPhase::SessionList => {
-                        if idx < self.sessions.len() {
-                            self.cursor = idx;
-                        }
-                    }
-                    HistoryPhase::SessionDetail => {
-                        if let Some(ref mut detail) = self.detail {
-                            if idx < detail.edits.len() {
-                                detail.detail_cursor = idx;
-                            }
-                        }
-                    }
-                    HistoryPhase::ConflictResolution(ref mut cr) => {
+        match self.phase {
+            HistoryPhase::SessionList => {
+                self.session_list.handle_click(x, y, &self.sessions);
+            }
+            HistoryPhase::SessionDetail => {
+                if let Some(ref mut detail) = self.detail {
+                    detail.detail_list.handle_click(x, y, &detail.entries);
+                }
+            }
+            HistoryPhase::ConflictResolution(ref mut cr) => {
+                // Conflict resolution still uses bespoke click targets
+                if let Some(id) = cr.click_targets.hit_test(x, y) {
+                    if let Ok(idx) = id.parse::<usize>() {
                         if idx < cr.conflicts.len() {
                             cr.conflict_cursor = idx;
                         }
                     }
-                    _ => {}
                 }
             }
+            _ => {}
         }
     }
 
     /// Update cached session data from cache thread.
     pub fn update(&mut self, data: Option<EditHistoryData>) {
         if let Some(d) = data {
-            self.sessions = d.sessions;
-            // Clamp cursor
-            if !self.sessions.is_empty() && self.cursor >= self.sessions.len() {
-                self.cursor = self.sessions.len() - 1;
-            }
+            self.sessions = d
+                .sessions
+                .into_iter()
+                .map(|s| SessionListEntry { summary: s })
+                .collect();
+            self.session_list.clamp_cursor(&self.sessions);
         }
     }
 
@@ -206,15 +333,28 @@ impl HistoryViewState {
         edits: Vec<EditRecord>,
         inode_paths: HashMap<i64, String>,
     ) {
-        let edit_count = edits.len();
-        let all_selected: HashSet<usize> = (0..edit_count).collect();
-        self.detail = Some(SessionDetail {
+        let entries: Vec<EditDetailEntry> = edits
+            .into_iter()
+            .map(|edit| {
+                let path = inode_paths
+                    .get(&edit.inode)
+                    .cloned()
+                    .unwrap_or_else(|| "?".to_string());
+                EditDetailEntry { edit, path }
+            })
+            .collect();
+
+        let mut detail_list =
+            StandardListState::new(StandardListConfig { multi_select: true });
+        // Select all by default
+        for i in 0..entries.len() {
+            detail_list.selected.insert(i);
+        }
+
+        self.detail = Some(EditDetailState {
             session_id,
-            edits,
-            inode_paths,
-            selected: all_selected,
-            detail_cursor: 0,
-            detail_scroll: 0,
+            entries,
+            detail_list,
         });
         self.phase = HistoryPhase::SessionDetail;
     }
@@ -230,12 +370,13 @@ impl HistoryViewState {
             conflicts,
             conflict_cursor: 0,
             conflict_scroll: 0,
+            click_targets: Default::default(),
         });
     }
 }
 
 // ============================================================================
-// Key Handling (Phase 1)
+// Key Handling
 // ============================================================================
 
 impl HistoryViewState {
@@ -259,54 +400,36 @@ impl HistoryViewState {
     }
 
     fn handle_session_list_input(&mut self, action: &InputAction) -> HistoryAction {
-        match action {
-            InputAction::NavUp => {
-                if self.cursor > 0 {
-                    self.cursor -= 1;
-                }
+        match self.session_list.handle_input(action, &self.sessions) {
+            ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
                 HistoryAction::None
             }
-            InputAction::NavDown => {
-                if !self.sessions.is_empty() && self.cursor < self.sessions.len() - 1 {
-                    self.cursor += 1;
-                }
-                HistoryAction::None
+            ListInputResult::Confirm(SessionAction::Expand(session_id)) => {
+                HistoryAction::ExpandSession(session_id)
             }
-            InputAction::Home => {
-                self.cursor = 0;
-                HistoryAction::None
-            }
-            InputAction::End => {
-                if !self.sessions.is_empty() {
-                    self.cursor = self.sessions.len() - 1;
-                }
-                HistoryAction::None
-            }
-            InputAction::Confirm => {
-                if let Some(session) = self.sessions.get(self.cursor) {
-                    HistoryAction::ExpandSession(session.session_id.clone())
-                } else {
-                    HistoryAction::None
-                }
-            }
-            InputAction::Char('d') => {
-                if self.sessions.is_empty() {
-                    HistoryAction::None
-                } else {
-                    HistoryAction::JettisonSession
+            ListInputResult::Unhandled => {
+                // Handle actions StandardList doesn't know about
+                match action {
+                    InputAction::Char('d') => {
+                        if self.sessions.is_empty() {
+                            HistoryAction::None
+                        } else {
+                            HistoryAction::JettisonSession
+                        }
+                    }
+                    InputAction::Char('D') => {
+                        if self.sessions.is_empty() {
+                            HistoryAction::None
+                        } else {
+                            HistoryAction::JettisonAll
+                        }
+                    }
+                    InputAction::CycleNext => HistoryAction::CycleNext,
+                    InputAction::CyclePrev => HistoryAction::CyclePrev,
+                    InputAction::Cancel => HistoryAction::RequestQuit,
+                    _ => HistoryAction::None,
                 }
             }
-            InputAction::Char('D') => {
-                if self.sessions.is_empty() {
-                    HistoryAction::None
-                } else {
-                    HistoryAction::JettisonAll
-                }
-            }
-            InputAction::CycleNext => HistoryAction::CycleNext,
-            InputAction::CyclePrev => HistoryAction::CyclePrev,
-            InputAction::Cancel => HistoryAction::RequestQuit,
-            _ => HistoryAction::None,
         }
     }
 
@@ -316,55 +439,23 @@ impl HistoryViewState {
             None => return HistoryAction::CollapseDetail,
         };
 
-        match action {
-            InputAction::NavUp => {
-                if detail.detail_cursor > 0 {
-                    detail.detail_cursor -= 1;
-                }
+        match detail.detail_list.handle_input(action, &detail.entries) {
+            ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
                 HistoryAction::None
             }
-            InputAction::NavDown => {
-                if !detail.edits.is_empty() && detail.detail_cursor < detail.edits.len() - 1 {
-                    detail.detail_cursor += 1;
-                }
-                HistoryAction::None
+            ListInputResult::Confirm(EditDetailAction::InitiateReversal) => {
+                HistoryAction::InitiateReversal
             }
-            InputAction::Home => {
-                detail.detail_cursor = 0;
-                HistoryAction::None
-            }
-            InputAction::End => {
-                if !detail.edits.is_empty() {
-                    detail.detail_cursor = detail.edits.len() - 1;
-                }
-                HistoryAction::None
-            }
-            InputAction::Toggle => {
-                let idx = detail.detail_cursor;
-                if idx < detail.edits.len() {
-                    if detail.selected.contains(&idx) {
-                        detail.selected.remove(&idx);
-                    } else {
-                        detail.selected.insert(idx);
-                    }
-                }
-                HistoryAction::None
-            }
-            InputAction::Confirm => {
-                if detail.selected.is_empty() {
+            ListInputResult::Unhandled => match action {
+                InputAction::CycleNext => HistoryAction::CycleNext,
+                InputAction::CyclePrev => HistoryAction::CyclePrev,
+                InputAction::Cancel => {
+                    self.detail = None;
+                    self.phase = HistoryPhase::SessionList;
                     HistoryAction::None
-                } else {
-                    HistoryAction::InitiateReversal
                 }
-            }
-            InputAction::CycleNext => HistoryAction::CycleNext,
-            InputAction::CyclePrev => HistoryAction::CyclePrev,
-            InputAction::Cancel => {
-                self.detail = None;
-                self.phase = HistoryPhase::SessionList;
-                HistoryAction::None
-            }
-            _ => HistoryAction::None,
+                _ => HistoryAction::None,
+            },
         }
     }
 }

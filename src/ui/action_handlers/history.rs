@@ -129,11 +129,11 @@ impl App {
                 None => return,
             };
             let mut edits = Vec::new();
-            let mut indices: Vec<usize> = detail.selected.iter().copied().collect();
+            let mut indices: Vec<usize> = detail.detail_list.selected.iter().copied().collect();
             indices.sort();
             for idx in indices {
-                if let Some(edit) = detail.edits.get(idx) {
-                    edits.push(edit.clone());
+                if let Some(entry) = detail.entries.get(idx) {
+                    edits.push(entry.edit.clone());
                 }
             }
             edits
@@ -257,10 +257,13 @@ impl App {
     /// Enter confirm-jettison-session phase for the currently selected session.
     fn enter_jettison_session(&mut self) {
         let (session_id, edit_count) = match self.view {
-            ActiveView::History(ref state) => match state.sessions.get(state.cursor) {
-                Some(s) => (s.session_id.clone(), s.edit_count),
-                None => return,
-            },
+            ActiveView::History(ref state) => {
+                let cursor = state.session_list.cursor;
+                match state.sessions.get(cursor) {
+                    Some(entry) => (entry.summary.session_id.clone(), entry.summary.edit_count),
+                    None => return,
+                }
+            }
             _ => return,
         };
 
@@ -276,7 +279,7 @@ impl App {
     fn enter_jettison_all(&mut self) {
         let (total_records, session_count) = match self.view {
             ActiveView::History(ref state) => {
-                let total: usize = state.sessions.iter().map(|s| s.edit_count).sum();
+                let total: usize = state.sessions.iter().map(|e| e.summary.edit_count).sum();
                 (total, state.sessions.len())
             }
             _ => return,
@@ -310,10 +313,8 @@ impl App {
         self.finalize_jettison(rows, "Jettisoned", |sender| {
             sender.clear_tag_edit_history_session(&session_id);
         }, |state| {
-            state.sessions.retain(|s| s.session_id != session_id);
-            if !state.sessions.is_empty() && state.cursor >= state.sessions.len() {
-                state.cursor = state.sessions.len() - 1;
-            }
+            state.sessions.retain(|e| e.summary.session_id != session_id);
+            state.session_list.clamp_cursor(&state.sessions);
         });
     }
 
@@ -328,7 +329,7 @@ impl App {
             sender.clear_tag_edit_history();
         }, |state| {
             state.sessions.clear();
-            state.cursor = 0;
+            state.session_list.reset();
             state.detail = None;
         });
     }

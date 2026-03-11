@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
@@ -36,13 +36,13 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
         }
         HistoryPhase::SessionDetail => render_session_detail(f, area, state),
         HistoryPhase::ConflictResolution(ref mut cr) => {
-            render_conflict_resolution(f, area, &mut state.click_targets, cr)
+            render_conflict_resolution(f, area, cr)
         }
     }
 }
 
 // ============================================================================
-// Session List
+// Session List (Level 1 — StandardList)
 // ============================================================================
 
 fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
@@ -54,83 +54,37 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) 
         ])
         .split(area);
 
-    let block = Block::default()
-        .title(" Edit History — Sessions ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
-
-    let inner = block.inner(chunks[0]);
-    f.render_widget(block, chunks[0]);
-
     if state.sessions.is_empty() {
-        state.click_targets.clear();
+        let block = Block::default()
+            .title(" Edit History — Sessions ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let inner = block.inner(chunks[0]);
+        f.render_widget(block, chunks[0]);
         let empty = Paragraph::new(Line::from(Span::styled(
             "No edit history recorded.",
             Style::default().fg(Color::DarkGray),
         )));
         f.render_widget(empty, inner);
     } else {
-        let visible_height = inner.height as usize;
-        let scroll = crate::ui::helpers::clamp_scroll(state.cursor, state.scroll, visible_height);
-        state.click_targets.populate(inner, scroll, state.sessions.len());
-
-        let mut lines = Vec::new();
-        for (i, session) in state
-            .sessions
-            .iter()
-            .enumerate()
-            .skip(scroll)
-            .take(visible_height)
-        {
-            let is_selected = i == state.cursor;
-
-            let timestamp = truncate_right(&session.earliest_at, 19);
-            let label = if session.session_id.len() > 30 {
-                truncate_right(&session.session_id, 30)
-            } else {
-                session.session_id.clone()
-            };
-
-            let text = format!(
-                " {} │ {} │ {} edit{}, {} file{}",
-                timestamp,
-                label,
-                session.edit_count,
-                if session.edit_count == 1 { "" } else { "s" },
-                session.inode_count,
-                if session.inode_count == 1 { "" } else { "s" },
-            );
-
-            let style = if is_selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            lines.push(Line::from(Span::styled(text, style)));
-        }
-
-        let paragraph = Paragraph::new(lines);
-        f.render_widget(paragraph, inner);
-
-        // Scrollbar
-        if state.sessions.len() > visible_height {
-            let mut scrollbar_state =
-                ScrollbarState::new(state.sessions.len()).position(state.cursor);
-            f.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight),
-                chunks[0],
-                &mut scrollbar_state,
-            );
-        }
+        state.session_list.render(
+            f,
+            chunks[0],
+            &state.sessions,
+            |idx, is_cursor, _is_selected, _width| {
+                render_session_row(&state.sessions, idx, is_cursor)
+            },
+            "Edit History — Sessions",
+            true,
+        );
     }
 
     // Controls hint
     let hints = Line::from(vec![
         cc::nav(" ↑↓"),
         cc::text(" navigate  "),
+        cc::toggle("[Z]"),
+        cc::text(" info  "),
         cc::confirm("[Enter]"),
         cc::text(" expand  "),
         cc::action("[d]"),
@@ -143,13 +97,58 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) 
     f.render_widget(Paragraph::new(hints), chunks[1]);
 }
 
+fn render_session_row(
+    sessions: &[super::SessionListEntry],
+    idx: usize,
+    is_cursor: bool,
+) -> Line<'static> {
+    let Some(entry) = sessions.get(idx) else {
+        return Line::raw("");
+    };
+    let s = &entry.summary;
+
+    let prefix = if is_cursor { "\u{25b8} " } else { "  " };
+    let base_style = if is_cursor {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let timestamp = truncate_right(&s.earliest_at, 19);
+    let label = if s.session_id.len() > 30 {
+        truncate_right(&s.session_id, 30)
+    } else {
+        s.session_id.clone()
+    };
+
+    Line::from(vec![
+        Span::styled(prefix, base_style),
+        Span::styled(
+            format!("{} │ {}", timestamp, label),
+            base_style,
+        ),
+        Span::styled(
+            format!(
+                "  ({} edit{}, {} file{})",
+                s.edit_count,
+                if s.edit_count == 1 { "" } else { "s" },
+                s.inode_count,
+                if s.inode_count == 1 { "" } else { "s" },
+            ),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ])
+}
+
 // ============================================================================
-// Session Detail
+// Session Detail (Level 2 — StandardList with multi-select)
 // ============================================================================
 
 fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
     let detail = match state.detail {
-        Some(ref d) => d,
+        Some(ref mut d) => d,
         None => return,
     };
 
@@ -161,87 +160,27 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState
         ])
         .split(area);
 
-    let selected_count = detail.selected.len();
+    let selected_count = detail.detail_list.selected.len();
     let title = format!(
-        " Session: {} — {} edit{} ({} selected) ",
+        "Session: {} — {} edit{} ({} selected)",
         truncate_right(&detail.session_id, 30),
-        detail.edits.len(),
-        if detail.edits.len() == 1 { "" } else { "s" },
+        detail.entries.len(),
+        if detail.entries.len() == 1 { "" } else { "s" },
         selected_count,
     );
 
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
-
-    let inner = block.inner(chunks[0]);
-    f.render_widget(block, chunks[0]);
-
-    let visible_height = inner.height as usize;
-    let scroll = crate::ui::helpers::clamp_scroll(detail.detail_cursor, detail.detail_scroll, visible_height);
-
-    state.click_targets.populate(inner, scroll, detail.edits.len());
-
-    let mut lines = Vec::new();
-    for (i, edit) in detail
-        .edits
-        .iter()
-        .enumerate()
-        .skip(scroll)
-        .take(visible_height)
-    {
-        let is_cursor = i == detail.detail_cursor;
-        let is_selected = detail.selected.contains(&i);
-
-        let checkbox = if is_selected { "[x]" } else { "[ ]" };
-
-        let path = detail
-            .inode_paths
-            .get(&edit.inode)
-            .map(|s| s.as_str())
-            .unwrap_or("?");
-        let path_short = if path.len() > 25 {
-            truncate_right(path, 25)
-        } else {
-            path.to_string()
-        };
-
-        let old = edit.old_value.as_deref().unwrap_or("∅");
-        let new = edit.new_value.as_deref().unwrap_or("∅");
-        let time_short = truncate_right(&edit.edited_at, 19);
-
-        let text = format!(
-            " {} {} │ {} │ {} → {} │ {}",
-            checkbox, path_short, edit.field_name, old, new, time_short,
-        );
-
-        let style = if is_cursor {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else if is_selected {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        lines.push(Line::from(Span::styled(text, style)));
-    }
-
-    let paragraph = Paragraph::new(lines);
-    f.render_widget(paragraph, inner);
-
-    // Scrollbar
-    if detail.edits.len() > visible_height {
-        let mut scrollbar_state =
-            ScrollbarState::new(detail.edits.len()).position(detail.detail_cursor);
-        f.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight),
-            chunks[0],
-            &mut scrollbar_state,
-        );
-    }
+    // Borrow entries and list separately to avoid conflicting borrows
+    let entries = &detail.entries;
+    detail.detail_list.render(
+        f,
+        chunks[0],
+        entries,
+        |idx, is_cursor, is_selected, _width| {
+            render_edit_row(entries, idx, is_cursor, is_selected)
+        },
+        &title,
+        true,
+    );
 
     // Controls hint
     let hints = Line::from(vec![
@@ -249,6 +188,8 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState
         cc::text(" navigate  "),
         cc::toggle("[Space]"),
         cc::text(" toggle  "),
+        cc::toggle("[Z]"),
+        cc::text(" diff  "),
         cc::confirm("[Enter]"),
         cc::text(" reverse selected  "),
         cc::cancel("[Esc]"),
@@ -257,15 +198,58 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState
     f.render_widget(Paragraph::new(hints), chunks[1]);
 }
 
+fn render_edit_row(
+    entries: &[super::EditDetailEntry],
+    idx: usize,
+    is_cursor: bool,
+    is_selected: bool,
+) -> Line<'static> {
+    let Some(entry) = entries.get(idx) else {
+        return Line::raw("");
+    };
+
+    let checkbox = if is_selected { "[x]" } else { "[ ]" };
+    let prefix = if is_cursor { "\u{25b8}" } else { " " };
+
+    let path_short = if entry.path.len() > 25 {
+        truncate_right(&entry.path, 25)
+    } else {
+        entry.path.clone()
+    };
+
+    let old = entry.edit.old_value.as_deref().unwrap_or("∅");
+    let new = entry.edit.new_value.as_deref().unwrap_or("∅");
+
+    let cursor_style = if is_cursor {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else if is_selected {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    Line::from(vec![
+        Span::styled(format!("{} {} ", prefix, checkbox), cursor_style),
+        Span::styled(path_short, cursor_style),
+        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+        Span::styled(entry.edit.field_name.clone(), Style::default().fg(Color::Cyan)),
+        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+        Span::styled(old.to_string(), Style::default().fg(Color::Red)),
+        Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+        Span::styled(new.to_string(), Style::default().fg(Color::Green)),
+    ])
+}
+
 // ============================================================================
-// Conflict Resolution
+// Conflict Resolution (unchanged — bespoke for now)
 // ============================================================================
 
 fn render_conflict_resolution(
     f: &mut Frame,
     area: Rect,
-    click_targets: &mut crate::ui::widgets::ListClickTargets,
-    state: &super::ConflictResolutionState,
+    state: &mut super::ConflictResolutionState,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -310,7 +294,7 @@ fn render_conflict_resolution(
     f.render_widget(block, chunks[1]);
 
     if state.conflicts.is_empty() {
-        click_targets.clear();
+        state.click_targets.clear();
         let msg = Paragraph::new(Line::from(Span::styled(
             "No conflicts — all reversals are clean. Press Enter to confirm.",
             Style::default().fg(Color::Green),
@@ -320,7 +304,7 @@ fn render_conflict_resolution(
         let visible_height = inner.height as usize;
         let scroll = crate::ui::helpers::clamp_scroll(state.conflict_cursor, state.conflict_scroll, visible_height);
 
-        click_targets.populate(inner, scroll, state.conflicts.len());
+        state.click_targets.populate(inner, scroll, state.conflicts.len());
 
         let mut lines = Vec::new();
         for (i, conflict) in state
@@ -379,7 +363,7 @@ fn render_conflict_resolution(
 }
 
 // ============================================================================
-// Jettison Confirmation Modals
+// Jettison Confirmation Modals (unchanged)
 // ============================================================================
 
 fn render_confirm_jettison_session(f: &mut Frame, area: Rect, state: &JettisonSessionState) {
@@ -468,8 +452,3 @@ fn render_confirm_jettison_all_final(f: &mut Frame, area: Rect, state: &Jettison
         .hint("Enter jettison  •  Esc cancel")
         .render(f, area);
 }
-
-// ============================================================================
-// Helpers
-// ============================================================================
-

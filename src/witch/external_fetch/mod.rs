@@ -20,449 +20,30 @@
 //!
 //! Does NOT affect the Witch's work_state — She stays Idle while fetches run.
 
+mod handle;
+mod rate_limiter;
+mod types;
+
+// Re-export everything that was previously pub or pub(super)
+pub use handle::ExternalFetchHandle;
+pub use types::{
+    AcoustIdFetchTask, ExternalFetchTask, FetchOutcome, FetchProgress, MatchRow, MbEntityKind,
+    MbFetchTask, SourceProgress,
+};
+pub(super) use types::SchedulerMessage;
+
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::sync::mpsc::{Receiver, Sender};
+use std::thread;
+use std::time::Duration;
 
 use crate::config::SharedConfig;
 use crate::db::Database;
 use crate::meta::external::ExternalSource;
 
-// ============================================================================
-// Public Types
-// ============================================================================
-
-/// A single external API call to execute on rayon.
-#[derive(Debug, Clone)]
-pub enum ExternalFetchTask {
-    AcoustId(AcoustIdFetchTask),
-    MusicBrainz(MbFetchTask),
-}
-
-/// AcoustID fingerprint lookup task.
-#[derive(Debug, Clone)]
-pub struct AcoustIdFetchTask {
-    pub inode: i64,
-    pub fingerprint_raw: Vec<u32>,
-    pub fingerprint_blob: Vec<u8>,
-    pub duration_secs: u32,
-    pub api_key: String,
-}
-
-/// MusicBrainz entity fetch task.
-#[derive(Debug, Clone)]
-pub struct MbFetchTask {
-    pub kind: MbEntityKind,
-    pub mbid: String,
-    pub base_url: String,
-}
-
-impl ExternalFetchTask {
-    /// Human-readable label for status display.
-    pub fn label(&self) -> &str {
-        match self {
-            Self::AcoustId(_) => "AcoustID lookup",
-            Self::MusicBrainz(t) => match t.kind {
-                MbEntityKind::Recording => "MB recording fetch",
-                MbEntityKind::Artist => "MB artist fetch",
-                MbEntityKind::Release => "MB release fetch",
-            },
-        }
-    }
-}
-
-/// A match row to write to external_matches (recording MBID + confidence only).
-pub struct MatchRow {
-    pub recording_id: String,
-    pub confidence: f64,
-}
-
-impl std::fmt::Debug for MatchRow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MatchRow")
-            .field("recording_id", &self.recording_id)
-            .field("confidence", &self.confidence)
-            .finish()
-    }
-}
-
-/// Per-source progress snapshot.
-#[derive(Debug, Clone, Default)]
-pub struct SourceProgress {
-    pub total: usize,
-    pub processed: usize,
-    pub matched: usize,
-    pub no_match: usize,
-    pub retries: usize,
-}
-
-/// Combined progress for both sources.
-#[derive(Debug, Clone, Default)]
-pub struct FetchProgress {
-    pub acoustid: SourceProgress,
-    pub mb: SourceProgress,
-    /// Current effective AcoustID requests/sec (from rate limiter).
-    pub acoustid_rps: f32,
-    /// Current effective MB requests/sec (from adaptive rate limiter).
-    pub mb_rps: f32,
-}
-
-/// What kind of MusicBrainz entity to fetch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MbEntityKind {
-    Recording,
-    Artist,
-    Release,
-}
-
-impl MbEntityKind {
-    /// The entity_type string used in mb_known_entities table.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Recording => "recording",
-            Self::Artist => "artist",
-            Self::Release => "release",
-        }
-    }
-}
-
-// ============================================================================
-// Internal Types (Scheduler ↔ Witch)
-// ============================================================================
-
-/// Message from scheduler to Witch (tasks + status updates).
-pub(super) enum SchedulerMessage {
-    /// A task for the Witch to execute on rayon.
-    TaskRequest {
-        task: ExternalFetchTask,
-        label: String,
-    },
-    /// Intermediate progress snapshot.
-    Progress(FetchProgress),
-    /// One source's queue has drained.
-    SourceDone {
-        source: ExternalSource,
-        stats: SourceProgress,
-    },
-    /// Both sources done — scheduler going back to sleep.
-    AllDone,
-}
-
-/// Result of an external fetch task execution.
-///
-/// Used both as the rayon task result (carried in `TaskResult::fetch_result`)
-/// and as the outcome sent from Witch back to scheduler for chain-emit and
-/// progress tracking. DB writes already happened on the rayon thread.
-#[derive(Debug)]
-pub enum FetchOutcome {
-    AcoustIdMatch {
-        recordings: Vec<MatchRow>,
-    },
-    AcoustIdNoMatch,
-    AcoustIdRateLimited {
-        task: ExternalFetchTask,
-    },
-    AcoustIdError,
-    /// MB entity fetched successfully. `discovered_entities` carries newly
-    /// discovered artist/release IDs (from recording parsing) for the
-    /// scheduler to queue as follow-up fetches.
-    MbFound {
-        discovered_entities: Vec<(MbEntityKind, String)>,
-    },
-    MbNotFound,
-    MbRateLimited {
-        task: ExternalFetchTask,
-    },
-    MbError,
-}
-
-/// Command from Witch to scheduler.
-enum FetchCommand {
-    /// Scan eligible dirs for inodes needing AcoustID fingerprint lookup.
-    /// Also populates MB queue for existing matches needing enrichment.
-    Start { eligible_dirs: Vec<PathBuf> },
-    /// Shut down the scheduler thread.
-    Shutdown,
-}
-
-// ============================================================================
-// Rate Limiter
-// ============================================================================
-
-/// Per-source rate limiter with exponential backoff support.
-struct RateLimiter {
-    /// Minimum interval between requests.
-    base_interval: Duration,
-    /// Current backoff multiplier (1 = no backoff).
-    backoff_multiplier: u32,
-    /// When the last request was issued.
-    last_request_at: Option<Instant>,
-    /// Maximum backoff multiplier.
-    max_backoff: u32,
-}
-
-impl RateLimiter {
-    fn new_acoustid(requests_per_second: u32) -> Self {
-        Self {
-            base_interval: Duration::from_millis(1000 / requests_per_second.max(1) as u64),
-            backoff_multiplier: 1,
-            last_request_at: None,
-            max_backoff: 1, // AcoustID uses fixed 2s penalty, not exponential
-        }
-    }
-
-    /// Duration until this limiter is ready for another request.
-    /// Returns `Duration::ZERO` if ready now.
-    fn time_until_ready(&self) -> Duration {
-        match self.last_request_at {
-            None => Duration::ZERO,
-            Some(last) => {
-                let effective = self.base_interval * self.backoff_multiplier;
-                effective.saturating_sub(last.elapsed())
-            }
-        }
-    }
-
-    /// Mark that a request was just dispatched.
-    fn mark_request(&mut self) {
-        self.last_request_at = Some(Instant::now());
-    }
-
-    /// Double the backoff multiplier (capped at max_backoff).
-    fn apply_backoff(&mut self) {
-        self.backoff_multiplier = (self.backoff_multiplier * 2).min(self.max_backoff);
-    }
-
-    /// Reset backoff to normal rate.
-    fn reset_backoff(&mut self) {
-        self.backoff_multiplier = 1;
-    }
-
-    /// Current effective requests per second (accounting for backoff).
-    fn effective_rps(&self) -> f64 {
-        let effective_micros =
-            self.base_interval.as_micros() as f64 * self.backoff_multiplier.max(1) as f64;
-        1_000_000.0 / effective_micros
-    }
-}
-
-/// Initial MB requests per second (conservative start).
-const MB_INITIAL_RPS: f64 = 4.0;
-/// How many consecutive successes before ramping up by 1 RPS.
-const MB_RAMP_SUCCESS_WINDOW: u32 = 20;
-
-/// Adaptive rate limiter for MusicBrainz.
-///
-/// Starts at a conservative rate (~4 RPS), ramps up toward the configured
-/// ceiling after sustained success, and halves on rate-limit responses.
-/// Logs every rate adjustment with the RPS at which failure occurred.
-struct AdaptiveRateLimiter {
-    /// Current interval between requests (1/current_rps).
-    current_interval: Duration,
-    /// Minimum RPS floor (won't drop below this on backoff).
-    min_rps: f64,
-    /// Maximum RPS ceiling from config.
-    max_rps: f64,
-    /// Current effective RPS (tracked as f64 for smooth ramping).
-    current_rps: f64,
-    /// When the last request was issued.
-    last_request_at: Option<Instant>,
-    /// Consecutive successes since last failure (for ramp-up gating).
-    consecutive_successes: u32,
-    /// RPS values at which rate-limit failures occurred (for heuristics).
-    failure_rps_history: Vec<f64>,
-}
-
-impl AdaptiveRateLimiter {
-    fn new(max_rps: u32) -> Self {
-        let max = (max_rps.max(1) as f64).max(MB_INITIAL_RPS);
-        let initial = MB_INITIAL_RPS.min(max);
-        Self {
-            current_interval: Self::interval_for_rps(initial),
-            min_rps: 1.0,
-            max_rps: max,
-            current_rps: initial,
-            last_request_at: None,
-            consecutive_successes: 0,
-            failure_rps_history: Vec::new(),
-        }
-    }
-
-    /// For local mirrors: start at the ceiling immediately, no ramp-up needed.
-    fn new_unthrottled(max_rps: u32) -> Self {
-        let max = max_rps.max(1) as f64;
-        Self {
-            current_interval: Self::interval_for_rps(max),
-            min_rps: max,
-            max_rps: max,
-            current_rps: max,
-            last_request_at: None,
-            consecutive_successes: 0,
-            failure_rps_history: Vec::new(),
-        }
-    }
-
-    fn interval_for_rps(rps: f64) -> Duration {
-        Duration::from_micros((1_000_000.0 / rps) as u64)
-    }
-
-    /// Duration until this limiter is ready for another request.
-    fn time_until_ready(&self) -> Duration {
-        match self.last_request_at {
-            None => Duration::ZERO,
-            Some(last) => self.current_interval.saturating_sub(last.elapsed()),
-        }
-    }
-
-    /// Mark that a request was just dispatched.
-    fn mark_request(&mut self) {
-        self.last_request_at = Some(Instant::now());
-    }
-
-    /// Record a successful response. After enough consecutive successes,
-    /// ramp up rate by ~1 RPS toward the ceiling.
-    fn record_success(&mut self) {
-        self.consecutive_successes += 1;
-        if self.consecutive_successes >= MB_RAMP_SUCCESS_WINDOW && self.current_rps < self.max_rps {
-            let old_rps = self.current_rps;
-            self.current_rps = (self.current_rps + 1.0).min(self.max_rps);
-            self.current_interval = Self::interval_for_rps(self.current_rps);
-            self.consecutive_successes = 0;
-            crate::logging::log_general(format!(
-                "[FETCH] MB rate ramp-up: {:.1} -> {:.1} RPS (after {} clean results)",
-                old_rps, self.current_rps, MB_RAMP_SUCCESS_WINDOW,
-            ));
-        }
-    }
-
-    /// Rate-limit hit: halve the current rate, log the failure RPS.
-    fn apply_backoff(&mut self) {
-        let failed_at = self.current_rps;
-        self.failure_rps_history.push(failed_at);
-        self.consecutive_successes = 0;
-
-        let new_rps = (self.current_rps / 2.0).max(self.min_rps);
-        crate::logging::log_general(format!(
-            "[FETCH] MB rate backoff: {:.1} -> {:.1} RPS (rate-limited at {:.1}, \
-             failure history: {:?})",
-            self.current_rps, new_rps, failed_at, self.failure_rps_history,
-        ));
-        self.current_rps = new_rps;
-        self.current_interval = Self::interval_for_rps(self.current_rps);
-    }
-
-    /// Clear last-request timestamp (used when a cache hit skips HTTP).
-    fn clear_last_request(&mut self) {
-        self.last_request_at = None;
-    }
-
-    /// Current effective RPS (for logging).
-    fn current_rps(&self) -> f64 {
-        self.current_rps
-    }
-}
-
-// ============================================================================
-// ExternalFetchHandle — Witch-side API
-// ============================================================================
-
-/// Handle held by the Witch for communicating with the scheduler thread.
-pub struct ExternalFetchHandle {
-    /// Send commands to scheduler (start, shutdown).
-    command_tx: Sender<FetchCommand>,
-    /// Receive messages from scheduler (task requests + status).
-    message_rx: Receiver<SchedulerMessage>,
-    /// Send outcomes back to scheduler (for chain-emit).
-    outcome_tx: Sender<FetchOutcome>,
-    /// Join handle for the scheduler thread.
-    handle: Option<JoinHandle<()>>,
-    /// Whether the scheduler is currently active.
-    batch_active: bool,
-}
-
-impl ExternalFetchHandle {
-    /// Spawn the scheduler thread.
-    ///
-    /// The scheduler sleeps until it receives a Start command, then
-    /// dispatches tasks to the Witch via the message channel.
-    pub fn spawn(shared_config: SharedConfig) -> Self {
-        // Witch → Scheduler: commands
-        let (command_tx, command_rx) = mpsc::channel();
-        // Scheduler → Witch: task requests + status
-        let (message_tx, message_rx) = mpsc::channel();
-        // Witch → Scheduler: outcomes for chain-emit
-        let (outcome_tx, outcome_rx) = mpsc::channel();
-
-        let handle = thread::spawn(move || {
-            run_scheduler(command_rx, message_tx, outcome_rx, shared_config);
-        });
-
-        Self {
-            command_tx,
-            message_rx,
-            outcome_tx,
-            handle: Some(handle),
-            batch_active: false,
-        }
-    }
-
-    /// Request an external metadata fetch for the given directories.
-    ///
-    /// Populates both the AcoustID queue (fingerprint lookups) and
-    /// the MB queue (recording/artist/release enrichment) upfront.
-    pub fn request_fetch(&mut self, eligible_dirs: Vec<PathBuf>) {
-        if self.batch_active {
-            return; // Don't stack requests
-        }
-        self.batch_active = true;
-        let _ = self.command_tx.send(FetchCommand::Start { eligible_dirs });
-    }
-
-    /// Drain available messages from the scheduler (non-blocking).
-    ///
-    /// Returns messages received since last drain. Also clears batch_active
-    /// when AllDone is received.
-    pub(super) fn drain_messages(&mut self) -> Vec<SchedulerMessage> {
-        let mut msgs = Vec::new();
-        while let Ok(msg) = self.message_rx.try_recv() {
-            if matches!(msg, SchedulerMessage::AllDone) {
-                self.batch_active = false;
-            }
-            msgs.push(msg);
-        }
-        msgs
-    }
-
-    /// Send an outcome back to the scheduler for chain-emit decisions.
-    pub(super) fn send_outcome(&self, outcome: FetchOutcome) {
-        let _ = self.outcome_tx.send(outcome);
-    }
-
-    /// Whether the scheduler is currently active.
-    pub fn is_batch_active(&self) -> bool {
-        self.batch_active
-    }
-
-}
-
-impl super::types::ManagedThread for ExternalFetchHandle {
-    fn send_shutdown(&self) {
-        let _ = self.command_tx.send(FetchCommand::Shutdown);
-    }
-
-    fn take_handle(&mut self) -> Option<std::thread::JoinHandle<()>> {
-        self.handle.take()
-    }
-}
-
-impl Drop for ExternalFetchHandle {
-    fn drop(&mut self) {
-        use super::types::ManagedThread;
-        self.shutdown();
-    }
-}
+use rate_limiter::{AdaptiveRateLimiter, RateLimiter};
+use types::FetchCommand;
 
 // ============================================================================
 // Scheduler Thread
@@ -533,7 +114,7 @@ fn run_scheduling_loop(
         )
     };
 
-    // Work queues (internal to scheduler — items here haven't been dispatched yet)
+    // Work queues (internal to scheduler -- items here haven't been dispatched yet)
     let mut acoustid_queue: VecDeque<AcoustIdQueueItem> = VecDeque::new();
     let mut mb_queue: VecDeque<MbQueueItem> = VecDeque::new();
 
@@ -622,7 +203,7 @@ fn run_scheduling_loop(
                 acoustid_stats.total += acoustid_queue.len();
                 acoustid_done = false;
             }
-            Err(_) => {} // Empty or Disconnected — both fine
+            Err(_) => {} // Empty or Disconnected -- both fine
         }
 
         // ---- 2. Drain outcomes from Witch (non-blocking) ----
@@ -728,7 +309,7 @@ fn run_scheduling_loop(
                     mb_in_flight = mb_in_flight.saturating_sub(1);
                     mb_stats.retries += 1;
                     mb_stats.processed += 1;
-                    // Don't re-queue on hard errors — next scan picks it up
+                    // Don't re-queue on hard errors -- next scan picks it up
                 }
             }
             send_progress(
@@ -746,7 +327,7 @@ fn run_scheduling_loop(
             acoustid_limiter.mark_request();
             acoustid_in_flight += 1;
             let _ = message_tx.send(SchedulerMessage::TaskRequest {
-                task: ExternalFetchTask::AcoustId(AcoustIdFetchTask {
+                task: ExternalFetchTask::AcoustId(types::AcoustIdFetchTask {
                     inode: item.inode,
                     fingerprint_raw: item.fingerprint_raw,
                     fingerprint_blob: item.fingerprint_blob,
@@ -761,7 +342,7 @@ fn run_scheduling_loop(
         if !mb_queue.is_empty() && mb_limiter.time_until_ready() == Duration::ZERO {
             let item = mb_queue.pop_front().unwrap();
 
-            // Check DB cache first — skip if already fresh
+            // Check DB cache first -- skip if already fresh
             let cache_result = match item.kind {
                 MbEntityKind::Recording => db.get_mb_recording_cache(&item.mbid),
                 MbEntityKind::Artist => db.get_mb_artist_cache(&item.mbid),
@@ -780,9 +361,9 @@ fn run_scheduling_loop(
                 .unwrap_or(false);
 
             if already_cached {
-                // Already fresh in cache — skip without HTTP call
+                // Already fresh in cache -- skip without HTTP call
                 mb_stats.total = mb_stats.total.saturating_sub(1);
-                // Don't consume rate limiter slot — clear last_request so
+                // Don't consume rate limiter slot -- clear last_request so
                 // the next real dispatch isn't delayed by the cache check.
                 mb_limiter.clear_last_request();
             } else {
@@ -790,7 +371,7 @@ fn run_scheduling_loop(
                 mb_in_flight += 1;
                 let label = format!("MB {} fetch", item.kind.as_str());
                 let _ = message_tx.send(SchedulerMessage::TaskRequest {
-                    task: ExternalFetchTask::MusicBrainz(MbFetchTask {
+                    task: ExternalFetchTask::MusicBrainz(types::MbFetchTask {
                         kind: item.kind,
                         mbid: item.mbid,
                         base_url: mb_base_url.clone(),
@@ -842,7 +423,7 @@ fn run_scheduling_loop(
 
         // ---- 7. Sleep for the shortest relevant interval ----
         let acoustid_wait = if acoustid_queue.is_empty() {
-            Duration::from_secs(60) // effectively infinite — nothing to dispatch
+            Duration::from_secs(60) // effectively infinite -- nothing to dispatch
         } else {
             acoustid_limiter.time_until_ready()
         };
@@ -1004,7 +585,7 @@ fn send_progress(
 }
 
 /// Convert fingerprint Vec<u32> to BLOB bytes (little-endian).
-fn fingerprint_to_blob(fp: &[u32]) -> Vec<u8> {
+pub(super) fn fingerprint_to_blob(fp: &[u32]) -> Vec<u8> {
     fp.iter().flat_map(|n| n.to_le_bytes()).collect()
 }
 

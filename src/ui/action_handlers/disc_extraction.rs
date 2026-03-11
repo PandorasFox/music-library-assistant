@@ -138,46 +138,26 @@ impl HandleAction for crate::ui::disc_extraction_modal::DiscExtractionAction {
 impl App {
     /// Start disc extraction resolution from Insights view.
     ///
-    /// Loads DiscExtraction signals, resolves file paths, builds modal data,
-    /// starts a transaction, and switches to the DiscExtractionResolution view.
+    /// Uses the GetDiscExtractionData domain query to load signals, resolve paths,
+    /// and apply config in one step, then starts a transaction and opens the modal.
     pub(super) fn start_disc_extraction_resolution(&mut self) {
+        use crate::db::domain::GetDiscExtractionData;
         use crate::ui::disc_extraction_modal;
 
         let config = self.config().opinions.disc_extraction.clone();
 
-        let (signals, path_map) = self
+        let data = self
             .cache
-            .query(|db| {
-                let sigs = db.get_disc_extraction_signals().unwrap_or_default();
-                // Collect all inodes for path lookup
-                let all_inodes: Vec<i64> = sigs
-                    .iter()
-                    .flat_map(|s| s.data.inodes.iter().copied())
-                    .collect();
-                let paths = db
-                    .get_file_paths_batch(crate::db::types::Zone::Corpus, &all_inodes)
-                    .unwrap_or_default();
-                (sigs, paths)
+            .domain_query(GetDiscExtractionData {
+                map_letters_to_numbers: config.map_letters_to_numbers,
             })
             .recv();
 
-        if signals.is_empty() {
+        if data.groups.is_empty() {
             self.status_message = Some("No disc extraction signals found".to_string());
             return;
         }
 
-        let data = disc_extraction_modal::DiscExtractionData::from_signals(
-            signals,
-            |inode| {
-                path_map
-                    .get(&inode)
-                    .cloned()
-                    .unwrap_or_else(|| format!("<inode {}>", inode))
-            },
-            config.map_letters_to_numbers,
-        );
-
-        // Start transaction for the resolution session
         let _ = self.witch.start_transaction("Disc extraction");
 
         let state = disc_extraction_modal::DiscExtractionState::new(data, config.disc_tag_name);

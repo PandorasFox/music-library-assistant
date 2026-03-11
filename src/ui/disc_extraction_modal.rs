@@ -86,7 +86,7 @@ pub enum DiscExtractionAction {
 // ============================================================================
 
 /// A single group for disc extraction resolution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DiscExtractionGroup {
     /// Description of what's being extracted (for info bar).
     pub description: String,
@@ -97,7 +97,7 @@ pub struct DiscExtractionGroup {
 }
 
 /// Per-file entry within a group.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DiscFileEntry {
     pub inode: i64,
     pub path: String,
@@ -110,7 +110,7 @@ pub struct DiscFileEntry {
 }
 
 /// Loaded data for the modal.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DiscExtractionData {
     pub groups: Vec<DiscExtractionGroup>,
 }

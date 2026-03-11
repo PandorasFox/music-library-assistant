@@ -392,55 +392,33 @@ define_domain_query! {
     }
 }
 
-/// A disc extraction group with resolved file paths instead of raw inodes.
-#[derive(serde::Serialize)]
-pub struct DiscExtractionGroupResolved {
-    pub key: String,
-    pub source: crate::meta::signals::data::DiscExtractionSource,
-    pub files: Vec<(i64, String)>,
-}
-
 define_domain_query! {
-    /// Disc extraction signals with resolved file paths (self-contained detail query).
+    /// Disc extraction signals resolved into modal-ready data.
     ///
-    /// Collapses the two-step signal-load + path-resolution pattern into a single query.
-    GetDiscExtractionWithPaths => Vec<DiscExtractionGroupResolved>, uncached, |db| {
+    /// Loads signals, resolves file paths, and applies config (letter→number mapping)
+    /// to produce the full DiscExtractionData the modal needs.
+    GetDiscExtractionData { map_letters_to_numbers: bool } =>
+        crate::ui::disc_extraction_modal::DiscExtractionData, uncached, |s, db| {
+        use crate::ui::disc_extraction_modal::DiscExtractionData;
+
         let signals = db.get_disc_extraction_signals().unwrap_or_default();
         if signals.is_empty() {
-            return Vec::new();
+            return DiscExtractionData { groups: Vec::new() };
         }
 
-        // Collect all inodes for batch path resolution
         let all_inodes: Vec<i64> = signals
             .iter()
-            .flat_map(|s| s.data.inodes.iter().copied())
+            .flat_map(|sig| sig.data.inodes.iter().copied())
             .collect();
         let path_map = db
             .get_file_paths_batch(crate::db::types::Zone::Corpus, &all_inodes)
             .unwrap_or_default();
 
-        signals
-            .into_iter()
-            .map(|s| {
-                let files = s
-                    .data
-                    .inodes
-                    .iter()
-                    .map(|&inode| {
-                        let path = path_map
-                            .get(&inode)
-                            .cloned()
-                            .unwrap_or_else(|| format!("<inode {}>", inode));
-                        (inode, path)
-                    })
-                    .collect();
-                DiscExtractionGroupResolved {
-                    key: s.key,
-                    source: s.data.source,
-                    files,
-                }
-            })
-            .collect()
+        DiscExtractionData::from_signals(
+            signals,
+            |inode| path_map.get(&inode).cloned().unwrap_or_else(|| format!("<inode {}>", inode)),
+            s.map_letters_to_numbers,
+        )
     }
 }
 
@@ -817,8 +795,8 @@ mod tests {
     fn get_disc_extraction_with_paths_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
-        let result = GetDiscExtractionWithPaths.execute(&read_db);
-        assert!(result.is_empty());
+        let result = GetDiscExtractionData { map_letters_to_numbers: false }.execute(&read_db);
+        assert!(result.groups.is_empty());
     }
 
     // -- Wave 3 modal init loaders: empty DB returns defaults --
@@ -1007,7 +985,7 @@ mod tests {
         serde_json::to_string(&GetInconsistentAlbumArtistKeys.execute(&read_db)).unwrap();
         serde_json::to_string(&GetTagCanonicityKeys { tag_filter: None }.execute(&read_db)).unwrap();
         serde_json::to_string(&GetInboxTagCanonicityKeys.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetDiscExtractionWithPaths.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetDiscExtractionData { map_letters_to_numbers: false }.execute(&read_db)).unwrap();
 
         // Modal init loaders
         serde_json::to_string(&GetMissingFileData.execute(&read_db)).unwrap();

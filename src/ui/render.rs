@@ -64,7 +64,7 @@ pub fn render_app(
             .split(f.area());
 
         // Read deploy_needs_action from locally cached deploy status
-        let deploy_needs_action = app.cached_deploy.as_ref().is_some_and(|s| s.needs_action);
+        let deploy_needs_action = app.cached.get::<crate::db::domain::GetDeployStatus>().is_some_and(|s| s.needs_action);
 
         let transactions_open = app.config().opinions.leave_transactions_open;
         let transaction_has_decisions = app.witch.has_transaction()

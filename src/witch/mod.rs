@@ -821,7 +821,7 @@ impl Witch {
                 } else if had_mutations {
                     // Mutations ran - re-validate everything via re-awakening
                     let _ = self.notice_tx.send(WitchNotice::MutationsCompleted);
-                    self.cache_thread_handle.invalidate_all();
+                    self.cache_thread_handle.invalidate_scope(self.session_recomputation_scope);
                     crate::logging::log_general(format!(
                         "[STATE] Mutations complete (scope={:?}). Transitioning Full -> Inodes for re-validation. \
                          Processed {} tasks.",

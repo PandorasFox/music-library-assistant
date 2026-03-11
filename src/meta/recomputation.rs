@@ -35,6 +35,16 @@ impl RecomputationScope {
     /// External match data arrived (AcoustID lookups completed).
     pub const EXTERNAL: Self = Self(1 << 4);
 
+    /// Const union of two scopes. Use in const context: `TAGS.union(FILES)`.
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// True if `self` shares any bits with `other`.
+    pub const fn overlaps(self, other: Self) -> bool {
+        (self.0 & other.0) != 0
+    }
+
     /// True if no domains are flagged.
     pub fn is_empty(self) -> bool {
         self.0 == 0
@@ -88,6 +98,23 @@ mod tests {
         let scope = RecomputationScope::TAGS;
         assert!(scope.touches_any(&[RecomputationScope::TAGS, RecomputationScope::FILES]));
         assert!(!scope.touches_any(&[RecomputationScope::FILES, RecomputationScope::DEPLOY]));
+    }
+
+    #[test]
+    fn test_const_union() {
+        const SCOPE: RecomputationScope = RecomputationScope::TAGS.union(RecomputationScope::FILES);
+        assert!(SCOPE.contains(RecomputationScope::TAGS));
+        assert!(SCOPE.contains(RecomputationScope::FILES));
+        assert!(!SCOPE.contains(RecomputationScope::DEPLOY));
+    }
+
+    #[test]
+    fn test_const_overlaps() {
+        const A: RecomputationScope = RecomputationScope::TAGS.union(RecomputationScope::FILES);
+        const B: RecomputationScope = RecomputationScope::FILES.union(RecomputationScope::DEPLOY);
+        assert!(A.overlaps(B)); // both have FILES
+        assert!(!RecomputationScope::TAGS.overlaps(RecomputationScope::DEPLOY));
+        assert!(!RecomputationScope::EMPTY.overlaps(A));
     }
 
     #[test]

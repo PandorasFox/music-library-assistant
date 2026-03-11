@@ -172,8 +172,15 @@ impl App {
                     }
                 }
                 ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {
-                    // Invalidate caches before transitioning - mutations just completed
-                    self.cache.invalidate_all();
+                    // Invalidate all caches before transitioning - startup analysis just completed
+                    use crate::meta::recomputation::RecomputationScope;
+                    self.cache.invalidate_scope(
+                        RecomputationScope::TAGS
+                            | RecomputationScope::FILES
+                            | RecomputationScope::DEPLOY
+                            | RecomputationScope::INBOX
+                            | RecomputationScope::EXTERNAL,
+                    );
                     // Release SQLite page cache memory now that the computation burst is done
                     self.witch.post_cycle_housekeeping();
                     // Transition to configured default view

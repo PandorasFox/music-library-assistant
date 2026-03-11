@@ -82,6 +82,8 @@ use crossterm::{
 };
 use input::InputAction;
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -107,13 +109,8 @@ pub(crate) struct App {
     /// Handle to the cache thread for periodic refreshes and one-shot queries.
     pub(super) cache: crate::witch::cache_thread::CacheHandle,
 
-    /// Locally cached periodic data from the cache thread.
-    pub(super) cached_insights: Option<crate::meta::views::InsightsData>,
-    pub(super) cached_inbox: Option<crate::meta::views::InboxOverviewData>,
-    pub(super) cached_deploy: Option<crate::meta::views::DeployStatus>,
-    pub(super) cached_history: Option<crate::meta::views::EditHistoryData>,
-    pub(super) cached_external_matches: Option<crate::meta::views::ExternalMatchesData>,
-    pub(super) cached_packing_dirs: Option<crate::witch::cache_thread::PackingDirsData>,
+    /// Locally cached periodic data from the cache thread (TypeId-keyed).
+    pub(super) cached: CachedData,
 
     // View stack for push/pop navigation (TransactionReview, ProgressiveWork, etc.)
     pub(super) view_stack: Vec<SuspendedView>,
@@ -147,6 +144,34 @@ pub(crate) struct App {
 
 }
 
+/// Type-erased cache for periodic query results from the cache thread.
+///
+/// Keyed by `TypeId` of the `CachedQuery` implementor. Values are the
+/// query's `Response` type, boxed and downcast on access.
+pub(super) struct CachedData {
+    slots: HashMap<TypeId, Box<dyn Any>>,
+}
+
+impl CachedData {
+    fn new() -> Self {
+        Self {
+            slots: HashMap::new(),
+        }
+    }
+
+    /// Get a cached query result by query type.
+    pub fn get<Q: crate::db::domain::CachedQuery>(&self) -> Option<&Q::Response> {
+        self.slots
+            .get(&TypeId::of::<Q>())
+            .and_then(|v| v.downcast_ref::<Q::Response>())
+    }
+
+    /// Insert a raw cache result (called from drain loop).
+    pub fn insert_raw(&mut self, type_id: TypeId, value: Box<dyn Any + Send>) {
+        self.slots.insert(type_id, value);
+    }
+}
+
 impl App {
     /// Create a new App with a pre-existing Witch instance, cache handle, and shared config.
     fn new_with_witch(
@@ -163,12 +188,7 @@ impl App {
             view: ActiveView::Insights(insights_view::InsightsViewState::new()),
             witch,
             cache,
-            cached_insights: None,
-            cached_inbox: None,
-            cached_deploy: None,
-            cached_history: None,
-            cached_external_matches: None,
-            cached_packing_dirs: None,
+            cached: CachedData::new(),
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Health,
             db_path: std::path::PathBuf::new(),
@@ -382,7 +402,7 @@ impl App {
             has_api_key,
             singles_before_incompletes,
         );
-        if let Some(ref data) = self.cached_external_matches {
+        if let Some(data) = self.cached.get::<crate::db::domain::GetExternalMatches>() {
             state.update(data.clone());
         }
         self.view = ActiveView::ExternalMatches(state);
@@ -430,7 +450,7 @@ impl App {
     /// per-library file counts.
     pub(super) fn start_deploy_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::Deploy;
-        let deploy_status = self.cached_deploy.clone();
+        let deploy_status = self.cached.get::<crate::db::domain::GetDeployStatus>().cloned();
 
         let needs_action = deploy_status.as_ref().is_some_and(|s| s.needs_action);
 
@@ -714,7 +734,8 @@ fn run_app<B: ratatui::backend::Backend>(
                     app.cached_status = status;
                 }
                 crate::witch::WitchNotice::MutationsCompleted => {
-                    app.cache.invalidate_all();
+                    // Witch already sent InvalidateScope to cache thread;
+                    // UI just needs to know data is stale until fresh results arrive.
                     app.cache_stale = true;
                 }
                 crate::witch::WitchNotice::Error(msg) => {
@@ -733,39 +754,26 @@ fn run_app<B: ratatui::backend::Backend>(
         let ready_items = app.cache.drain_ready();
         if !ready_items.is_empty() {
             app.cache_stale = false;
-        }
-        for item in ready_items {
-            match item {
-                crate::witch::cache_thread::CacheReady::Insights(data) => {
-                    app.cached_insights = Some(data);
-                }
-                crate::witch::cache_thread::CacheReady::InboxOverview(data) => {
-                    app.cached_inbox = Some(data);
-                }
-                crate::witch::cache_thread::CacheReady::DeployStatus(data) => {
-                    app.cached_deploy = Some(data);
-                }
-                crate::witch::cache_thread::CacheReady::EditHistory(data) => {
-                    app.cached_history = Some(data);
-                }
-                crate::witch::cache_thread::CacheReady::ExternalMatches(data) => {
-                    app.cached_external_matches = Some(data);
-                }
-                crate::witch::cache_thread::CacheReady::PackingDirs(data) => {
-                    // Update navigator's cached data and refresh markers on all entries
+            let mut arrivals = Vec::new();
+            for item in ready_items {
+                arrivals.push(item.type_id);
+                app.cached.insert_raw(item.type_id, item.value);
+            }
+            // Post-drain side effect: PackingDirs → tree browser markers
+            if arrivals.contains(&TypeId::of::<crate::db::domain::GetPackingDirs>()) {
+                if let Some(data) = app.cached.get::<crate::db::domain::GetPackingDirs>() {
                     if let ActiveView::CorpusBrowser(ref mut browser) = app.view {
                         browser
                             .navigator
                             .set_packing_data(&data.file_paths, &data.dir_categories);
                     }
-                    app.cached_packing_dirs = Some(data);
                 }
             }
         }
 
         // Update views with cached data
         if let ActiveView::Insights(ref mut view) = app.view {
-            let insights_data = app.cached_insights.clone();
+            let insights_data = app.cached.get::<crate::db::domain::GetInsights>().cloned();
             let handled = app.witch.handled_decision_kinds();
             view.update(
                 Some(&app.cached_status),
@@ -775,17 +783,17 @@ fn run_app<B: ratatui::backend::Backend>(
             );
         }
         if let ActiveView::Inbox(ref mut view) = app.view {
-            let inbox_data = app.cached_inbox.clone();
+            let inbox_data = app.cached.get::<crate::db::domain::GetInboxOverview>().cloned();
             view.update(inbox_data);
             view.busy = app.cached_status.pending > 0
                 || app.cached_status.idle_rescan_active
                 || app.cache_stale;
         }
         if let ActiveView::History(ref mut view) = app.view {
-            view.update(app.cached_history.clone());
+            view.update(app.cached.get::<crate::db::domain::GetEditHistory>().cloned());
         }
         if let ActiveView::ExternalMatches(ref mut view) = app.view {
-            if let Some(ref data) = app.cached_external_matches {
+            if let Some(data) = app.cached.get::<crate::db::domain::GetExternalMatches>() {
                 view.update(data.clone());
             }
             let new_fetch_active = app.witch.is_external_fetch_active();
@@ -803,7 +811,7 @@ fn run_app<B: ratatui::backend::Backend>(
             ref mut library_file_counts,
         }) = app.view
         {
-            if let Some(ref status) = app.cached_deploy {
+            if let Some(status) = app.cached.get::<crate::db::domain::GetDeployStatus>() {
                 *library_file_counts = status.library_file_counts.clone();
             }
         }
@@ -821,24 +829,24 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Flag demand for cached UI data
         // Always want deploy status — titlebar needs it for purple indicator
-        app.cache.want_deploy();
+        app.cache.want::<crate::db::domain::GetDeployStatus>();
         if matches!(app.view, ActiveView::Insights(_)) {
-            app.cache.want_insights();
+            app.cache.want::<crate::db::domain::GetInsights>();
         }
         if matches!(app.view, ActiveView::Inbox(_)) {
-            app.cache.want_inbox();
+            app.cache.want::<crate::db::domain::GetInboxOverview>();
         }
         if matches!(app.view, ActiveView::History(_)) {
-            app.cache.want_history();
+            app.cache.want::<crate::db::domain::GetEditHistory>();
         }
         if matches!(app.view, ActiveView::CorpusBrowser(_)) {
-            app.cache.want_packing_dirs();
+            app.cache.want::<crate::db::domain::GetPackingDirs>();
         }
         if let ActiveView::ExternalMatches(ref view) = app.view {
             if view.fetch_active {
-                app.cache.want_external_matches_urgent();
+                app.cache.want_urgent::<crate::db::domain::GetExternalMatches>();
             } else {
-                app.cache.want_external_matches();
+                app.cache.want::<crate::db::domain::GetExternalMatches>();
             }
         }
 

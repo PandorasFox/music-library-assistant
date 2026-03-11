@@ -1,7 +1,7 @@
 //! Dedicated cache thread for UI read queries.
 //!
 //! The cache thread owns a read-only DB connection and handles both:
-//! - **Periodic refreshes** (throttled, demand-driven): insights, inbox, deploy
+//! - **Periodic refreshes** (throttled, demand-driven, scope-invalidated)
 //! - **One-shot queries** (typed, async): modal init, view data loading
 //!
 //! ## Architecture
@@ -13,41 +13,45 @@
 //! Results flow back via two paths:
 //! - `CacheReady` channel for periodic data (UI drains each frame)
 //! - Per-query `Sender<T>` channels for one-shot queries (typed `DbQuery<T>`)
+//!
+//! ## Adding a Cached Query
+//!
+//! 1. Define it in `db/domain.rs` with `cached(N, SCOPE)` syntax
+//! 2. Call `app.cache.want::<GetFoo>()` in the event loop
+//! 3. Read with `app.cached.get::<GetFoo>()`
+//!
+//! That's it. The cache thread auto-registers slots on first `want`.
 
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::config;
-use crate::db::domain::{self, DomainQuery};
+use crate::db::domain::{CachedQuery, DomainQuery};
 use crate::db::{Database, ReadOnlyDb};
-use crate::meta::views::{
-    DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
-};
+use crate::meta::recomputation::RecomputationScope;
 
 // ============================================================================
 // Cache Thread Protocol
 // ============================================================================
 
+/// Factory closure that builds a `RegisteredSlot` from trait constants.
+/// Sent with every `Want` request; `entry().or_insert_with()` deduplicates.
+type CacheSlotFactory = Box<dyn FnOnce() -> RegisteredSlot + Send>;
+
 /// Requests from UI/Witch → cache thread.
 pub(crate) enum CacheRequest {
-    /// UI wants fresh insights data (throttled).
-    WantInsights,
-    /// UI wants fresh inbox overview data (throttled).
-    WantInbox,
-    /// UI wants fresh deploy status (throttled).
-    WantDeploy,
-    /// UI wants fresh edit history data (throttled).
-    WantHistory,
-    /// UI wants fresh external matches data (throttled).
-    WantExternalMatches,
-    /// UI wants external matches data with urgency (shorter throttle).
-    /// Used when fetch is actively running so confidence counts update in near-realtime.
-    WantExternalMatchesUrgent,
-    /// UI wants fresh packing directory data (throttled).
-    WantPackingDirs,
-    /// Invalidate all cached data (force re-query on next want).
-    InvalidateAll,
+    /// Signal demand for a cached query. Factory is used to register the slot
+    /// on first request; subsequent requests just set the `wanted` flag.
+    Want {
+        type_id: TypeId,
+        factory: CacheSlotFactory,
+        urgent: bool,
+    },
+    /// Invalidate cached entries whose scope overlaps with the given scope.
+    InvalidateScope(RecomputationScope),
     /// Execute a one-shot query on the read-only connection.
     Query(Box<dyn FnOnce(&ReadOnlyDb<'_>) + Send>),
     /// Release unused SQLite page cache memory on the cache thread's connection.
@@ -59,24 +63,82 @@ pub(crate) enum CacheRequest {
     Shutdown,
 }
 
-/// Periodic refresh results from cache thread → UI.
-pub(crate) enum CacheReady {
-    Insights(InsightsData),
-    InboxOverview(InboxOverviewData),
-    DeployStatus(DeployStatus),
-    EditHistory(EditHistoryData),
-    ExternalMatches(ExternalMatchesData),
-    PackingDirs(PackingDirsData),
+/// A single periodic refresh result from cache thread → UI.
+pub(crate) struct CacheReady {
+    pub type_id: TypeId,
+    pub value: Box<dyn Any + Send>,
 }
 
-/// Cached packing directory data for tree browser markers.
-#[derive(serde::Serialize)]
-pub struct PackingDirsData {
-    /// Paths of files with release packing assignments.
-    pub file_paths: std::collections::HashSet<std::path::PathBuf>,
-    /// Parent directories mapped to their best packing category.
-    pub dir_categories:
-        std::collections::HashMap<std::path::PathBuf, crate::meta::signals::packing_category::PackingCategory>,
+// ============================================================================
+// GenericCache (internal slot management)
+// ============================================================================
+
+/// A registered cache slot with its execution closure and throttle state.
+pub(crate) struct RegisteredSlot {
+    /// Closure that executes the query and returns a boxed result.
+    execute: Box<dyn Fn(&ReadOnlyDb<'_>) -> Box<dyn Any + Send> + Send>,
+    /// Normal throttle interval.
+    throttle: Duration,
+    /// Optional shorter throttle for urgent refresh.
+    urgent_throttle: Option<Duration>,
+    /// Which mutation domains affect this query.
+    scope: RecomputationScope,
+    /// Whether the UI has signaled demand since last refresh.
+    wanted: bool,
+    /// Whether urgent throttle should be used.
+    urgent: bool,
+    /// When this slot was last refreshed (None = never).
+    refreshed_at: Option<Instant>,
+}
+
+impl RegisteredSlot {
+    fn should_refresh(&self) -> bool {
+        if !self.wanted {
+            return false;
+        }
+        let throttle = if self.urgent {
+            self.urgent_throttle.unwrap_or(self.throttle)
+        } else {
+            self.throttle
+        };
+        self.refreshed_at
+            .is_none_or(|t| t.elapsed() >= throttle)
+    }
+}
+
+/// Internal cache state: TypeId-keyed slots for all registered cached queries.
+struct GenericCache {
+    slots: HashMap<TypeId, RegisteredSlot>,
+}
+
+impl GenericCache {
+    fn new() -> Self {
+        Self {
+            slots: HashMap::new(),
+        }
+    }
+
+    /// Invalidate all slots whose scope overlaps with the given mutation scope.
+    fn invalidate_scope(&mut self, scope: RecomputationScope) {
+        for slot in self.slots.values_mut() {
+            if slot.scope.overlaps(scope) {
+                slot.refreshed_at = None;
+                slot.wanted = true;
+            }
+        }
+    }
+
+    /// Run throttled refreshes for all slots that are due.
+    fn run_refreshes(&mut self, read_db: &ReadOnlyDb<'_>, ready_tx: &Sender<CacheReady>) {
+        for (&type_id, slot) in &mut self.slots {
+            if slot.should_refresh() {
+                slot.wanted = false;
+                let value = (slot.execute)(read_db);
+                slot.refreshed_at = Some(Instant::now());
+                let _ = ready_tx.send(CacheReady { type_id, value });
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -92,47 +154,37 @@ pub(crate) struct CacheHandle {
 }
 
 impl CacheHandle {
-    /// Signal demand for insights data (throttled by cache thread).
-    pub(crate) fn want_insights(&self) {
-        let _ = self.request_tx.send(CacheRequest::WantInsights);
+    /// Signal demand for a cached query (normal throttle).
+    pub(crate) fn want<Q: CachedQuery>(&self) {
+        self.send_want::<Q>(false);
     }
 
-    /// Signal demand for inbox overview data (throttled by cache thread).
-    pub(crate) fn want_inbox(&self) {
-        let _ = self.request_tx.send(CacheRequest::WantInbox);
+    /// Signal urgent demand for a cached query (uses urgent throttle if defined).
+    pub(crate) fn want_urgent<Q: CachedQuery>(&self) {
+        self.send_want::<Q>(true);
     }
 
-    /// Signal demand for deploy status (throttled by cache thread).
-    pub(crate) fn want_deploy(&self) {
-        let _ = self.request_tx.send(CacheRequest::WantDeploy);
+    fn send_want<Q: CachedQuery>(&self, urgent: bool) {
+        let type_id = TypeId::of::<Q>();
+        let factory: CacheSlotFactory = Box::new(move || RegisteredSlot {
+            execute: Box::new(|db| Box::new(Q::default().execute(db))),
+            throttle: Q::THROTTLE,
+            urgent_throttle: Q::URGENT_THROTTLE,
+            scope: Q::SCOPE,
+            wanted: true,
+            urgent,
+            refreshed_at: None,
+        });
+        let _ = self.request_tx.send(CacheRequest::Want {
+            type_id,
+            factory,
+            urgent,
+        });
     }
 
-    /// Signal demand for edit history data (throttled by cache thread).
-    pub(crate) fn want_history(&self) {
-        let _ = self.request_tx.send(CacheRequest::WantHistory);
-    }
-
-    /// Signal demand for packing directory data (throttled by cache thread).
-    pub(crate) fn want_packing_dirs(&self) {
-        let _ = self.request_tx.send(CacheRequest::WantPackingDirs);
-    }
-
-    /// Signal demand for external matches data (throttled by cache thread).
-    pub(crate) fn want_external_matches(&self) {
-        let _ = self.request_tx.send(CacheRequest::WantExternalMatches);
-    }
-
-    /// Signal urgent demand for external matches data (shorter throttle).
-    /// Use when external fetch is actively running.
-    pub(crate) fn want_external_matches_urgent(&self) {
-        let _ = self
-            .request_tx
-            .send(CacheRequest::WantExternalMatchesUrgent);
-    }
-
-    /// Invalidate all cached data. Next want_* call will force a re-query.
-    pub(crate) fn invalidate_all(&self) {
-        let _ = self.request_tx.send(CacheRequest::InvalidateAll);
+    /// Invalidate cached entries whose scope overlaps with the given scope.
+    pub(crate) fn invalidate_scope(&self, scope: RecomputationScope) {
+        let _ = self.request_tx.send(CacheRequest::InvalidateScope(scope));
     }
 
     /// Tell the cache thread to close and reopen its DB connection.
@@ -223,9 +275,9 @@ pub(crate) struct CacheThreadHandle {
 }
 
 impl CacheThreadHandle {
-    /// Tell the cache thread to invalidate all cached data.
-    pub(crate) fn invalidate_all(&self) {
-        let _ = self.request_tx.send(CacheRequest::InvalidateAll);
+    /// Tell the cache thread to invalidate entries whose scope overlaps.
+    pub(crate) fn invalidate_scope(&self, scope: RecomputationScope) {
+        let _ = self.request_tx.send(CacheRequest::InvalidateScope(scope));
     }
 
     /// Tell the cache thread to release unused SQLite page cache memory.
@@ -254,116 +306,6 @@ impl Drop for CacheThreadHandle {
 // ============================================================================
 // Cache Thread Spawn
 // ============================================================================
-
-/// Throttle state for periodic cache entries.
-struct ThrottleState {
-    insights_wanted: bool,
-    inbox_wanted: bool,
-    deploy_wanted: bool,
-    history_wanted: bool,
-    external_matches_wanted: bool,
-    packing_dirs_wanted: bool,
-    /// When true, external matches uses a 2s throttle instead of 15s.
-    external_matches_urgent: bool,
-    insights_at: Option<Instant>,
-    inbox_at: Option<Instant>,
-    deploy_at: Option<Instant>,
-    history_at: Option<Instant>,
-    external_matches_at: Option<Instant>,
-    packing_dirs_at: Option<Instant>,
-}
-
-impl ThrottleState {
-    const INSIGHTS_THROTTLE: Duration = Duration::from_secs(30);
-    const INBOX_THROTTLE: Duration = Duration::from_secs(15);
-    const DEPLOY_THROTTLE: Duration = Duration::from_secs(15);
-    const HISTORY_THROTTLE: Duration = Duration::from_secs(30);
-    const EXTERNAL_MATCHES_THROTTLE: Duration = Duration::from_secs(15);
-    const PACKING_DIRS_THROTTLE: Duration = Duration::from_secs(30);
-    const EXTERNAL_MATCHES_URGENT_THROTTLE: Duration = Duration::from_secs(5);
-
-    fn new() -> Self {
-        Self {
-            insights_wanted: false,
-            inbox_wanted: false,
-            deploy_wanted: false,
-            history_wanted: false,
-            external_matches_wanted: false,
-            packing_dirs_wanted: false,
-            external_matches_urgent: false,
-            insights_at: None,
-            inbox_at: None,
-            deploy_at: None,
-            history_at: None,
-            external_matches_at: None,
-            packing_dirs_at: None,
-        }
-    }
-
-    fn invalidate_all(&mut self) {
-        self.insights_at = None;
-        self.inbox_at = None;
-        self.deploy_at = None;
-        self.history_at = None;
-        self.external_matches_at = None;
-        self.packing_dirs_at = None;
-        // Set wanted so next cycle refreshes everything
-        self.insights_wanted = true;
-        self.inbox_wanted = true;
-        self.deploy_wanted = true;
-        self.history_wanted = true;
-        self.external_matches_wanted = true;
-        self.packing_dirs_wanted = true;
-        self.external_matches_urgent = false;
-    }
-
-    fn should_refresh_insights(&self) -> bool {
-        self.insights_wanted
-            && self
-                .insights_at
-                .is_none_or(|t| t.elapsed() >= Self::INSIGHTS_THROTTLE)
-    }
-
-    fn should_refresh_inbox(&self) -> bool {
-        self.inbox_wanted
-            && self
-                .inbox_at
-                .is_none_or(|t| t.elapsed() >= Self::INBOX_THROTTLE)
-    }
-
-    fn should_refresh_deploy(&self) -> bool {
-        self.deploy_wanted
-            && self
-                .deploy_at
-                .is_none_or(|t| t.elapsed() >= Self::DEPLOY_THROTTLE)
-    }
-
-    fn should_refresh_history(&self) -> bool {
-        self.history_wanted
-            && self
-                .history_at
-                .is_none_or(|t| t.elapsed() >= Self::HISTORY_THROTTLE)
-    }
-
-    fn should_refresh_packing_dirs(&self) -> bool {
-        self.packing_dirs_wanted
-            && self
-                .packing_dirs_at
-                .is_none_or(|t| t.elapsed() >= Self::PACKING_DIRS_THROTTLE)
-    }
-
-    fn should_refresh_external_matches(&self) -> bool {
-        let throttle = if self.external_matches_urgent {
-            Self::EXTERNAL_MATCHES_URGENT_THROTTLE
-        } else {
-            Self::EXTERNAL_MATCHES_THROTTLE
-        };
-        self.external_matches_wanted
-            && self
-                .external_matches_at
-                .is_none_or(|t| t.elapsed() >= throttle)
-    }
-}
 
 /// Spawn the cache thread. Returns the UI handle and the Witch handle.
 pub(crate) fn spawn() -> (CacheHandle, CacheThreadHandle) {
@@ -403,19 +345,19 @@ fn cache_thread_main(request_rx: Receiver<CacheRequest>, ready_tx: Sender<CacheR
     crate::logging::log_general("[CACHE_THREAD] Started");
 
     let mut db = open_read_only_db();
-    let mut throttle = ThrottleState::new();
+    let mut cache = GenericCache::new();
 
     loop {
         // Block with timeout — gives us a natural refresh cycle
         match request_rx.recv_timeout(Duration::from_millis(250)) {
             Ok(request) => {
                 // Process this request and drain any queued ones
-                if process_request(request, &mut db, &mut throttle, &ready_tx) {
+                if process_request(request, &mut db, &mut cache, &ready_tx) {
                     break; // Shutdown requested
                 }
                 // Drain queued requests
                 while let Ok(request) = request_rx.try_recv() {
-                    if process_request(request, &mut db, &mut throttle, &ready_tx) {
+                    if process_request(request, &mut db, &mut cache, &ready_tx) {
                         crate::logging::log_general("[CACHE_THREAD] Shutdown complete");
                         return;
                     }
@@ -433,7 +375,7 @@ fn cache_thread_main(request_rx: Receiver<CacheRequest>, ready_tx: Sender<CacheR
         // Run throttled refreshes if DB is available
         if let Some(ref db_conn) = db {
             let read_db = ReadOnlyDb::new(db_conn);
-            run_refreshes(&mut throttle, &read_db, &ready_tx);
+            cache.run_refreshes(&read_db, &ready_tx);
         }
     }
 
@@ -444,39 +386,27 @@ fn cache_thread_main(request_rx: Receiver<CacheRequest>, ready_tx: Sender<CacheR
 fn process_request(
     request: CacheRequest,
     db: &mut Option<Database>,
-    throttle: &mut ThrottleState,
+    cache: &mut GenericCache,
     ready_tx: &Sender<CacheReady>,
 ) -> bool {
     match request {
-        CacheRequest::WantInsights => {
-            throttle.insights_wanted = true;
+        CacheRequest::Want {
+            type_id,
+            factory,
+            urgent,
+        } => {
+            let slot = cache.slots.entry(type_id).or_insert_with(factory);
+            slot.wanted = true;
+            if urgent {
+                slot.urgent = true;
+            }
         }
-        CacheRequest::WantInbox => {
-            throttle.inbox_wanted = true;
-        }
-        CacheRequest::WantDeploy => {
-            throttle.deploy_wanted = true;
-        }
-        CacheRequest::WantHistory => {
-            throttle.history_wanted = true;
-        }
-        CacheRequest::WantPackingDirs => {
-            throttle.packing_dirs_wanted = true;
-        }
-        CacheRequest::WantExternalMatches => {
-            throttle.external_matches_wanted = true;
-            throttle.external_matches_urgent = false;
-        }
-        CacheRequest::WantExternalMatchesUrgent => {
-            throttle.external_matches_wanted = true;
-            throttle.external_matches_urgent = true;
-        }
-        CacheRequest::InvalidateAll => {
-            throttle.invalidate_all();
+        CacheRequest::InvalidateScope(scope) => {
+            cache.invalidate_scope(scope);
             // Run an immediate refresh cycle
             if let Some(ref db_conn) = db {
                 let read_db = ReadOnlyDb::new(db_conn);
-                run_refreshes(throttle, &read_db, ready_tx);
+                cache.run_refreshes(&read_db, ready_tx);
             }
         }
         CacheRequest::Query(f) => {
@@ -506,53 +436,4 @@ fn process_request(
         }
     }
     false
-}
-
-/// Run throttled periodic refreshes.
-fn run_refreshes(
-    throttle: &mut ThrottleState,
-    read_db: &ReadOnlyDb<'_>,
-    ready_tx: &Sender<CacheReady>,
-) {
-    if throttle.should_refresh_insights() {
-        throttle.insights_wanted = false;
-        let data = domain::GetInsights.execute(read_db);
-        throttle.insights_at = Some(Instant::now());
-        let _ = ready_tx.send(CacheReady::Insights(data));
-    }
-
-    if throttle.should_refresh_inbox() {
-        throttle.inbox_wanted = false;
-        let data = domain::GetInboxOverview.execute(read_db);
-        throttle.inbox_at = Some(Instant::now());
-        let _ = ready_tx.send(CacheReady::InboxOverview(data));
-    }
-
-    if throttle.should_refresh_deploy() {
-        throttle.deploy_wanted = false;
-        let data = domain::GetDeployStatus.execute(read_db);
-        throttle.deploy_at = Some(Instant::now());
-        let _ = ready_tx.send(CacheReady::DeployStatus(data));
-    }
-
-    if throttle.should_refresh_history() {
-        throttle.history_wanted = false;
-        let data = domain::GetEditHistory.execute(read_db);
-        throttle.history_at = Some(Instant::now());
-        let _ = ready_tx.send(CacheReady::EditHistory(data));
-    }
-
-    if throttle.should_refresh_packing_dirs() {
-        throttle.packing_dirs_wanted = false;
-        let data = domain::GetPackingDirs.execute(read_db);
-        throttle.packing_dirs_at = Some(Instant::now());
-        let _ = ready_tx.send(CacheReady::PackingDirs(data));
-    }
-
-    if throttle.should_refresh_external_matches() {
-        throttle.external_matches_wanted = false;
-        let data = domain::GetExternalMatches.execute(read_db);
-        throttle.external_matches_at = Some(Instant::now());
-        let _ = ready_tx.send(CacheReady::ExternalMatches(data));
-    }
 }

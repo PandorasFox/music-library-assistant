@@ -22,13 +22,13 @@
 //! // Simple: unit struct, single db method call, unwrap_or_default
 //! define_domain_query! {
 //!     /// Doc comment
-//!     GetFoo => FooData, cached(15), db.get_foo_data()
+//!     GetFoo => FooData, cached(15, TAGS | FILES), db.get_foo_data()
 //! }
 //!
 //! // Body: unit struct, custom execute logic with `db` in scope
 //! define_domain_query! {
 //!     /// Doc comment
-//!     GetBar => BarData, cached(30), |db| {
+//!     GetBar => BarData, cached(30, TAGS), |db| {
 //!         let x = db.get_x().unwrap_or_default();
 //!         let y = db.get_y().unwrap_or_default();
 //!         BarData { x, y }
@@ -86,9 +86,16 @@ pub trait DomainQuery: Send + 'static {
 
 /// Summary queries that benefit from throttled caching.
 /// Detail queries implement only `DomainQuery`.
-pub trait CachedQuery: DomainQuery {
+///
+/// `Default` bound: the cache thread re-executes unit struct queries
+/// by reconstructing them via `Q::default()`.
+pub trait CachedQuery: DomainQuery + Default {
     /// How long cached results remain fresh before re-query.
     const THROTTLE: Duration;
+    /// Which mutation domains should invalidate this cache entry.
+    const SCOPE: crate::meta::recomputation::RecomputationScope;
+    /// Optional shorter throttle for urgent refresh (e.g., during active fetch).
+    const URGENT_THROTTLE: Option<Duration> = None;
 }
 
 // ============================================================================
@@ -99,13 +106,13 @@ pub trait CachedQuery: DomainQuery {
 ///
 /// See module docs for usage examples.
 macro_rules! define_domain_query {
-    // Simple form: unit struct, single db method, unwrap_or_default
+    // Simple form: unit struct, single db method, unwrap_or_default, scoped cache
     (
         $( #[doc = $doc:expr] )*
-        $name:ident => $response:ty, cached($secs:expr), db.$method:ident()
+        $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+), db.$method:ident()
     ) => {
         $( #[doc = $doc] )*
-        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(Default, serde::Serialize, serde::Deserialize)]
         pub struct $name;
 
         impl DomainQuery for $name {
@@ -118,16 +125,43 @@ macro_rules! define_domain_query {
 
         impl CachedQuery for $name {
             const THROTTLE: Duration = Duration::from_secs($secs);
+            const SCOPE: crate::meta::recomputation::RecomputationScope =
+                define_domain_query!(@scope $($scope)|+);
         }
     };
 
-    // Body form: unit struct, custom execute expression with db closure
+    // Simple form with urgent throttle
     (
         $( #[doc = $doc:expr] )*
-        $name:ident => $response:ty, cached($secs:expr), |$db:ident| $body:block
+        $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+, urgent($urgent_secs:expr)), db.$method:ident()
     ) => {
         $( #[doc = $doc] )*
-        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(Default, serde::Serialize, serde::Deserialize)]
+        pub struct $name;
+
+        impl DomainQuery for $name {
+            type Response = $response;
+
+            fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
+                db.$method().unwrap_or_default()
+            }
+        }
+
+        impl CachedQuery for $name {
+            const THROTTLE: Duration = Duration::from_secs($secs);
+            const SCOPE: crate::meta::recomputation::RecomputationScope =
+                define_domain_query!(@scope $($scope)|+);
+            const URGENT_THROTTLE: Option<Duration> = Some(Duration::from_secs($urgent_secs));
+        }
+    };
+
+    // Body form: unit struct, custom execute expression with db closure, scoped cache
+    (
+        $( #[doc = $doc:expr] )*
+        $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+), |$db:ident| $body:block
+    ) => {
+        $( #[doc = $doc] )*
+        #[derive(Default, serde::Serialize, serde::Deserialize)]
         pub struct $name;
 
         impl DomainQuery for $name {
@@ -140,6 +174,8 @@ macro_rules! define_domain_query {
 
         impl CachedQuery for $name {
             const THROTTLE: Duration = Duration::from_secs($secs);
+            const SCOPE: crate::meta::recomputation::RecomputationScope =
+                define_domain_query!(@scope $($scope)|+);
         }
     };
 
@@ -221,7 +257,7 @@ macro_rules! define_domain_query {
     // Parameterized body form, cached: struct with fields + custom execute body
     (
         $( #[doc = $doc:expr] )*
-        $name:ident { $( $field:ident : $ftype:ty ),+ $(,)? } => $response:ty, cached($secs:expr), |$s:ident, $db:ident| $body:block
+        $name:ident { $( $field:ident : $ftype:ty ),+ $(,)? } => $response:ty, cached($secs:expr, $($scope:ident)|+), |$s:ident, $db:ident| $body:block
     ) => {
         $( #[doc = $doc] )*
         #[derive(serde::Serialize, serde::Deserialize)]
@@ -240,7 +276,15 @@ macro_rules! define_domain_query {
 
         impl CachedQuery for $name {
             const THROTTLE: Duration = Duration::from_secs($secs);
+            const SCOPE: crate::meta::recomputation::RecomputationScope =
+                define_domain_query!(@scope $($scope)|+);
         }
+    };
+
+    // Internal helper: expand scope union from `TAGS | FILES` syntax
+    (@scope $first:ident $(| $rest:ident)*) => {
+        crate::meta::recomputation::RecomputationScope::$first
+        $( .union(crate::meta::recomputation::RecomputationScope::$rest) )*
     };
 }
 
@@ -253,26 +297,35 @@ use crate::meta::views::{
     BucketedOobFile, DeployStatus, EditHistoryData, EditHistoryExportRow, ExternalMatchesData,
     InboxOverviewData, InsightsData, MovedFileInfo, OobSyncFile,
 };
-use crate::witch::cache_thread::PackingDirsData;
+
+/// Cached packing directory data for tree browser markers.
+#[derive(Default, serde::Serialize)]
+pub struct PackingDirsData {
+    /// Paths of files with release packing assignments.
+    pub file_paths: std::collections::HashSet<std::path::PathBuf>,
+    /// Parent directories mapped to their best packing category.
+    pub dir_categories:
+        std::collections::HashMap<std::path::PathBuf, crate::meta::signals::packing_category::PackingCategory>,
+}
 
 define_domain_query! {
     /// Corpus health insights: file state, tag squash, and other signal counts.
-    GetInsights => InsightsData, cached(30), db.get_insights_data()
+    GetInsights => InsightsData, cached(30, TAGS | FILES), db.get_insights_data()
 }
 
 define_domain_query! {
     /// Inbox file counts by category (unindexed, corpus match, organizable, etc.).
-    GetInboxOverview => InboxOverviewData, cached(15), db.get_inbox_overview_data()
+    GetInboxOverview => InboxOverviewData, cached(15, FILES | INBOX), db.get_inbox_overview_data()
 }
 
 define_domain_query! {
     /// Current deploy status: library health and per-library file counts.
-    GetDeployStatus => DeployStatus, cached(15), db.get_deploy_status()
+    GetDeployStatus => DeployStatus, cached(15, DEPLOY | FILES), db.get_deploy_status()
 }
 
 define_domain_query! {
     /// Edit session list with timestamps and edit counts.
-    GetEditHistory => EditHistoryData, cached(30), |db| {
+    GetEditHistory => EditHistoryData, cached(30, TAGS), |db| {
         let sessions = db.get_edit_sessions().unwrap_or_default();
         EditHistoryData { sessions }
     }
@@ -280,12 +333,12 @@ define_domain_query! {
 
 define_domain_query! {
     /// External match data: confidence buckets, packing counts, untagged entries.
-    GetExternalMatches => ExternalMatchesData, cached(15), db.get_external_matches_data()
+    GetExternalMatches => ExternalMatchesData, cached(15, EXTERNAL, urgent(5)), db.get_external_matches_data()
 }
 
 define_domain_query! {
     /// Packing directory data: assigned file paths and directory categories.
-    GetPackingDirs => PackingDirsData, cached(30), |db| {
+    GetPackingDirs => PackingDirsData, cached(30, EXTERNAL | FILES), |db| {
         let file_paths = db.get_packing_assigned_paths().unwrap_or_default();
         let dir_categories = db.get_packing_directory_categories().unwrap_or_default();
         PackingDirsData { file_paths, dir_categories }

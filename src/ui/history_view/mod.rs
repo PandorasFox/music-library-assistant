@@ -202,7 +202,7 @@ impl WizardItem for EditDetailEntry {
             content: vec![RichBlock::Table {
                 headers,
                 rows,
-                col_ratio: vec![20, 80],
+                col_ratio: vec![12, 88],
             }],
         })
     }
@@ -372,8 +372,10 @@ impl HistoryViewState {
             })
             .collect();
 
-        let mut detail_list =
-            StandardListState::new(StandardListConfig { multi_select: true });
+        let mut detail_list = StandardListState::new(StandardListConfig {
+            multi_select: true,
+            pane_min_width: 70,
+        });
         // Select all by default
         for i in 0..entries.len() {
             detail_list.selected.insert(i);

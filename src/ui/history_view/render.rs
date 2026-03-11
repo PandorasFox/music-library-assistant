@@ -175,8 +175,8 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState
         f,
         chunks[0],
         entries,
-        |idx, is_cursor, is_selected, _width| {
-            render_edit_row(entries, idx, is_cursor, is_selected)
+        |idx, is_cursor, is_selected, width| {
+            render_edit_row(entries, idx, is_cursor, is_selected, width)
         },
         &title,
         true,
@@ -203,6 +203,7 @@ fn render_edit_row(
     idx: usize,
     is_cursor: bool,
     is_selected: bool,
+    width: u16,
 ) -> Line<'static> {
     let Some(entry) = entries.get(idx) else {
         return Line::raw("");
@@ -211,8 +212,10 @@ fn render_edit_row(
     let checkbox = if is_selected { "[x]" } else { "[ ]" };
     let prefix = if is_cursor { "\u{25b8}" } else { " " };
 
-    let path_short = if entry.path.len() > 25 {
-        truncate_right(&entry.path, 25)
+    // Give the path about a third of the row width, minimum 25, generous max.
+    let path_max = ((width as usize) / 3).clamp(25, 80);
+    let path_short = if entry.path.chars().count() > path_max {
+        truncate_right(&entry.path, path_max)
     } else {
         entry.path.clone()
     };

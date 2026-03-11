@@ -15,6 +15,7 @@ use ratatui::{
     layout::{Layout, Constraint, Direction, Rect},
     style::{Color, Style, Modifier},
     text::Line,
+    widgets::Clear,
     Frame,
 };
 
@@ -74,12 +75,17 @@ pub enum ListInputResult<A> {
 pub struct StandardListConfig {
     /// Whether items can be toggle-selected with Space.
     pub multi_select: bool,
+    /// Minimum width for the wizard pane. When the normal 60/40 split gives
+    /// the pane less than this, the pane renders as a right-aligned overlay
+    /// on top of the list instead. Default: 0 (always use normal split).
+    pub pane_min_width: u16,
 }
 
 impl Default for StandardListConfig {
     fn default() -> Self {
         Self {
             multi_select: false,
+            pane_min_width: 0,
         }
     }
 }
@@ -346,17 +352,29 @@ impl StandardListState {
             _ => false,
         };
 
-        let (list_area, pane_area) = if has_pane_data {
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(60),
-                    Constraint::Percentage(40),
-                ])
-                .split(area);
-            (chunks[0], Some(chunks[1]))
+        let (list_area, pane_area, pane_is_overlay) = if has_pane_data {
+            let normal_pane_width = area.width * 40 / 100;
+            let needs_overlay = self.config.pane_min_width > 0
+                && normal_pane_width < self.config.pane_min_width;
+
+            if needs_overlay {
+                // Overlay: list renders full width, pane overlaps from the right.
+                let pane_w = self.config.pane_min_width.min(area.width.saturating_sub(4));
+                let pane_x = area.x + area.width - pane_w;
+                let pane_rect = Rect::new(pane_x, area.y, pane_w, area.height);
+                (area, Some(pane_rect), true)
+            } else {
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(60),
+                        Constraint::Percentage(40),
+                    ])
+                    .split(area);
+                (chunks[0], Some(chunks[1]), false)
+            }
         } else {
-            (area, None)
+            (area, None, false)
         };
 
         // Render list.
@@ -374,6 +392,10 @@ impl StandardListState {
                     } => (pane_title.as_str(), pane_content.as_slice()),
                     _ => ("", &[] as &[RichBlock]),
                 };
+                // Clear underneath when pane overlays the list.
+                if pane_is_overlay {
+                    f.render_widget(Clear, pane_rect);
+                }
                 let pane_focused = self.focus == ListFocus::WizardPane;
                 render_wizard_pane(
                     f,
@@ -740,7 +762,7 @@ mod tests {
 
     #[test]
     fn toggle_with_multi_select() {
-        let mut s = StandardListState::new(StandardListConfig { multi_select: true });
+        let mut s = StandardListState::new(StandardListConfig { multi_select: true, ..Default::default() });
         s.set_visible_height(10);
         let items = make_items(5);
 

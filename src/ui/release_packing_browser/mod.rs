@@ -223,7 +223,7 @@ impl ReleasePackingBrowserState {
         let mut state = Self {
             category,
             entries: Vec::new(),
-            list_state: StandardListState::new(StandardListConfig { multi_select: true }),
+            list_state: StandardListState::new(StandardListConfig { multi_select: true, ..Default::default() }),
             pin_input: None,
             pin_error: None,
             pinned_release_ids: HashSet::new(),
@@ -247,7 +247,7 @@ impl ReleasePackingBrowserState {
         let mut state = Self {
             category,
             entries: Vec::new(),
-            list_state: StandardListState::new(StandardListConfig { multi_select: true }),
+            list_state: StandardListState::new(StandardListConfig { multi_select: true, ..Default::default() }),
             pin_input: None,
             pin_error: None,
             pinned_release_ids: HashSet::new(),

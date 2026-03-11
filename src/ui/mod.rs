@@ -455,8 +455,9 @@ impl App {
         // Check for inbox unindexed files — show intake popup if any
         let intake_state = self
             .cache
-            .query(|db| {
-                startup::IntakeConfirmationState::gather_zone::<crate::zones::InboxZone>(db, startup::IntakeSource::Inbox)
+            .domain_query(crate::db::domain::GetIntakeConfirmation {
+                source: startup::IntakeSource::Inbox,
+                zone: Some(crate::db::types::Zone::Inbox),
             })
             .recv();
 

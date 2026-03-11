@@ -41,57 +41,16 @@ impl App {
         };
 
         // Load audio files from database using relative path
-        let rel_path_owned = rel_path.to_path_buf();
+        let mode = if recursive {
+            crate::db::domain::TagEditorLoadMode::Directory
+        } else {
+            crate::db::domain::TagEditorLoadMode::SingleFile
+        };
         let (audio_files, selected_idx) = self
             .cache
-            .query(move |db| {
-                if recursive {
-                    // Get all audio files in directory and subdirectories
-                    let files = db
-                        .get_audio_files_for_tag_editing(&rel_path_owned)
-                        .unwrap_or_default();
-                    (files, 0usize)
-                } else {
-                    let rel_parent = match rel_path_owned.parent() {
-                        Some(p) => p.to_path_buf(),
-                        None => return (Vec::new(), 0usize),
-                    };
-
-                    // Load all audio files from parent directory
-                    let dir_files = db
-                        .get_audio_files_for_tag_editing(&rel_parent)
-                        .unwrap_or_default();
-
-                    // Filter to only files directly in this directory (not subdirectories)
-                    let rel_path_str = rel_path_owned.to_string_lossy().to_string();
-                    let rel_parent_str = rel_parent.to_string_lossy().to_string();
-                    let files_in_dir: Vec<_> = dir_files
-                        .into_iter()
-                        .filter(|f| {
-                            if let Some(suffix) = f.path().strip_prefix(&rel_parent_str) {
-                                let suffix = suffix.trim_start_matches(std::path::MAIN_SEPARATOR);
-                                !suffix.contains(std::path::MAIN_SEPARATOR)
-                            } else {
-                                false
-                            }
-                        })
-                        .collect();
-
-                    let selected_idx = files_in_dir
-                        .iter()
-                        .position(|f| f.path() == rel_path_str)
-                        .unwrap_or(0);
-
-                    if files_in_dir.is_empty() {
-                        // Fallback: try to get just the single audio file
-                        match db.get_audio_file_by_path(&rel_path_str) {
-                            Ok(Some(audio_file)) => (vec![audio_file], 0),
-                            _ => (Vec::new(), 0),
-                        }
-                    } else {
-                        (files_in_dir, selected_idx)
-                    }
-                }
+            .domain_query(crate::db::domain::GetTagEditorFiles {
+                rel_path: rel_path.to_path_buf(),
+                mode,
             })
             .recv();
 
@@ -195,11 +154,11 @@ impl App {
             }
         };
 
-        let audio_files = self
+        let (audio_files, _) = self
             .cache
-            .query(move |db| {
-                db.get_audio_files_for_tag_editing(&rel_dir)
-                    .unwrap_or_default()
+            .domain_query(crate::db::domain::GetTagEditorFiles {
+                rel_path: rel_dir,
+                mode: crate::db::domain::TagEditorLoadMode::Directory,
             })
             .recv();
 

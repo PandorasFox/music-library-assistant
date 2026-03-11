@@ -26,7 +26,6 @@ use std::path::PathBuf;
 use crate::ui::input::InputAction;
 
 use crate::config::{Config, InboxOrganizeGranularity};
-use crate::db::ReadOnlyDb;
 use crate::meta::mutations::{
     file_ops::{InboxDirToCorpusMutation, InboxDirTrackedFile, InboxToCorpusMutation},
     Mutation,
@@ -39,7 +38,7 @@ use crate::ui::widgets::TextInputState;
 // ============================================================================
 
 /// A directory of inbox files to organize.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct InboxDirectory {
     /// Display name for this directory group
     pub dir_name: String,
@@ -50,7 +49,7 @@ pub struct InboxDirectory {
 }
 
 /// A single organizable inbox file.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct InboxOrganizeFile {
     pub inode: i64,
     /// Absolute path to the file
@@ -145,24 +144,16 @@ pub struct InboxOrganizeState {
 }
 
 impl InboxOrganizeState {
-    /// Load organizable files and create the workflow state from a ReadOnlyDb.
+    /// Create workflow state from pre-loaded directories.
     ///
-    /// Returns None if there are no organizable files.
-    pub fn load_from_read_db(read_db: &ReadOnlyDb<'_>, config: &Config) -> Option<Self> {
-        let files = read_db.get_organizable_inbox_files().ok()?;
-        if files.is_empty() {
-            return None;
-        }
-
-        let inbox_dir = config.inbox_dir();
-        let corpus_dir = config.corpus_dir();
-        let granularity = config.opinions.inbox_organize.directory_granularity;
-
-        // Group files into directories based on granularity
-        let directories = group_into_directories(&files, &inbox_dir, granularity);
+    /// The directories come from `GetInboxOrganizeData` domain query.
+    /// Returns None if directories is empty.
+    pub fn from_directories(directories: Vec<InboxDirectory>, config: &Config) -> Option<Self> {
         if directories.is_empty() {
             return None;
         }
+
+        let corpus_dir = config.corpus_dir();
 
         // Create corpus navigator (directories only, show root, with synthetic entry)
         let mut corpus_navigator = TreeNavigator::new(
@@ -419,7 +410,7 @@ impl InboxOrganizeState {
 // ============================================================================
 
 /// Group organizable files into InboxDirectory structs based on granularity.
-fn group_into_directories(
+pub(crate) fn group_into_directories(
     files: &[(i64, String)],
     inbox_dir: &std::path::Path,
     granularity: InboxOrganizeGranularity,

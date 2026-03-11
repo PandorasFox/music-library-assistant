@@ -28,7 +28,7 @@ use crate::meta::mutations::Mutation;
 /// Where the intake confirmation was triggered from.
 ///
 /// Replaces the old `zone: String` for post-action routing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum IntakeSource {
     /// Triggered at startup after eyeballing completes
     Startup,
@@ -39,7 +39,7 @@ pub enum IntakeSource {
 }
 
 /// A directory group for display purposes
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DirectoryGroup {
     /// Display path (relative to corpus root)
     pub display_path: String,
@@ -50,7 +50,7 @@ pub struct DirectoryGroup {
 }
 
 /// File entry with path for indexing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct UnindexedFileEntry {
     /// Absolute path for indexing
     pub abs_path: PathBuf,
@@ -59,7 +59,7 @@ pub struct UnindexedFileEntry {
 }
 
 /// State for the intake confirmation modal.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct IntakeConfirmationState {
     /// Number of unindexed files detected
     pub file_count: usize,

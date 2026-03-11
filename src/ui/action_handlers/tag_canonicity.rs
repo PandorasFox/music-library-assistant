@@ -406,7 +406,10 @@ impl App {
         let kind = clusters.kind;
         let pending = self
             .cache
-            .query(move |db| Self::load_typed_signal_data(&signal_key, kind, db));
+            .domain_query(crate::db::domain::GetTagCanonicitySignalData {
+                signal_key,
+                kind,
+            });
 
         self.view = ActiveView::TagCanonicityLoading { pending, clusters };
         true
@@ -469,32 +472,6 @@ impl App {
                 }
 
                 self.view = ActiveView::TagCanonicityResolution { state, clusters };
-            }
-        }
-    }
-
-    /// Load typed signal data by key and kind, returning modal data.
-    fn load_typed_signal_data(
-        key: &str,
-        kind: CanonicitySignalKind,
-        read_db: &crate::db::ReadOnlyDb,
-    ) -> Option<tag_canonicity_v2::TagCanonicalityModalDataV2> {
-        match kind {
-            CanonicitySignalKind::TagCanonicity => {
-                let signal = read_db.get_tag_canonicity_signal(key).ok()??;
-                tag_canonicity_v2::TagCanonicalityModalDataV2::from_tag_canonicity(&signal, read_db)
-            }
-            CanonicitySignalKind::InconsistentAlbumArtist => {
-                let signal = read_db.get_inconsistent_album_artist_signal(key).ok()??;
-                tag_canonicity_v2::TagCanonicalityModalDataV2::from_inconsistent_album_artist(
-                    &signal, read_db,
-                )
-            }
-            CanonicitySignalKind::InboxTagCanonicity => {
-                let signal = read_db.get_inbox_tag_canonicity_signal(key).ok()??;
-                tag_canonicity_v2::TagCanonicalityModalDataV2::from_inbox_tag_canonicity(
-                    &signal, read_db,
-                )
             }
         }
     }

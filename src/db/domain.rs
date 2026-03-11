@@ -612,6 +612,325 @@ define_domain_query! {
 }
 
 // ============================================================================
+// Wave 5: Remaining closure conversions
+// ============================================================================
+
+define_domain_query! {
+    /// Gather unindexed files for intake confirmation.
+    ///
+    /// `zone: None` checks both corpus and inbox (startup mode).
+    /// `zone: Some(Zone::Corpus)` or `Some(Zone::Inbox)` checks one zone.
+    GetIntakeConfirmation {
+        source: crate::ui::startup::IntakeSource,
+        zone: Option<crate::db::types::Zone>,
+    } => Option<crate::ui::startup::IntakeConfirmationState>, uncached, |s, db| {
+        use crate::ui::startup::IntakeConfirmationState;
+        match s.zone {
+            Some(crate::db::types::Zone::Corpus) => {
+                IntakeConfirmationState::gather_zone::<crate::zones::CorpusZone>(db, s.source)
+            }
+            Some(crate::db::types::Zone::Inbox) => {
+                IntakeConfirmationState::gather_zone::<crate::zones::InboxZone>(db, s.source)
+            }
+            Some(_) => None,
+            None => IntakeConfirmationState::gather_startup(db),
+        }
+    }
+}
+
+define_domain_query! {
+    /// Load compound split modal data for a specific compound group.
+    GetCompoundSplitGroupData {
+        group: crate::meta::signals::data::CompoundGroup,
+        zone: crate::db::types::Zone,
+    } => Option<crate::ui::compound_split_v2::CompoundSplitDataV2>, uncached, |s, db| {
+        crate::ui::compound_split_v2::CompoundSplitDataV2::from_compound_group(&s.group, db, s.zone)
+    }
+}
+
+define_domain_query! {
+    /// Load tag canonicity signal data for a specific signal key.
+    GetTagCanonicitySignalData {
+        signal_key: String,
+        kind: crate::ui::CanonicitySignalKind,
+    } => Option<crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2>, uncached, |s, db| {
+        load_tag_canonicity_signal_data(&s.signal_key, s.kind, db)
+    }
+}
+
+/// Load typed tag canonicity signal data by key and kind.
+///
+/// Extracted from `App::load_typed_signal_data` so it can be called
+/// from the domain query without needing `&self`.
+fn load_tag_canonicity_signal_data(
+    key: &str,
+    kind: crate::ui::CanonicitySignalKind,
+    read_db: &ReadOnlyDb,
+) -> Option<crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2> {
+    use crate::ui::CanonicitySignalKind;
+    use crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2;
+    match kind {
+        CanonicitySignalKind::TagCanonicity => {
+            let signal = read_db.get_tag_canonicity_signal(key).ok()??;
+            TagCanonicalityModalDataV2::from_tag_canonicity(&signal, read_db)
+        }
+        CanonicitySignalKind::InconsistentAlbumArtist => {
+            let signal = read_db.get_inconsistent_album_artist_signal(key).ok()??;
+            TagCanonicalityModalDataV2::from_inconsistent_album_artist(&signal, read_db)
+        }
+        CanonicitySignalKind::InboxTagCanonicity => {
+            let signal = read_db.get_inbox_tag_canonicity_signal(key).ok()??;
+            TagCanonicalityModalDataV2::from_inbox_tag_canonicity(&signal, read_db)
+        }
+    }
+}
+
+/// Response type for batch recording data loading.
+#[derive(serde::Serialize)]
+pub struct RecordingBatchResult {
+    pub summaries: Vec<(String, crate::ui::external_match_modal::types::RecordingSummary)>,
+    pub details: Vec<(String, crate::ui::external_match_modal::types::RecordingDetail)>,
+}
+
+define_domain_query! {
+    /// Batch-load MB recording summaries and detail data from cache.
+    GetRecordingBatchData {
+        recording_ids: Vec<String>,
+        preferred_locales: Vec<String>,
+    } => RecordingBatchResult, uncached, |s, db| {
+        load_recording_batch_data(&s.recording_ids, &s.preferred_locales, db)
+    }
+}
+
+/// Batch-load recording data from MB cache.
+///
+/// Extracted from the inline closure in `start_external_match_review_with`.
+fn load_recording_batch_data(
+    ids: &[String],
+    preferred_locales: &[String],
+    db: &ReadOnlyDb,
+) -> RecordingBatchResult {
+    use crate::external::musicbrainz;
+    use crate::ui::external_match_modal::types::{RecordingDetail, RecordingSummary};
+    use std::collections::HashSet;
+
+    let mut summaries = Vec::new();
+    let mut details = Vec::new();
+
+    for rec_id in ids {
+        let rec_cache = db.get_mb_recording_cache(rec_id).ok().flatten();
+        let recording =
+            rec_cache.and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
+
+        let Some(rec) = recording else {
+            continue;
+        };
+
+        // Collect unique artist IDs from credits + relations
+        let mut artist_ids: Vec<String> = Vec::new();
+        let mut artist_seen = HashSet::new();
+        for credit in &rec.artist_credit {
+            if artist_seen.insert(credit.artist.id.clone()) {
+                artist_ids.push(credit.artist.id.clone());
+            }
+        }
+        for relation in &rec.relations {
+            if let Some(ref artist) = relation.artist {
+                if artist_seen.insert(artist.id.clone()) {
+                    artist_ids.push(artist.id.clone());
+                }
+            }
+        }
+
+        // Load cached artist data
+        let artists: Vec<(String, Option<musicbrainz::MbArtist>)> = artist_ids
+            .into_iter()
+            .map(|id| {
+                let parsed = db
+                    .get_mb_artist_cache(&id)
+                    .ok()
+                    .flatten()
+                    .and_then(|(json, _)| musicbrainz::parse_artist(&json).ok());
+                (id, parsed)
+            })
+            .collect();
+
+        // Build summary
+        let artist_credit = musicbrainz::join_artist_credits_localized(
+            &rec.artist_credit,
+            &artists,
+            preferred_locales,
+        );
+
+        summaries.push((
+            rec_id.clone(),
+            RecordingSummary {
+                title: rec.title.clone(),
+                artist_credit,
+                length_ms: rec.length.map(|l| l as u64),
+                release_count: rec.releases.len(),
+            },
+        ));
+
+        // Load cached release data for full detail
+        let releases: Vec<_> = rec
+            .releases
+            .iter()
+            .map(|r| {
+                let parsed = db
+                    .get_mb_release_cache(&r.id)
+                    .ok()
+                    .flatten()
+                    .and_then(|(json, _)| musicbrainz::parse_release(&json).ok());
+                (r.id.clone(), parsed)
+            })
+            .collect();
+
+        details.push((
+            rec_id.clone(),
+            RecordingDetail {
+                recording: rec,
+                artists,
+                releases,
+            },
+        ));
+    }
+
+    RecordingBatchResult { summaries, details }
+}
+
+/// Response type for release staging data loading.
+#[derive(serde::Serialize)]
+pub struct ReleaseStagingData {
+    pub bundle: crate::external::musicbrainz::MbCacheBundle,
+    pub inode_tags: std::collections::HashMap<i64, Vec<(String, String)>>,
+}
+
+define_domain_query! {
+    /// Load MB cache bundle and current tags for release approval staging.
+    GetReleaseStagingData {
+        release_ids: Vec<String>,
+        recording_ids: Vec<String>,
+        inodes: Vec<i64>,
+    } => ReleaseStagingData, uncached, |s, db| {
+        use crate::external::musicbrainz::MbCacheBundle;
+        let bundle = MbCacheBundle::load(db, &s.release_ids, &s.recording_ids);
+        let mut tags = std::collections::HashMap::new();
+        for inode in &s.inodes {
+            tags.insert(
+                *inode,
+                db.get_tags::<crate::zones::CorpusZone>(*inode)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
+                    .collect(),
+            );
+        }
+        ReleaseStagingData { bundle, inode_tags: tags }
+    }
+}
+
+/// Tag editor file loading mode.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum TagEditorLoadMode {
+    /// Load all files in directory tree (recursive).
+    Directory,
+    /// Load siblings in parent directory, select the target file.
+    SingleFile,
+}
+
+define_domain_query! {
+    /// Load audio files for the tag editor.
+    ///
+    /// In `Directory` mode, loads all files recursively under `rel_path`.
+    /// In `SingleFile` mode, loads direct siblings in the parent dir and
+    /// returns the index of the target file.
+    GetTagEditorFiles {
+        rel_path: std::path::PathBuf,
+        mode: TagEditorLoadMode,
+    } => (Vec<crate::db::types::AudioFile>, usize), uncached, |s, db| {
+        load_tag_editor_files(&s.rel_path, &s.mode, db)
+    }
+}
+
+/// Load audio files for tag editing based on mode.
+///
+/// Extracted from `App::open_unified_tag_editor` closure logic.
+fn load_tag_editor_files(
+    rel_path: &std::path::Path,
+    mode: &TagEditorLoadMode,
+    db: &ReadOnlyDb,
+) -> (Vec<crate::db::types::AudioFile>, usize) {
+    match mode {
+        TagEditorLoadMode::Directory => {
+            let files = db
+                .get_audio_files_for_tag_editing(rel_path)
+                .unwrap_or_default();
+            (files, 0)
+        }
+        TagEditorLoadMode::SingleFile => {
+            let rel_parent = match rel_path.parent() {
+                Some(p) => p.to_path_buf(),
+                None => return (Vec::new(), 0),
+            };
+
+            // Load all audio files from parent directory
+            let dir_files = db
+                .get_audio_files_for_tag_editing(&rel_parent)
+                .unwrap_or_default();
+
+            // Filter to only files directly in this directory (not subdirectories)
+            let rel_path_str = rel_path.to_string_lossy().to_string();
+            let rel_parent_str = rel_parent.to_string_lossy().to_string();
+            let files_in_dir: Vec<_> = dir_files
+                .into_iter()
+                .filter(|f| {
+                    if let Some(suffix) = f.path().strip_prefix(&rel_parent_str) {
+                        let suffix = suffix.trim_start_matches(std::path::MAIN_SEPARATOR);
+                        !suffix.contains(std::path::MAIN_SEPARATOR)
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+
+            let selected_idx = files_in_dir
+                .iter()
+                .position(|f| f.path() == rel_path_str)
+                .unwrap_or(0);
+
+            if files_in_dir.is_empty() {
+                // Fallback: try to get just the single audio file
+                match db.get_audio_file_by_path(&rel_path_str) {
+                    Ok(Some(audio_file)) => (vec![audio_file], 0),
+                    _ => (Vec::new(), 0),
+                }
+            } else {
+                (files_in_dir, selected_idx)
+            }
+        }
+    }
+}
+
+define_domain_query! {
+    /// Load organizable inbox directories for the organize workflow.
+    ///
+    /// Returns the grouped directories (data only). The caller constructs
+    /// the full `InboxOrganizeState` with navigator and UI state.
+    GetInboxOrganizeData {
+        config: crate::config::Config,
+    } => Vec<crate::ui::inbox_organize::InboxDirectory>, uncached, |s, db| {
+        let files = db.get_organizable_inbox_files().unwrap_or_default();
+        if files.is_empty() {
+            return Vec::new();
+        }
+        let inbox_dir = s.config.inbox_dir();
+        let granularity = s.config.opinions.inbox_organize.directory_granularity;
+        crate::ui::inbox_organize::group_into_directories(&files, &inbox_dir, granularity)
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

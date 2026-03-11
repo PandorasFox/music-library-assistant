@@ -351,7 +351,7 @@ pub struct ExternalTagDiff {
 
 /// A group of inodes sharing the same compound tag value.
 /// Used to aggregate compound split resolution by value rather than per-file.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompoundGroup {
     pub tag_name: String,
     pub compound_value: String,

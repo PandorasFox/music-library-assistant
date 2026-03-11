@@ -29,7 +29,7 @@ use crate::meta::signals::data::{
 use crate::ui::widgets::TextInputState;
 
 /// A tag variant with its occurrence count.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TagVariantEntry {
     /// The tag value
     pub value: String,
@@ -38,7 +38,7 @@ pub struct TagVariantEntry {
 }
 
 /// File info with cached tag values for display.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FileTagInfo {
     /// Inode of the file
     pub inode: i64,
@@ -51,7 +51,7 @@ pub struct FileTagInfo {
 }
 
 /// Extended modal data with per-file tag info.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TagCanonicalityModalDataV2 {
     /// The tag name being canonicalized (e.g., "artist", "album_artist")
     pub tag_name: String,

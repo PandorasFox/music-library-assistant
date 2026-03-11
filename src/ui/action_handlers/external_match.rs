@@ -155,8 +155,6 @@ impl App {
             return;
         }
 
-        use crate::external::musicbrainz;
-
         // Collect unique recording IDs
         let mut recording_ids: Vec<String> = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -172,98 +170,16 @@ impl App {
             .unwrap_or_default();
 
         // Batch query: load summaries + full detail for all recordings at once
-        let ids = recording_ids;
-        let (summaries, details) = self
+        let batch = self
             .cache
-            .query(move |db| {
-                let mut summaries = Vec::new();
-                let mut details = Vec::new();
-
-                for rec_id in &ids {
-                    let rec_cache = db.get_mb_recording_cache(rec_id).ok().flatten();
-                    let recording =
-                        rec_cache.and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
-
-                    let Some(rec) = recording else {
-                        continue;
-                    };
-
-                    // Collect unique artist IDs from credits + relations
-                    let mut artist_ids: Vec<String> = Vec::new();
-                    let mut artist_seen = std::collections::HashSet::new();
-                    for credit in &rec.artist_credit {
-                        if artist_seen.insert(credit.artist.id.clone()) {
-                            artist_ids.push(credit.artist.id.clone());
-                        }
-                    }
-                    for relation in &rec.relations {
-                        if let Some(ref artist) = relation.artist {
-                            if artist_seen.insert(artist.id.clone()) {
-                                artist_ids.push(artist.id.clone());
-                            }
-                        }
-                    }
-
-                    // Load cached artist data
-                    let artists: Vec<(String, Option<musicbrainz::MbArtist>)> = artist_ids
-                        .into_iter()
-                        .map(|id| {
-                            let parsed = db
-                                .get_mb_artist_cache(&id)
-                                .ok()
-                                .flatten()
-                                .and_then(|(json, _)| musicbrainz::parse_artist(&json).ok());
-                            (id, parsed)
-                        })
-                        .collect();
-
-                    // Build summary
-                    let artist_credit = musicbrainz::join_artist_credits_localized(
-                        &rec.artist_credit,
-                        &artists,
-                        &preferred_locales,
-                    );
-
-                    summaries.push((
-                        rec_id.clone(),
-                        external_match_modal::types::RecordingSummary {
-                            title: rec.title.clone(),
-                            artist_credit,
-                            length_ms: rec.length.map(|l| l as u64),
-                            release_count: rec.releases.len(),
-                        },
-                    ));
-
-                    // Load cached release data for full detail
-                    let releases: Vec<_> = rec
-                        .releases
-                        .iter()
-                        .map(|r| {
-                            let parsed = db
-                                .get_mb_release_cache(&r.id)
-                                .ok()
-                                .flatten()
-                                .and_then(|(json, _)| musicbrainz::parse_release(&json).ok());
-                            (r.id.clone(), parsed)
-                        })
-                        .collect();
-
-                    details.push((
-                        rec_id.clone(),
-                        external_match_modal::types::RecordingDetail {
-                            recording: rec,
-                            artists,
-                            releases,
-                        },
-                    ));
-                }
-
-                (summaries, details)
+            .domain_query(crate::db::domain::GetRecordingBatchData {
+                recording_ids,
+                preferred_locales,
             })
             .recv();
 
         let state =
-            external_match_modal::ExternalMatchReviewState::new(entries, summaries, details);
+            external_match_modal::ExternalMatchReviewState::new(entries, batch.summaries, batch.details);
 
         self.view = ActiveView::ExternalMatchReview(state);
     }
@@ -498,7 +414,6 @@ impl App {
         selected_indices: std::collections::BTreeSet<usize>,
         gesture: &witness::ConfirmationGesture,
     ) {
-        use crate::external::musicbrainz::MbCacheBundle;
         use crate::external::tag_generation::{generate_tag_ops, MbTagInput};
         use crate::meta::decisions::DecisionKey;
         use crate::meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation};
@@ -548,26 +463,16 @@ impl App {
         }
 
         // Batch query: load MB cache + current tags
-        let inodes = all_inodes;
-        let (bundle, inode_tags) = self
+        let staging = self
             .cache
-            .query(move |db| {
-                let bundle = MbCacheBundle::load(db, &release_ids, &recording_ids);
-                let mut tags: std::collections::HashMap<i64, Vec<(String, String)>> =
-                    std::collections::HashMap::new();
-                for inode in &inodes {
-                    tags.insert(
-                        *inode,
-                        db.get_tags::<crate::zones::CorpusZone>(*inode)
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|t| (t.tag_name.to_uppercase(), t.tag_value))
-                            .collect(),
-                    );
-                }
-                (bundle, tags)
+            .domain_query(crate::db::domain::GetReleaseStagingData {
+                release_ids,
+                recording_ids,
+                inodes: all_inodes,
             })
             .recv();
+        let bundle = staging.bundle;
+        let inode_tags = staging.inode_tags;
 
         // Stage one decision per release
         let open_txn = self.open_txn_mode();

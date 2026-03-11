@@ -111,11 +111,11 @@ impl App {
             .start_transaction(&format!("Compound tag split ({})", mode_str));
 
         // Load the first group into modal data
-        let first_group = clusters.all_groups()[0].clone();
         let data = self
             .cache
-            .query(move |db| {
-                compound_split_v2::CompoundSplitDataV2::from_compound_group(&first_group, db, zone)
+            .domain_query(crate::db::domain::GetCompoundSplitGroupData {
+                group: clusters.all_groups()[0].clone(),
+                zone,
             })
             .recv();
 
@@ -418,8 +418,9 @@ impl App {
 
         let data = self
             .cache
-            .query(move |db| {
-                compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, db, zone)
+            .domain_query(crate::db::domain::GetCompoundSplitGroupData {
+                group,
+                zone,
             })
             .recv();
 
@@ -474,8 +475,9 @@ impl App {
 
         let data = self
             .cache
-            .query(move |db| {
-                compound_split_v2::CompoundSplitDataV2::from_compound_group(&group, db, zone)
+            .domain_query(crate::db::domain::GetCompoundSplitGroupData {
+                group,
+                zone,
             })
             .recv();
 

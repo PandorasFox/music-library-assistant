@@ -32,11 +32,9 @@ impl HandleAction for super::super::inbox_view::InboxAction {
                 // Gather inbox unindexed files and show intake confirmation
                 let intake_state = app
                     .cache
-                    .query(|db| {
-                        startup::IntakeConfirmationState::gather_zone::<crate::zones::InboxZone>(
-                            db,
-                            startup::IntakeSource::Inbox,
-                        )
+                    .domain_query(crate::db::domain::GetIntakeConfirmation {
+                        source: startup::IntakeSource::Inbox,
+                        zone: Some(crate::db::types::Zone::Inbox),
                     })
                     .recv();
 
@@ -170,12 +168,16 @@ impl App {
     /// Start the inbox organize workflow.
     fn start_inbox_organize(&mut self) {
         let config = self.config().clone();
-        let state = self
+        let directories = self
             .cache
-            .query(move |db| inbox_organize::InboxOrganizeState::load_from_read_db(db, &config))
+            .domain_query(crate::db::domain::GetInboxOrganizeData {
+                config: config.clone(),
+            })
             .recv();
 
-        if let Some(state) = state {
+        if let Some(state) =
+            inbox_organize::InboxOrganizeState::from_directories(directories, &config)
+        {
             self.view = ActiveView::InboxOrganize(state);
         }
     }

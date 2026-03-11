@@ -313,7 +313,7 @@ pub(crate) enum FilterPopupContext {
 // ============================================================================
 
 /// Which typed signal table this cluster modal targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum CanonicitySignalKind {
     /// `signal_tag_canonicity` table (pre-fill enabled)
     TagCanonicity,

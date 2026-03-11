@@ -211,7 +211,10 @@ impl App {
         ));
 
         self.cache
-            .query(move |db| startup::IntakeConfirmationState::gather_startup(db))
+            .domain_query(crate::db::domain::GetIntakeConfirmation {
+                source: startup::IntakeSource::Startup,
+                zone: None,
+            })
             .recv()
     }
 
@@ -284,15 +287,11 @@ impl App {
 
         // Load compound split data from the group via cache thread
         // Progressive worker only used for corpus compound splits (Ctrl+A in safe mode)
-        let group_clone = group.clone();
         let data = match self
             .cache
-            .query(move |db| {
-                compound_split_v2::CompoundSplitDataV2::from_compound_group(
-                    &group_clone,
-                    db,
-                    crate::db::types::Zone::Corpus,
-                )
+            .domain_query(crate::db::domain::GetCompoundSplitGroupData {
+                group: group.clone(),
+                zone: crate::db::types::Zone::Corpus,
             })
             .recv()
         {

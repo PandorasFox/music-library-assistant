@@ -14,16 +14,23 @@
 use rusqlite::{Connection, Result};
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-
 /// Compute a deterministic hash from bincode-serialized bytes.
 ///
-/// Uses `DefaultHasher` (SipHash-1-3 with keys (0,0)) which is deterministic
-/// across calls within a process. Stored as i64 in SQLite via `as i64`.
+/// Uses FNV-1a (64-bit), a simple non-cryptographic hash with a fixed algorithm.
+/// Unlike `DefaultHasher`, FNV-1a is stable across Rust compiler versions —
+/// `DefaultHasher`'s algorithm is explicitly not guaranteed stable, so stored
+/// hash values could silently become stale after a toolchain update, triggering
+/// spurious re-emission of every signal.
 fn compute_blob_hash(bytes: &[u8]) -> i64 {
-    let mut hasher = std::hash::DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish() as i64
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x00000100000001B3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for &byte in bytes {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash as i64
 }
 
 // ============================================================================

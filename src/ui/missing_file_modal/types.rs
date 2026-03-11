@@ -14,7 +14,7 @@ use crate::meta::mutations::indexing::DropFromIndexMutation;
 
 /// A missing corpus file that can be restored from library.
 ///
-/// The same inode exists in the files table (source='library'), meaning we can
+/// The same inode exists in the files table (zone='library'), meaning we can
 /// hard-link from library back to corpus.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RestorableMissingFile {
@@ -51,7 +51,7 @@ pub struct MissingFileModalData {
 impl MissingFileModalData {
     /// Load and categorize missing files from the database.
     ///
-    /// A file is restorable if its inode exists in the files table (source='library').
+    /// A file is restorable if its inode exists in the files table (zone='library').
     /// For missing files, the file doesn't exist on disk. We try to get the inode
     /// from the database (files or audio_info tables).
     pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {

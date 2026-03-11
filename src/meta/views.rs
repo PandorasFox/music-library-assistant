@@ -437,8 +437,8 @@ pub struct OobSyncFile {
 
 /// Classification bucket for OOB signal files.
 ///
-/// Determined by SQL CASE expression against signal type and `tag_mismatches` table:
-/// - MtimeOnly: mtime_only_mismatch signal (mtime changed, tags identical) - needs acknowledgement
+/// Determined by typed OOB signal classification:
+/// - MtimeOnly: MtimeOnlyMismatchSignal (mtime changed, tags identical) - needs acknowledgement
 /// - DbOnly: all mismatches have `disk_value IS NULL`
 /// - DiskOnly: all mismatches have `db_value IS NULL`
 /// - Conflict: both values present, or mixed null directions

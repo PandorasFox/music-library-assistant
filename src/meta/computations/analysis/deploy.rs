@@ -309,7 +309,7 @@ pub fn execute_detect_release_overlaps(
 
 /// Execute DeriveDeployHealthSignals - derive library health from scan data.
 ///
-/// Reads library file data from files table (source='library') and compares against
+/// Reads library file data from files table (zone='library') and compares against
 /// corpus index to identify leftovers and stale deployments.
 pub fn execute_derive_deploy_health_signals(
     read_only_db: &ReadOnlyDb<'_>,
@@ -796,7 +796,7 @@ pub fn execute_derive_corpus_deploy_status(
         }
     };
 
-    // Build inode → library paths map from files table (source='library')
+    // Build inode → library paths map from files table (zone='library')
     // This replaces the old stale_signals/stale_inodes approach that had a race
     // condition with DeriveDeployHealthSignals. We compute stale status inline.
     let mut library_inode_to_paths: HashMap<i64, Vec<PathBuf>> = HashMap::new();

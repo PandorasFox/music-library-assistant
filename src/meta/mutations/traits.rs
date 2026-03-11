@@ -109,9 +109,8 @@ pub trait MutationExecutor: std::fmt::Debug + Send + Sync {
 
     /// Paths to spawn signal update computations for.
     ///
-    /// Transitional: used during migration from path-based to inode-based
-    /// post-execution pipeline. Returns paths that need UpdateCorpusFileSignals
-    /// or UpdateLibraryFileSignals computations spawned.
+    /// Returns paths that need UpdateCorpusFileSignals or UpdateLibraryFileSignals
+    /// computations spawned in the post-execution pipeline (Phase 3).
     fn paths_for_signal_updates(&self) -> Vec<std::path::PathBuf> {
         Vec::new()
     }

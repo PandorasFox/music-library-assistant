@@ -194,7 +194,7 @@ pub enum ReasoningLevel {
 
 /// Watcher state — tracks filesystem watcher thread progress.
 ///
-/// Replaces `InodeAwarenessLevel`. The watcher thread owns filesystem
+/// The watcher thread owns filesystem
 /// monitoring; this enum tracks its lifecycle from the Witch's perspective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WatcherState {

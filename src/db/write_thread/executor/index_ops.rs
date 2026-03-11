@@ -648,11 +648,8 @@ pub(super) fn execute_set_needs_disk_flush(db: &Database, path: &str, value: boo
     Ok(())
 }
 
-/// Execute ClearTagMismatchesForTrack: clear all mismatches for a file.
-/// NOTE: tag_mismatches table is dropped in new schema. Tag conflicts are
-/// now handled via OOB signals with typed mismatch data in bincode BLOBs.
-/// This is a no-op placeholder until callers are updated.
+/// No-op: tag_mismatches table was dropped. Tag conflicts are now handled
+/// via OOB signals (OutOfBandTagSyncSignal, OutOfBandTagConflictSignal, MtimeOnlyMismatchSignal).
 pub(super) fn execute_clear_tag_mismatches_for_track(_db: &Database, _path: &str) -> anyhow::Result<()> {
-    // TODO: Clear OOB signals for this path when tag conflicts are fully signal-based
     Ok(())
 }

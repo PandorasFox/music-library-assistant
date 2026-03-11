@@ -201,7 +201,7 @@ impl App {
 
     /// Check for unindexed files after Awakening completes.
     ///
-    /// Queries UnindexedFile signals (computed during second-level derivation).
+    /// Queries UnindexedFile signals (emitted by DeriveZoneSignals / UpdateCorpusFileSignals).
     /// Returns Some if there are unindexed files to confirm, None otherwise.
     pub(super) fn check_for_unindexed_files(&mut self) -> Option<startup::IntakeConfirmationState> {
         let reasoning = self.witch.reasoning_level();

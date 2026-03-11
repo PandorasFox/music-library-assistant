@@ -458,7 +458,7 @@ impl SignalWriteSender {
         });
     }
 
-    /// Clear all tag mismatches for a track.
+    /// No-op vestige: tag_mismatches table was dropped. OOB signals handle conflicts now.
     pub fn clear_tag_mismatches_for_track(&self, path: &str, _witness: &MutationExecutionWitness) {
         self.mark_enqueued();
         let _ = self.tx.send(DbWriteOp::ClearTagMismatchesForTrack {

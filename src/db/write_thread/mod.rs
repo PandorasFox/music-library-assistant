@@ -314,7 +314,7 @@ enum DbWriteOp {
         role: String,
     },
 
-    /// Clear tag mismatches for a track (after resolution).
+    /// No-op vestige: tag_mismatches table was dropped. OOB signals handle conflicts now.
     ClearTagMismatchesForTrack {
         path: String,
     },

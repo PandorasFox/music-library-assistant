@@ -896,7 +896,7 @@ fn collect_tracked_files(dir: &Path, root: &Path, result: &mut HashMap<i64, (Str
                 let (mtime_secs, mtime_nanos) = crate::corpus::paths::read_mtime(&metadata);
                 let file_size = metadata.len() as i64;
 
-                // Store path relative to zone root
+                // Store path relative to zone root (for internal abs_path reconstruction)
                 let relative = path
                     .strip_prefix(root)
                     .unwrap_or(&path)

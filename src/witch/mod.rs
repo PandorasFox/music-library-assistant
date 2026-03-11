@@ -1058,17 +1058,20 @@ impl Witch {
                         inodes.len()
                     ));
 
-                    // Accumulate inodes into observed maps, converting to path-only
-                    // (the mtime/size info is held by the watcher for steady-state tracking)
+                    // Accumulate inodes into observed maps.
+                    // Watcher paths are zone-relative (e.g. "digital/releases/...").
+                    // DB paths are archive-root-relative (e.g. "corpus/digital/releases/...").
+                    // Prepend zone name to match DB convention.
+                    let zone_prefix = zone.as_str();
                     match zone {
                         crate::db::types::Zone::Corpus => {
                             for (inode, (path, _mtime_s, _mtime_ns, _size)) in inodes {
-                                self.observed_corpus_inodes.insert(inode, path);
+                                self.observed_corpus_inodes.insert(inode, format!("{}/{}", zone_prefix, path));
                             }
                         }
                         crate::db::types::Zone::Inbox => {
                             for (inode, (path, _mtime_s, _mtime_ns, _size)) in inodes {
-                                self.observed_inbox_inodes.insert(inode, path);
+                                self.observed_inbox_inodes.insert(inode, format!("{}/{}", zone_prefix, path));
                             }
                         }
                         crate::db::types::Zone::Library => {
@@ -1213,7 +1216,9 @@ impl Witch {
                     // (or cascade-drop for inbox)
                     self.watcher_derivation_needed = true;
                 }
-                fs_watcher::WatcherMessage::ImageFileObserved(img) => {
+                fs_watcher::WatcherMessage::ImageFileObserved(mut img) => {
+                    // Watcher paths are zone-relative; DB expects archive-root-relative
+                    img.path = format!("{}/{}", img.zone.as_str(), img.path);
                     self.pending_observed_images.push(img);
                 }
                 fs_watcher::WatcherMessage::Rescan => {

@@ -79,23 +79,51 @@ pub(crate) enum SessionAction {
 impl WizardItem for SessionListEntry {
     fn wizard(&self, _width: u16) -> Option<WizardOffer> {
         let s = &self.summary;
-        Some(WizardOffer::Popup(vec![
-            Line::styled(
-                crate::ui::helpers::truncate_right(&s.earliest_at, 19),
-                Style::default().fg(Color::Cyan),
-            ),
-            Line::styled(
-                format!(
-                    "{} edit{}, {} file{}",
-                    s.edit_count,
-                    if s.edit_count == 1 { "" } else { "s" },
-                    s.inode_count,
-                    if s.inode_count == 1 { "" } else { "s" },
-                ),
-                Style::default().fg(Color::White),
-            ),
-        ]))
+        let relative = relative_timestamp(&s.earliest_at);
+        Some(WizardOffer::Popup(vec![Line::styled(
+            relative,
+            Style::default().fg(Color::Cyan),
+        )]))
     }
+}
+
+/// Parse a `YYYY-MM-DD HH:MM:SS` UTC timestamp into a human-relative string.
+fn relative_timestamp(ts: &str) -> String {
+    use chrono::{NaiveDateTime, Utc};
+
+    let Ok(naive) = NaiveDateTime::parse_from_str(ts.trim(), "%Y-%m-%d %H:%M:%S") else {
+        return ts.to_string();
+    };
+    let then = naive.and_utc();
+    let now = Utc::now();
+    let delta = now.signed_duration_since(then);
+
+    if delta.num_seconds() < 0 {
+        return "just now".to_string();
+    }
+
+    let secs = delta.num_seconds();
+    if secs < 60 {
+        return "just now".to_string();
+    }
+    let mins = delta.num_minutes();
+    if mins < 60 {
+        return format!("{} min{} ago", mins, if mins == 1 { "" } else { "s" });
+    }
+    let hours = delta.num_hours();
+    if hours < 24 {
+        return format!("{} hour{} ago", hours, if hours == 1 { "" } else { "s" });
+    }
+    let days = delta.num_days();
+    if days < 30 {
+        return format!("{} day{} ago", days, if days == 1 { "" } else { "s" });
+    }
+    if days < 365 {
+        let months = days / 30;
+        return format!("{} month{} ago", months, if months == 1 { "" } else { "s" });
+    }
+    let years = days / 365;
+    format!("{} year{} ago", years, if years == 1 { "" } else { "s" })
 }
 
 impl ListEntry for SessionListEntry {

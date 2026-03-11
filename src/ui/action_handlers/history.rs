@@ -133,7 +133,7 @@ impl App {
             indices.sort();
             for idx in indices {
                 if let Some(entry) = detail.entries.get(idx) {
-                    edits.push(entry.edit.clone());
+                    edits.extend(entry.edits());
                 }
             }
             edits

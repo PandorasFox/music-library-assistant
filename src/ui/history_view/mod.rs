@@ -11,7 +11,7 @@ pub mod render;
 
 use std::collections::{BTreeSet, HashMap};
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 
 use crate::meta::views::{EditHistoryData, EditRecord, EditSessionSummary};
@@ -134,10 +134,44 @@ impl ListEntry for SessionListEntry {
     }
 }
 
-/// Level 2 list entry: an individual edit within a session.
-pub(crate) struct EditDetailEntry {
-    pub edit: EditRecord,
-    pub path: String,
+/// Level 2 list entry: grouped view of edits within a session.
+///
+/// Edits that are identical across multiple files (same field+old+new) are
+/// pulled out as `CommonEdit` entries. Remaining per-file edits are grouped
+/// under `FileHeader` separators with individual `FileEdit` rows.
+pub(crate) enum EditDetailEntry {
+    /// An edit pattern shared across multiple files.
+    CommonEdit {
+        field_name: String,
+        old_value: Option<String>,
+        new_value: Option<String>,
+        /// Affected file paths (for wizard pane).
+        paths: Vec<String>,
+        /// The underlying EditRecords (for reversal).
+        edits: Vec<EditRecord>,
+    },
+    /// Visual separator before per-file edits.
+    PerFileSeparator,
+    /// Non-selectable file path header grouping per-file edits.
+    FileHeader {
+        path: String,
+    },
+    /// An individual edit that wasn't aggregable.
+    FileEdit {
+        edit: EditRecord,
+        path: String,
+    },
+}
+
+impl EditDetailEntry {
+    /// Return the EditRecords this entry represents (for reversal).
+    pub fn edits(&self) -> Vec<EditRecord> {
+        match self {
+            EditDetailEntry::CommonEdit { edits, .. } => edits.clone(),
+            EditDetailEntry::FileEdit { edit, .. } => vec![edit.clone()],
+            EditDetailEntry::PerFileSeparator | EditDetailEntry::FileHeader { .. } => vec![],
+        }
+    }
 }
 
 /// Action from confirming in the edit detail list.
@@ -147,64 +181,88 @@ pub(crate) enum EditDetailAction {
 
 impl WizardItem for EditDetailEntry {
     fn wizard(&self, _width: u16) -> Option<WizardOffer> {
-        let e = &self.edit;
-        let old_val = e.old_value.as_deref().unwrap_or("∅");
-        let new_val = e.new_value.as_deref().unwrap_or("∅");
+        match self {
+            EditDetailEntry::CommonEdit {
+                field_name,
+                old_value,
+                new_value,
+                paths,
+                ..
+            } => {
+                let old = old_value.as_deref().unwrap_or("∅");
+                let new = new_value.as_deref().unwrap_or("∅");
 
-        let headers = vec![
-            RichSpan::new(
-                "",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            RichSpan::new(
-                "",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ];
+                let mut content = vec![
+                    RichBlock::Paragraph(vec![
+                        RichSpan::new(field_name, Style::default().fg(Color::Cyan)),
+                        RichSpan::new(": ", Style::default().fg(Color::DarkGray)),
+                        RichSpan::new(old, Style::default().fg(Color::Red)),
+                        RichSpan::new(" → ", Style::default().fg(Color::DarkGray)),
+                        RichSpan::new(new, Style::default().fg(Color::Green)),
+                    ]),
+                    RichBlock::Blank,
+                    RichBlock::Heading(format!("Affected files ({})", paths.len())),
+                    RichBlock::Separator,
+                ];
 
-        let rows = vec![
-            vec![
-                vec![RichSpan::new("Field", Style::default().fg(Color::DarkGray))],
-                vec![RichSpan::new(
-                    &e.field_name,
-                    Style::default().fg(Color::Cyan),
-                )],
-            ],
-            vec![
-                vec![RichSpan::new("File", Style::default().fg(Color::DarkGray))],
-                vec![RichSpan::new(&self.path, Style::default().fg(Color::White))],
-            ],
-            vec![
-                vec![RichSpan::new("Old", Style::default().fg(Color::DarkGray))],
-                vec![RichSpan::new(old_val, Style::default().fg(Color::Red))],
-            ],
-            vec![
-                vec![RichSpan::new("New", Style::default().fg(Color::DarkGray))],
-                vec![RichSpan::new(new_val, Style::default().fg(Color::Green))],
-            ],
-            vec![
-                vec![RichSpan::new("Time", Style::default().fg(Color::DarkGray))],
-                vec![RichSpan::new(
-                    crate::ui::helpers::truncate_right(&e.edited_at, 19),
-                    Style::default().fg(Color::White),
-                )],
-            ],
-        ];
+                for path in paths {
+                    content.push(RichBlock::Paragraph(vec![RichSpan::new(
+                        path,
+                        Style::default().fg(Color::White),
+                    )]));
+                }
 
-        let title = format!("{} — {}", e.field_name, self.path);
+                let title = format!(
+                    "{}: {} → {} ({} files)",
+                    field_name,
+                    old,
+                    new,
+                    paths.len()
+                );
 
-        Some(WizardOffer::Pane {
-            title,
-            content: vec![RichBlock::Table {
-                headers,
-                rows,
-                col_ratio: vec![12, 88],
-            }],
-        })
+                Some(WizardOffer::Pane { title, content })
+            }
+            EditDetailEntry::FileEdit { edit, path } => {
+                let old_val = edit.old_value.as_deref().unwrap_or("∅");
+                let new_val = edit.new_value.as_deref().unwrap_or("∅");
+
+                let kv_table = |label: &str, value: &str, style: Style| {
+                    vec![
+                        vec![RichSpan::new(label, Style::default().fg(Color::DarkGray))],
+                        vec![RichSpan::new(value, style)],
+                    ]
+                };
+
+                let headers = vec![
+                    RichSpan::new("", Style::default()),
+                    RichSpan::new("", Style::default()),
+                ];
+
+                let rows = vec![
+                    kv_table("Field", &edit.field_name, Style::default().fg(Color::Cyan)),
+                    kv_table("File", path, Style::default().fg(Color::White)),
+                    kv_table("Old", old_val, Style::default().fg(Color::Red)),
+                    kv_table("New", new_val, Style::default().fg(Color::Green)),
+                    kv_table(
+                        "Time",
+                        &crate::ui::helpers::truncate_right(&edit.edited_at, 19),
+                        Style::default().fg(Color::White),
+                    ),
+                ];
+
+                let title = format!("{} — {}", edit.field_name, path);
+
+                Some(WizardOffer::Pane {
+                    title,
+                    content: vec![RichBlock::Table {
+                        headers,
+                        rows,
+                        col_ratio: vec![12, 88],
+                    }],
+                })
+            }
+            EditDetailEntry::PerFileSeparator | EditDetailEntry::FileHeader { .. } => None,
+        }
     }
 }
 
@@ -216,6 +274,13 @@ impl ListEntry for EditDetailEntry {
             return None;
         }
         Some(EditDetailAction::InitiateReversal)
+    }
+
+    fn is_selectable(&self) -> bool {
+        matches!(
+            self,
+            EditDetailEntry::CommonEdit { .. } | EditDetailEntry::FileEdit { .. }
+        )
     }
 }
 
@@ -355,30 +420,27 @@ impl HistoryViewState {
     }
 
     /// Set detail after one-shot DB query.
+    ///
+    /// Groups edits: identical `(field, old, new)` tuples across 2+ inodes
+    /// become `CommonEdit` entries; remaining per-file edits are grouped
+    /// under `FileHeader` separators.
     pub fn set_detail(
         &mut self,
         session_id: String,
         edits: Vec<EditRecord>,
         inode_paths: HashMap<i64, String>,
     ) {
-        let entries: Vec<EditDetailEntry> = edits
-            .into_iter()
-            .map(|edit| {
-                let path = inode_paths
-                    .get(&edit.inode)
-                    .cloned()
-                    .unwrap_or_else(|| "?".to_string());
-                EditDetailEntry { edit, path }
-            })
-            .collect();
+        let entries = group_edits(edits, &inode_paths);
 
         let mut detail_list = StandardListState::new(StandardListConfig {
             multi_select: true,
             pane_min_width: 70,
         });
-        // Select all by default
-        for i in 0..entries.len() {
-            detail_list.selected.insert(i);
+        // Select all selectable entries by default
+        for (i, entry) in entries.iter().enumerate() {
+            if entry.is_selectable() {
+                detail_list.selected.insert(i);
+            }
         }
 
         self.detail = Some(EditDetailState {
@@ -403,6 +465,130 @@ impl HistoryViewState {
             click_targets: Default::default(),
         });
     }
+}
+
+// ============================================================================
+// Grouping Logic
+// ============================================================================
+
+/// Key for grouping edits by identical mutation pattern.
+#[derive(Hash, PartialEq, Eq, Clone)]
+struct EditPatternKey {
+    field_name: String,
+    old_value: Option<String>,
+    new_value: Option<String>,
+}
+
+/// Group edits into common (multi-file) and per-file entries.
+fn group_edits(
+    edits: Vec<EditRecord>,
+    inode_paths: &HashMap<i64, String>,
+) -> Vec<EditDetailEntry> {
+    use std::collections::hash_map::Entry;
+
+    // Phase 1: bucket edits by (field, old, new) pattern.
+    let mut buckets: HashMap<EditPatternKey, Vec<EditRecord>> = HashMap::new();
+    let mut insertion_order: Vec<EditPatternKey> = Vec::new();
+
+    for edit in edits {
+        let key = EditPatternKey {
+            field_name: edit.field_name.clone(),
+            old_value: edit.old_value.clone(),
+            new_value: edit.new_value.clone(),
+        };
+        match buckets.entry(key.clone()) {
+            Entry::Vacant(e) => {
+                insertion_order.push(key);
+                e.insert(vec![edit]);
+            }
+            Entry::Occupied(mut e) => {
+                e.get_mut().push(edit);
+            }
+        }
+    }
+
+    // Phase 2: partition into common (2+ distinct inodes) vs per-file.
+    let mut common_entries = Vec::new();
+    let mut per_file_edits: Vec<(EditRecord, String)> = Vec::new();
+
+    for key in insertion_order {
+        let bucket = buckets.remove(&key).unwrap();
+        let distinct_inodes: std::collections::HashSet<i64> =
+            bucket.iter().map(|e| e.inode).collect();
+
+        if distinct_inodes.len() >= 2 {
+            let mut paths: Vec<String> = distinct_inodes
+                .iter()
+                .map(|inode| {
+                    inode_paths
+                        .get(inode)
+                        .cloned()
+                        .unwrap_or_else(|| "?".to_string())
+                })
+                .collect();
+            paths.sort();
+
+            common_entries.push(EditDetailEntry::CommonEdit {
+                field_name: key.field_name,
+                old_value: key.old_value,
+                new_value: key.new_value,
+                paths,
+                edits: bucket,
+            });
+        } else {
+            for edit in bucket {
+                let path = inode_paths
+                    .get(&edit.inode)
+                    .cloned()
+                    .unwrap_or_else(|| "?".to_string());
+                per_file_edits.push((edit, path));
+            }
+        }
+    }
+
+    // Phase 3: group per-file edits by inode.
+    let mut entries = common_entries;
+
+    if !per_file_edits.is_empty() {
+        if !entries.is_empty() {
+            entries.push(EditDetailEntry::PerFileSeparator);
+        }
+
+        // Group by inode, preserving order of first appearance.
+        let mut inode_groups: Vec<(i64, String, Vec<EditRecord>)> = Vec::new();
+        let mut inode_index: HashMap<i64, usize> = HashMap::new();
+
+        for (edit, path) in per_file_edits {
+            match inode_index.entry(edit.inode) {
+                Entry::Vacant(e) => {
+                    let idx = inode_groups.len();
+                    e.insert(idx);
+                    inode_groups.push((edit.inode, path, vec![edit]));
+                }
+                Entry::Occupied(e) => {
+                    inode_groups[*e.get()].2.push(edit);
+                }
+            }
+        }
+
+        for (_inode, path, edits) in inode_groups {
+            if edits.len() > 1 {
+                // Multiple edits for one file — show header + individual edits
+                entries.push(EditDetailEntry::FileHeader {
+                    path: path.clone(),
+                });
+                for edit in edits {
+                    entries.push(EditDetailEntry::FileEdit { edit, path: path.clone() });
+                }
+            } else {
+                // Single edit for a file — just show the edit directly
+                let edit = edits.into_iter().next().unwrap();
+                entries.push(EditDetailEntry::FileEdit { edit, path });
+            }
+        }
+    }
+
+    entries
 }
 
 // ============================================================================

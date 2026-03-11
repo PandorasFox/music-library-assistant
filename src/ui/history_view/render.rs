@@ -13,6 +13,7 @@ use super::{
 };
 use crate::ui::helpers::truncate_right;
 use crate::ui::widgets::control_colors as cc;
+use crate::ui::widgets::standard_list::ListEntry;
 use crate::ui::widgets::{ConfirmationButton, ConfirmationModal};
 
 pub fn render(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
@@ -160,12 +161,17 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState
         ])
         .split(area);
 
+    let selectable_count = detail
+        .entries
+        .iter()
+        .filter(|e| e.is_selectable())
+        .count();
     let selected_count = detail.detail_list.selected.len();
     let title = format!(
-        "Session: {} — {} edit{} ({} selected)",
+        "Session: {} — {} item{} ({} selected)",
         truncate_right(&detail.session_id, 30),
-        detail.entries.len(),
-        if detail.entries.len() == 1 { "" } else { "s" },
+        selectable_count,
+        if selectable_count == 1 { "" } else { "s" },
         selected_count,
     );
 
@@ -205,44 +211,141 @@ fn render_edit_row(
     is_selected: bool,
     width: u16,
 ) -> Line<'static> {
+    use super::EditDetailEntry;
+
     let Some(entry) = entries.get(idx) else {
         return Line::raw("");
     };
 
-    let checkbox = if is_selected { "[x]" } else { "[ ]" };
-    let prefix = if is_cursor { "\u{25b8}" } else { " " };
+    match entry {
+        EditDetailEntry::CommonEdit {
+            field_name,
+            old_value,
+            new_value,
+            paths,
+            ..
+        } => {
+            let checkbox = if is_selected { "[x]" } else { "[ ]" };
+            let prefix = if is_cursor { "\u{25b8}" } else { " " };
+            let old = old_value.as_deref().unwrap_or("∅");
+            let new = new_value.as_deref().unwrap_or("∅");
+            let file_count = paths.len();
 
-    // Give the path about a third of the row width, minimum 25, generous max.
-    let path_max = ((width as usize) / 3).clamp(25, 80);
-    let path_short = if entry.path.chars().count() > path_max {
-        truncate_right(&entry.path, path_max)
-    } else {
-        entry.path.clone()
-    };
+            let cursor_style = if is_cursor {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_selected {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::White)
+            };
 
-    let old = entry.edit.old_value.as_deref().unwrap_or("∅");
-    let new = entry.edit.new_value.as_deref().unwrap_or("∅");
+            Line::from(vec![
+                Span::styled(format!("{} {} ", prefix, checkbox), cursor_style),
+                Span::styled(field_name.clone(), Style::default().fg(Color::Cyan)),
+                Span::styled(": ", Style::default().fg(Color::DarkGray)),
+                Span::styled(old.to_string(), Style::default().fg(Color::Red)),
+                Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+                Span::styled(new.to_string(), Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!(
+                        "  (across {} file{})",
+                        file_count,
+                        if file_count == 1 { "" } else { "s" },
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])
+        }
 
-    let cursor_style = if is_cursor {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else if is_selected {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::White)
-    };
+        EditDetailEntry::PerFileSeparator => {
+            let w = width as usize;
+            let label = " Per-file edits ";
+            let pad = w.saturating_sub(label.len());
+            let left = pad / 2;
+            let right = pad - left;
+            let sep = format!(
+                "{}{}{}",
+                "\u{2500}".repeat(left),
+                label,
+                "\u{2500}".repeat(right),
+            );
+            Line::styled(sep, Style::default().fg(Color::DarkGray))
+        }
 
-    Line::from(vec![
-        Span::styled(format!("{} {} ", prefix, checkbox), cursor_style),
-        Span::styled(path_short, cursor_style),
-        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-        Span::styled(entry.edit.field_name.clone(), Style::default().fg(Color::Cyan)),
-        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
-        Span::styled(old.to_string(), Style::default().fg(Color::Red)),
-        Span::styled(" → ", Style::default().fg(Color::DarkGray)),
-        Span::styled(new.to_string(), Style::default().fg(Color::Green)),
-    ])
+        EditDetailEntry::FileHeader { path } => {
+            let path_max = ((width as usize) / 2).clamp(30, 100);
+            let path_display = if path.chars().count() > path_max {
+                truncate_right(path, path_max)
+            } else {
+                path.clone()
+            };
+            Line::styled(
+                format!("  {}", path_display),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+        }
+
+        EditDetailEntry::FileEdit {
+            edit, path, ..
+        } => {
+            let checkbox = if is_selected { "[x]" } else { "[ ]" };
+            let prefix = if is_cursor { "\u{25b8}" } else { " " };
+            let old = edit.old_value.as_deref().unwrap_or("∅");
+            let new = edit.new_value.as_deref().unwrap_or("∅");
+
+            let cursor_style = if is_cursor {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_selected {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            // When under a FileHeader, indent and skip showing the path.
+            // Detect: if there's a FileHeader above us, we're grouped.
+            let has_header = idx > 0
+                && matches!(
+                    entries.get(idx - 1),
+                    Some(EditDetailEntry::FileHeader { .. } | EditDetailEntry::FileEdit { .. })
+                );
+
+            if has_header {
+                Line::from(vec![
+                    Span::styled(format!("    {} {} ", prefix, checkbox), cursor_style),
+                    Span::styled(edit.field_name.clone(), Style::default().fg(Color::Cyan)),
+                    Span::styled(": ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(old.to_string(), Style::default().fg(Color::Red)),
+                    Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(new.to_string(), Style::default().fg(Color::Green)),
+                ])
+            } else {
+                // Standalone file edit (no header above) — show path
+                let path_max = ((width as usize) / 3).clamp(25, 80);
+                let path_short = if path.chars().count() > path_max {
+                    truncate_right(path, path_max)
+                } else {
+                    path.clone()
+                };
+
+                Line::from(vec![
+                    Span::styled(format!("{} {} ", prefix, checkbox), cursor_style),
+                    Span::styled(path_short, cursor_style),
+                    Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(edit.field_name.clone(), Style::default().fg(Color::Cyan)),
+                    Span::styled(": ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(old.to_string(), Style::default().fg(Color::Red)),
+                    Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(new.to_string(), Style::default().fg(Color::Green)),
+                ])
+            }
+        }
+    }
 }
 
 // ============================================================================

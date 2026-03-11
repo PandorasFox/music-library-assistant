@@ -586,7 +586,7 @@ impl App {
     // Startup Flow
     // =========================================================================
 
-    /// Complete startup: spawn db_thread, start observing, open persistent txn,
+    /// Complete startup: spawn db_thread, start FS watcher, open persistent txn,
     /// and transition to the Progress screen.
     pub(super) fn complete_startup(&mut self) {
         let shared = self.shared_config.clone();

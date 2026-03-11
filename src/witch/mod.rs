@@ -512,7 +512,7 @@ impl Witch {
     /// Start watching. Returns false if already scanning.
     ///
     /// Sends Start command to the watcher thread, which walks zone roots
-    /// and reports inode maps back via messages. Replaces start_observing().
+    /// and reports inode maps back via messages.
     pub fn start_watching(&mut self) -> bool {
         if self.is_initial_scanning() {
             return false;
@@ -1322,7 +1322,7 @@ impl Witch {
     /// Re-observe filesystem state after mutations drain.
     ///
     /// Sends Start to the watcher thread, which re-walks zone roots and
-    /// reports fresh inode maps. Replaces the old WalkCorpus-based re-observation.
+    /// reports fresh inode maps.
     fn queue_reobservation(&mut self) {
         crate::logging::log_general(
             "[STATE] Re-observation: requesting watcher re-scan for post-mutation re-awakening",

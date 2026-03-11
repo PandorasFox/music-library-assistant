@@ -24,7 +24,7 @@ use crate::witch::cache_thread::DbQuery;
 /// The active view and its state. One variant is active at a time.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ActiveView {
-    // Startup views (before observing)
+    // Startup views (before watcher starts)
     SchemaUpdate(SchemaUpdateState),
     VacuumPrompt(VacuumPromptState),
 

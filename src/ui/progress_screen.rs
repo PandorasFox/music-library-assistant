@@ -10,7 +10,7 @@
 //! ```rust,ignore
 //! // For startup eyeballing
 //! let mut progress = ProgressScreen::new_eyeballing();
-//! witch.start_observing(...);
+//! witch.start_watching();
 //!
 //! // Each frame
 //! if progress.tick(witch) {

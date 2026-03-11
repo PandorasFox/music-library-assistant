@@ -591,7 +591,7 @@ impl App {
     pub(super) fn complete_startup(&mut self) {
         let shared = self.shared_config.clone();
         self.witch.set_shared_config(shared);
-        self.witch.start_observing();
+        self.witch.start_watching();
 
         // If leave_transactions_open is enabled, open a persistent transaction at startup
         if self.open_txn_mode() {

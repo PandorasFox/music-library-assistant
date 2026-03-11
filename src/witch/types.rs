@@ -192,20 +192,19 @@ pub enum ReasoningLevel {
     Full,
 }
 
-/// Inode awareness level - tracks filesystem walk progress.
+/// Watcher state — tracks filesystem watcher thread progress.
 ///
-/// Controls whether mutations are accepted:
-/// - None/Checking → Mutations rejected
-/// - Done → Mutations accepted
+/// Replaces `InodeAwarenessLevel`. The watcher thread owns filesystem
+/// monitoring; this enum tracks its lifecycle from the Witch's perspective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum InodeAwarenessLevel {
-    /// Never walked the filesystem.
+pub enum WatcherState {
+    /// Watcher spawned but not yet started.
     #[default]
-    None,
-    /// Walk in progress.
-    Checking,
-    /// Walk complete.
-    Done,
+    NotStarted,
+    /// Initial directory walk in progress (watcher scanning zone roots).
+    InitialScan,
+    /// Watcher active and monitoring. Initial scan complete.
+    Watching,
 }
 
 // ============================================================================

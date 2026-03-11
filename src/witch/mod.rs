@@ -21,21 +21,22 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use crate::config::{self, Config, SharedConfig};
 use crate::db::write_thread::{self, DbThreadHandle};
 use crate::db::Database;
-use crate::meta::computations::{analysis, derivation, observation, Computation};
+use crate::meta::computations::{analysis, derivation, Computation};
 use crate::meta::mutations::Mutation;
 
 // Module declarations
 pub(crate) mod cache_thread;
 mod execution;
 pub(crate) mod external_fetch;
+pub(crate) mod fs_watcher;
 pub mod messages;
 mod transaction;
 pub(crate) mod types;
 // Re-export public types
 pub use messages::InitialUiState;
 pub use types::{
-    InodeAwarenessLevel, MaintenanceWitness, MutationExecutionWitness, PendingTransaction,
-    ReasoningLevel, SpawnedMutation, Task, TaskLabel, WorkState, WorkStateSnapshot, WorkStatus,
+    MaintenanceWitness, MutationExecutionWitness, PendingTransaction, ReasoningLevel,
+    SpawnedMutation, Task, TaskLabel, WatcherState, WorkState, WorkStateSnapshot, WorkStatus,
 };
 // Decision authority flows through ConfirmationGesture (ui/action_handlers/witness.rs)
 // and WitnessedDecision (meta/decisions/mod.rs). See operator_decisions.rs for call sites.
@@ -116,11 +117,7 @@ pub struct Witch {
 
     // Reasoning and inode awareness state
     reasoning_level: ReasoningLevel,
-    inode_awareness: InodeAwarenessLevel,
-
-    /// Whether legacy library observation is enabled.
-    /// Derived from Config at construction time.
-    legacy_enabled: bool,
+    watcher_state: WatcherState,
 
     /// When true, mutations are permanently disabled (read-only debug mode).
     /// Set from config at startup.
@@ -225,6 +222,10 @@ pub struct Witch {
     /// UI-controlled gate: true only on safe browsing views (lateral ring).
     idle_rescan_eligible: bool,
 
+    /// Handle to the filesystem watcher thread.
+    /// Spawned at construction time — always present.
+    fs_watcher: fs_watcher::FsWatcherHandle,
+
     /// Handle for the autonomous external fetch thread (AcoustID lookups).
     /// None when no API key is configured or shared_config not yet available.
     external_fetch: Option<external_fetch::ExternalFetchHandle>,
@@ -236,19 +237,14 @@ pub struct Witch {
 
 /// Deferred follow-up work accumulated during `transition_to_completed()`.
 ///
-/// The match on (is_checking_inodes, reasoning_level) sets flags for what
-/// computations to queue after the work state resets to Done. This struct
-/// collects those flags so `dispatch_post_transition_work()` can act on
-/// them in a single place.
+/// Observation-phase transitions (watcher scan completing) are now handled
+/// directly in `drain_watcher_messages()`. This struct handles post-derivation
+/// and post-mutation work.
 #[derive(Default)]
 struct PostTransitionWork {
-    /// Queue full awakening computations (DeriveCorpusSignals + second-level).
-    awakening: bool,
-    /// Queue lightweight idle-rescan awakening (corpus+inbox signals only).
-    idle_rescan_awakening: bool,
     /// Queue ScheduleContentAnalysis after full awakening completes.
     content_analysis: bool,
-    /// Queue re-observation (WalkCorpus) after mutations complete.
+    /// Queue re-observation (watcher re-scan) after mutations complete.
     reobservation: bool,
     /// Queue ReconcileLibraryFiles with these observed files (Inodes stage 1).
     reconcile_library: Option<Vec<derivation::ObservedLibraryFile>>,
@@ -257,11 +253,7 @@ struct PostTransitionWork {
 impl PostTransitionWork {
     /// Whether any follow-up work is pending.
     fn has_work(&self) -> bool {
-        self.awakening
-            || self.idle_rescan_awakening
-            || self.content_analysis
-            || self.reobservation
-            || self.reconcile_library.is_some()
+        self.content_analysis || self.reobservation || self.reconcile_library.is_some()
     }
 }
 
@@ -270,7 +262,7 @@ impl Witch {
     const LINGER_DURATION: Duration = Duration::from_secs(30);
 
     pub fn new(
-        cfg: &Config,
+        _cfg: &Config,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
     ) -> (
         Self,
@@ -308,13 +300,15 @@ impl Witch {
         // Create notice channel for Witch → UI notifications
         let (notice_tx, notice_rx) = mpsc::channel();
 
+        // Spawn the filesystem watcher thread
+        let fs_watcher_handle = fs_watcher::FsWatcherHandle::spawn();
+
         let she = Self {
             result_tx,
             result_rx,
             work_state: WorkState::Idle,
             reasoning_level: ReasoningLevel::None,
-            inode_awareness: InodeAwarenessLevel::None,
-            legacy_enabled: cfg.legacy_enabled,
+            watcher_state: WatcherState::NotStarted,
             read_only_mode: false,
             safety_latch_reason: None,
             session_recomputation_scope: crate::meta::recomputation::RecomputationScope::EMPTY,
@@ -339,6 +333,7 @@ impl Witch {
             idle_since: None,
             idle_rescan_active: false,
             idle_rescan_eligible: false,
+            fs_watcher: fs_watcher_handle,
             external_fetch: None,
             fetch_progress: None,
         };
@@ -398,9 +393,9 @@ impl Witch {
         self.reasoning_level
     }
 
-    /// Check if inode checking is currently in progress.
-    pub fn is_checking_inodes(&self) -> bool {
-        matches!(self.inode_awareness, InodeAwarenessLevel::Checking)
+    /// Check if the watcher is performing its initial scan.
+    pub fn is_initial_scanning(&self) -> bool {
+        matches!(self.watcher_state, WatcherState::InitialScan)
     }
 
     /// Set the UI-controlled idle rescan eligibility flag.
@@ -449,81 +444,38 @@ impl Witch {
         }
     }
 
-    /// Start observing. Returns false if observing already in progress.
+    /// Start watching. Returns false if already scanning.
     ///
-    /// Derives paths from the global resolver and stored config.
-    /// Queues WalkCorpus computations for corpus and optional legacy library.
-    pub fn start_observing(&mut self) -> bool {
-        if self.is_checking_inodes() {
+    /// Sends Start command to the watcher thread, which walks zone roots
+    /// and reports inode maps back via messages. Replaces start_observing().
+    pub fn start_watching(&mut self) -> bool {
+        if self.is_initial_scanning() {
             return false;
         }
 
-        self.inode_awareness = InodeAwarenessLevel::Checking;
-        self.queue_observing_computations();
-        true
-    }
-
-    /// Queue observing computations (internal helper).
-    fn queue_observing_computations(&mut self) {
-        self.queue_walk_computations(
-            self.force_check_all_files_at_startup,
-            true,
-            "Observing",
-        );
-    }
-
-    /// Queue zone walk computations with shared logic.
-    ///
-    /// Clears accumulated observation state, then queues WalkCorpus for corpus,
-    /// inbox (if present), and legacy (if enabled and `include_legacy` is true).
-    fn queue_walk_computations(
-        &mut self,
-        force_check: bool,
-        include_legacy: bool,
-        label_prefix: &str,
-    ) {
         let resolver = crate::corpus::paths::get_resolver();
+
+        let mut zones = vec![(crate::db::types::Zone::Corpus, resolver.corpus_dir())];
+
+        let inbox_dir = resolver.inbox_dir();
+        if inbox_dir.is_dir() {
+            zones.push((crate::db::types::Zone::Inbox, inbox_dir));
+        }
 
         // Clear accumulated observation state before fresh scan
         self.observed_corpus_inodes.clear();
         self.observed_inbox_inodes.clear();
-        if include_legacy {
-            self.observed_library_files.clear();
-            self.library_reconciliation_done = false;
-        }
+        self.observed_library_files.clear();
+        self.library_reconciliation_done = false;
 
-        self.queue_computation_with_label(
-            Computation::Observation(observation::Computation::WalkCorpus {
-                root: resolver.corpus_dir(),
-                zone: "corpus".to_string(),
-                force_check,
-            }),
-            Some(format!("{} corpus", label_prefix)),
-        );
+        self.watcher_state = WatcherState::InitialScan;
+        self.fs_watcher.start(zones, self.force_check_all_files_at_startup);
 
-        let inbox_dir = resolver.inbox_dir();
-        if inbox_dir.is_dir() {
-            self.queue_computation_with_label(
-                Computation::Observation(observation::Computation::WalkCorpus {
-                    root: inbox_dir,
-                    zone: "inbox".to_string(),
-                    force_check,
-                }),
-                Some(format!("{} inbox", label_prefix)),
-            );
-        }
-
-        if include_legacy && self.legacy_enabled {
-            self.queue_computation_with_label(
-                Computation::Observation(observation::Computation::WalkCorpus {
-                    root: resolver.libraries_dir().join("legacy"),
-                    zone: "legacy".to_string(),
-                    force_check,
-                }),
-                Some(format!("{} legacy", label_prefix)),
-            );
-        }
+        crate::logging::log_general("[WITCH] Watcher started — initial scan in progress");
+        true
     }
+
+    // queue_walk_computations() removed — watcher thread handles directory walking.
 
     /// Advance internal processing. MUST be called exactly once per frame from the event loop.
     ///
@@ -643,6 +595,9 @@ impl Witch {
         // Check if idle rescan should trigger
         self.maybe_start_idle_rescan();
 
+        // FS watcher: drain initial scan results and steady-state events
+        self.drain_watcher_messages();
+
         // External fetch: drain scheduler messages (task requests + status)
         self.drain_scheduler_messages();
 
@@ -750,56 +705,17 @@ impl Witch {
             _ => 0,
         };
 
-        // State transition based on (is_checking_inodes, reasoning_level) tuple
-        // All combinations explicitly handled; invalid states panic
-        match (self.is_checking_inodes(), self.reasoning_level) {
-            // Observing completed while None: begin Inodes
-            (true, ReasoningLevel::None) => {
-                self.inode_awareness = InodeAwarenessLevel::Done;
-                crate::logging::log_general(format!(
-                    "[STATE] Observing complete. Transitioning None -> Inodes. \
-                     Processed {} tasks.",
-                    session_processed
-                ));
-                self.reasoning_level = ReasoningLevel::Inodes;
-                work.awakening = true;
-            }
-
-            // Re-observing completed while Full: sync signals via awakening
-            (true, ReasoningLevel::Full) => {
-                self.inode_awareness = InodeAwarenessLevel::Done;
-                if self.idle_rescan_active {
-                    crate::logging::log_general(format!(
-                        "[STATE] Idle rescan observation complete. Queueing lightweight signal derivation. \
-                         Processed {} tasks.",
-                        session_processed
-                    ));
-                    work.idle_rescan_awakening = true;
-                } else {
-                    crate::logging::log_general(format!(
-                        "[STATE] Re-observing complete while Full. Queueing awakening to sync signals. \
-                         Processed {} tasks.",
-                        session_processed
-                    ));
-                    work.awakening = true;
-                }
-            }
-
-            // Re-walk completed during Inodes: proceed to derivations
-            (true, ReasoningLevel::Inodes) => {
-                self.inode_awareness = InodeAwarenessLevel::Done;
-                crate::logging::log_general(format!(
-                    "[STATE] Re-observation complete during Inodes. Queueing derivations. \
-                     Processed {} tasks.",
-                    session_processed
-                ));
-                work.awakening = true;
-            }
-
+        // State transition based on reasoning_level.
+        //
+        // Observation-phase transitions (watcher scan completing) are now handled
+        // directly in drain_watcher_messages() when AllInitialScansComplete arrives.
+        // This function only sees non-observation work draining (derivation,
+        // mutations, content analysis, maintenance).
+        match self.reasoning_level {
             // Inodes completed: two-stage transition
             // Stage 1: Queue ReconcileLibraryFiles, stay in Inodes
             // Stage 2: Transition to Full and queue content analysis
-            (false, ReasoningLevel::Inodes) => {
+            ReasoningLevel::Inodes => {
                 if !self.library_reconciliation_done {
                     // Stage 1: Library reconciliation not yet done
                     self.library_reconciliation_done = true;
@@ -832,7 +748,7 @@ impl Witch {
             }
 
             // Normal operation: work completed while Full
-            (false, ReasoningLevel::Full) => {
+            ReasoningLevel::Full => {
                 if self.idle_rescan_active {
                     // Idle rescan signal derivation complete
                     crate::logging::log_general(format!(
@@ -856,14 +772,14 @@ impl Witch {
                         crate::meta::recomputation::RecomputationScope::EMPTY,
                     ));
                     self.reasoning_level = ReasoningLevel::Inodes;
-                    self.inode_awareness = InodeAwarenessLevel::Checking;
+                    self.watcher_state = WatcherState::InitialScan;
                     work.reobservation = true;
                 }
                 // If no mutations and not idle rescan, stay Full (normal work completion)
             }
 
             // Maintenance can complete while None - this is valid, just NOP
-            (false, ReasoningLevel::None) => {
+            ReasoningLevel::None => {
                 let only_maintenance = self
                     .kind_counts
                     .keys()
@@ -876,8 +792,8 @@ impl Witch {
                     ));
                 } else {
                     panic!(
-                        "Invalid state: non-observing, non-maintenance work completed while reasoning is None. \
-                         The only work while None should be observing or maintenance."
+                        "Invalid state: non-maintenance work completed while reasoning is None. \
+                         The only work while None should be maintenance."
                     );
                 }
             }
@@ -917,13 +833,7 @@ impl Witch {
         // Queue follow-up computations AFTER reset to fix off-by-one counting
         // (if queued before reset, the task's queue count gets wiped but it still completes)
         if work.reobservation {
-            self.queue_reobservation_computations();
-        }
-        if work.awakening {
-            self.queue_awakening_computations(true);
-        }
-        if work.idle_rescan_awakening {
-            self.queue_awakening_computations(false);
+            self.queue_reobservation();
         }
         if let Some(observed) = work.reconcile_library {
             self.queue_computation_with_label(
@@ -1025,9 +935,20 @@ impl Witch {
 
         self.idle_rescan_active = true;
         self.idle_since = None;
-        self.inode_awareness = InodeAwarenessLevel::Checking;
+        self.watcher_state = WatcherState::InitialScan;
 
-        self.queue_walk_computations(false, false, "Rescanning");
+        // Request watcher re-scan (corpus + inbox only, no legacy)
+        let resolver = crate::corpus::paths::get_resolver();
+        let mut zones = vec![(crate::db::types::Zone::Corpus, resolver.corpus_dir())];
+        let inbox_dir = resolver.inbox_dir();
+        if inbox_dir.is_dir() {
+            zones.push((crate::db::types::Zone::Inbox, inbox_dir));
+        }
+
+        self.observed_corpus_inodes.clear();
+        self.observed_inbox_inodes.clear();
+
+        self.fs_watcher.start(zones, false);
     }
 
     // =========================================================================
@@ -1070,6 +991,100 @@ impl Witch {
                 }
                 external_fetch::SchedulerMessage::AllDone => {
                     // batch_active already cleared by drain_messages()
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // FS Watcher Integration
+    // =========================================================================
+
+    /// Drain messages from the filesystem watcher and act on them.
+    ///
+    /// InitialScanComplete results are accumulated into observed inode maps.
+    /// AllInitialScansComplete signals observation is done (equivalent to
+    /// WalkCorpus + all ScanCorpusDirectory completing).
+    ///
+    /// Called each tick().
+    fn drain_watcher_messages(&mut self) {
+        let messages = self.fs_watcher.drain_messages();
+
+        for msg in messages {
+            match msg {
+                fs_watcher::WatcherMessage::InitialScanComplete { zone, inodes } => {
+                    crate::logging::log_general(format!(
+                        "[WITCH] Watcher initial scan complete for {:?}: {} inodes",
+                        zone,
+                        inodes.len()
+                    ));
+
+                    // Accumulate inodes into observed maps, converting to path-only
+                    // (the mtime/size info is held by the watcher for steady-state tracking)
+                    match zone {
+                        crate::db::types::Zone::Corpus => {
+                            for (inode, (path, _mtime_s, _mtime_ns, _size)) in inodes {
+                                self.observed_corpus_inodes.insert(inode, path);
+                            }
+                        }
+                        crate::db::types::Zone::Inbox => {
+                            for (inode, (path, _mtime_s, _mtime_ns, _size)) in inodes {
+                                self.observed_inbox_inodes.insert(inode, path);
+                            }
+                        }
+                        crate::db::types::Zone::Library => {
+                            // Library files handled separately via ScanLibraryDirectory
+                            crate::logging::log_general(
+                                "[WITCH] Library zone scan from watcher — ignoring (handled separately)"
+                            );
+                        }
+                    }
+                }
+                fs_watcher::WatcherMessage::AllInitialScansComplete => {
+                    crate::logging::log_general(format!(
+                        "[WITCH] All watcher initial scans complete. \
+                         Corpus: {} inodes, Inbox: {} inodes",
+                        self.observed_corpus_inodes.len(),
+                        self.observed_inbox_inodes.len()
+                    ));
+                    self.watcher_state = WatcherState::Watching;
+
+                    // Drive the state machine forward based on current reasoning level.
+                    // This replaces the observation→awakening transition that previously
+                    // happened in transition_to_completed() when WalkCorpus+ScanCorpusDirectory
+                    // computations drained.
+                    match self.reasoning_level {
+                        ReasoningLevel::None => {
+                            // First startup: None → Inodes, queue awakening
+                            crate::logging::log_general(
+                                "[STATE] Watcher scan complete. Transitioning None -> Inodes."
+                            );
+                            self.reasoning_level = ReasoningLevel::Inodes;
+                            self.queue_awakening_computations(true);
+                        }
+                        ReasoningLevel::Inodes => {
+                            // Re-observation during Inodes: queue awakening
+                            crate::logging::log_general(
+                                "[STATE] Re-observation complete during Inodes. Queueing derivations."
+                            );
+                            self.queue_awakening_computations(true);
+                        }
+                        ReasoningLevel::Full => {
+                            if self.idle_rescan_active {
+                                // Idle rescan: lightweight awakening
+                                crate::logging::log_general(
+                                    "[STATE] Idle rescan observation complete. Queueing lightweight signal derivation."
+                                );
+                                self.queue_awakening_computations(false);
+                            } else {
+                                // Post-mutation re-observation: full awakening
+                                crate::logging::log_general(
+                                    "[STATE] Re-observing complete while Full. Queueing awakening to sync signals."
+                                );
+                                self.queue_awakening_computations(true);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1162,12 +1177,30 @@ impl Witch {
         );
     }
 
-    /// Queue re-observation computations (WalkCorpus) for re-awakening after mutations.
-    fn queue_reobservation_computations(&mut self) {
+    /// Re-observe filesystem state after mutations drain.
+    ///
+    /// Sends Start to the watcher thread, which re-walks zone roots and
+    /// reports fresh inode maps. Replaces the old WalkCorpus-based re-observation.
+    fn queue_reobservation(&mut self) {
         crate::logging::log_general(
-            "[STATE] Queueing re-observation computations for post-mutation re-awakening",
+            "[STATE] Re-observation: requesting watcher re-scan for post-mutation re-awakening",
         );
-        self.queue_walk_computations(false, true, "Re-observing");
+
+        let resolver = crate::corpus::paths::get_resolver();
+        let mut zones = vec![(crate::db::types::Zone::Corpus, resolver.corpus_dir())];
+
+        let inbox_dir = resolver.inbox_dir();
+        if inbox_dir.is_dir() {
+            zones.push((crate::db::types::Zone::Inbox, inbox_dir));
+        }
+
+        // Clear accumulated observation state before fresh scan
+        self.observed_corpus_inodes.clear();
+        self.observed_inbox_inodes.clear();
+        self.observed_library_files.clear();
+        self.library_reconciliation_done = false;
+
+        self.fs_watcher.start(zones, false);
     }
 
     /// Queue content analysis computations (internal only).
@@ -1554,7 +1587,10 @@ impl Drop for Witch {
         // 4. DB thread checkpoints WAL and closes write connection
         // 5. With all connections closed, SQLite cleans up -wal and -shm files
 
-        // Step 0: Shut down external fetch thread if active.
+        // Step 0a: Shut down filesystem watcher thread.
+        self.fs_watcher.shutdown();
+
+        // Step 0b: Shut down external fetch thread if active.
         if let Some(ref mut handle) = self.external_fetch {
             handle.shutdown();
         }

@@ -12,72 +12,13 @@ use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
-    drop_stale_corpus_signal, ensure_typed_signal, enumerate_all_directories, extract_mtime,
-    is_audio_file, is_image_file,
+    drop_stale_corpus_signal, ensure_typed_signal, extract_mtime, is_audio_file, is_image_file,
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::*;
 use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::{Computation, Result};
-
-// ============================================================================
-// Phase 1: Walk Corpus
-// ============================================================================
-
-/// Phase 1: Enumerate ALL corpus directories and spawn per-directory scans.
-pub fn execute_walk_corpus(
-    _read_only_db: &ReadOnlyDb<'_>,
-    root: &Path,
-    zone: &str,
-    force_check: bool,
-) -> Result {
-    let computation = Computation::WalkCorpus {
-        root: root.to_path_buf(),
-        zone: zone.to_string(),
-        force_check,
-    };
-
-    if !root.exists() {
-        return Result::failure(
-            computation,
-            format!("Root directory does not exist: {:?}", root),
-        );
-    }
-
-    // Recursively enumerate ALL directories
-    let (directories, symlink_count) = enumerate_all_directories(root);
-
-    if symlink_count > 0 {
-        log_general(format!(
-            "[WARN] WalkCorpus: skipped {} directory symlinks in {:?}",
-            symlink_count, root
-        ));
-    }
-
-    log_general(format!(
-        "[COMPUTE] WalkCorpus: found {} directories in {:?}{}",
-        directories.len(),
-        root,
-        if force_check {
-            " (force_check=true)"
-        } else {
-            ""
-        }
-    ));
-
-    // Spawn ScanCorpusDirectory for each directory
-    let spawn: Vec<Computation> = directories
-        .into_iter()
-        .map(|directory| Computation::ScanCorpusDirectory {
-            directory,
-            zone: zone.to_string(),
-            force_check,
-        })
-        .collect();
-
-    Result::success(computation, spawn)
-}
 
 // ============================================================================
 // Scan Single Directory

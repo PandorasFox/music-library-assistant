@@ -18,7 +18,7 @@
 //!
 //! Computations are organized into three phases with compile-time enforced boundaries:
 //!
-//! - **Observation** (`observation/`) - Corpus observation (WalkCorpus, ScanCorpusDirectory, etc.)
+//! - **Observation** (`observation/`) - Corpus observation (ScanCorpusDirectory, VerifyMtime, etc.)
 //! - **Derivation** (`derivation/`) - First-level derivations (DeriveDirectorySignals, etc.)
 //! - **Analysis** (`analysis/`) - Full-corpus analysis (DetectFingerprintDuplicates, etc.)
 //!

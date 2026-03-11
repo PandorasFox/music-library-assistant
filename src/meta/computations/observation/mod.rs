@@ -12,7 +12,6 @@
 //!
 //! ## Computations
 //!
-//! - `WalkCorpus` - Enumerate directories, spawn per-directory scans
 //! - `ScanCorpusDirectory` - Scan single directory, emit FileInCorpus signals
 //! - `VerifyMtime` - Check file modification time
 //! - `VerifyTags` - Compare disk tags to indexed tags
@@ -36,16 +35,6 @@ pub use executors::*;
 /// spawn other Observation computations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Computation {
-    /// Phase 1: Walk corpus directory tree to collect file state.
-    ///
-    /// Enumerates top-level directories under root and spawns per-directory scans.
-    WalkCorpus {
-        root: PathBuf,
-        zone: String,
-        /// When true, bypass mtime optimization and verify all indexed files.
-        force_check: bool,
-    },
-
     /// Walk and scan a single directory subtree.
     ///
     /// Walks the directory recursively, collects disk state, and compares
@@ -85,7 +74,6 @@ impl Computation {
     /// Get a human-readable label for this computation.
     pub fn label(&self) -> &'static str {
         match self {
-            Computation::WalkCorpus { .. } => "Observing",
             Computation::ScanCorpusDirectory { .. } => "Scanning directory",
             Computation::VerifyMtime { .. } => "Verifying mtime",
             Computation::VerifyTags { .. } => "Tag verification",
@@ -96,11 +84,6 @@ impl Computation {
     /// Execute this computation.
     pub fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
         match self {
-            Computation::WalkCorpus {
-                root,
-                zone,
-                force_check,
-            } => execute_walk_corpus(ctx.read_db, root, zone, *force_check),
             Computation::ScanCorpusDirectory {
                 directory,
                 zone,

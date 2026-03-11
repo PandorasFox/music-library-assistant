@@ -409,20 +409,13 @@ pub enum OobSyncDirection {
 
 /// A single tag mismatch entry between DB and disk.
 ///
-/// Contains both display strings (for UI) and individual values (for mutations).
-/// Multi-value tags (e.g., multiple TRACKNUMBER fields) are stored as individual
-/// values in the `*_values` vecs, joined for display in `*_value` fields.
+/// Mirrors the signal-level `TagMismatchEntry` with UI-friendly field naming.
+/// The signal computation already aggregates multi-value tags into display strings.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TagMismatchEntry {
     pub field: String,
-    /// Display string (values joined with "; ") - for UI
     pub db_value: Option<String>,
-    /// Display string (values joined with "; ") - for UI
     pub disk_value: Option<String>,
-    /// Individual tag values from DB (for mutations)
-    pub _db_values: Vec<String>,
-    /// Individual tag values from disk (for mutations)
-    pub _disk_values: Vec<String>,
 }
 
 /// A file with purely sync-direction tag mismatches (all extras in one direction).
@@ -501,11 +494,16 @@ impl ConflictBucket {
 }
 
 /// A file with an OOB tag signal, classified into a conflict bucket.
+///
+/// Carries the mismatch data from the signal so the UI never needs to
+/// re-read tags from disk.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BucketedOobFile {
     pub inode: i64,
     pub path: String,
     pub bucket: ConflictBucket,
+    /// Tag mismatches from the signal (empty for MtimeOnly bucket).
+    pub mismatches: Vec<TagMismatchEntry>,
 }
 
 // ============================================================================

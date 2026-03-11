@@ -180,7 +180,8 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &OobConflictState) {
         return;
     }
 
-    if state.current_diff.is_empty() {
+    let mismatches = state.current_mismatches();
+    if mismatches.is_empty() {
         let empty =
             Paragraph::new("No tag differences found").style(Style::default().fg(Color::DarkGray));
         f.render_widget(empty, inner);
@@ -203,8 +204,7 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &OobConflictState) {
                 Style::default().fg(Color::Cyan).add_modifier(bold),
             ),
         ],
-        rows: state
-            .current_diff
+        rows: mismatches
             .iter()
             .map(|m| {
                 let db_text = m.db_value.as_deref().unwrap_or("\u{2014}");

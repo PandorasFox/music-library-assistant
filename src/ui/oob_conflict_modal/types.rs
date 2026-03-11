@@ -3,7 +3,7 @@
 use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 
-use crate::meta::views::{BucketedOobFile, ConflictBucket, TagMismatchEntry};
+use crate::meta::views::{BucketedOobFile, ConflictBucket};
 use crate::ui::bulk_selection::BulkSelectionState;
 use crate::ui::widgets::{ButtonRects, FocusPane, TextInputState};
 
@@ -170,8 +170,6 @@ pub struct OobConflictState {
     pub bucket_counts: [usize; 4],
     /// Resolution button selection (for resolvable buckets)
     pub selected_button: ResolutionButton,
-    /// On-demand tag diff for the currently selected file
-    pub current_diff: Vec<TagMismatchEntry>,
     /// Current focus pane (List or Buttons)
     pub focus_pane: FocusPane,
     /// Button rectangles for click detection (set during render)
@@ -221,7 +219,6 @@ impl OobConflictState {
             ],
             bucket_counts,
             selected_button: ResolutionButton::ApplyDb,
-            current_diff: Vec::new(),
             focus_pane: FocusPane::List,
             button_rects: ButtonRects::new(),
         }
@@ -237,6 +234,14 @@ impl OobConflictState {
 
     pub fn total_files(&self) -> usize {
         self.bucket_counts.iter().sum()
+    }
+
+    /// Get tag mismatches for the currently selected file (from the signal data).
+    pub fn current_mismatches(&self) -> &[crate::meta::views::TagMismatchEntry] {
+        self.active_bucket_state()
+            .current_file()
+            .map(|f| f.mismatches.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
@@ -395,79 +400,3 @@ impl OobConflictState {
     }
 }
 
-// ============================================================================
-// On-demand diff computation
-// ============================================================================
-
-/// Compute the tag diff between DB and disk for a single track.
-///
-/// Reads DB tags from the database and disk tags from the filesystem,
-/// then returns entries for all fields where the values differ.
-/// Properly handles multi-value tags by comparing value sets per key.
-pub fn compute_tag_diff(
-    read_db: &crate::db::ReadOnlyDb<'_>,
-    inode: i64,
-    abs_path: &std::path::Path,
-) -> Vec<TagMismatchEntry> {
-    use crate::corpus::tags::TagSet;
-    use std::collections::HashSet;
-
-    // Get DB tags as TagSet
-    let db_tags = match read_db.get_tags::<crate::zones::CorpusZone>(inode) {
-        Ok(tags) => tags,
-        Err(_) => return Vec::new(),
-    };
-    let db_tagset = TagSet::new(db_tags.into_iter().map(|t| (t.tag_name, t.tag_value)));
-
-    // Read disk tags as TagSet
-    let disk_tagset = match TagSet::from_file(abs_path) {
-        Ok(tags) => tags,
-        Err(_) => return Vec::new(),
-    };
-
-    // Get all unique tag names from both sources
-    let mut all_tag_names: HashSet<String> = HashSet::new();
-    for (k, _) in db_tagset.iter() {
-        all_tag_names.insert(k.to_string());
-    }
-    for (k, _) in disk_tagset.iter() {
-        all_tag_names.insert(k.to_string());
-    }
-
-    let mut mismatches = Vec::new();
-    for tag_name in all_tag_names {
-        // Collect all values for this tag from each source
-        let db_values: Vec<&str> = db_tagset.values_for(&tag_name).collect();
-        let disk_values: Vec<&str> = disk_tagset.values_for(&tag_name).collect();
-
-        // Convert to sets for proper comparison (order doesn't matter)
-        let db_set: HashSet<&str> = db_values.iter().copied().collect();
-        let disk_set: HashSet<&str> = disk_values.iter().copied().collect();
-
-        if db_set != disk_set {
-            // Aggregate multi-values into semicolon-separated string for display
-            let db_display = if db_values.is_empty() {
-                None
-            } else {
-                Some(db_values.join("; "))
-            };
-            let disk_display = if disk_values.is_empty() {
-                None
-            } else {
-                Some(disk_values.join("; "))
-            };
-
-            mismatches.push(TagMismatchEntry {
-                field: tag_name,
-                db_value: db_display,
-                disk_value: disk_display,
-                // Store individual values for proper mutation generation
-                _db_values: db_values.iter().map(|s| s.to_string()).collect(),
-                _disk_values: disk_values.iter().map(|s| s.to_string()).collect(),
-            });
-        }
-    }
-
-    mismatches.sort_by(|a, b| a.field.cmp(&b.field));
-    mismatches
-}

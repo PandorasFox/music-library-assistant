@@ -46,11 +46,7 @@ impl HandleAction for oob_conflict_modal::OobConflictAction {
         match self {
             oob_conflict_modal::OobConflictAction::None => {}
             oob_conflict_modal::OobConflictAction::Navigate => {
-                // File or bucket selection changed -- recompute diff for the new file
-                let diff = app.compute_current_conflict_diff();
-                if let ActiveView::OobConflictInspection(ref mut state) = app.view {
-                    state.current_diff = diff;
-                }
+                // Mismatches are carried in BucketedOobFile — nothing to reload
             }
             oob_conflict_modal::OobConflictAction::Resolve => {
                 let Some(w) = witness else { return };
@@ -200,49 +196,16 @@ impl App {
 
     /// Start OOB tag conflict inspection from Insights view.
     ///
-    /// Loads all OOB signal files classified into four buckets, starts a
-    /// transaction for potential resolution, and computes the initial diff.
+    /// Loads all OOB signal files classified into four buckets (with mismatch
+    /// data from signals) and starts a transaction for potential resolution.
     pub(in crate::ui) fn start_oob_conflict_inspection(&mut self) {
-        // Query bucketed files via cache thread
         let files = self.cache.domain_query(domain::GetOobFilesBucketed).recv();
 
         // Start transaction for potential resolution
         let _ = self.witch.start_transaction("OOB tag resolution");
 
-        let mut state = oob_conflict_modal::OobConflictState::new(files);
-
-        // Compute initial diff for first file in the active bucket
-        if let Some(file) = state.active_bucket_state().current_file() {
-            let inode = file.inode;
-            let path = file.path.clone();
-            let resolver = paths::get_resolver();
-            let abs_path = resolver.resolve(std::path::Path::new(&path));
-            state.current_diff = self
-                .cache
-                .query(move |db| oob_conflict_modal::types::compute_tag_diff(db, inode, &abs_path))
-                .recv();
-        }
-
+        let state = oob_conflict_modal::OobConflictState::new(files);
         self.view = ActiveView::OobConflictInspection(state);
-    }
-
-    /// Compute the tag diff for the currently selected conflict file.
-    fn compute_current_conflict_diff(&mut self) -> Vec<crate::meta::views::TagMismatchEntry> {
-        let (inode, path) = match &self.view {
-            ActiveView::OobConflictInspection(ref state) => {
-                match state.active_bucket_state().current_file() {
-                    Some(file) => (file.inode, file.path.clone()),
-                    None => return Vec::new(),
-                }
-            }
-            _ => return Vec::new(),
-        };
-
-        let resolver = paths::get_resolver();
-        let abs_path = resolver.resolve(std::path::Path::new(&path));
-        self.cache
-            .query(move |db| oob_conflict_modal::types::compute_tag_diff(db, inode, &abs_path))
-            .recv()
     }
 
     /// Stage resolution mutations for files in the active bucket.

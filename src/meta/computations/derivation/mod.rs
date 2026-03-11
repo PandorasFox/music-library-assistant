@@ -68,8 +68,8 @@ pub enum Computation {
     /// - disk_only (disk - indexed) → InboxUnindexed signals
     /// - both (disk ∩ indexed) → InboxHealthy signals
     DeriveInboxSignals {
-        /// Inbox inodes observed on disk during the Observation phase (inode → relative path).
-        /// Accumulated by the Witch from ScanCorpusDirectory results.
+        /// Inbox inodes observed on disk (inode → relative path).
+        /// Populated by the FS watcher's initial scan and steady-state events.
         observed_inodes: HashMap<i64, String>,
     },
 
@@ -80,8 +80,8 @@ pub enum Computation {
     /// - index_only (indexed - disk) → MissingFile signals
     /// - both (disk ∩ indexed) → check OOB, emit HealthyFile or spawn verification
     DeriveCorpusSignals {
-        /// Corpus inodes observed on disk during the Observation phase (inode → relative path).
-        /// Accumulated by the Witch from ScanCorpusDirectory results.
+        /// Corpus inodes observed on disk (inode → relative path).
+        /// Populated by the FS watcher's initial scan and steady-state events.
         observed_inodes: HashMap<i64, String>,
     },
 

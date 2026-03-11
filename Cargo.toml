@@ -43,6 +43,7 @@ rubato = "0.14"        # Sample rate conversion for Opus (pure Rust)
 rusty-chromaprint = "0.1"
 
 # File system utilities
+notify = { version = "8.2", default-features = false, features = ["macos_kqueue"] }
 walkdir = "2.5"
 dirs = "5.0"
 chrono = "0.4"

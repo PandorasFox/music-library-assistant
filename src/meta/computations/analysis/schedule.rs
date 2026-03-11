@@ -51,7 +51,6 @@ pub fn execute_schedule_content_analysis(
             Computation::DetectFingerprintOverlaps,
             Computation::DetectDuplicateInodes,
             Computation::DetectShitFormats,
-            Computation::IndexImageFile,
         ]);
     }
 

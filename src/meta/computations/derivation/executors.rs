@@ -261,10 +261,15 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
     let both: Vec<i64> = disk_set.intersection(&indexed_set).copied().collect();
 
     // ========================================================================
-    // Emit unindexed signals for files on disk but not indexed
+    // Emit unindexed signals for audio files on disk but not indexed.
+    // Image files in disk_only are expected — they get indexed separately
+    // by IndexObservedImages, not through the audio indexing pipeline.
     // ========================================================================
     for inode in &disk_only {
         if let Some(path) = disk_inodes.get(inode) {
+            if is_image_file(Path::new(path)) {
+                continue;
+            }
             ensure_typed_signal(
                 read_only_db,
                 sender,

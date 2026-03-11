@@ -456,10 +456,6 @@ pub(super) struct TaskResult {
     /// Recomputation scope from this mutation (which domains it dirtied).
     /// EMPTY for computations, migrations, and failed mutations.
     pub recomputation_scope: RecomputationScope,
-    /// Corpus inodes observed on disk during this computation (inode → relative path).
-    pub observed_corpus_inodes: HashMap<i64, String>,
-    /// Inbox inodes observed on disk during this computation (inode → relative path).
-    pub observed_inbox_inodes: HashMap<i64, String>,
     /// Library files observed on disk during ScanLibraryDirectory.
     pub observed_library_files: Vec<crate::meta::computations::derivation::ObservedLibraryFile>,
     /// External fetch result data (only populated for ExternalFetch tasks).

@@ -185,13 +185,13 @@ pub struct Witch {
     /// Used by the insights view to hide entries already handled.
     handled_sources: std::collections::HashSet<crate::meta::decisions::DecisionKeyKind>,
 
-    /// Corpus inodes observed on disk during the current observation cycle.
-    /// Accumulated from ScanCorpusDirectory results in tick().
-    /// Consumed by queue_awakening_computations() via std::mem::take().
+    /// Authoritative set of corpus inodes observed on disk.
+    /// Populated by watcher initial scan, updated incrementally by steady-state events.
+    /// Cloned (not taken) when queuing derivation computations.
     observed_corpus_inodes: HashMap<i64, String>,
-    /// Inbox inodes observed on disk during the current observation cycle.
-    /// Accumulated from ScanCorpusDirectory results in tick().
-    /// Consumed by queue_awakening_computations() via std::mem::take().
+    /// Authoritative set of inbox inodes observed on disk.
+    /// Populated by watcher initial scan, updated incrementally by steady-state events.
+    /// Cloned (not taken) when queuing derivation computations.
     observed_inbox_inodes: HashMap<i64, String>,
 
     /// Library files observed on disk during the current awakening cycle.
@@ -221,6 +221,16 @@ pub struct Witch {
 
     /// UI-controlled gate: true only on safe browsing views (lateral ring).
     idle_rescan_eligible: bool,
+
+    /// Set by watcher events (FileCreated/FileRemoved) during steady state.
+    /// When true and Witch is idle, queues a derivation pass to reconcile
+    /// observed inodes against the index.
+    watcher_derivation_needed: bool,
+
+    /// Images observed by the watcher, pending indexing.
+    /// Accumulated from ImageFileObserved messages, drained when a batch
+    /// is queued as an IndexObservedImages computation.
+    pending_observed_images: Vec<fs_watcher::ObservedImage>,
 
     /// Handle to the filesystem watcher thread.
     /// Spawned at construction time — always present.
@@ -333,6 +343,8 @@ impl Witch {
             idle_since: None,
             idle_rescan_active: false,
             idle_rescan_eligible: false,
+            watcher_derivation_needed: false,
+            pending_observed_images: Vec::new(),
             fs_watcher: fs_watcher_handle,
             external_fetch: None,
             fetch_progress: None,
@@ -469,7 +481,7 @@ impl Witch {
         self.library_reconciliation_done = false;
 
         self.watcher_state = WatcherState::InitialScan;
-        self.fs_watcher.start(zones, self.force_check_all_files_at_startup);
+        self.fs_watcher.start(zones);
 
         crate::logging::log_general("[WITCH] Watcher started — initial scan in progress");
         true
@@ -540,12 +552,6 @@ impl Witch {
                 self.session_recomputation_scope |= result.recomputation_scope;
             }
 
-            // Accumulate observed inodes from ScanCorpusDirectory results
-            self.observed_corpus_inodes
-                .extend(result.observed_corpus_inodes);
-            self.observed_inbox_inodes
-                .extend(result.observed_inbox_inodes);
-
             // Accumulate observed library files from ScanLibraryDirectory results
             self.observed_library_files
                 .extend(result.observed_library_files);
@@ -597,6 +603,19 @@ impl Witch {
 
         // FS watcher: drain initial scan results and steady-state events
         self.drain_watcher_messages();
+
+        // If watcher events changed the observed inode maps, queue derivation
+        // once current work drains. This batches rapid events naturally.
+        if self.watcher_derivation_needed
+            && self.work_state.is_idle()
+            && self.reasoning_level == ReasoningLevel::Full
+        {
+            self.watcher_derivation_needed = false;
+            crate::logging::log_general(
+                "[WITCH] Steady-state derivation triggered by watcher events"
+            );
+            self.queue_awakening_computations(false);
+        }
 
         // External fetch: drain scheduler messages (task requests + status)
         self.drain_scheduler_messages();
@@ -856,8 +875,28 @@ impl Witch {
     /// and DeriveInboxSignals. When `include_second_level` is true, also queues
     /// ScheduleSecondLevelDerivations for directory checks and library walks.
     fn queue_awakening_computations(&mut self, include_second_level: bool) {
-        let observed_corpus = std::mem::take(&mut self.observed_corpus_inodes);
-        let observed_inbox = std::mem::take(&mut self.observed_inbox_inodes);
+        // Flush pending image observations before derivation runs.
+        // Images must be in the `files` table before DeriveCorpusSignals,
+        // otherwise derivation sees them as disk-only ghosts.
+        if !self.pending_observed_images.is_empty() {
+            let images = std::mem::take(&mut self.pending_observed_images);
+            let count = images.len();
+            crate::logging::log_general(format!(
+                "[WITCH] Queueing IndexObservedImages for {} images", count
+            ));
+            self.queue_computation_with_label(
+                Computation::Analysis(
+                    analysis::Computation::IndexObservedImages { images }
+                ),
+                Some(format!("Index {} observed images", count)),
+            );
+        }
+
+        // Clone maps rather than take — the observed inode sets must persist for
+        // steady-state watcher events to incrementally update them. Derivation
+        // gets a snapshot; the Witch keeps the authoritative live set.
+        let observed_corpus = self.observed_corpus_inodes.clone();
+        let observed_inbox = self.observed_inbox_inodes.clone();
 
         let label = if include_second_level { "Awakening" } else { "idle rescan awakening" };
         crate::logging::log_general(format!(
@@ -948,7 +987,7 @@ impl Witch {
         self.observed_corpus_inodes.clear();
         self.observed_inbox_inodes.clear();
 
-        self.fs_watcher.start(zones, false);
+        self.fs_watcher.start(zones);
     }
 
     // =========================================================================
@@ -1004,7 +1043,7 @@ impl Witch {
     ///
     /// InitialScanComplete results are accumulated into observed inode maps.
     /// AllInitialScansComplete signals observation is done (equivalent to
-    /// WalkCorpus + all ScanCorpusDirectory completing).
+    /// the old WalkCorpus + ScanCorpusDirectory flow).
     ///
     /// Called each tick().
     fn drain_watcher_messages(&mut self) {
@@ -1051,7 +1090,7 @@ impl Witch {
 
                     // Drive the state machine forward based on current reasoning level.
                     // This replaces the observation→awakening transition that previously
-                    // happened in transition_to_completed() when WalkCorpus+ScanCorpusDirectory
+                    // happened in transition_to_completed() when the old observation
                     // computations drained.
                     match self.reasoning_level {
                         ReasoningLevel::None => {
@@ -1086,8 +1125,108 @@ impl Witch {
                         }
                     }
                 }
+                // Steady-state events: incremental inode map updates + computation queueing
+                fs_watcher::WatcherMessage::FileChanged {
+                    zone, inode, path,
+                    mtime_secs: _, mtime_nanos: _, file_size: _, tags: _,
+                    // Phase 4: mtime/tags used for pending-write reconciliation
+                } => {
+                    crate::logging::log_general(format!(
+                        "[WITCH] Watcher: file changed — zone={:?} inode={} path={:?}",
+                        zone, inode, path
+                    ));
+
+                    // Update observed map with current path (may have been renamed)
+                    let rel_path = crate::corpus::paths::get_resolver()
+                        .to_relative(&path)
+                        .unwrap_or_else(|| path.clone())
+                        .to_string_lossy()
+                        .to_string();
+
+                    match zone {
+                        crate::db::types::Zone::Corpus => {
+                            self.observed_corpus_inodes.insert(inode, rel_path);
+                        }
+                        crate::db::types::Zone::Inbox => {
+                            self.observed_inbox_inodes.insert(inode, rel_path);
+                        }
+                        crate::db::types::Zone::Library => {}
+                    }
+
+                    // Queue per-inode tag verification (compares disk tags vs DB)
+                    if zone == crate::db::types::Zone::Corpus {
+                        self.queue_computation_with_label(
+                            Computation::Observation(
+                                crate::meta::computations::observation::Computation::VerifyTags { inode, path }
+                            ),
+                            Some("Verify tags (watcher)".to_string()),
+                        );
+                    }
+                    // Inbox files don't have tag verification — derivation handles them
+                }
+                fs_watcher::WatcherMessage::FileCreated {
+                    zone, inode, path,
+                    mtime_secs: _, mtime_nanos: _, file_size: _,
+                    // Phase 4: mtime/size used for files table update
+                } => {
+                    crate::logging::log_general(format!(
+                        "[WITCH] Watcher: file created — zone={:?} inode={} path={:?}",
+                        zone, inode, path
+                    ));
+
+                    let rel_path = crate::corpus::paths::get_resolver()
+                        .to_relative(&path)
+                        .unwrap_or_else(|| path.clone())
+                        .to_string_lossy()
+                        .to_string();
+
+                    match zone {
+                        crate::db::types::Zone::Corpus => {
+                            self.observed_corpus_inodes.insert(inode, rel_path);
+                        }
+                        crate::db::types::Zone::Inbox => {
+                            self.observed_inbox_inodes.insert(inode, rel_path);
+                        }
+                        crate::db::types::Zone::Library => {}
+                    }
+
+                    // Derivation will detect this as disk-only and emit UnindexedFileSignal
+                    self.watcher_derivation_needed = true;
+                }
+                fs_watcher::WatcherMessage::FileRemoved { zone, inode, path } => {
+                    crate::logging::log_general(format!(
+                        "[WITCH] Watcher: file removed — zone={:?} inode={} path={:?}",
+                        zone, inode, path
+                    ));
+
+                    match zone {
+                        crate::db::types::Zone::Corpus => {
+                            self.observed_corpus_inodes.remove(&inode);
+                        }
+                        crate::db::types::Zone::Inbox => {
+                            self.observed_inbox_inodes.remove(&inode);
+                        }
+                        crate::db::types::Zone::Library => {}
+                    }
+
+                    // Derivation will detect this as index-only and emit MissingFileSignal
+                    // (or cascade-drop for inbox)
+                    self.watcher_derivation_needed = true;
+                }
+                fs_watcher::WatcherMessage::ImageFileObserved(img) => {
+                    self.pending_observed_images.push(img);
+                }
+                fs_watcher::WatcherMessage::Rescan => {
+                    crate::logging::log_general(
+                        "[WITCH] Watcher requested rescan — clearing observed inodes for fresh accumulation"
+                    );
+                    self.observed_corpus_inodes.clear();
+                    self.observed_inbox_inodes.clear();
+                    self.watcher_state = WatcherState::InitialScan;
+                }
             }
         }
+
     }
 
     /// Trigger an external fetch (operator-initiated).
@@ -1200,7 +1339,7 @@ impl Witch {
         self.observed_library_files.clear();
         self.library_reconciliation_done = false;
 
-        self.fs_watcher.start(zones, false);
+        self.fs_watcher.start(zones);
     }
 
     /// Queue content analysis computations (internal only).
@@ -1280,8 +1419,6 @@ impl Witch {
                         config_update: None,
                         recomputation_scope: crate::meta::recomputation::RecomputationScope::EMPTY,
                         fetch_result: None,
-                        observed_corpus_inodes: HashMap::new(),
-                        observed_inbox_inodes: HashMap::new(),
                         observed_library_files: Vec::new(),
                         deferred_phases: VecDeque::new(),
                     }

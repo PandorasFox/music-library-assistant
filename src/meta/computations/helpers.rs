@@ -80,6 +80,20 @@ pub(super) fn is_audio_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Check if a bare extension string is an image extension.
+pub(crate) fn is_image_file_ext(ext: &str) -> bool {
+    IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+}
+
+/// Check if a path string (relative or absolute) has an image file extension.
+pub(crate) fn is_image_file_ext_from_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
 /// Check if path has an image file extension.
 ///
 /// Filters out macOS resource fork files (`._*`).

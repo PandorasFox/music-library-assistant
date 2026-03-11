@@ -300,11 +300,13 @@ pub enum Computation {
         new_separators: Vec<(String, String)>,
     },
 
-    /// Index image files discovered by the scanner.
+    /// Index images observed by the FS watcher.
     ///
-    /// Dirty-inode computation: reads image dimensions and determines role
-    /// from filename, writing metadata to the `image_info` table.
-    IndexImageFile,
+    /// Carries pre-extracted metadata (format, dimensions, role) from the
+    /// watcher thread. Writes to both `files` and `image_info` tables.
+    IndexObservedImages {
+        images: Vec<crate::witch::fs_watcher::ObservedImage>,
+    },
 }
 
 impl Computation {
@@ -344,7 +346,7 @@ impl Computation {
             Computation::EmitUnmatchedSignals => "Emitting unmatched signals",
             Computation::DeriveExternalMatches => "Deriving external match signals",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
-            Computation::IndexImageFile => "Indexing image files",
+            Computation::IndexObservedImages { .. } => "Indexing observed images",
         }
     }
 
@@ -460,8 +462,8 @@ impl Computation {
                     ctx.witness,
                 )
             }
-            Computation::IndexImageFile => {
-                execute_index_image_file(ctx.read_db, ctx.witness)
+            Computation::IndexObservedImages { ref images } => {
+                execute_index_observed_images(images, ctx.witness)
             }
         }
     }

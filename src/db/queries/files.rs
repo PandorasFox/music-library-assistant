@@ -880,8 +880,8 @@ impl Database {
 
     /// Check which inodes already have image_info rows (batch query).
     ///
-    /// Used by ScanCorpusDirectory's mtime freshness gate: if an image inode
-    /// already has image_info AND its mtime hasn't changed, skip dirty marking.
+    /// Used for image indexing freshness checks: if an image inode
+    /// already has image_info AND its mtime hasn't changed, skip re-indexing.
     pub fn get_image_info_exists_batch(&self, inodes: &[i64]) -> Result<HashSet<i64>> {
         if inodes.is_empty() {
             return Ok(HashSet::new());

@@ -26,7 +26,6 @@
 //! 5. **Specific signal clearing** - Clear signals by type+key (from `specific_signals_to_clear()`)
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use crate::config;
 use crate::corpus::paths;
@@ -119,8 +118,6 @@ pub(super) fn execute_mutation(
                 spawn_mutations: Vec::new(),
                 config_update: None,
                 recomputation_scope: RecomputationScope::EMPTY,
-                observed_corpus_inodes: HashMap::new(),
-                observed_inbox_inodes: HashMap::new(),
                 observed_library_files: Vec::new(),
                 fetch_result: None,
                 deferred_phases: std::collections::VecDeque::new(),
@@ -210,8 +207,6 @@ pub(super) fn execute_mutation(
         spawn_mutations,
         config_update,
         recomputation_scope,
-        observed_corpus_inodes: HashMap::new(),
-        observed_inbox_inodes: HashMap::new(),
         observed_library_files: Vec::new(),
         fetch_result: None,
         deferred_phases: std::collections::VecDeque::new(),
@@ -239,8 +234,6 @@ pub(super) fn execute_computation(
         spawn_mutations: Vec::new(), // Computations don't spawn mutations
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
-        observed_corpus_inodes: result.observed_corpus_inodes,
-        observed_inbox_inodes: result.observed_inbox_inodes,
         observed_library_files: result.observed_library_files,
         fetch_result: None,
         deferred_phases: result.deferred_phases,
@@ -294,8 +287,6 @@ pub(super) fn execute_maintenance(
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
         fetch_result: None,
-        observed_corpus_inodes: HashMap::new(),
-        observed_inbox_inodes: HashMap::new(),
         observed_library_files: Vec::new(),
         deferred_phases: std::collections::VecDeque::new(),
     }
@@ -544,8 +535,6 @@ pub(super) fn execute_external_fetch(
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
         fetch_result: Some(fetch_result),
-        observed_corpus_inodes: HashMap::new(),
-        observed_inbox_inodes: HashMap::new(),
         observed_library_files: Vec::new(),
         deferred_phases: std::collections::VecDeque::new(),
     }

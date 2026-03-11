@@ -18,7 +18,7 @@
 //!
 //! Computations are organized into three phases with compile-time enforced boundaries:
 //!
-//! - **Observation** (`observation/`) - Corpus observation (ScanCorpusDirectory, VerifyMtime, etc.)
+//! - **Observation** (`observation/`) - Per-file verification (VerifyMtime, VerifyTags, VerifyAudio)
 //! - **Derivation** (`derivation/`) - First-level derivations (DeriveDirectorySignals, etc.)
 //! - **Analysis** (`analysis/`) - Full-corpus analysis (DetectFingerprintDuplicates, etc.)
 //!
@@ -67,7 +67,7 @@ pub use stats::{close_thread_local_connection, with_read_only_db};
 pub use types::ComputationWitness;
 
 // Internal imports for execute functions
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 // ============================================================================
 // Pipeline Stages (multi-phase computation barriers)
@@ -160,10 +160,6 @@ pub struct ComputationResult {
     /// Barrier-separated follow-up phases. Each phase runs only after all
     /// prior work drains (in-flight tasks + db write queue empty).
     pub deferred_phases: VecDeque<(PipelineStage, Vec<Computation>)>,
-    /// Corpus inodes observed on disk during this computation (inode → relative path).
-    pub observed_corpus_inodes: HashMap<i64, String>,
-    /// Inbox inodes observed on disk during this computation (inode → relative path).
-    pub observed_inbox_inodes: HashMap<i64, String>,
     /// Library files observed on disk during ScanLibraryDirectory.
     pub observed_library_files: Vec<derivation::ObservedLibraryFile>,
 }
@@ -177,8 +173,6 @@ impl ComputationResult {
             spawn_derivation: Vec::new(),
             spawn_analysis: Vec::new(),
             deferred_phases: VecDeque::new(),
-            observed_corpus_inodes: result.observed_corpus_inodes,
-            observed_inbox_inodes: result.observed_inbox_inodes,
             observed_library_files: Vec::new(),
         }
     }
@@ -191,8 +185,6 @@ impl ComputationResult {
             spawn_derivation: result.spawn,
             spawn_analysis: Vec::new(),
             deferred_phases: VecDeque::new(),
-            observed_corpus_inodes: HashMap::new(),
-            observed_inbox_inodes: HashMap::new(),
             observed_library_files: result.observed_library_files,
         }
     }
@@ -205,8 +197,6 @@ impl ComputationResult {
             spawn_derivation: Vec::new(),
             spawn_analysis: result.spawn,
             deferred_phases: result.deferred_phases,
-            observed_corpus_inodes: HashMap::new(),
-            observed_inbox_inodes: HashMap::new(),
             observed_library_files: Vec::new(),
         }
     }
@@ -264,8 +254,6 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             spawn_derivation: Vec::new(),
             spawn_analysis: Vec::new(),
             deferred_phases: VecDeque::new(),
-            observed_corpus_inodes: HashMap::new(),
-            observed_inbox_inodes: HashMap::new(),
             observed_library_files: Vec::new(),
         },
     }

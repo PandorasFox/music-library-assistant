@@ -1,8 +1,8 @@
 //! FsWatcherHandle — Witch-side API for the filesystem watcher thread.
 //!
 //! The watcher thread owns filesystem monitoring and inode state tracking.
-//! It performs initial directory walks at startup and (in future phases)
-//! persistent inotify-based monitoring for steady-state change detection.
+//! It performs initial directory walks at startup and persistent inotify-based
+//! monitoring for steady-state change detection.
 //!
 //! ## Channel Topology
 //!
@@ -22,6 +22,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
 
 use crate::db::types::Zone;
 
@@ -29,12 +32,26 @@ use crate::db::types::Zone;
 // Public Types
 // ============================================================================
 
+/// Image file observed on disk by the watcher thread.
+///
+/// Contains only FS-level data (no file content reads). Format, dimensions,
+/// and role are extracted later by `IndexObservedImages` on a rayon worker,
+/// keeping the watcher thread lightweight (stat-only).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservedImage {
+    pub zone: Zone,
+    pub inode: i64,
+    pub path: String, // relative to zone root
+    pub mtime_secs: i64,
+    pub mtime_nanos: i64,
+    pub file_size: i64,
+}
+
 /// Command from Witch to watcher thread.
 pub(super) enum WatcherCommand {
     /// Begin watching zone roots. Triggers initial directory walk.
     Start {
         zones: Vec<(Zone, PathBuf)>,
-        force_check: bool,
     },
     /// Shut down the watcher thread.
     Shutdown,
@@ -50,6 +67,38 @@ pub(super) enum WatcherMessage {
     },
     /// All zones' initial scans done.
     AllInitialScansComplete,
+    /// File changed (mtime differs from watcher's cached state).
+    /// Watcher has already read tags from the file.
+    FileChanged {
+        zone: Zone,
+        inode: i64,
+        path: PathBuf,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        file_size: i64,
+        tags: Vec<(String, String)>,
+    },
+    /// New file appeared (not in watcher's inode set).
+    FileCreated {
+        zone: Zone,
+        inode: i64,
+        path: PathBuf,
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        file_size: i64,
+    },
+    /// File removed from disk.
+    FileRemoved {
+        zone: Zone,
+        inode: i64,
+        path: PathBuf,
+    },
+    /// Image file observed with extracted metadata (dimensions, format, role).
+    /// Watcher has already read the image — Witch queues DB writes.
+    ImageFileObserved(ObservedImage),
+    /// inotify overflow or watch error — watcher will re-walk and re-send
+    /// InitialScanComplete. Witch should queue full bulk reconciliation.
+    Rescan,
 }
 
 // ============================================================================
@@ -60,7 +109,7 @@ pub(super) enum WatcherMessage {
 pub struct FsWatcherHandle {
     /// Send commands to watcher (start, shutdown).
     command_tx: Sender<WatcherCommand>,
-    /// Receive messages from watcher (scan results).
+    /// Receive messages from watcher (scan results + events).
     message_rx: Receiver<WatcherMessage>,
     /// Join handle for the watcher thread.
     handle: Option<JoinHandle<()>>,
@@ -70,7 +119,7 @@ impl FsWatcherHandle {
     /// Spawn the watcher thread.
     ///
     /// The watcher sleeps until it receives a Start command, then walks
-    /// zone directories and reports inode maps back to the Witch.
+    /// zone directories and sets up inotify watches for steady-state monitoring.
     pub fn spawn() -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let (message_tx, message_rx) = mpsc::channel();
@@ -87,10 +136,10 @@ impl FsWatcherHandle {
     }
 
     /// Request the watcher to start scanning zone roots.
-    pub fn start(&self, zones: Vec<(Zone, PathBuf)>, force_check: bool) {
+    pub fn start(&self, zones: Vec<(Zone, PathBuf)>) {
         let _ = self
             .command_tx
-            .send(WatcherCommand::Start { zones, force_check });
+            .send(WatcherCommand::Start { zones });
     }
 
     /// Drain available messages from the watcher (non-blocking).
@@ -121,21 +170,83 @@ impl Drop for FsWatcherHandle {
 }
 
 // ============================================================================
+// Watcher Thread State
+// ============================================================================
+
+/// Per-file cached state held by the watcher.
+#[derive(Debug, Clone)]
+struct CachedFileState {
+    mtime_secs: i64,
+    mtime_nanos: i64,
+    file_size: i64,
+}
+
+/// Watcher's in-memory state for one zone.
+struct ZoneState {
+    zone: Zone,
+    root: PathBuf,
+    /// inode → (relative_path, cached mtime/size)
+    files: HashMap<i64, (String, CachedFileState)>,
+    /// path → inode (reverse index for event lookup)
+    path_to_inode: HashMap<PathBuf, i64>,
+}
+
+impl ZoneState {
+    fn new(zone: Zone, root: PathBuf) -> Self {
+        Self {
+            zone,
+            root,
+            files: HashMap::new(),
+            path_to_inode: HashMap::new(),
+        }
+    }
+
+    /// Insert a file into the cached state.
+    fn insert(&mut self, inode: i64, relative_path: String, state: CachedFileState) {
+        let abs_path = self.root.join(&relative_path);
+        self.path_to_inode.insert(abs_path, inode);
+        self.files.insert(inode, (relative_path, state));
+    }
+
+    /// Remove a file by inode.
+    fn remove_by_inode(&mut self, inode: i64) -> Option<String> {
+        if let Some((path, _)) = self.files.remove(&inode) {
+            let abs_path = self.root.join(&path);
+            self.path_to_inode.remove(&abs_path);
+            Some(path)
+        } else {
+            None
+        }
+    }
+
+    /// Find the zone for an absolute path, returning the inode if it's tracked.
+    fn inode_for_path(&self, path: &Path) -> Option<i64> {
+        self.path_to_inode.get(path).copied()
+    }
+
+}
+
+/// Debounce window for coalescing rapid FS events (e.g. editor write patterns).
+const DEBOUNCE_DURATION: Duration = Duration::from_millis(200);
+
+// ============================================================================
 // Watcher Thread Main Loop
 // ============================================================================
 
-/// Watcher main loop. Waits for commands, performs directory walks.
+/// Watcher main loop. Waits for commands, performs directory walks,
+/// then enters steady-state inotify monitoring.
 fn run_watcher(command_rx: Receiver<WatcherCommand>, message_tx: Sender<WatcherMessage>) {
     crate::logging::log_general("[FS_WATCHER] Watcher thread started");
 
     while let Ok(command) = command_rx.recv() {
         match command {
             WatcherCommand::Shutdown => break,
-            WatcherCommand::Start {
-                zones,
-                force_check,
-            } => {
-                run_initial_scan(&zones, force_check, &message_tx);
+            WatcherCommand::Start { zones } => {
+                // Run initial scan + steady-state monitoring.
+                // Returns true if shutdown was requested during monitoring.
+                if run_scan_and_monitor(&zones, &command_rx, &message_tx) {
+                    break;
+                }
             }
         }
     }
@@ -143,23 +254,22 @@ fn run_watcher(command_rx: Receiver<WatcherCommand>, message_tx: Sender<WatcherM
     crate::logging::log_general("[FS_WATCHER] Watcher thread exiting");
 }
 
-/// Perform the initial directory scan for all zones.
-///
-/// Walks each zone root, collects audio files with inode/mtime/size,
-/// and sends per-zone `InitialScanComplete` messages followed by
-/// `AllInitialScansComplete`.
-fn run_initial_scan(
+/// Perform initial scan, set up inotify, enter monitoring loop.
+/// Returns true if shutdown requested.
+fn run_scan_and_monitor(
     zones: &[(Zone, PathBuf)],
-    _force_check: bool,
+    command_rx: &Receiver<WatcherCommand>,
     message_tx: &Sender<WatcherMessage>,
-) {
+) -> bool {
+    // Phase 1: Initial scan — walk and report
+    let mut zone_states = Vec::new();
+
     for (zone, root) in zones {
         if !root.exists() {
             crate::logging::log_general(format!(
                 "[FS_WATCHER] Zone {:?} root does not exist: {:?}, skipping",
                 zone, root
             ));
-            // Send empty scan result so the Witch knows this zone was processed
             let _ = message_tx.send(WatcherMessage::InitialScanComplete {
                 zone: *zone,
                 inodes: HashMap::new(),
@@ -172,25 +282,513 @@ fn run_initial_scan(
             zone, root
         ));
 
-        let inodes = walk_zone_root(root);
+        let mut zone_state = ZoneState::new(*zone, root.clone());
+        let raw_inodes = walk_zone_root(root);
 
         crate::logging::log_general(format!(
-            "[FS_WATCHER] Zone {:?} initial scan complete: {} audio files found",
+            "[FS_WATCHER] Zone {:?} initial scan complete: {} tracked files found",
             zone,
-            inodes.len()
+            raw_inodes.len()
         ));
+
+        // Populate zone state and send image metadata for image files
+        let mut image_count = 0;
+        for (inode, (rel_path, mtime_s, mtime_ns, size)) in &raw_inodes {
+            zone_state.insert(
+                *inode,
+                rel_path.clone(),
+                CachedFileState {
+                    mtime_secs: *mtime_s,
+                    mtime_nanos: *mtime_ns,
+                    file_size: *size,
+                },
+            );
+
+            // For image files, report to Witch (no content reads — just FS-level data)
+            if crate::meta::computations::helpers::is_image_file_ext_from_path(rel_path) {
+                let _ = message_tx.send(WatcherMessage::ImageFileObserved(ObservedImage {
+                    zone: *zone,
+                    inode: *inode,
+                    path: rel_path.clone(),
+                    mtime_secs: *mtime_s,
+                    mtime_nanos: *mtime_ns,
+                    file_size: *size,
+                }));
+                image_count += 1;
+            }
+        }
+
+        if image_count > 0 {
+            crate::logging::log_general(format!(
+                "[FS_WATCHER] Zone {:?}: {} image files observed with metadata",
+                zone, image_count
+            ));
+        }
 
         let _ = message_tx.send(WatcherMessage::InitialScanComplete {
             zone: *zone,
-            inodes,
+            inodes: raw_inodes,
         });
+
+        zone_states.push(zone_state);
     }
 
     let _ = message_tx.send(WatcherMessage::AllInitialScansComplete);
+
+    // Phase 2: Set up inotify watcher and enter monitoring loop
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+
+    let mut watcher = match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+        match res {
+            Ok(event) => { let _ = notify_tx.send(NotifyEvent::Event(event)); }
+            Err(e) => { let _ = notify_tx.send(NotifyEvent::Error(e)); }
+        }
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            crate::logging::log_error(format!(
+                "[FS_WATCHER] Failed to create inotify watcher: {}. \
+                 Steady-state monitoring disabled.",
+                e
+            ));
+            // Fall back to idle loop (no steady-state, rely on periodic reconciliation)
+            return idle_loop(command_rx);
+        }
+    };
+
+    // Set up recursive watches on zone roots
+    for zs in &zone_states {
+        if let Err(e) = notify::Watcher::watch(&mut watcher, &zs.root, notify::RecursiveMode::Recursive) {
+            crate::logging::log_error(format!(
+                "[FS_WATCHER] Failed to watch {:?}: {}",
+                zs.root, e
+            ));
+        } else {
+            crate::logging::log_general(format!(
+                "[FS_WATCHER] Watching zone {:?} at {:?}",
+                zs.zone, zs.root
+            ));
+        }
+    }
+
+    // Monitoring loop: drain notify events + check for commands
+    let mut debounce_map: HashMap<PathBuf, Instant> = HashMap::new();
+    let mut pending_paths: Vec<PathBuf> = Vec::new();
+
+    loop {
+        // Check for commands (non-blocking)
+        match command_rx.try_recv() {
+            Ok(WatcherCommand::Shutdown) => return true,
+            Ok(WatcherCommand::Start { zones, .. }) => {
+                // Re-scan requested: drop current watcher, re-run
+                drop(watcher);
+
+                // Re-scan zones
+                zone_states.clear();
+                for (zone, root) in &zones {
+                    if !root.exists() {
+                        let _ = message_tx.send(WatcherMessage::InitialScanComplete {
+                            zone: *zone,
+                            inodes: HashMap::new(),
+                        });
+                        continue;
+                    }
+
+                    let mut zone_state = ZoneState::new(*zone, root.clone());
+                    let raw_inodes = walk_zone_root(root);
+
+                    for (inode, (rel_path, mtime_s, mtime_ns, size)) in &raw_inodes {
+                        zone_state.insert(
+                            *inode,
+                            rel_path.clone(),
+                            CachedFileState {
+                                mtime_secs: *mtime_s,
+                                mtime_nanos: *mtime_ns,
+                                file_size: *size,
+                            },
+                        );
+                    }
+
+                    let _ = message_tx.send(WatcherMessage::InitialScanComplete {
+                        zone: *zone,
+                        inodes: raw_inodes,
+                    });
+
+                    zone_states.push(zone_state);
+                }
+
+                let _ = message_tx.send(WatcherMessage::AllInitialScansComplete);
+
+                // Return false to re-enter command loop, which will re-run
+                // run_scan_and_monitor with fresh inotify watches
+                return false;
+            }
+            Err(_) => {} // No command
+        }
+
+        // Drain notify events (non-blocking)
+        let mut had_events = false;
+        loop {
+            match notify_rx.try_recv() {
+                Ok(NotifyEvent::Event(event)) => {
+                    had_events = true;
+                    process_notify_event(
+                        &event,
+                        &mut zone_states,
+                        &mut debounce_map,
+                        &mut pending_paths,
+                    );
+                }
+                Ok(NotifyEvent::Error(e)) => {
+                    handle_notify_error(e, &mut zone_states, message_tx, &mut watcher);
+                }
+                Err(_) => break,
+            }
+        }
+
+        // Process debounced events that have settled
+        let now = Instant::now();
+        let mut i = 0;
+        while i < pending_paths.len() {
+            let path = &pending_paths[i];
+            if let Some(last_event) = debounce_map.get(path) {
+                if now.duration_since(*last_event) >= DEBOUNCE_DURATION {
+                    let path = pending_paths.swap_remove(i);
+                    debounce_map.remove(&path);
+                    process_settled_event(&path, &mut zone_states, message_tx);
+                    // Don't increment i — swap_remove moved the last element here
+                    continue;
+                }
+            } else {
+                // No debounce entry — remove from pending
+                pending_paths.swap_remove(i);
+                continue;
+            }
+            i += 1;
+        }
+
+        // Sleep briefly to avoid busy-spinning (50ms for responsive shutdown)
+        if !had_events && pending_paths.is_empty() {
+            thread::sleep(Duration::from_millis(50));
+        } else if !pending_paths.is_empty() {
+            // Events are pending debounce — sleep shorter
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// Fall back to idle loop when inotify is unavailable.
+/// Returns true if shutdown requested.
+fn idle_loop(command_rx: &Receiver<WatcherCommand>) -> bool {
+    loop {
+        match command_rx.recv() {
+            Ok(WatcherCommand::Shutdown) => return true,
+            Ok(WatcherCommand::Start { .. }) => return false,
+            Err(_) => return true,
+        }
+    }
+}
+
+/// Internal wrapper for notify events.
+enum NotifyEvent {
+    Event(notify::Event),
+    Error(notify::Error),
 }
 
 // ============================================================================
-// Directory Walking (reuses observation helpers' logic)
+// Event Processing
+// ============================================================================
+
+/// Record a notify event into the debounce map.
+fn process_notify_event(
+    event: &notify::Event,
+    zone_states: &mut [ZoneState],
+    debounce_map: &mut HashMap<PathBuf, Instant>,
+    pending_paths: &mut Vec<PathBuf>,
+) {
+    use notify::EventKind;
+
+    // Only care about file-level events that could affect audio files
+    match event.kind {
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
+        _ => return,
+    }
+
+    let now = Instant::now();
+    for path in &event.paths {
+        // Only process files in our zone roots
+        let in_zone = zone_states.iter().any(|zs| path.starts_with(&zs.root));
+        if !in_zone {
+            continue;
+        }
+
+        // Skip directories (we watch recursively, so new dirs are auto-watched)
+        if path.is_dir() {
+            continue;
+        }
+
+        // Only care about tracked files (audio + images)
+        if !is_tracked_file(path) {
+            continue;
+        }
+
+        let is_new = !debounce_map.contains_key(path);
+        debounce_map.insert(path.clone(), now);
+        if is_new {
+            pending_paths.push(path.clone());
+        }
+    }
+}
+
+/// Process a settled (debounced) event for a single path.
+fn process_settled_event(
+    path: &Path,
+    zone_states: &mut [ZoneState],
+    message_tx: &Sender<WatcherMessage>,
+) {
+    // Find which zone this path belongs to
+    let zone_idx = match zone_states.iter().position(|zs| path.starts_with(&zs.root)) {
+        Some(i) => i,
+        None => return,
+    };
+
+    let zone = zone_states[zone_idx].zone;
+    let existing_inode = zone_states[zone_idx].inode_for_path(path);
+
+    // Stat the file to see its current state
+    match std::fs::metadata(path) {
+        Ok(metadata) => {
+            let inode = metadata.ino() as i64;
+            let (mtime_secs, mtime_nanos) = crate::corpus::paths::read_mtime(&metadata);
+            let file_size = metadata.len() as i64;
+
+            if let Some(existing) = existing_inode {
+                if existing == inode {
+                    // Same inode at same path — check if mtime/size changed
+                    let cached = &zone_states[zone_idx].files[&inode].1;
+                    if cached.mtime_secs == mtime_secs
+                        && cached.mtime_nanos == mtime_nanos
+                        && cached.file_size == file_size
+                    {
+                        // No actual change (e.g. editor open/close without save)
+                        return;
+                    }
+
+                    // Mtime changed — read tags (audio files only) and report
+                    let tags = if is_audio_file(path) {
+                        read_tags(path)
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Update cached state
+                    let entry = zone_states[zone_idx].files.get_mut(&inode).unwrap();
+                    entry.1 = CachedFileState {
+                        mtime_secs,
+                        mtime_nanos,
+                        file_size,
+                    };
+
+                    let _ = message_tx.send(WatcherMessage::FileChanged {
+                        zone,
+                        inode,
+                        path: path.to_path_buf(),
+                        mtime_secs,
+                        mtime_nanos,
+                        file_size,
+                        tags,
+                    });
+
+                    // For images: also send updated metadata
+                    maybe_send_image_observed(path, zone, inode, mtime_secs, mtime_nanos, file_size, &zone_states[zone_idx].root, message_tx);
+                } else {
+                    // Different inode at same path — file was replaced
+                    // Remove old inode, add new one
+                    zone_states[zone_idx].remove_by_inode(existing);
+
+                    let rel_path = path
+                        .strip_prefix(&zone_states[zone_idx].root)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .to_string();
+
+                    // Report old inode as removed
+                    let _ = message_tx.send(WatcherMessage::FileRemoved {
+                        zone,
+                        inode: existing,
+                        path: path.to_path_buf(),
+                    });
+
+                    // Report new inode as created
+                    zone_states[zone_idx].insert(
+                        inode,
+                        rel_path,
+                        CachedFileState {
+                            mtime_secs,
+                            mtime_nanos,
+                            file_size,
+                        },
+                    );
+
+                    let _ = message_tx.send(WatcherMessage::FileCreated {
+                        zone,
+                        inode,
+                        path: path.to_path_buf(),
+                        mtime_secs,
+                        mtime_nanos,
+                        file_size,
+                    });
+                    maybe_send_image_observed(path, zone, inode, mtime_secs, mtime_nanos, file_size, &zone_states[zone_idx].root, message_tx);
+                }
+            } else {
+                // New file (not in our cached state)
+                let rel_path = path
+                    .strip_prefix(&zone_states[zone_idx].root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .to_string();
+
+                zone_states[zone_idx].insert(
+                    inode,
+                    rel_path,
+                    CachedFileState {
+                        mtime_secs,
+                        mtime_nanos,
+                        file_size,
+                    },
+                );
+
+                let _ = message_tx.send(WatcherMessage::FileCreated {
+                    zone,
+                    inode,
+                    path: path.to_path_buf(),
+                    mtime_secs,
+                    mtime_nanos,
+                    file_size,
+                });
+                maybe_send_image_observed(path, zone, inode, mtime_secs, mtime_nanos, file_size, &zone_states[zone_idx].root, message_tx);
+            }
+        }
+        Err(_) => {
+            // File doesn't exist anymore — it was removed
+            if let Some(inode) = existing_inode {
+                zone_states[zone_idx].remove_by_inode(inode);
+
+                let _ = message_tx.send(WatcherMessage::FileRemoved {
+                    zone,
+                    inode,
+                    path: path.to_path_buf(),
+                });
+            }
+            // If we didn't know about it, ignore
+        }
+    }
+}
+
+/// Handle a notify error (inotify overflow, watch limit, etc.)
+fn handle_notify_error(
+    error: notify::Error,
+    zone_states: &mut [ZoneState],
+    message_tx: &Sender<WatcherMessage>,
+    watcher: &mut notify::RecommendedWatcher,
+) {
+    crate::logging::log_error(format!(
+        "[FS_WATCHER] Notify error: {}",
+        error
+    ));
+
+    // Only rescan on watch limit exhaustion — the one error that means
+    // we're definitively missing events. Generic errors are logged but not
+    // worth a full re-walk (which could itself trigger more errors).
+    let needs_rescan = matches!(error.kind, notify::ErrorKind::MaxFilesWatch);
+
+    if needs_rescan {
+        crate::logging::log_general(
+            "[FS_WATCHER] inotify overflow/limit — triggering full rescan"
+        );
+
+        let _ = message_tx.send(WatcherMessage::Rescan);
+
+        // Re-walk all zones to rebuild state
+        for zs in zone_states.iter_mut() {
+            let raw_inodes = walk_zone_root(&zs.root);
+
+            // Rebuild zone state
+            zs.files.clear();
+            zs.path_to_inode.clear();
+
+            for (inode, (rel_path, mtime_s, mtime_ns, size)) in &raw_inodes {
+                zs.insert(
+                    *inode,
+                    rel_path.clone(),
+                    CachedFileState {
+                        mtime_secs: *mtime_s,
+                        mtime_nanos: *mtime_ns,
+                        file_size: *size,
+                    },
+                );
+            }
+
+            let _ = message_tx.send(WatcherMessage::InitialScanComplete {
+                zone: zs.zone,
+                inodes: raw_inodes,
+            });
+
+            // Re-establish watch
+            let _ = notify::Watcher::watch(watcher, &zs.root, notify::RecursiveMode::Recursive);
+        }
+
+        let _ = message_tx.send(WatcherMessage::AllInitialScansComplete);
+    }
+}
+
+/// Read tags from an audio file. Returns empty vec on error.
+fn read_tags(path: &Path) -> Vec<(String, String)> {
+    match crate::corpus::tags::TagSet::from_file(path) {
+        Ok(tagset) => tagset.into_vec(),
+        Err(e) => {
+            crate::logging::log_error(format!(
+                "[FS_WATCHER] Failed to read tags from {:?}: {}",
+                path, e
+            ));
+            Vec::new()
+        }
+    }
+}
+
+/// If `path` is an image file, send an `ImageFileObserved` message.
+fn maybe_send_image_observed(
+    path: &Path,
+    zone: Zone,
+    inode: i64,
+    mtime_secs: i64,
+    mtime_nanos: i64,
+    file_size: i64,
+    zone_root: &Path,
+    message_tx: &Sender<WatcherMessage>,
+) {
+    if !crate::meta::computations::helpers::is_image_file(path) {
+        return;
+    }
+
+    let rel_path = path
+        .strip_prefix(zone_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .to_string();
+
+    let _ = message_tx.send(WatcherMessage::ImageFileObserved(ObservedImage {
+        zone,
+        inode,
+        path: rel_path,
+        mtime_secs,
+        mtime_nanos,
+        file_size,
+    }));
+}
+
+// ============================================================================
+// Directory Walking
 // ============================================================================
 
 /// Walk a zone root and collect all audio files with metadata.
@@ -211,7 +809,7 @@ fn walk_zone_root(root: &Path) -> HashMap<i64, (String, i64, i64, i64)> {
 
     // Collect audio files from each directory
     for dir in &directories {
-        collect_audio_files(dir, root, &mut result);
+        collect_tracked_files(dir, root, &mut result);
     }
 
     result
@@ -276,10 +874,10 @@ fn enumerate_directories_recursive(
     }
 }
 
-/// Collect audio files from a single directory into the result map.
+/// Collect tracked files (audio + images) from a single directory into the result map.
 ///
 /// Paths are stored relative to `root`.
-fn collect_audio_files(dir: &Path, root: &Path, result: &mut HashMap<i64, (String, i64, i64, i64)>) {
+fn collect_tracked_files(dir: &Path, root: &Path, result: &mut HashMap<i64, (String, i64, i64, i64)>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -292,7 +890,7 @@ fn collect_audio_files(dir: &Path, root: &Path, result: &mut HashMap<i64, (Strin
             continue;
         }
 
-        if is_audio_file(&path) {
+        if is_tracked_file(&path) {
             if let Ok(metadata) = std::fs::metadata(&path) {
                 let inode = metadata.ino() as i64;
                 let (mtime_secs, mtime_nanos) = crate::corpus::paths::read_mtime(&metadata);
@@ -311,8 +909,21 @@ fn collect_audio_files(dir: &Path, root: &Path, result: &mut HashMap<i64, (Strin
     }
 }
 
-/// Check if a file has an audio extension (delegates to canonical list in mm-utils).
+/// Check if a file has an audio extension.
 fn is_audio_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| crate::config::is_audio_extension(ext))
+        .unwrap_or(false)
+}
+
+/// Check if a file is one we track: audio files or image files.
+///
+/// The watcher observes everything indexed in the `files` table.
+/// Audio files are the primary corpus content; image files (cover art, etc.)
+/// are also indexed and must be in the observed inode set or derivation
+/// will emit spurious MissingFileSignals for them.
+fn is_tracked_file(path: &Path) -> bool {
     // Skip macOS resource fork files (._filename.ext)
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         if name.starts_with("._") {
@@ -322,6 +933,9 @@ fn is_audio_file(path: &Path) -> bool {
 
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| crate::config::is_audio_extension(ext))
+        .map(|ext| {
+            crate::config::is_audio_extension(ext)
+                || crate::meta::computations::helpers::is_image_file_ext(ext)
+        })
         .unwrap_or(false)
 }

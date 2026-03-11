@@ -110,7 +110,7 @@ pub enum Computation {
 
     /// Scan a single library directory.
     ///
-    /// Collects (path, inode) pairs and stores them in files table (source='library').
+    /// Collects (path, inode) pairs and stores them in files table (zone='library').
     /// Deploy health derivation happens in Analysis phase.
     ScanLibraryDirectory {
         directory: PathBuf,

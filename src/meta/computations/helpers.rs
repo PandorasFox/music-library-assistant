@@ -135,14 +135,6 @@ pub(super) fn parse_inodes_csv(s: &str) -> Vec<i64> {
         .collect()
 }
 
-/// Extract modification time from metadata as (seconds, nanoseconds) tuple.
-///
-/// Returns (0, 0) if mtime extraction fails.
-/// Delegates to the canonical implementation in `corpus::paths::read_mtime`.
-pub(super) fn extract_mtime(metadata: &std::fs::Metadata) -> (i64, i64) {
-    crate::corpus::paths::read_mtime(metadata)
-}
-
 // ============================================================================
 // Directory Enumeration
 // ============================================================================
@@ -234,12 +226,12 @@ pub(super) fn get_configured_library_names(config: &crate::config::Config) -> Ve
 }
 
 // ============================================================================
-// Observation Generation Counter (vestigial — kept for UpdateCorpusFileSignals)
+// Observation Generation Counter (currently inert — never incremented)
 // ============================================================================
 
 static OBSERVATION_GENERATION: AtomicU8 = AtomicU8::new(0);
 
-/// Get the current observation generation (vestigial — used by UpdateCorpusFileSignals).
+/// Get the current observation generation (currently inert — always returns 0).
 pub(crate) fn current_observation_generation() -> u8 {
     OBSERVATION_GENERATION.load(Ordering::SeqCst) % 13
 }

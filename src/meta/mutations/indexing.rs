@@ -781,7 +781,7 @@ impl TagVerifyResult {
 pub fn execute_verify_tags(
     db: &crate::db::ReadOnlyDb<'_>,
     inode: i64,
-    path: &Path,
+    disk_tagset: crate::corpus::tags::TagSet,
 ) -> Result<TagVerifyResult> {
     use crate::corpus::tags::TagSet;
     use std::collections::HashSet;
@@ -798,20 +798,6 @@ pub fn execute_verify_tags(
             .into_iter()
             .map(|t: crate::db::types::AudioTag| (t.tag_name, t.tag_value)),
     );
-
-    // Read tags from file as TagSet
-    let disk_tagset = match TagSet::from_file(path) {
-        Ok(tags) => tags,
-        Err(e) => {
-            // File might not exist or be unreadable - log but don't fail
-            crate::logging::log_error(format!(
-                "VerifyTags: Could not read tags from {}: {}",
-                path.display(),
-                e
-            ));
-            return Ok(TagVerifyResult::empty());
-        }
-    };
 
     // Get all unique tag names from both sources
     let mut all_tag_names: HashSet<String> = HashSet::new();

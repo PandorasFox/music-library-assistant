@@ -84,7 +84,7 @@ macro_rules! gc_signal_tables {
 // Second-Level Signal Derivations
 // ============================================================================
 
-/// Schedule second-level signal derivations by spawning per-directory computations.
+/// Detect missing indexed directories and schedule library walks.
 pub fn execute_schedule_second_level_derivations(
     read_only_db: &ReadOnlyDb<'_>,
     witness: &ComputationWitness,

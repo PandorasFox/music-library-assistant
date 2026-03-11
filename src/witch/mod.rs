@@ -1149,8 +1149,7 @@ impl Witch {
                 // Steady-state events: incremental inode map updates + computation queueing
                 fs_watcher::WatcherMessage::FileChanged {
                     zone, inode, path,
-                    mtime_secs: _, mtime_nanos: _, file_size: _, tags: _,
-                    // Phase 4: mtime/tags used for pending-write reconciliation
+                    mtime_secs, mtime_nanos, file_size, disk_tags,
                 } => {
                     crate::logging::log_general(format!(
                         "[WITCH] Watcher: file changed — zone={} inode={} path={:?}",
@@ -1173,7 +1172,11 @@ impl Witch {
                     if zone == crate::db::types::Zone::Corpus {
                         self.queue_computation_with_label(
                             Computation::Observation(
-                                crate::meta::computations::observation::Computation::VerifyTags { inode, path }
+                                crate::meta::computations::observation::Computation::VerifyTags {
+                                    inode, path,
+                                    mtime_secs, mtime_nanos, file_size,
+                                    disk_tags,
+                                }
                             ),
                             Some("Verify tags (watcher)".to_string()),
                         );
@@ -1182,7 +1185,6 @@ impl Witch {
                 fs_watcher::WatcherMessage::FileCreated {
                     zone, inode, path,
                     mtime_secs: _, mtime_nanos: _, file_size: _,
-                    // Phase 4: mtime/size used for files table update
                 } => {
                     crate::logging::log_general(format!(
                         "[WITCH] Watcher: file created — zone={} inode={} path={:?}",

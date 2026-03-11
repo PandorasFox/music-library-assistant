@@ -88,7 +88,7 @@ pub(super) enum WatcherMessage {
         mtime_secs: i64,
         mtime_nanos: i64,
         file_size: i64,
-        tags: Vec<(String, String)>,
+        disk_tags: crate::corpus::tags::TagSet,
     },
     /// New file appeared (not in watcher's inode set).
     FileCreated {
@@ -590,7 +590,7 @@ fn process_settled_event(
                     let tags = if is_audio_file(path) {
                         read_tags(path)
                     } else {
-                        Vec::new()
+                        crate::corpus::tags::TagSet::new(std::iter::empty())
                     };
 
                     // Update cached state
@@ -608,7 +608,7 @@ fn process_settled_event(
                         mtime_secs,
                         mtime_nanos,
                         file_size,
-                        tags,
+                        disk_tags: tags,
                     });
 
                     // For images: also send updated metadata
@@ -755,15 +755,15 @@ fn handle_notify_error(
 }
 
 /// Read tags from an audio file. Returns empty vec on error.
-fn read_tags(path: &Path) -> Vec<(String, String)> {
+fn read_tags(path: &Path) -> crate::corpus::tags::TagSet {
     match crate::corpus::tags::TagSet::from_file(path) {
-        Ok(tagset) => tagset.into_vec(),
+        Ok(tagset) => tagset,
         Err(e) => {
             crate::logging::log_error(format!(
                 "[FS_WATCHER] Failed to read tags from {:?}: {}",
                 path, e
             ));
-            Vec::new()
+            crate::corpus::tags::TagSet::new(std::iter::empty())
         }
     }
 }

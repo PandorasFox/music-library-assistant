@@ -19,8 +19,8 @@
 //! Computations are organized into three phases with compile-time enforced boundaries:
 //!
 //! - **Observation** (`observation/`) - Per-file verification (VerifyTags, VerifyAudio)
-//! - **Derivation** (`derivation/`) - First-level derivations (DeriveDirectorySignals, etc.)
-//! - **Analysis** (`analysis/`) - Full-corpus analysis (DetectFingerprintDuplicates, etc.)
+//! - **Derivation** (`derivation/`) - First-level derivations (DeriveCorpusSignals, DeriveInboxSignals, etc.)
+//! - **Analysis** (`analysis/`) - Full-corpus analysis (DetectFingerprintOverlaps, etc.)
 //!
 //! Each phase has its own `Computation` enum and `Result` type. The `Result::spawn`
 //! field can ONLY contain computations from the same phase - this is enforced at

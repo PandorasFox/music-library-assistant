@@ -35,7 +35,17 @@ pub enum Computation {
     ///
     /// Compares the actual file tags to what's stored in the index.
     /// Pending-write aware: distinguishes MM-initiated writes from external changes.
-    VerifyTags { inode: i64, path: PathBuf },
+    VerifyTags {
+        inode: i64,
+        path: PathBuf,
+        /// Watcher-provided disk mtime (avoids stat round-trip).
+        mtime_secs: i64,
+        mtime_nanos: i64,
+        /// Watcher-provided file size.
+        file_size: i64,
+        /// Watcher-provided disk tags (avoids re-reading file).
+        disk_tags: crate::corpus::tags::TagSet,
+    },
 
     /// Verify audio stream integrity by decoding the entire file.
     ///
@@ -56,8 +66,8 @@ impl Computation {
     /// Execute this computation.
     pub fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
         match self {
-            Computation::VerifyTags { inode, path } => {
-                execute_verify_tags(ctx.read_db, *inode, path, ctx.witness)
+            Computation::VerifyTags { inode, path, mtime_secs, mtime_nanos, file_size: _, disk_tags } => {
+                execute_verify_tags(ctx.read_db, *inode, path, *mtime_secs, *mtime_nanos, disk_tags, ctx.witness)
             }
             Computation::VerifyAudio { inode, path } => {
                 execute_verify_audio(ctx.read_db, *inode, path, ctx.witness)

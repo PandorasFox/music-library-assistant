@@ -8,7 +8,7 @@ use crate::db::types::Zone;
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
-    drop_stale_corpus_signal, ensure_typed_signal, extract_mtime,
+    drop_stale_corpus_signal, ensure_typed_signal,
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::*;
@@ -16,13 +16,16 @@ use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::{Computation, Result};
 
-/// Check if a file's disk mtime differs from what's stored in files table.
+/// Check if the watcher-observed mtime differs from what's stored in files table.
 ///
-/// Uses the portable API (extract_mtime) for consistency across the codebase.
+/// Compares watcher-provided mtime against DB, avoiding disk round-trip.
 /// Returns true if mtime differs or if we can't determine (fail-safe to emit signal).
-/// Resolves the file's zone from the DB rather than hardcoding, so this works
-/// correctly for both corpus and inbox files.
-fn check_mtime_differs(read_only_db: &ReadOnlyDb<'_>, inode: i64, path: &Path) -> bool {
+fn check_mtime_differs(
+    read_only_db: &ReadOnlyDb<'_>,
+    inode: i64,
+    disk_mtime_secs: i64,
+    disk_mtime_nanos: i64,
+) -> bool {
     // Resolve the file's zone from the DB
     let zone = read_only_db
         .get_file_zone_and_path_by_inode(inode)
@@ -40,15 +43,7 @@ fn check_mtime_differs(read_only_db: &ReadOnlyDb<'_>, inode: i64, path: &Path) -
         Err(_) => return true, // Query failed, assume differs
     };
 
-    // Get current disk mtime using portable API
-    let metadata = match std::fs::metadata(path) {
-        Ok(m) => m,
-        Err(_) => return true, // Can't read file, assume differs
-    };
-    let (disk_secs, disk_nanos) = extract_mtime(&metadata);
-
-    // Compare
-    mtime_info.0 != disk_secs || mtime_info.1 != disk_nanos
+    mtime_info.0 != disk_mtime_secs || mtime_info.1 != disk_mtime_nanos
 }
 
 // ============================================================================
@@ -69,12 +64,15 @@ fn check_mtime_differs(read_only_db: &ReadOnlyDb<'_>, inode: i64, path: &Path) -
 /// clean tags (expected: MM just wrote them). This prevents spurious MtimeOnlyMismatch
 /// signals for MM-initiated writes.
 ///
-/// **Mtime update**: All branches update `files.mtime` from current disk state,
+/// **Mtime update**: All branches update `files.mtime` from the watcher-observed state,
 /// since `write_file_tags()` no longer handles mtime updates.
 pub fn execute_verify_tags(
     read_only_db: &ReadOnlyDb<'_>,
     inode: i64,
     path: &Path,
+    mtime_secs: i64,
+    mtime_nanos: i64,
+    disk_tags: &crate::corpus::tags::TagSet,
     witness: &ComputationWitness,
 ) -> Result {
     use crate::meta::mutations::indexing;
@@ -82,6 +80,10 @@ pub fn execute_verify_tags(
     let computation = Computation::VerifyTags {
         inode,
         path: path.to_path_buf(),
+        mtime_secs,
+        mtime_nanos,
+        file_size: 0, // not used in result construction
+        disk_tags: disk_tags.clone(),
     };
 
     // Route mismatch writes through db_thread (read-only connection can't write directly)
@@ -123,7 +125,7 @@ pub fn execute_verify_tags(
         .map(|(z, _)| z)
         .unwrap_or_else(|| "corpus".to_string());
 
-    match indexing::execute_verify_tags(read_only_db, inode, path) {
+    match indexing::execute_verify_tags(read_only_db, inode, disk_tags.clone()) {
         Ok(verify_result) => {
             if verify_result.is_clean() {
                 if has_pending_write {
@@ -145,7 +147,7 @@ pub fn execute_verify_tags(
                     );
                 } else {
                     // No pending_write — external or idle rescan path
-                    let mtime_actually_differs = check_mtime_differs(read_only_db, inode, path);
+                    let mtime_actually_differs = check_mtime_differs(read_only_db, inode, mtime_secs, mtime_nanos);
 
                     if mtime_actually_differs {
                         // Mtime changed but tags identical — external touch
@@ -273,11 +275,8 @@ pub fn execute_verify_tags(
                 sender.clear_dirty_inode(inode, "pending_write", witness);
             }
 
-            // Update DB mtime from current disk state (all branches)
-            if let Ok(metadata) = std::fs::metadata(path) {
-                let (secs, nanos) = extract_mtime(&metadata);
-                sender.update_file_mtime(&zone_str, inode, secs, nanos, witness);
-            }
+            // Update DB mtime from watcher-observed state (all branches)
+            sender.update_file_mtime(&zone_str, inode, mtime_secs, mtime_nanos, witness);
 
             Result::success(computation, Vec::new())
         }
@@ -317,10 +316,7 @@ pub fn execute_verify_tags(
             }
 
             // Update DB mtime even on error (prevents re-triggering)
-            if let Ok(metadata) = std::fs::metadata(path) {
-                let (secs, nanos) = extract_mtime(&metadata);
-                sender.update_file_mtime(&zone_str, inode, secs, nanos, witness);
-            }
+            sender.update_file_mtime(&zone_str, inode, mtime_secs, mtime_nanos, witness);
 
             // Return success so computation continues processing other files
             Result::success(computation, Vec::new())

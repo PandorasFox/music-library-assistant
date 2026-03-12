@@ -11,7 +11,7 @@ use ratatui::{
     Frame,
 };
 
-use super::active_view::{ActiveView, ExitConfirmModalState, TagCanonicityClusters};
+use super::active_view::{ActiveView, ExitConfirmModalState};
 use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::startup;
 use super::widgets::{status_bar, Modal, ModalButton, ModalStyle, UnifiedTitleBar};
@@ -64,7 +64,7 @@ pub fn render_app(
             .split(f.area());
 
         // Read deploy_needs_action from locally cached deploy status
-        let deploy_needs_action = app.witch.cached.get::<crate::db::domain::GetDeployStatus>().is_some_and(|s| s.needs_action);
+        let deploy_needs_action = app.witch.query(crate::db::domain::GetDeployStatus).needs_action;
 
         let transactions_open = app.config().opinions.leave_transactions_open;
         let transaction_has_decisions = {
@@ -183,9 +183,6 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         }
         ActiveView::TagCanonicityResolution { ref mut state, .. } => {
             tag_canonicity_v2::render(f, area, state);
-        }
-        ActiveView::TagCanonicityLoading { ref clusters, .. } => {
-            render_canonicity_loading(f, area, clusters);
         }
         ActiveView::CompoundTagSplit { ref mut state, .. } => {
             compound_split_v2::render(f, area, state);
@@ -381,42 +378,3 @@ fn render_status_bar(
     status_bar::render(f, area, status_line_1, status_line_2);
 }
 
-/// Render a simple loading indicator for tag canonicity cluster loading.
-fn render_canonicity_loading(
-    f: &mut Frame,
-    area: ratatui::layout::Rect,
-    clusters: &TagCanonicityClusters,
-) {
-    let group_indicator = format!(
-        "({}/{})",
-        clusters.current_index + 1,
-        clusters.signal_keys.len()
-    );
-
-    let title = format!(" Tag Canonicity {} ", group_indicator);
-
-    let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let loading = Paragraph::new(Line::from(Span::styled(
-        "Loading...",
-        Style::default().fg(Color::DarkGray),
-    )))
-    .alignment(Alignment::Center);
-
-    // Center vertically
-    let y_offset = inner.height / 2;
-    let centered = ratatui::layout::Rect {
-        x: inner.x,
-        y: inner.y + y_offset,
-        width: inner.width,
-        height: 1,
-    };
-    f.render_widget(loading, centered);
-}

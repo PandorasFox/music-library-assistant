@@ -15,8 +15,9 @@
 //!
 //! ## Macro
 //!
-//! The `define_domain_query!` macro generates the query struct, `DomainQuery` impl,
-//! and optional `CachedQuery` impl from a compact declaration. Forms:
+//! The `define_domain_query!` macro generates the query struct and `DomainQuery`
+//! impl from a compact declaration. The `cached(...)` annotation is retained for
+//! documentation but no longer generates caching machinery. Forms:
 //!
 //! ```ignore
 //! // Simple: unit struct, single db method call, unwrap_or_default
@@ -58,8 +59,6 @@
 //!
 //! See `docs/DOMAIN_QUERY_STRATEGY.md` for the full design rationale.
 
-use std::time::Duration;
-
 use serde::Serialize;
 
 use crate::db::ReadOnlyDb;
@@ -83,29 +82,18 @@ pub trait DomainQuery: Send + 'static {
     fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response;
 }
 
-/// Summary queries that benefit from throttled caching.
-/// Detail queries implement only `DomainQuery`.
-///
-/// `Default` bound: the cache thread re-executes unit struct queries
-/// by reconstructing them via `Q::default()`.
-pub trait CachedQuery: DomainQuery + Default {
-    /// How long cached results remain fresh before re-query.
-    const THROTTLE: Duration;
-    /// Which mutation domains should invalidate this cache entry.
-    const SCOPE: crate::meta::recomputation::RecomputationScope;
-    /// Optional shorter throttle for urgent refresh (e.g., during active fetch).
-    const URGENT_THROTTLE: Option<Duration> = None;
-}
 
 // ============================================================================
 // Macro
 // ============================================================================
 
-/// Generates a domain query struct with `DomainQuery` and optional `CachedQuery` impls.
+/// Generates a domain query struct with `DomainQuery` impl.
 ///
 /// See module docs for usage examples.
 macro_rules! define_domain_query {
-    // Simple form: unit struct, single db method, unwrap_or_default, scoped cache
+    // Simple form: unit struct, single db method, unwrap_or_default
+    // The `cached(...)` annotation is retained for documentation but no longer
+    // generates any caching impl — all queries go through the protocol.
     (
         $( #[doc = $doc:expr] )*
         $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+), db.$method:ident()
@@ -121,15 +109,9 @@ macro_rules! define_domain_query {
                 db.$method().unwrap_or_default()
             }
         }
-
-        impl CachedQuery for $name {
-            const THROTTLE: Duration = Duration::from_secs($secs);
-            const SCOPE: crate::meta::recomputation::RecomputationScope =
-                define_domain_query!(@scope $($scope)|+);
-        }
     };
 
-    // Simple form with urgent throttle
+    // Simple form with urgent throttle annotation (ignored)
     (
         $( #[doc = $doc:expr] )*
         $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+, urgent($urgent_secs:expr)), db.$method:ident()
@@ -145,16 +127,9 @@ macro_rules! define_domain_query {
                 db.$method().unwrap_or_default()
             }
         }
-
-        impl CachedQuery for $name {
-            const THROTTLE: Duration = Duration::from_secs($secs);
-            const SCOPE: crate::meta::recomputation::RecomputationScope =
-                define_domain_query!(@scope $($scope)|+);
-            const URGENT_THROTTLE: Option<Duration> = Some(Duration::from_secs($urgent_secs));
-        }
     };
 
-    // Body form: unit struct, custom execute expression with db closure, scoped cache
+    // Body form: unit struct, custom execute expression with db closure
     (
         $( #[doc = $doc:expr] )*
         $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+), |$db:ident| $body:block
@@ -169,12 +144,6 @@ macro_rules! define_domain_query {
             fn execute(self, $db: &ReadOnlyDb<'_>) -> Self::Response {
                 $body
             }
-        }
-
-        impl CachedQuery for $name {
-            const THROTTLE: Duration = Duration::from_secs($secs);
-            const SCOPE: crate::meta::recomputation::RecomputationScope =
-                define_domain_query!(@scope $($scope)|+);
         }
     };
 
@@ -272,12 +241,6 @@ macro_rules! define_domain_query {
                 $body
             }
         }
-
-        impl CachedQuery for $name {
-            const THROTTLE: Duration = Duration::from_secs($secs);
-            const SCOPE: crate::meta::recomputation::RecomputationScope =
-                define_domain_query!(@scope $($scope)|+);
-        }
     };
 
     // Internal helper: expand scope union from `TAGS | FILES` syntax
@@ -288,7 +251,7 @@ macro_rules! define_domain_query {
 }
 
 // ============================================================================
-// Summary Queries (CacheReady variants)
+// Summary Queries
 // ============================================================================
 
 use crate::meta::signals::data::{CompoundGroup, MissingAlbumSingleSignal};

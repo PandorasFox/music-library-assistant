@@ -356,13 +356,12 @@ impl App {
         );
     }
 
-    /// Fire async load of the signal at the current cluster index.
+    /// Load the signal at the current cluster index.
     ///
-    /// Extracts clusters from the current `TagCanonicityResolution` view, fires
-    /// a non-blocking query on the cache thread, and transitions to
-    /// `TagCanonicityLoading`. The tick handler will poll for completion.
+    /// Extracts clusters from the current `TagCanonicityResolution` view,
+    /// queries the DB, and transitions directly to the new resolution state.
     ///
-    /// Returns true if the async load was started, false on error.
+    /// Returns true if the load succeeded, false on error.
     pub(in crate::ui) fn load_current_cluster_signal(&mut self) -> bool {
         // Extract clusters from current view (take ownership via replace)
         let clusters = match std::mem::replace(
@@ -380,10 +379,7 @@ impl App {
         self.start_async_cluster_load(clusters)
     }
 
-    /// Fire async load with provided clusters (for restoring from SuspendedView).
-    ///
-    /// Sets the view to `TagCanonicityLoading` with the pending query.
-    /// The tick handler will poll for completion and transition to Resolution.
+    /// Load with provided clusters (for restoring from SuspendedView).
     pub(in crate::ui) fn load_current_cluster_signal_with_clusters(
         &mut self,
         clusters: TagCanonicityClusters,
@@ -391,7 +387,7 @@ impl App {
         self.start_async_cluster_load(clusters)
     }
 
-    /// Common helper: fire the cache query and transition to loading state.
+    /// Load cluster data and transition directly to resolution state.
     pub(in crate::ui) fn start_async_cluster_load(
         &mut self,
         clusters: TagCanonicityClusters,
@@ -402,48 +398,19 @@ impl App {
         };
 
         let kind = clusters.kind;
-        let pending = self
+        let result = self
             .witch
-            .query_async(crate::db::domain::GetTagCanonicitySignalData {
+            .query(crate::db::domain::GetTagCanonicitySignalData {
                 signal_key,
                 kind,
             });
 
-        self.view = ActiveView::TagCanonicityLoading { pending, clusters };
-        true
-    }
-
-    /// Called by the tick loop when `TagCanonicityLoading` is active.
-    /// Polls the pending query; on completion, constructs state and transitions
-    /// to `TagCanonicityResolution`.
-    pub(in crate::ui) fn tick_tag_canonicity_loading(&mut self) {
-        // Take the loading view out to get ownership of the pending query
-        let old = std::mem::replace(
-            &mut self.view,
-            ActiveView::Insights(insights_view::InsightsViewState::new()),
-        );
-        let ActiveView::TagCanonicityLoading { pending, clusters } = old else {
-            // Shouldn't happen — put it back
-            self.view = old;
-            return;
-        };
-
-        match pending.try_recv() {
-            Err(still_pending) => {
-                // Not ready yet — put loading state back
-                self.view = ActiveView::TagCanonicityLoading {
-                    pending: still_pending,
-                    clusters,
-                };
-            }
-            Ok(None) => {
-                // Signal not found
+        match result {
+            None => {
                 self.status_message = Some("Signal not found".to_string());
                 self.start_health_view();
             }
-            Ok(Some(data)) => {
-                // Build the resolved state
-                let kind = clusters.kind;
+            Some(data) => {
                 let current_index = clusters.current_index;
                 let total = clusters.signal_keys.len();
                 let pre_fill = clusters.pre_fill();
@@ -473,6 +440,7 @@ impl App {
                 self.view = ActiveView::TagCanonicityResolution { state, clusters };
             }
         }
+        true
     }
 
     /// Map signal kind to zone for mutations and file queries.

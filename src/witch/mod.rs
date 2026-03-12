@@ -37,7 +37,7 @@ mod handle;
 mod transaction;
 pub(crate) mod types;
 // Re-export public types
-pub use handle::{PendingQuery, WitchHandle};
+pub use handle::WitchHandle;
 pub use types::{
     MaintenanceWitness, MutationExecutionWitness, PendingTransaction, ReasoningLevel,
     SpawnedMutation, Task, TaskLabel, TransactionSnapshot, WatcherState, WitchStartupState,
@@ -281,7 +281,7 @@ impl Witch {
     fn new(
         startup_state: types::WitchStartupState,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
-    ) -> (Self, cache_thread::CacheHandle) {
+    ) -> Self {
         // Spawn the logging thread if we have the receiver
         let log_thread_handle = log_rx.map(crate::logging::spawn_log_thread);
 
@@ -294,8 +294,8 @@ impl Witch {
         // connections work with busy_timeout. The db_thread sits idle on recv() during migrations.
         crate::logging::log_general("[WITCH] Spawning db_thread");
 
-        // Spawn the dedicated cache thread
-        let (cache_ui_handle, cache_witch_handle) = cache_thread::spawn();
+        // Spawn the DB read thread
+        let cache_witch_handle = cache_thread::spawn();
 
         // Spawn the filesystem watcher thread
         let fs_watcher_handle = fs_watcher::FsWatcherHandle::spawn();
@@ -335,16 +335,15 @@ impl Witch {
             fetch_progress: None,
         };
 
-        (she, cache_ui_handle)
+        she
     }
 
     /// Create a new Witch with opinions applied (Ready state).
     fn with_opinions(
         cfg: &Config,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
-    ) -> (Self, cache_thread::CacheHandle) {
-        let (mut she, cache_handle) =
-            Self::new(types::WitchStartupState::Ready, log_rx);
+    ) -> Self {
+        let mut she = Self::new(types::WitchStartupState::Ready, log_rx);
         she.force_check_all_files_at_startup =
             cfg.opinions.startup.force_check_all_files_at_startup;
         she.vacuum_threshold = cfg.opinions.startup.vacuum_threshold;
@@ -353,7 +352,7 @@ impl Witch {
                 "[WITCH] force_check_all_files_at_startup=true: will verify all indexed files at startup"
             );
         }
-        (she, cache_handle)
+        she
     }
 
     /// Run the Witch on the current (main) thread.
@@ -373,7 +372,7 @@ impl Witch {
         let db_path = config::get_db_path().expect("XDG data dir");
         let has_db = db_path.exists();
 
-        let (mut she, cache_handle) = if has_db {
+        let mut she = if has_db {
             // Normal startup: load config, init performance globals
             let cfg = match config::load_config() {
                 Ok(cfg) => {
@@ -417,13 +416,10 @@ impl Witch {
         she.auth_thread_handle = Some(auth_witch_handle);
         she.auth_handle = Some(auth_handle);
 
-        // Shared state: Witch writes, handle reads
-        let status = std::sync::Arc::new(std::sync::RwLock::new(she.publish_status()));
-
         // Command channel: handle sends, Witch receives
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
-        let handle = WitchHandle::new(std::sync::Arc::clone(&status), cmd_tx, cache_handle);
+        let handle = WitchHandle::new(cmd_tx);
 
         // Spawn the UI as a client thread
         let ui_thread = std::thread::Builder::new()
@@ -432,7 +428,7 @@ impl Witch {
             .expect("Failed to spawn UI thread");
 
         // Witch owns the main thread
-        she.run_loop(cmd_rx, status);
+        she.run_loop(cmd_rx);
 
         // Wait for UI thread to finish
         let _ = ui_thread.join();
@@ -449,7 +445,6 @@ impl Witch {
     fn run_loop(
         &mut self,
         cmd_rx: mpsc::Receiver<handle::HandleCommand>,
-        status: std::sync::Arc<std::sync::RwLock<WitchStatus>>,
     ) {
         use handle::HandleCommand;
 
@@ -473,11 +468,6 @@ impl Witch {
             // (Reconciling/Vacuuming need tick() to process maintenance tasks)
             if self.startup_state != types::WitchStartupState::AwaitingSetup {
                 self.tick();
-            }
-
-            // Publish state snapshot
-            if let Ok(mut guard) = status.write() {
-                *guard = self.publish_status();
             }
 
             // Brief sleep to avoid busy-spinning.
@@ -552,20 +542,31 @@ impl Witch {
 
         match cmd {
             HandleCommand::Authenticated { token, body, reply } => {
+                // Domain queries bypass synchronous dispatch — they forward
+                // the reply channel to the read thread so it replies directly.
+                if let AuthenticatedBody::Query(QueryPayload::Domain(domain_payload)) = body {
+                    // Validate auth before forwarding.
+                    match self.resolve_auth(Some(&token)) {
+                        Ok(AuthorizationLevel::Authenticated) => {
+                            self.cache_thread_handle
+                                .forward_domain_query(domain_payload, reply);
+                            // Read thread owns the reply now — don't reply here.
+                        }
+                        Ok(_) | Err(_) => {
+                            let _ = reply.send(Err(ProtocolError::Unauthorized));
+                        }
+                    }
+                    return;
+                }
+
                 let result = self.gate(Some(&token), AuthorizationLevel::Authenticated, |w| {
                     match body {
                         // -- Query area --
                         AuthenticatedBody::Query(payload) => {
                             let response = match payload {
                                 QueryPayload::Status => QueryResponse::Status(w.publish_status()),
-                                QueryPayload::Domain(_domain_payload) => {
-                                    // Domain queries go through the cache thread, not here.
-                                    // This is dispatched via CacheRequest::Query in a closure.
-                                    // For now, panic — callers use handle.query() for domain queries.
-                                    unreachable!(
-                                        "Domain queries should route through the cache thread, \
-                                         not HandleCommand::Authenticated"
-                                    )
+                                QueryPayload::Domain(_) => {
+                                    unreachable!("domain queries handled above")
                                 }
                             };
                             Ok(AuthenticatedResponse::Query(response))
@@ -2035,8 +2036,7 @@ impl Witch {
     /// Build the comprehensive state machine snapshot.
     ///
     /// This captures all observable Witch state in a single struct.
-    /// Written to `Arc<RwLock<WitchStatus>>` each tick for transparent
-    /// client reads.
+    /// Returned synchronously when a client sends `StatusQuery`.
     pub fn publish_status(&self) -> WitchStatus {
         let transaction = self.pending_transaction.as_ref().map(|txn| {
             TransactionSnapshot {

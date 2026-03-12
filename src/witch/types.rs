@@ -458,11 +458,10 @@ impl From<&WorkState> for WorkStateSnapshot {
 // WitchStatus — Comprehensive State Machine Snapshot
 // ============================================================================
 
-/// The Witch's complete observable state, published as a shared snapshot.
+/// The Witch's complete observable state, published as a protocol response.
 ///
 /// This is the single source of truth for clients reading the Witch's state.
-/// The Witch updates this via `Arc<RwLock<WitchStatus>>` each tick; handles
-/// read it transparently with no caching or invalidation needed.
+/// Returned synchronously by the Witch when a client sends `StatusQuery`.
 ///
 /// Generation counters allow event detection by diffing between frames:
 /// - `mutations_generation`: increments when a mutation batch completes

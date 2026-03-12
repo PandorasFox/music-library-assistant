@@ -71,8 +71,7 @@ impl App {
             ActiveView::Insights(insights_view::InsightsViewState::new()),
         );
         match old_view {
-            ActiveView::TagCanonicityResolution { clusters, .. }
-            | ActiveView::TagCanonicityLoading { clusters, .. } => {
+            ActiveView::TagCanonicityResolution { clusters, .. } => {
                 SuspendedView::TagCanonicityReload { clusters }
             }
             ActiveView::CompoundTagSplit {

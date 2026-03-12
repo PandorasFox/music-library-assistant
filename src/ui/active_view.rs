@@ -13,7 +13,6 @@ use crate::ui::{
     shit_format_modal, startup, subpar_duplicate_modal, tabbed_transaction_review,
     tag_canonicity_v2, tag_editor, tag_search, transaction_review, tree_browser,
 };
-use crate::witch::PendingQuery;
 
 // ============================================================================
 // ActiveView
@@ -75,11 +74,6 @@ pub(crate) enum ActiveView {
         state: tag_canonicity_v2::TagCanonicalityStateV2,
         clusters: TagCanonicityClusters,
     },
-    /// Loading state while fetching next cluster signal from cache thread.
-    TagCanonicityLoading {
-        pending: PendingQuery<Option<tag_canonicity_v2::TagCanonicalityModalDataV2>>,
-        clusters: TagCanonicityClusters,
-    },
     CompoundTagSplit {
         state: compound_split_v2::CompoundSplitStateV2,
         clusters: compound_split_v2::CompoundSplitClustersV2,
@@ -134,7 +128,6 @@ impl ActiveView {
             Self::ReleasePackingBrowser(_) => Some("Release Packing Browser"),
             Self::KnotBrowser(_) => Some("Knot Browser"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
-            Self::TagCanonicityLoading { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
             Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),
             Self::DiscExtractionResolution(_) => Some("Disc Extraction"),

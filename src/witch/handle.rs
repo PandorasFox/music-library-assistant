@@ -1,32 +1,27 @@
 //! WitchHandle — the single client handle for interacting with the Witch.
 //!
 //! The Witch owns the main thread. Clients (e.g. TUI) run in spawned threads
-//! and communicate via:
-//! - `Arc<RwLock<WitchStatus>>` for transparent state reads (no cache, no staleness)
-//! - `mpsc::Sender<HandleCommand>` for protocol-routed commands
-//! - Cache channels for periodic + one-shot DB queries
+//! and communicate exclusively via protocol messages:
+//! - `send_query()` for typed read-only queries (status, domain DB queries)
+//! - `send_transaction()` for decision lifecycle
+//! - `send_command()` for operational actions
 //!
-//! All server-side concepts (cache thread, auth thread, DB connections) are
-//! encapsulated here. The UI sees only WitchHandle.
+//! All server-side concepts (read thread, auth thread, DB connections) are
+//! invisible to clients. The UI sees only WitchHandle.
 
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
-use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, RwLock};
+use std::sync::mpsc;
 
 use std::path::PathBuf;
 
 use crate::auth::SessionToken;
 use crate::config::SharedConfig;
-use crate::db::domain::{CachedQuery, DomainQuery};
 use crate::meta::decisions::{DecisionKey, DiscardSummary, WitnessedDecision};
 use crate::meta::protocol::{
     AuthResponse, AuthenticatedBody, AuthenticatedResponse, CommandPayload, CommandResponse,
-    DecisionDetail, ProtocolError, ProtocolQuery,
+    DecisionDetail, ProtocolError, ProtocolQuery, StatusQuery,
     TransactionPayload, TransactionResponse, UnauthenticatedBody, UnauthenticatedResponse,
 };
 
-use super::cache_thread::CacheHandle;
 use super::WitchStatus;
 
 // ============================================================================
@@ -60,122 +55,30 @@ pub(super) enum HandleCommand {
 }
 
 // ============================================================================
-// PendingQuery<T> (typed one-shot response)
-// ============================================================================
-
-/// A pending one-shot query result.
-///
-/// Wraps a channel receiver. The query runs on the cache thread;
-/// the result arrives when complete.
-pub struct PendingQuery<T> {
-    rx: Receiver<T>,
-}
-
-impl<T> PendingQuery<T> {
-    /// Blocking wait for the result.
-    pub fn recv(self) -> T {
-        self.rx.recv().expect("cache thread dropped query sender")
-    }
-
-    /// Non-blocking poll for the result.
-    ///
-    /// Returns `Ok(value)` if ready, `Err(self)` if still pending (returns self
-    /// back so you can try again next frame).
-    pub fn try_recv(self) -> Result<T, Self> {
-        match self.rx.try_recv() {
-            Ok(value) => Ok(value),
-            Err(std::sync::mpsc::TryRecvError::Empty) => Err(self),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                panic!("cache thread dropped query sender")
-            }
-        }
-    }
-}
-
-// ============================================================================
-// CachedData (type-erased periodic query cache)
-// ============================================================================
-
-/// Type-erased cache for periodic query results from the cache thread.
-///
-/// Keyed by `TypeId` of the `CachedQuery` implementor. Values are the
-/// query's `Response` type, boxed and downcast on access.
-pub struct CachedData {
-    slots: HashMap<TypeId, Box<dyn Any + Send>>,
-}
-
-impl CachedData {
-    fn new() -> Self {
-        Self {
-            slots: HashMap::new(),
-        }
-    }
-
-    /// Get a cached query result by query type.
-    pub fn get<Q: CachedQuery>(&self) -> Option<&Q::Response> {
-        self.slots
-            .get(&TypeId::of::<Q>())
-            .and_then(|v| v.downcast_ref::<Q::Response>())
-    }
-
-    /// Insert a raw cache result (called from drain loop).
-    fn insert_raw(&mut self, type_id: TypeId, value: Box<dyn Any + Send>) {
-        self.slots.insert(type_id, value);
-    }
-}
-
-// ============================================================================
 // WitchHandle
 // ============================================================================
 
 /// Client handle for a self-owning Witch running in her own thread.
 ///
-/// The single interface between clients and the Witch. Encapsulates:
-/// - Transparent state reads (`Arc<RwLock<WitchStatus>>`)
-/// - Protocol-routed command channel to the Witch thread
-/// - Cache thread channels (periodic + one-shot DB queries)
-/// - Session token management
-/// - Type-erased periodic query cache
+/// The single interface between clients and the Witch. All communication
+/// goes through typed protocol messages — no shared memory, no bypass paths.
 pub struct WitchHandle {
-    /// Transparent read into the Witch's state machine.
-    /// Updated by the Witch each tick. Reads are lock-free in practice
-    /// (write contention is one update per tick, ~10ms).
-    status: Arc<RwLock<WitchStatus>>,
-
     /// Command channel to the Witch thread.
     cmd_tx: mpsc::Sender<HandleCommand>,
 
     /// Session token from the authenticated operator. Set after login.
     /// Threaded into every outgoing HandleCommand for server-side validation.
     session_token: Option<SessionToken>,
-
-    // -- Cache thread channels --
-    /// Send cache requests (want, query, invalidate).
-    cache: CacheHandle,
-
-    /// Locally cached periodic data from the cache thread (TypeId-keyed).
-    pub cached: CachedData,
-
-    /// Set when `MutationsCompleted` fires (cache invalidated), cleared when
-    /// fresh `CacheReady` results arrive. Views stay greyed-out while true so
-    /// the operator never sees stale counts with an interactive overlay.
-    cache_stale: bool,
 }
 
 impl WitchHandle {
     /// Create a new handle from its components.
     pub(super) fn new(
-        status: Arc<RwLock<WitchStatus>>,
         cmd_tx: mpsc::Sender<HandleCommand>,
-        cache: CacheHandle,
     ) -> Self {
         Self {
-            status,
             cmd_tx,
             session_token: None,
-            cache,
-            cached: CachedData::new(),
-            cache_stale: false,
         }
     }
 
@@ -270,13 +173,10 @@ impl WitchHandle {
 
     /// Read the Witch's current state machine snapshot.
     ///
-    /// Reads from shared memory (`Arc<RwLock<WitchStatus>>`) — transparent,
-    /// always fresh, sub-microsecond.
+    /// Sends a StatusQuery through the protocol — synchronous round-trip to
+    /// the Witch thread. The Witch replies immediately from `publish_status()`.
     pub fn witch_status(&self) -> WitchStatus {
-        self.status
-            .read()
-            .expect("WitchStatus lock poisoned")
-            .clone()
+        self.send_query(StatusQuery)
     }
 
     /// Attempt login. Returns a session token on success.
@@ -414,71 +314,16 @@ impl WitchHandle {
     }
 
     // =========================================================================
-    // Cache: one-shot queries
+    // Domain Queries
     // =========================================================================
 
-    /// Submit a blocking one-shot domain query. Returns the result directly.
-    pub fn query<Q: DomainQuery>(&self, q: Q) -> Q::Response {
-        self.cache.domain_query(q).recv()
-    }
-
-    /// Submit an async one-shot domain query. Returns a `PendingQuery` to poll.
-    pub fn query_async<Q: DomainQuery>(&self, q: Q) -> PendingQuery<Q::Response> {
-        let inner = self.cache.domain_query(q);
-        PendingQuery { rx: inner.rx }
-    }
-
-    // =========================================================================
-    // Cache: periodic subscriptions
-    // =========================================================================
-
-    /// Signal demand for a cached query (normal throttle).
-    pub fn subscribe<Q: CachedQuery>(&self) {
-        self.cache.want::<Q>();
-    }
-
-    /// Signal urgent demand for a cached query (uses urgent throttle if defined).
-    pub fn subscribe_urgent<Q: CachedQuery>(&self) {
-        self.cache.want_urgent::<Q>();
-    }
-
-    /// Drain ready results from the cache thread into the local cache.
+    /// Submit a domain query through the protocol. Blocks until the result
+    /// arrives from the DB read thread.
     ///
-    /// Call once per frame. Returns the list of TypeIds that arrived
-    /// (for post-drain side effects like updating tree browser markers).
-    pub fn drain_subscriptions(&mut self) -> Vec<TypeId> {
-        let ready_items = self.cache.drain_ready();
-        if ready_items.is_empty() {
-            return Vec::new();
-        }
-        self.cache_stale = false;
-        let mut arrivals = Vec::with_capacity(ready_items.len());
-        for item in ready_items {
-            arrivals.push(item.type_id);
-            self.cached.insert_raw(item.type_id, item.value);
-        }
-        arrivals
-    }
-
-    /// Whether cached data is stale (mutations completed, fresh results not yet arrived).
-    pub fn is_cache_stale(&self) -> bool {
-        self.cache_stale
-    }
-
-    /// Mark cache as stale. Called when MutationsCompleted notice arrives.
-    pub fn set_cache_stale(&mut self) {
-        self.cache_stale = true;
-    }
-
-    /// Tell the cache thread to invalidate entries whose scope overlaps.
-    pub fn invalidate_cache(&self, scope: crate::meta::recomputation::RecomputationScope) {
-        self.cache.invalidate_scope(scope);
-    }
-
-    /// Tell the cache thread to close and reopen its DB connection.
-    /// Used after schema migrations.
-    pub fn reconnect_cache_db(&self) {
-        self.cache.reconnect_db();
+    /// Convenience wrapper over `send_query()` — all registered domain queries
+    /// implement `ProtocolQuery` via the `domain_query_protocol!` macro.
+    pub fn query<Q: ProtocolQuery>(&self, q: Q) -> Q::Response {
+        self.send_query(q)
     }
 }
 

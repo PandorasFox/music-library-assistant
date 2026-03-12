@@ -720,15 +720,14 @@ impl InsightsViewState {
         self.list.clamp_cursor(&self.flat_items);
     }
 
-    /// Update state every tick - checks Witch status and caches insights data.
+    /// Update state every tick - checks Witch status and refreshes insights data.
     pub fn update(
         &mut self,
         witch_status: Option<&WorkStatus>,
         insights_data: Option<InsightsData>,
         handled_sources: &HashSet<DecisionKeyKind>,
-        cache_stale: bool,
     ) {
-        let busy = cache_stale || witch_status.map(|s| s.pending > 0).unwrap_or(false);
+        let busy = witch_status.map(|s| s.pending > 0).unwrap_or(false);
 
         self.witch_busy = busy;
 
@@ -889,7 +888,7 @@ mod tests {
         let no_handled = HashSet::new();
 
         // No status - should be Ready
-        state.update(None, None, &no_handled, false);
+        state.update(None, None, &no_handled);
         assert!(!state.witch_busy);
 
         // Pending > 0 - should be busy
@@ -897,7 +896,7 @@ mod tests {
             pending: 5,
             ..Default::default()
         };
-        state.update(Some(&busy_status), None, &no_handled, false);
+        state.update(Some(&busy_status), None, &no_handled);
         assert!(state.witch_busy);
 
         // Pending = 0 - should be ready again
@@ -905,7 +904,7 @@ mod tests {
             pending: 0,
             ..Default::default()
         };
-        state.update(Some(&idle_status), None, &no_handled, false);
+        state.update(Some(&idle_status), None, &no_handled);
         assert!(!state.witch_busy);
     }
 
@@ -916,14 +915,14 @@ mod tests {
         let no_handled = HashSet::new();
 
         // Populate with data, no filtering
-        state.update(None, Some(data.clone()), &no_handled, false);
+        state.update(None, Some(data.clone()), &no_handled);
         let corpus_count_before = state.cached_entries.corpus.len();
         assert!(corpus_count_before > 0);
 
         // Now mark MtimeAck as handled — CorpusMtimeOnly should disappear
         let mut handled = HashSet::new();
         handled.insert(DecisionKeyKind::MtimeAck);
-        state.update(None, None, &handled, false);
+        state.update(None, None, &handled);
 
         // Should have one fewer entry
         assert_eq!(state.cached_entries.corpus.len(), corpus_count_before - 1);
@@ -946,7 +945,7 @@ mod tests {
         handled.insert(DecisionKeyKind::OobSync);
         handled.insert(DecisionKeyKind::MissingFile);
 
-        state.update(None, Some(data), &handled, false);
+        state.update(None, Some(data), &handled);
 
         // Informational entries (FilesInCorpus, FilesIndexed) should survive
         assert!(state
@@ -968,7 +967,7 @@ mod tests {
         let no_handled = HashSet::new();
 
         // Populate and select last item
-        state.update(None, Some(data.clone()), &no_handled, false);
+        state.update(None, Some(data.clone()), &no_handled);
         // Move to end
         state.list.cursor = state.flat_items.len().saturating_sub(1);
 
@@ -984,7 +983,7 @@ mod tests {
         handled.insert(DecisionKeyKind::ShitFormat);
         handled.insert(DecisionKeyKind::IntakeIndex);
 
-        state.update(None, None, &handled, false);
+        state.update(None, None, &handled);
 
         // Cursor should be within bounds
         assert!(state.list.cursor < state.flat_items.len());
@@ -997,17 +996,17 @@ mod tests {
         let no_handled = HashSet::new();
 
         // Initial populate
-        state.update(None, Some(data), &no_handled, false);
+        state.update(None, Some(data), &no_handled);
         let count_before = state.cached_entries.corpus.len();
 
         // Change handled set without new InsightsData — should still rebuild
         let mut handled = HashSet::new();
         handled.insert(DecisionKeyKind::MtimeAck);
-        state.update(None, None, &handled, false);
+        state.update(None, None, &handled);
         assert_eq!(state.cached_entries.corpus.len(), count_before - 1);
 
         // Discard (empty handled) — should restore
-        state.update(None, None, &no_handled, false);
+        state.update(None, None, &no_handled);
         assert_eq!(state.cached_entries.corpus.len(), count_before);
     }
 

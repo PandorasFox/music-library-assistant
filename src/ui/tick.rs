@@ -83,15 +83,6 @@ impl App {
                     }
                 }
                 ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {
-                    // Invalidate all caches before transitioning - startup analysis just completed
-                    use crate::meta::recomputation::RecomputationScope;
-                    self.witch.invalidate_cache(
-                        RecomputationScope::TAGS
-                            | RecomputationScope::FILES
-                            | RecomputationScope::DEPLOY
-                            | RecomputationScope::INBOX
-                            | RecomputationScope::EXTERNAL,
-                    );
                     // Transition to configured default view
                     self.start_default_view();
                 }

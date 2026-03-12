@@ -81,7 +81,6 @@ use crossterm::{
 };
 use input::InputAction;
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
-use std::any::TypeId;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -188,7 +187,6 @@ impl App {
             ActiveView::StartupMaintenance => ViewAction::None,
             ActiveView::Progress { .. } => ViewAction::None,
             ActiveView::ProgressiveWork(_) => ViewAction::None,
-            ActiveView::TagCanonicityLoading { .. } => ViewAction::None,
             ActiveView::ConfigEditor(s) => dispatch_input!(ConfigEditor, s),
             ActiveView::Insights(s) => dispatch_input!(Insights, s),
             ActiveView::CorpusBrowser(s) => dispatch_input!(CorpusBrowser, s),
@@ -336,9 +334,8 @@ impl App {
             has_api_key,
             singles_before_incompletes,
         );
-        if let Some(data) = self.witch.cached.get::<crate::db::domain::GetExternalMatches>() {
-            state.update(data.clone());
-        }
+        let data = self.witch.query(crate::db::domain::GetExternalMatches);
+        state.update(data);
         self.view = ActiveView::ExternalMatches(state);
     }
 
@@ -384,11 +381,9 @@ impl App {
     /// per-library file counts.
     pub(super) fn start_deploy_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::Deploy;
-        let deploy_status = self.witch.cached.get::<crate::db::domain::GetDeployStatus>().cloned();
+        let deploy_status = self.witch.query(crate::db::domain::GetDeployStatus);
 
-        let needs_action = deploy_status.as_ref().is_some_and(|s| s.needs_action);
-
-        if needs_action {
+        if deploy_status.needs_action {
             let data = self
                 .witch
                 .query(crate::db::domain::GetDeployData {
@@ -398,11 +393,8 @@ impl App {
             self.view =
                 ActiveView::Deploy(deploy_modal::DeployViewState::Preview(Box::new(preview)));
         } else {
-            let counts = deploy_status
-                .map(|s| s.library_file_counts)
-                .unwrap_or_default();
             self.view = ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate {
-                library_file_counts: counts,
+                library_file_counts: deploy_status.library_file_counts,
             });
         }
     }
@@ -598,7 +590,6 @@ fn run_app<B: ratatui::backend::Backend>(
             let state = app.witch.witch_status().startup_state;
             if state == crate::witch::WitchStartupState::Ready {
                 app.startup_complete = true;
-                app.witch.reconnect_cache_db();
                 app.complete_startup();
                 terminal.draw(|f| render(f, app))?;
                 continue;
@@ -611,10 +602,9 @@ fn run_app<B: ratatui::backend::Backend>(
         {
             let status = app.witch.witch_status();
 
-            // Mutations completed → cache invalidation
+            // Mutations completed
             if status.mutations_generation != app.prev_mutations_generation {
                 app.prev_mutations_generation = status.mutations_generation;
-                app.witch.set_cache_stale();
             }
 
             // New error → show status message
@@ -631,54 +621,33 @@ fn run_app<B: ratatui::backend::Backend>(
             }
         }
 
-        // Drain CacheReady results from cache thread → update local cached data
-        let arrivals = app.witch.drain_subscriptions();
-        if !arrivals.is_empty() {
-            // Post-drain side effect: PackingDirs → tree browser markers
-            if arrivals.contains(&TypeId::of::<crate::db::domain::GetPackingDirs>()) {
-                if let Some(data) = app.witch.cached.get::<crate::db::domain::GetPackingDirs>() {
-                    if let ActiveView::CorpusBrowser(ref mut browser) = app.view {
-                        browser
-                            .navigator
-                            .set_packing_data(&data.file_paths, &data.dir_categories);
-                    }
-                }
-            }
-        }
-
-        // Update views with cached data
+        // Update views with query data
         if let ActiveView::Insights(ref mut view) = app.view {
-            let insights_data = app.witch.cached.get::<crate::db::domain::GetInsights>().cloned();
+            let insights_data = app.witch.query(crate::db::domain::GetInsights);
             let ws = app.witch.witch_status();
             view.update(
                 Some(&ws.work),
-                insights_data,
+                Some(insights_data),
                 &ws.handled_decision_kinds,
-                app.witch.is_cache_stale(),
             );
         }
         if let ActiveView::Inbox(ref mut view) = app.view {
-            let inbox_data = app.witch.cached.get::<crate::db::domain::GetInboxOverview>().cloned();
-            view.update(inbox_data);
+            let inbox_data = app.witch.query(crate::db::domain::GetInboxOverview);
+            view.update(Some(inbox_data));
             let ws = app.witch.witch_status();
-            view.busy = ws.work.pending > 0
-                || app.witch.is_cache_stale();
+            view.busy = ws.work.pending > 0;
         }
         if let ActiveView::History(ref mut view) = app.view {
-            view.update(app.witch.cached.get::<crate::db::domain::GetEditHistory>().cloned());
+            view.update(Some(app.witch.query(crate::db::domain::GetEditHistory)));
         }
         if let ActiveView::ExternalMatches(ref mut view) = app.view {
-            if let Some(data) = app.witch.cached.get::<crate::db::domain::GetExternalMatches>() {
-                view.update(data.clone());
-            }
-            let ext_status = {
-                let ws = app.witch.witch_status();
-                (ws.is_external_fetch_active, ws.external_fetch_progress.clone())
-            };
-            let new_fetch_active = ext_status.0;
+            let data = app.witch.query(crate::db::domain::GetExternalMatches);
+            view.update(data);
+            let ws = app.witch.witch_status();
+            let new_fetch_active = ws.is_external_fetch_active;
             let fetch_changed = view.fetch_active != new_fetch_active;
             view.fetch_active = new_fetch_active;
-            view.fetch_progress = ext_status.1;
+            view.fetch_progress = ws.external_fetch_progress.clone();
             if view.fetch_active {
                 view.tick_count = view.tick_count.wrapping_add(1);
             }
@@ -690,9 +659,14 @@ fn run_app<B: ratatui::backend::Backend>(
             ref mut library_file_counts,
         }) = app.view
         {
-            if let Some(status) = app.witch.cached.get::<crate::db::domain::GetDeployStatus>() {
-                *library_file_counts = status.library_file_counts.clone();
-            }
+            let status = app.witch.query(crate::db::domain::GetDeployStatus);
+            *library_file_counts = status.library_file_counts;
+        }
+        if let ActiveView::CorpusBrowser(ref mut browser) = app.view {
+            let data = app.witch.query(crate::db::domain::GetPackingDirs);
+            browser
+                .navigator
+                .set_packing_data(&data.file_paths, &data.dir_categories);
         }
 
         // Tick view-specific state machines
@@ -701,32 +675,6 @@ fn run_app<B: ratatui::backend::Backend>(
         }
         if matches!(app.view, ActiveView::ProgressiveWork(_)) {
             app.tick_progressive_worker();
-        }
-        if matches!(app.view, ActiveView::TagCanonicityLoading { .. }) {
-            app.tick_tag_canonicity_loading();
-        }
-
-        // Flag demand for cached UI data
-        // Always want deploy status — titlebar needs it for purple indicator
-        app.witch.subscribe::<crate::db::domain::GetDeployStatus>();
-        if matches!(app.view, ActiveView::Insights(_)) {
-            app.witch.subscribe::<crate::db::domain::GetInsights>();
-        }
-        if matches!(app.view, ActiveView::Inbox(_)) {
-            app.witch.subscribe::<crate::db::domain::GetInboxOverview>();
-        }
-        if matches!(app.view, ActiveView::History(_)) {
-            app.witch.subscribe::<crate::db::domain::GetEditHistory>();
-        }
-        if matches!(app.view, ActiveView::CorpusBrowser(_)) {
-            app.witch.subscribe::<crate::db::domain::GetPackingDirs>();
-        }
-        if let ActiveView::ExternalMatches(ref view) = app.view {
-            if view.fetch_active {
-                app.witch.subscribe_urgent::<crate::db::domain::GetExternalMatches>();
-            } else {
-                app.witch.subscribe::<crate::db::domain::GetExternalMatches>();
-            }
         }
 
         terminal.draw(|f| render(f, app))?;

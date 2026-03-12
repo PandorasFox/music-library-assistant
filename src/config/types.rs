@@ -42,6 +42,10 @@ pub struct Opinions {
     pub album_art: AlbumArtOpinions,
     /// Debug/diagnostic options (reserved, currently empty).
     pub debug: DebugOpinions,
+    /// Poll interval in seconds for the filesystem watcher fallback mode.
+    /// Used when inotify is unavailable (watch limit hit, creation failure).
+    /// Default: 900 (15 minutes).
+    pub watcher_poll_interval_secs: u64,
 }
 
 /// KDL field names — single source of truth for parse/edit/source-detection.
@@ -49,6 +53,8 @@ impl Opinions {
     // Direct children of the "opinions" block
     pub const KDL_LOSSY_SHIT: &str = "lossy-shit-formats-to-flac";
     pub const KDL_LEAVE_TXN_OPEN: &str = "leave-transactions-open";
+
+    pub const KDL_WATCHER_POLL_INTERVAL: &str = "watcher-poll-interval-secs";
 
     // Sub-block names
     pub const KDL_BLOCK_STARTUP: &str = "startup";
@@ -649,6 +655,7 @@ impl Default for Opinions {
             disc_extraction: DiscExtractionOpinions::default(),
             album_art: AlbumArtOpinions::default(),
             debug: DebugOpinions::default(),
+            watcher_poll_interval_secs: 900,
         }
     }
 }

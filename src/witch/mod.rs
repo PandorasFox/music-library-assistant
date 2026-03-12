@@ -484,6 +484,9 @@ impl Witch {
     ///
     /// Seeds the watcher with DB-cached mtime+tags so the initial scan
     /// can skip tag reads for files with matching mtimes.
+    ///
+    /// In polling mode, sends a Poll command (immediate re-walk with fresh
+    /// cache) instead of Start (which would retry inotify).
     pub fn start_watching(&mut self) -> bool {
         if self.is_initial_scanning() {
             return false;
@@ -496,11 +499,31 @@ impl Witch {
         // Watcher compares disk mtime → if match, uses cached tags (skips disk read).
         let db_cache = self.build_watcher_db_cache();
 
-        self.watcher_state = WatcherState::InitialScan;
-        self.fs_watcher.start(watched_zones(), db_cache);
+        if self.watcher_state == WatcherState::Polling {
+            // In polling mode: send Poll for immediate re-walk without
+            // retrying inotify. Poll interval comes from config.
+            let interval = self.poll_interval_secs();
+            self.fs_watcher.poll(db_cache, interval);
+            crate::logging::log_general("[WITCH] Watcher poll triggered — re-walking zones");
+        } else {
+            self.watcher_state = WatcherState::InitialScan;
+            self.fs_watcher.start(watched_zones(), db_cache);
+            crate::logging::log_general("[WITCH] Watcher started — initial scan in progress");
+        }
 
-        crate::logging::log_general("[WITCH] Watcher started — initial scan in progress");
         true
+    }
+
+    /// Get the configured poll interval (seconds) from shared config.
+    fn poll_interval_secs(&self) -> u64 {
+        self.shared_config
+            .as_ref()
+            .map(|sc| {
+                config::read_shared_config(sc)
+                    .opinions
+                    .watcher_poll_interval_secs
+            })
+            .unwrap_or(900)
     }
 
     /// Build a DB cache for the watcher's initial scan.
@@ -617,6 +640,12 @@ impl Witch {
 
             // Apply config update if present (from ApplyConfigEdits mutation)
             if let Some(new_config) = result.config_update {
+                // If in polling mode, send updated interval to the watcher thread
+                if self.watcher_state == WatcherState::Polling {
+                    let new_interval = new_config.opinions.watcher_poll_interval_secs;
+                    let db_cache = self.build_watcher_db_cache();
+                    self.fs_watcher.poll(db_cache, new_interval);
+                }
                 self.update_shared_config(new_config);
                 let _ = self.notice_tx.send(WitchNotice::ConfigUpdated);
             }
@@ -1089,7 +1118,11 @@ impl Witch {
                         self.observed_inodes.inbox.len(),
                         self.observed_inodes.library.len(),
                     ));
-                    self.watcher_state = WatcherState::Watching;
+                    // Preserve Polling state — only transition to Watching
+                    // when we were doing an inotify-backed initial scan.
+                    if self.watcher_state != WatcherState::Polling {
+                        self.watcher_state = WatcherState::Watching;
+                    }
 
                     // Drive the state machine forward based on current reasoning level.
                     // This replaces the observation→awakening transition that previously
@@ -1203,16 +1236,13 @@ impl Witch {
                     img.path = format!("{}/{}", img.zone.as_str(), img.path);
                     self.pending_observed_images.push(img);
                 }
-                fs_watcher::WatcherMessage::Rescan => {
-                    crate::logging::log_general(
-                        "[WITCH] Watcher requested rescan — rebuilding with fresh DB cache"
+                fs_watcher::WatcherMessage::InotifyFailed => {
+                    crate::logging::log_error(
+                        "[WITCH] Watcher fell back to polling mode (inotify unavailable). \
+                         Filesystem changes will be detected periodically, not in real-time."
                     );
                     self.observed_inodes.clear();
-                    self.watcher_state = WatcherState::InitialScan;
-                    // Build fresh DB cache and send Start back to the watcher.
-                    // The watcher's Start handler does the re-walk with cached tags.
-                    let db_cache = self.build_watcher_db_cache();
-                    self.fs_watcher.start(watched_zones(), db_cache);
+                    self.watcher_state = WatcherState::Polling;
                 }
             }
         }

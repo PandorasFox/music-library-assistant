@@ -376,6 +376,9 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
             cf!(bool, leave_transactions_open, "Leave transactions open",
                 "Keep one open transaction; adds Transaction tab to view ring",
                 &["TODO"], Opinions::KDL_LEAVE_TXN_OPEN),
+            cf!(duration, watcher_poll_interval_secs, "Watcher poll interval",
+                "Filesystem poll interval when inotify is unavailable (seconds)",
+                &["TODO"], Opinions::KDL_WATCHER_POLL_INTERVAL),
         ]},
         ConfigGroup { name: "Performance", collapsed: false, fields: vec![
             cf!(optional_uint!, performance.worker_threads, "Worker threads",

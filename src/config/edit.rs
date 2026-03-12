@@ -278,6 +278,17 @@ pub fn apply_config_edits_to_kdl(
         );
     }
 
+    // --- Watcher Poll Interval ---
+    if new_config.opinions.watcher_poll_interval_secs
+        != old_config.opinions.watcher_poll_interval_secs
+    {
+        set_or_create_int_node(
+            opinions_doc,
+            Opinions::KDL_WATCHER_POLL_INTERVAL,
+            new_config.opinions.watcher_poll_interval_secs as i64,
+        );
+    }
+
     // --- Inbox Organize ---
     if new_config.opinions.inbox_organize.directory_granularity
         != old_config.opinions.inbox_organize.directory_granularity

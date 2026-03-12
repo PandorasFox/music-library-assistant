@@ -67,6 +67,7 @@ pub struct ObservedImage {
 /// Watcher compares disk mtime against this cached mtime. If they match,
 /// the DB's tags are current and can be carried through the initial scan
 /// without reading tags from disk.
+#[derive(Clone)]
 pub(crate) struct CachedInodeState {
     pub mtime_secs: i64,
     pub mtime_nanos: i64,
@@ -81,6 +82,12 @@ pub(super) enum WatcherCommand {
         /// DB-cached state seeded by the Witch. Watcher skips tag reads
         /// for files whose disk mtime matches the cached mtime.
         db_cache: HashMap<i64, CachedInodeState>,
+    },
+    /// Immediate re-walk (polling mode only). Carries fresh DB cache
+    /// and updated poll interval from config.
+    Poll {
+        db_cache: HashMap<i64, CachedInodeState>,
+        poll_interval_secs: u64,
     },
     /// Shut down the watcher thread.
     Shutdown,
@@ -125,9 +132,10 @@ pub(super) enum WatcherMessage {
     /// Image file observed with extracted metadata (dimensions, format, role).
     /// Watcher has already read the image — Witch queues DB writes.
     ImageFileObserved(ObservedImage),
-    /// inotify overflow or watch error — watcher will re-walk and re-send
-    /// InitialScanComplete. Witch should queue full bulk reconciliation.
-    Rescan,
+    /// inotify watch limit exceeded or creation failed. Watcher has fallen
+    /// back to periodic polling. Witch should clear observed state and
+    /// note degraded mode — scan results arrive via InitialScanComplete.
+    InotifyFailed,
 }
 
 // ============================================================================
@@ -169,6 +177,14 @@ impl FsWatcherHandle {
         let _ = self
             .command_tx
             .send(WatcherCommand::Start { zones, db_cache });
+    }
+
+    /// Request an immediate re-walk in polling mode with fresh DB cache
+    /// and updated poll interval.
+    pub fn poll(&self, db_cache: HashMap<i64, CachedInodeState>, poll_interval_secs: u64) {
+        let _ = self
+            .command_tx
+            .send(WatcherCommand::Poll { db_cache, poll_interval_secs });
     }
 
     /// Drain available messages from the watcher (non-blocking).
@@ -277,6 +293,9 @@ fn run_watcher(command_rx: Receiver<WatcherCommand>, message_tx: Sender<WatcherM
                     break;
                 }
             }
+            WatcherCommand::Poll { .. } => {
+                // Poll before Start is a no-op — we have no zones to walk.
+            }
         }
     }
 
@@ -378,11 +397,15 @@ fn run_scan_and_monitor(
         Err(e) => {
             crate::logging::log_error(format!(
                 "[FS_WATCHER] Failed to create inotify watcher: {}. \
-                 Steady-state monitoring disabled.",
+                 Falling back to polling mode.",
                 e
             ));
-            // Fall back to idle loop (no steady-state, rely on periodic reconciliation)
-            return idle_loop(command_rx);
+            let _ = message_tx.send(WatcherMessage::InotifyFailed);
+            return run_polling_loop(
+                zones, db_cache.clone(),
+                Duration::from_secs(900),
+                command_rx, message_tx,
+            );
         }
     };
 
@@ -453,6 +476,9 @@ fn run_scan_and_monitor(
                 // run_scan_and_monitor with fresh inotify watches
                 return false;
             }
+            Ok(WatcherCommand::Poll { .. }) => {
+                // Poll is for polling mode only; ignored in inotify mode.
+            }
             Err(_) => {} // No command
         }
 
@@ -471,17 +497,14 @@ fn run_scan_and_monitor(
                 }
                 Ok(NotifyEvent::Error(e)) => {
                     if handle_notify_error(e) {
-                        // Request rescan from Witch and block until she
-                        // sends a fresh Start with DB-seeded cache.
-                        let _ = message_tx.send(WatcherMessage::Rescan);
+                        let _ = message_tx.send(WatcherMessage::InotifyFailed);
                         drop(watcher);
-                        return match wait_for_start(command_rx) {
-                            Some((zones, db_cache)) => {
-                                // Recursive: run fresh scan+monitor cycle
-                                run_scan_and_monitor(&zones, &db_cache, command_rx, message_tx)
-                            }
-                            None => true, // shutdown
-                        };
+                        // Default poll interval; Witch will send updated interval via Poll.
+                        return run_polling_loop(
+                            zones, db_cache.clone(),
+                            Duration::from_secs(900),
+                            command_rx, message_tx,
+                        );
                     }
                 }
                 Err(_) => break,
@@ -519,29 +542,67 @@ fn run_scan_and_monitor(
     }
 }
 
-/// Block until the Witch sends a Start command (with DB cache).
-/// Returns None on shutdown or channel close.
-fn wait_for_start(
+/// Polling fallback when inotify is unavailable.
+///
+/// Periodically re-walks all zone roots and sends InitialScanComplete/
+/// AllInitialScansComplete messages, mimicking a fresh scan each cycle.
+/// No recursion, no stack growth.
+///
+/// Returns true if shutdown requested, false if a Start command arrived
+/// (caller should retry inotify via the outer run_watcher loop).
+fn run_polling_loop(
+    zones: &[(Zone, PathBuf)],
+    mut db_cache: HashMap<i64, CachedInodeState>,
+    mut poll_interval: Duration,
     command_rx: &Receiver<WatcherCommand>,
-) -> Option<(Vec<(Zone, PathBuf)>, HashMap<i64, CachedInodeState>)> {
-    loop {
-        match command_rx.recv() {
-            Ok(WatcherCommand::Start { zones, db_cache }) => return Some((zones, db_cache)),
-            Ok(WatcherCommand::Shutdown) => return None,
-            Err(_) => return None,
-        }
-    }
-}
+    message_tx: &Sender<WatcherMessage>,
+) -> bool {
+    use std::sync::mpsc::RecvTimeoutError;
 
-/// Fall back to idle loop when inotify is unavailable.
-/// Returns true if shutdown requested.
-fn idle_loop(command_rx: &Receiver<WatcherCommand>) -> bool {
+    crate::logging::log_general(format!(
+        "[FS_WATCHER] Entering polling mode (interval: {}s)",
+        poll_interval.as_secs()
+    ));
+
     loop {
-        match command_rx.recv() {
+        match command_rx.recv_timeout(poll_interval) {
             Ok(WatcherCommand::Shutdown) => return true,
-            Ok(WatcherCommand::Start { .. }) => return false,
-            Err(_) => return true,
+            Ok(WatcherCommand::Start { .. }) => {
+                // Start = retry inotify. Return false to re-enter
+                // run_watcher's outer loop → run_scan_and_monitor.
+                // If inotify fails again, we'll re-enter polling.
+                crate::logging::log_general(
+                    "[FS_WATCHER] Start received in polling mode — retrying inotify"
+                );
+                return false;
+            }
+            Ok(WatcherCommand::Poll { db_cache: new_cache, poll_interval_secs }) => {
+                // Operator-initiated rescan OR config change.
+                // Update cache + interval, do immediate walk (fall through).
+                db_cache = new_cache;
+                poll_interval = Duration::from_secs(poll_interval_secs);
+                crate::logging::log_general(format!(
+                    "[FS_WATCHER] Poll command received — immediate re-walk (interval: {}s)",
+                    poll_interval_secs
+                ));
+            }
+            Err(RecvTimeoutError::Timeout) => { /* time to poll */ }
+            Err(RecvTimeoutError::Disconnected) => return true,
         }
+
+        // Re-walk all zones
+        for (zone, root) in zones {
+            let inodes = if root.exists() {
+                walk_zone_root(root, &db_cache)
+            } else {
+                HashMap::new()
+            };
+            let _ = message_tx.send(WatcherMessage::InitialScanComplete {
+                zone: *zone,
+                inodes,
+            });
+        }
+        let _ = message_tx.send(WatcherMessage::AllInitialScansComplete);
     }
 }
 
@@ -743,9 +804,8 @@ fn process_settled_event(
 
 /// Handle a notify error (inotify overflow, watch limit, etc.)
 ///
-/// Returns `true` if a full rescan is needed (watch limit exhaustion).
-/// The caller is responsible for requesting a rescan from the Witch and
-/// blocking until a fresh `Start` command arrives with a DB cache.
+/// Returns `true` if the caller should fall back to polling mode
+/// (watch limit exhaustion — inotify is no longer viable).
 fn handle_notify_error(error: notify::Error) -> bool {
     crate::logging::log_error(format!(
         "[FS_WATCHER] Notify error: {}",

@@ -629,6 +629,15 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                                     }
                                 }
                             }
+                            Opinions::KDL_WATCHER_POLL_INTERVAL => {
+                                if let Some(entry) = child.entries().first() {
+                                    if let Some(val) = entry.value().as_i64() {
+                                        if val > 0 {
+                                            config.opinions.watcher_poll_interval_secs = val as u64;
+                                        }
+                                    }
+                                }
+                            }
                             Opinions::KDL_BLOCK_EXTERNAL_MATCHING => {
                                 parse_external_matching_opinions(
                                     child,

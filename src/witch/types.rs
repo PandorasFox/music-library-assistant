@@ -205,6 +205,8 @@ pub enum WatcherState {
     InitialScan,
     /// Watcher active and monitoring. Initial scan complete.
     Watching,
+    /// inotify unavailable — watcher periodically re-walks zones.
+    Polling,
 }
 
 // ============================================================================

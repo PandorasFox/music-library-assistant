@@ -57,50 +57,20 @@ pub mod zones;
 use anyhow::Result;
 
 fn main() -> Result<()> {
-    // Step 0: Initialize log channel FIRST (before any logging happens)
+    // Initialize log channel FIRST (before any logging happens)
     let log_rx = logging::init_log_channel();
 
-    // Step 1: Ensure config directory exists
+    // Ensure config directory exists
     let config_dir = config::get_config_dir()?;
     std::fs::create_dir_all(&config_dir)?;
 
-    // Step 2: First-time setup if no config exists (pre-Witch — She needs a config to boot)
-    if !config::config_exists() {
-        ui::startup::run_first_time_setup()?;
-    }
-
-    // Step 3: Load config (parse KDL)
-    let config = match config::load_config() {
-        Ok(cfg) => {
-            logging::log_general("Config loaded successfully");
-            config::init_performance_config(cfg.opinions.performance.clone());
-            cfg
-        }
-        Err(e) => {
-            eprintln!("ERROR: Failed to load config\n");
-            eprintln!("{:#}", e);
-            std::process::exit(1);
-        }
-    };
-
-    // Step 4: Validate config (filesystem tests - same-device check for hardlinks)
-    if let Err(e) = config.validate() {
-        eprintln!("ERROR: Config validation failed\n");
-        eprintln!("{:#}", e);
-        std::process::exit(1);
-    }
-
-    // Step 5: Clear terminal
+    // Clear terminal
     print!("\x1B[2J\x1B[1;1H");
 
-    // Step 6: Witch owns the main thread. TUI is spawned as a client thread.
-    let force_check = config.opinions.startup.force_check_all_files_at_startup;
-    let shared_config = config.into_shared();
-
-    // Clone config for the Witch before moving shared_config into the closure
-    let cfg = config::read_shared_config(&shared_config).clone();
-    witch::Witch::run(&cfg, force_check, Some(log_rx), move |handle, cache, notices| {
-        if let Err(e) = ui::run_tui(shared_config, handle, cache, notices) {
+    // Witch owns the main thread. TUI is spawned as a client thread.
+    // The Witch detects startup state (AwaitingSetup vs Ready) internally.
+    witch::Witch::run(Some(log_rx), move |handle, cache, notices| {
+        if let Err(e) = ui::run_tui(handle, cache, notices) {
             eprintln!("TUI error: {:?}", e);
         }
     });

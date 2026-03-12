@@ -12,6 +12,8 @@
 //!
 //! See `docs/CLIENT_SERVER_ARCHITECTURE.md` for the full design.
 
+use std::path::PathBuf;
+
 use crate::meta::decisions::{DecisionKey, DiscardSummary, TransactionError, WitnessedDecision};
 use crate::meta::mutations::Mutation;
 use crate::witch::WitchStatus;
@@ -42,6 +44,15 @@ pub trait WitchClient {
     /// live fields. For the handle impl, this reads from shared memory
     /// (`Arc<RwLock<WitchStatus>>`) — transparent, always fresh.
     fn witch_status(&self) -> WitchStatus;
+
+    // ====================================================================
+    // Setup commands
+    // ====================================================================
+
+    /// Complete first-time setup: write config, create dirs + DB, transition to Ready.
+    ///
+    /// Called by the client after the operator selects an archive root path.
+    fn complete_setup(&mut self, root: PathBuf) -> Result<(), String>;
 
     // ====================================================================
     // Transaction commands
@@ -114,6 +125,10 @@ pub trait WitchClient {
 impl WitchClient for super::Witch {
     fn witch_status(&self) -> WitchStatus {
         self.publish_status()
+    }
+
+    fn complete_setup(&mut self, root: PathBuf) -> Result<(), String> {
+        self.complete_setup(root)
     }
 
     fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError> {

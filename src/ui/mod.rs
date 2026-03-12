@@ -615,8 +615,7 @@ fn render(f: &mut Frame, app: &mut App) {
 // ============================================================================
 
 pub fn run_tui(
-    shared_config: SharedConfig,
-    witch: crate::witch::WitchHandle,
+    mut witch: crate::witch::WitchHandle,
     cache: crate::witch::cache_thread::CacheHandle,
     notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
 ) -> Result<()> {
@@ -636,21 +635,45 @@ pub fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let db_path = crate::config::get_db_path()?;
-    let initial_state = crate::witch::InitialUiState::determine(&db_path);
+    // Check startup state from the Witch
+    {
+        use crate::witch::WitchClient;
+        let status = witch.witch_status();
 
-    if initial_state == crate::witch::InitialUiState::FirstTimeSetup {
-        startup::handle_first_time_setup(&mut terminal, &db_path)?;
+        if status.startup_state == crate::witch::WitchStartupState::AwaitingSetup {
+            let has_config = crate::config::config_exists();
+
+            let root = if has_config {
+                // Config exists but DB was deleted — show DB setup dialog, use existing root
+                let db_path = crate::config::get_db_path()?;
+                startup::handle_db_setup_dialog(&mut terminal, &db_path)?;
+                let cfg = crate::config::load_config()?;
+                cfg.root
+            } else {
+                // Fresh install — directory picker
+                startup::run_directory_picker(&mut terminal)?
+            };
+
+            witch.complete_setup(root).map_err(|e| anyhow::anyhow!(e))?;
+        }
     }
 
-    let vacuum_threshold = {
-        let cfg = crate::config::read_shared_config(&shared_config);
-        cfg.opinions.startup.vacuum_threshold
-    };
+    // Config + DB now guaranteed. Load shared config for App.
+    let config = crate::config::load_config()?;
+    if let Err(e) = config.validate() {
+        eprintln!("ERROR: Config validation failed\n");
+        eprintln!("{:#}", e);
+        std::process::exit(1);
+    }
+    let vacuum_threshold = config.opinions.startup.vacuum_threshold;
+    let shared_config = config.into_shared();
+
+    let db_path = crate::config::get_db_path()?;
 
     let mut app = App::new(shared_config, witch, cache, notice_rx, art_picker);
     app.vacuum_threshold = vacuum_threshold;
     app.db_path = db_path.clone();
+
     // Determine initial view based on startup state
     {
         use crate::witch::WitchClient;

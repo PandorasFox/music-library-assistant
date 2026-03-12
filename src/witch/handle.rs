@@ -10,6 +10,8 @@
 use std::sync::mpsc;
 use std::sync::{Arc, RwLock};
 
+use std::path::PathBuf;
+
 use crate::config::SharedConfig;
 use crate::meta::decisions::{DecisionKey, DiscardSummary, TransactionError, WitnessedDecision};
 
@@ -53,6 +55,12 @@ pub(super) enum HandleCommand {
     // -- External fetch --
     RequestExternalFetch,
     RequestReleasePacking,
+
+    // -- Setup --
+    CompleteSetup {
+        root: PathBuf,
+        reply: mpsc::Sender<Result<(), String>>,
+    },
 
     // -- Maintenance / lifecycle --
     QueueSchemaReconciliation,
@@ -119,6 +127,10 @@ impl WitchClient for WitchHandle {
             .read()
             .expect("WitchStatus lock poisoned")
             .clone()
+    }
+
+    fn complete_setup(&mut self, root: PathBuf) -> Result<(), String> {
+        self.send_recv(|reply| HandleCommand::CompleteSetup { root, reply })
     }
 
     fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError> {

@@ -1,99 +1,42 @@
-//! First-Time Setup Wizard
+//! First-Time Setup UI Components
 //!
-//! Two code paths:
+//! Provides the interactive UI elements for first-time setup, called from
+//! `run_tui()` when the Witch is in `AwaitingSetup` state:
 //!
-//! 1. **Full setup** (`run_first_time_setup`): No config exists at all. Runs an
-//!    interactive directory picker to select the archive root, creates config.kdl,
-//!    subdirectories, and DB. Manages its own terminal lifecycle.
+//! - `run_directory_picker()`: Interactive filesystem browser for selecting archive root.
+//! - `handle_db_setup_dialog()`: Confirmation dialog when config exists but DB was deleted.
 //!
-//! 2. **DB-only setup** (`handle_first_time_setup`): Config exists but DB was deleted.
-//!    Simple confirmation dialog that recreates the DB and subdirectories. Runs within
-//!    an already-initialized terminal (called from `run_tui`).
+//! Infrastructure creation (config, dirs, DB) is handled by the Witch via `CompleteSetup`.
 
 use anyhow::Result;
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
-use crossterm::{
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::backend::{Backend, CrosstermBackend};
+use crossterm::event::{self, Event, KeyCode};
+use ratatui::backend::Backend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Terminal;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::ui::tree_browser::{EntryFilter, TreeEntry, TreeNavigator};
 
 /// Proof that code is executing in the first-time setup path.
-/// Constructor is private to this module; type is pub(crate) so db/ can require it.
+/// Type is pub(crate) so db/ can require it.
 pub(crate) struct FirstTimeSetupToken(());
+
+impl FirstTimeSetupToken {
+    /// Create a setup token. Only the Witch and first-time setup code should call this.
+    pub(crate) fn new() -> Self {
+        Self(())
+    }
+}
 
 use crate::ui::input;
 use crate::ui::widgets::selection_styles::CURSOR_STYLE;
 use crate::ui::widgets::TextInputState;
 
 // ============================================================================
-// Full First-Time Setup (no config exists)
-// ============================================================================
-
-/// Run the complete first-time setup wizard with its own terminal.
-///
-/// Called from main() when no config.kdl exists. Guides the user through:
-/// 1. Selecting an archive root directory (with option to create new dirs)
-/// 2. Creating subdirectories + database
-pub fn run_first_time_setup() -> Result<()> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let result = run_setup_flow(&mut terminal);
-
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    result
-}
-
-fn run_setup_flow<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
-    // Step 1: Directory picker
-    let selected_root = run_directory_picker(terminal)?;
-
-    // Write initial config
-    crate::config::write_initial_config(&selected_root)?;
-
-    // Create subdirectories
-    std::fs::create_dir_all(selected_root.join("corpus"))?;
-    std::fs::create_dir_all(selected_root.join("libraries"))?;
-    std::fs::create_dir_all(selected_root.join("stash"))?;
-    std::fs::create_dir_all(selected_root.join("inbox"))?;
-
-    // Create database
-    let db_path = crate::config::get_db_path()?;
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let token = FirstTimeSetupToken(());
-    let db = crate::db::create_database(&db_path, &token)?;
-    drop(db);
-
-    // Step 2: Show completion + hint
-    run_completion_screen(terminal, &selected_root, &db_path)?;
-
-    Ok(())
-}
-
-// ============================================================================
-// Step 1: Directory Picker
+// Directory Picker
 // ============================================================================
 
 /// State for the directory picker step.
@@ -136,7 +79,9 @@ impl DirectoryPickerState {
 }
 
 /// Run the directory picker, returning the selected path.
-fn run_directory_picker<B: Backend>(terminal: &mut Terminal<B>) -> Result<PathBuf> {
+///
+/// Called from `run_tui()` when no config exists. The caller (TUI) owns the terminal.
+pub fn run_directory_picker<B: Backend>(terminal: &mut Terminal<B>) -> Result<PathBuf> {
     let mut state = DirectoryPickerState::new();
 
     loop {
@@ -401,130 +346,19 @@ fn render_picker_entry(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
 }
 
 // ============================================================================
-// Step 2: Completion Screen
+// DB Setup Dialog (config exists, DB was deleted)
 // ============================================================================
 
-fn run_completion_screen<B: Backend>(
-    terminal: &mut Terminal<B>,
-    root: &Path,
-    db_path: &Path,
-) -> Result<()> {
-    let root_display = root.display().to_string();
-    let db_display = db_path.display().to_string();
-
-    loop {
-        terminal.draw(|f| {
-            render_completion_screen(f, &root_display, &db_display);
-        })?;
-
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Enter | KeyCode::Esc => break,
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn render_completion_screen(f: &mut ratatui::Frame, root_display: &str, db_display: &str) {
-    let area = f.area();
-
-    let outer_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" First-Time Setup \u{2014} Step 2 of 2 ")
-        .title_alignment(Alignment::Center);
-
-    let inner = outer_block.inner(area);
-    f.render_widget(outer_block, area);
-
-    let lines = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(" Archive root: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(root_display, Style::default().fg(Color::Yellow)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            " Directory structure created:",
-            Style::default().fg(Color::White),
-        )),
-        Line::from(vec![
-            Span::styled("   \u{2713} ", Style::default().fg(Color::Green)),
-            Span::styled("corpus/", Style::default().fg(Color::White)),
-        ]),
-        Line::from(vec![
-            Span::styled("   \u{2713} ", Style::default().fg(Color::Green)),
-            Span::styled("libraries/", Style::default().fg(Color::White)),
-        ]),
-        Line::from(vec![
-            Span::styled("   \u{2713} ", Style::default().fg(Color::Green)),
-            Span::styled("stash/", Style::default().fg(Color::White)),
-        ]),
-        Line::from(vec![
-            Span::styled("   \u{2713} ", Style::default().fg(Color::Green)),
-            Span::styled("inbox/", Style::default().fg(Color::White)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            " Database created:",
-            Style::default().fg(Color::White),
-        )),
-        Line::from(vec![
-            Span::styled("   \u{2713} ", Style::default().fg(Color::Green)),
-            Span::styled(db_display, Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            " \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            " If you have an existing music library, now is a good time to",
-            Style::default().fg(Color::White),
-        )),
-        Line::from(Span::styled(
-            " copy or move it into the corpus/ directory. MM will discover",
-            Style::default().fg(Color::White),
-        )),
-        Line::from(Span::styled(
-            " and index everything on its first scan.",
-            Style::default().fg(Color::White),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(" [", Style::default().fg(Color::DarkGray)),
-            Span::styled("Enter", Style::default().fg(Color::Cyan)),
-            Span::styled("] Continue to MM", Style::default().fg(Color::DarkGray)),
-        ]),
-    ];
-
-    f.render_widget(Paragraph::new(lines), inner);
-}
-
-// ============================================================================
-// DB-Only First-Time Setup (config exists, DB was deleted)
-// ============================================================================
-
-/// Handle first-time DB setup when config exists but no database file exists.
+/// Show a confirmation dialog when config exists but database was deleted.
 ///
-/// Shows a dialog prompting the user to create a new database, then
-/// initializes it with the latest schema version (no migrations needed).
-pub fn handle_first_time_setup<B: Backend>(
+/// UI-only: shows the dialog, waits for Enter/Esc. Infrastructure creation
+/// (dirs, DB) is handled by the Witch via `CompleteSetup`.
+pub fn handle_db_setup_dialog<B: Backend>(
     terminal: &mut Terminal<B>,
     db_path: &Path,
 ) -> Result<()> {
-    // Ensure parent directory exists
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
     let db_display = db_path.to_string_lossy();
 
-    // Render first-time setup dialog
     loop {
         terminal.draw(|f| {
             let area = f.area();
@@ -543,7 +377,7 @@ pub fn handle_first_time_setup<B: Backend>(
 
             let lines = vec![
                 Line::from(""),
-                Line::from("Welcome to MM!").style(
+                Line::from("Welcome back to MM!").style(
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
@@ -564,7 +398,7 @@ pub fn handle_first_time_setup<B: Backend>(
             let paragraph = Paragraph::new(lines)
                 .block(
                     Block::default()
-                        .title(" First-Time Setup ")
+                        .title(" Database Setup ")
                         .title_alignment(Alignment::Center)
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::Cyan)),
@@ -574,15 +408,9 @@ pub fn handle_first_time_setup<B: Backend>(
             f.render_widget(paragraph, dialog_area);
         })?;
 
-        // Wait for user input
         if let Event::Key(key) = event::read()? {
             match key.code {
-                KeyCode::Enter => {
-                    // User confirmed first-time setup. No ConfirmationGesture needed here:
-                    // database creation is infrastructure setup, not a corpus mutation.
-                    // ConfirmationGesture is for mutations that alter indexed corpus data.
-                    break;
-                }
+                KeyCode::Enter => break,
                 KeyCode::Esc => {
                     return Err(anyhow::anyhow!("Setup cancelled by user"));
                 }
@@ -591,88 +419,5 @@ pub fn handle_first_time_setup<B: Backend>(
         }
     }
 
-    // Show "creating database" status
-    terminal.draw(|f| {
-        let area = f.area();
-        let dialog_width = 50.min(area.width.saturating_sub(4));
-        let dialog_height = 7;
-
-        let dialog_area = Rect {
-            x: (area.width.saturating_sub(dialog_width)) / 2,
-            y: (area.height.saturating_sub(dialog_height)) / 2,
-            width: dialog_width,
-            height: dialog_height,
-        };
-
-        f.render_widget(Clear, dialog_area);
-
-        let paragraph = Paragraph::new(vec![
-            Line::from(""),
-            Line::from("Creating database...").style(Style::default().fg(Color::Cyan)),
-            Line::from(""),
-        ])
-        .block(
-            Block::default()
-                .title(" Setup ")
-                .title_alignment(Alignment::Center)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        )
-        .alignment(Alignment::Center);
-
-        f.render_widget(paragraph, dialog_area);
-    })?;
-
-    // Create archive subdirectories
-    let config = crate::config::load_config()?;
-    std::fs::create_dir_all(config.corpus_dir())?;
-    std::fs::create_dir_all(config.libraries_dir())?;
-    std::fs::create_dir_all(config.stash_dir())?;
-    std::fs::create_dir_all(config.inbox_dir())?;
-
-    // Create database (initialize_schema stores the schema fingerprint)
-    let token = FirstTimeSetupToken(());
-    let db = crate::db::create_database(db_path, &token)?;
-    drop(db);
-
-    // Show completion message
-    terminal.draw(|f| {
-        let area = f.area();
-        let dialog_width = 50.min(area.width.saturating_sub(4));
-        let dialog_height = 7;
-
-        let dialog_area = Rect {
-            x: (area.width.saturating_sub(dialog_width)) / 2,
-            y: (area.height.saturating_sub(dialog_height)) / 2,
-            width: dialog_width,
-            height: dialog_height,
-        };
-
-        f.render_widget(Clear, dialog_area);
-
-        let paragraph = Paragraph::new(vec![
-            Line::from(""),
-            Line::from("Database created successfully!").style(
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Line::from(""),
-            Line::from("Starting initial corpus scan...")
-                .style(Style::default().fg(Color::DarkGray)),
-        ])
-        .block(
-            Block::default()
-                .title(" Setup Complete ")
-                .title_alignment(Alignment::Center)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green)),
-        )
-        .alignment(Alignment::Center);
-
-        f.render_widget(paragraph, dialog_area);
-    })?;
-
-    std::thread::sleep(std::time::Duration::from_millis(800));
     Ok(())
 }

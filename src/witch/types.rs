@@ -37,6 +37,24 @@ pub trait ManagedThread {
 }
 
 // ============================================================================
+// Startup State
+// ============================================================================
+
+/// Witch startup state — whether She's operational or awaiting first-time setup.
+///
+/// When no database exists, the Witch boots into `AwaitingSetup` and idles
+/// until a client delivers the setup payload (root path). After setup
+/// completes, She transitions to `Ready` and begins normal operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum WitchStartupState {
+    /// No database — waiting for client to provide setup payload.
+    AwaitingSetup,
+    /// Fully operational.
+    #[default]
+    Ready,
+}
+
+// ============================================================================
 // State Machine
 // ============================================================================
 
@@ -443,6 +461,10 @@ impl From<&WorkState> for WorkStateSnapshot {
 /// See `docs/CLIENT_SERVER_ARCHITECTURE.md` for the full design.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct WitchStatus {
+    // -- Startup state --
+    /// Whether the Witch is operational or awaiting first-time setup.
+    pub startup_state: WitchStartupState,
+
     // -- Work state --
     /// Task processing state (idle/working/done + counts).
     pub work: WorkStatus,

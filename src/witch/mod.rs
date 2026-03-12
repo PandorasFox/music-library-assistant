@@ -33,17 +33,15 @@ mod execution;
 pub(crate) mod external_fetch;
 pub(crate) mod fs_watcher;
 mod handle;
-pub mod messages;
 mod transaction;
 pub(crate) mod types;
 // Re-export public types
 pub use client::WitchClient;
 pub use handle::WitchHandle;
-pub use messages::InitialUiState;
 pub use types::{
     MaintenanceWitness, MutationExecutionWitness, PendingTransaction, ReasoningLevel,
-    SpawnedMutation, Task, TaskLabel, TransactionSnapshot, WatcherState, WitchStatus, WorkState,
-    WorkStateSnapshot, WorkStatus,
+    SpawnedMutation, Task, TaskLabel, TransactionSnapshot, WatcherState, WitchStartupState,
+    WitchStatus, WorkState, WorkStateSnapshot, WorkStatus,
 };
 // Decision authority flows through ConfirmationGesture (ui/action_handlers/witness.rs)
 // and WitnessedDecision (meta/decisions/mod.rs). See operator_decisions.rs for call sites.
@@ -186,6 +184,9 @@ fn watched_zones() -> Vec<(crate::db::types::Zone, std::path::PathBuf)> {
 /// She provides a parallel task queue with state machine semantics,
 /// ensuring all mutations flow through proper witness channels.
 pub struct Witch {
+    // Startup state — AwaitingSetup or Ready
+    startup_state: types::WitchStartupState,
+
     // Rayon-based task execution with channel for results
     result_tx: Sender<TaskResult>,
     result_rx: Receiver<TaskResult>,
@@ -319,7 +320,7 @@ impl Witch {
     const LINGER_DURATION: Duration = Duration::from_secs(30);
 
     pub fn new(
-        _cfg: &Config,
+        startup_state: types::WitchStartupState,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
     ) -> (
         Self,
@@ -361,6 +362,7 @@ impl Witch {
         let fs_watcher_handle = fs_watcher::FsWatcherHandle::spawn();
 
         let she = Self {
+            startup_state,
             result_tx,
             result_rx,
             work_state: WorkState::Idle,
@@ -393,19 +395,20 @@ impl Witch {
         (she, cache_ui_handle, notice_rx)
     }
 
-    /// Create a new Witch with opinions applied.
+    /// Create a new Witch with opinions applied (Ready state).
     pub fn with_opinions(
         cfg: &Config,
-        force_check_all_files_at_startup: bool,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
     ) -> (
         Self,
         cache_thread::CacheHandle,
         std::sync::mpsc::Receiver<WitchNotice>,
     ) {
-        let (mut she, cache_handle, notice_rx) = Self::new(cfg, log_rx);
-        she.force_check_all_files_at_startup = force_check_all_files_at_startup;
-        if force_check_all_files_at_startup {
+        let (mut she, cache_handle, notice_rx) =
+            Self::new(types::WitchStartupState::Ready, log_rx);
+        she.force_check_all_files_at_startup =
+            cfg.opinions.startup.force_check_all_files_at_startup;
+        if she.force_check_all_files_at_startup {
             crate::logging::log_general(
                 "[WITCH] force_check_all_files_at_startup=true: will verify all indexed files at startup"
             );
@@ -415,16 +418,41 @@ impl Witch {
 
     /// Run the Witch on the current (main) thread.
     ///
-    /// Constructs channels, spawns the UI as a client thread via `ui_factory`,
-    /// then enters `run_loop()` on this thread. Does not return until shutdown.
+    /// Detects startup state from filesystem: if no DB exists, boots in
+    /// `AwaitingSetup` and idles until a client sends `CompleteSetup`.
+    /// If both config and DB exist, loads config + performance globals and
+    /// runs normally.
+    ///
+    /// Spawns the UI as a client thread via `ui_factory`, then enters
+    /// `run_loop()` on this thread. Does not return until shutdown.
     pub fn run(
-        cfg: &Config,
-        force_check_all_files_at_startup: bool,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
         ui_factory: impl FnOnce(WitchHandle, cache_thread::CacheHandle, std::sync::mpsc::Receiver<WitchNotice>) + Send + 'static,
     ) {
-        let (mut she, cache_handle, notice_rx) =
-            Self::with_opinions(cfg, force_check_all_files_at_startup, log_rx);
+        // Detect startup state
+        let db_path = config::get_db_path().expect("XDG data dir");
+        let has_db = db_path.exists();
+
+        let (mut she, cache_handle, notice_rx) = if has_db {
+            // Normal startup: load config, init performance globals
+            let cfg = match config::load_config() {
+                Ok(cfg) => {
+                    crate::logging::log_general("Config loaded successfully");
+                    config::init_performance_config(cfg.opinions.performance.clone());
+                    cfg
+                }
+                Err(e) => {
+                    eprintln!("ERROR: Failed to load config\n");
+                    eprintln!("{:#}", e);
+                    std::process::exit(1);
+                }
+            };
+            Self::with_opinions(&cfg, log_rx)
+        } else {
+            // No DB — Witch boots in AwaitingSetup
+            crate::logging::log_general("[WITCH] No database found — entering AwaitingSetup");
+            Self::new(types::WitchStartupState::AwaitingSetup, log_rx)
+        };
 
         // Shared state: Witch writes, handle reads
         let status = std::sync::Arc::new(std::sync::RwLock::new(she.publish_status()));
@@ -451,6 +479,10 @@ impl Witch {
     ///
     /// Processes commands, runs tick(), publishes state. Runs until Shutdown
     /// command or channel disconnection.
+    ///
+    /// When `startup_state == AwaitingSetup`, skips `tick()` — only drains
+    /// commands and publishes status. This lets the Witch idle safely until
+    /// a client delivers the setup payload.
     fn run_loop(
         &mut self,
         cmd_rx: mpsc::Receiver<handle::HandleCommand>,
@@ -474,8 +506,10 @@ impl Witch {
                 }
             }
 
-            // Advance the work loop
-            self.tick();
+            // Only advance the work loop when fully operational
+            if self.startup_state == types::WitchStartupState::Ready {
+                self.tick();
+            }
 
             // Publish state snapshot
             if let Ok(mut guard) = status.write() {
@@ -535,6 +569,9 @@ impl Witch {
             HandleCommand::RequestReleasePacking => {
                 self.request_release_packing();
             }
+            HandleCommand::CompleteSetup { root, reply } => {
+                let _ = reply.send(self.complete_setup(root));
+            }
             HandleCommand::QueueSchemaReconciliation => {
                 self.queue_schema_reconciliation();
             }
@@ -554,6 +591,62 @@ impl Witch {
                 // Handled by caller (run_loop checks for this)
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // First-Time Setup
+    // -------------------------------------------------------------------------
+
+    /// Complete first-time setup: write config, create dirs + DB, transition to Ready.
+    ///
+    /// Called when a client sends CompleteSetup after the operator picks an archive root.
+    fn complete_setup(&mut self, root: std::path::PathBuf) -> Result<(), String> {
+        use crate::ui::startup::first_time_setup::FirstTimeSetupToken;
+
+        if !config::config_exists() {
+            // Fresh install — write initial config.kdl with root
+            config::write_initial_config(&root).map_err(|e| format!("Failed to write config: {}", e))?;
+        }
+
+        // Load the config we just wrote
+        let cfg = config::load_config().map_err(|e| format!("Failed to load config: {}", e))?;
+
+        // Init performance globals
+        config::init_performance_config(cfg.opinions.performance.clone());
+
+        // Create subdirectories
+        std::fs::create_dir_all(root.join("corpus"))
+            .map_err(|e| format!("Failed to create corpus/: {}", e))?;
+        std::fs::create_dir_all(root.join("libraries"))
+            .map_err(|e| format!("Failed to create libraries/: {}", e))?;
+        std::fs::create_dir_all(root.join("stash"))
+            .map_err(|e| format!("Failed to create stash/: {}", e))?;
+        std::fs::create_dir_all(root.join("inbox"))
+            .map_err(|e| format!("Failed to create inbox/: {}", e))?;
+
+        // Create database
+        let db_path = config::get_db_path().map_err(|e| format!("Failed to get DB path: {}", e))?;
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create DB parent dir: {}", e))?;
+        }
+        let token = FirstTimeSetupToken::new();
+        let db = crate::db::create_database(&db_path, &token)
+            .map_err(|e| format!("Failed to create database: {}", e))?;
+        drop(db);
+
+        // Tell cache thread to reconnect to the new DB
+        self.cache_thread_handle.reconnect_db();
+
+        // Apply opinions from the loaded config
+        self.force_check_all_files_at_startup =
+            cfg.opinions.startup.force_check_all_files_at_startup;
+
+        // Transition to Ready
+        self.startup_state = types::WitchStartupState::Ready;
+        crate::logging::log_general("[WITCH] Setup complete — transitioning to Ready");
+
+        Ok(())
     }
 
     // -------------------------------------------------------------------------
@@ -1698,14 +1791,40 @@ impl Witch {
     ///
     /// Returns true if the database exists and has pending schema changes.
     pub fn needs_schema_update(&self) -> bool {
+        use crate::db::reconciler;
+
+        if self.startup_state != types::WitchStartupState::Ready {
+            return false;
+        }
+
         let db_path = match config::get_db_path() {
             Ok(p) => p,
             Err(_) => return false,
         };
-        matches!(
-            InitialUiState::determine(&db_path),
-            InitialUiState::SchemaUpdateRequired
-        )
+        if !db_path.exists() {
+            return false;
+        }
+
+        let db = match Database::open_read_only(&db_path) {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+
+        let schema_dirty = !reconciler::fingerprint_matches(&db);
+        let has_data_migrations = reconciler::has_pending_data_migrations(&db);
+
+        if !schema_dirty && !has_data_migrations {
+            return false;
+        }
+
+        if schema_dirty {
+            match reconciler::ReconciliationPlan::compute(db.conn()) {
+                Ok(plan) => !plan.is_empty() || has_data_migrations,
+                _ => true,
+            }
+        } else {
+            true
+        }
     }
 
     /// Get pending schema update descriptions for UI display.
@@ -1788,6 +1907,7 @@ impl Witch {
         });
 
         WitchStatus {
+            startup_state: self.startup_state,
             work: self.status(),
             reasoning_level: self.reasoning_level(),
             has_pending: self.has_pending(),

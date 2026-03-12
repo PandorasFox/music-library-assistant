@@ -277,6 +277,11 @@ impl CacheThreadHandle {
         let _ = self.request_tx.send(CacheRequest::InvalidateScope(scope));
     }
 
+    /// Tell the cache thread to close and reopen its DB connection.
+    /// Used after first-time setup creates the DB.
+    pub(crate) fn reconnect_db(&self) {
+        let _ = self.request_tx.send(CacheRequest::ReconnectDb);
+    }
 }
 
 impl super::types::ManagedThread for CacheThreadHandle {

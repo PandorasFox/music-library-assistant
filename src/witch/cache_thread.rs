@@ -56,6 +56,8 @@ pub(crate) enum CacheRequest {
     Query(Box<dyn FnOnce(&ReadOnlyDb<'_>) + Send>),
     /// Close and reopen the read-only connection (after schema migrations).
     ReconnectDb,
+    /// Update SQLite PRAGMA cache_size on the cache thread's connection.
+    SetCacheSize(i64),
     /// Shut down the cache thread.
     Shutdown,
 }
@@ -282,6 +284,11 @@ impl CacheThreadHandle {
     pub(crate) fn reconnect_db(&self) {
         let _ = self.request_tx.send(CacheRequest::ReconnectDb);
     }
+
+    /// Update SQLite PRAGMA cache_size on the cache thread's connection.
+    pub(crate) fn set_cache_size(&self, kb: i64) {
+        let _ = self.request_tx.send(CacheRequest::SetCacheSize(kb));
+    }
 }
 
 impl super::types::ManagedThread for CacheThreadHandle {
@@ -423,6 +430,17 @@ fn process_request(
         CacheRequest::ReconnectDb => {
             crate::logging::log_general("[CACHE_THREAD] Reconnecting DB");
             *db = open_read_only_db();
+        }
+        CacheRequest::SetCacheSize(kb) => {
+            if let Some(ref db_conn) = db {
+                let _ = db_conn
+                    .conn()
+                    .execute_batch(&format!("PRAGMA cache_size = {};", kb));
+                crate::logging::log_general(format!(
+                    "[CACHE_THREAD] Updated cache_size to {} KB",
+                    kb
+                ));
+            }
         }
         CacheRequest::Shutdown => {
             return true;

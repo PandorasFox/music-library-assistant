@@ -21,7 +21,7 @@ pub use mm_utils::{get_config_dir, get_db_path, is_audio_extension, AUDIO_EXTENS
 pub use dirs::{parse_dirs_kdl, write_dirs_to_disk};
 pub use edit::write_config_to_disk;
 pub use path_schema::parse_path_schema;
-pub use performance::{get_db_cache_kb, get_worker_thread_count, init_performance_config};
+pub use performance::{get_db_cache_kb, get_worker_thread_count, init_performance_config, set_db_cache_kb};
 pub use types::{
     read_shared_config, AlbumArtOpinions, CanonicalizationOpinions, Config,
     CreditRoutingConfig, DiscExtractionOpinions, DuplicateAnalysisOpinions,

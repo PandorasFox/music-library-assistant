@@ -693,6 +693,7 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             });
         }
 
+        DbWriteOp::SetCacheSize { .. } => unreachable!("SetCacheSize handled in run_db_thread loop"),
         DbWriteOp::Shutdown => unreachable!("Shutdown handled in run_db_thread loop"),
     }
 }

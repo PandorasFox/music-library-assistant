@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc;
 
 use crate::config::{self, Config, SharedConfig};
 use crate::db::write_thread::{self, DbThreadHandle};
@@ -33,6 +33,7 @@ mod client;
 mod execution;
 pub(crate) mod external_fetch;
 pub(crate) mod fs_watcher;
+mod hades;
 mod handle;
 mod transaction;
 pub(crate) mod types;
@@ -48,8 +49,7 @@ pub use types::{
 // and WitnessedDecision (meta/decisions/mod.rs). See operator_decisions.rs for call sites.
 
 // Internal imports
-use execution::execute_task;
-use types::{ContentAnalysisWitness, TaskResult};
+use types::ContentAnalysisWitness;
 
 // ============================================================================
 // WitchNotice — Typed Witch → UI Notifications
@@ -161,9 +161,8 @@ pub struct Witch {
     /// Populated once at startup if Reconciling, cleared on transition to Ready.
     startup_schema_descriptions: Vec<String>,
 
-    // Rayon-based task execution with channel for results
-    result_tx: Sender<TaskResult>,
-    result_rx: Receiver<TaskResult>,
+    // Pipeline overseer thread — owns the rayon pool and result channel
+    hades: hades::HadesHandle,
 
     // Work state machine (carries session counters inline)
     work_state: WorkState,
@@ -171,7 +170,6 @@ pub struct Witch {
     // Reasoning and inode awareness state
     reasoning_level: ReasoningLevel,
     watcher_state: WatcherState,
-
 
     /// Accumulated recomputation scope from mutations this session.
     /// Used to determine whether re-awakening is needed and which content
@@ -303,22 +301,9 @@ impl Witch {
         // Spawn the logging thread if we have the receiver
         let log_thread_handle = log_rx.map(crate::logging::spawn_log_thread);
 
-        // Use rayon's global thread pool with work-stealing for better performance.
-        // Thread count from config (default: 2x logical cores for I/O-bound workloads).
-        let num_threads = config::get_worker_thread_count();
-
-        // Configure rayon's global thread pool (only first call takes effect)
-        let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build_global();
-
-        crate::logging::log_general(format!(
-            "[WORKER] Using rayon thread pool with {} threads",
-            num_threads
-        ));
-
-        // Channel for receiving task results
-        let (result_tx, result_rx) = mpsc::channel();
+        // Spawn Hades — the pipeline overseer thread that owns the rayon pool.
+        // Uses a dedicated ThreadPool instance (not the global pool).
+        let hades = hades::HadesHandle::spawn();
 
         // Spawn db_thread early. Migrations coexist with an idle db_thread — they open
         // their own write connections on rayon threads, and in WAL mode concurrent
@@ -338,8 +323,7 @@ impl Witch {
             startup_state,
             vacuum_threshold: 0.0,
             startup_schema_descriptions: Vec::new(),
-            result_tx,
-            result_rx,
+            hades,
             work_state: WorkState::Idle,
             reasoning_level: ReasoningLevel::None,
             watcher_state: WatcherState::NotStarted,
@@ -578,14 +562,14 @@ impl Witch {
             HandleCommand::ValidateConfig { config, reply } => {
                 let _ = reply.send(config.validate().map_err(|e| format!("{:#}", e)));
             }
-            HandleCommand::LatchReadOnlyForSafety { reason } => {
-                self.latch_read_only_for_safety(reason);
-            }
             HandleCommand::SetSharedConfig { shared } => {
                 self.set_shared_config(shared);
             }
             HandleCommand::StartWatching { reply } => {
                 let _ = reply.send(self.start_watching());
+            }
+            HandleCommand::UpdatePerformance { opinions } => {
+                self.update_performance_impl(opinions);
             }
             HandleCommand::Shutdown => {
                 // Handled by caller (run_loop checks for this)
@@ -681,6 +665,24 @@ impl Witch {
         self.shared_config = Some(shared);
     }
 
+    /// Update performance config at runtime: propagate to Hades (pool resize),
+    /// db_thread (cache_size), and cache_thread (cache_size).
+    fn update_performance_impl(&mut self, opinions: crate::config::PerformanceOpinions) {
+        let new_cache_kb = -(opinions.db_cache_mb as i64 * 1024);
+
+        // Hades handles rayon pool rebuild + thread-local cache_size (lazy propagation)
+        self.hades.update_config(&opinions);
+
+        // Explicit cache_size update for long-lived thread connections
+        crate::db::write_thread::set_cache_size(new_cache_kb);
+        self.cache_thread_handle.set_cache_size(new_cache_kb);
+
+        crate::logging::log_general(format!(
+            "[WITCH] Performance config updated (cache_kb={}, threads={:?})",
+            new_cache_kb, opinions.worker_threads
+        ));
+    }
+
     /// Replace the in-memory config with a new version (after config edit mutation).
     ///
     /// Write-locks briefly; safe because tick() and render() are sequential on main thread.
@@ -707,32 +709,12 @@ impl Witch {
 
     /// Check if mutations are currently accepted.
     ///
-    /// Mutations are only accepted when:
-    /// - Eye state is Awake (observing and awakening complete)
-    /// - Not in read-only mode (config setting)
-    /// - Safety latch not triggered (runtime invariant violation)
-    ///
-    /// This is derived state - mutations are automatically blocked during
-    /// re-awakening cycles after mutations drain.
+    /// Mutations are only accepted when reasoning level is Full
+    /// (observing and awakening complete). This is derived state —
+    /// mutations are automatically blocked during re-awakening cycles
+    /// after mutations drain.
     fn accepting_mutations(&self) -> bool {
         self.reasoning_level == ReasoningLevel::Full
-            && self.safety_latch_reason.is_none()
-    }
-
-    /// Trigger the safety latch, permanently disabling mutations for this session.
-    ///
-    /// This is a one-way operation - once latched, cannot be unlatched.
-    /// The operator must fix the underlying issue and restart MM.
-    ///
-    /// Called when a runtime invariant is violated (e.g., mount boundary crossed).
-    pub fn latch_read_only_for_safety(&mut self, reason: String) {
-        if self.safety_latch_reason.is_none() {
-            crate::logging::log_error(format!("[WITCH] SAFETY LATCH TRIGGERED: {}", reason));
-            let _ = self
-                .notice_tx
-                .send(WitchNotice::SafetyLatch(reason.clone()));
-            self.safety_latch_reason = Some(reason);
-        }
     }
 
     /// Start watching. Returns false if already scanning.
@@ -851,18 +833,13 @@ impl Witch {
     /// - Updates state machine transitions
     /// - Aggregates worker performance stats (when timing enabled)
     pub fn tick(&mut self) {
-        // Check for mount boundary violations reported by worker threads
-        if let Some(reason) = check_mount_violation() {
-            self.latch_read_only_for_safety(reason.to_string());
-        }
-
         // Drain completed results and collect spawned computations and mutations
         let mut spawned_computations: Vec<Computation> = Vec::new();
         let mut spawned_mutations: Vec<types::SpawnedMutation> = Vec::new();
         // Collect fetch outcomes to send to scheduler after we're done borrowing self
         let mut fetch_outcomes: Vec<external_fetch::FetchOutcome> = Vec::new();
 
-        while let Ok(result) = self.result_rx.try_recv() {
+        for result in self.hades.drain_results() {
             // ExternalFetch results bypass work_state — they're independent of the
             // Witch's task lifecycle. Process them separately.
             if result.kind == types::TaskKind::ExternalFetch {
@@ -1658,39 +1635,7 @@ impl Witch {
     /// If the task panics, we still send a failure result so the Witch's
     /// in_flight counter stays accurate and we don't lose tasks silently.
     fn spawn_task(&self, task: Task, label: String) {
-        let tx = self.result_tx.clone();
-        let label_for_panic = label.clone();
-        let kind_for_panic = types::TaskKind::from_task(&task);
-        rayon::spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                execute_task(task, label)
-            }));
-            let result = match result {
-                Ok(r) => r,
-                Err(e) => {
-                    let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else if let Some(s) = e.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "Unknown panic".to_string()
-                    };
-                    TaskResult {
-                        success: false,
-                        error: Some(format!("Task panicked: {}", panic_msg)),
-                        label: label_for_panic,
-                        kind: kind_for_panic,
-                        spawn: Vec::new(),
-                        spawn_mutations: Vec::new(),
-                        config_update: None,
-                        recomputation_scope: crate::meta::recomputation::RecomputationScope::EMPTY,
-                        fetch_result: None,
-                        deferred_phases: VecDeque::new(),
-                    }
-                }
-            };
-            let _ = tx.send(result);
-        });
+        self.hades.dispatch(task, label);
     }
 
     // -------------------------------------------------------------------------
@@ -2040,10 +1985,9 @@ impl Drop for Witch {
         // Shutdown order is critical for SQLite WAL cleanup:
         // 0. Shut down external fetch thread (owns a read-only connection)
         // 1. Shut down cache thread (owns a read-only connection)
-        // 2. Close thread-local read-only connections on rayon workers
-        // 3. Close the Witch's cached read-only connection
-        // 4. DB thread checkpoints WAL and closes write connection
-        // 5. With all connections closed, SQLite cleans up -wal and -shm files
+        // 2. Shut down Hades (closes thread-local connections on rayon workers, drops pool)
+        // 3. DB thread checkpoints WAL and closes write connection
+        // 4. Logging thread last so all shutdown messages get logged
 
         // Step 0a: Shut down filesystem watcher thread.
         self.fs_watcher.shutdown();
@@ -2058,12 +2002,9 @@ impl Drop for Witch {
         // before WAL checkpoint.
         self.cache_thread_handle.shutdown();
 
-        // Step 2: Close thread-local read-only connections on all rayon worker threads
-        // These are cached per-thread and must be explicitly closed
-        rayon::broadcast(|_| {
-            crate::meta::computations::close_thread_local_connection();
-        });
-        crate::logging::log_general("[WITCH] Closed all rayon thread-local DB connections");
+        // Step 2: Shut down Hades — closes thread-local DB connections on all
+        // rayon worker threads and drops the pool.
+        self.hades.shutdown();
 
         // Step 3: Shut down the DB thread (it will checkpoint and close write connection)
         self.db_thread_handle.shutdown();

@@ -118,6 +118,16 @@ pub fn execute_reconciliation() -> Result<(), String> {
         .map_err(|_| "db_thread disconnected during reconciliation".to_string())?
 }
 
+/// Update the SQLite PRAGMA cache_size on the write thread's connection.
+///
+/// Fire-and-forget: enqueues the command and returns immediately.
+pub fn set_cache_size(kb: i64) {
+    if let Some(sender) = SIGNAL_SENDER.get() {
+        sender.mark_enqueued();
+        let _ = sender.tx.send(DbWriteOp::SetCacheSize { kb });
+    }
+}
+
 /// Signal the DB thread to close its connection and exit.
 ///
 /// Called by `Witch::drop()`. After this, further signal sends will still
@@ -470,6 +480,14 @@ enum DbWriteOp {
         rows: Vec<PendingAcoustIdSubmission>,
     },
 
+    // =========================================================================
+    // Runtime Config Updates
+    // =========================================================================
+
+    /// Update SQLite PRAGMA cache_size on the write connection.
+    /// Sent by Witch when performance config changes at runtime.
+    SetCacheSize { kb: i64 },
+
     Shutdown,
 }
 
@@ -601,6 +619,17 @@ fn run_db_thread(signal_rx: Receiver<DbWriteOp>, stats: Arc<SharedStats>) {
                     crate::logging::log_general("[DB_THREAD] Schema reconciliation completed");
                 }
                 let _ = result_tx.send(result);
+                stats.queue_depth.fetch_sub(1, Ordering::Relaxed);
+                if stats.queue_depth.load(Ordering::Relaxed) == 0 {
+                    stats.queue_empty.store(true, Ordering::Release);
+                }
+            }
+            Ok(DbWriteOp::SetCacheSize { kb }) => {
+                let _ = db.conn().execute_batch(&format!("PRAGMA cache_size = {};", kb));
+                crate::logging::log_general(format!(
+                    "[DB_THREAD] Updated cache_size to {} KB",
+                    kb
+                ));
                 stats.queue_depth.fetch_sub(1, Ordering::Relaxed);
                 if stats.queue_depth.load(Ordering::Relaxed) == 0 {
                     stats.queue_empty.store(true, Ordering::Release);

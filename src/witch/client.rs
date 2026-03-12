@@ -117,6 +117,9 @@ pub trait WitchClient {
 
     /// Start the filesystem watcher. Returns true if watching started.
     fn start_watching(&mut self) -> bool;
+
+    /// Update performance config at runtime (pool resize, cache_size).
+    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions);
 }
 
 // ========================================================================
@@ -194,5 +197,9 @@ impl WitchClient for super::Witch {
 
     fn start_watching(&mut self) -> bool {
         self.start_watching()
+    }
+
+    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) {
+        self.update_performance_impl(opinions)
     }
 }

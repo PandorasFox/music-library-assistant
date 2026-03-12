@@ -73,6 +73,11 @@ pub(super) enum HandleCommand {
         reply: mpsc::Sender<bool>,
     },
 
+    // -- Performance --
+    UpdatePerformance {
+        opinions: crate::config::PerformanceOpinions,
+    },
+
     // -- Shutdown --
     Shutdown,
 }
@@ -202,6 +207,10 @@ impl WitchClient for WitchHandle {
 
     fn start_watching(&mut self) -> bool {
         self.send_recv(|reply| HandleCommand::StartWatching { reply })
+    }
+
+    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) {
+        self.send(HandleCommand::UpdatePerformance { opinions });
     }
 }
 

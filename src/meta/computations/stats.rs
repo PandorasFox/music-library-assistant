@@ -1,6 +1,6 @@
 //! Thread-local database connection management for computation workers.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 // ============================================================================
 // Thread-Local Storage
@@ -14,6 +14,9 @@ use std::cell::RefCell;
 // All writes from computations must go through `write_thread::signal_sender()`.
 thread_local! {
     static THREAD_READ_ONLY_DB: RefCell<Option<crate::db::Database>> = const { RefCell::new(None) };
+    /// Last cache_kb value applied to this thread's connection.
+    /// Compared against the global atomic on each task execution for lazy propagation.
+    static THREAD_CACHE_KB: Cell<i64> = const { Cell::new(0) };
 }
 
 // ============================================================================
@@ -22,11 +25,15 @@ thread_local! {
 
 /// Close the thread-local database connection on the current thread.
 ///
-/// Called via `rayon::broadcast()` during shutdown to ensure all worker
-/// thread connections are closed before the db_thread attempts WAL checkpoint.
+/// Called via pool `broadcast()` during shutdown or pool rebuild to ensure
+/// all worker thread connections are closed before the db_thread attempts
+/// WAL checkpoint.
 pub fn close_thread_local_connection() {
     THREAD_READ_ONLY_DB.with(|cell| {
         cell.borrow_mut().take();
+    });
+    THREAD_CACHE_KB.with(|cell| {
+        cell.set(0);
     });
 }
 
@@ -40,6 +47,13 @@ pub fn close_thread_local_connection() {
 /// to persist data must route writes through `write_thread::signal_sender()`.
 ///
 /// The `read_only_db` parameter name in executor functions reflects this.
+///
+/// # Cache Size Propagation
+///
+/// On each call, compares the global `get_db_cache_kb()` against the
+/// thread-local cached value. If different, runs `PRAGMA cache_size` to
+/// apply the new setting. This provides lazy propagation of runtime
+/// config changes without requiring explicit messages to rayon workers.
 ///
 /// # Usage
 ///
@@ -60,6 +74,19 @@ where
             let db = Database::open_read_only(&db_path).map_err(|e| e.to_string())?;
             *opt = Some(db);
         }
+
+        // Lazy cache_size propagation: check if global value has changed
+        let global_cache_kb = config::get_db_cache_kb();
+        THREAD_CACHE_KB.with(|thread_kb| {
+            if thread_kb.get() != global_cache_kb {
+                if let Some(ref db) = *opt {
+                    let _ = db
+                        .conn()
+                        .execute_batch(&format!("PRAGMA cache_size = {};", global_cache_kb));
+                }
+                thread_kb.set(global_cache_kb);
+            }
+        });
 
         let read_only_db = ReadOnlyDb::new(opt.as_ref().unwrap());
         Ok(f(&read_only_db))

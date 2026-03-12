@@ -184,8 +184,15 @@ fn watched_zones() -> Vec<(crate::db::types::Zone, std::path::PathBuf)> {
 /// She provides a parallel task queue with state machine semantics,
 /// ensuring all mutations flow through proper witness channels.
 pub struct Witch {
-    // Startup state — AwaitingSetup or Ready
+    // Startup state — lifecycle from AwaitingSetup through maintenance to Ready
     startup_state: types::WitchStartupState,
+
+    /// Vacuum freelist ratio threshold from config (0.0 = disabled).
+    vacuum_threshold: f64,
+
+    /// Human-readable descriptions of pending schema changes (for progress display).
+    /// Populated once at startup if Reconciling, cleared on transition to Ready.
+    startup_schema_descriptions: Vec<String>,
 
     // Rayon-based task execution with channel for results
     result_tx: Sender<TaskResult>,
@@ -363,6 +370,8 @@ impl Witch {
 
         let she = Self {
             startup_state,
+            vacuum_threshold: 0.0,
+            startup_schema_descriptions: Vec::new(),
             result_tx,
             result_rx,
             work_state: WorkState::Idle,
@@ -408,6 +417,7 @@ impl Witch {
             Self::new(types::WitchStartupState::Ready, log_rx);
         she.force_check_all_files_at_startup =
             cfg.opinions.startup.force_check_all_files_at_startup;
+        she.vacuum_threshold = cfg.opinions.startup.vacuum_threshold;
         if she.force_check_all_files_at_startup {
             crate::logging::log_general(
                 "[WITCH] force_check_all_files_at_startup=true: will verify all indexed files at startup"
@@ -453,6 +463,20 @@ impl Witch {
             crate::logging::log_general("[WITCH] No database found — entering AwaitingSetup");
             Self::new(types::WitchStartupState::AwaitingSetup, log_rx)
         };
+
+        // Auto-detect and queue startup maintenance (schema reconciliation, vacuum)
+        if she.startup_state == types::WitchStartupState::Ready {
+            if she.needs_schema_update() {
+                crate::logging::log_general("[WITCH] Schema update needed — entering Reconciling");
+                she.startup_schema_descriptions = she.pending_schema_descriptions();
+                she.startup_state = types::WitchStartupState::Reconciling;
+                she.queue_schema_reconciliation();
+            } else if she.check_vacuum_needed() {
+                crate::logging::log_general("[WITCH] Vacuum threshold exceeded — entering Vacuuming");
+                she.startup_state = types::WitchStartupState::Vacuuming;
+                she.queue_vacuum();
+            }
+        }
 
         // Shared state: Witch writes, handle reads
         let status = std::sync::Arc::new(std::sync::RwLock::new(she.publish_status()));
@@ -506,8 +530,9 @@ impl Witch {
                 }
             }
 
-            // Only advance the work loop when fully operational
-            if self.startup_state == types::WitchStartupState::Ready {
+            // Advance the work loop in any state except AwaitingSetup
+            // (Reconciling/Vacuuming need tick() to process maintenance tasks)
+            if self.startup_state != types::WitchStartupState::AwaitingSetup {
                 self.tick();
             }
 
@@ -572,11 +597,8 @@ impl Witch {
             HandleCommand::CompleteSetup { root, reply } => {
                 let _ = reply.send(self.complete_setup(root));
             }
-            HandleCommand::QueueSchemaReconciliation => {
-                self.queue_schema_reconciliation();
-            }
-            HandleCommand::QueueVacuum => {
-                self.queue_vacuum();
+            HandleCommand::ValidateConfig { config, reply } => {
+                let _ = reply.send(config.validate().map_err(|e| format!("{:#}", e)));
             }
             HandleCommand::LatchReadOnlyForSafety { reason } => {
                 self.latch_read_only_for_safety(reason);
@@ -949,6 +971,28 @@ impl Witch {
 
         // External fetch: drain scheduler messages (task requests + status)
         self.drain_scheduler_messages();
+
+        // Startup state transitions (Reconciling → Vacuuming → Ready)
+        match self.startup_state {
+            types::WitchStartupState::Reconciling if !self.has_pending() => {
+                crate::logging::log_general("[WITCH] Schema reconciliation complete");
+                // Reconnect cache thread's DB so it picks up new schema
+                self.cache_thread_handle.reconnect_db();
+                self.startup_schema_descriptions.clear();
+                if self.check_vacuum_needed() {
+                    crate::logging::log_general("[WITCH] Vacuum threshold exceeded — entering Vacuuming");
+                    self.startup_state = types::WitchStartupState::Vacuuming;
+                    self.queue_vacuum();
+                } else {
+                    self.startup_state = types::WitchStartupState::Ready;
+                }
+            }
+            types::WitchStartupState::Vacuuming if !self.has_pending() => {
+                crate::logging::log_general("[WITCH] Vacuum complete — entering Ready");
+                self.startup_state = types::WitchStartupState::Ready;
+            }
+            _ => {}
+        }
 
         // Emit status update to UI
         let _ = self.notice_tx.send(WitchNotice::StatusUpdate(WorkStatus {
@@ -1850,22 +1894,57 @@ impl Witch {
 
     /// Queue schema reconciliation for async execution.
     ///
-    /// Requires a `ConfirmationGesture` from the SchemaUpdate approval view.
-    pub fn queue_schema_reconciliation(&mut self) {
+    /// Called internally by the Witch during startup when schema update is needed.
+    fn queue_schema_reconciliation(&mut self) {
         use crate::meta::maintenance::DbMaintenanceTask;
 
-        crate::logging::log_general("[WITCH] Queueing schema reconciliation (operator approved)");
+        crate::logging::log_general("[WITCH] Queueing schema reconciliation");
         self.queue_maintenance(DbMaintenanceTask::SchemaReconciliation);
     }
 
     /// Queue a VACUUM for async execution.
     ///
-    /// Requires a `ConfirmationGesture` from the VacuumPrompt view.
-    /// Drops the cached read-only connection first (VACUUM needs exclusive access).
-    pub fn queue_vacuum(&mut self) {
+    /// Called internally by the Witch during startup when vacuum threshold is exceeded.
+    fn queue_vacuum(&mut self) {
         use crate::meta::maintenance::DbMaintenanceTask;
 
         self.queue_maintenance(DbMaintenanceTask::Vacuum);
+    }
+
+    /// Check if the database needs vacuuming based on freelist ratio.
+    ///
+    /// Returns true if the freelist ratio exceeds `self.vacuum_threshold`.
+    fn check_vacuum_needed(&self) -> bool {
+        if self.vacuum_threshold <= 0.0 {
+            return false;
+        }
+
+        let db_path = match config::get_db_path() {
+            Ok(p) if p.exists() => p,
+            _ => return false,
+        };
+
+        let conn = match rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+
+        let page_count: u64 = conn
+            .pragma_query_value(None, "page_count", |row| row.get(0))
+            .unwrap_or(0);
+        let freelist_count: u64 = conn
+            .pragma_query_value(None, "freelist_count", |row| row.get(0))
+            .unwrap_or(0);
+
+        if page_count == 0 {
+            return false;
+        }
+
+        let ratio = freelist_count as f64 / page_count as f64;
+        ratio > self.vacuum_threshold
     }
 
     // -------------------------------------------------------------------------
@@ -1913,8 +1992,6 @@ impl Witch {
             has_pending: self.has_pending(),
             is_initial_scanning: self.is_initial_scanning(),
             db_queue_depth: self.db_queue_depth(),
-            needs_schema_update: self.needs_schema_update(),
-            pending_schema_descriptions: self.pending_schema_descriptions(),
             transaction,
             handled_decision_kinds: self.handled_sources.clone(),
             is_external_fetch_active: self.is_external_fetch_active(),

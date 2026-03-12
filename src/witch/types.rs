@@ -40,15 +40,21 @@ pub trait ManagedThread {
 // Startup State
 // ============================================================================
 
-/// Witch startup state — whether She's operational or awaiting first-time setup.
+/// Witch startup state — lifecycle from boot to fully operational.
 ///
 /// When no database exists, the Witch boots into `AwaitingSetup` and idles
 /// until a client delivers the setup payload (root path). After setup
-/// completes, She transitions to `Ready` and begins normal operation.
+/// completes (or on normal startup with existing DB), She auto-detects
+/// maintenance needs (schema reconciliation, vacuum) and transitions
+/// through `Reconciling` / `Vacuuming` before reaching `Ready`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum WitchStartupState {
     /// No database — waiting for client to provide setup payload.
     AwaitingSetup,
+    /// Schema reconciliation auto-running.
+    Reconciling,
+    /// Database vacuum auto-running.
+    Vacuuming,
     /// Fully operational.
     #[default]
     Ready,
@@ -476,12 +482,6 @@ pub struct WitchStatus {
     pub is_initial_scanning: bool,
     /// Number of tasks queued in the db_thread write queue.
     pub db_queue_depth: u64,
-
-    // -- Schema state --
-    /// Whether the database schema needs updating.
-    pub needs_schema_update: bool,
-    /// Human-readable descriptions of pending schema changes.
-    pub pending_schema_descriptions: Vec<String>,
 
     // -- Transaction state --
     /// Active transaction snapshot, if any.

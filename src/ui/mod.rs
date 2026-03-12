@@ -66,8 +66,7 @@ pub mod widgets;
 // Re-export for convenience
 pub(crate) use active_view::{
     ActiveView, CanonicitySignalKind, ExitConfirmAction, ExitConfirmModalState,
-    SchemaUpdateAction, SchemaUpdatePhase, SchemaUpdateState, SuspendedView,
-    TagCanonicityClusters, VacuumAction, VacuumPhase, VacuumPromptState, ViewAction,
+    SuspendedView, TagCanonicityClusters, ViewAction,
 };
 use types::ProgressStatsUpdater;
 
@@ -118,11 +117,9 @@ pub(crate) struct App {
     /// Last lateral view the user was on. Used for returning after modal flows.
     pub(super) last_lateral_view: widgets::LateralView,
 
-    /// Database path, stored for startup flow (vacuum prompt needs it).
-    pub(super) db_path: std::path::PathBuf,
-
-    /// Vacuum threshold from config, stored for startup flow.
-    pub(super) vacuum_threshold: f64,
+    /// Whether startup maintenance (schema reconciliation, vacuum) has completed.
+    /// Set to true once WitchStartupState transitions to Ready.
+    startup_complete: bool,
 
     /// Receiver for typed Witch → UI notifications.
     notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
@@ -191,8 +188,7 @@ impl App {
             cached: CachedData::new(),
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Health,
-            db_path: std::path::PathBuf::new(),
-            vacuum_threshold: 0.0,
+            startup_complete: false,
             notice_rx,
             cached_status: Default::default(),
             cache_stale: false,
@@ -232,26 +228,7 @@ impl App {
 
         // Phase 1: borrow view, produce view action
         let view_action = match &mut self.view {
-            ActiveView::SchemaUpdate(s) => {
-                let a = match (s.phase, &action) {
-                    (SchemaUpdatePhase::Approval, InputAction::Confirm) => {
-                        SchemaUpdateAction::Approve
-                    }
-                    (SchemaUpdatePhase::Approval, InputAction::Cancel) => {
-                        SchemaUpdateAction::Cancel
-                    }
-                    _ => SchemaUpdateAction::None,
-                };
-                ViewAction::SchemaUpdate(a)
-            }
-            ActiveView::VacuumPrompt(s) => {
-                let a = match (s.phase, &action) {
-                    (VacuumPhase::Prompt, InputAction::Confirm) => VacuumAction::Compact,
-                    (VacuumPhase::Prompt, InputAction::Cancel) => VacuumAction::Skip,
-                    _ => VacuumAction::None,
-                };
-                ViewAction::VacuumPrompt(a)
-            }
+            ActiveView::StartupMaintenance => ViewAction::None,
             ActiveView::Progress { .. } => ViewAction::None,
             ActiveView::ProgressiveWork(_) => ViewAction::None,
             ActiveView::TagCanonicityLoading { .. } => ViewAction::None,
@@ -525,63 +502,6 @@ impl App {
         };
     }
 
-    /// After migrations complete, check if vacuum is needed, otherwise complete startup.
-    pub(super) fn advance_past_migrations(
-        &mut self,
-        db_path: &std::path::Path,
-        vacuum_threshold: f64,
-    ) {
-        if let Some(prompt_state) = Self::check_vacuum_needed(db_path, vacuum_threshold) {
-            self.view = ActiveView::VacuumPrompt(prompt_state);
-        } else {
-            self.complete_startup();
-        }
-    }
-
-    /// Check if the database needs vacuuming. Returns Some(state) if so.
-    fn check_vacuum_needed(db_path: &std::path::Path, threshold: f64) -> Option<VacuumPromptState> {
-        if threshold <= 0.0 || !db_path.exists() {
-            return None;
-        }
-
-        let conn = rusqlite::Connection::open_with_flags(
-            db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .ok()?;
-
-        let page_count: u64 = conn
-            .pragma_query_value(None, "page_count", |row| row.get(0))
-            .ok()?;
-        let freelist_count: u64 = conn
-            .pragma_query_value(None, "freelist_count", |row| row.get(0))
-            .ok()?;
-        let page_size: u64 = conn
-            .pragma_query_value(None, "page_size", |row| row.get(0))
-            .ok()?;
-
-        drop(conn);
-
-        if page_count == 0 {
-            return None;
-        }
-
-        let ratio = freelist_count as f64 / page_count as f64;
-        if ratio <= threshold {
-            return None;
-        }
-
-        let pct = (ratio * 100.0).round() as u64;
-        let free_bytes = freelist_count * page_size;
-        let free_mb = free_bytes as f64 / (1024.0 * 1024.0);
-
-        Some(VacuumPromptState {
-            pct,
-            free_mb,
-            db_path: db_path.to_path_buf(),
-            phase: VacuumPhase::Prompt,
-        })
-    }
 }
 
 // ============================================================================
@@ -665,26 +585,21 @@ pub fn run_tui(
         eprintln!("{:#}", e);
         std::process::exit(1);
     }
-    let vacuum_threshold = config.opinions.startup.vacuum_threshold;
     let shared_config = config.into_shared();
 
-    let db_path = crate::config::get_db_path()?;
-
     let mut app = App::new(shared_config, witch, cache, notice_rx, art_picker);
-    app.vacuum_threshold = vacuum_threshold;
-    app.db_path = db_path.clone();
 
-    // Determine initial view based on startup state
+    // Check if the Witch is already Ready (no startup maintenance needed)
+    // or if she's running maintenance (Reconciling/Vacuuming)
     {
         use crate::witch::WitchClient;
         let status = app.witch.witch_status();
-        if status.needs_schema_update {
-            app.view = ActiveView::SchemaUpdate(SchemaUpdateState {
-                descriptions: status.pending_schema_descriptions,
-                phase: SchemaUpdatePhase::Approval,
-            });
+        if status.startup_state == crate::witch::WitchStartupState::Ready {
+            app.startup_complete = true;
+            app.complete_startup();
         } else {
-            app.advance_past_migrations(&db_path, vacuum_threshold);
+            // Witch is in Reconciling or Vacuuming — show maintenance view
+            app.view = ActiveView::StartupMaintenance;
         }
     }
 
@@ -721,19 +636,14 @@ fn run_app<B: ratatui::backend::Backend>(
             app.handle_input(InputAction::Cancel);
         }
 
-        // Tick startup views first (they have their own Witch tick calls)
-        if matches!(app.view, ActiveView::SchemaUpdate(_)) {
-            app.tick_schema_update();
-            // If tick changed the view away from SchemaUpdate, skip the rest of
-            // this frame to let the new view render first.
-            if !matches!(app.view, ActiveView::SchemaUpdate(_)) {
-                terminal.draw(|f| render(f, app))?;
-                continue;
-            }
-        }
-        if matches!(app.view, ActiveView::VacuumPrompt(_)) {
-            app.tick_vacuum_prompt();
-            if !matches!(app.view, ActiveView::VacuumPrompt(_)) {
+        // Observe startup maintenance completion (Witch auto-runs reconciliation/vacuum)
+        if !app.startup_complete {
+            use crate::witch::WitchClient;
+            let state = app.witch.witch_status().startup_state;
+            if state == crate::witch::WitchStartupState::Ready {
+                app.startup_complete = true;
+                app.cache.reconnect_db();
+                app.complete_startup();
                 terminal.draw(|f| render(f, app))?;
                 continue;
             }

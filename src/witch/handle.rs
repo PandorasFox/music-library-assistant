@@ -63,8 +63,10 @@ pub(super) enum HandleCommand {
     },
 
     // -- Maintenance / lifecycle --
-    QueueSchemaReconciliation,
-    QueueVacuum,
+    ValidateConfig {
+        config: crate::config::Config,
+        reply: mpsc::Sender<Result<(), String>>,
+    },
     LatchReadOnlyForSafety { reason: String },
     SetSharedConfig { shared: SharedConfig },
     StartWatching {
@@ -179,12 +181,11 @@ impl WitchClient for WitchHandle {
         self.send(HandleCommand::RequestReleasePacking);
     }
 
-    fn queue_schema_reconciliation(&mut self) {
-        self.send(HandleCommand::QueueSchemaReconciliation);
-    }
-
-    fn queue_vacuum(&mut self) {
-        self.send(HandleCommand::QueueVacuum);
+    fn validate_config(&self, config: &crate::config::Config) -> Result<(), String> {
+        self.send_recv(|reply| HandleCommand::ValidateConfig {
+            config: config.clone(),
+            reply,
+        })
     }
 
     fn latch_read_only_for_safety(&mut self, reason: String) {

@@ -15,97 +15,10 @@ use crate::ui::{
     compound_split_v2,
     progress_screen::{ProgressPhase, ProgressScreen},
     progressive_worker::{OnComplete, ProgressiveWorkerState, WorkItem, WorkSummary},
-    startup, transaction_review, ActiveView, SchemaUpdatePhase, VacuumPhase,
+    startup, transaction_review, ActiveView,
 };
 
 impl App {
-    /// Tick the schema update view.
-    ///
-    /// When phase is Running: check if reconciliation has completed.
-    /// When complete: show completion briefly, then advance.
-    pub(super) fn tick_schema_update(&mut self) {
-        let phase = match self.view {
-            ActiveView::SchemaUpdate(ref state) => state.phase,
-            _ => return,
-        };
-
-        match phase {
-            SchemaUpdatePhase::Running => {
-                // Check if reconciliation has completed
-                if !self.witch.witch_status().has_pending {
-                    // Reconciliation complete
-                    if let ActiveView::SchemaUpdate(ref mut state) = self.view {
-                        state.phase = SchemaUpdatePhase::Complete;
-                    }
-                }
-            }
-            SchemaUpdatePhase::Complete => {
-                // Reconnect cache thread's DB so it picks up new schema
-                self.cache.reconnect_db();
-
-                // Advance past schema update
-                let db_path = self.db_path.clone();
-                let threshold = self.vacuum_threshold;
-                self.advance_past_migrations(&db_path, threshold);
-            }
-            SchemaUpdatePhase::Approval => {
-                // Waiting for user input, nothing to tick
-            }
-        }
-    }
-
-    /// Tick the vacuum prompt view.
-    ///
-    /// When phase is Compacting: tick the Witch (vacuum runs async on rayon),
-    /// then transition to Complete when done.
-    /// When Complete: advance to complete_startup.
-    pub(super) fn tick_vacuum_prompt(&mut self) {
-        let phase = match self.view {
-            ActiveView::VacuumPrompt(ref state) => state.phase,
-            _ => return,
-        };
-
-        match phase {
-            VacuumPhase::Compacting => {
-                // Check if the async vacuum task has completed
-                if !self.witch.witch_status().has_pending {
-                    // Vacuum complete — re-query to show reclaimed amount
-                    let db_path = match self.view {
-                        ActiveView::VacuumPrompt(ref state) => state.db_path.clone(),
-                        _ => return,
-                    };
-                    let new_size_mb = Self::query_db_size_mb(&db_path).unwrap_or(0.0);
-                    if let ActiveView::VacuumPrompt(ref mut state) = self.view {
-                        state.phase = VacuumPhase::Complete { new_size_mb };
-                    }
-                }
-            }
-            VacuumPhase::Complete { .. } => {
-                // Advance to normal startup
-                self.complete_startup();
-            }
-            VacuumPhase::Prompt => {
-                // Waiting for user input
-            }
-        }
-    }
-
-    /// Query the current database size in MB.
-    fn query_db_size_mb(db_path: &std::path::Path) -> Option<f64> {
-        let conn = rusqlite::Connection::open_with_flags(
-            db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .ok()?;
-        let page_count: u64 = conn
-            .pragma_query_value(None, "page_count", |row| row.get(0))
-            .ok()?;
-        let page_size: u64 = conn
-            .pragma_query_value(None, "page_size", |row| row.get(0))
-            .ok()?;
-        Some((page_count * page_size) as f64 / (1024.0 * 1024.0))
-    }
-
     /// Tick the progress screen and check for completion.
     ///
     /// Called each frame while the active view is Progress. Handles all progress phases:

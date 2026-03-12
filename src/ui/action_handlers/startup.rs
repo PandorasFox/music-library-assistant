@@ -1,59 +1,12 @@
 //! Startup and lifecycle action handlers.
 //!
-//! Handles schema update approval, vacuum prompt, intake confirmation,
-//! and exit confirmation actions.
+//! Handles intake confirmation and exit confirmation actions.
 
 use super::super::App;
 use super::witness;
 use super::HandleAction;
 use crate::ui::active_view::ActiveView;
 use crate::witch::WitchClient;
-
-impl HandleAction for super::super::SchemaUpdateAction {
-    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
-        use super::super::SchemaUpdatePhase;
-        match self {
-            super::super::SchemaUpdateAction::None => {}
-            super::super::SchemaUpdateAction::Approve => {
-                if let (ActiveView::SchemaUpdate(ref mut state), Some(gesture)) =
-                    (&mut app.view, witness)
-                {
-                    if state.phase == SchemaUpdatePhase::Approval {
-                        let _ = gesture; // TUI-side proof of operator confirmation
-                        app.witch.queue_schema_reconciliation();
-                        state.phase = SchemaUpdatePhase::Running;
-                    }
-                }
-            }
-            super::super::SchemaUpdateAction::Cancel => {
-                app.should_quit = true;
-            }
-        }
-    }
-}
-
-impl HandleAction for super::super::VacuumAction {
-    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
-        use super::super::VacuumPhase;
-        match self {
-            super::super::VacuumAction::None => {}
-            super::super::VacuumAction::Compact => {
-                if let (ActiveView::VacuumPrompt(ref mut state), Some(gesture)) =
-                    (&mut app.view, witness)
-                {
-                    if state.phase == VacuumPhase::Prompt {
-                        let _ = gesture; // TUI-side proof of operator confirmation
-                        app.witch.queue_vacuum();
-                        state.phase = VacuumPhase::Compacting;
-                    }
-                }
-            }
-            super::super::VacuumAction::Skip => {
-                app.complete_startup();
-            }
-        }
-    }
-}
 
 impl HandleAction for super::super::ExitConfirmAction {
     fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {

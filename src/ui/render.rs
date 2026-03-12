@@ -131,11 +131,8 @@ fn render_header(f: &mut Frame, area: ratatui::layout::Rect, view: &ActiveView) 
 
 fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Rect) {
     match app.view {
-        ActiveView::SchemaUpdate(ref state) => {
-            startup::migrations::render_schema_update_view(f, area, state);
-        }
-        ActiveView::VacuumPrompt(ref state) => {
-            startup::vacuum::render_vacuum_view(f, area, state);
+        ActiveView::StartupMaintenance => {
+            startup::render_startup_maintenance(f, area, app);
         }
         ActiveView::Progress { .. } => {
             // Never reached - handled separately in render_app() before this function

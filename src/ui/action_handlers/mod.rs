@@ -62,8 +62,6 @@ impl App {
 
         match action {
             ViewAction::None => {}
-            ViewAction::SchemaUpdate(a) => a.handle(self, witness.as_ref()),
-            ViewAction::VacuumPrompt(a) => a.handle(self, witness.as_ref()),
             ViewAction::ConfigEditor(a) => a.handle(self, witness.as_ref()),
             ViewAction::Insights(a) => a.handle(self, witness.as_ref()),
             ViewAction::CorpusBrowser(a) => a.handle(self, witness.as_ref()),
@@ -431,6 +429,12 @@ impl HandleAction for super::config_editor::ConfigEditorAction {
 
                 if let Some((original_kdl, old_config, new_config)) = mutation_data {
                     let Some(g) = gesture else { return };
+
+                    // Validate config through the Witch before staging
+                    if let Err(e) = app.witch.validate_config(&new_config) {
+                        app.status_message = Some(format!("Config rejected: {}", e));
+                        return;
+                    }
 
                     let mutation = Mutation::ApplyConfigEdits(Box::new(ApplyConfigEditsMutation {
                         original_kdl,

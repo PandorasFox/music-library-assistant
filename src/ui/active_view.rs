@@ -4,8 +4,6 @@
 //! Each variant carries its own state, so the type system guarantees that
 //! mode and state are always consistent.
 
-use std::path::PathBuf;
-
 use crate::ui::{
     compound_split_v2, config_editor, corrupt_file_modal, deploy_modal, directory_cluster_modal,
     disc_extraction_modal, external_match_modal, external_match_view, eye::Eye,
@@ -24,9 +22,8 @@ use crate::witch::cache_thread::DbQuery;
 /// The active view and its state. One variant is active at a time.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ActiveView {
-    // Startup views (before watcher starts)
-    SchemaUpdate(SchemaUpdateState),
-    VacuumPrompt(VacuumPromptState),
+    // Startup maintenance (non-interactive, Witch auto-runs schema reconciliation / vacuum)
+    StartupMaintenance,
 
     // Lateral view ring
     ConfigEditor(config_editor::ConfigEditorState),
@@ -107,8 +104,7 @@ impl ActiveView {
     /// Get a header suffix for the title bar, if applicable.
     pub(crate) fn header_suffix(&self) -> Option<&'static str> {
         match self {
-            Self::SchemaUpdate(_) => Some("Schema Update"),
-            Self::VacuumPrompt(_) => Some("Database Compaction"),
+            Self::StartupMaintenance => Some("Startup"),
             Self::ConfigEditor(_) => Some("Config Editor"),
             Self::Insights(_) => Some("Corpus Insights"),
             Self::History(_) => Some("Edit History"),
@@ -153,7 +149,7 @@ impl ActiveView {
     /// Views without file listings return None.
     pub(crate) fn selected_path(&self) -> Option<&str> {
         match self {
-            Self::SchemaUpdate(_) | Self::VacuumPrompt(_) => None,
+            Self::StartupMaintenance => None,
             Self::CorpusBrowser(browser) => browser.selected_path().and_then(|p| p.to_str()),
             Self::TagCanonicityResolution { state, .. } => state.selected_path(),
             Self::CompoundTagSplit { state, .. } => state.selected_path(),
@@ -224,8 +220,6 @@ pub(crate) enum SuspendedView {
 /// consumed by Phase 2 (dispatch on &mut self).
 pub(crate) enum ViewAction {
     None,
-    SchemaUpdate(SchemaUpdateAction),
-    VacuumPrompt(VacuumAction),
     ConfigEditor(config_editor::ConfigEditorAction),
     Insights(insights_view::InsightsAction),
     CorpusBrowser(tree_browser::TreeBrowserAction),
@@ -357,62 +351,3 @@ impl TagCanonicityClusters {
     }
 }
 
-// ============================================================================
-// Startup View State Types
-// ============================================================================
-
-/// Phase of the migration approval flow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SchemaUpdatePhase {
-    /// Showing approval dialog, waiting for user input.
-    Approval,
-    /// Migrations are running via Witch.
-    Running,
-    /// All migrations complete, brief display before advancing.
-    Complete,
-}
-
-/// State for the migration approval startup view.
-pub(crate) struct SchemaUpdateState {
-    /// Human-readable descriptions of pending migrations.
-    pub descriptions: Vec<String>,
-    /// Current phase of the flow.
-    pub phase: SchemaUpdatePhase,
-}
-
-/// Action from the migration approval view.
-pub(crate) enum SchemaUpdateAction {
-    None,
-    Approve,
-    Cancel,
-}
-
-/// Phase of the vacuum prompt flow.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum VacuumPhase {
-    /// Showing prompt, waiting for user input.
-    Prompt,
-    /// VACUUM is executing.
-    Compacting,
-    /// Compaction complete, showing results.
-    Complete { new_size_mb: f64 },
-}
-
-/// State for the vacuum prompt startup view.
-pub(crate) struct VacuumPromptState {
-    /// Percentage of reclaimable space.
-    pub pct: u64,
-    /// Reclaimable space in MB.
-    pub free_mb: f64,
-    /// Path to database file (for VACUUM execution).
-    pub db_path: PathBuf,
-    /// Current phase of the flow.
-    pub phase: VacuumPhase,
-}
-
-/// Action from the vacuum prompt view.
-pub(crate) enum VacuumAction {
-    None,
-    Compact,
-    Skip,
-}

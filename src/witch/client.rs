@@ -102,11 +102,10 @@ pub trait WitchClient {
     // Lifecycle commands
     // ====================================================================
 
-    /// Queue schema reconciliation for execution.
-    fn queue_schema_reconciliation(&mut self);
-
-    /// Queue a VACUUM operation on the database.
-    fn queue_vacuum(&mut self);
+    /// Validate a config blob before staging it as a mutation.
+    ///
+    /// Returns Ok(()) if valid, Err(reason) if rejected.
+    fn validate_config(&self, config: &crate::config::Config) -> Result<(), String>;
 
     /// Latch the Witch into read-only mode for safety.
     fn latch_read_only_for_safety(&mut self, reason: String);
@@ -179,12 +178,8 @@ impl WitchClient for super::Witch {
         self.request_release_packing()
     }
 
-    fn queue_schema_reconciliation(&mut self) {
-        self.queue_schema_reconciliation()
-    }
-
-    fn queue_vacuum(&mut self) {
-        self.queue_vacuum()
+    fn validate_config(&self, config: &crate::config::Config) -> Result<(), String> {
+        config.validate().map_err(|e| format!("{:#}", e))
     }
 
     fn latch_read_only_for_safety(&mut self, reason: String) {

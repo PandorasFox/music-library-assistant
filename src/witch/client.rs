@@ -49,10 +49,15 @@ pub trait WitchClient {
     // Setup commands
     // ====================================================================
 
-    /// Complete first-time setup: write config, create dirs + DB, transition to Ready.
+    /// Complete first-time setup: write config, create dirs + DB, create first user, transition to Ready.
     ///
-    /// Called by the client after the operator selects an archive root path.
-    fn complete_setup(&mut self, root: PathBuf) -> Result<(), String>;
+    /// Called by the client after the operator selects an archive root path and
+    /// creates the first user account. `first_user` is `(username, password_hash)`.
+    fn complete_setup(
+        &mut self,
+        root: PathBuf,
+        first_user: Option<(String, String)>,
+    ) -> Result<(), String>;
 
     // ====================================================================
     // Transaction commands
@@ -126,8 +131,12 @@ impl WitchClient for super::Witch {
         self.publish_status()
     }
 
-    fn complete_setup(&mut self, root: PathBuf) -> Result<(), String> {
-        self.complete_setup(root)
+    fn complete_setup(
+        &mut self,
+        root: PathBuf,
+        first_user: Option<(String, String)>,
+    ) -> Result<(), String> {
+        self.complete_setup_impl(root, first_user)
     }
 
     fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError> {

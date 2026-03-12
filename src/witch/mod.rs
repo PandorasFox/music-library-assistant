@@ -27,6 +27,7 @@ use crate::meta::computations::{analysis, derivation, Computation};
 use crate::meta::mutations::Mutation;
 
 // Module declarations
+pub(crate) mod auth_thread;
 pub(crate) mod cache_thread;
 mod client;
 mod execution;
@@ -295,6 +296,10 @@ pub struct Witch {
     /// Spawned at construction time — always present.
     fs_watcher: fs_watcher::FsWatcherHandle,
 
+    /// Handle to the auth thread for lifecycle management.
+    /// Spawned in `run()`, before the UI thread.
+    auth_thread_handle: Option<auth_thread::AuthThreadHandle>,
+
     /// Handle for the autonomous external fetch thread (AcoustID lookups).
     /// None when no API key is configured or shared_config not yet available.
     external_fetch: Option<external_fetch::ExternalFetchHandle>,
@@ -397,6 +402,7 @@ impl Witch {
             watcher_derivation_needed: false,
             pending_observed_images: Vec::new(),
             fs_watcher: fs_watcher_handle,
+            auth_thread_handle: None, // Spawned in run(), not new()
             external_fetch: None,
             fetch_progress: None,
         };
@@ -437,7 +443,7 @@ impl Witch {
     /// `run_loop()` on this thread. Does not return until shutdown.
     pub fn run(
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
-        ui_factory: impl FnOnce(WitchHandle, cache_thread::CacheHandle, std::sync::mpsc::Receiver<WitchNotice>) + Send + 'static,
+        ui_factory: impl FnOnce(WitchHandle, cache_thread::CacheHandle, auth_thread::AuthHandle, std::sync::mpsc::Receiver<WitchNotice>) + Send + 'static,
     ) {
         // Detect startup state
         let db_path = config::get_db_path().expect("XDG data dir");
@@ -478,6 +484,14 @@ impl Witch {
             }
         }
 
+        // Spawn auth thread BEFORE UI — auth must be available for login flow.
+        // If DB exists, auth thread opens a read-only connection immediately.
+        // If no DB (AwaitingSetup), auth thread starts in no-DB mode and opens
+        // its connection when notified via DbReady after first-time setup.
+        let auth_db_path = if has_db { Some(db_path) } else { None };
+        let (auth_handle, auth_witch_handle) = auth_thread::spawn(auth_db_path);
+        she.auth_thread_handle = Some(auth_witch_handle);
+
         // Shared state: Witch writes, handle reads
         let status = std::sync::Arc::new(std::sync::RwLock::new(she.publish_status()));
 
@@ -489,7 +503,7 @@ impl Witch {
         // Spawn the UI as a client thread
         let ui_thread = std::thread::Builder::new()
             .name("tui".into())
-            .spawn(move || ui_factory(handle, cache_handle, notice_rx))
+            .spawn(move || ui_factory(handle, cache_handle, auth_handle, notice_rx))
             .expect("Failed to spawn UI thread");
 
         // Witch owns the main thread
@@ -594,8 +608,12 @@ impl Witch {
             HandleCommand::RequestReleasePacking => {
                 self.request_release_packing();
             }
-            HandleCommand::CompleteSetup { root, reply } => {
-                let _ = reply.send(self.complete_setup(root));
+            HandleCommand::CompleteSetup {
+                root,
+                first_user,
+                reply,
+            } => {
+                let _ = reply.send(self.complete_setup_impl(root, first_user));
             }
             HandleCommand::ValidateConfig { config, reply } => {
                 let _ = reply.send(config.validate().map_err(|e| format!("{:#}", e)));
@@ -619,10 +637,15 @@ impl Witch {
     // First-Time Setup
     // -------------------------------------------------------------------------
 
-    /// Complete first-time setup: write config, create dirs + DB, transition to Ready.
+    /// Complete first-time setup: write config, create dirs + DB, create first user, transition to Ready.
     ///
-    /// Called when a client sends CompleteSetup after the operator picks an archive root.
-    fn complete_setup(&mut self, root: std::path::PathBuf) -> Result<(), String> {
+    /// Called when a client sends CompleteSetup after the operator picks an archive root
+    /// and provides first-user credentials. `first_user` is `(username, password_hash)`.
+    fn complete_setup_impl(
+        &mut self,
+        root: std::path::PathBuf,
+        first_user: Option<(String, String)>,
+    ) -> Result<(), String> {
         use crate::ui::startup::first_time_setup::FirstTimeSetupToken;
 
         if !config::config_exists() {
@@ -655,10 +678,26 @@ impl Witch {
         let token = FirstTimeSetupToken::new();
         let db = crate::db::create_database(&db_path, &token)
             .map_err(|e| format!("Failed to create database: {}", e))?;
+
+        // Create the first user if credentials were provided
+        if let Some((username, password_hash)) = first_user {
+            db.create_user(&username, &password_hash)
+                .map_err(|e| format!("Failed to create first user: {}", e))?;
+            crate::logging::log_general(format!(
+                "[WITCH] First user '{}' created",
+                username
+            ));
+        }
+
         drop(db);
 
         // Tell cache thread to reconnect to the new DB
         self.cache_thread_handle.reconnect_db();
+
+        // Notify auth thread that DB is now available
+        if let Some(ref auth_handle) = self.auth_thread_handle {
+            auth_handle.notify_db_ready();
+        }
 
         // Apply opinions from the loaded config
         self.force_check_all_files_at_startup =

@@ -638,6 +638,19 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                                     }
                                 }
                             }
+                            Opinions::KDL_SESSION_LIFETIME => {
+                                if let Some(entry) = child.entries().first() {
+                                    if let Some(s) = entry.value().as_string() {
+                                        if s == "close" {
+                                            config.opinions.session_lifetime_days = None;
+                                        }
+                                    } else if let Some(val) = entry.value().as_i64() {
+                                        if val > 0 {
+                                            config.opinions.session_lifetime_days = Some(val as u64);
+                                        }
+                                    }
+                                }
+                            }
                             Opinions::KDL_BLOCK_EXTERNAL_MATCHING => {
                                 parse_external_matching_opinions(
                                     child,

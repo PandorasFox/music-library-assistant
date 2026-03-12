@@ -44,6 +44,7 @@ pub const MM_VERSION: &str = "beta 9";
 /// Full application title with version
 pub const MM_TITLE: &str = "Music Magic (mm beta 9)";
 
+mod auth;
 mod config;
 mod corpus;
 mod db;
@@ -69,8 +70,8 @@ fn main() -> Result<()> {
 
     // Witch owns the main thread. TUI is spawned as a client thread.
     // The Witch detects startup state (AwaitingSetup vs Ready) internally.
-    witch::Witch::run(Some(log_rx), move |handle, cache, notices| {
-        if let Err(e) = ui::run_tui(handle, cache, notices) {
+    witch::Witch::run(Some(log_rx), move |handle, cache, auth, notices| {
+        if let Err(e) = ui::run_tui(handle, cache, auth, notices) {
             eprintln!("TUI error: {:?}", e);
         }
     });

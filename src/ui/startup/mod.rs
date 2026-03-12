@@ -16,6 +16,7 @@
 
 pub(crate) mod first_time_setup;
 pub mod intake_confirmation;
+pub mod login;
 pub mod migrations;
 pub mod vacuum;
 

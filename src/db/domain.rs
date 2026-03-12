@@ -984,6 +984,24 @@ define_domain_query! {
 }
 
 // ============================================================================
+// Auth Queries
+// ============================================================================
+
+/// System auth state: user count for NeedsSetup vs NeedsAuth determination.
+#[derive(Default, Serialize, Clone, Debug)]
+pub struct AuthStateData {
+    pub user_count: i64,
+}
+
+define_domain_query! {
+    /// System auth state: user count for NeedsSetup vs NeedsAuth determination.
+    GetAuthState => AuthStateData, uncached, |db| {
+        let count = db.user_count().unwrap_or(0);
+        AuthStateData { user_count: count }
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1379,5 +1397,23 @@ mod tests {
         serde_json::to_string(&GetMissingTagAudioFiles.execute(&read_db)).unwrap();
         serde_json::to_string(&GetSessionEditDetail { session_id: "x".to_string() }.execute(&read_db)).unwrap();
         serde_json::to_string(&GetCurrentTagValues { queries: vec![] }.execute(&read_db)).unwrap();
+        serde_json::to_string(&GetAuthState.execute(&read_db)).unwrap();
+    }
+
+    #[test]
+    fn get_auth_state_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetAuthState.execute(&read_db);
+        assert_eq!(result.user_count, 0);
+    }
+
+    #[test]
+    fn get_auth_state_with_users() {
+        let db = test_db();
+        db.create_user("alice", "hash").unwrap();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetAuthState.execute(&read_db);
+        assert_eq!(result.user_count, 1);
     }
 }

@@ -537,6 +537,7 @@ fn render(f: &mut Frame, app: &mut App) {
 pub fn run_tui(
     mut witch: crate::witch::WitchHandle,
     cache: crate::witch::cache_thread::CacheHandle,
+    auth: crate::witch::auth_thread::AuthHandle,
     notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
 ) -> Result<()> {
     crate::logging::log_general("=== MM TUI startup ===");
@@ -574,7 +575,27 @@ pub fn run_tui(
                 startup::run_directory_picker(&mut terminal)?
             };
 
-            witch.complete_setup(root).map_err(|e| anyhow::anyhow!(e))?;
+            // Collect first-user credentials
+            let first_user = startup::first_time_setup::run_create_account(&mut terminal)?;
+
+            witch
+                .complete_setup(root, Some(first_user))
+                .map_err(|e| anyhow::anyhow!(e))?;
+
+            // Notify auth thread that DB is now available (it opened its connection)
+            auth.notify_db_ready();
+        }
+    }
+
+    // Auth gate: require login before proceeding to the main app
+    {
+        use crate::witch::auth_thread::SystemAuthState;
+
+        let auth_state = auth.status();
+        if auth_state == SystemAuthState::NeedsAuth {
+            let session = startup::login::run_login_screen(&mut terminal, &auth)?;
+            // Session token obtained — stored for future per-session transaction gating
+            let _ = session;
         }
     }
 

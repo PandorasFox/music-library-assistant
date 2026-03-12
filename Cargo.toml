@@ -77,6 +77,12 @@ uuid = { version = "1.0", features = ["v4"] }
 # Random number generation
 rand = "0.8"
 
+# Password hashing (Argon2id)
+argon2 = "0.5"
+
+# Lock-free atomic Arc swapping (session table)
+arc-swap = "1"
+
 # HTTP client (blocking, minimal — for AcoustID API)
 ureq = "2"
 serde_json = "1"

@@ -6,6 +6,7 @@
 //! - `metadata`: App metadata, tag canonicalization
 //! - `library_scan`: Library scanning state
 
+pub mod auth;
 pub mod external;
 pub mod files;
 mod health;
@@ -676,5 +677,14 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_image_info_exists_batch(inodes: &[i64]) -> Result<std::collections::HashSet<i64>>;
         fn get_all_corpus_images() -> Result<Vec<files::CorpusImageEntry>>;
         fn get_any_audio_sibling_in_directory(corpus_dir: &str) -> Result<Option<(i64, String)>>;
+    }
+
+    // =========================================================================
+    // Auth Queries
+    // =========================================================================
+
+    delegate_read! {
+        fn user_count() -> Result<i64>;
+        fn get_user_by_username(username: &str) -> Result<Option<auth::UserRow>>;
     }
 }

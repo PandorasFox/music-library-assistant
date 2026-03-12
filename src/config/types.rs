@@ -46,6 +46,9 @@ pub struct Opinions {
     /// Used when inotify is unavailable (watch limit hit, creation failure).
     /// Default: 900 (15 minutes).
     pub watcher_poll_interval_secs: u64,
+    /// Session lifetime in days. None = sessions expire on process exit ("close"),
+    /// Some(n) = sessions expire after n days. Default: Some(30).
+    pub session_lifetime_days: Option<u64>,
 }
 
 /// KDL field names — single source of truth for parse/edit/source-detection.
@@ -55,6 +58,7 @@ impl Opinions {
     pub const KDL_LEAVE_TXN_OPEN: &str = "leave-transactions-open";
 
     pub const KDL_WATCHER_POLL_INTERVAL: &str = "watcher-poll-interval-secs";
+    pub const KDL_SESSION_LIFETIME: &str = "session-lifetime";
 
     // Sub-block names
     pub const KDL_BLOCK_STARTUP: &str = "startup";
@@ -656,6 +660,7 @@ impl Default for Opinions {
             album_art: AlbumArtOpinions::default(),
             debug: DebugOpinions::default(),
             watcher_poll_interval_secs: 900,
+            session_lifetime_days: Some(30),
         }
     }
 }

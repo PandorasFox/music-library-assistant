@@ -286,6 +286,18 @@ pub fn schema_inventory() -> Vec<TableEntry> {
     });
 
     tables.push(TableEntry {
+        name: "users",
+        kind: TableKind::Core,
+        create_sql: "CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        )",
+        index_sql: &[],
+    });
+
+    tables.push(TableEntry {
         name: "external_retry",
         kind: TableKind::Core,
         create_sql: "CREATE TABLE IF NOT EXISTS external_retry (

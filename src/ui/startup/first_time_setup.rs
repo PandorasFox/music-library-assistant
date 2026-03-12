@@ -188,7 +188,7 @@ fn render_directory_picker(f: &mut ratatui::Frame, state: &mut DirectoryPickerSt
     let outer_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(" First-Time Setup \u{2014} Step 1 of 2 ")
+        .title(" First-Time Setup \u{2014} Step 1 of 3 ")
         .title_alignment(Alignment::Center);
 
     let inner = outer_block.inner(area);
@@ -420,4 +420,309 @@ pub fn handle_db_setup_dialog<B: Backend>(
     }
 
     Ok(())
+}
+
+// ============================================================================
+// Step 2: Create First Account
+// ============================================================================
+
+/// Focus state for the account creation form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccountField {
+    Username,
+    Password,
+    Confirm,
+}
+
+/// State for the account creation step.
+struct CreateAccountState {
+    username: TextInputState,
+    password: TextInputState,
+    confirm: TextInputState,
+    focused: AccountField,
+    error_message: Option<String>,
+}
+
+impl CreateAccountState {
+    fn new() -> Self {
+        let mut username = TextInputState::new();
+        username.focused = true;
+        Self {
+            username,
+            password: TextInputState::new(),
+            confirm: TextInputState::new(),
+            focused: AccountField::Username,
+            error_message: None,
+        }
+    }
+
+    fn focus_field(&mut self, field: AccountField) {
+        self.username.focused = false;
+        self.password.focused = false;
+        self.confirm.focused = false;
+        match field {
+            AccountField::Username => self.username.focused = true,
+            AccountField::Password => self.password.focused = true,
+            AccountField::Confirm => self.confirm.focused = true,
+        }
+        self.focused = field;
+    }
+
+    fn focus_next(&mut self) {
+        let next = match self.focused {
+            AccountField::Username => AccountField::Password,
+            AccountField::Password => AccountField::Confirm,
+            AccountField::Confirm => AccountField::Username,
+        };
+        self.focus_field(next);
+    }
+
+    fn focus_prev(&mut self) {
+        let prev = match self.focused {
+            AccountField::Username => AccountField::Confirm,
+            AccountField::Password => AccountField::Username,
+            AccountField::Confirm => AccountField::Password,
+        };
+        self.focus_field(prev);
+    }
+}
+
+/// Run the "Create Account" step of first-time setup.
+///
+/// Returns `(username, password_hash)` on success.
+pub fn run_create_account<B: Backend>(
+    terminal: &mut Terminal<B>,
+) -> Result<(String, String)> {
+    let mut state = CreateAccountState::new();
+
+    loop {
+        terminal.draw(|f| render_create_account(f, &state))?;
+
+        if let Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Tab => {
+                    state.focus_next();
+                    state.error_message = None;
+                }
+                KeyCode::BackTab => {
+                    state.focus_prev();
+                    state.error_message = None;
+                }
+                KeyCode::Down => {
+                    state.focus_next();
+                    state.error_message = None;
+                }
+                KeyCode::Up => {
+                    state.focus_prev();
+                    state.error_message = None;
+                }
+                KeyCode::Enter => {
+                    // Validate and submit
+                    let username = state.username.value().trim().to_string();
+                    let password = state.password.value().to_string();
+                    let confirm = state.confirm.value().to_string();
+
+                    if username.is_empty() {
+                        state.error_message = Some("Username cannot be empty".to_string());
+                        state.focus_field(AccountField::Username);
+                    } else if password.is_empty() {
+                        state.error_message = Some("Password cannot be empty".to_string());
+                        state.focus_field(AccountField::Password);
+                    } else if password != confirm {
+                        state.error_message = Some("Passwords do not match".to_string());
+                        state.confirm.clear();
+                        state.focus_field(AccountField::Confirm);
+                    } else {
+                        // Hash password and return
+                        match crate::auth::hash_password(&password) {
+                            Ok(hash) => return Ok((username, hash)),
+                            Err(e) => {
+                                state.error_message =
+                                    Some(format!("Failed to hash password: {}", e));
+                            }
+                        }
+                    }
+                }
+                KeyCode::Esc => {
+                    return Err(anyhow::anyhow!("Setup cancelled by user"));
+                }
+                _ => {
+                    let action = input::map_key(key);
+                    match state.focused {
+                        AccountField::Username => {
+                            state.username.handle_input(&action);
+                        }
+                        AccountField::Password => {
+                            state.password.handle_input(&action);
+                        }
+                        AccountField::Confirm => {
+                            state.confirm.handle_input(&action);
+                        }
+                    }
+                    state.error_message = None;
+                }
+            }
+        }
+    }
+}
+
+fn render_create_account(f: &mut ratatui::Frame, state: &CreateAccountState) {
+    let area = f.area();
+
+    let outer_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" First-Time Setup \u{2014} Step 2 of 3 ")
+        .title_alignment(Alignment::Center);
+
+    let inner = outer_block.inner(area);
+    f.render_widget(outer_block, area);
+
+    let dialog_width = 50.min(inner.width.saturating_sub(4));
+    let dialog_height = 16.min(inner.height.saturating_sub(4));
+
+    let dialog_area = Rect {
+        x: inner.x + (inner.width.saturating_sub(dialog_width)) / 2,
+        y: inner.y + (inner.height.saturating_sub(dialog_height)) / 2,
+        width: dialog_width,
+        height: dialog_height,
+    };
+
+    f.render_widget(Clear, dialog_area);
+
+    let block = Block::default()
+        .title(" Create Account ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let form_area = block.inner(dialog_area);
+    f.render_widget(block, dialog_area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Description
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Username label
+            Constraint::Length(1), // Username input
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Password label
+            Constraint::Length(1), // Password input
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Confirm label
+            Constraint::Length(1), // Confirm input
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Error / controls
+        ])
+        .split(form_area);
+
+    f.render_widget(
+        Paragraph::new(" Create your administrator account.")
+            .style(Style::default().fg(Color::White)),
+        chunks[0],
+    );
+
+    // Username
+    let label_style = if state.focused == AccountField::Username {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    f.render_widget(
+        Paragraph::new(" Username:").style(label_style),
+        chunks[2],
+    );
+    render_text_field(f, chunks[3], &state.username, false);
+
+    // Password
+    let label_style = if state.focused == AccountField::Password {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    f.render_widget(
+        Paragraph::new(" Password:").style(label_style),
+        chunks[5],
+    );
+    render_text_field(f, chunks[6], &state.password, true);
+
+    // Confirm
+    let label_style = if state.focused == AccountField::Confirm {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    f.render_widget(
+        Paragraph::new(" Confirm:").style(label_style),
+        chunks[8],
+    );
+    render_text_field(f, chunks[9], &state.confirm, true);
+
+    // Error or controls
+    if let Some(ref err) = state.error_message {
+        f.render_widget(
+            Paragraph::new(format!(" {}", err)).style(Style::default().fg(Color::Red)),
+            chunks[11],
+        );
+    } else {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(" Tab", Style::default().fg(Color::Yellow)),
+                Span::styled(" next  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Enter", Style::default().fg(Color::Green)),
+                Span::styled(" create  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+                Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+            ])),
+            chunks[11],
+        );
+    }
+}
+
+/// Render a text input field, optionally masked for passwords.
+fn render_text_field(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    input: &TextInputState,
+    masked: bool,
+) {
+    let value = input.value().to_string();
+    let display: String = if masked {
+        "*".repeat(value.chars().count())
+    } else {
+        value.clone()
+    };
+
+    if input.focused {
+        let cursor_pos = input.cursor;
+        let chars: Vec<char> = display.chars().collect();
+        let before: String = chars[..cursor_pos.min(chars.len())].iter().collect();
+        let at_cursor = chars
+            .get(cursor_pos)
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| " ".to_string());
+        let after: String = if cursor_pos < chars.len() {
+            chars[cursor_pos + 1..].iter().collect()
+        } else {
+            String::new()
+        };
+
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(before, Style::default().fg(Color::White)),
+                Span::styled(
+                    at_cursor,
+                    Style::default().fg(Color::Black).bg(Color::Cyan),
+                ),
+                Span::styled(after, Style::default().fg(Color::White)),
+            ])),
+            area,
+        );
+    } else {
+        f.render_widget(
+            Paragraph::new(format!(" {}", display)).style(Style::default().fg(Color::White)),
+            area,
+        );
+    }
 }

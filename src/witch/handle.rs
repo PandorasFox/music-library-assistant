@@ -59,6 +59,7 @@ pub(super) enum HandleCommand {
     // -- Setup --
     CompleteSetup {
         root: PathBuf,
+        first_user: Option<(String, String)>,
         reply: mpsc::Sender<Result<(), String>>,
     },
 
@@ -131,8 +132,16 @@ impl WitchClient for WitchHandle {
             .clone()
     }
 
-    fn complete_setup(&mut self, root: PathBuf) -> Result<(), String> {
-        self.send_recv(|reply| HandleCommand::CompleteSetup { root, reply })
+    fn complete_setup(
+        &mut self,
+        root: PathBuf,
+        first_user: Option<(String, String)>,
+    ) -> Result<(), String> {
+        self.send_recv(|reply| HandleCommand::CompleteSetup {
+            root,
+            first_user,
+            reply,
+        })
     }
 
     fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError> {

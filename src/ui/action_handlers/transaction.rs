@@ -15,7 +15,7 @@ impl HandleAction for transaction_review::TransactionReviewAction {
             TransactionReviewAction::None => {}
 
             TransactionReviewAction::Cancel => {
-                if app.witch.witch_status().transaction.as_ref().map_or(true, |t| t.decision_keys.is_empty()) {
+                if app.witch_status().transaction.as_ref().map_or(true, |t| t.decision_keys.is_empty()) {
                     // Empty transaction — treat Esc as exit request
                     if app.has_pending_operations() {
                         app.status_message =
@@ -96,7 +96,7 @@ impl HandleAction for transaction_review::TransactionReviewAction {
                 let _ = super::super::operator_decisions::remove_decision(&mut app.witch, &key, g);
 
                 // If transaction is now empty, auto-close review
-                if app.witch.witch_status().transaction.as_ref().map_or(true, |t| t.decision_keys.is_empty()) {
+                if app.witch_status().transaction.as_ref().map_or(true, |t| t.decision_keys.is_empty()) {
                     if !app.pop_and_restore() {
                         app.start_health_view();
                     }

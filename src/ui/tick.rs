@@ -47,13 +47,13 @@ impl App {
         let phase = screen.phase();
 
         // Update eye animation (scoped to Progress view)
-        let can_animate = self.witch.witch_status().reasoning_level == crate::witch::ReasoningLevel::Full;
+        let can_animate = self.witch_status().reasoning_level == crate::witch::ReasoningLevel::Full;
         eye.update(can_animate);
 
         // Tick progress screen - it checks daemon state for completion
-        let completed = screen.tick(&self.witch);
+        let completed = screen.tick(self.witch_status());
         if completed {
-            let status = self.witch.witch_status().work;
+            let status = self.witch_status().work.clone();
             crate::logging::log_general(format!(
                 "{:?} phase complete: {} processed",
                 phase, status.total_processed
@@ -70,7 +70,7 @@ impl App {
                     // Check for unindexed files before deciding next phase
                     if let Some(intake_state) = self.check_for_unindexed_files() {
                         self.view = ActiveView::IntakeConfirmation(intake_state);
-                    } else if self.witch.witch_status().has_pending {
+                    } else if self.witch_status().has_pending {
                         // Witch has pending work (e.g., freshen latch triggered content analysis)
                         self.view = ActiveView::Progress {
                             screen: ProgressScreen::new_content_analysis(),
@@ -111,7 +111,7 @@ impl App {
     /// Queries UnindexedFile signals (emitted by DeriveZoneSignals / UpdateCorpusFileSignals).
     /// Returns Some if there are unindexed files to confirm, None otherwise.
     pub(super) fn check_for_unindexed_files(&mut self) -> Option<startup::IntakeConfirmationState> {
-        let reasoning = self.witch.witch_status().reasoning_level;
+        let reasoning = self.witch_status().reasoning_level;
         crate::logging::log_general(format!(
             "check_for_unindexed_files: reasoning_level={:?}",
             reasoning

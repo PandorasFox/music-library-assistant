@@ -91,7 +91,7 @@ impl HandleAction for crate::ui::startup::IntakeConfirmationAction {
                 crate::logging::log_general("IntakeConfirmation: user skipped indexing");
 
                 // Discard any active transaction from review modal (not in open-txn mode)
-                if !app.open_txn_mode() && app.witch.witch_status().transaction.is_some() {
+                if !app.open_txn_mode() && app.witch_status().transaction.is_some() {
                     let _ = operator_decisions::discard_transaction(&mut app.witch);
                 }
 

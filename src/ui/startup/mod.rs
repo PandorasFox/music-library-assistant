@@ -36,7 +36,7 @@ pub fn render_startup_maintenance(
     area: Rect,
     app: &super::App,
 ) {
-    let status = app.witch.witch_status();
+    let status = app.witch_status();
 
     let (title, lines) = match status.startup_state {
         crate::witch::WitchStartupState::Reconciling => {

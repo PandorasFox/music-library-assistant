@@ -217,8 +217,7 @@ impl App {
     /// Sync browser's pending-edit markers from the current transaction's DirConfigEdit decisions.
     pub(super) fn sync_browser_pending_edits(&mut self) {
         let mut pending = std::collections::HashSet::new();
-        let status = self.witch.witch_status();
-        if let Some(ref txn) = status.transaction {
+        if let Some(ref txn) = self.cached_status.transaction {
             for key in &txn.decision_keys {
                 if let DecisionKey::DirConfigEdit { source_path } = key {
                     pending.insert(source_path.clone());

@@ -396,7 +396,7 @@ impl App {
         gesture: &witness::ConfirmationGesture,
     ) {
         // Start transaction if not already started
-        if self.witch.witch_status().transaction.is_none() {
+        if self.witch_status().transaction.is_none() {
             let _ = self.witch.start_transaction("Directory overlap resolution");
         }
         let _ = super::super::operator_decisions::stage_decision(

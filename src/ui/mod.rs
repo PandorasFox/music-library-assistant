@@ -84,8 +84,10 @@ use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::config::{Config, SharedConfig};
+use crate::witch::WitchStatus;
 
 // ============================================================================
 // Application State
@@ -120,6 +122,10 @@ pub(crate) struct App {
     prev_error_generation: u64,
     prev_config_generation: u64,
 
+    /// Cached WitchStatus — refreshed once per loop iteration (1s TTL).
+    cached_status: WitchStatus,
+    cached_status_at: Instant,
+
     /// Terminal image rendering: picker for protocol detection + image cache.
     pub(super) art_picker: widgets::AlbumArtPicker,
     pub(super) art_cache: widgets::AlbumArtCache,
@@ -136,6 +142,7 @@ impl App {
         witch: crate::witch::WitchHandle,
         art_picker: widgets::AlbumArtPicker,
     ) -> Self {
+        let cached_status = witch.witch_status();
         Self {
             shared_config,
             should_quit: false,
@@ -148,15 +155,32 @@ impl App {
             prev_mutations_generation: 0,
             prev_error_generation: 0,
             prev_config_generation: 0,
+            cached_status,
+            cached_status_at: Instant::now(),
             art_picker,
             art_cache: widgets::AlbumArtCache::new(),
             tab_click_rects: Vec::new(),
         }
     }
 
+    const STATUS_TTL: Duration = Duration::from_secs(1);
+
     /// Read-lock the shared config for accessing config values.
     pub(super) fn config(&self) -> std::sync::RwLockReadGuard<'_, Config> {
         crate::config::read_shared_config(&self.shared_config)
+    }
+
+    /// Return a reference to the cached WitchStatus (refreshed once per loop iteration).
+    pub(super) fn witch_status(&self) -> &WitchStatus {
+        &self.cached_status
+    }
+
+    /// Refresh the cached WitchStatus if the TTL has elapsed.
+    fn refresh_status(&mut self) {
+        if self.cached_status_at.elapsed() >= Self::STATUS_TTL {
+            self.cached_status = self.witch.witch_status();
+            self.cached_status_at = Instant::now();
+        }
     }
 
     /// Whether the Transaction tab should be visible in the lateral view ring.
@@ -254,7 +278,7 @@ impl App {
 
     /// Check if there are any pending operations (Witch work).
     pub(super) fn has_pending_operations(&self) -> bool {
-        self.witch.witch_status().has_pending
+        self.witch_status().has_pending
     }
 
     /// Start the health view.
@@ -287,7 +311,7 @@ impl App {
     where
         T: ProgressStatsUpdater,
     {
-        state.set_db_queue_depth(self.witch.witch_status().db_queue_depth);
+        state.set_db_queue_depth(self.witch_status().db_queue_depth);
     }
 
     pub(super) fn start_tag_search(&mut self) {
@@ -321,7 +345,7 @@ impl App {
     /// Start the external matches lateral view.
     pub(super) fn start_external_matches_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::ExternalMatches;
-        let ws = self.witch.witch_status();
+        let ws = self.witch_status();
         let fetch_active = ws.is_external_fetch_active;
         let has_api_key = ws.has_acoustid_api_key;
         let singles_before_incompletes = self
@@ -458,7 +482,7 @@ fn render(f: &mut Frame, app: &mut App) {
     };
 
     let status_line_2 = {
-        app.witch.witch_status().transaction.as_ref().map(|t| {
+        app.witch_status().transaction.as_ref().map(|t| {
             let dec = t.decision_count;
             let mut_ = t.mutation_count;
             let pd = if dec == 1 { "" } else { "s" };
@@ -581,13 +605,15 @@ fn run_app<B: ratatui::backend::Backend>(
     }
 
     loop {
+        app.refresh_status();
+
         if signal_received.swap(false, Ordering::SeqCst) {
             app.handle_input(InputAction::Cancel);
         }
 
         // Observe startup maintenance completion (Witch auto-runs reconciliation/vacuum)
         if !app.startup_complete {
-            let state = app.witch.witch_status().startup_state;
+            let state = app.witch_status().startup_state;
             if state == crate::witch::WitchStartupState::Ready {
                 app.startup_complete = true;
                 app.complete_startup();
@@ -600,7 +626,7 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Detect events via generation counter diffing against WitchStatus
         {
-            let status = app.witch.witch_status();
+            let status = &app.cached_status;
 
             // Mutations completed
             if status.mutations_generation != app.prev_mutations_generation {
@@ -624,18 +650,16 @@ fn run_app<B: ratatui::backend::Backend>(
         // Update views with query data
         if let ActiveView::Insights(ref mut view) = app.view {
             let insights_data = app.witch.query(crate::db::domain::GetInsights);
-            let ws = app.witch.witch_status();
             view.update(
-                Some(&ws.work),
+                Some(&app.cached_status.work),
                 Some(insights_data),
-                &ws.handled_decision_kinds,
+                &app.cached_status.handled_decision_kinds,
             );
         }
         if let ActiveView::Inbox(ref mut view) = app.view {
             let inbox_data = app.witch.query(crate::db::domain::GetInboxOverview);
+            view.busy = app.cached_status.work.pending > 0;
             view.update(Some(inbox_data));
-            let ws = app.witch.witch_status();
-            view.busy = ws.work.pending > 0;
         }
         if let ActiveView::History(ref mut view) = app.view {
             view.update(Some(app.witch.query(crate::db::domain::GetEditHistory)));
@@ -643,11 +667,10 @@ fn run_app<B: ratatui::backend::Backend>(
         if let ActiveView::ExternalMatches(ref mut view) = app.view {
             let data = app.witch.query(crate::db::domain::GetExternalMatches);
             view.update(data);
-            let ws = app.witch.witch_status();
-            let new_fetch_active = ws.is_external_fetch_active;
+            let new_fetch_active = app.cached_status.is_external_fetch_active;
             let fetch_changed = view.fetch_active != new_fetch_active;
             view.fetch_active = new_fetch_active;
-            view.fetch_progress = ws.external_fetch_progress.clone();
+            view.fetch_progress = app.cached_status.external_fetch_progress.clone();
             if view.fetch_active {
                 view.tick_count = view.tick_count.wrapping_add(1);
             }

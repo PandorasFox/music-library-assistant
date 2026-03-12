@@ -181,7 +181,7 @@ impl WorkState {
 /// Gates the overall UI mode:
 /// - None/Inodes → Splash screen
 /// - Full → Normal UI with blinking eye
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ReasoningLevel {
     /// Startup — no reasoning yet.
     #[default]
@@ -196,7 +196,7 @@ pub enum ReasoningLevel {
 ///
 /// The watcher thread owns filesystem
 /// monitoring; this enum tracks its lifecycle from the Witch's perspective.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum WatcherState {
     /// Watcher spawned but not yet started.
     #[default]
@@ -397,7 +397,7 @@ impl TaskLabel {
 }
 
 /// Status information returned from tick() and status().
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct WorkStatus {
     /// Current high-level state snapshot.
     pub state: WorkStateSnapshot,
@@ -412,7 +412,7 @@ pub struct WorkStatus {
 }
 
 /// Snapshot of Witch work state for status reporting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum WorkStateSnapshot {
     #[default]
     Idle,

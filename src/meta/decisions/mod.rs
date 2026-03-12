@@ -18,7 +18,7 @@ pub(crate) use crate::ui::action_handlers::witness::ConfirmationGesture;
 /// Each variant carries its own typed keying data, ensuring decisions from
 /// different workflows can never collide. Singleton variants (no inner data)
 /// represent bulk operations where one decision handles the entire insight type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum DecisionKey {
     // === Zone-scoped file signal decisions ===
     /// Tag canonicity resolution (cluster index within tag_name)
@@ -175,7 +175,7 @@ impl std::fmt::Display for DecisionKey {
 /// Only singleton variants (no inner data) are represented. Used by the
 /// insights view to hide entries whose single-decision source is already
 /// staged in the active transaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum DecisionKeyKind {
     OobSync,
     OobConflict,
@@ -286,7 +286,7 @@ impl PendingTransaction {
 }
 
 /// Errors that can occur during transaction operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TransactionError {
     /// Attempted to start a transaction when one is already active.
     AlreadyActive,

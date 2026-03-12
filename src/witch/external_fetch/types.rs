@@ -63,7 +63,7 @@ impl std::fmt::Debug for MatchRow {
 }
 
 /// Per-source progress snapshot.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SourceProgress {
     pub total: usize,
     pub processed: usize,
@@ -73,7 +73,7 @@ pub struct SourceProgress {
 }
 
 /// Combined progress for both sources.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct FetchProgress {
     pub acoustid: SourceProgress,
     pub mb: SourceProgress,

@@ -13,6 +13,7 @@ pub mod decisions;
 pub mod external;
 pub mod maintenance;
 pub mod mutations;
+pub mod protocol;
 pub mod recomputation;
 pub mod signals;
 pub mod views;

@@ -25,7 +25,7 @@ use crate::ui::widgets::standard_list::ListInputResult;
 
 pub use state::TagSearchState;
 pub use types::{
-    ComparisonOperator, FileTypeCategory, SearchCondition, TagSearchAction, TagSearchMode,
+    SearchCondition, TagSearchAction, TagSearchMode,
 };
 
 impl TagSearchState {

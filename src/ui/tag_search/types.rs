@@ -97,22 +97,7 @@ impl FileTypeCategory {
         }
     }
 
-    /// Cycle to the previous category.
-    pub fn prev(&self) -> Self {
-        match self {
-            FileTypeCategory::Any => FileTypeCategory::Specific(FileFormat::Aac),
-            FileTypeCategory::Lossless => FileTypeCategory::Any,
-            FileTypeCategory::Lossy => FileTypeCategory::Lossless,
-            FileTypeCategory::Specific(f) => {
-                let prev_format = f.prev();
-                if prev_format == FileFormat::Aac {
-                    FileTypeCategory::Lossy
-                } else {
-                    FileTypeCategory::Specific(prev_format)
-                }
-            }
-        }
-    }
+
 
     /// Check if a file type matches this category.
     pub fn matches(&self, file_type: &str) -> bool {
@@ -173,17 +158,7 @@ impl FileFormat {
         }
     }
 
-    /// Cycle to the previous format.
-    pub fn prev(&self) -> Self {
-        match self {
-            FileFormat::Flac => FileFormat::Aac,
-            FileFormat::Mp3 => FileFormat::Flac,
-            FileFormat::Opus => FileFormat::Mp3,
-            FileFormat::Ogg => FileFormat::Opus,
-            FileFormat::Wav => FileFormat::Ogg,
-            FileFormat::Aac => FileFormat::Wav,
-        }
-    }
+
 
     /// Check if a file type matches this format.
     pub fn matches(&self, file_type: &str) -> bool {
@@ -263,15 +238,6 @@ impl ComparisonOperator {
         }
     }
 
-    /// Cycle to the previous operator.
-    pub fn prev(&self) -> Self {
-        match self {
-            ComparisonOperator::Is => ComparisonOperator::Like,
-            ComparisonOperator::Not => ComparisonOperator::Is,
-            ComparisonOperator::Contains => ComparisonOperator::Not,
-            ComparisonOperator::Like => ComparisonOperator::Contains,
-        }
-    }
 }
 
 /// A single search condition.

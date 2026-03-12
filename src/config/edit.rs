@@ -269,15 +269,6 @@ pub fn apply_config_edits_to_kdl(
         }
     }
 
-    // --- Idle Rescan Interval ---
-    if new_config.opinions.idle_rescan_interval_secs
-        != old_config.opinions.idle_rescan_interval_secs
-    {
-        let dur = std::time::Duration::from_secs(new_config.opinions.idle_rescan_interval_secs);
-        let formatted = humantime::format_duration(dur).to_string();
-        set_or_create_string_node(opinions_doc, Opinions::KDL_IDLE_RESCAN, &formatted);
-    }
-
     // --- Leave Transactions Open ---
     if new_config.opinions.leave_transactions_open != old_config.opinions.leave_transactions_open {
         set_or_create_bool_node(

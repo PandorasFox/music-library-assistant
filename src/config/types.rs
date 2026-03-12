@@ -30,9 +30,6 @@ pub struct Opinions {
     pub duplicate_analysis: DuplicateAnalysisOpinions,
     pub release_packing: ReleasePackingOpinions,
     pub inbox_organize: InboxOrganizeOpinions,
-    /// Seconds of idle time before auto-rescanning corpus/inbox for filesystem changes.
-    /// Default: 180. Set to 0 to disable.
-    pub idle_rescan_interval_secs: u64,
     /// When true, keep one persistent transaction open across modal interactions.
     /// Decisions accumulate in a Transaction tab; commit/discard from there.
     /// Default: false.
@@ -51,7 +48,6 @@ pub struct Opinions {
 impl Opinions {
     // Direct children of the "opinions" block
     pub const KDL_LOSSY_SHIT: &str = "lossy-shit-formats-to-flac";
-    pub const KDL_IDLE_RESCAN: &str = "idle-rescan-interval";
     pub const KDL_LEAVE_TXN_OPEN: &str = "leave-transactions-open";
 
     // Sub-block names
@@ -648,7 +644,6 @@ impl Default for Opinions {
             duplicate_analysis: DuplicateAnalysisOpinions::default(),
             release_packing: ReleasePackingOpinions::default(),
             inbox_organize: InboxOrganizeOpinions::default(),
-            idle_rescan_interval_secs: 180,
             leave_transactions_open: false,
             external_matching: ExternalMatchingConfig::default(),
             disc_extraction: DiscExtractionOpinions::default(),

@@ -583,9 +583,7 @@ impl App {
 
 fn render(f: &mut Frame, app: &mut App) {
     // Build status bar lines
-    let status_line_1 = if app.witch.idle_rescan_active() {
-        Some("Refreshing corpus...".to_string())
-    } else if let Some(ref msg) = app.status_message {
+    let status_line_1 = if let Some(ref msg) = app.status_message {
         Some(msg.clone())
     } else {
         app.view.selected_path().map(|s| s.to_string())
@@ -710,18 +708,6 @@ fn run_app<B: ratatui::backend::Backend>(
             ActiveView::SchemaUpdate(_) | ActiveView::VacuumPrompt(_)
         );
 
-        // Set idle rescan eligibility based on current view (lateral views only)
-        let idle_eligible = matches!(
-            app.view,
-            ActiveView::Insights(_)
-                | ActiveView::CorpusBrowser(_)
-                | ActiveView::TagSearch(_)
-                | ActiveView::History(_)
-                | ActiveView::Inbox(_)
-                | ActiveView::TabbedTransactionReview(_)
-        );
-        app.witch.set_idle_rescan_eligible(idle_eligible);
-
         // Tick the Witch (skip during startup views — they tick internally as needed)
         if !is_startup_view {
             app.witch.tick();
@@ -786,7 +772,6 @@ fn run_app<B: ratatui::backend::Backend>(
             let inbox_data = app.cached.get::<crate::db::domain::GetInboxOverview>().cloned();
             view.update(inbox_data);
             view.busy = app.cached_status.pending > 0
-                || app.cached_status.idle_rescan_active
                 || app.cache_stale;
         }
         if let ActiveView::History(ref mut view) = app.view {

@@ -68,9 +68,9 @@ pub enum Computation {
     /// - disk_only (disk - indexed) → InboxUnindexed signals
     /// - both (disk ∩ indexed) → InboxHealthy signals
     DeriveInboxSignals {
-        /// Inbox inodes observed on disk (inode → relative path).
+        /// Inbox inodes observed on disk (inode → enriched metadata).
         /// Populated by the FS watcher's initial scan and steady-state events.
-        observed_inodes: HashMap<i64, String>,
+        observed_inodes: HashMap<i64, crate::witch::ObservedInodeMeta>,
     },
 
     /// Derive corpus signals via global inode set comparison.
@@ -80,9 +80,9 @@ pub enum Computation {
     /// - index_only (indexed - disk) → MissingFile signals
     /// - both (disk ∩ indexed) → check OOB, emit HealthyFile or spawn verification
     DeriveCorpusSignals {
-        /// Corpus inodes observed on disk (inode → relative path).
+        /// Corpus inodes observed on disk (inode → enriched metadata).
         /// Populated by the FS watcher's initial scan and steady-state events.
-        observed_inodes: HashMap<i64, String>,
+        observed_inodes: HashMap<i64, crate::witch::ObservedInodeMeta>,
     },
 
     /// Update corpus signals for a single file after mutation.
@@ -98,26 +98,6 @@ pub enum Computation {
     /// when a library file is modified or removed.
     /// Only valid for paths within library directories.
     UpdateLibraryFileSignals { path: PathBuf },
-
-    /// Walk a library directory tree.
-    ///
-    /// Spawns ScanLibraryDirectory for each subdirectory found.
-    WalkLibrary {
-        library_root: PathBuf,
-        library_name: String,
-        corpus_path_prefixes: Vec<PathBuf>,
-    },
-
-    /// Scan a single library directory.
-    ///
-    /// Collects (path, inode) pairs and stores them in files table (zone='library').
-    /// Deploy health derivation happens in Analysis phase.
-    ScanLibraryDirectory {
-        directory: PathBuf,
-        library_name: String,
-        library_root: PathBuf,
-        corpus_path_prefixes: Vec<PathBuf>,
-    },
 
     /// Reconcile observed library files against the DB.
     ///
@@ -147,8 +127,6 @@ impl Computation {
             Computation::DeriveCorpusSignals { .. } => "Deriving corpus signals",
             Computation::UpdateCorpusFileSignals { .. } => "Updating corpus file signals",
             Computation::UpdateLibraryFileSignals { .. } => "Updating library file signals",
-            Computation::WalkLibrary { .. } => "Walking library",
-            Computation::ScanLibraryDirectory { .. } => "Scanning library directory",
             Computation::ReconcileLibraryFiles { .. } => "Reconciling library files",
             Computation::UpdateDeploySignals { .. } => "Updating deploy signals",
         }
@@ -176,30 +154,6 @@ impl Computation {
             Computation::UpdateLibraryFileSignals { path } => {
                 execute_update_library_file_signals(ctx.read_db, path, ctx.witness)
             }
-            Computation::WalkLibrary {
-                library_root,
-                library_name,
-                corpus_path_prefixes,
-            } => execute_walk_library(
-                ctx.read_db,
-                library_root,
-                library_name,
-                corpus_path_prefixes,
-                ctx.witness,
-            ),
-            Computation::ScanLibraryDirectory {
-                directory,
-                library_name,
-                library_root,
-                corpus_path_prefixes,
-            } => execute_scan_library_directory(
-                ctx.read_db,
-                directory,
-                library_name,
-                library_root,
-                corpus_path_prefixes,
-                ctx.witness,
-            ),
             Computation::ReconcileLibraryFiles { observed_files } => {
                 execute_reconcile_library_files(ctx.read_db, observed_files, ctx.witness)
             }
@@ -231,9 +185,6 @@ pub struct Result {
     pub error: Option<String>,
     /// Follow-up computations - ONLY Derivation computations allowed.
     pub spawn: Vec<Computation>,
-    /// Library files observed on disk during ScanLibraryDirectory.
-    /// Accumulated by the Witch and consumed by ReconcileLibraryFiles.
-    pub observed_library_files: Vec<ObservedLibraryFile>,
 }
 
 impl Result {
@@ -243,21 +194,6 @@ impl Result {
             success: true,
             error: None,
             spawn,
-            observed_library_files: Vec::new(),
-        }
-    }
-
-    pub fn success_with_library_files(
-        computation: Computation,
-        spawn: Vec<Computation>,
-        observed_library_files: Vec<ObservedLibraryFile>,
-    ) -> Self {
-        Self {
-            _computation: computation,
-            success: true,
-            error: None,
-            spawn,
-            observed_library_files,
         }
     }
 
@@ -267,7 +203,6 @@ impl Result {
             success: false,
             error: Some(error),
             spawn: Vec::new(),
-            observed_library_files: Vec::new(),
         }
     }
 }

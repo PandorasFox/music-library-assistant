@@ -622,20 +622,6 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                                     &mut config.opinions.inbox_organize,
                                 );
                             }
-                            Opinions::KDL_IDLE_RESCAN => {
-                                if let Some(entry) = child.entries().first() {
-                                    if let Some(s) = entry.value().as_string() {
-                                        if let Ok(dur) = humantime::parse_duration(s) {
-                                            config.opinions.idle_rescan_interval_secs =
-                                                dur.as_secs();
-                                        }
-                                    } else if let Some(val) = entry.value().as_i64() {
-                                        // Legacy: bare integer seconds
-                                        config.opinions.idle_rescan_interval_secs =
-                                            val.max(0) as u64;
-                                    }
-                                }
-                            }
                             Opinions::KDL_LEAVE_TXN_OPEN => {
                                 if let Some(entry) = child.entries().first() {
                                     if let Some(val) = entry.value().as_bool() {

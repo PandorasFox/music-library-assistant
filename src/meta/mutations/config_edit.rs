@@ -279,8 +279,7 @@ fn config_recomputation_scope(old: &Config, new: &Config) -> RecomputationScope 
     }
 
     // These fields are runtime policy — no content re-analysis needed:
-    // startup.*, performance.*, idle_rescan_interval_secs, leave_transactions_open,
-    // quality_resolution.*
+    // startup.*, performance.*, leave_transactions_open, quality_resolution.*
 
     scope
 }

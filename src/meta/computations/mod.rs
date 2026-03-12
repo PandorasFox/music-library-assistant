@@ -160,8 +160,6 @@ pub struct ComputationResult {
     /// Barrier-separated follow-up phases. Each phase runs only after all
     /// prior work drains (in-flight tasks + db write queue empty).
     pub deferred_phases: VecDeque<(PipelineStage, Vec<Computation>)>,
-    /// Library files observed on disk during ScanLibraryDirectory.
-    pub observed_library_files: Vec<derivation::ObservedLibraryFile>,
 }
 
 impl ComputationResult {
@@ -173,7 +171,6 @@ impl ComputationResult {
             spawn_derivation: Vec::new(),
             spawn_analysis: Vec::new(),
             deferred_phases: VecDeque::new(),
-            observed_library_files: Vec::new(),
         }
     }
 
@@ -185,7 +182,6 @@ impl ComputationResult {
             spawn_derivation: result.spawn,
             spawn_analysis: Vec::new(),
             deferred_phases: VecDeque::new(),
-            observed_library_files: result.observed_library_files,
         }
     }
 
@@ -197,7 +193,6 @@ impl ComputationResult {
             spawn_derivation: Vec::new(),
             spawn_analysis: result.spawn,
             deferred_phases: result.deferred_phases,
-            observed_library_files: Vec::new(),
         }
     }
 
@@ -254,7 +249,6 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
             spawn_derivation: Vec::new(),
             spawn_analysis: Vec::new(),
             deferred_phases: VecDeque::new(),
-            observed_library_files: Vec::new(),
         },
     }
 }

@@ -119,7 +119,7 @@ pub(super) fn execute_mutation(
                 spawn_mutations: Vec::new(),
                 config_update: None,
                 recomputation_scope: RecomputationScope::EMPTY,
-                observed_library_files: Vec::new(),
+
                 fetch_result: None,
                 deferred_phases: std::collections::VecDeque::new(),
             };
@@ -208,7 +208,6 @@ pub(super) fn execute_mutation(
         spawn_mutations,
         config_update,
         recomputation_scope,
-        observed_library_files: Vec::new(),
         fetch_result: None,
         deferred_phases: std::collections::VecDeque::new(),
     }
@@ -235,7 +234,6 @@ pub(super) fn execute_computation(
         spawn_mutations: Vec::new(), // Computations don't spawn mutations
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
-        observed_library_files: result.observed_library_files,
         fetch_result: None,
         deferred_phases: result.deferred_phases,
     }
@@ -288,7 +286,6 @@ pub(super) fn execute_maintenance(
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
         fetch_result: None,
-        observed_library_files: Vec::new(),
         deferred_phases: std::collections::VecDeque::new(),
     }
 }
@@ -536,7 +533,6 @@ pub(super) fn execute_external_fetch(
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
         fetch_result: Some(fetch_result),
-        observed_library_files: Vec::new(),
         deferred_phases: std::collections::VecDeque::new(),
     }
 }

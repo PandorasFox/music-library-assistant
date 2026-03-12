@@ -4,12 +4,10 @@
 //! like file type detection, path parsing, signal emission, and configuration access.
 
 use std::collections::{HashMap, HashSet};
-use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::config::AUDIO_EXTENSIONS;
-use crate::corpus::paths;
 use crate::db::write_thread::{self, SignalWitness};
 use crate::db::ReadOnlyDb;
 use crate::meta::signals::registry::TypedSignalWrite;
@@ -133,80 +131,6 @@ pub(super) fn parse_inodes_csv(s: &str) -> Vec<i64> {
     s.split(',')
         .filter_map(|s| s.trim().parse::<i64>().ok())
         .collect()
-}
-
-// ============================================================================
-// Directory Enumeration
-// ============================================================================
-
-/// Enumerate all directories under root, including root itself.
-///
-/// Returns (directories, symlink_count). Symlinks are skipped.
-pub(super) fn enumerate_all_directories(root: &Path) -> (Vec<PathBuf>, usize) {
-    let mut directories: Vec<PathBuf> = Vec::new();
-    let mut symlink_count = 0;
-    enumerate_directories_recursive(root, &mut directories, &mut symlink_count);
-
-    // Include root itself (for files directly in root)
-    directories.push(root.to_path_buf());
-
-    (directories, symlink_count)
-}
-
-/// Recursively enumerate directories, tracking symlinks and checking mount boundaries.
-///
-/// If a directory is on a different filesystem (different st_dev) than the expected
-/// root filesystem, reports a mount violation via the global flag. The Witch will
-/// pick this up on next tick() and latch into read-only mode.
-pub(super) fn enumerate_directories_recursive(
-    dir: &Path,
-    directories: &mut Vec<PathBuf>,
-    symlink_count: &mut usize,
-) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-
-    // Get expected device ID for mount boundary checks
-    let expected_dev = paths::get_expected_device_id();
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-
-        // Check for symlinks - we don't follow them
-        if path.is_symlink() {
-            if path.is_dir() {
-                *symlink_count += 1;
-            }
-            continue;
-        }
-
-        if path.is_dir() {
-            // Check for mount boundary violation
-            if let Some(expected) = expected_dev {
-                if let Ok(metadata) = std::fs::metadata(&path) {
-                    let actual_dev = metadata.dev();
-                    if actual_dev != expected {
-                        // Mount boundary crossed! Report violation.
-                        crate::witch::report_mount_violation(format!(
-                            "Nested mount point detected at {:?}\n\
-                             Expected device: {}, found device: {}\n\
-                             \n\
-                             The corpus and libraries must not contain nested mount points.\n\
-                             Please unmount the nested filesystem and restart MM.",
-                            path, expected, actual_dev
-                        ));
-                        // Skip this directory and its children - don't recurse into different filesystem
-                        continue;
-                    }
-                }
-            }
-
-            directories.push(path.clone());
-            enumerate_directories_recursive(&path, directories, symlink_count);
-        }
-    }
 }
 
 // ============================================================================

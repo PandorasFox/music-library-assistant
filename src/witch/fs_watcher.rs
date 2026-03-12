@@ -34,14 +34,17 @@ use crate::db::types::Zone;
 
 /// A file observed on disk during initial scan or steady-state monitoring.
 ///
-/// Carries FS-level metadata only (stat data). The watcher never reads file
-/// content — semantic analysis (tags, audio info) happens in computations.
+/// Carries FS-level metadata and optionally tags (from DB cache or disk read).
+/// Tags are populated during initial scan when the DB cache provides a matching
+/// mtime, or from disk reads for changed files during steady-state monitoring.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObservedFile {
     pub path: String, // relative to zone root
     pub mtime_secs: i64,
     pub mtime_nanos: i64,
     pub file_size: i64,
+    /// Tags for audio files. None for non-audio files or when tags weren't read.
+    pub tags: Option<crate::corpus::tags::TagSet>,
 }
 
 /// Image file observed on disk by the watcher thread.
@@ -59,11 +62,25 @@ pub struct ObservedImage {
     pub file_size: i64,
 }
 
+/// DB-cached state for one inode, seeded by the Witch at startup.
+///
+/// Watcher compares disk mtime against this cached mtime. If they match,
+/// the DB's tags are current and can be carried through the initial scan
+/// without reading tags from disk.
+pub(crate) struct CachedInodeState {
+    pub mtime_secs: i64,
+    pub mtime_nanos: i64,
+    pub tags: crate::corpus::tags::TagSet,
+}
+
 /// Command from Witch to watcher thread.
 pub(super) enum WatcherCommand {
     /// Begin watching zone roots. Triggers initial directory walk.
     Start {
         zones: Vec<(Zone, PathBuf)>,
+        /// DB-cached state seeded by the Witch. Watcher skips tag reads
+        /// for files whose disk mtime matches the cached mtime.
+        db_cache: HashMap<i64, CachedInodeState>,
     },
     /// Shut down the watcher thread.
     Shutdown,
@@ -148,10 +165,10 @@ impl FsWatcherHandle {
     }
 
     /// Request the watcher to start scanning zone roots.
-    pub fn start(&self, zones: Vec<(Zone, PathBuf)>) {
+    pub fn start(&self, zones: Vec<(Zone, PathBuf)>, db_cache: HashMap<i64, CachedInodeState>) {
         let _ = self
             .command_tx
-            .send(WatcherCommand::Start { zones });
+            .send(WatcherCommand::Start { zones, db_cache });
     }
 
     /// Drain available messages from the watcher (non-blocking).
@@ -253,10 +270,10 @@ fn run_watcher(command_rx: Receiver<WatcherCommand>, message_tx: Sender<WatcherM
     while let Ok(command) = command_rx.recv() {
         match command {
             WatcherCommand::Shutdown => break,
-            WatcherCommand::Start { zones } => {
+            WatcherCommand::Start { zones, db_cache } => {
                 // Run initial scan + steady-state monitoring.
                 // Returns true if shutdown was requested during monitoring.
-                if run_scan_and_monitor(&zones, &command_rx, &message_tx) {
+                if run_scan_and_monitor(&zones, &db_cache, &command_rx, &message_tx) {
                     break;
                 }
             }
@@ -270,6 +287,7 @@ fn run_watcher(command_rx: Receiver<WatcherCommand>, message_tx: Sender<WatcherM
 /// Returns true if shutdown requested.
 fn run_scan_and_monitor(
     zones: &[(Zone, PathBuf)],
+    db_cache: &HashMap<i64, CachedInodeState>,
     command_rx: &Receiver<WatcherCommand>,
     message_tx: &Sender<WatcherMessage>,
 ) -> bool {
@@ -295,7 +313,7 @@ fn run_scan_and_monitor(
         ));
 
         let mut zone_state = ZoneState::new(*zone, root.clone());
-        let raw_inodes = walk_zone_root(root);
+        let raw_inodes = walk_zone_root(root, db_cache);
 
         crate::logging::log_general(format!(
             "[FS_WATCHER] Zone {:?} initial scan complete: {} tracked files found",
@@ -391,7 +409,7 @@ fn run_scan_and_monitor(
         // Check for commands (non-blocking)
         match command_rx.try_recv() {
             Ok(WatcherCommand::Shutdown) => return true,
-            Ok(WatcherCommand::Start { zones, .. }) => {
+            Ok(WatcherCommand::Start { zones, db_cache: rescan_cache }) => {
                 // Re-scan requested: drop current watcher, re-run
                 drop(watcher);
 
@@ -407,7 +425,7 @@ fn run_scan_and_monitor(
                     }
 
                     let mut zone_state = ZoneState::new(*zone, root.clone());
-                    let raw_inodes = walk_zone_root(root);
+                    let raw_inodes = walk_zone_root(root, &rescan_cache);
 
                     for (inode, observed) in &raw_inodes {
                         zone_state.insert(
@@ -452,7 +470,19 @@ fn run_scan_and_monitor(
                     );
                 }
                 Ok(NotifyEvent::Error(e)) => {
-                    handle_notify_error(e, &mut zone_states, message_tx, &mut watcher);
+                    if handle_notify_error(e) {
+                        // Request rescan from Witch and block until she
+                        // sends a fresh Start with DB-seeded cache.
+                        let _ = message_tx.send(WatcherMessage::Rescan);
+                        drop(watcher);
+                        return match wait_for_start(command_rx) {
+                            Some((zones, db_cache)) => {
+                                // Recursive: run fresh scan+monitor cycle
+                                run_scan_and_monitor(&zones, &db_cache, command_rx, message_tx)
+                            }
+                            None => true, // shutdown
+                        };
+                    }
                 }
                 Err(_) => break,
             }
@@ -485,6 +515,20 @@ fn run_scan_and_monitor(
         } else if !pending_paths.is_empty() {
             // Events are pending debounce — sleep shorter
             thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// Block until the Witch sends a Start command (with DB cache).
+/// Returns None on shutdown or channel close.
+fn wait_for_start(
+    command_rx: &Receiver<WatcherCommand>,
+) -> Option<(Vec<(Zone, PathBuf)>, HashMap<i64, CachedInodeState>)> {
+    loop {
+        match command_rx.recv() {
+            Ok(WatcherCommand::Start { zones, db_cache }) => return Some((zones, db_cache)),
+            Ok(WatcherCommand::Shutdown) => return None,
+            Err(_) => return None,
         }
     }
 }
@@ -698,12 +742,11 @@ fn process_settled_event(
 }
 
 /// Handle a notify error (inotify overflow, watch limit, etc.)
-fn handle_notify_error(
-    error: notify::Error,
-    zone_states: &mut [ZoneState],
-    message_tx: &Sender<WatcherMessage>,
-    watcher: &mut notify::RecommendedWatcher,
-) {
+///
+/// Returns `true` if a full rescan is needed (watch limit exhaustion).
+/// The caller is responsible for requesting a rescan from the Witch and
+/// blocking until a fresh `Start` command arrives with a DB cache.
+fn handle_notify_error(error: notify::Error) -> bool {
     crate::logging::log_error(format!(
         "[FS_WATCHER] Notify error: {}",
         error
@@ -712,46 +755,14 @@ fn handle_notify_error(
     // Only rescan on watch limit exhaustion — the one error that means
     // we're definitively missing events. Generic errors are logged but not
     // worth a full re-walk (which could itself trigger more errors).
-    let needs_rescan = matches!(error.kind, notify::ErrorKind::MaxFilesWatch);
-
-    if needs_rescan {
+    if matches!(error.kind, notify::ErrorKind::MaxFilesWatch) {
         crate::logging::log_general(
-            "[FS_WATCHER] inotify overflow/limit — triggering full rescan"
+            "[FS_WATCHER] inotify overflow/limit — requesting rescan from Witch"
         );
-
-        let _ = message_tx.send(WatcherMessage::Rescan);
-
-        // Re-walk all zones to rebuild state
-        for zs in zone_states.iter_mut() {
-            let raw_inodes = walk_zone_root(&zs.root);
-
-            // Rebuild zone state
-            zs.files.clear();
-            zs.path_to_inode.clear();
-
-            for (inode, observed) in &raw_inodes {
-                zs.insert(
-                    *inode,
-                    observed.path.clone(),
-                    CachedFileState {
-                        mtime_secs: observed.mtime_secs,
-                        mtime_nanos: observed.mtime_nanos,
-                        file_size: observed.file_size,
-                    },
-                );
-            }
-
-            let _ = message_tx.send(WatcherMessage::InitialScanComplete {
-                zone: zs.zone,
-                inodes: raw_inodes,
-            });
-
-            // Re-establish watch
-            let _ = notify::Watcher::watch(watcher, &zs.root, notify::RecursiveMode::Recursive);
-        }
-
-        let _ = message_tx.send(WatcherMessage::AllInitialScansComplete);
+        return true;
     }
+
+    false
 }
 
 /// Read tags from an audio file. Returns empty vec on error.
@@ -804,7 +815,11 @@ fn maybe_send_image_observed(
 // ============================================================================
 
 /// Walk a zone root and collect all tracked files (audio + images) with metadata.
-fn walk_zone_root(root: &Path) -> HashMap<i64, ObservedFile> {
+///
+/// For audio files, checks `db_cache` for matching mtime — if matched, carries
+/// the cached tags through without a disk read. Otherwise tags are left as None
+/// (they'll be read on first change via steady-state monitoring).
+fn walk_zone_root(root: &Path, db_cache: &HashMap<i64, CachedInodeState>) -> HashMap<i64, ObservedFile> {
     let mut result = HashMap::new();
 
     // Enumerate all directories (including root itself)
@@ -819,7 +834,7 @@ fn walk_zone_root(root: &Path) -> HashMap<i64, ObservedFile> {
 
     // Collect audio files from each directory
     for dir in &directories {
-        collect_tracked_files(dir, root, &mut result);
+        collect_tracked_files(dir, root, db_cache, &mut result);
     }
 
     result
@@ -886,8 +901,14 @@ fn enumerate_directories_recursive(
 
 /// Collect tracked files (audio + images) from a single directory into the result map.
 ///
-/// Paths are stored relative to `root`.
-fn collect_tracked_files(dir: &Path, root: &Path, result: &mut HashMap<i64, ObservedFile>) {
+/// Paths are stored relative to `root`. For audio files, checks `db_cache` for
+/// matching mtime and uses cached tags if available.
+fn collect_tracked_files(
+    dir: &Path,
+    root: &Path,
+    db_cache: &HashMap<i64, CachedInodeState>,
+    result: &mut HashMap<i64, ObservedFile>,
+) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -906,6 +927,23 @@ fn collect_tracked_files(dir: &Path, root: &Path, result: &mut HashMap<i64, Obse
                 let (mtime_secs, mtime_nanos) = crate::corpus::paths::read_mtime(&metadata);
                 let file_size = metadata.len() as i64;
 
+                // For audio files, try to use DB-cached tags if mtime matches
+                let tags = if is_audio_file(&path) {
+                    if let Some(cached) = db_cache.get(&inode) {
+                        if cached.mtime_secs == mtime_secs && cached.mtime_nanos == mtime_nanos {
+                            Some(cached.tags.clone())
+                        } else {
+                            // Mtime differs — tags might be stale, leave as None.
+                            // Derivation will schedule verification for mismatched files.
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 // Store path relative to zone root (for internal abs_path reconstruction)
                 let relative = path
                     .strip_prefix(root)
@@ -918,6 +956,7 @@ fn collect_tracked_files(dir: &Path, root: &Path, result: &mut HashMap<i64, Obse
                     mtime_secs,
                     mtime_nanos,
                     file_size,
+                    tags,
                 });
             }
         }

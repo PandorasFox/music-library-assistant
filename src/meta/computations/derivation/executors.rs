@@ -4,15 +4,14 @@
 
 use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::corpus::paths;
 use crate::db::write_thread;
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
-    drop_stale_corpus_signal, ensure_typed_signal, enumerate_all_directories,
-    get_configured_library_names, is_audio_file, is_image_file,
+    drop_stale_corpus_signal, ensure_typed_signal, is_audio_file, is_image_file,
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::*;
@@ -142,37 +141,12 @@ pub fn execute_schedule_second_level_derivations(
         missing_dir_count
     ));
 
-    // ========================================================================
-    // Schedule Library Walks
-    // ========================================================================
-    // DeriveCorpusSignals and DeriveInboxSignals are now queued directly by
-    // the Witch with accumulated observation data. This computation handles
-    // directory checks (above) and library walks (below).
-
-    let mut spawn: Vec<Computation> = Vec::new();
-
-    // Spawn library health computations for each configured library
-    if let Ok(config) = crate::config::load_config() {
-        let library_names = get_configured_library_names(&config);
-        log_general(format!(
-            "[COMPUTE] ScheduleSecondLevelDerivations: spawning {} library walks",
-            library_names.len()
-        ));
-
-        for library_name in library_names {
-            let library_root = config.libraries_dir().join(&library_name);
-            let corpus_path_prefixes = config.get_corpus_paths_for_library(&library_name);
-            spawn.push(Computation::WalkLibrary {
-                library_root,
-                library_name,
-                corpus_path_prefixes,
-            });
-        }
-    }
+    // Library walks are no longer needed — the watcher observes the library
+    // zone directly and the Witch queues ReconcileLibraryFiles from watcher data.
 
     Result::success(
         Computation::ScheduleSecondLevelDerivations,
-        spawn,
+        Vec::new(),
     )
 }
 
@@ -190,7 +164,7 @@ pub fn execute_schedule_second_level_derivations(
 /// Zone-specific behavior is encoded in the `DeriveZoneSignals` trait.
 fn derive_zone_signals<Z: DeriveZoneSignals>(
     read_only_db: &ReadOnlyDb<'_>,
-    observed_inodes: HashMap<i64, String>,
+    observed_inodes: HashMap<i64, crate::witch::ObservedInodeMeta>,
     sender: &write_thread::SignalWriteSender,
     witness: &ComputationWitness,
     computation: Computation,
@@ -209,10 +183,10 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
     let mut fp_new = 0usize;
     let mut fp_stale = 0usize;
 
-    for (inode, path) in &observed_inodes {
+    for (inode, meta) in &observed_inodes {
         if !existing.contains_key(inode) {
             sender.write_typed_signal(
-                Z::file_presence_signal(*inode, path.clone(), 0),
+                Z::file_presence_signal(*inode, meta.path.clone(), 0),
                 witness,
             );
             fp_new += 1;
@@ -270,8 +244,8 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
     // ========================================================================
     let mut moved = 0usize;
     for inode in &disk_only {
-        if let Some(path) = disk_inodes.get(inode) {
-            if is_image_file(Path::new(path)) {
+        if let Some(meta) = disk_inodes.get(inode) {
+            if is_image_file(Path::new(&meta.path)) {
                 continue;
             }
 
@@ -285,7 +259,7 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
                         sender,
                         TypedSignalWrite::MovedFile(MovedFileSignal {
                             inode: *inode,
-                            path: path.clone(),
+                            path: meta.path.clone(),
                             old_path,
                             old_zone: old_zone_str,
                             new_zone: zone.to_string(),
@@ -299,7 +273,7 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
             ensure_typed_signal(
                 read_only_db,
                 sender,
-                Z::unindexed_signal(*inode, path.to_string()),
+                Z::unindexed_signal(*inode, meta.path.clone()),
                 witness,
             );
         }
@@ -321,7 +295,7 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
     // the file was renamed/moved within the zone.
     // ========================================================================
     for inode in &both {
-        let disk_path = disk_inodes.get(inode).map(|p| p.as_str()).unwrap_or("");
+        let disk_path = disk_inodes.get(inode).map(|m| m.path.as_str()).unwrap_or("");
         let indexed_path = indexed_inodes.get(inode).map(|p| p.as_str()).unwrap_or("");
 
         if !disk_path.is_empty() && !indexed_path.is_empty() && disk_path != indexed_path {
@@ -374,7 +348,7 @@ fn derive_zone_signals<Z: DeriveZoneSignals>(
 /// Derive corpus signals via global inode set comparison.
 pub fn execute_derive_corpus_signals(
     read_only_db: &ReadOnlyDb<'_>,
-    observed_inodes: HashMap<i64, String>,
+    observed_inodes: HashMap<i64, crate::witch::ObservedInodeMeta>,
     witness: &ComputationWitness,
 ) -> Result {
     let sender = require_sender!(Computation::DeriveCorpusSignals {
@@ -394,7 +368,7 @@ pub fn execute_derive_corpus_signals(
 /// Derive inbox signals via global inode set comparison.
 pub fn execute_derive_inbox_signals(
     read_only_db: &ReadOnlyDb<'_>,
-    observed_inodes: HashMap<i64, String>,
+    observed_inodes: HashMap<i64, crate::witch::ObservedInodeMeta>,
     witness: &ComputationWitness,
 ) -> Result {
     let sender = require_sender!(Computation::DeriveInboxSignals {
@@ -692,118 +666,6 @@ pub fn execute_update_library_file_signals(
 // ============================================================================
 // Library Health Scanning
 // ============================================================================
-
-/// Walk a library directory tree and spawn per-directory scans.
-///
-/// No longer clears library files from the DB — reconciliation is deferred to
-/// ReconcileLibraryFiles after all ScanLibraryDirectory results are accumulated.
-pub fn execute_walk_library(
-    _read_only_db: &ReadOnlyDb<'_>,
-    library_root: &Path,
-    library_name: &str,
-    corpus_path_prefixes: &[PathBuf],
-    _witness: &ComputationWitness,
-) -> Result {
-    let computation = Computation::WalkLibrary {
-        library_root: library_root.to_path_buf(),
-        library_name: library_name.to_string(),
-        corpus_path_prefixes: corpus_path_prefixes.to_vec(),
-    };
-
-    if !library_root.exists() {
-        log_general(format!(
-            "[COMPUTE] WalkLibrary: library root does not exist: {:?}",
-            library_root
-        ));
-        return Result::success(computation, Vec::new());
-    }
-
-    let (directories, _symlink_count) = enumerate_all_directories(library_root);
-
-    log_general(format!(
-        "[COMPUTE] WalkLibrary '{}': found {} directories in {:?}",
-        library_name,
-        directories.len(),
-        library_root
-    ));
-
-    let spawn: Vec<Computation> = directories
-        .into_iter()
-        .map(|directory| Computation::ScanLibraryDirectory {
-            directory,
-            library_name: library_name.to_string(),
-            library_root: library_root.to_path_buf(),
-            corpus_path_prefixes: corpus_path_prefixes.to_vec(),
-        })
-        .collect();
-
-    Result::success(computation, spawn)
-}
-
-/// Scan a single library directory and return observed files.
-///
-/// Instead of writing directly to the DB, returns observed library files via
-/// the Result. The Witch accumulates these and passes them to
-/// ReconcileLibraryFiles for set reconciliation.
-pub fn execute_scan_library_directory(
-    _read_only_db: &ReadOnlyDb<'_>,
-    directory: &Path,
-    library_name: &str,
-    library_root: &Path,
-    corpus_path_prefixes: &[PathBuf],
-    _witness: &ComputationWitness,
-) -> Result {
-    let computation = Computation::ScanLibraryDirectory {
-        directory: directory.to_path_buf(),
-        library_name: library_name.to_string(),
-        library_root: library_root.to_path_buf(),
-        corpus_path_prefixes: corpus_path_prefixes.to_vec(),
-    };
-
-    // Collect audio files in this directory (non-recursive)
-    let mut observed_files: Vec<super::ObservedLibraryFile> = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(directory) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && (is_audio_file(&path) || is_image_file(&path)) {
-                if let Ok(metadata) = std::fs::metadata(&path) {
-                    let (mtime_secs, mtime_nanos) = crate::corpus::paths::read_mtime(&metadata);
-
-                    // Compute stored_path: strip library_root prefix, prepend library_name
-                    let library_relative = path.strip_prefix(library_root).unwrap_or(&path);
-                    let stored_path = format!("{}/{}", library_name, library_relative.display());
-
-                    observed_files.push(super::ObservedLibraryFile {
-                        stored_path,
-                        inode: metadata.ino() as i64,
-                        mtime_secs,
-                        mtime_nanos,
-                        file_size: metadata.len() as i64,
-                    });
-                }
-            }
-        }
-    }
-
-    // Log per-directory scan results (only non-empty directories to avoid noise)
-    if !observed_files.is_empty() {
-        log_general(format!(
-            "[COMPUTE] ScanLibraryDirectory '{}': {} files in {:?}",
-            library_name,
-            observed_files.len(),
-            directory,
-        ));
-    }
-
-    let _ = corpus_path_prefixes; // Suppress unused warning - needed for logging/future use
-
-    Result::success_with_library_files(
-        computation,
-        Vec::new(),
-        observed_files,
-    )
-}
 
 // ============================================================================
 // Library File Reconciliation

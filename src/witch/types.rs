@@ -407,8 +407,6 @@ pub struct WorkStatus {
     pub session_queued: usize,
     /// Breakdown of pending tasks by type label.
     pub pending_by_label: HashMap<String, usize>,
-    /// Whether an idle rescan is currently in progress.
-    pub idle_rescan_active: bool,
 }
 
 /// Snapshot of Witch work state for status reporting.
@@ -456,8 +454,6 @@ pub(super) struct TaskResult {
     /// Recomputation scope from this mutation (which domains it dirtied).
     /// EMPTY for computations, migrations, and failed mutations.
     pub recomputation_scope: RecomputationScope,
-    /// Library files observed on disk during ScanLibraryDirectory.
-    pub observed_library_files: Vec<crate::meta::computations::derivation::ObservedLibraryFile>,
     /// External fetch result data (only populated for ExternalFetch tasks).
     pub fetch_result: Option<super::external_fetch::FetchOutcome>,
     /// Barrier-separated follow-up computation phases (pipeline orchestrators only).

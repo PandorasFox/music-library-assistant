@@ -117,6 +117,29 @@ impl Database {
         Ok(result)
     }
 
+    /// Get mtime info for ALL files in a zone (for startup DB cache seeding).
+    pub fn get_all_file_mtimes(
+        &self,
+        zone: Zone,
+    ) -> Result<HashMap<i64, (i64, i64)>> {
+        let query = "SELECT inode, mtime_secs, mtime_nanos FROM files WHERE zone = ? AND is_dir = 0";
+        let mut stmt = self.conn.prepare(query)?;
+        let zone_str = zone.as_str();
+        let mut result = HashMap::new();
+        let rows = stmt.query_map(params![zone_str], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (inode, mtime_secs, mtime_nanos) = row?;
+            result.insert(inode, (mtime_secs, mtime_nanos));
+        }
+        Ok(result)
+    }
+
     /// Look up the zone and path for an inode in corpus/inbox zones.
     ///
     /// Used for cross-zone move detection: when a file is found in zone A

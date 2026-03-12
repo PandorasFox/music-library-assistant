@@ -546,6 +546,7 @@ impl<'a> ReadOnlyDb<'a> {
     delegate_read! {
         fn get_file_entry_by_path(path: &str, zone: &str) -> Result<Option<super::types::FileEntry>>;
         fn get_file_mtime_batch(source: super::types::Zone, inodes: &[i64]) -> Result<std::collections::HashMap<i64, (i64, i64)>>;
+        fn get_all_file_mtimes(zone: super::types::Zone) -> Result<std::collections::HashMap<i64, (i64, i64)>>;
         fn get_file_zone_and_path_by_inode(inode: i64) -> Result<Option<(String, String)>>;
         fn get_file_paths_batch(source: super::types::Zone, inodes: &[i64]) -> Result<std::collections::HashMap<i64, String>>;
         fn get_duplicate_inode_groups() -> Result<Vec<(i64, String)>>;

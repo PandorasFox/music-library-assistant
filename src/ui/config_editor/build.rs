@@ -373,9 +373,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
                 &["TODO"], InboxOrganizeOpinions::KDL_DIR_GRANULARITY),
         ]},
         ConfigGroup { name: "Advanced", collapsed: false, fields: vec![
-            cf!(duration, idle_rescan_interval_secs, "Idle rescan interval",
-                "Idle time before auto-rescanning corpus/inbox (e.g. 3m, 180s, disabled)",
-                &["TODO"], Opinions::KDL_IDLE_RESCAN),
             cf!(bool, leave_transactions_open, "Leave transactions open",
                 "Keep one open transaction; adds Transaction tab to view ring",
                 &["TODO"], Opinions::KDL_LEAVE_TXN_OPEN),

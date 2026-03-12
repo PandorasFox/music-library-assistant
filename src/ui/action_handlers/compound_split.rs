@@ -10,7 +10,6 @@ use crate::db::types::Zone;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::suspended_views::SuspendTarget;
 use crate::ui::{compound_split_v2, helpers, progressive_worker, tag_editor, ActiveView};
-use crate::witch::WitchClient;
 
 impl HandleAction for compound_split_v2::CompoundSplitActionV2 {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {

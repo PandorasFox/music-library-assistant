@@ -68,7 +68,6 @@ pub fn render_app(
 
         let transactions_open = app.config().opinions.leave_transactions_open;
         let transaction_has_decisions = {
-            use crate::witch::WitchClient;
             app.witch.witch_status().transaction.as_ref()
                 .is_some_and(|t| t.decision_count > 0)
         };

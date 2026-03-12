@@ -464,6 +464,11 @@ impl From<&WorkState> for WorkStateSnapshot {
 /// The Witch updates this via `Arc<RwLock<WitchStatus>>` each tick; handles
 /// read it transparently with no caching or invalidation needed.
 ///
+/// Generation counters allow event detection by diffing between frames:
+/// - `mutations_generation`: increments when a mutation batch completes
+/// - `error_generation`: increments when a task error occurs
+/// - `config_generation`: increments when config is mutated
+///
 /// See `docs/CLIENT_SERVER_ARCHITECTURE.md` for the full design.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct WitchStatus {
@@ -496,6 +501,19 @@ pub struct WitchStatus {
     pub external_fetch_progress: Option<super::external_fetch::FetchProgress>,
     /// Whether an AcoustID API key is configured.
     pub has_acoustid_api_key: bool,
+
+    // -- Generation counters (for event detection via frame diffing) --
+    /// Increments each time a mutation batch completes. UI diffs this to
+    /// detect cache invalidation events (replaces WitchNotice::MutationsCompleted).
+    pub mutations_generation: u64,
+    /// Most recent task error message, if any.
+    pub last_error: Option<String>,
+    /// Increments each time a new task error occurs. UI diffs this to
+    /// detect errors (replaces WitchNotice::Error).
+    pub error_generation: u64,
+    /// Increments each time config is mutated. UI diffs this to
+    /// detect config changes (replaces WitchNotice::ConfigUpdated).
+    pub config_generation: u64,
 }
 
 /// Lightweight snapshot of the active transaction for status reads.

@@ -115,11 +115,11 @@ pub(crate) struct App {
     /// Set to true once WitchStartupState transitions to Ready.
     startup_complete: bool,
 
-    /// Receiver for typed Witch → UI notifications.
-    notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
-
-    /// Locally cached Witch status from StatusUpdate notices.
-    pub(super) cached_status: crate::witch::WorkStatus,
+    /// Generation counters from last frame — used to detect events by diffing
+    /// against the current WitchStatus each frame.
+    prev_mutations_generation: u64,
+    prev_error_generation: u64,
+    prev_config_generation: u64,
 
     /// Terminal image rendering: picker for protocol detection + image cache.
     pub(super) art_picker: widgets::AlbumArtPicker,
@@ -135,7 +135,6 @@ impl App {
     fn new(
         shared_config: SharedConfig,
         witch: crate::witch::WitchHandle,
-        notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
         art_picker: widgets::AlbumArtPicker,
     ) -> Self {
         Self {
@@ -147,8 +146,9 @@ impl App {
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Health,
             startup_complete: false,
-            notice_rx,
-            cached_status: Default::default(),
+            prev_mutations_generation: 0,
+            prev_error_generation: 0,
+            prev_config_generation: 0,
             art_picker,
             art_cache: widgets::AlbumArtCache::new(),
             tab_click_rects: Vec::new(),
@@ -256,7 +256,6 @@ impl App {
 
     /// Check if there are any pending operations (Witch work).
     pub(super) fn has_pending_operations(&self) -> bool {
-        use crate::witch::WitchClient;
         self.witch.witch_status().has_pending
     }
 
@@ -290,7 +289,6 @@ impl App {
     where
         T: ProgressStatsUpdater,
     {
-        use crate::witch::WitchClient;
         state.set_db_queue_depth(self.witch.witch_status().db_queue_depth);
     }
 
@@ -325,10 +323,7 @@ impl App {
     /// Start the external matches lateral view.
     pub(super) fn start_external_matches_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::ExternalMatches;
-        let ws = {
-            use crate::witch::WitchClient;
-            self.witch.witch_status()
-        };
+        let ws = self.witch.witch_status();
         let fetch_active = ws.is_external_fetch_active;
         let has_api_key = ws.has_acoustid_api_key;
         let singles_before_incompletes = self
@@ -441,7 +436,6 @@ impl App {
     /// Complete startup: spawn db_thread, start FS watcher, open persistent txn,
     /// and transition to the Progress screen.
     pub(super) fn complete_startup(&mut self) {
-        use crate::witch::WitchClient;
         let shared = self.shared_config.clone();
         let _ = self.witch.set_shared_config(shared);
         let _ = self.witch.start_watching();
@@ -472,7 +466,6 @@ fn render(f: &mut Frame, app: &mut App) {
     };
 
     let status_line_2 = {
-        use crate::witch::WitchClient;
         app.witch.witch_status().transaction.as_ref().map(|t| {
             let dec = t.decision_count;
             let mut_ = t.mutation_count;
@@ -491,7 +484,6 @@ fn render(f: &mut Frame, app: &mut App) {
 
 pub fn run_tui(
     mut witch: crate::witch::WitchHandle,
-    notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
 ) -> Result<()> {
     crate::logging::log_general("=== MM TUI startup ===");
 
@@ -511,7 +503,6 @@ pub fn run_tui(
 
     // Check startup state from the Witch
     {
-        use crate::witch::WitchClient;
         let status = witch.witch_status();
 
         if status.startup_state == crate::witch::WitchStartupState::AwaitingSetup {
@@ -554,12 +545,11 @@ pub fn run_tui(
     }
     let shared_config = config.into_shared();
 
-    let mut app = App::new(shared_config, witch, notice_rx, art_picker);
+    let mut app = App::new(shared_config, witch, art_picker);
 
     // Check if the Witch is already Ready (no startup maintenance needed)
     // or if she's running maintenance (Reconciling/Vacuuming)
     {
-        use crate::witch::WitchClient;
         let status = app.witch.witch_status();
         if status.startup_state == crate::witch::WitchStartupState::Ready {
             app.startup_complete = true;
@@ -605,7 +595,6 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Observe startup maintenance completion (Witch auto-runs reconciliation/vacuum)
         if !app.startup_complete {
-            use crate::witch::WitchClient;
             let state = app.witch.witch_status().startup_state;
             if state == crate::witch::WitchStartupState::Ready {
                 app.startup_complete = true;
@@ -618,23 +607,27 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // (Witch ticks herself on the main thread — no manual tick needed)
 
-        // Drain WitchNotices → update local state
-        while let Ok(notice) = app.notice_rx.try_recv() {
-            match notice {
-                crate::witch::WitchNotice::StatusUpdate(status) => {
-                    app.cached_status = status;
+        // Detect events via generation counter diffing against WitchStatus
+        {
+            let status = app.witch.witch_status();
+
+            // Mutations completed → cache invalidation
+            if status.mutations_generation != app.prev_mutations_generation {
+                app.prev_mutations_generation = status.mutations_generation;
+                app.witch.set_cache_stale();
+            }
+
+            // New error → show status message
+            if status.error_generation != app.prev_error_generation {
+                app.prev_error_generation = status.error_generation;
+                if let Some(ref err) = status.last_error {
+                    app.status_message = Some(format!("Task failed: {}", err));
                 }
-                crate::witch::WitchNotice::MutationsCompleted => {
-                    // Witch already sent InvalidateScope to cache thread;
-                    // UI just needs to know data is stale until fresh results arrive.
-                    app.witch.set_cache_stale();
-                }
-                crate::witch::WitchNotice::Error(msg) => {
-                    app.status_message = Some(format!("Task failed: {}", msg));
-                }
-                crate::witch::WitchNotice::ConfigUpdated => {
-                    // Config already updated on Witch side via shared_config
-                }
+            }
+
+            // Config updated (already applied via shared_config on Witch side)
+            if status.config_generation != app.prev_config_generation {
+                app.prev_config_generation = status.config_generation;
             }
         }
 
@@ -656,21 +649,19 @@ fn run_app<B: ratatui::backend::Backend>(
         // Update views with cached data
         if let ActiveView::Insights(ref mut view) = app.view {
             let insights_data = app.witch.cached.get::<crate::db::domain::GetInsights>().cloned();
-            let handled = {
-                use crate::witch::WitchClient;
-                app.witch.witch_status().handled_decision_kinds
-            };
+            let ws = app.witch.witch_status();
             view.update(
-                Some(&app.cached_status),
+                Some(&ws.work),
                 insights_data,
-                &handled,
+                &ws.handled_decision_kinds,
                 app.witch.is_cache_stale(),
             );
         }
         if let ActiveView::Inbox(ref mut view) = app.view {
             let inbox_data = app.witch.cached.get::<crate::db::domain::GetInboxOverview>().cloned();
             view.update(inbox_data);
-            view.busy = app.cached_status.pending > 0
+            let ws = app.witch.witch_status();
+            view.busy = ws.work.pending > 0
                 || app.witch.is_cache_stale();
         }
         if let ActiveView::History(ref mut view) = app.view {
@@ -681,7 +672,6 @@ fn run_app<B: ratatui::backend::Backend>(
                 view.update(data.clone());
             }
             let ext_status = {
-                use crate::witch::WitchClient;
                 let ws = app.witch.witch_status();
                 (ws.is_external_fetch_active, ws.external_fetch_progress.clone())
             };

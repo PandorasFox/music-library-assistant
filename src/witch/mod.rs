@@ -29,7 +29,6 @@ use crate::meta::mutations::Mutation;
 // Module declarations
 pub(crate) mod auth_thread;
 pub(crate) mod cache_thread;
-mod client;
 mod execution;
 pub(crate) mod external_fetch;
 pub(crate) mod fs_watcher;
@@ -38,7 +37,6 @@ mod handle;
 mod transaction;
 pub(crate) mod types;
 // Re-export public types
-pub use client::WitchClient;
 pub use handle::{PendingQuery, WitchHandle};
 pub use types::{
     MaintenanceWitness, MutationExecutionWitness, PendingTransaction, ReasoningLevel,
@@ -51,25 +49,6 @@ pub use types::{
 // Internal imports
 use types::ContentAnalysisWitness;
 
-// ============================================================================
-// WitchNotice — Typed Witch → UI Notifications
-// ============================================================================
-
-/// Typed notifications from the Witch to the UI layer.
-///
-/// Sent via channel each tick. The UI drains these each frame to update
-/// local state (status, errors, cache invalidation) without reaching
-/// through the Witch's fields.
-pub enum WitchNotice {
-    /// Witch's work status snapshot (emitted every tick).
-    StatusUpdate(WorkStatus),
-    /// Mutations have drained — UI should invalidate caches.
-    MutationsCompleted,
-    /// A task failed with this error message.
-    Error(String),
-    /// Config was updated by a mutation (UI should re-read shared config).
-    ConfigUpdated,
-}
 
 // ============================================================================
 // Zone-Keyed Observation State
@@ -221,8 +200,13 @@ pub struct Witch {
     /// Spawned in new(), shut down in Drop.
     cache_thread_handle: cache_thread::CacheThreadHandle,
 
-    /// Channel for sending typed notices to the UI layer.
-    notice_tx: std::sync::mpsc::Sender<WitchNotice>,
+    // -- Generation counters (monotonically increasing, published in WitchStatus) --
+    /// Increments when a mutation batch completes.
+    mutations_generation: u64,
+    /// Increments when a new task error occurs.
+    error_generation: u64,
+    /// Increments when config is mutated.
+    config_generation: u64,
 
     /// Decision key kinds with staged decisions in the active transaction.
     /// Used by the insights view to hide entries already handled.
@@ -297,11 +281,7 @@ impl Witch {
     fn new(
         startup_state: types::WitchStartupState,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
-    ) -> (
-        Self,
-        cache_thread::CacheHandle,
-        std::sync::mpsc::Receiver<WitchNotice>,
-    ) {
+    ) -> (Self, cache_thread::CacheHandle) {
         // Spawn the logging thread if we have the receiver
         let log_thread_handle = log_rx.map(crate::logging::spawn_log_thread);
 
@@ -316,9 +296,6 @@ impl Witch {
 
         // Spawn the dedicated cache thread
         let (cache_ui_handle, cache_witch_handle) = cache_thread::spawn();
-
-        // Create notice channel for Witch → UI notifications
-        let (notice_tx, notice_rx) = mpsc::channel();
 
         // Spawn the filesystem watcher thread
         let fs_watcher_handle = fs_watcher::FsWatcherHandle::spawn();
@@ -342,7 +319,9 @@ impl Witch {
             pending_computation_phases: VecDeque::new(),
             db_thread_handle: write_thread::spawn(),
             cache_thread_handle: cache_witch_handle,
-            notice_tx,
+            mutations_generation: 0,
+            error_generation: 0,
+            config_generation: 0,
             handled_sources: std::collections::HashSet::new(),
             observed_inodes: ObservedInodes::new(),
             log_thread_handle,
@@ -356,19 +335,15 @@ impl Witch {
             fetch_progress: None,
         };
 
-        (she, cache_ui_handle, notice_rx)
+        (she, cache_ui_handle)
     }
 
     /// Create a new Witch with opinions applied (Ready state).
     fn with_opinions(
         cfg: &Config,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
-    ) -> (
-        Self,
-        cache_thread::CacheHandle,
-        std::sync::mpsc::Receiver<WitchNotice>,
-    ) {
-        let (mut she, cache_handle, notice_rx) =
+    ) -> (Self, cache_thread::CacheHandle) {
+        let (mut she, cache_handle) =
             Self::new(types::WitchStartupState::Ready, log_rx);
         she.force_check_all_files_at_startup =
             cfg.opinions.startup.force_check_all_files_at_startup;
@@ -378,7 +353,7 @@ impl Witch {
                 "[WITCH] force_check_all_files_at_startup=true: will verify all indexed files at startup"
             );
         }
-        (she, cache_handle, notice_rx)
+        (she, cache_handle)
     }
 
     /// Run the Witch on the current (main) thread.
@@ -392,13 +367,13 @@ impl Witch {
     /// `run_loop()` on this thread. Does not return until shutdown.
     pub fn run(
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
-        ui_factory: impl FnOnce(WitchHandle, std::sync::mpsc::Receiver<WitchNotice>) + Send + 'static,
+        ui_factory: impl FnOnce(WitchHandle) + Send + 'static,
     ) {
         // Detect startup state
         let db_path = config::get_db_path().expect("XDG data dir");
         let has_db = db_path.exists();
 
-        let (mut she, cache_handle, notice_rx) = if has_db {
+        let (mut she, cache_handle) = if has_db {
             // Normal startup: load config, init performance globals
             let cfg = match config::load_config() {
                 Ok(cfg) => {
@@ -453,7 +428,7 @@ impl Witch {
         // Spawn the UI as a client thread
         let ui_thread = std::thread::Builder::new()
             .name("tui".into())
-            .spawn(move || ui_factory(handle, notice_rx))
+            .spawn(move || ui_factory(handle))
             .expect("Failed to spawn UI thread");
 
         // Witch owns the main thread
@@ -565,155 +540,174 @@ impl Witch {
     // Protocol Dispatch
     // -------------------------------------------------------------------------
 
-    /// Handle a WitchCommand, mapping results to CommandResponse.
-    fn handle_command(
-        &mut self,
-        cmd: crate::meta::protocol::WitchCommand,
-    ) -> Result<crate::meta::protocol::CommandResponse, crate::meta::protocol::ProtocolError> {
-        use crate::meta::protocol::{CommandResponse, WitchCommand};
-
-        match cmd {
-            WitchCommand::StartTransaction { label } => {
-                self.start_transaction(&label)
-                    .map(|()| CommandResponse::Ok)
-                    .map_err(crate::meta::protocol::ProtocolError::Transaction)
-            }
-            WitchCommand::RemoveDecision { key } => {
-                self.remove_decision(&key)
-                    .map(|()| CommandResponse::Ok)
-                    .map_err(crate::meta::protocol::ProtocolError::Transaction)
-            }
-            WitchCommand::ConfirmTransaction => {
-                self.confirm_transaction()
-                    .map(|()| CommandResponse::Ok)
-                    .map_err(crate::meta::protocol::ProtocolError::Transaction)
-            }
-            WitchCommand::DiscardTransaction => {
-                self.discard_transaction()
-                    .map(|_| CommandResponse::Ok)
-                    .map_err(crate::meta::protocol::ProtocolError::Transaction)
-            }
-            WitchCommand::RequestExternalFetch => {
-                self.request_external_fetch();
-                Ok(CommandResponse::Ok)
-            }
-            WitchCommand::RequestReleasePacking => {
-                self.request_release_packing();
-                Ok(CommandResponse::Ok)
-            }
-            WitchCommand::QueueSchemaReconciliation => {
-                self.queue_schema_reconciliation();
-                Ok(CommandResponse::Ok)
-            }
-            WitchCommand::QueueVacuum => {
-                self.queue_vacuum();
-                Ok(CommandResponse::Ok)
-            }
-            WitchCommand::AddDecision { .. } => {
-                // AddDecision over wire is not yet supported (mutations aren't serializable).
-                // In-process path uses HandleCommand::AddDecision directly.
-                todo!("Remote AddDecision requires server-side decision lookup")
-            }
-            WitchCommand::LatchReadOnlyForSafety { .. } => {
-                todo!("LatchReadOnlyForSafety not yet implemented")
-            }
-        }
-    }
-
     /// Dispatch a single command from the handle.
     fn dispatch_command(&mut self, cmd: handle::HandleCommand) {
-        use crate::meta::protocol::{Authorized, AuthorizationLevel};
+        use crate::meta::protocol::{
+            AuthResponse, AuthenticatedBody, AuthenticatedResponse, AuthorizationLevel,
+            CommandPayload, CommandResponse, DecisionDetail, ProtocolError, QueryPayload,
+            QueryResponse, TransactionPayload, TransactionResponse, UnauthenticatedBody,
+            UnauthenticatedResponse,
+        };
         use handle::HandleCommand;
 
         match cmd {
-            HandleCommand::Command { token, command, reply } => {
-                let required = command.required_authorization();
-                let result = self.gate(token.as_ref(), required, |w| w.handle_command(command));
-                let _ = reply.send(result);
-            }
-            HandleCommand::AddDecision { token, key, decision, reply } => {
-                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |w| {
-                    w.add_decision(key, decision)
-                        .map_err(crate::meta::protocol::ProtocolError::Transaction)
+            HandleCommand::Authenticated { token, body, reply } => {
+                let result = self.gate(Some(&token), AuthorizationLevel::Authenticated, |w| {
+                    match body {
+                        // -- Query area --
+                        AuthenticatedBody::Query(payload) => {
+                            let response = match payload {
+                                QueryPayload::Status => QueryResponse::Status(w.publish_status()),
+                                QueryPayload::Domain(_domain_payload) => {
+                                    // Domain queries go through the cache thread, not here.
+                                    // This is dispatched via CacheRequest::Query in a closure.
+                                    // For now, panic — callers use handle.query() for domain queries.
+                                    unreachable!(
+                                        "Domain queries should route through the cache thread, \
+                                         not HandleCommand::Authenticated"
+                                    )
+                                }
+                            };
+                            Ok(AuthenticatedResponse::Query(response))
+                        }
+
+                        // -- Transaction area --
+                        AuthenticatedBody::Transaction(payload) => {
+                            let response = match payload {
+                                TransactionPayload::Start { label } => {
+                                    match w.start_transaction(&label) {
+                                        Ok(()) => TransactionResponse::Ok,
+                                        Err(e) => TransactionResponse::Error(e),
+                                    }
+                                }
+                                TransactionPayload::AddDecision { key, decision } => {
+                                    match w.add_decision(key, decision) {
+                                        Ok(()) => TransactionResponse::Ok,
+                                        Err(e) => TransactionResponse::Error(e),
+                                    }
+                                }
+                                TransactionPayload::RemoveDecision { key } => {
+                                    match w.remove_decision(&key) {
+                                        Ok(()) => TransactionResponse::Ok,
+                                        Err(e) => TransactionResponse::Error(e),
+                                    }
+                                }
+                                TransactionPayload::Confirm => {
+                                    match w.confirm_transaction() {
+                                        Ok(()) => TransactionResponse::Ok,
+                                        Err(e) => TransactionResponse::Error(e),
+                                    }
+                                }
+                                TransactionPayload::Discard => {
+                                    match w.discard_transaction() {
+                                        Ok(summary) => TransactionResponse::Discarded(summary),
+                                        Err(e) => TransactionResponse::Error(e),
+                                    }
+                                }
+                                TransactionPayload::GetDetails => {
+                                    let details = w
+                                        .pending_transaction
+                                        .as_ref()
+                                        .map(|txn| {
+                                            txn.decisions
+                                                .iter()
+                                                .map(|(k, d)| DecisionDetail {
+                                                    key: k.clone(),
+                                                    label: d.label.clone(),
+                                                    mutations: d.mutations.clone(),
+                                                })
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    TransactionResponse::Details(details)
+                                }
+                            };
+                            Ok(AuthenticatedResponse::Transaction(response))
+                        }
+
+                        // -- Command area --
+                        AuthenticatedBody::Command(payload) => {
+                            let response = match payload {
+                                CommandPayload::RequestExternalFetch => {
+                                    w.request_external_fetch();
+                                    CommandResponse::Ok
+                                }
+                                CommandPayload::RequestReleasePacking => {
+                                    w.request_release_packing();
+                                    CommandResponse::Ok
+                                }
+                                CommandPayload::ValidateConfig { config } => {
+                                    config.validate().map_err(|e| {
+                                        ProtocolError::Internal(format!("{:#}", e))
+                                    })?;
+                                    CommandResponse::Ok
+                                }
+                                CommandPayload::SetSharedConfig { shared } => {
+                                    w.set_shared_config(shared);
+                                    CommandResponse::Ok
+                                }
+                                CommandPayload::StartWatching => {
+                                    CommandResponse::WatchingStarted(w.start_watching())
+                                }
+                                CommandPayload::UpdatePerformance { opinions } => {
+                                    w.update_performance_impl(opinions);
+                                    CommandResponse::Ok
+                                }
+                                CommandPayload::QueueSchemaReconciliation => {
+                                    w.queue_schema_reconciliation();
+                                    CommandResponse::Ok
+                                }
+                                CommandPayload::QueueVacuum => {
+                                    w.queue_vacuum();
+                                    CommandResponse::Ok
+                                }
+                            };
+                            Ok(AuthenticatedResponse::Command(response))
+                        }
+                    }
                 });
                 let _ = reply.send(result);
             }
-            HandleCommand::GetTransactionDetails { token, reply } => {
-                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |w| {
-                    let details = w
-                        .pending_transaction
-                        .as_ref()
-                        .map(|txn| {
-                            txn.decisions
-                                .iter()
-                                .map(|(k, d)| client::DecisionDetail {
-                                    key: k.clone(),
-                                    label: d.label.clone(),
-                                    mutations: d.mutations.clone(),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    Ok(details)
-                });
-                let _ = reply.send(result);
-            }
-            HandleCommand::CompleteSetup { token, root, first_user, reply } => {
-                let result = self.gate(token.as_ref(), AuthorizationLevel::FirstTimeSetup, |w| {
-                    w.complete_setup_impl(root, first_user)
-                        .map_err(crate::meta::protocol::ProtocolError::Internal)
-                });
-                let _ = reply.send(result);
-            }
-            HandleCommand::ValidateConfig { token, config, reply } => {
-                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |_w| {
-                    config.validate()
-                        .map_err(|e| crate::meta::protocol::ProtocolError::Internal(format!("{:#}", e)))
-                });
-                let _ = reply.send(result);
-            }
-            HandleCommand::SetSharedConfig { token, shared, reply } => {
-                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |w| {
-                    w.set_shared_config(shared);
-                    Ok(())
-                });
-                let _ = reply.send(result);
-            }
-            HandleCommand::StartWatching { token, reply } => {
-                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |w| {
-                    Ok(w.start_watching())
-                });
-                let _ = reply.send(result);
-            }
-            HandleCommand::UpdatePerformance { token, opinions, reply } => {
-                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |w| {
-                    w.update_performance_impl(opinions);
-                    Ok(())
-                });
-                let _ = reply.send(result);
-            }
-            HandleCommand::Auth { request, reply } => {
-                use crate::meta::protocol::{AuthRequest, AuthResponse};
-                let response = match request {
-                    AuthRequest::Login { username, password } => {
-                        match &self.auth_handle {
+
+            HandleCommand::Unauthenticated { body, reply } => {
+                let result = match body {
+                    UnauthenticatedBody::Login { username, password } => {
+                        let response = match &self.auth_handle {
                             Some(auth) => {
-                                match auth.login(&username, &password, crate::auth::SessionLifetime::CloseOnExit) {
+                                match auth.login(
+                                    &username,
+                                    &password,
+                                    crate::auth::SessionLifetime::CloseOnExit,
+                                ) {
                                     Ok(token) => AuthResponse::Token(token),
                                     Err(msg) => AuthResponse::Failed(msg),
                                 }
                             }
                             None => AuthResponse::Failed("Auth not available".to_string()),
-                        }
+                        };
+                        Ok(UnauthenticatedResponse::Auth(response))
+                    }
+                    UnauthenticatedBody::CompleteSetup { root, first_user } => {
+                        self.gate(
+                            None,
+                            AuthorizationLevel::FirstTimeSetup,
+                            |w| {
+                                w.complete_setup_impl(root, first_user)
+                                    .map_err(ProtocolError::Internal)?;
+                                Ok(UnauthenticatedResponse::SetupComplete)
+                            },
+                        )
                     }
                 };
-                let _ = reply.send(response);
+                let _ = reply.send(result);
             }
+
             HandleCommand::NotifyDbReady => {
                 if let Some(ref auth_handle) = self.auth_thread_handle {
                     auth_handle.notify_db_ready();
                 }
             }
+
             HandleCommand::Shutdown => {
                 // Handled by caller (run_loop checks for this)
             }
@@ -1005,7 +999,7 @@ impl Witch {
 
             if !result.success {
                 if let Some(err) = result.error {
-                    let _ = self.notice_tx.send(WitchNotice::Error(err.clone()));
+                    self.error_generation += 1;
                     if self.recent_errors.len() >= 5 {
                         self.recent_errors.pop_front();
                     }
@@ -1022,7 +1016,7 @@ impl Witch {
                     self.fs_watcher.poll(db_cache, new_interval);
                 }
                 self.update_shared_config(new_config);
-                let _ = self.notice_tx.send(WitchNotice::ConfigUpdated);
+                self.config_generation += 1;
             }
 
             // Accumulate recomputation scope from mutation results
@@ -1062,12 +1056,6 @@ impl Witch {
         }
 
         // Cache thread handles its own periodic refreshes — no action needed here.
-
-        // Capture current state for status before transitions
-        let current_in_flight = self.work_state.in_flight();
-        let current_total_processed = self.work_state.processed();
-        let current_session_queued = self.work_state.queued();
-        let current_pending_by_label = self.work_state.by_label().cloned().unwrap_or_default();
 
         // State machine transitions
         self.update_state();
@@ -1113,14 +1101,6 @@ impl Witch {
             _ => {}
         }
 
-        // Emit status update to UI
-        let _ = self.notice_tx.send(WitchNotice::StatusUpdate(WorkStatus {
-            state: WorkStateSnapshot::from(&self.work_state),
-            pending: current_in_flight,
-            total_processed: current_total_processed,
-            session_queued: current_session_queued,
-            pending_by_label: current_pending_by_label,
-        }));
     }
 
     /// Update state machine based on in-flight tasks and timing.
@@ -1247,7 +1227,7 @@ impl Witch {
                     // Mutations ran — notify UI and invalidate caches.
                     // inotify detects FS changes from mutations → watcher_derivation_needed
                     // triggers derivation when idle. No watcher restart needed.
-                    let _ = self.notice_tx.send(WitchNotice::MutationsCompleted);
+                    self.mutations_generation += 1;
                     self.cache_thread_handle.invalidate_scope(self.session_recomputation_scope);
                     crate::logging::log_general(format!(
                         "[STATE] Mutations complete (scope={:?}). Staying Full, inotify handles re-derivation. \
@@ -2084,6 +2064,10 @@ impl Witch {
             is_external_fetch_active: self.is_external_fetch_active(),
             external_fetch_progress: self.external_fetch_progress().cloned(),
             has_acoustid_api_key: self.has_acoustid_api_key(),
+            mutations_generation: self.mutations_generation,
+            last_error: self.recent_errors.back().cloned(),
+            error_generation: self.error_generation,
+            config_generation: self.config_generation,
         }
     }
 

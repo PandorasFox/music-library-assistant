@@ -15,7 +15,7 @@ use ratatui::Terminal;
 use crate::auth::SessionToken;
 use crate::ui::input;
 use crate::ui::widgets::TextInputState;
-use crate::witch::{WitchClient, WitchHandle};
+use crate::witch::WitchHandle;
 
 /// Focus state for the login form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

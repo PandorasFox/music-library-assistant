@@ -23,7 +23,7 @@ use crate::ui::widgets::standard_list::{
 };
 use crate::ui::widgets::wizard::{WizardItem, WizardOffer};
 use crate::ui::widgets::{centered_rect_fixed, render_button_row, ConfirmationButton};
-use crate::witch::WitchClient;
+use crate::witch::WitchHandle;
 
 // ============================================================================
 // Types
@@ -200,7 +200,7 @@ impl TransactionReviewState {
     }
 
     /// Refresh cached decisions from the Witch. Call after mutations or on tick.
-    pub fn refresh_decisions(&mut self, witch: &impl WitchClient) {
+    pub fn refresh_decisions(&mut self, witch: &WitchHandle) {
         self.decisions = fetch_decision_summaries(witch);
         self.list.clamp_cursor(&self.decisions);
     }
@@ -388,7 +388,7 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
 }
 
 /// Fetch decision summaries from the Witch's active transaction.
-pub fn fetch_decision_summaries(witch: &impl WitchClient) -> Vec<DecisionSummary> {
+pub fn fetch_decision_summaries(witch: &WitchHandle) -> Vec<DecisionSummary> {
     witch
         .transaction_decision_details()
         .unwrap_or_default()

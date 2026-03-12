@@ -9,7 +9,6 @@ use super::witness;
 use super::HandleAction;
 use crate::meta::views::ExternalMatchReviewEntry;
 use crate::ui::{external_match_modal, external_match_view, widgets, ActiveView};
-use crate::witch::WitchClient;
 
 // =========================================================================
 // External Matches Lateral View Actions

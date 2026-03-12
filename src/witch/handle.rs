@@ -3,13 +3,11 @@
 //! The Witch owns the main thread. Clients (e.g. TUI) run in spawned threads
 //! and communicate via:
 //! - `Arc<RwLock<WitchStatus>>` for transparent state reads (no cache, no staleness)
-//! - `mpsc::Sender<HandleCommand>` for commands (with oneshot response channels)
+//! - `mpsc::Sender<HandleCommand>` for protocol-routed commands
 //! - Cache channels for periodic + one-shot DB queries
 //!
 //! All server-side concepts (cache thread, auth thread, DB connections) are
 //! encapsulated here. The UI sees only WitchHandle.
-//!
-//! See `docs/CLIENT_SERVER_ARCHITECTURE.md` for the full design.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -22,10 +20,13 @@ use crate::auth::SessionToken;
 use crate::config::SharedConfig;
 use crate::db::domain::{CachedQuery, DomainQuery};
 use crate::meta::decisions::{DecisionKey, DiscardSummary, WitnessedDecision};
-use crate::meta::protocol::{AuthRequest, AuthResponse, CommandResponse, ProtocolError, WitchCommand};
+use crate::meta::protocol::{
+    AuthResponse, AuthenticatedBody, AuthenticatedResponse, CommandPayload, CommandResponse,
+    DecisionDetail, ProtocolError, ProtocolQuery,
+    TransactionPayload, TransactionResponse, UnauthenticatedBody, UnauthenticatedResponse,
+};
 
 use super::cache_thread::CacheHandle;
-use super::client::{DecisionDetail, WitchClient};
 use super::WitchStatus;
 
 // ============================================================================
@@ -34,65 +35,27 @@ use super::WitchStatus;
 
 /// A command sent from the handle to the Witch thread.
 ///
-/// Each variant that needs a response carries a oneshot sender.
-/// Protocol commands carry a session token for server-side auth gating.
+/// Three variants: authenticated protocol request, unauthenticated protocol
+/// request, and lifecycle (shutdown/notify). The reply channel carries the
+/// area-matching response type.
 pub(super) enum HandleCommand {
-    // -- Protocol dispatch (auth-gated via token) --
-    Command {
-        token: Option<SessionToken>,
-        command: WitchCommand,
-        reply: mpsc::Sender<Result<CommandResponse, ProtocolError>>,
+    /// Authenticated protocol request (queries, transactions, commands).
+    Authenticated {
+        token: SessionToken,
+        body: AuthenticatedBody,
+        reply: mpsc::Sender<Result<AuthenticatedResponse, ProtocolError>>,
     },
 
-    // -- Enriched in-process (carries non-serializable data, still auth-gated) --
-    AddDecision {
-        token: Option<SessionToken>,
-        key: DecisionKey,
-        decision: WitnessedDecision,
-        reply: mpsc::Sender<Result<(), ProtocolError>>,
-    },
-    GetTransactionDetails {
-        token: Option<SessionToken>,
-        reply: mpsc::Sender<Result<Vec<DecisionDetail>, ProtocolError>>,
-    },
-
-    // -- Auth (pre-gate — no session token required) --
-    Auth {
-        request: AuthRequest,
-        reply: mpsc::Sender<AuthResponse>,
+    /// Unauthenticated protocol request (login, setup).
+    Unauthenticated {
+        body: UnauthenticatedBody,
+        reply: mpsc::Sender<Result<UnauthenticatedResponse, ProtocolError>>,
     },
 
     /// Notify auth thread that DB is now available (after first-time setup).
     NotifyDbReady,
 
-    // -- Lifecycle (auth-gated) --
-    CompleteSetup {
-        token: Option<SessionToken>,
-        root: PathBuf,
-        first_user: Option<(String, String)>,
-        reply: mpsc::Sender<Result<(), ProtocolError>>,
-    },
-    ValidateConfig {
-        token: Option<SessionToken>,
-        config: crate::config::Config,
-        reply: mpsc::Sender<Result<(), ProtocolError>>,
-    },
-    SetSharedConfig {
-        token: Option<SessionToken>,
-        shared: SharedConfig,
-        reply: mpsc::Sender<Result<(), ProtocolError>>,
-    },
-    StartWatching {
-        token: Option<SessionToken>,
-        reply: mpsc::Sender<Result<bool, ProtocolError>>,
-    },
-    UpdatePerformance {
-        token: Option<SessionToken>,
-        opinions: crate::config::PerformanceOpinions,
-        reply: mpsc::Sender<Result<(), ProtocolError>>,
-    },
-
-    // -- Shutdown --
+    /// Shutdown the Witch.
     Shutdown,
 }
 
@@ -169,7 +132,7 @@ impl CachedData {
 ///
 /// The single interface between clients and the Witch. Encapsulates:
 /// - Transparent state reads (`Arc<RwLock<WitchStatus>>`)
-/// - Command channel to the Witch thread
+/// - Protocol-routed command channel to the Witch thread
 /// - Cache thread channels (periodic + one-shot DB queries)
 /// - Session token management
 /// - Type-erased periodic query cache
@@ -219,6 +182,235 @@ impl WitchHandle {
     /// Notify the Witch that the DB is now available (after first-time setup).
     pub fn notify_db_ready(&self) {
         let _ = self.cmd_tx.send(HandleCommand::NotifyDbReady);
+    }
+
+    // =========================================================================
+    // Protocol: Authenticated requests
+    // =========================================================================
+
+    /// Send an authenticated request and wait for the reply.
+    /// Panics if no session token is set (call login() first).
+    fn send_authenticated(
+        &self,
+        body: AuthenticatedBody,
+    ) -> Result<AuthenticatedResponse, ProtocolError> {
+        let token = self
+            .session_token
+            .clone()
+            .expect("send_authenticated called before login");
+        let (tx, rx) = mpsc::channel();
+        self.cmd_tx
+            .send(HandleCommand::Authenticated {
+                token,
+                body,
+                reply: tx,
+            })
+            .expect("Witch thread has shut down unexpectedly");
+        rx.recv()
+            .expect("Witch thread dropped reply channel unexpectedly")
+    }
+
+    /// Send a typed protocol query and extract the typed response.
+    ///
+    /// Panics on protocol errors (in-process, these indicate bugs).
+    /// Callsite usage: `let status: WitchStatus = handle.send_query(StatusQuery);`
+    pub fn send_query<Q: ProtocolQuery>(&self, q: Q) -> Q::Response {
+        let body = AuthenticatedBody::Query(q.into_payload());
+        match self.send_authenticated(body) {
+            Ok(AuthenticatedResponse::Query(qr)) => Q::extract_response(qr),
+            Ok(_) => unreachable!("protocol bug: wrong response area"),
+            Err(e) => panic!("protocol query failed: {e}"),
+        }
+    }
+
+    /// Send a transaction operation and return the transaction response.
+    pub fn send_transaction(
+        &self,
+        payload: TransactionPayload,
+    ) -> TransactionResponse {
+        let body = AuthenticatedBody::Transaction(payload);
+        match self.send_authenticated(body) {
+            Ok(AuthenticatedResponse::Transaction(tr)) => tr,
+            Ok(_) => unreachable!("protocol bug: wrong response area"),
+            Err(_) => TransactionResponse::Error(
+                crate::meta::decisions::TransactionError::NotAcceptingMutations,
+            ),
+        }
+    }
+
+    /// Send a command and return the command response.
+    pub fn send_command(&self, payload: CommandPayload) -> Result<CommandResponse, ProtocolError> {
+        let body = AuthenticatedBody::Command(payload);
+        match self.send_authenticated(body)? {
+            AuthenticatedResponse::Command(cr) => Ok(cr),
+            _ => unreachable!("protocol bug: wrong response area"),
+        }
+    }
+
+    // =========================================================================
+    // Protocol: Unauthenticated requests
+    // =========================================================================
+
+    /// Send an unauthenticated request and wait for the reply.
+    fn send_unauthenticated(
+        &self,
+        body: UnauthenticatedBody,
+    ) -> Result<UnauthenticatedResponse, ProtocolError> {
+        let (tx, rx) = mpsc::channel();
+        self.cmd_tx
+            .send(HandleCommand::Unauthenticated { body, reply: tx })
+            .expect("Witch thread has shut down unexpectedly");
+        rx.recv()
+            .expect("Witch thread dropped reply channel unexpectedly")
+    }
+
+    // =========================================================================
+    // Convenience methods (ergonomic sugar over protocol)
+    // =========================================================================
+
+    /// Read the Witch's current state machine snapshot.
+    ///
+    /// Reads from shared memory (`Arc<RwLock<WitchStatus>>`) — transparent,
+    /// always fresh, sub-microsecond.
+    pub fn witch_status(&self) -> WitchStatus {
+        self.status
+            .read()
+            .expect("WitchStatus lock poisoned")
+            .clone()
+    }
+
+    /// Attempt login. Returns a session token on success.
+    pub fn login(&mut self, username: &str, password: &str) -> Result<SessionToken, String> {
+        let response = self.send_unauthenticated(UnauthenticatedBody::Login {
+            username: username.to_string(),
+            password: password.to_string(),
+        });
+        match response {
+            Ok(UnauthenticatedResponse::Auth(AuthResponse::Token(token))) => {
+                self.session_token = Some(token.clone());
+                Ok(token)
+            }
+            Ok(UnauthenticatedResponse::Auth(AuthResponse::Failed(msg))) => Err(msg),
+            Ok(_) => Err("unexpected response to login".to_string()),
+            Err(e) => Err(format!("{e}")),
+        }
+    }
+
+    /// Complete first-time setup.
+    pub fn complete_setup(
+        &mut self,
+        root: PathBuf,
+        first_user: Option<(String, String)>,
+    ) -> Result<(), ProtocolError> {
+        match self.send_unauthenticated(UnauthenticatedBody::CompleteSetup { root, first_user })? {
+            UnauthenticatedResponse::SetupComplete => Ok(()),
+            _ => Err(ProtocolError::Internal(
+                "unexpected response to setup".to_string(),
+            )),
+        }
+    }
+
+    /// Open a new transaction.
+    pub fn start_transaction(&mut self, label: &str) -> Result<(), ProtocolError> {
+        match self.send_transaction(TransactionPayload::Start {
+            label: label.to_owned(),
+        }) {
+            TransactionResponse::Ok => Ok(()),
+            TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    /// Stage a decision in the active transaction.
+    pub fn add_decision(
+        &mut self,
+        key: DecisionKey,
+        decision: WitnessedDecision,
+    ) -> Result<(), ProtocolError> {
+        match self.send_transaction(TransactionPayload::AddDecision { key, decision }) {
+            TransactionResponse::Ok => Ok(()),
+            TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    /// Remove a staged decision.
+    pub fn remove_decision(&mut self, key: &DecisionKey) -> Result<(), ProtocolError> {
+        match self.send_transaction(TransactionPayload::RemoveDecision { key: key.clone() }) {
+            TransactionResponse::Ok => Ok(()),
+            TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    /// Commit the active transaction.
+    pub fn confirm_transaction(&mut self) -> Result<(), ProtocolError> {
+        match self.send_transaction(TransactionPayload::Confirm) {
+            TransactionResponse::Ok => Ok(()),
+            TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    /// Discard the active transaction.
+    pub fn discard_transaction(&mut self) -> Result<DiscardSummary, ProtocolError> {
+        match self.send_transaction(TransactionPayload::Discard) {
+            TransactionResponse::Discarded(s) => Ok(s),
+            TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    /// Get full details for all decisions in the active transaction.
+    pub fn transaction_decision_details(&self) -> Result<Vec<DecisionDetail>, ProtocolError> {
+        match self.send_transaction(TransactionPayload::GetDetails) {
+            TransactionResponse::Details(d) => Ok(d),
+            TransactionResponse::Error(e) => Err(ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    /// Kick off external fetch.
+    pub fn request_external_fetch(&mut self) -> Result<(), ProtocolError> {
+        self.send_command(CommandPayload::RequestExternalFetch)?;
+        Ok(())
+    }
+
+    /// Kick off release bin-packing.
+    pub fn request_release_packing(&mut self) -> Result<(), ProtocolError> {
+        self.send_command(CommandPayload::RequestReleasePacking)?;
+        Ok(())
+    }
+
+    /// Validate a config blob.
+    pub fn validate_config(&self, config: &crate::config::Config) -> Result<(), ProtocolError> {
+        self.send_command(CommandPayload::ValidateConfig {
+            config: config.clone(),
+        })?;
+        Ok(())
+    }
+
+    /// Inject shared config.
+    pub fn set_shared_config(&mut self, shared: SharedConfig) -> Result<(), ProtocolError> {
+        self.send_command(CommandPayload::SetSharedConfig { shared })?;
+        Ok(())
+    }
+
+    /// Start the filesystem watcher.
+    pub fn start_watching(&mut self) -> Result<bool, ProtocolError> {
+        match self.send_command(CommandPayload::StartWatching)? {
+            CommandResponse::WatchingStarted(v) => Ok(v),
+            CommandResponse::Ok => Ok(false),
+        }
+    }
+
+    /// Update performance config at runtime.
+    pub fn update_performance(
+        &mut self,
+        opinions: crate::config::PerformanceOpinions,
+    ) -> Result<(), ProtocolError> {
+        self.send_command(CommandPayload::UpdatePerformance { opinions })?;
+        Ok(())
     }
 
     // =========================================================================
@@ -287,157 +479,6 @@ impl WitchHandle {
     /// Used after schema migrations.
     pub fn reconnect_cache_db(&self) {
         self.cache.reconnect_db();
-    }
-
-    // =========================================================================
-    // Internal command plumbing
-    // =========================================================================
-
-    /// Send a command and wait for the reply.
-    fn send_recv<T>(&self, f: impl FnOnce(mpsc::Sender<T>) -> HandleCommand) -> T {
-        let (tx, rx) = mpsc::channel();
-        let cmd = f(tx);
-        self.cmd_tx
-            .send(cmd)
-            .expect("Witch thread has shut down unexpectedly");
-        rx.recv()
-            .expect("Witch thread dropped reply channel unexpectedly")
-    }
-
-    /// Send a WitchCommand and decode the CommandResponse.
-    fn send_command(&self, command: WitchCommand) -> Result<CommandResponse, ProtocolError> {
-        self.send_recv(|reply| HandleCommand::Command {
-            token: self.session_token.clone(),
-            command,
-            reply,
-        })
-    }
-
-    /// Send a WitchCommand expecting Ok response, mapping TransactionError.
-    fn send_command_ok(&self, command: WitchCommand) -> Result<(), ProtocolError> {
-        match self.send_command(command)? {
-            CommandResponse::Ok => Ok(()),
-            CommandResponse::TransactionError(e) => Err(ProtocolError::Transaction(e)),
-        }
-    }
-}
-
-impl WitchClient for WitchHandle {
-    fn witch_status(&self) -> WitchStatus {
-        self.status
-            .read()
-            .expect("WitchStatus lock poisoned")
-            .clone()
-    }
-
-    fn login(&mut self, username: &str, password: &str) -> Result<SessionToken, String> {
-        let response = self.send_recv(|reply| HandleCommand::Auth {
-            request: AuthRequest::Login {
-                username: username.to_string(),
-                password: password.to_string(),
-            },
-            reply,
-        });
-        match response {
-            AuthResponse::Token(token) => {
-                self.session_token = Some(token.clone());
-                Ok(token)
-            }
-            AuthResponse::Failed(msg) => Err(msg),
-        }
-    }
-
-    fn complete_setup(
-        &mut self,
-        root: PathBuf,
-        first_user: Option<(String, String)>,
-    ) -> Result<(), ProtocolError> {
-        self.send_recv(|reply| HandleCommand::CompleteSetup {
-            token: self.session_token.clone(),
-            root,
-            first_user,
-            reply,
-        })
-    }
-
-    fn start_transaction(&mut self, label: &str) -> Result<(), ProtocolError> {
-        self.send_command_ok(WitchCommand::StartTransaction {
-            label: label.to_owned(),
-        })
-    }
-
-    fn add_decision(
-        &mut self,
-        key: DecisionKey,
-        decision: WitnessedDecision,
-    ) -> Result<(), ProtocolError> {
-        self.send_recv(|reply| HandleCommand::AddDecision {
-            token: self.session_token.clone(),
-            key,
-            decision,
-            reply,
-        })
-    }
-
-    fn remove_decision(&mut self, key: &DecisionKey) -> Result<(), ProtocolError> {
-        self.send_command_ok(WitchCommand::RemoveDecision { key: key.clone() })
-    }
-
-    fn confirm_transaction(&mut self) -> Result<(), ProtocolError> {
-        self.send_command_ok(WitchCommand::ConfirmTransaction)
-    }
-
-    fn discard_transaction(&mut self) -> Result<DiscardSummary, ProtocolError> {
-        match self.send_command(WitchCommand::DiscardTransaction)? {
-            CommandResponse::Ok => Ok(DiscardSummary),
-            CommandResponse::TransactionError(e) => Err(ProtocolError::Transaction(e)),
-        }
-    }
-
-    fn transaction_decision_details(&self) -> Result<Vec<DecisionDetail>, ProtocolError> {
-        self.send_recv(|reply| HandleCommand::GetTransactionDetails {
-            token: self.session_token.clone(),
-            reply,
-        })
-    }
-
-    fn request_external_fetch(&mut self) -> Result<(), ProtocolError> {
-        self.send_command_ok(WitchCommand::RequestExternalFetch)
-    }
-
-    fn request_release_packing(&mut self) -> Result<(), ProtocolError> {
-        self.send_command_ok(WitchCommand::RequestReleasePacking)
-    }
-
-    fn validate_config(&self, config: &crate::config::Config) -> Result<(), ProtocolError> {
-        self.send_recv(|reply| HandleCommand::ValidateConfig {
-            token: self.session_token.clone(),
-            config: config.clone(),
-            reply,
-        })
-    }
-
-    fn set_shared_config(&mut self, shared: SharedConfig) -> Result<(), ProtocolError> {
-        self.send_recv(|reply| HandleCommand::SetSharedConfig {
-            token: self.session_token.clone(),
-            shared,
-            reply,
-        })
-    }
-
-    fn start_watching(&mut self) -> Result<bool, ProtocolError> {
-        self.send_recv(|reply| HandleCommand::StartWatching {
-            token: self.session_token.clone(),
-            reply,
-        })
-    }
-
-    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) -> Result<(), ProtocolError> {
-        self.send_recv(|reply| HandleCommand::UpdatePerformance {
-            token: self.session_token.clone(),
-            opinions,
-            reply,
-        })
     }
 }
 

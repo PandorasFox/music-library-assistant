@@ -6,7 +6,6 @@ use super::HandleAction;
 use crate::ui::active_view::ActiveView;
 use crate::ui::suspended_views::SuspendTarget;
 use crate::ui::{progress_screen, transaction_review, widgets};
-use crate::witch::WitchClient;
 
 impl HandleAction for transaction_review::TransactionReviewAction {
     fn handle(self, app: &mut App, gesture: Option<&witness::ConfirmationGesture>) {

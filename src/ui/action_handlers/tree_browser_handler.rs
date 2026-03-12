@@ -6,7 +6,6 @@ use super::HandleAction;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::active_view::ActiveView;
 use crate::ui::{tree_browser, widgets};
-use crate::witch::WitchClient;
 
 impl HandleAction for tree_browser::TreeBrowserAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {

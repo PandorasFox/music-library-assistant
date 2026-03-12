@@ -33,7 +33,6 @@ use crate::meta::decisions::DecisionKey;
 use crate::ui::active_view::{ActiveView, ViewAction};
 use crate::ui::eye::Eye;
 use crate::ui::{insights_view, progress_screen, tag_editor, tag_search, widgets};
-use crate::witch::WitchClient;
 
 /// Trait for action types that can be dispatched from ViewAction.
 ///

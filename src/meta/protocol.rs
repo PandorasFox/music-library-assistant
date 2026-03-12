@@ -1,42 +1,37 @@
 //! Protocol types for the Witch client-server architecture.
 //!
-//! These types define the wire format between clients (TUI, HTTP server)
-//! and the Witch server. All types derive Serialize/Deserialize for
-//! transport over the Unix socket protocol.
+//! The protocol defines the complete vocabulary for UI↔Witch communication.
+//! Two top-level request types (unauthenticated, authenticated) with typed
+//! sub-areas for queries, transactions, and commands.
 //!
-//! See `docs/CLIENT_SERVER_ARCHITECTURE.md` for the full design.
+//! ## Trait-Based Request/Response Coupling
+//!
+//! `ProtocolQuery` and `ProtocolCommand` traits have associated `Response` types.
+//! Client-side send methods are generic over these traits, so callsites get
+//! typed responses without manual variant matching.
+//!
+//! ## Domain Queries
+//!
+//! Domain queries (reads against the DB) are lifted into the protocol via
+//! the `domain_query_protocol!` macro in `db/domain.rs`. Adding a new query
+//! = adding one line to the macro invocation.
+
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::decisions::{DecisionKey, DecisionKeyKind, TransactionError};
+use super::decisions::{DecisionKey, TransactionError};
 use crate::auth::SessionToken;
-use crate::witch::external_fetch::FetchProgress;
-use crate::witch::{ReasoningLevel, WorkStatus};
-
-// ============================================================================
-// Session Identity
-// ============================================================================
-
-/// Opaque session identifier. Obtained via Login, included in every request.
-///
-/// No sentinel values, no special constants. A `SessionId` is either valid
-/// (returned by the Witch after authentication) or it doesn't exist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SessionId(pub u128);
+use crate::meta::decisions::{DiscardSummary, WitnessedDecision};
+use crate::witch::WitchStatus;
 
 // ============================================================================
 // Authorization
 // ============================================================================
 
-/// Authorization level required by a protocol endpoint.
+/// Authorization level for the Witch's gate.
 ///
-/// Two system states, two levels. The Witch's gate checks
-/// `resolve_auth(token) == endpoint.required_authorization()`
-/// with exact-match, fail-closed semantics.
-///
-/// Login is not an authorization level — it's the mechanism by which
-/// a client *obtains* a token. When login becomes a protocol command,
-/// it will be special-cased in dispatch (pre-gate), not given a level.
+/// Two system states, two levels. Exact-match, fail-closed semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuthorizationLevel {
     /// No users exist yet. Only `CompleteSetup` accepted.
@@ -46,164 +41,225 @@ pub enum AuthorizationLevel {
 }
 
 // ============================================================================
-// Auth (pre-gate — no session token required)
+// Unauthenticated Area (pre-gate — no session token required)
 // ============================================================================
 
-/// Auth request. Dispatched pre-gate.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum AuthRequest {
+/// Request body for unauthenticated operations.
+///
+/// Login and first-time setup. These bypass the auth gate entirely.
+#[derive(Debug, Clone)]
+pub enum UnauthenticatedBody {
+    /// Attempt login with credentials.
     Login { username: String, password: String },
+    /// Complete first-time setup with archive root and optional first user.
+    CompleteSetup {
+        root: PathBuf,
+        first_user: Option<(String, String)>,
+    },
 }
 
-/// Auth response.
+/// Response to unauthenticated requests.
+#[derive(Debug, Clone)]
+pub enum UnauthenticatedResponse {
+    /// Login result.
+    Auth(AuthResponse),
+    /// Setup completed successfully.
+    SetupComplete,
+}
+
+/// Auth response (login result).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuthResponse {
-    /// Login succeeded.
+    /// Login succeeded — here's the token.
     Token(SessionToken),
     /// Login failed.
     Failed(String),
 }
 
 // ============================================================================
-// Authorized trait
+// Authenticated Area
 // ============================================================================
 
-/// Structural auth contract. Every protocol message declares its required
-/// authorization level. The Witch's dispatch gate checks this automatically
-/// before any handler runs — handlers are structurally unreachable without
-/// passing auth.
-pub trait Authorized {
-    fn required_authorization(&self) -> AuthorizationLevel;
+/// Request body for authenticated operations.
+///
+/// Three sub-areas: queries (read-only), transactions (decision lifecycle),
+/// and commands (operational actions).
+pub enum AuthenticatedBody {
+    Query(QueryPayload),
+    Transaction(TransactionPayload),
+    Command(CommandPayload),
+}
+
+/// Response to authenticated requests.
+///
+/// Mirrors the three sub-areas. Server dispatch returns the variant
+/// matching the request area.
+pub enum AuthenticatedResponse {
+    Query(QueryResponse),
+    Transaction(TransactionResponse),
+    Command(CommandResponse),
 }
 
 // ============================================================================
-// Queries (read-only requests)
+// Query Area
 // ============================================================================
 
-/// Read-only queries against the Witch's state.
-///
-/// Each variant maps to one or more Witch read methods. Queries never
-/// mutate state and do not require a `ConfirmationGesture`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum WitchQuery {
-    /// Current work status snapshot.
+/// Read-only query payloads.
+pub enum QueryPayload {
+    /// Comprehensive Witch state snapshot.
     Status,
-    /// Current reasoning level (None | Inodes | Full).
-    ReasoningLevel,
-    /// Whether any decisions are pending in this session's transaction.
-    HasPending,
-    /// Whether initial corpus scanning is still in progress.
-    IsInitialScanning,
-    /// Number of tasks queued in the db_thread write queue.
-    DbQueueDepth,
-    /// Whether this session has an active transaction.
-    HasTransaction,
-    /// Summary of the active transaction (label, decision count, mutation count).
-    TransactionSummary,
-    /// All decision keys in the active transaction.
-    DecisionKeys,
-    /// Get a specific decision's label by key.
-    GetDecision(DecisionKey),
-    /// Which singleton DecisionKeyKinds are currently handled.
-    HandledDecisionKinds,
-    /// Whether the external fetch scheduler is currently running.
-    IsExternalFetchActive,
-    /// Progress snapshot from external fetch (AcoustID + MusicBrainz).
-    ExternalFetchProgress,
-    /// Whether an AcoustID API key is configured.
-    HasAcoustIdApiKey,
-    /// Whether the database schema needs updating.
-    NeedsSchemaUpdate,
-    /// Human-readable descriptions of pending schema changes.
-    PendingSchemaDescriptions,
+    /// Domain-specific DB query (dispatched to cache thread).
+    Domain(crate::db::domain::DomainQueryPayload),
+}
+
+/// Query response variants.
+pub enum QueryResponse {
+    /// Full Witch status snapshot.
+    Status(WitchStatus),
+    /// Domain query result.
+    Domain(crate::db::domain::DomainQueryResult),
+}
+
+/// Trait for protocol queries. Each implementor declares its response type.
+///
+/// The wire enums (`QueryPayload`, `QueryResponse`) exist for dispatch routing.
+/// Client-side send methods are generic over this trait, so callsites get
+/// typed responses: `let status: WitchStatus = handle.send_query(StatusQuery);`
+pub trait ProtocolQuery: Send + 'static {
+    type Response: Send + 'static;
+
+    /// Pack self into the wire enum.
+    fn into_payload(self) -> QueryPayload;
+
+    /// Extract typed response from the wire enum.
+    /// Panics on mismatch (indicates protocol bug, not runtime error).
+    fn extract_response(resp: QueryResponse) -> Self::Response;
+}
+
+/// Query for the comprehensive Witch state snapshot.
+pub struct StatusQuery;
+
+impl ProtocolQuery for StatusQuery {
+    type Response = WitchStatus;
+
+    fn into_payload(self) -> QueryPayload {
+        QueryPayload::Status
+    }
+
+    fn extract_response(resp: QueryResponse) -> WitchStatus {
+        match resp {
+            QueryResponse::Status(s) => s,
+            _ => unreachable!("protocol bug: expected Status response"),
+        }
+    }
 }
 
 // ============================================================================
-// Commands (state-mutating requests)
+// Transaction Area
 // ============================================================================
 
-/// State-mutating commands sent to the Witch.
+/// Transaction lifecycle operations.
 ///
-/// Each command requires a valid session with sufficient authorization.
-/// The Witch checks `required_authorization()` before dispatching.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum WitchCommand {
-    /// Open a new transaction for this session.
-    StartTransaction { label: String },
+/// Transactions are their own authenticated sub-area with typed responses.
+/// `AddDecision` carries non-serializable `WitnessedDecision` data — this
+/// is a known gap deferred to mutation serialization work.
+#[derive(Debug, Clone)]
+pub enum TransactionPayload {
+    /// Open a new transaction.
+    Start { label: String },
     /// Stage a decision in the active transaction.
+    /// NOTE: WitnessedDecision is not serializable. This variant is
+    /// enriched in-process only. Deferred to mutation serialization work.
     AddDecision {
         key: DecisionKey,
-        label: String,
-        /// Mutation count (mutations themselves are not serialized over the wire
-        /// in Phase 1 — the actual mutation data stays server-side when the TUI
-        /// is a direct client. This field exists for protocol completeness).
-        mutation_count: usize,
+        decision: WitnessedDecision,
     },
-    /// Remove a staged decision from the active transaction.
+    /// Remove a staged decision.
     RemoveDecision { key: DecisionKey },
     /// Commit the active transaction (execute all staged mutations).
-    ConfirmTransaction,
+    Confirm,
     /// Discard the active transaction without executing.
-    DiscardTransaction,
+    Discard,
+    /// Get full details for all decisions in the active transaction.
+    GetDetails,
+}
+
+/// Transaction operation response.
+#[derive(Debug, Clone)]
+pub enum TransactionResponse {
+    /// Operation succeeded.
+    Ok,
+    /// Decision details for the active transaction.
+    Details(Vec<DecisionDetail>),
+    /// Transaction was discarded.
+    Discarded(DiscardSummary),
+    /// Transaction-specific error.
+    Error(TransactionError),
+}
+
+/// Detail record for a single decision in the active transaction.
+///
+/// Heavier than what's in `TransactionSnapshot` — includes mutation data
+/// needed for the transaction review view's diff display.
+#[derive(Debug, Clone)]
+pub struct DecisionDetail {
+    pub key: DecisionKey,
+    pub label: String,
+    pub mutations: Vec<crate::meta::mutations::Mutation>,
+}
+
+// ============================================================================
+// Command Area
+// ============================================================================
+
+/// Operational commands with no transaction semantics.
+#[derive(Debug, Clone)]
+pub enum CommandPayload {
     /// Kick off external fetch (AcoustID + MusicBrainz lookups).
     RequestExternalFetch,
     /// Kick off release bin-packing computation.
     RequestReleasePacking,
-    /// Queue schema reconciliation (requires operator approval).
+    /// Validate a config blob (returns Ok or error).
+    ValidateConfig { config: crate::config::Config },
+    /// Inject shared config (called during startup).
+    SetSharedConfig { shared: crate::config::SharedConfig },
+    /// Start the filesystem watcher.
+    StartWatching,
+    /// Update performance config at runtime.
+    UpdatePerformance {
+        opinions: crate::config::PerformanceOpinions,
+    },
+    /// Queue schema reconciliation.
     QueueSchemaReconciliation,
-    /// Queue a VACUUM operation on the database.
+    /// Queue a VACUUM operation.
     QueueVacuum,
-    /// Latch the Witch into read-only mode for safety.
-    LatchReadOnlyForSafety { reason: String },
 }
 
-impl Authorized for WitchQuery {
-    fn required_authorization(&self) -> AuthorizationLevel {
-        AuthorizationLevel::Authenticated
-    }
-}
-
-impl Authorized for WitchCommand {
-    fn required_authorization(&self) -> AuthorizationLevel {
-        AuthorizationLevel::Authenticated
-    }
-}
-
-// ============================================================================
-// Responses
-// ============================================================================
-
-/// Typed response to a `WitchQuery`.
-///
-/// Each variant carries the data for exactly one query type.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum QueryResponse {
-    Status(WorkStatus),
-    ReasoningLevel(ReasoningLevel),
-    Bool(bool),
-    Usize(usize),
-    TransactionSummary(Option<TransactionSummaryData>),
-    DecisionKeys(Vec<DecisionKey>),
-    DecisionLabel(Option<String>),
-    HandledDecisionKinds(Vec<DecisionKeyKind>),
-    ExternalFetchProgress(Option<FetchProgress>),
-    SchemaDescriptions(Vec<String>),
-}
-
-/// Response to a `WitchCommand`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Command response variants.
+#[derive(Debug, Clone)]
 pub enum CommandResponse {
     /// Command executed successfully.
     Ok,
-    /// Transaction-related error.
-    TransactionError(TransactionError),
+    /// Filesystem watcher started (bool = whether watching actually began).
+    WatchingStarted(bool),
+}
+
+/// Trait for protocol commands. Each implementor declares its response type.
+pub trait ProtocolCommand: Send + 'static {
+    type Response: Send + 'static;
+
+    /// Pack self into the wire enum.
+    fn into_payload(self) -> CommandPayload;
+
+    /// Extract typed response from the wire enum.
+    fn extract_response(resp: CommandResponse) -> Self::Response;
 }
 
 // ============================================================================
 // Errors
 // ============================================================================
 
-/// Protocol-level errors (distinct from command-level transaction errors).
+/// Protocol-level errors (distinct from transaction-level errors).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProtocolError {
     /// Transaction state violation.
@@ -236,21 +292,6 @@ impl std::error::Error for ProtocolError {}
 // Wire-safe projections
 // ============================================================================
 
-/// Wire-safe projection of transaction state.
-///
-/// The full `PendingTransaction` contains `WitnessedDecision` which holds
-/// `Mutation` variants and a `ConfirmationGesture` — neither serializable
-/// nor appropriate for the wire. This struct carries just the summary data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransactionSummaryData {
-    /// Human-readable label for the transaction.
-    pub label: String,
-    /// Number of decisions staged.
-    pub decision_count: usize,
-    /// Total mutations across all staged decisions.
-    pub mutation_count: usize,
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -259,117 +300,19 @@ pub struct TransactionSummaryData {
 mod tests {
     use super::*;
 
-    /// Round-trip all protocol enum variants through serde_json to verify
-    /// Serialize + Deserialize are correctly derived on the full type graph.
     #[test]
-    fn protocol_types_serialize() {
-        // SessionId
-        let sid = SessionId(42);
-        let json = serde_json::to_string(&sid).unwrap();
-        let rt: SessionId = serde_json::from_str(&json).unwrap();
-        assert_eq!(sid, rt);
+    fn status_query_roundtrip() {
+        let q = StatusQuery;
+        let payload = q.into_payload();
+        assert!(matches!(payload, QueryPayload::Status));
 
-        // AuthorizationLevel — all variants
-        for level in [
-            AuthorizationLevel::FirstTimeSetup,
-            AuthorizationLevel::Authenticated,
-        ] {
-            let json = serde_json::to_string(&level).unwrap();
-            let rt: AuthorizationLevel = serde_json::from_str(&json).unwrap();
-            assert_eq!(level, rt);
-        }
+        let response = QueryResponse::Status(WitchStatus::default());
+        let result = StatusQuery::extract_response(response);
+        assert_eq!(result.mutations_generation, 0);
+    }
 
-        // WitchQuery — representative variants
-        let queries = vec![
-            WitchQuery::Status,
-            WitchQuery::ReasoningLevel,
-            WitchQuery::HasPending,
-            WitchQuery::IsInitialScanning,
-            WitchQuery::DbQueueDepth,
-            WitchQuery::HasTransaction,
-            WitchQuery::TransactionSummary,
-            WitchQuery::DecisionKeys,
-            WitchQuery::GetDecision(DecisionKey::Deploy),
-            WitchQuery::HandledDecisionKinds,
-            WitchQuery::IsExternalFetchActive,
-            WitchQuery::ExternalFetchProgress,
-            WitchQuery::HasAcoustIdApiKey,
-            WitchQuery::NeedsSchemaUpdate,
-            WitchQuery::PendingSchemaDescriptions,
-        ];
-        for q in &queries {
-            let json = serde_json::to_string(q).unwrap();
-            let _rt: WitchQuery = serde_json::from_str(&json).unwrap();
-        }
-
-        // WitchCommand — all variants
-        let commands = vec![
-            WitchCommand::StartTransaction {
-                label: "test".into(),
-            },
-            WitchCommand::AddDecision {
-                key: DecisionKey::Deploy,
-                label: "deploy all".into(),
-                mutation_count: 5,
-            },
-            WitchCommand::RemoveDecision {
-                key: DecisionKey::OobSync,
-            },
-            WitchCommand::ConfirmTransaction,
-            WitchCommand::DiscardTransaction,
-            WitchCommand::RequestExternalFetch,
-            WitchCommand::RequestReleasePacking,
-            WitchCommand::QueueSchemaReconciliation,
-            WitchCommand::QueueVacuum,
-            WitchCommand::LatchReadOnlyForSafety {
-                reason: "testing".into(),
-            },
-        ];
-        for c in &commands {
-            let json = serde_json::to_string(c).unwrap();
-            let _rt: WitchCommand = serde_json::from_str(&json).unwrap();
-        }
-
-        // QueryResponse — all variants
-        let responses = vec![
-            QueryResponse::Status(WorkStatus::default()),
-            QueryResponse::ReasoningLevel(ReasoningLevel::None),
-            QueryResponse::Bool(true),
-            QueryResponse::Usize(42),
-            QueryResponse::TransactionSummary(Some(TransactionSummaryData {
-                label: "test tx".into(),
-                decision_count: 3,
-                mutation_count: 10,
-            })),
-            QueryResponse::TransactionSummary(None),
-            QueryResponse::DecisionKeys(vec![DecisionKey::Deploy, DecisionKey::OobSync]),
-            QueryResponse::DecisionLabel(Some("label".into())),
-            QueryResponse::DecisionLabel(None),
-            QueryResponse::HandledDecisionKinds(vec![
-                DecisionKeyKind::OobSync,
-                DecisionKeyKind::MissingFile,
-            ]),
-            QueryResponse::ExternalFetchProgress(None),
-            QueryResponse::SchemaDescriptions(vec!["add column foo".into()]),
-        ];
-        for r in &responses {
-            let json = serde_json::to_string(r).unwrap();
-            let _rt: QueryResponse = serde_json::from_str(&json).unwrap();
-        }
-
-        // CommandResponse
-        let cmd_responses = vec![
-            CommandResponse::Ok,
-            CommandResponse::TransactionError(TransactionError::AlreadyActive),
-            CommandResponse::TransactionError(TransactionError::NoActiveTransaction),
-            CommandResponse::TransactionError(TransactionError::NotAcceptingMutations),
-        ];
-        for r in &cmd_responses {
-            let json = serde_json::to_string(r).unwrap();
-            let _rt: CommandResponse = serde_json::from_str(&json).unwrap();
-        }
-
-        // ProtocolError — all variants
+    #[test]
+    fn protocol_error_display() {
         let errors = vec![
             ProtocolError::Transaction(TransactionError::AlreadyActive),
             ProtocolError::InvalidSession,
@@ -378,61 +321,16 @@ mod tests {
             ProtocolError::Internal("boom".into()),
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).unwrap();
-            let _rt: ProtocolError = serde_json::from_str(&json).unwrap();
+            let s = format!("{e}");
+            assert!(!s.is_empty());
         }
-
-        // AuthRequest/AuthResponse
-        let auth_requests = vec![
-            AuthRequest::Login {
-                username: "alice".into(),
-                password: "secret".into(),
-            },
-        ];
-        for r in &auth_requests {
-            let json = serde_json::to_string(r).unwrap();
-            let _rt: AuthRequest = serde_json::from_str(&json).unwrap();
-        }
-
-        let auth_responses = vec![
-            AuthResponse::Token(SessionToken::from_bytes(vec![0xAB; 32])),
-            AuthResponse::Failed("bad password".into()),
-        ];
-        for r in &auth_responses {
-            let json = serde_json::to_string(r).unwrap();
-            let _rt: AuthResponse = serde_json::from_str(&json).unwrap();
-        }
-
-        // All protocol messages require Authenticated (via Authorized trait)
-        assert_eq!(
-            WitchQuery::Status.required_authorization(),
-            AuthorizationLevel::Authenticated,
-        );
-        assert_eq!(
-            WitchQuery::NeedsSchemaUpdate.required_authorization(),
-            AuthorizationLevel::Authenticated,
-        );
-        assert_eq!(
-            WitchCommand::RequestExternalFetch.required_authorization(),
-            AuthorizationLevel::Authenticated,
-        );
-
-        // TransactionSummaryData
-        let summary = TransactionSummaryData {
-            label: "deploy batch".into(),
-            decision_count: 5,
-            mutation_count: 20,
-        };
-        let json = serde_json::to_string(&summary).unwrap();
-        let rt: TransactionSummaryData = serde_json::from_str(&json).unwrap();
-        assert_eq!(summary.label, rt.label);
-        assert_eq!(summary.decision_count, rt.decision_count);
-        assert_eq!(summary.mutation_count, rt.mutation_count);
     }
 
-    /// Two system states, two levels, fail-closed exact-match.
     #[test]
     fn authorization_levels_are_distinct() {
-        assert_ne!(AuthorizationLevel::FirstTimeSetup, AuthorizationLevel::Authenticated);
+        assert_ne!(
+            AuthorizationLevel::FirstTimeSetup,
+            AuthorizationLevel::Authenticated
+        );
     }
 }

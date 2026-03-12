@@ -6,7 +6,6 @@ use super::HandleAction;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::active_view::ActiveView;
 use crate::ui::tag_editor;
-use crate::witch::WitchClient;
 
 impl HandleAction for crate::ui::missing_album_modal::MissingAlbumAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {

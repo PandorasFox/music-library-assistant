@@ -983,6 +983,113 @@ define_domain_query! {
 }
 
 // ============================================================================
+// Protocol Bridge — Domain Query Registry
+// ============================================================================
+
+/// Generates protocol-level types for all domain queries:
+/// - `DomainQueryPayload` enum (one variant per query, carrying the query struct)
+/// - `DomainQueryResult` enum (one variant per query, carrying the response)
+/// - `impl ProtocolQuery for Q` for each query (typed send/receive)
+/// - `dispatch_domain_query()` function (server-side exhaustive dispatch)
+///
+/// Adding a new domain query to the protocol = adding one line here.
+macro_rules! domain_query_protocol {
+    ( $( $query:ident ),+ $(,)? ) => {
+        /// Wire enum carrying a domain query payload.
+        /// One variant per registered domain query type.
+        pub enum DomainQueryPayload {
+            $( $query($query), )+
+        }
+
+        /// Wire enum carrying a domain query result.
+        /// One variant per registered domain query type.
+        pub enum DomainQueryResult {
+            $( $query(<$query as DomainQuery>::Response), )+
+        }
+
+        /// Server-side dispatch: execute a domain query payload against a read-only DB.
+        /// Exhaustive match ensures compile-time coupling.
+        pub fn dispatch_domain_query(
+            payload: DomainQueryPayload,
+            db: &ReadOnlyDb<'_>,
+        ) -> DomainQueryResult {
+            match payload {
+                $( DomainQueryPayload::$query(q) => DomainQueryResult::$query(q.execute(db)), )+
+            }
+        }
+
+        $(
+            impl crate::meta::protocol::ProtocolQuery for $query {
+                type Response = <$query as DomainQuery>::Response;
+
+                fn into_payload(self) -> crate::meta::protocol::QueryPayload {
+                    crate::meta::protocol::QueryPayload::Domain(DomainQueryPayload::$query(self))
+                }
+
+                fn extract_response(
+                    resp: crate::meta::protocol::QueryResponse,
+                ) -> Self::Response {
+                    match resp {
+                        crate::meta::protocol::QueryResponse::Domain(
+                            DomainQueryResult::$query(r),
+                        ) => r,
+                        _ => unreachable!("protocol bug: expected {} response", stringify!($query)),
+                    }
+                }
+            }
+        )+
+    };
+}
+
+domain_query_protocol! {
+    GetInsights,
+    GetInboxOverview,
+    GetDeployStatus,
+    GetEditHistory,
+    GetExternalMatches,
+    GetPackingDirs,
+    GetOobSyncFiles,
+    GetOobFilesBucketed,
+    GetMovedFiles,
+    GetMissingAlbumSingleSignals,
+    GetSessionEditHistory,
+    GetAllEditHistory,
+    GetCompoundSignalGroups,
+    GetInboxCompoundSignalGroups,
+    GetPackingKnots,
+    GetPackingInodePaths,
+    GetInconsistentAlbumArtistKeys,
+    GetTagCanonicityKeys,
+    GetInboxTagCanonicityKeys,
+    GetDiscExtractionData,
+    GetMissingFileData,
+    GetMissingDirectoryData,
+    GetCorruptFileData,
+    GetSubparDuplicateData,
+    GetDirectoryClusterData,
+    GetReleaseOverlapData,
+    GetShitFormatData,
+    GetInboxCorpusMatchData,
+    GetDeployData,
+    GetManualReviewData,
+    GetCorpusTags,
+    GetPackingBrowserData,
+    GetUnsolvedPackingData,
+    GetAudioFilesByInodes,
+    GetMissingTagAudioFiles,
+    GetAllAudioFilesWithTags,
+    GetSessionEditDetail,
+    GetCurrentTagValues,
+    GetIntakeConfirmation,
+    GetCompoundSplitGroupData,
+    GetTagCanonicitySignalData,
+    GetRecordingBatchData,
+    GetReleaseStagingData,
+    GetTagEditorFiles,
+    GetInboxOrganizeData,
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

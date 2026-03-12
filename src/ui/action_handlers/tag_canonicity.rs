@@ -12,7 +12,6 @@ use crate::ui::{
     helpers, insights_view, tag_canonicity_v2, tag_editor, ActiveView, CanonicitySignalKind,
     TagCanonicityClusters,
 };
-use crate::witch::WitchClient;
 
 impl App {
     /// Start tag canonicity resolution from Insights view.

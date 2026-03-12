@@ -9,7 +9,6 @@ use crate::corpus::paths;
 use crate::db::domain;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::{moved_file_modal, oob_conflict_modal, oob_sync_modal, ActiveView};
-use crate::witch::WitchClient;
 
 // ========================================================================
 // OOB Tag Sync

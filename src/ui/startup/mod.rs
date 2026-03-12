@@ -36,7 +36,6 @@ pub fn render_startup_maintenance(
     area: Rect,
     app: &super::App,
 ) {
-    use crate::witch::WitchClient;
     let status = app.witch.witch_status();
 
     let (title, lines) = match status.startup_state {

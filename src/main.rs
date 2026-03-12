@@ -70,8 +70,8 @@ fn main() -> Result<()> {
 
     // Witch owns the main thread. TUI is spawned as a client thread.
     // The Witch detects startup state (AwaitingSetup vs Ready) internally.
-    witch::Witch::run(Some(log_rx), move |handle, notices| {
-        if let Err(e) = ui::run_tui(handle, notices) {
+    witch::Witch::run(Some(log_rx), move |handle| {
+        if let Err(e) = ui::run_tui(handle) {
             eprintln!("TUI error: {:?}", e);
         }
     });

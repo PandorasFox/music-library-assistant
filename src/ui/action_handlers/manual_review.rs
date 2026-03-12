@@ -10,7 +10,6 @@ use crate::db::types::Zone;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::manual_review_modal::types;
 use crate::ui::{manual_review_modal, tag_editor, ActiveView};
-use crate::witch::WitchClient;
 
 impl HandleAction for manual_review_modal::ManualReviewAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {

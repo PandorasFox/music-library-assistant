@@ -9,7 +9,6 @@ use super::HandleAction;
 use crate::corpus::paths;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::{deploy_modal, ActiveView};
-use crate::witch::WitchClient;
 
 impl HandleAction for deploy_modal::DeployAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {

@@ -27,7 +27,7 @@
 //! }
 //! ```
 
-use crate::witch::{WitchClient, WorkStateSnapshot};
+use crate::witch::{WitchHandle, WorkStateSnapshot};
 
 /// Helper for waiting on Witch work completion.
 ///
@@ -62,7 +62,7 @@ impl WaitState {
     ///
     /// Returns `true` when waiting is complete (Witch was working and is now idle/completed).
     /// Call this each frame while waiting.
-    pub fn tick(&mut self, witch: &impl WitchClient) -> bool {
+    pub fn tick(&mut self, witch: &WitchHandle) -> bool {
         if !self.waiting {
             return false;
         }

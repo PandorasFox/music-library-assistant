@@ -34,7 +34,7 @@ use ratatui::{
 
 use super::eye::{EYE_CLOSED, EYE_CLOSING};
 use super::wait_state::WaitState;
-use crate::witch::{ReasoningLevel, WitchClient, WorkStateSnapshot, WorkStatus};
+use crate::witch::{ReasoningLevel, WitchHandle, WorkStateSnapshot, WorkStatus};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -223,7 +223,7 @@ impl ProgressScreen {
     /// Tick the progress screen state.
     ///
     /// Returns `true` if work is complete.
-    pub fn tick(&mut self, witch: &impl WitchClient) -> bool {
+    pub fn tick(&mut self, witch: &WitchHandle) -> bool {
         // Time-based animation tick: only increment when enough time has elapsed.
         // This keeps animation smooth regardless of UI frame rate.
         let now = Instant::now();

@@ -6,7 +6,6 @@ use super::super::App;
 use super::witness;
 use super::HandleAction;
 use crate::ui::active_view::ActiveView;
-use crate::witch::WitchClient;
 
 impl HandleAction for super::super::ExitConfirmAction {
     fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {

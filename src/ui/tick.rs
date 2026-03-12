@@ -10,7 +10,6 @@ use super::eye::Eye;
 use super::insights_view;
 use super::App;
 use crate::meta::decisions::DecisionKey;
-use crate::witch::WitchClient;
 use crate::ui::{
     compound_split_v2,
     progress_screen::{ProgressPhase, ProgressScreen},

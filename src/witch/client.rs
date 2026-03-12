@@ -112,9 +112,6 @@ pub trait WitchClient {
     /// Returns Ok(()) if valid, Err(reason) if rejected.
     fn validate_config(&self, config: &crate::config::Config) -> Result<(), String>;
 
-    /// Latch the Witch into read-only mode for safety.
-    fn latch_read_only_for_safety(&mut self, reason: String);
-
     /// Inject shared config (called during startup).
     fn set_shared_config(&mut self, shared: crate::config::SharedConfig);
 
@@ -189,10 +186,6 @@ impl WitchClient for super::Witch {
 
     fn validate_config(&self, config: &crate::config::Config) -> Result<(), String> {
         config.validate().map_err(|e| format!("{:#}", e))
-    }
-
-    fn latch_read_only_for_safety(&mut self, reason: String) {
-        self.latch_read_only_for_safety(reason)
     }
 
     fn set_shared_config(&mut self, shared: crate::config::SharedConfig) {

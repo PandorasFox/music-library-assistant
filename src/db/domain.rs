@@ -984,24 +984,6 @@ define_domain_query! {
 }
 
 // ============================================================================
-// Auth Queries
-// ============================================================================
-
-/// System auth state: user count for NeedsSetup vs NeedsAuth determination.
-#[derive(Default, Serialize, Clone, Debug)]
-pub struct AuthStateData {
-    pub user_count: i64,
-}
-
-define_domain_query! {
-    /// System auth state: user count for NeedsSetup vs NeedsAuth determination.
-    GetAuthState => AuthStateData, uncached, |db| {
-        let count = db.user_count().unwrap_or(0);
-        AuthStateData { user_count: count }
-    }
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 

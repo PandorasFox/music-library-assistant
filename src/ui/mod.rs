@@ -686,9 +686,6 @@ fn run_app<B: ratatui::backend::Backend>(
                 crate::witch::WitchNotice::Error(msg) => {
                     app.status_message = Some(format!("Task failed: {}", msg));
                 }
-                crate::witch::WitchNotice::SafetyLatch(reason) => {
-                    app.status_message = Some(format!("Safety latch: {}", reason));
-                }
                 crate::witch::WitchNotice::ConfigUpdated => {
                     // Config already updated on Witch side via shared_config
                 }

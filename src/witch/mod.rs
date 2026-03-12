@@ -67,42 +67,8 @@ pub enum WitchNotice {
     MutationsCompleted,
     /// A task failed with this error message.
     Error(String),
-    /// Safety latch triggered — mutations permanently disabled this session.
-    SafetyLatch(String),
     /// Config was updated by a mutation (UI should re-read shared config).
     ConfigUpdated,
-}
-
-// ============================================================================
-// Global Mount Violation Flag
-// ============================================================================
-
-use std::sync::OnceLock;
-
-/// Global flag for mount boundary violations detected by worker threads.
-///
-/// When a computation detects that a path crosses a filesystem mount boundary
-/// (different st_dev than expected), it sets this flag. The Witch checks this
-/// on each tick() and latches into read-only mode if set.
-///
-/// This is a OnceLock because once a violation is detected, it's permanent
-/// for this process lifetime.
-static MOUNT_VIOLATION: OnceLock<String> = OnceLock::new();
-
-/// Report a mount boundary violation from a worker thread.
-///
-/// Called by computations when they detect a path with a different st_dev
-/// than the expected root filesystem. The Witch will pick this up on next
-/// tick() and latch into read-only mode.
-pub fn report_mount_violation(reason: String) {
-    let _ = MOUNT_VIOLATION.set(reason);
-}
-
-/// Check if a mount violation has been reported.
-///
-/// Returns the violation reason if one has been reported.
-fn check_mount_violation() -> Option<&'static str> {
-    MOUNT_VIOLATION.get().map(|s| s.as_str())
 }
 
 // ============================================================================
@@ -206,11 +172,6 @@ pub struct Witch {
     reasoning_level: ReasoningLevel,
     watcher_state: WatcherState,
 
-
-    /// Runtime safety latch: if Some, mutations are permanently disabled for this session.
-    /// Contains the reason why the safety latch was triggered (e.g., mount boundary violation).
-    /// Once set, cannot be unset - operator must fix the issue and restart MM.
-    safety_latch_reason: Option<String>,
 
     /// Accumulated recomputation scope from mutations this session.
     /// Used to determine whether re-awakening is needed and which content
@@ -382,7 +343,6 @@ impl Witch {
             work_state: WorkState::Idle,
             reasoning_level: ReasoningLevel::None,
             watcher_state: WatcherState::NotStarted,
-            safety_latch_reason: None,
             session_recomputation_scope: crate::meta::recomputation::RecomputationScope::EMPTY,
             pending_recomputation_scope: None,
             force_check_all_files_at_startup: false, // Set via with_opinions()

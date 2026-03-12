@@ -68,7 +68,6 @@ pub(super) enum HandleCommand {
         config: crate::config::Config,
         reply: mpsc::Sender<Result<(), String>>,
     },
-    LatchReadOnlyForSafety { reason: String },
     SetSharedConfig { shared: SharedConfig },
     StartWatching {
         reply: mpsc::Sender<bool>,
@@ -195,10 +194,6 @@ impl WitchClient for WitchHandle {
             config: config.clone(),
             reply,
         })
-    }
-
-    fn latch_read_only_for_safety(&mut self, reason: String) {
-        self.send(HandleCommand::LatchReadOnlyForSafety { reason });
     }
 
     fn set_shared_config(&mut self, shared: SharedConfig) {

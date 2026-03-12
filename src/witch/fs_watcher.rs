@@ -940,12 +940,9 @@ fn enumerate_directories_recursive(
                 if let Ok(metadata) = std::fs::metadata(&path) {
                     let actual_dev = metadata.dev();
                     if actual_dev != expected {
-                        crate::witch::report_mount_violation(format!(
-                            "Nested mount point detected at {:?}\n\
-                             Expected device: {}, found device: {}\n\
-                             \n\
-                             The corpus and libraries must not contain nested mount points.\n\
-                             Please unmount the nested filesystem and restart MM.",
+                        crate::logging::log_error(format!(
+                            "[WATCHER] Nested mount point detected at {:?} \
+                             (expected device {}, found {}). Skipping.",
                             path, expected, actual_dev
                         ));
                         continue;

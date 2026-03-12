@@ -122,6 +122,23 @@ pub enum WitchCommand {
     LatchReadOnlyForSafety { reason: String },
 }
 
+impl WitchQuery {
+    /// The minimum authorization level required to execute this query.
+    ///
+    /// Schema queries are available pre-login (the TUI needs to know
+    /// whether to prompt for schema reconciliation before auth).
+    /// Everything else requires a valid session.
+    pub fn required_authorization(&self) -> AuthorizationLevel {
+        match self {
+            WitchQuery::NeedsSchemaUpdate | WitchQuery::PendingSchemaDescriptions => {
+                AuthorizationLevel::Unauthenticated
+            }
+            // Catch-all: any new variant defaults to AuthRequired.
+            _ => AuthorizationLevel::AuthRequired,
+        }
+    }
+}
+
 impl WitchCommand {
     /// The minimum authorization level required to execute this command.
     pub fn required_authorization(&self) -> AuthorizationLevel {
@@ -327,6 +344,7 @@ mod tests {
             CommandResponse::TransactionError(TransactionError::AlreadyActive),
             CommandResponse::TransactionError(TransactionError::NoActiveTransaction),
             CommandResponse::TransactionError(TransactionError::NotAcceptingMutations),
+            CommandResponse::TransactionError(TransactionError::Unauthorized),
         ];
         for r in &cmd_responses {
             let json = serde_json::to_string(r).unwrap();
@@ -345,6 +363,24 @@ mod tests {
             let json = serde_json::to_string(e).unwrap();
             let _rt: ProtocolError = serde_json::from_str(&json).unwrap();
         }
+
+        // WitchQuery authorization levels
+        assert_eq!(
+            WitchQuery::Status.required_authorization(),
+            AuthorizationLevel::AuthRequired,
+        );
+        assert_eq!(
+            WitchQuery::NeedsSchemaUpdate.required_authorization(),
+            AuthorizationLevel::Unauthenticated,
+        );
+        assert_eq!(
+            WitchQuery::PendingSchemaDescriptions.required_authorization(),
+            AuthorizationLevel::Unauthenticated,
+        );
+        assert_eq!(
+            WitchCommand::RequestExternalFetch.required_authorization(),
+            AuthorizationLevel::AuthRequired,
+        );
 
         // TransactionSummaryData
         let summary = TransactionSummaryData {

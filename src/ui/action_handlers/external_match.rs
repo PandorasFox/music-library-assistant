@@ -27,14 +27,14 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
             }
             external_match_view::ExternalMatchesAction::RequestQuit => app.handle_request_quit(),
             external_match_view::ExternalMatchesAction::RequestFetch => {
-                app.witch.request_external_fetch();
+                let _ = app.witch.request_external_fetch();
                 app.status_message = Some("External fetch requested".to_string());
                 if let ActiveView::ExternalMatches(ref mut state) = app.view {
                     state.fetch_active = app.witch.witch_status().is_external_fetch_active;
                 }
             }
             external_match_view::ExternalMatchesAction::RequestReleasePacking => {
-                app.witch.request_release_packing();
+                let _ = app.witch.request_release_packing();
                 app.transition_to_progress_after_mutations(
                     super::super::progress_screen::ProgressPhase::ContentAnalysis,
                 );

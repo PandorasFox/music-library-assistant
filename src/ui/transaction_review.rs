@@ -391,6 +391,7 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
 pub fn fetch_decision_summaries(witch: &impl WitchClient) -> Vec<DecisionSummary> {
     witch
         .transaction_decision_details()
+        .unwrap_or_default()
         .into_iter()
         .map(|d| {
             let diff_entries = d

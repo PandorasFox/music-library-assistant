@@ -467,7 +467,7 @@ impl App {
                     tag_name: tag_name_for_key,
                     cluster_index: current_index,
                 };
-                if let Some(detail) = self.witch.transaction_decision_details().into_iter().find(|d| d.key == backfill_key) {
+                if let Some(detail) = self.witch.transaction_decision_details().unwrap_or_default().into_iter().find(|d| d.key == backfill_key) {
                     state.restore_from_mutations(&detail.mutations);
                     state.pending_tag_edits =
                         Some(helpers::pending_edits_from_mutations(&detail.mutations));

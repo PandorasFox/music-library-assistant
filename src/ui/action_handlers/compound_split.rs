@@ -277,7 +277,7 @@ impl App {
 
     /// Collect (tag_name, canonical_value) pairs from staged EmitCanonicalTag decisions.
     fn staged_canonical_values(&self) -> Vec<(String, String)> {
-        let details = self.witch.transaction_decision_details();
+        let details = self.witch.transaction_decision_details().unwrap_or_default();
         details
             .iter()
             .filter_map(|detail| {
@@ -440,7 +440,7 @@ impl App {
             state.data.compound.tag_name.clone(),
             group_index,
         );
-        if let Some(detail) = self.witch.transaction_decision_details().into_iter().find(|d| d.key == backfill_key) {
+        if let Some(detail) = self.witch.transaction_decision_details().unwrap_or_default().into_iter().find(|d| d.key == backfill_key) {
             state.restore_from_mutations(&detail.mutations);
             state.pending_tag_edits =
                 Some(helpers::pending_edits_from_mutations(&detail.mutations));
@@ -497,7 +497,7 @@ impl App {
             state.data.compound.tag_name.clone(),
             group_index,
         );
-        if let Some(detail) = self.witch.transaction_decision_details().into_iter().find(|d| d.key == backfill_key) {
+        if let Some(detail) = self.witch.transaction_decision_details().unwrap_or_default().into_iter().find(|d| d.key == backfill_key) {
             state.restore_from_mutations(&detail.mutations);
             state.pending_tag_edits =
                 Some(helpers::pending_edits_from_mutations(&detail.mutations));

@@ -91,17 +91,17 @@ pub trait WitchClient {
     /// Returns per-decision mutation data needed for diff display in the
     /// transaction review view. For lightweight access (keys, labels,
     /// counts), use `witch_status().transaction` instead.
-    fn transaction_decision_details(&self) -> Vec<DecisionDetail>;
+    fn transaction_decision_details(&self) -> Result<Vec<DecisionDetail>, TransactionError>;
 
     // ====================================================================
     // External fetch commands
     // ====================================================================
 
     /// Kick off external fetch (AcoustID + MusicBrainz lookups).
-    fn request_external_fetch(&mut self);
+    fn request_external_fetch(&mut self) -> Result<(), TransactionError>;
 
     /// Kick off release bin-packing computation.
-    fn request_release_packing(&mut self);
+    fn request_release_packing(&mut self) -> Result<(), TransactionError>;
 
     // ====================================================================
     // Lifecycle commands
@@ -113,13 +113,13 @@ pub trait WitchClient {
     fn validate_config(&self, config: &crate::config::Config) -> Result<(), String>;
 
     /// Inject shared config (called during startup).
-    fn set_shared_config(&mut self, shared: crate::config::SharedConfig);
+    fn set_shared_config(&mut self, shared: crate::config::SharedConfig) -> Result<(), TransactionError>;
 
     /// Start the filesystem watcher. Returns true if watching started.
-    fn start_watching(&mut self) -> bool;
+    fn start_watching(&mut self) -> Result<bool, TransactionError>;
 
     /// Update performance config at runtime (pool resize, cache_size).
-    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions);
+    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) -> Result<(), TransactionError>;
 }
 
 // ========================================================================
@@ -163,8 +163,8 @@ impl WitchClient for super::Witch {
         self.discard_transaction()
     }
 
-    fn transaction_decision_details(&self) -> Vec<DecisionDetail> {
-        self.pending_transaction
+    fn transaction_decision_details(&self) -> Result<Vec<DecisionDetail>, TransactionError> {
+        Ok(self.pending_transaction
             .as_ref()
             .map(|txn| {
                 txn.decisions
@@ -176,30 +176,34 @@ impl WitchClient for super::Witch {
                     })
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
-    fn request_external_fetch(&mut self) {
-        self.request_external_fetch()
+    fn request_external_fetch(&mut self) -> Result<(), TransactionError> {
+        self.request_external_fetch();
+        Ok(())
     }
 
-    fn request_release_packing(&mut self) {
-        self.request_release_packing()
+    fn request_release_packing(&mut self) -> Result<(), TransactionError> {
+        self.request_release_packing();
+        Ok(())
     }
 
     fn validate_config(&self, config: &crate::config::Config) -> Result<(), String> {
         config.validate().map_err(|e| format!("{:#}", e))
     }
 
-    fn set_shared_config(&mut self, shared: crate::config::SharedConfig) {
-        self.set_shared_config(shared)
+    fn set_shared_config(&mut self, shared: crate::config::SharedConfig) -> Result<(), TransactionError> {
+        self.set_shared_config(shared);
+        Ok(())
     }
 
-    fn start_watching(&mut self) -> bool {
-        self.start_watching()
+    fn start_watching(&mut self) -> Result<bool, TransactionError> {
+        Ok(self.start_watching())
     }
 
-    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) {
-        self.update_performance_impl(opinions)
+    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) -> Result<(), TransactionError> {
+        self.update_performance_impl(opinions);
+        Ok(())
     }
 }

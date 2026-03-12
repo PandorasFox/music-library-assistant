@@ -12,8 +12,10 @@ use std::sync::{Arc, RwLock};
 
 use std::path::PathBuf;
 
+use crate::auth::SessionToken;
 use crate::config::SharedConfig;
 use crate::meta::decisions::{DecisionKey, DiscardSummary, TransactionError, WitnessedDecision};
+use crate::witch::auth_thread::AuthHandle;
 
 use super::client::{DecisionDetail, WitchClient};
 use super::WitchStatus;
@@ -98,6 +100,12 @@ pub struct WitchHandle {
 
     /// Command channel to the Witch thread.
     cmd_tx: mpsc::Sender<HandleCommand>,
+
+    /// Auth handle for token validation. Set after login.
+    auth: Option<AuthHandle>,
+
+    /// Session token from the authenticated operator. Set after login.
+    session: Option<SessionToken>,
 }
 
 impl WitchHandle {
@@ -106,7 +114,26 @@ impl WitchHandle {
         status: Arc<RwLock<WitchStatus>>,
         cmd_tx: mpsc::Sender<HandleCommand>,
     ) -> Self {
-        Self { status, cmd_tx }
+        Self {
+            status,
+            cmd_tx,
+            auth: None,
+            session: None,
+        }
+    }
+
+    /// Set the authenticated session. Called from run_tui() after login.
+    pub fn set_session(&mut self, auth: AuthHandle, token: SessionToken) {
+        self.auth = Some(auth);
+        self.session = Some(token);
+    }
+
+    /// Validate the current session. Returns Unauthorized if missing/expired.
+    fn check_auth(&self) -> Result<(), TransactionError> {
+        match (&self.auth, &self.session) {
+            (Some(auth), Some(token)) if auth.validate_token(token) => Ok(()),
+            _ => Err(TransactionError::Unauthorized),
+        }
     }
 
     /// Send a command and wait for the reply.
@@ -149,6 +176,7 @@ impl WitchClient for WitchHandle {
     }
 
     fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError> {
+        self.check_auth()?;
         self.send_recv(|reply| HandleCommand::StartTransaction {
             label: label.to_owned(),
             reply,
@@ -160,6 +188,7 @@ impl WitchClient for WitchHandle {
         key: DecisionKey,
         decision: WitnessedDecision,
     ) -> Result<(), TransactionError> {
+        self.check_auth()?;
         self.send_recv(|reply| HandleCommand::AddDecision {
             key,
             decision,
@@ -168,6 +197,7 @@ impl WitchClient for WitchHandle {
     }
 
     fn remove_decision(&mut self, key: &DecisionKey) -> Result<(), TransactionError> {
+        self.check_auth()?;
         self.send_recv(|reply| HandleCommand::RemoveDecision {
             key: key.clone(),
             reply,
@@ -175,23 +205,30 @@ impl WitchClient for WitchHandle {
     }
 
     fn confirm_transaction(&mut self) -> Result<(), TransactionError> {
+        self.check_auth()?;
         self.send_recv(|reply| HandleCommand::ConfirmTransaction { reply })
     }
 
     fn discard_transaction(&mut self) -> Result<DiscardSummary, TransactionError> {
+        self.check_auth()?;
         self.send_recv(|reply| HandleCommand::DiscardTransaction { reply })
     }
 
-    fn transaction_decision_details(&self) -> Vec<DecisionDetail> {
-        self.send_recv(|reply| HandleCommand::GetTransactionDetails { reply })
+    fn transaction_decision_details(&self) -> Result<Vec<DecisionDetail>, TransactionError> {
+        self.check_auth()?;
+        Ok(self.send_recv(|reply| HandleCommand::GetTransactionDetails { reply }))
     }
 
-    fn request_external_fetch(&mut self) {
+    fn request_external_fetch(&mut self) -> Result<(), TransactionError> {
+        self.check_auth()?;
         self.send(HandleCommand::RequestExternalFetch);
+        Ok(())
     }
 
-    fn request_release_packing(&mut self) {
+    fn request_release_packing(&mut self) -> Result<(), TransactionError> {
+        self.check_auth()?;
         self.send(HandleCommand::RequestReleasePacking);
+        Ok(())
     }
 
     fn validate_config(&self, config: &crate::config::Config) -> Result<(), String> {
@@ -201,16 +238,21 @@ impl WitchClient for WitchHandle {
         })
     }
 
-    fn set_shared_config(&mut self, shared: SharedConfig) {
+    fn set_shared_config(&mut self, shared: SharedConfig) -> Result<(), TransactionError> {
+        self.check_auth()?;
         self.send(HandleCommand::SetSharedConfig { shared });
+        Ok(())
     }
 
-    fn start_watching(&mut self) -> bool {
-        self.send_recv(|reply| HandleCommand::StartWatching { reply })
+    fn start_watching(&mut self) -> Result<bool, TransactionError> {
+        self.check_auth()?;
+        Ok(self.send_recv(|reply| HandleCommand::StartWatching { reply }))
     }
 
-    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) {
+    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) -> Result<(), TransactionError> {
+        self.check_auth()?;
         self.send(HandleCommand::UpdatePerformance { opinions });
+        Ok(())
     }
 }
 

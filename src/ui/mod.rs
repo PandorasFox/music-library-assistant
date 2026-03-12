@@ -488,8 +488,8 @@ impl App {
     pub(super) fn complete_startup(&mut self) {
         use crate::witch::WitchClient;
         let shared = self.shared_config.clone();
-        self.witch.set_shared_config(shared);
-        self.witch.start_watching();
+        let _ = self.witch.set_shared_config(shared);
+        let _ = self.witch.start_watching();
 
         // If leave_transactions_open is enabled, open a persistent transaction at startup
         if self.open_txn_mode() {
@@ -594,8 +594,7 @@ pub fn run_tui(
         let auth_state = auth.status();
         if auth_state == SystemAuthState::NeedsAuth {
             let session = startup::login::run_login_screen(&mut terminal, &auth)?;
-            // Session token obtained — stored for future per-session transaction gating
-            let _ = session;
+            witch.set_session(auth.clone(), session);
         }
     }
 

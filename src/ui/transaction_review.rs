@@ -23,7 +23,7 @@ use crate::ui::widgets::standard_list::{
 };
 use crate::ui::widgets::wizard::{WizardItem, WizardOffer};
 use crate::ui::widgets::{centered_rect_fixed, render_button_row, ConfirmationButton};
-use crate::witch::Witch;
+use crate::witch::WitchClient;
 
 // ============================================================================
 // Types
@@ -200,7 +200,7 @@ impl TransactionReviewState {
     }
 
     /// Refresh cached decisions from the Witch. Call after mutations or on tick.
-    pub fn refresh_decisions(&mut self, witch: &Witch) {
+    pub fn refresh_decisions(&mut self, witch: &impl WitchClient) {
         self.decisions = fetch_decision_summaries(witch);
         self.list.clamp_cursor(&self.decisions);
     }
@@ -388,26 +388,24 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
 }
 
 /// Fetch decision summaries from the Witch's active transaction.
-pub fn fetch_decision_summaries(witch: &Witch) -> Vec<DecisionSummary> {
+pub fn fetch_decision_summaries(witch: &impl WitchClient) -> Vec<DecisionSummary> {
     witch
-        .decision_keys()
-        .iter()
-        .filter_map(|key| {
-            witch.get_decision(key).map(|d| {
-                let diff_entries = d
-                    .mutations
-                    .iter()
-                    .flat_map(|m| m.as_executor().diff_entries())
-                    .collect();
+        .transaction_decision_details()
+        .into_iter()
+        .map(|d| {
+            let diff_entries = d
+                .mutations
+                .iter()
+                .flat_map(|m| m.as_executor().diff_entries())
+                .collect();
 
-                DecisionSummary {
-                    key: key.clone(),
-                    label: d.label.clone(),
-                    mutation_count: d.mutations.len(),
-                    track_count: count_unique_files(&d.mutations),
-                    diff_entries,
-                }
-            })
+            DecisionSummary {
+                key: d.key,
+                label: d.label,
+                mutation_count: d.mutations.len(),
+                track_count: count_unique_files(&d.mutations),
+                diff_entries,
+            }
         })
         .collect()
 }

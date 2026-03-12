@@ -11,6 +11,7 @@ use crate::db::types::AudioFile;
 use crate::ui::suspended_views::SuspendTarget;
 use crate::ui::tag_editor;
 use crate::ui::ActiveView;
+use crate::witch::WitchClient;
 
 /// Drain any pending input events from the terminal buffer.
 ///

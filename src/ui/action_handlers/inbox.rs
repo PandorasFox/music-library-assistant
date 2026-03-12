@@ -14,6 +14,7 @@ use crate::ui::inbox_corpus_match_modal;
 use crate::ui::inbox_organize;
 use crate::ui::startup;
 use crate::ui::{CanonicitySignalKind, TagCanonicityClusters};
+use crate::witch::WitchClient;
 
 impl HandleAction for super::super::inbox_view::InboxAction {
     fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {

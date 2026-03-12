@@ -7,6 +7,7 @@ use super::super::App;
 use super::witness;
 use super::HandleAction;
 use crate::ui::active_view::ActiveView;
+use crate::witch::WitchClient;
 
 impl HandleAction for super::super::SchemaUpdateAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
@@ -18,7 +19,8 @@ impl HandleAction for super::super::SchemaUpdateAction {
                     (&mut app.view, witness)
                 {
                     if state.phase == SchemaUpdatePhase::Approval {
-                        app.witch.queue_schema_reconciliation(gesture);
+                        let _ = gesture; // TUI-side proof of operator confirmation
+                        app.witch.queue_schema_reconciliation();
                         state.phase = SchemaUpdatePhase::Running;
                     }
                 }
@@ -40,7 +42,8 @@ impl HandleAction for super::super::VacuumAction {
                     (&mut app.view, witness)
                 {
                     if state.phase == VacuumPhase::Prompt {
-                        app.witch.queue_vacuum(gesture);
+                        let _ = gesture; // TUI-side proof of operator confirmation
+                        app.witch.queue_vacuum();
                         state.phase = VacuumPhase::Compacting;
                     }
                 }
@@ -136,7 +139,7 @@ impl HandleAction for crate::ui::startup::IntakeConfirmationAction {
                 crate::logging::log_general("IntakeConfirmation: user skipped indexing");
 
                 // Discard any active transaction from review modal (not in open-txn mode)
-                if !app.open_txn_mode() && app.witch.has_transaction() {
+                if !app.open_txn_mode() && app.witch.witch_status().transaction.is_some() {
                     let _ = operator_decisions::discard_transaction(&mut app.witch);
                 }
 

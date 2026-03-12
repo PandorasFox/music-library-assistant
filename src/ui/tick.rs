@@ -10,6 +10,7 @@ use super::eye::Eye;
 use super::insights_view;
 use super::App;
 use crate::meta::decisions::DecisionKey;
+use crate::witch::WitchClient;
 use crate::ui::{
     compound_split_v2,
     progress_screen::{ProgressPhase, ProgressScreen},
@@ -30,9 +31,8 @@ impl App {
 
         match phase {
             SchemaUpdatePhase::Running => {
-                // Tick the Witch to process reconciliation task
-                self.witch.tick();
-                if !self.witch.has_pending() {
+                // Check if reconciliation has completed
+                if !self.witch.witch_status().has_pending {
                     // Reconciliation complete
                     if let ActiveView::SchemaUpdate(ref mut state) = self.view {
                         state.phase = SchemaUpdatePhase::Complete;
@@ -67,9 +67,8 @@ impl App {
 
         match phase {
             VacuumPhase::Compacting => {
-                // Tick the Witch to process the async vacuum task
-                self.witch.tick();
-                if !self.witch.has_pending() {
+                // Check if the async vacuum task has completed
+                if !self.witch.witch_status().has_pending {
                     // Vacuum complete — re-query to show reclaimed amount
                     let db_path = match self.view {
                         ActiveView::VacuumPrompt(ref state) => state.db_path.clone(),
@@ -136,13 +135,13 @@ impl App {
         let phase = screen.phase();
 
         // Update eye animation (scoped to Progress view)
-        let can_animate = self.witch.reasoning_level() == crate::witch::ReasoningLevel::Full;
+        let can_animate = self.witch.witch_status().reasoning_level == crate::witch::ReasoningLevel::Full;
         eye.update(can_animate);
 
         // Tick progress screen - it checks daemon state for completion
         let completed = screen.tick(&self.witch);
         if completed {
-            let status = self.witch.status();
+            let status = self.witch.witch_status().work;
             crate::logging::log_general(format!(
                 "{:?} phase complete: {} processed",
                 phase, status.total_processed
@@ -159,7 +158,7 @@ impl App {
                     // Check for unindexed files before deciding next phase
                     if let Some(intake_state) = self.check_for_unindexed_files() {
                         self.view = ActiveView::IntakeConfirmation(intake_state);
-                    } else if self.witch.has_pending() {
+                    } else if self.witch.witch_status().has_pending {
                         // Witch has pending work (e.g., freshen latch triggered content analysis)
                         self.view = ActiveView::Progress {
                             screen: ProgressScreen::new_content_analysis(),
@@ -181,8 +180,6 @@ impl App {
                             | RecomputationScope::INBOX
                             | RecomputationScope::EXTERNAL,
                     );
-                    // Release SQLite page cache memory now that the computation burst is done
-                    self.witch.post_cycle_housekeeping();
                     // Transition to configured default view
                     self.start_default_view();
                 }
@@ -211,7 +208,7 @@ impl App {
     /// Queries UnindexedFile signals (emitted by DeriveZoneSignals / UpdateCorpusFileSignals).
     /// Returns Some if there are unindexed files to confirm, None otherwise.
     pub(super) fn check_for_unindexed_files(&mut self) -> Option<startup::IntakeConfirmationState> {
-        let reasoning = self.witch.reasoning_level();
+        let reasoning = self.witch.witch_status().reasoning_level;
         crate::logging::log_general(format!(
             "check_for_unindexed_files: reasoning_level={:?}",
             reasoning

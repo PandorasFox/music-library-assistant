@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::db::types::Zone;
 use crate::meta::decisions::{
-    ConfirmationGesture, DecisionKey, DiscardSummary, PendingTransaction, TransactionError,
+    DecisionKey, DiscardSummary, PendingTransaction, TransactionError,
     WitnessedDecision,
 };
 use crate::meta::mutations::dir_config_edit::{
@@ -189,24 +189,6 @@ impl super::Witch {
         Ok(())
     }
 
-    /// Check if a transaction is currently active.
-    pub fn has_transaction(&self) -> bool {
-        self.pending_transaction.is_some()
-    }
-
-    /// Get a summary of the pending transaction for UI display.
-    ///
-    /// Returns None if no transaction is active.
-    pub fn transaction_summary(&self) -> Option<(&str, usize, usize)> {
-        self.pending_transaction.as_ref().map(|txn| {
-            (
-                txn.label.as_str(),
-                txn.decision_count(),
-                txn.mutation_count(),
-            )
-        })
-    }
-
     /// Add a witnessed decision to the transaction.
     ///
     /// - `key`: Semantic key identifying the decision source and item
@@ -244,28 +226,10 @@ impl super::Witch {
         Ok(())
     }
 
-    /// Fetch a decision by key.
-    ///
-    /// Returns None if no decision stored at that key.
-    pub fn get_decision(&self, key: &DecisionKey) -> Option<&WitnessedDecision> {
-        self.pending_transaction
-            .as_ref()
-            .and_then(|txn| txn.decisions.get(key))
-    }
-
-    /// List all decision keys in the current transaction.
-    pub fn decision_keys(&self) -> Vec<DecisionKey> {
-        self.pending_transaction
-            .as_ref()
-            .map(|txn| txn.keys())
-            .unwrap_or_default()
-    }
-
     /// Remove an entire decision from the active transaction.
     pub fn remove_decision(
         &mut self,
         key: &DecisionKey,
-        _gesture: &ConfirmationGesture,
     ) -> Result<(), TransactionError> {
         self.require_active_transaction(&format!("remove_decision(key={})", key))?;
 
@@ -289,7 +253,6 @@ impl super::Witch {
     /// Returns summary of what was committed, or error if mutations not accepted.
     pub fn confirm_transaction(
         &mut self,
-        _gesture: &ConfirmationGesture,
     ) -> Result<(), TransactionError> {
         // Gate: mutations must be accepted (eye is Awake, not read-only)
         if !self.accepting_mutations() {

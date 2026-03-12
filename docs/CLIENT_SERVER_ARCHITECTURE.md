@@ -353,6 +353,153 @@ Personally, I was thinking about splitting up the modals/widgets and giving them
 - Same invalidation model: `RecomputationScope`-based, timer-throttled
 - `MutationsCompleted` triggers scope invalidation as today
 
+## Type System Boundary Improvements
+
+The migration exposes several places where typed information degrades to strings or flat structs at module boundaries. These should be addressed at specific phases to avoid carrying stringly-typed interfaces into the new architecture.
+
+### Typed Error Pipeline (Phase 6 — with Hades)
+
+**Problem:** Every worker result collapses into `TaskResult { success: bool, error: Option<String> }`. The Witch can't distinguish recoverable from fatal errors, can't route failure modes, can't make retry/abort decisions.
+
+**Solution:** Typed errors at every layer, strings only at the final human-readable rendering.
+
+Mutation execution returns a proper Result:
+
+```rust
+fn execute(&self, ctx: &MutationContext) -> Result<MutationSuccess, MutationError>;
+
+struct MutationSuccess {
+    effects: MutationEffects,
+    spawn_mutations: Vec<SpawnedMutation>,
+    config_update: Option<Config>,
+}
+```
+
+`TaskResult` carries a typed error enum instead of `Option<String>`:
+
+```rust
+enum TaskError {
+    /// Mutation couldn't execute (DB constraint, missing data)
+    MutationFailed { label: String, source: MutationError },
+    /// Computation input was invalid (missing signal sender, stale state)
+    ComputationAborted { label: String, source: String },
+    /// External fetch failed (network, rate limit, upstream error)
+    FetchFailed { source: String, retryable: bool },
+    /// Rayon task panicked
+    WorkerPanic { label: String, payload: String },
+    /// Filesystem constraint violated (mount boundary, permissions)
+    FsViolation { path: PathBuf, reason: String },
+}
+```
+
+Hades routes on variant: retry `FetchFailed { retryable: true }`, escalate `FsViolation` to safety latch, log-and-continue `ComputationAborted`. No success booleans at any layer.
+
+### Observation Type Hierarchy (Pre-Phase 3 — with WitchClient trait)
+
+**Problem:** `ObservedInodeMeta` is a flat struct that carries watcher metadata (mtime, file_size) through to derivation, which only cares about `(inode, path)` set membership. Meanwhile `ObservedFile` (watcher-internal) has `tags: Option<TagSet>` that gets stripped at the Witch boundary. Two representations of the same observation, with different fields, at different layers.
+
+**Solution:** Zone-aware observation types with layer-appropriate projections.
+
+```rust
+/// What the watcher produces internally (full metadata for change detection)
+struct WatcherObservation {
+    inode: i64,
+    path: String,
+    mtime: Mtime,
+    size: i64,
+    tags: Option<TagSet>,  // corpus only
+}
+
+/// What derivation receives (just identity + location)
+struct ObservedInode {
+    path: String,
+    // no mtime/size — derivation doesn't use them
+}
+```
+
+The watcher keeps full metadata for change detection internally. The Witch projects to `HashMap<i64, ObservedInode>` when dispatching derivation. Clean separation — consumers get exactly the data they need.
+
+### Arc-Wrapped Observation Maps (Standalone — anytime)
+
+**Problem:** Every derivation computation receives a full clone of the observed inode map. At 100k+ files, that's a non-trivial allocation per dispatch. The data is immutable once the watcher snapshot is taken.
+
+**Solution:** `Arc<HashMap<i64, ObservedInode>>`. The Witch freezes a snapshot, wraps it in Arc, and all derivation dispatches clone the Arc (pointer bump, not deep copy). Steady-state watcher updates produce a new Arc. The `Computation` enum variants carry `Arc<HashMap<...>>` instead of owned `HashMap<...>` — still Clone, still Send.
+
+### Declarative Mutation Effects (Pre-Phase 6 — before Hades)
+
+**Problem:** Post-mutation behavior is spread across 5+ trait methods (`signal_clear_scope()`, `affected_inodes()`, `additional_computations()`, `specific_signals_to_clear()`, `paths_for_signal_updates()`), called in hardcoded order by `apply_post_execution`. The pipeline has implicit interactions (phase 1c only runs if scope contains TAGS, phase 1b is hardcoded for specific mutation types). New mutation authors must understand the protocol; if pipeline order changes, every mutation is potentially affected.
+
+**Solution:** A single declarative struct replaces the trait methods:
+
+```rust
+struct MutationEffects {
+    signal_clear: SignalClearScope,
+    affected_inodes: Vec<i64>,
+    discovered_inodes: Vec<i64>,
+    drop_file_entries: Vec<i64>,
+    signals_to_clear: Vec<SignalToClear>,
+    paths_for_signal_updates: Vec<PathBuf>,
+    additional_computations: Vec<Computation>,
+    recomputation_scope: RecomputationScope,
+    pending_signals: Vec<TypedSignalWrite>,
+    diff_entries: Vec<DiffEntry>,
+}
+```
+
+The trait simplifies to:
+
+```rust
+trait MutationExecutor {
+    fn label(&self) -> &'static str;
+    fn staging(&self) -> MutationStaging;
+    fn execute(&self, ctx: &MutationContext) -> Result<MutationSuccess, MutationError>;
+}
+```
+
+`apply_post_execution` becomes pure interpretation of data — no trait method dispatch, no ordering questions. The hardcoded `StashFromZone`/`StashLeftovers` match becomes the `drop_file_entries` field.
+
+### Rich WitchNotice (Phase 6 — with protocol)
+
+**Problem:** The UI learns that mutations completed but not which ones or what scope. Errors arrive as strings. Config updates carry no delta. The UI infers by polling (`cache_stale`, `cached_status`) rather than reacting to precise notifications.
+
+**Solution:** Enrich notices with the data clients need to react precisely:
+
+```rust
+enum WitchNotice {
+    StatusUpdate(WorkStatus),
+    MutationsCompleted {
+        count: usize,
+        scope: RecomputationScope,
+        labels: Vec<String>,
+    },
+    TaskError(TaskError),
+    SafetyLatch(String),
+    ConfigUpdated { changed_fields: Vec<&'static str> },
+}
+```
+
+The UI can then invalidate only affected caches: "3 tag mutations completed, scope = TAGS | DEPLOY" → skip refreshing inbox/file caches. This aligns with the protocol's richer response types — the socket protocol will carry this level of detail from the start.
+
+### RecomputationScope Granularity (No action needed)
+
+`RecomputationScope` is a u8 bitmask with 5 domain bits (TAGS, FILES, DEPLOY, INBOX, EXTERNAL). It gates two things: which content analysis computations `ScheduleContentAnalysis` spawns (~17 possible, filtered to relevant subset), and which cached domain queries the cache thread invalidates.
+
+The bitmask is domain-level, not inode-level — but `dirty_inodes` already handles inode-level precision for per-inode computations. The spawned computations are SQL-driven bulk queries whose dispatch overhead is negligible. Cache invalidation correctly cross-cuts domains (e.g., tag changes invalidate deploy caches because deployments can become stale when tags change).
+
+If computation count per domain grows significantly, consolidating tag-related computations into fewer inode-aware passes is an option, but the current structure is adequate.
+
+### Implementation Ordering
+
+| Priority | Item | When | Rationale |
+|----------|------|------|-----------|
+| Standalone | Arc observation maps | Anytime | Pure perf win, trivial change |
+| Pre-Phase 3 | Observation type hierarchy | With WitchClient trait | Clean data flow before abstracting it |
+| Pre-Phase 6 | Declarative MutationEffects | Before Hades | Simplifies the pipeline Hades will supervise |
+| Phase 6 | Typed error pipeline | With Hades | Error routing is Hades's responsibility |
+| Phase 6 | Rich WitchNotice | With protocol | Protocol already defines richer types |
+
+---
+
 ## Type Guarantee Matrix
 
 | Guarantee | Mechanism | Where enforced |

@@ -12,6 +12,7 @@ use crate::ui::{
     corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal,
     subpar_duplicate_modal, ActiveView,
 };
+use crate::witch::WitchClient;
 
 /// Start a simple resolution modal: load data via domain query, create preview, set view.
 macro_rules! start_resolution {
@@ -400,7 +401,7 @@ impl App {
         gesture: &witness::ConfirmationGesture,
     ) {
         // Start transaction if not already started
-        if !self.witch.has_transaction() {
+        if self.witch.witch_status().transaction.is_none() {
             let _ = self.witch.start_transaction("Directory overlap resolution");
         }
         let _ = super::super::operator_decisions::stage_decision(

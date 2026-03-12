@@ -1,4 +1,4 @@
-//! The Witch - Background task execution and orderliness enforcement
+//! The Witch - Main-thread task execution and orderliness enforcement
 //!
 //! The Witch is named such because She enforces orderliness in her domain,
 //! and provides all guarantees for data which flows properly through Her.
@@ -28,17 +28,22 @@ use crate::meta::mutations::Mutation;
 
 // Module declarations
 pub(crate) mod cache_thread;
+mod client;
 mod execution;
 pub(crate) mod external_fetch;
 pub(crate) mod fs_watcher;
+mod handle;
 pub mod messages;
 mod transaction;
 pub(crate) mod types;
 // Re-export public types
+pub use client::WitchClient;
+pub use handle::WitchHandle;
 pub use messages::InitialUiState;
 pub use types::{
     MaintenanceWitness, MutationExecutionWitness, PendingTransaction, ReasoningLevel,
-    SpawnedMutation, Task, TaskLabel, WatcherState, WorkState, WorkStateSnapshot, WorkStatus,
+    SpawnedMutation, Task, TaskLabel, TransactionSnapshot, WatcherState, WitchStatus, WorkState,
+    WorkStateSnapshot, WorkStatus,
 };
 // Decision authority flows through ConfirmationGesture (ui/action_handlers/witness.rs)
 // and WitnessedDecision (meta/decisions/mod.rs). See operator_decisions.rs for call sites.
@@ -192,9 +197,6 @@ pub struct Witch {
     reasoning_level: ReasoningLevel,
     watcher_state: WatcherState,
 
-    /// When true, mutations are permanently disabled (read-only debug mode).
-    /// Set from config at startup.
-    read_only_mode: bool,
 
     /// Runtime safety latch: if Some, mutations are permanently disabled for this session.
     /// Contains the reason why the safety latch was triggered (e.g., mount boundary violation).
@@ -364,7 +366,6 @@ impl Witch {
             work_state: WorkState::Idle,
             reasoning_level: ReasoningLevel::None,
             watcher_state: WatcherState::NotStarted,
-            read_only_mode: false,
             safety_latch_reason: None,
             session_recomputation_scope: crate::meta::recomputation::RecomputationScope::EMPTY,
             pending_recomputation_scope: None,
@@ -395,7 +396,6 @@ impl Witch {
     /// Create a new Witch with opinions applied.
     pub fn with_opinions(
         cfg: &Config,
-        read_only_mode: bool,
         force_check_all_files_at_startup: bool,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
     ) -> (
@@ -404,7 +404,6 @@ impl Witch {
         std::sync::mpsc::Receiver<WitchNotice>,
     ) {
         let (mut she, cache_handle, notice_rx) = Self::new(cfg, log_rx);
-        she.read_only_mode = read_only_mode;
         she.force_check_all_files_at_startup = force_check_all_files_at_startup;
         if force_check_all_files_at_startup {
             crate::logging::log_general(
@@ -414,13 +413,156 @@ impl Witch {
         (she, cache_handle, notice_rx)
     }
 
+    /// Run the Witch on the current (main) thread.
+    ///
+    /// Constructs channels, spawns the UI as a client thread via `ui_factory`,
+    /// then enters `run_loop()` on this thread. Does not return until shutdown.
+    pub fn run(
+        cfg: &Config,
+        force_check_all_files_at_startup: bool,
+        log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
+        ui_factory: impl FnOnce(WitchHandle, cache_thread::CacheHandle, std::sync::mpsc::Receiver<WitchNotice>) + Send + 'static,
+    ) {
+        let (mut she, cache_handle, notice_rx) =
+            Self::with_opinions(cfg, force_check_all_files_at_startup, log_rx);
+
+        // Shared state: Witch writes, handle reads
+        let status = std::sync::Arc::new(std::sync::RwLock::new(she.publish_status()));
+
+        // Command channel: handle sends, Witch receives
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+
+        let handle = WitchHandle::new(std::sync::Arc::clone(&status), cmd_tx);
+
+        // Spawn the UI as a client thread
+        let ui_thread = std::thread::Builder::new()
+            .name("tui".into())
+            .spawn(move || ui_factory(handle, cache_handle, notice_rx))
+            .expect("Failed to spawn UI thread");
+
+        // Witch owns the main thread
+        she.run_loop(cmd_rx, status);
+
+        // Wait for UI thread to finish
+        let _ = ui_thread.join();
+    }
+
+    /// The Witch's self-owned run loop.
+    ///
+    /// Processes commands, runs tick(), publishes state. Runs until Shutdown
+    /// command or channel disconnection.
+    fn run_loop(
+        &mut self,
+        cmd_rx: mpsc::Receiver<handle::HandleCommand>,
+        status: std::sync::Arc<std::sync::RwLock<WitchStatus>>,
+    ) {
+        use handle::HandleCommand;
+
+        loop {
+            // Drain all pending commands (non-blocking)
+            loop {
+                match cmd_rx.try_recv() {
+                    Ok(cmd) => {
+                        let should_stop = matches!(cmd, HandleCommand::Shutdown);
+                        self.dispatch_command(cmd);
+                        if should_stop {
+                            return;
+                        }
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => return,
+                }
+            }
+
+            // Advance the work loop
+            self.tick();
+
+            // Publish state snapshot
+            if let Ok(mut guard) = status.write() {
+                *guard = self.publish_status();
+            }
+
+            // Brief sleep to avoid busy-spinning.
+            // The Witch processes at ~100Hz — faster than the TUI frame rate.
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Dispatch a single command from the handle.
+    fn dispatch_command(&mut self, cmd: handle::HandleCommand) {
+        use handle::HandleCommand;
+
+        match cmd {
+            HandleCommand::StartTransaction { label, reply } => {
+                let _ = reply.send(self.start_transaction(&label));
+            }
+            HandleCommand::AddDecision {
+                key,
+                decision,
+                reply,
+            } => {
+                let _ = reply.send(self.add_decision(key, decision));
+            }
+            HandleCommand::RemoveDecision { key, reply } => {
+                let _ = reply.send(self.remove_decision(&key));
+            }
+            HandleCommand::ConfirmTransaction { reply } => {
+                let _ = reply.send(self.confirm_transaction());
+            }
+            HandleCommand::DiscardTransaction { reply } => {
+                let _ = reply.send(self.discard_transaction());
+            }
+            HandleCommand::GetTransactionDetails { reply } => {
+                let details = self
+                    .pending_transaction
+                    .as_ref()
+                    .map(|txn| {
+                        txn.decisions
+                            .iter()
+                            .map(|(k, d)| client::DecisionDetail {
+                                key: k.clone(),
+                                label: d.label.clone(),
+                                mutations: d.mutations.clone(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let _ = reply.send(details);
+            }
+            HandleCommand::RequestExternalFetch => {
+                self.request_external_fetch();
+            }
+            HandleCommand::RequestReleasePacking => {
+                self.request_release_packing();
+            }
+            HandleCommand::QueueSchemaReconciliation => {
+                self.queue_schema_reconciliation();
+            }
+            HandleCommand::QueueVacuum => {
+                self.queue_vacuum();
+            }
+            HandleCommand::LatchReadOnlyForSafety { reason } => {
+                self.latch_read_only_for_safety(reason);
+            }
+            HandleCommand::SetSharedConfig { shared } => {
+                self.set_shared_config(shared);
+            }
+            HandleCommand::StartWatching { reply } => {
+                let _ = reply.send(self.start_watching());
+            }
+            HandleCommand::Shutdown => {
+                // Handled by caller (run_loop checks for this)
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Shared Config
     // -------------------------------------------------------------------------
 
     /// Store the shared config reference after construction.
     ///
-    /// Called from `run_menu()` after both App and Witch are created.
+    /// Called from `run_tui()` after both App and Witch are created.
     pub fn set_shared_config(&mut self, shared: SharedConfig) {
         self.shared_config = Some(shared);
     }
@@ -460,7 +602,6 @@ impl Witch {
     /// re-awakening cycles after mutations drain.
     fn accepting_mutations(&self) -> bool {
         self.reasoning_level == ReasoningLevel::Full
-            && !self.read_only_mode
             && self.safety_latch_reason.is_none()
     }
 
@@ -836,11 +977,9 @@ impl Witch {
                 ));
                 self.reasoning_level = ReasoningLevel::Full;
 
-                if !self.read_only_mode {
-                    crate::logging::log_general(
-                        "[STATE] Mutations now enabled (read-write mode).",
-                    );
-                }
+                crate::logging::log_general(
+                    "[STATE] Mutations now enabled.",
+                );
 
                 // Queue content analysis after full awakening
                 work.content_analysis = true;
@@ -1593,10 +1732,7 @@ impl Witch {
     /// Queue schema reconciliation for async execution.
     ///
     /// Requires a `ConfirmationGesture` from the SchemaUpdate approval view.
-    pub fn queue_schema_reconciliation(
-        &mut self,
-        _gesture: &crate::meta::decisions::ConfirmationGesture,
-    ) {
+    pub fn queue_schema_reconciliation(&mut self) {
         use crate::meta::maintenance::DbMaintenanceTask;
 
         crate::logging::log_general("[WITCH] Queueing schema reconciliation (operator approved)");
@@ -1607,7 +1743,7 @@ impl Witch {
     ///
     /// Requires a `ConfirmationGesture` from the VacuumPrompt view.
     /// Drops the cached read-only connection first (VACUUM needs exclusive access).
-    pub fn queue_vacuum(&mut self, _gesture: &crate::meta::decisions::ConfirmationGesture) {
+    pub fn queue_vacuum(&mut self) {
         use crate::meta::maintenance::DbMaintenanceTask;
 
         self.queue_maintenance(DbMaintenanceTask::Vacuum);
@@ -1631,6 +1767,42 @@ impl Witch {
         }
     }
 
+    /// Build the comprehensive state machine snapshot.
+    ///
+    /// This captures all observable Witch state in a single struct.
+    /// Written to `Arc<RwLock<WitchStatus>>` each tick for transparent
+    /// client reads.
+    pub fn publish_status(&self) -> WitchStatus {
+        let transaction = self.pending_transaction.as_ref().map(|txn| {
+            TransactionSnapshot {
+                label: txn.label.clone(),
+                decision_count: txn.decision_count(),
+                mutation_count: txn.mutation_count(),
+                decision_keys: txn.keys(),
+                decision_labels: txn
+                    .decisions
+                    .iter()
+                    .map(|(k, d)| (k.clone(), d.label.clone()))
+                    .collect(),
+            }
+        });
+
+        WitchStatus {
+            work: self.status(),
+            reasoning_level: self.reasoning_level(),
+            has_pending: self.has_pending(),
+            is_initial_scanning: self.is_initial_scanning(),
+            db_queue_depth: self.db_queue_depth(),
+            needs_schema_update: self.needs_schema_update(),
+            pending_schema_descriptions: self.pending_schema_descriptions(),
+            transaction,
+            handled_decision_kinds: self.handled_sources.clone(),
+            is_external_fetch_active: self.is_external_fetch_active(),
+            external_fetch_progress: self.external_fetch_progress().cloned(),
+            has_acoustid_api_key: self.has_acoustid_api_key(),
+        }
+    }
+
     /// Check if there's pending work (tasks queued or in-flight).
     pub fn has_pending(&self) -> bool {
         // Check rayon in-flight tasks
@@ -1648,45 +1820,9 @@ impl Witch {
         false
     }
 
-    /// Release SQLite page cache memory across all open connections after a computation cycle.
-    ///
-    /// Called when the progress screen transitions back to an actionable view, i.e. the
-    /// computation burst is complete and no more heavy queries are imminent. Two things happen:
-    ///
-    /// 1. All rayon worker thread-local read-only connections are closed via broadcast.
-    ///    They reopen lazily on the next computation. This drops their page caches entirely.
-    ///
-    /// 2. The cache thread's connection issues `PRAGMA shrink_memory` to release unused
-    ///    pages. It stays open (needed for periodic refreshes) but gives back what it can.
-    ///
-    /// The write thread's connection is left alone — its cache is actively useful.
-    /// jemalloc's background thread will return the freed OS pages within ~1s anyway,
-    /// but this accelerates the process and makes it deterministic.
-    pub fn post_cycle_housekeeping(&self) {
-        // Close thread-local read-only connections on all rayon workers.
-        // They reopen lazily next time with_read_only_db() is called.
-        rayon::broadcast(|_| {
-            crate::meta::computations::close_thread_local_connection();
-        });
-        crate::logging::log_general("[WITCH] Post-cycle: closed rayon thread-local DB connections");
-
-        // Shrink the cache thread's page cache.
-        self.cache_thread_handle.shrink_memory();
-        crate::logging::log_general("[WITCH] Post-cycle: requested cache thread SQLite shrink");
-    }
-
     /// Get pending DB write queue depth.
     pub fn db_queue_depth(&self) -> u64 {
         self.db_thread_handle.queue_depth()
-    }
-
-    /// Get the decision key kinds that have been handled in the active transaction.
-    ///
-    /// Used by the insights view to hide entries already staged.
-    pub fn handled_decision_kinds(
-        &self,
-    ) -> &std::collections::HashSet<crate::meta::decisions::DecisionKeyKind> {
-        &self.handled_sources
     }
 
     /// Rebuild handled_sources from current transaction state.

@@ -12,6 +12,7 @@ use crate::ui::{
     helpers, insights_view, tag_canonicity_v2, tag_editor, ActiveView, CanonicitySignalKind,
     TagCanonicityClusters,
 };
+use crate::witch::WitchClient;
 
 impl App {
     /// Start tag canonicity resolution from Insights view.
@@ -462,13 +463,14 @@ impl App {
                 );
 
                 // Back-fill UI state from staged decision if one exists for this cluster
-                if let Some(decision) = self.witch.get_decision(&DecisionKey::TagCanonicity {
+                let backfill_key = DecisionKey::TagCanonicity {
                     tag_name: tag_name_for_key,
                     cluster_index: current_index,
-                }) {
-                    state.restore_from_mutations(&decision.mutations);
+                };
+                if let Some(detail) = self.witch.transaction_decision_details().into_iter().find(|d| d.key == backfill_key) {
+                    state.restore_from_mutations(&detail.mutations);
                     state.pending_tag_edits =
-                        Some(helpers::pending_edits_from_mutations(&decision.mutations));
+                        Some(helpers::pending_edits_from_mutations(&detail.mutations));
                 }
 
                 self.view = ActiveView::TagCanonicityResolution { state, clusters };

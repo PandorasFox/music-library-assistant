@@ -9,6 +9,7 @@ use super::witness;
 use super::HandleAction;
 use crate::meta::views::ExternalMatchReviewEntry;
 use crate::ui::{external_match_modal, external_match_view, widgets, ActiveView};
+use crate::witch::WitchClient;
 
 // =========================================================================
 // External Matches Lateral View Actions
@@ -29,7 +30,7 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
                 app.witch.request_external_fetch();
                 app.status_message = Some("External fetch requested".to_string());
                 if let ActiveView::ExternalMatches(ref mut state) = app.view {
-                    state.fetch_active = app.witch.is_external_fetch_active();
+                    state.fetch_active = app.witch.witch_status().is_external_fetch_active;
                 }
             }
             external_match_view::ExternalMatchesAction::RequestReleasePacking => {

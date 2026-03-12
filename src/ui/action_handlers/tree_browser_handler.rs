@@ -6,6 +6,7 @@ use super::HandleAction;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::active_view::ActiveView;
 use crate::ui::{tree_browser, widgets};
+use crate::witch::WitchClient;
 
 impl HandleAction for tree_browser::TreeBrowserAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
@@ -217,9 +218,12 @@ impl App {
     /// Sync browser's pending-edit markers from the current transaction's DirConfigEdit decisions.
     pub(super) fn sync_browser_pending_edits(&mut self) {
         let mut pending = std::collections::HashSet::new();
-        for key in self.witch.decision_keys() {
-            if let DecisionKey::DirConfigEdit { source_path } = key {
-                pending.insert(source_path);
+        let status = self.witch.witch_status();
+        if let Some(ref txn) = status.transaction {
+            for key in &txn.decision_keys {
+                if let DecisionKey::DirConfigEdit { source_path } = key {
+                    pending.insert(source_path.clone());
+                }
             }
         }
         if let ActiveView::CorpusBrowser(ref mut browser) = self.view {

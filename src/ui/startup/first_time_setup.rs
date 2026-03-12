@@ -8,7 +8,7 @@
 //!
 //! 2. **DB-only setup** (`handle_first_time_setup`): Config exists but DB was deleted.
 //!    Simple confirmation dialog that recreates the DB and subdirectories. Runs within
-//!    an already-initialized terminal (called from `run_menu`).
+//!    an already-initialized terminal (called from `run_tui`).
 
 use anyhow::Result;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};

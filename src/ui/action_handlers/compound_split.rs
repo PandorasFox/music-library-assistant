@@ -10,6 +10,7 @@ use crate::db::types::Zone;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::suspended_views::SuspendTarget;
 use crate::ui::{compound_split_v2, helpers, progressive_worker, tag_editor, ActiveView};
+use crate::witch::WitchClient;
 
 impl HandleAction for compound_split_v2::CompoundSplitActionV2 {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
@@ -276,12 +277,11 @@ impl App {
 
     /// Collect (tag_name, canonical_value) pairs from staged EmitCanonicalTag decisions.
     fn staged_canonical_values(&self) -> Vec<(String, String)> {
-        self.witch
-            .decision_keys()
+        let details = self.witch.transaction_decision_details();
+        details
             .iter()
-            .filter_map(|key| {
-                let decision = self.witch.get_decision(key)?;
-                decision.mutations.iter().find_map(|m| {
+            .filter_map(|detail| {
+                detail.mutations.iter().find_map(|m| {
                     if let crate::meta::mutations::Mutation::EmitCanonicalTag(ref ct) = m {
                         Some((ct.tag_name.clone(), ct.canonical_value.clone()))
                     } else {
@@ -440,10 +440,10 @@ impl App {
             state.data.compound.tag_name.clone(),
             group_index,
         );
-        if let Some(decision) = self.witch.get_decision(&backfill_key) {
-            state.restore_from_mutations(&decision.mutations);
+        if let Some(detail) = self.witch.transaction_decision_details().into_iter().find(|d| d.key == backfill_key) {
+            state.restore_from_mutations(&detail.mutations);
             state.pending_tag_edits =
-                Some(helpers::pending_edits_from_mutations(&decision.mutations));
+                Some(helpers::pending_edits_from_mutations(&detail.mutations));
         }
 
         // Update state in existing view
@@ -497,10 +497,10 @@ impl App {
             state.data.compound.tag_name.clone(),
             group_index,
         );
-        if let Some(decision) = self.witch.get_decision(&backfill_key) {
-            state.restore_from_mutations(&decision.mutations);
+        if let Some(detail) = self.witch.transaction_decision_details().into_iter().find(|d| d.key == backfill_key) {
+            state.restore_from_mutations(&detail.mutations);
             state.pending_tag_edits =
-                Some(helpers::pending_edits_from_mutations(&decision.mutations));
+                Some(helpers::pending_edits_from_mutations(&detail.mutations));
         }
 
         self.view = ActiveView::CompoundTagSplit {

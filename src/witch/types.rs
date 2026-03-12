@@ -431,6 +431,71 @@ impl From<&WorkState> for WorkStateSnapshot {
 }
 
 // ============================================================================
+// WitchStatus — Comprehensive State Machine Snapshot
+// ============================================================================
+
+/// The Witch's complete observable state, published as a shared snapshot.
+///
+/// This is the single source of truth for clients reading the Witch's state.
+/// The Witch updates this via `Arc<RwLock<WitchStatus>>` each tick; handles
+/// read it transparently with no caching or invalidation needed.
+///
+/// See `docs/CLIENT_SERVER_ARCHITECTURE.md` for the full design.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct WitchStatus {
+    // -- Work state --
+    /// Task processing state (idle/working/done + counts).
+    pub work: WorkStatus,
+    /// Current reasoning level (None → Inodes → Full).
+    pub reasoning_level: ReasoningLevel,
+    /// Whether any tasks are in-flight or queued.
+    pub has_pending: bool,
+    /// Whether initial corpus scanning is still in progress.
+    pub is_initial_scanning: bool,
+    /// Number of tasks queued in the db_thread write queue.
+    pub db_queue_depth: u64,
+
+    // -- Schema state --
+    /// Whether the database schema needs updating.
+    pub needs_schema_update: bool,
+    /// Human-readable descriptions of pending schema changes.
+    pub pending_schema_descriptions: Vec<String>,
+
+    // -- Transaction state --
+    /// Active transaction snapshot, if any.
+    pub transaction: Option<TransactionSnapshot>,
+    /// Decision key kinds with staged decisions (for insight view filtering).
+    pub handled_decision_kinds: std::collections::HashSet<crate::meta::decisions::DecisionKeyKind>,
+
+    // -- External fetch state --
+    /// Whether the external fetch scheduler is currently running.
+    pub is_external_fetch_active: bool,
+    /// Progress snapshot from external fetch (AcoustID + MusicBrainz).
+    pub external_fetch_progress: Option<super::external_fetch::FetchProgress>,
+    /// Whether an AcoustID API key is configured.
+    pub has_acoustid_api_key: bool,
+}
+
+/// Lightweight snapshot of the active transaction for status reads.
+///
+/// Contains enough data for render code (titlebar, insights view) without
+/// the heavy mutation/diff data. For full decision details (transaction
+/// review view), use a dedicated command query.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TransactionSnapshot {
+    /// Human-readable label for the transaction.
+    pub label: String,
+    /// Number of decisions staged.
+    pub decision_count: usize,
+    /// Total mutations across all staged decisions.
+    pub mutation_count: usize,
+    /// All decision keys in the transaction.
+    pub decision_keys: Vec<crate::meta::decisions::DecisionKey>,
+    /// Per-decision labels, keyed by decision key.
+    pub decision_labels: Vec<(crate::meta::decisions::DecisionKey, String)>,
+}
+
+// ============================================================================
 // Transaction Types (re-exported from meta::decisions)
 // ============================================================================
 

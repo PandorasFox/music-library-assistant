@@ -103,8 +103,8 @@ pub(crate) struct App {
     /// The active view and its state. One variant is active at a time.
     pub(super) view: ActiveView,
 
-    // The Witch - enforcer of orderliness, handles all mutations and background work
-    pub(super) witch: crate::witch::Witch,
+    // Handle to the Witch — She owns the main thread, we command via channels
+    pub(super) witch: crate::witch::WitchHandle,
 
     /// Handle to the cache thread for periodic refreshes and one-shot queries.
     pub(super) cache: crate::witch::cache_thread::CacheHandle,
@@ -173,10 +173,10 @@ impl CachedData {
 }
 
 impl App {
-    /// Create a new App with a pre-existing Witch instance, cache handle, and shared config.
-    fn new_with_witch(
+    /// Create a new App with a Witch handle, cache handle, and shared config.
+    fn new(
         shared_config: SharedConfig,
-        witch: crate::witch::Witch,
+        witch: crate::witch::WitchHandle,
         cache: crate::witch::cache_thread::CacheHandle,
         notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
         art_picker: widgets::AlbumArtPicker,
@@ -322,7 +322,8 @@ impl App {
 
     /// Check if there are any pending operations (Witch work).
     pub(super) fn has_pending_operations(&self) -> bool {
-        self.witch.has_pending()
+        use crate::witch::WitchClient;
+        self.witch.witch_status().has_pending
     }
 
     /// Start the health view.
@@ -355,7 +356,8 @@ impl App {
     where
         T: ProgressStatsUpdater,
     {
-        state.set_db_queue_depth(self.witch.db_queue_depth());
+        use crate::witch::WitchClient;
+        state.set_db_queue_depth(self.witch.witch_status().db_queue_depth);
     }
 
     pub(super) fn start_tag_search(&mut self) {
@@ -390,8 +392,12 @@ impl App {
     /// Start the external matches lateral view.
     pub(super) fn start_external_matches_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::ExternalMatches;
-        let fetch_active = self.witch.is_external_fetch_active();
-        let has_api_key = self.witch.has_acoustid_api_key();
+        let ws = {
+            use crate::witch::WitchClient;
+            self.witch.witch_status()
+        };
+        let fetch_active = ws.is_external_fetch_active;
+        let has_api_key = ws.has_acoustid_api_key;
         let singles_before_incompletes = self
             .config()
             .opinions
@@ -503,6 +509,7 @@ impl App {
     /// Complete startup: spawn db_thread, start FS watcher, open persistent txn,
     /// and transition to the Progress screen.
     pub(super) fn complete_startup(&mut self) {
+        use crate::witch::WitchClient;
         let shared = self.shared_config.clone();
         self.witch.set_shared_config(shared);
         self.witch.start_watching();
@@ -589,11 +596,16 @@ fn render(f: &mut Frame, app: &mut App) {
         app.view.selected_path().map(|s| s.to_string())
     };
 
-    let status_line_2 = app.witch.transaction_summary().map(|(label, dec, mut_)| {
-        let pd = if dec == 1 { "" } else { "s" };
-        let pm = if mut_ == 1 { "" } else { "s" };
-        format!("Transaction \"{label}\": {dec} decision{pd}, {mut_} mutation{pm} staged")
-    });
+    let status_line_2 = {
+        use crate::witch::WitchClient;
+        app.witch.witch_status().transaction.as_ref().map(|t| {
+            let dec = t.decision_count;
+            let mut_ = t.mutation_count;
+            let pd = if dec == 1 { "" } else { "s" };
+            let pm = if mut_ == 1 { "" } else { "s" };
+            format!("Transaction \"{}\": {} decision{}, {} mutation{} staged", t.label, dec, pd, mut_, pm)
+        })
+    };
 
     render::render_app(f, app, status_line_1, status_line_2);
 }
@@ -602,11 +614,13 @@ fn render(f: &mut Frame, app: &mut App) {
 // Entry Point
 // ============================================================================
 
-pub fn run_menu(
-    config: Config,
-    log_rx: std::sync::mpsc::Receiver<crate::logging::LogOp>,
+pub fn run_tui(
+    shared_config: SharedConfig,
+    witch: crate::witch::WitchHandle,
+    cache: crate::witch::cache_thread::CacheHandle,
+    notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
 ) -> Result<()> {
-    crate::logging::log_general("=== MM startup ===");
+    crate::logging::log_general("=== MM TUI startup ===");
 
     // Init the image picker (env-based detection, no stdin probing).
     let art_picker = widgets::AlbumArtPicker::init();
@@ -629,26 +643,26 @@ pub fn run_menu(
         startup::handle_first_time_setup(&mut terminal, &db_path)?;
     }
 
-    let force_check = config.opinions.startup.force_check_all_files_at_startup;
-    let vacuum_threshold = config.opinions.startup.vacuum_threshold;
-    let shared_config = config.into_shared();
-    let (witch, cache_handle, notice_rx) = {
+    let vacuum_threshold = {
         let cfg = crate::config::read_shared_config(&shared_config);
-        crate::witch::Witch::with_opinions(&cfg, false, force_check, Some(log_rx))
+        cfg.opinions.startup.vacuum_threshold
     };
 
-    let mut app = App::new_with_witch(shared_config, witch, cache_handle, notice_rx, art_picker);
+    let mut app = App::new(shared_config, witch, cache, notice_rx, art_picker);
     app.vacuum_threshold = vacuum_threshold;
     app.db_path = db_path.clone();
     // Determine initial view based on startup state
-    if app.witch.needs_schema_update() {
-        let descriptions = app.witch.pending_schema_descriptions();
-        app.view = ActiveView::SchemaUpdate(SchemaUpdateState {
-            descriptions,
-            phase: SchemaUpdatePhase::Approval,
-        });
-    } else {
-        app.advance_past_migrations(&db_path, vacuum_threshold);
+    {
+        use crate::witch::WitchClient;
+        let status = app.witch.witch_status();
+        if status.needs_schema_update {
+            app.view = ActiveView::SchemaUpdate(SchemaUpdateState {
+                descriptions: status.pending_schema_descriptions,
+                phase: SchemaUpdatePhase::Approval,
+            });
+        } else {
+            app.advance_past_migrations(&db_path, vacuum_threshold);
+        }
     }
 
     let res = run_app(&mut terminal, &mut app);
@@ -702,16 +716,7 @@ fn run_app<B: ratatui::backend::Backend>(
             }
         }
 
-        // Startup views don't interact with the normal Witch tick / idle rescan
-        let is_startup_view = matches!(
-            app.view,
-            ActiveView::SchemaUpdate(_) | ActiveView::VacuumPrompt(_)
-        );
-
-        // Tick the Witch (skip during startup views — they tick internally as needed)
-        if !is_startup_view {
-            app.witch.tick();
-        }
+        // (Witch ticks herself on the main thread — no manual tick needed)
 
         // Drain WitchNotices → update local state
         while let Ok(notice) = app.notice_rx.try_recv() {
@@ -760,11 +765,14 @@ fn run_app<B: ratatui::backend::Backend>(
         // Update views with cached data
         if let ActiveView::Insights(ref mut view) = app.view {
             let insights_data = app.cached.get::<crate::db::domain::GetInsights>().cloned();
-            let handled = app.witch.handled_decision_kinds();
+            let handled = {
+                use crate::witch::WitchClient;
+                app.witch.witch_status().handled_decision_kinds
+            };
             view.update(
                 Some(&app.cached_status),
                 insights_data,
-                handled,
+                &handled,
                 app.cache_stale,
             );
         }
@@ -781,10 +789,15 @@ fn run_app<B: ratatui::backend::Backend>(
             if let Some(data) = app.cached.get::<crate::db::domain::GetExternalMatches>() {
                 view.update(data.clone());
             }
-            let new_fetch_active = app.witch.is_external_fetch_active();
+            let ext_status = {
+                use crate::witch::WitchClient;
+                let ws = app.witch.witch_status();
+                (ws.is_external_fetch_active, ws.external_fetch_progress.clone())
+            };
+            let new_fetch_active = ext_status.0;
             let fetch_changed = view.fetch_active != new_fetch_active;
             view.fetch_active = new_fetch_active;
-            view.fetch_progress = app.witch.external_fetch_progress().cloned();
+            view.fetch_progress = ext_status.1;
             if view.fetch_active {
                 view.tick_count = view.tick_count.wrapping_add(1);
             }

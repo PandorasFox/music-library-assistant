@@ -29,7 +29,7 @@ use crate::meta::decisions::{
     ConfirmationGesture, DecisionKey, DiscardSummary, TransactionError, WitnessedDecision,
 };
 use crate::meta::mutations::Mutation;
-use crate::witch::Witch;
+use crate::witch::WitchClient;
 
 // =============================================================================
 // SEALED DECISION HANDLERS
@@ -40,7 +40,7 @@ use crate::witch::Witch;
 /// Called from Enter keypress when user confirms a single item (tag save, etc.).
 /// The decision is added to the transaction but not yet committed.
 pub fn stage_decision(
-    witch: &mut Witch,
+    witch: &mut impl WitchClient,
     key: DecisionKey,
     label: &str,
     mutations: Vec<Mutation>,
@@ -54,17 +54,19 @@ pub fn stage_decision(
 ///
 /// Called from Enter keypress on transaction commit confirmation.
 pub fn commit_transaction(
-    witch: &mut Witch,
-    gesture: &ConfirmationGesture,
+    witch: &mut impl WitchClient,
+    _gesture: &ConfirmationGesture,
 ) -> Result<(), TransactionError> {
-    witch.confirm_transaction(gesture)
+    witch.confirm_transaction()
 }
 
 /// Discard the active transaction - drop all staged decisions.
 ///
 /// Called from Escape/cancel keypress on transaction modal.
 /// Does not require a gesture — discarding is always safe.
-pub fn discard_transaction(witch: &mut Witch) -> Result<DiscardSummary, TransactionError> {
+pub fn discard_transaction(
+    witch: &mut impl WitchClient,
+) -> Result<DiscardSummary, TransactionError> {
     witch.discard_transaction()
 }
 
@@ -72,9 +74,9 @@ pub fn discard_transaction(witch: &mut Witch) -> Result<DiscardSummary, Transact
 ///
 /// Called when user removes a decision from transaction review.
 pub fn remove_decision(
-    witch: &mut Witch,
+    witch: &mut impl WitchClient,
     key: &DecisionKey,
-    gesture: &ConfirmationGesture,
+    _gesture: &ConfirmationGesture,
 ) -> Result<(), TransactionError> {
-    witch.remove_decision(key, gesture)
+    witch.remove_decision(key)
 }

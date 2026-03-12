@@ -67,11 +67,11 @@ pub fn render_app(
         let deploy_needs_action = app.cached.get::<crate::db::domain::GetDeployStatus>().is_some_and(|s| s.needs_action);
 
         let transactions_open = app.config().opinions.leave_transactions_open;
-        let transaction_has_decisions = app.witch.has_transaction()
-            && app
-                .witch
-                .transaction_summary()
-                .is_some_and(|(_, d, _)| d > 0);
+        let transaction_has_decisions = {
+            use crate::witch::WitchClient;
+            app.witch.witch_status().transaction.as_ref()
+                .is_some_and(|t| t.decision_count > 0)
+        };
 
         let titlebar = UnifiedTitleBar::new(lv)
             .with_deploy_needs_action(deploy_needs_action)

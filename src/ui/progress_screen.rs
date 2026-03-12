@@ -34,7 +34,7 @@ use ratatui::{
 
 use super::eye::{EYE_CLOSED, EYE_CLOSING};
 use super::wait_state::WaitState;
-use crate::witch::{ReasoningLevel, Witch, WorkStateSnapshot, WorkStatus};
+use crate::witch::{ReasoningLevel, WitchClient, WorkStateSnapshot, WorkStatus};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -223,7 +223,7 @@ impl ProgressScreen {
     /// Tick the progress screen state.
     ///
     /// Returns `true` if work is complete.
-    pub fn tick(&mut self, witch: &Witch) -> bool {
+    pub fn tick(&mut self, witch: &impl WitchClient) -> bool {
         // Time-based animation tick: only increment when enough time has elapsed.
         // This keeps animation smooth regardless of UI frame rate.
         let now = Instant::now();
@@ -236,16 +236,17 @@ impl ProgressScreen {
         }
 
         // Update progress from the Witch
-        let status = witch.status();
-        self.update_progress(&status);
+        let ws = witch.witch_status();
+        let status = &ws.work;
+        self.update_progress(status);
 
-        self.set_db_queue_depth(witch.db_queue_depth());
+        self.set_db_queue_depth(ws.db_queue_depth);
 
         // Phase-specific completion detection
         match self.phase {
             ProgressPhase::Eyeballing => {
                 // Track reasoning level for rendering
-                self.reasoning_level = witch.reasoning_level();
+                self.reasoning_level = ws.reasoning_level;
 
                 // Complete when reasoning reaches Full
                 if self.reasoning_level == ReasoningLevel::Full {

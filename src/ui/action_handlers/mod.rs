@@ -33,6 +33,7 @@ use crate::meta::decisions::DecisionKey;
 use crate::ui::active_view::{ActiveView, ViewAction};
 use crate::ui::eye::Eye;
 use crate::ui::{insights_view, progress_screen, tag_editor, tag_search, widgets};
+use crate::witch::WitchClient;
 
 /// Trait for action types that can be dispatched from ViewAction.
 ///
@@ -162,7 +163,7 @@ impl App {
     /// In open-txn mode: leaves the persistent transaction intact.
     pub(in crate::ui) fn cancel_and_return_to_source(&mut self, log_message: &str) {
         crate::logging::log_general(log_message);
-        if !self.open_txn_mode() && self.witch.has_transaction() {
+        if !self.open_txn_mode() && self.witch.witch_status().transaction.is_some() {
             let _ = super::operator_decisions::discard_transaction(&mut self.witch);
         }
         self.return_to_last_lateral_view();

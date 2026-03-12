@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 /// Parse a human-readable size string like "256mb", "1gb", "512" into MB.
 /// Accepts: plain numbers (interpreted as MB), or suffixed with kb/mb/gb (case-insensitive).
-fn parse_size_mb(s: &str) -> Option<u32> {
+pub(crate) fn parse_size_mb(s: &str) -> Option<u32> {
     let s = s.trim().to_lowercase();
 
     if let Some(num_str) = s.strip_suffix("gb") {

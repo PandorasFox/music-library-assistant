@@ -4,6 +4,7 @@
 
 mod dirs;
 mod edit;
+mod env_override;
 mod parse;
 pub mod path_schema;
 mod performance;
@@ -94,6 +95,9 @@ pub fn load_config() -> Result<Config> {
             .with_context(|| format!("Failed to read dirs from {:?}", dirs_path))?;
         config.source_dirs = parse_dirs_kdl(&dirs_content)?;
     }
+
+    // Layer environment variable overrides on top of file-based config
+    env_override::apply_env_overrides(&mut config);
 
     Ok(config)
 }

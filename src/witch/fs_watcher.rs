@@ -132,6 +132,9 @@ pub(super) enum WatcherMessage {
     /// Image file observed with extracted metadata (dimensions, format, role).
     /// Watcher has already read the image — Witch queues DB writes.
     ImageFileObserved(ObservedImage),
+    /// inotify watches established — watcher is actively monitoring.
+    /// Sent after AllInitialScansComplete, once inotify is fully set up.
+    MonitoringActive,
     /// inotify watch limit exceeded or creation failed. Watcher has fallen
     /// back to periodic polling. Witch should clear observed state and
     /// note degraded mode — scan results arrive via InitialScanComplete.
@@ -423,6 +426,9 @@ fn run_scan_and_monitor(
             ));
         }
     }
+
+    // All inotify watches established — signal the Witch
+    let _ = message_tx.send(WatcherMessage::MonitoringActive);
 
     // Monitoring loop: drain notify events + check for commands
     let mut debounce_map: HashMap<PathBuf, Instant> = HashMap::new();

@@ -647,9 +647,6 @@ impl Witch {
                                     w.set_shared_config(shared);
                                     CommandResponse::Ok
                                 }
-                                CommandPayload::StartWatching => {
-                                    CommandResponse::WatchingStarted(w.start_watching())
-                                }
                                 CommandPayload::UpdatePerformance { opinions } => {
                                     w.update_performance_impl(opinions);
                                     CommandResponse::Ok
@@ -687,6 +684,10 @@ impl Witch {
                             None => AuthResponse::Failed("Auth not available".to_string()),
                         };
                         Ok(UnauthenticatedResponse::Auth(response))
+                    }
+                    UnauthenticatedBody::SetupQuery => {
+                        let needs_setup = self.startup_state == types::WitchStartupState::AwaitingSetup;
+                        Ok(UnauthenticatedResponse::SetupStatus { needs_setup })
                     }
                     UnauthenticatedBody::CompleteSetup { root, first_user } => {
                         self.gate(
@@ -1102,6 +1103,14 @@ impl Witch {
             _ => {}
         }
 
+        // Auto-start watcher when Ready and not yet scanning.
+        // Scanning is the Witch's own operational concern — not gated on client login.
+        if self.startup_state == types::WitchStartupState::Ready
+            && self.watcher_state == WatcherState::NotStarted
+        {
+            self.start_watching();
+        }
+
     }
 
     /// Update state machine based on in-flight tasks and timing.
@@ -1494,13 +1503,9 @@ impl Witch {
                         self.observed_inodes.inbox.len(),
                         self.observed_inodes.library.len(),
                     ));
-                    // Preserve Polling state — only transition to Watching
-                    // when we were doing an inotify-backed initial scan.
-                    if self.watcher_state != WatcherState::Polling {
-                        self.watcher_state = WatcherState::Watching;
-                    }
-
                     // Drive the state machine forward based on current reasoning level.
+                    // Note: watcher_state transitions to Watching only when
+                    // MonitoringActive arrives (after inotify watches are established).
                     // This replaces the observation→awakening transition that previously
                     // happened in transition_to_completed() when the old observation
                     // computations drained.
@@ -1611,6 +1616,14 @@ impl Witch {
                     // Watcher paths are zone-relative; DB expects archive-root-relative
                     img.path = format!("{}/{}", img.zone.as_str(), img.path);
                     self.pending_observed_images.push(img);
+                }
+                fs_watcher::WatcherMessage::MonitoringActive => {
+                    if self.watcher_state != WatcherState::Polling {
+                        self.watcher_state = WatcherState::Watching;
+                    }
+                    crate::logging::log_general(
+                        "[WITCH] Watcher monitoring active (inotify established)"
+                    );
                 }
                 fs_watcher::WatcherMessage::InotifyFailed => {
                     crate::logging::log_error(

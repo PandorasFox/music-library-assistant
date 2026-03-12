@@ -449,22 +449,39 @@ impl App {
     // Startup Flow
     // =========================================================================
 
-    /// Complete startup: spawn db_thread, start FS watcher, open persistent txn,
-    /// and transition to the Progress screen.
+    /// Complete startup: inject shared config, open persistent txn,
+    /// and transition to the appropriate view based on Witch state.
     pub(super) fn complete_startup(&mut self) {
         let shared = self.shared_config.clone();
         let _ = self.witch.set_shared_config(shared);
-        let _ = self.witch.start_watching();
 
         // If leave_transactions_open is enabled, open a persistent transaction at startup
         if self.open_txn_mode() {
             let _ = self.witch.start_transaction("Open");
         }
 
-        self.view = ActiveView::Progress {
-            screen: progress_screen::ProgressScreen::new_eyeballing(),
-            eye: eye::Eye::default(),
-        };
+        // Pick the right view based on current Witch state:
+        // - Full reasoning + idle → go straight to the default view
+        // - Full reasoning + busy → show content analysis progress
+        // - Not yet Full → show eyeballing progress
+        let status = self.witch.witch_status();
+        match status.reasoning_level {
+            crate::witch::ReasoningLevel::Full if !status.has_pending => {
+                self.start_default_view();
+            }
+            crate::witch::ReasoningLevel::Full => {
+                self.view = ActiveView::Progress {
+                    screen: progress_screen::ProgressScreen::new_content_analysis(),
+                    eye: eye::Eye::default(),
+                };
+            }
+            _ => {
+                self.view = ActiveView::Progress {
+                    screen: progress_screen::ProgressScreen::new_eyeballing(),
+                    eye: eye::Eye::default(),
+                };
+            }
+        }
     }
 
 }
@@ -517,34 +534,30 @@ pub fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Check startup state from the Witch
-    {
-        let status = witch.witch_status();
+    // Check startup state from the Witch (unauthenticated — before login)
+    if witch.needs_setup() {
+        let has_config = crate::config::config_exists();
 
-        if status.startup_state == crate::witch::WitchStartupState::AwaitingSetup {
-            let has_config = crate::config::config_exists();
+        let root = if has_config {
+            // Config exists but DB was deleted — show DB setup dialog, use existing root
+            let db_path = crate::config::get_db_path()?;
+            startup::handle_db_setup_dialog(&mut terminal, &db_path)?;
+            let cfg = crate::config::load_config()?;
+            cfg.root
+        } else {
+            // Fresh install — directory picker
+            startup::run_directory_picker(&mut terminal)?
+        };
 
-            let root = if has_config {
-                // Config exists but DB was deleted — show DB setup dialog, use existing root
-                let db_path = crate::config::get_db_path()?;
-                startup::handle_db_setup_dialog(&mut terminal, &db_path)?;
-                let cfg = crate::config::load_config()?;
-                cfg.root
-            } else {
-                // Fresh install — directory picker
-                startup::run_directory_picker(&mut terminal)?
-            };
+        // Collect first-user credentials
+        let first_user = startup::first_time_setup::run_create_account(&mut terminal)?;
 
-            // Collect first-user credentials
-            let first_user = startup::first_time_setup::run_create_account(&mut terminal)?;
+        witch
+            .complete_setup(root, Some(first_user))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-            witch
-                .complete_setup(root, Some(first_user))
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-            // Notify auth thread that DB is now available
-            witch.notify_db_ready();
-        }
+        // Notify auth thread that DB is now available
+        witch.notify_db_ready();
     }
 
     // Auth: login to obtain session token

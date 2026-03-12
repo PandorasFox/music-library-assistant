@@ -56,6 +56,8 @@ pub enum UnauthenticatedBody {
         root: PathBuf,
         first_user: Option<(String, String)>,
     },
+    /// Check whether first-time setup is needed.
+    SetupQuery,
 }
 
 /// Response to unauthenticated requests.
@@ -65,6 +67,8 @@ pub enum UnauthenticatedResponse {
     Auth(AuthResponse),
     /// Setup completed successfully.
     SetupComplete,
+    /// Setup status response.
+    SetupStatus { needs_setup: bool },
 }
 
 /// Auth response (login result).
@@ -223,8 +227,6 @@ pub enum CommandPayload {
     ValidateConfig { config: crate::config::Config },
     /// Inject shared config (called during startup).
     SetSharedConfig { shared: crate::config::SharedConfig },
-    /// Start the filesystem watcher.
-    StartWatching,
     /// Update performance config at runtime.
     UpdatePerformance {
         opinions: crate::config::PerformanceOpinions,
@@ -240,8 +242,6 @@ pub enum CommandPayload {
 pub enum CommandResponse {
     /// Command executed successfully.
     Ok,
-    /// Filesystem watcher started (bool = whether watching actually began).
-    WatchingStarted(bool),
 }
 
 /// Trait for protocol commands. Each implementor declares its response type.

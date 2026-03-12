@@ -8,9 +8,8 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! // For startup eyeballing
+//! // For startup eyeballing (Witch auto-starts watcher on Ready)
 //! let mut progress = ProgressScreen::new_eyeballing();
-//! witch.start_watching();
 //!
 //! // Each frame
 //! if progress.tick(witch) {
@@ -19,7 +18,6 @@
 //!
 //! // For content analysis
 //! let mut progress = ProgressScreen::new_content_analysis();
-//! witch.queue_content_analysis();
 //! ```
 
 use std::time::Instant;

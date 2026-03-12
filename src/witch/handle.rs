@@ -171,6 +171,14 @@ impl WitchHandle {
     // Convenience methods (ergonomic sugar over protocol)
     // =========================================================================
 
+    /// Check whether first-time setup is needed (unauthenticated).
+    pub fn needs_setup(&self) -> bool {
+        match self.send_unauthenticated(UnauthenticatedBody::SetupQuery) {
+            Ok(UnauthenticatedResponse::SetupStatus { needs_setup }) => needs_setup,
+            _ => false,
+        }
+    }
+
     /// Read the Witch's current state machine snapshot.
     ///
     /// Sends a StatusQuery through the protocol — synchronous round-trip to
@@ -294,14 +302,6 @@ impl WitchHandle {
     pub fn set_shared_config(&mut self, shared: SharedConfig) -> Result<(), ProtocolError> {
         self.send_command(CommandPayload::SetSharedConfig { shared })?;
         Ok(())
-    }
-
-    /// Start the filesystem watcher.
-    pub fn start_watching(&mut self) -> Result<bool, ProtocolError> {
-        match self.send_command(CommandPayload::StartWatching)? {
-            CommandResponse::WatchingStarted(v) => Ok(v),
-            CommandResponse::Ok => Ok(false),
-        }
     }
 
     /// Update performance config at runtime.

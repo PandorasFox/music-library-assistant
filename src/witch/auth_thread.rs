@@ -49,10 +49,8 @@ type SessionMap = HashMap<[u8; 32], SessionEntry>;
 
 #[derive(Debug, Clone)]
 struct SessionEntry {
-    #[allow(dead_code)] // Will be used in Phase 4 (per-session transactions)
-    user_id: i64,
-    #[allow(dead_code)]
-    created_at: Instant,
+    _user_id: i64,
+    _created_at: Instant,
     expires_at: Option<Instant>,
 }
 
@@ -337,8 +335,8 @@ fn attempt_login(
     };
 
     let entry = SessionEntry {
-        user_id: user.id,
-        created_at: Instant::now(),
+        _user_id: user.id,
+        _created_at: Instant::now(),
         expires_at,
     };
 
@@ -452,8 +450,8 @@ mod tests {
 
         // Manually insert an expired session
         let entry = SessionEntry {
-            user_id: 1,
-            created_at: Instant::now(),
+            _user_id: 1,
+            _created_at: Instant::now(),
             expires_at: Some(Instant::now() - Duration::from_secs(1)),
         };
         let mut map = HashMap::new();

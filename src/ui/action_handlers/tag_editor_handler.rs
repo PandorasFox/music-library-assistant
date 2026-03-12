@@ -103,9 +103,8 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
             UnifiedTagEditorAction::RequestFillFromDb { inode } => match inode {
                 Some(inode) => {
                     let tag_pairs = app
-                        .cache
-                        .domain_query(crate::db::domain::GetCorpusTags { inode })
-                        .recv();
+                        .witch
+                        .query(crate::db::domain::GetCorpusTags { inode });
 
                     if let ActiveView::UnifiedTagEditor(ref mut editor) = app.view {
                         editor.fill_from_db_result(tag_pairs);

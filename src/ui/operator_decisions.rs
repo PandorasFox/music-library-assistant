@@ -26,9 +26,10 @@
 //! 3. User confirms via `commit_transaction()` or discards via `discard_transaction()`
 
 use crate::meta::decisions::{
-    ConfirmationGesture, DecisionKey, DiscardSummary, TransactionError, WitnessedDecision,
+    ConfirmationGesture, DecisionKey, DiscardSummary, WitnessedDecision,
 };
 use crate::meta::mutations::Mutation;
+use crate::meta::protocol::ProtocolError;
 use crate::witch::WitchClient;
 
 // =============================================================================
@@ -45,7 +46,7 @@ pub fn stage_decision(
     label: &str,
     mutations: Vec<Mutation>,
     gesture: &ConfirmationGesture,
-) -> Result<(), TransactionError> {
+) -> Result<(), ProtocolError> {
     let decision = WitnessedDecision::new(label, mutations, gesture);
     witch.add_decision(key, decision)
 }
@@ -56,7 +57,7 @@ pub fn stage_decision(
 pub fn commit_transaction(
     witch: &mut impl WitchClient,
     _gesture: &ConfirmationGesture,
-) -> Result<(), TransactionError> {
+) -> Result<(), ProtocolError> {
     witch.confirm_transaction()
 }
 
@@ -66,7 +67,7 @@ pub fn commit_transaction(
 /// Does not require a gesture — discarding is always safe.
 pub fn discard_transaction(
     witch: &mut impl WitchClient,
-) -> Result<DiscardSummary, TransactionError> {
+) -> Result<DiscardSummary, ProtocolError> {
     witch.discard_transaction()
 }
 
@@ -77,6 +78,6 @@ pub fn remove_decision(
     witch: &mut impl WitchClient,
     key: &DecisionKey,
     _gesture: &ConfirmationGesture,
-) -> Result<(), TransactionError> {
+) -> Result<(), ProtocolError> {
     witch.remove_decision(key)
 }

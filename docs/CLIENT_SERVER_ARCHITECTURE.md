@@ -151,16 +151,16 @@ DomainQuery dispatch stays as the existing trait-based system. Domain queries ar
 
 | Variant | Maps to | Auth level |
 |---------|---------|------------|
-| `StartTransaction { label }` | `start_transaction()` | AuthRequired |
-| `AddDecision { key, label, mutations }` | `add_decision()` | AuthRequired |
-| `RemoveDecision { key }` | `remove_decision()` | AuthRequired |
-| `ConfirmTransaction` | `confirm_transaction()` | AuthRequired |
-| `DiscardTransaction` | `discard_transaction()` | AuthRequired |
-| `RequestExternalFetch` | `request_external_fetch()` | AuthRequired |
-| `RequestReleasePacking` | `request_release_packing()` | AuthRequired |
-| `QueueSchemaReconciliation` | `queue_schema_reconciliation()` | AuthRequired |
-| `QueueVacuum` | `queue_vacuum()` | AuthRequired |
-| `LatchReadOnlyForSafety { reason }` | `latch_read_only_for_safety()` | AuthRequired |
+| `StartTransaction { label }` | `start_transaction()` | Authenticated |
+| `AddDecision { key, label, mutations }` | `add_decision()` | Authenticated |
+| `RemoveDecision { key }` | `remove_decision()` | Authenticated |
+| `ConfirmTransaction` | `confirm_transaction()` | Authenticated |
+| `DiscardTransaction` | `discard_transaction()` | Authenticated |
+| `RequestExternalFetch` | `request_external_fetch()` | Authenticated |
+| `RequestReleasePacking` | `request_release_packing()` | Authenticated |
+| `QueueSchemaReconciliation` | `queue_schema_reconciliation()` | Authenticated |
+| `QueueVacuum` | `queue_vacuum()` | Authenticated |
+| `LatchReadOnlyForSafety { reason }` | `latch_read_only_for_safety()` | Authenticated |
 
 **`QueryResponse`** — typed response variants matching each query.
 
@@ -207,8 +207,7 @@ ONE auth path. Every client authenticates the same way.
 | Level | When | Allowed |
 |-------|------|---------|
 | `FirstTimeSetup` | No users exist | Setup commands only |
-| `Unauthenticated` | Before login | Status queries (is system up? needs setup?) |
-| `AuthRequired` | After login (default) | Everything |
+| `Authenticated` | After login (valid session) | All operational endpoints |
 
 ### ConfirmationGesture Evolution
 

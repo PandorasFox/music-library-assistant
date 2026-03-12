@@ -223,9 +223,8 @@ impl App {
             return;
         }
         let audio_files = self
-            .cache
-            .domain_query(crate::db::domain::GetAudioFilesByInodes { inodes, zone })
-            .recv();
+            .witch
+            .query(crate::db::domain::GetAudioFilesByInodes { inodes, zone });
         if !audio_files.is_empty() {
             self.open_embedded_tag_editor(mode, audio_files, key, label);
         }
@@ -300,9 +299,8 @@ impl App {
     /// the bulk tag editor so the operator can fill in missing tags.
     fn start_missing_tag_resolution(&mut self) {
         let audio_files = self
-            .cache
-            .domain_query(crate::db::domain::GetMissingTagAudioFiles)
-            .recv();
+            .witch
+            .query(crate::db::domain::GetMissingTagAudioFiles);
 
         if audio_files.is_empty() {
             return;
@@ -599,12 +597,11 @@ impl HandleAction for tag_search::TagSearchAction {
                 // Execute search via cache thread (blocking — fast single query)
                 if let ActiveView::TagSearch(ref mut search) = app.view {
                     let all_files = app
-                        .cache
-                        .domain_query(crate::db::domain::GetAllAudioFilesWithTags {
+                        .witch
+                        .query(crate::db::domain::GetAllAudioFilesWithTags {
                             zone: crate::db::types::Zone::Corpus,
                             include_library: false,
-                        })
-                        .recv();
+                        });
                     search.execute_search(all_files);
                 }
             }

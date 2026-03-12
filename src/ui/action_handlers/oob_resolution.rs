@@ -92,7 +92,7 @@ impl HandleAction for moved_file_modal::MovedFileAction {
 impl App {
     /// Start OOB tag sync resolution from Insights view.
     pub(in crate::ui) fn start_oob_sync_resolution(&mut self) {
-        let files = self.cache.domain_query(domain::GetOobSyncFiles).recv();
+        let files = self.witch.query(domain::GetOobSyncFiles);
 
         // Start transaction for the sync resolution
         let _ = self.witch.start_transaction("OOB tag sync");
@@ -200,7 +200,7 @@ impl App {
     /// Loads all OOB signal files classified into four buckets (with mismatch
     /// data from signals) and starts a transaction for potential resolution.
     pub(in crate::ui) fn start_oob_conflict_inspection(&mut self) {
-        let files = self.cache.domain_query(domain::GetOobFilesBucketed).recv();
+        let files = self.witch.query(domain::GetOobFilesBucketed);
 
         // Start transaction for potential resolution
         let _ = self.witch.start_transaction("OOB tag resolution");
@@ -364,7 +364,7 @@ impl App {
     /// Start moved file acknowledgement modal.
     pub(in crate::ui) fn start_moved_file_acknowledge(&mut self) {
         // Query files with moved_file signals
-        let files = self.cache.domain_query(domain::GetMovedFiles).recv();
+        let files = self.witch.query(domain::GetMovedFiles);
 
         crate::logging::log_general(format!(
             "Starting moved file acknowledgement: {} files",

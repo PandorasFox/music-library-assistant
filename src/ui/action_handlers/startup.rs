@@ -112,12 +112,11 @@ impl App {
     /// Gathers unindexed files and opens the intake confirmation modal.
     pub(super) fn start_intake_confirmation_from_health(&mut self) {
         let intake_state = self
-            .cache
-            .domain_query(crate::db::domain::GetIntakeConfirmation {
+            .witch
+            .query(crate::db::domain::GetIntakeConfirmation {
                 source: crate::ui::startup::IntakeSource::Health,
                 zone: Some(crate::db::types::Zone::Corpus),
-            })
-            .recv();
+            });
 
         if let Some(state) = intake_state {
             self.view = ActiveView::IntakeConfirmation(state);

@@ -48,12 +48,11 @@ impl App {
             crate::db::domain::TagEditorLoadMode::SingleFile
         };
         let (audio_files, selected_idx) = self
-            .cache
-            .domain_query(crate::db::domain::GetTagEditorFiles {
+            .witch
+            .query(crate::db::domain::GetTagEditorFiles {
                 rel_path: rel_path.to_path_buf(),
                 mode,
-            })
-            .recv();
+            });
 
         if audio_files.is_empty() {
             self.abort_to_health(format!("No indexed files at: {}", path.display()));
@@ -156,12 +155,11 @@ impl App {
         };
 
         let (audio_files, _) = self
-            .cache
-            .domain_query(crate::db::domain::GetTagEditorFiles {
+            .witch
+            .query(crate::db::domain::GetTagEditorFiles {
                 rel_path: rel_dir,
                 mode: crate::db::domain::TagEditorLoadMode::Directory,
-            })
-            .recv();
+            });
 
         if audio_files.is_empty() {
             self.status_message =

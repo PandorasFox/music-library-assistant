@@ -11,7 +11,7 @@ use std::time::Duration;
 
 /// Opaque session token (32 random bytes). Client stores this.
 /// Becomes the backing data for the protocol's SessionId.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionToken(Vec<u8>);
 
 impl SessionToken {
@@ -20,8 +20,7 @@ impl SessionToken {
         &self.0
     }
 
-    /// Create a SessionToken from raw bytes (for tests).
-    #[cfg(test)]
+    /// Create a SessionToken from raw bytes.
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }

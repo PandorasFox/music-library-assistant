@@ -74,9 +74,8 @@ impl App {
     /// and switches to the ManualReview view.
     pub(in crate::ui) fn start_manual_review(&mut self, kind: types::ReviewKind) {
         let data = self
-            .cache
-            .domain_query(crate::db::domain::GetManualReviewData { kind })
-            .recv();
+            .witch
+            .query(crate::db::domain::GetManualReviewData { kind });
 
         // Start transaction for the review session
         let _ = self.witch.start_transaction(kind.transaction_label());

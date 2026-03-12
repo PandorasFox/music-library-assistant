@@ -32,12 +32,11 @@ impl HandleAction for super::super::inbox_view::InboxAction {
             InboxAction::LaunchIntake => {
                 // Gather inbox unindexed files and show intake confirmation
                 let intake_state = app
-                    .cache
-                    .domain_query(crate::db::domain::GetIntakeConfirmation {
+                    .witch
+                    .query(crate::db::domain::GetIntakeConfirmation {
                         source: startup::IntakeSource::Inbox,
                         zone: Some(crate::db::types::Zone::Inbox),
-                    })
-                    .recv();
+                    });
 
                 if let Some(state) = intake_state {
                     app.view = ActiveView::IntakeConfirmation(state);
@@ -126,9 +125,8 @@ impl App {
     /// `InboxTagCanonicity` kind, and launches the standard canonicity modal.
     fn start_inbox_tag_canonicity_resolution(&mut self) {
         let signal_keys = self
-            .cache
-            .domain_query(crate::db::domain::GetInboxTagCanonicityKeys)
-            .recv();
+            .witch
+            .query(crate::db::domain::GetInboxTagCanonicityKeys);
 
         if signal_keys.is_empty() {
             self.status_message = Some("No inbox tag canonicity signals to resolve".to_string());
@@ -156,11 +154,10 @@ impl App {
             .quality_resolution
             .inbox_bitrate_fuzz_percent;
         let data = self
-            .cache
-            .domain_query(crate::db::domain::GetInboxCorpusMatchData {
+            .witch
+            .query(crate::db::domain::GetInboxCorpusMatchData {
                 bitrate_fuzz_percent: fuzz,
-            })
-            .recv();
+            });
 
         let preview = inbox_corpus_match_modal::InboxCorpusMatchPreviewState::new(data);
         self.view = ActiveView::InboxCorpusMatchResolution(preview);
@@ -170,11 +167,10 @@ impl App {
     fn start_inbox_organize(&mut self) {
         let config = self.config().clone();
         let directories = self
-            .cache
-            .domain_query(crate::db::domain::GetInboxOrganizeData {
+            .witch
+            .query(crate::db::domain::GetInboxOrganizeData {
                 config: config.clone(),
-            })
-            .recv();
+            });
 
         if let Some(state) =
             inbox_organize::InboxOrganizeState::from_directories(directories, &config)

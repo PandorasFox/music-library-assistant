@@ -81,8 +81,7 @@ use crossterm::{
 };
 use input::InputAction;
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use std::any::TypeId;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -102,14 +101,9 @@ pub(crate) struct App {
     /// The active view and its state. One variant is active at a time.
     pub(super) view: ActiveView,
 
-    // Handle to the Witch — She owns the main thread, we command via channels
+    // Handle to the Witch — She owns the main thread, we command via channels.
+    // Also owns cache channels and locally cached periodic data.
     pub(super) witch: crate::witch::WitchHandle,
-
-    /// Handle to the cache thread for periodic refreshes and one-shot queries.
-    pub(super) cache: crate::witch::cache_thread::CacheHandle,
-
-    /// Locally cached periodic data from the cache thread (TypeId-keyed).
-    pub(super) cached: CachedData,
 
     // View stack for push/pop navigation (TransactionReview, ProgressiveWork, etc.)
     pub(super) view_stack: Vec<SuspendedView>,
@@ -127,11 +121,6 @@ pub(crate) struct App {
     /// Locally cached Witch status from StatusUpdate notices.
     pub(super) cached_status: crate::witch::WorkStatus,
 
-    /// Set when `MutationsCompleted` fires (cache invalidated), cleared when
-    /// fresh `CacheReady` results arrive. Views stay greyed-out while true so
-    /// the operator never sees stale counts with an interactive overlay.
-    cache_stale: bool,
-
     /// Terminal image rendering: picker for protocol detection + image cache.
     pub(super) art_picker: widgets::AlbumArtPicker,
     pub(super) art_cache: widgets::AlbumArtCache,
@@ -141,40 +130,11 @@ pub(crate) struct App {
 
 }
 
-/// Type-erased cache for periodic query results from the cache thread.
-///
-/// Keyed by `TypeId` of the `CachedQuery` implementor. Values are the
-/// query's `Response` type, boxed and downcast on access.
-pub(super) struct CachedData {
-    slots: HashMap<TypeId, Box<dyn Any>>,
-}
-
-impl CachedData {
-    fn new() -> Self {
-        Self {
-            slots: HashMap::new(),
-        }
-    }
-
-    /// Get a cached query result by query type.
-    pub fn get<Q: crate::db::domain::CachedQuery>(&self) -> Option<&Q::Response> {
-        self.slots
-            .get(&TypeId::of::<Q>())
-            .and_then(|v| v.downcast_ref::<Q::Response>())
-    }
-
-    /// Insert a raw cache result (called from drain loop).
-    pub fn insert_raw(&mut self, type_id: TypeId, value: Box<dyn Any + Send>) {
-        self.slots.insert(type_id, value);
-    }
-}
-
 impl App {
-    /// Create a new App with a Witch handle, cache handle, and shared config.
+    /// Create a new App with a Witch handle and shared config.
     fn new(
         shared_config: SharedConfig,
         witch: crate::witch::WitchHandle,
-        cache: crate::witch::cache_thread::CacheHandle,
         notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
         art_picker: widgets::AlbumArtPicker,
     ) -> Self {
@@ -184,14 +144,11 @@ impl App {
             status_message: None,
             view: ActiveView::Insights(insights_view::InsightsViewState::new()),
             witch,
-            cache,
-            cached: CachedData::new(),
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Health,
             startup_complete: false,
             notice_rx,
             cached_status: Default::default(),
-            cache_stale: false,
             art_picker,
             art_cache: widgets::AlbumArtCache::new(),
             tab_click_rects: Vec::new(),
@@ -346,12 +303,11 @@ impl App {
         self.last_lateral_view = widgets::LateralView::Inbox;
         // Check for inbox unindexed files — show intake popup if any
         let intake_state = self
-            .cache
-            .domain_query(crate::db::domain::GetIntakeConfirmation {
+            .witch
+            .query(crate::db::domain::GetIntakeConfirmation {
                 source: startup::IntakeSource::Inbox,
                 zone: Some(crate::db::types::Zone::Inbox),
-            })
-            .recv();
+            });
 
         if let Some(state) = intake_state {
             self.view = ActiveView::IntakeConfirmation(state);
@@ -385,7 +341,7 @@ impl App {
             has_api_key,
             singles_before_incompletes,
         );
-        if let Some(data) = self.cached.get::<crate::db::domain::GetExternalMatches>() {
+        if let Some(data) = self.witch.cached.get::<crate::db::domain::GetExternalMatches>() {
             state.update(data.clone());
         }
         self.view = ActiveView::ExternalMatches(state);
@@ -433,17 +389,16 @@ impl App {
     /// per-library file counts.
     pub(super) fn start_deploy_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::Deploy;
-        let deploy_status = self.cached.get::<crate::db::domain::GetDeployStatus>().cloned();
+        let deploy_status = self.witch.cached.get::<crate::db::domain::GetDeployStatus>().cloned();
 
         let needs_action = deploy_status.as_ref().is_some_and(|s| s.needs_action);
 
         if needs_action {
             let data = self
-                .cache
-                .domain_query(crate::db::domain::GetDeployData {
+                .witch
+                .query(crate::db::domain::GetDeployData {
                     config: crate::config::load_config().ok(),
-                })
-                .recv();
+                });
             let preview = deploy_modal::DeploymentPreviewState::new(data);
             self.view =
                 ActiveView::Deploy(deploy_modal::DeployViewState::Preview(Box::new(preview)));
@@ -536,8 +491,6 @@ fn render(f: &mut Frame, app: &mut App) {
 
 pub fn run_tui(
     mut witch: crate::witch::WitchHandle,
-    cache: crate::witch::cache_thread::CacheHandle,
-    auth: crate::witch::auth_thread::AuthHandle,
     notice_rx: std::sync::mpsc::Receiver<crate::witch::WitchNotice>,
 ) -> Result<()> {
     crate::logging::log_general("=== MM TUI startup ===");
@@ -580,22 +533,16 @@ pub fn run_tui(
 
             witch
                 .complete_setup(root, Some(first_user))
-                .map_err(|e| anyhow::anyhow!(e))?;
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-            // Notify auth thread that DB is now available (it opened its connection)
-            auth.notify_db_ready();
+            // Notify auth thread that DB is now available
+            witch.notify_db_ready();
         }
     }
 
-    // Auth gate: require login before proceeding to the main app
+    // Auth: login to obtain session token
     {
-        use crate::witch::auth_thread::SystemAuthState;
-
-        let auth_state = auth.status();
-        if auth_state == SystemAuthState::NeedsAuth {
-            let session = startup::login::run_login_screen(&mut terminal, &auth)?;
-            witch.set_session(auth.clone(), session);
-        }
+        startup::login::run_login_screen(&mut terminal, &mut witch)?;
     }
 
     // Config + DB now guaranteed. Load shared config for App.
@@ -607,7 +554,7 @@ pub fn run_tui(
     }
     let shared_config = config.into_shared();
 
-    let mut app = App::new(shared_config, witch, cache, notice_rx, art_picker);
+    let mut app = App::new(shared_config, witch, notice_rx, art_picker);
 
     // Check if the Witch is already Ready (no startup maintenance needed)
     // or if she's running maintenance (Reconciling/Vacuuming)
@@ -662,7 +609,7 @@ fn run_app<B: ratatui::backend::Backend>(
             let state = app.witch.witch_status().startup_state;
             if state == crate::witch::WitchStartupState::Ready {
                 app.startup_complete = true;
-                app.cache.reconnect_db();
+                app.witch.reconnect_cache_db();
                 app.complete_startup();
                 terminal.draw(|f| render(f, app))?;
                 continue;
@@ -680,7 +627,7 @@ fn run_app<B: ratatui::backend::Backend>(
                 crate::witch::WitchNotice::MutationsCompleted => {
                     // Witch already sent InvalidateScope to cache thread;
                     // UI just needs to know data is stale until fresh results arrive.
-                    app.cache_stale = true;
+                    app.witch.set_cache_stale();
                 }
                 crate::witch::WitchNotice::Error(msg) => {
                     app.status_message = Some(format!("Task failed: {}", msg));
@@ -692,17 +639,11 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         // Drain CacheReady results from cache thread → update local cached data
-        let ready_items = app.cache.drain_ready();
-        if !ready_items.is_empty() {
-            app.cache_stale = false;
-            let mut arrivals = Vec::new();
-            for item in ready_items {
-                arrivals.push(item.type_id);
-                app.cached.insert_raw(item.type_id, item.value);
-            }
+        let arrivals = app.witch.drain_subscriptions();
+        if !arrivals.is_empty() {
             // Post-drain side effect: PackingDirs → tree browser markers
             if arrivals.contains(&TypeId::of::<crate::db::domain::GetPackingDirs>()) {
-                if let Some(data) = app.cached.get::<crate::db::domain::GetPackingDirs>() {
+                if let Some(data) = app.witch.cached.get::<crate::db::domain::GetPackingDirs>() {
                     if let ActiveView::CorpusBrowser(ref mut browser) = app.view {
                         browser
                             .navigator
@@ -714,7 +655,7 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Update views with cached data
         if let ActiveView::Insights(ref mut view) = app.view {
-            let insights_data = app.cached.get::<crate::db::domain::GetInsights>().cloned();
+            let insights_data = app.witch.cached.get::<crate::db::domain::GetInsights>().cloned();
             let handled = {
                 use crate::witch::WitchClient;
                 app.witch.witch_status().handled_decision_kinds
@@ -723,20 +664,20 @@ fn run_app<B: ratatui::backend::Backend>(
                 Some(&app.cached_status),
                 insights_data,
                 &handled,
-                app.cache_stale,
+                app.witch.is_cache_stale(),
             );
         }
         if let ActiveView::Inbox(ref mut view) = app.view {
-            let inbox_data = app.cached.get::<crate::db::domain::GetInboxOverview>().cloned();
+            let inbox_data = app.witch.cached.get::<crate::db::domain::GetInboxOverview>().cloned();
             view.update(inbox_data);
             view.busy = app.cached_status.pending > 0
-                || app.cache_stale;
+                || app.witch.is_cache_stale();
         }
         if let ActiveView::History(ref mut view) = app.view {
-            view.update(app.cached.get::<crate::db::domain::GetEditHistory>().cloned());
+            view.update(app.witch.cached.get::<crate::db::domain::GetEditHistory>().cloned());
         }
         if let ActiveView::ExternalMatches(ref mut view) = app.view {
-            if let Some(data) = app.cached.get::<crate::db::domain::GetExternalMatches>() {
+            if let Some(data) = app.witch.cached.get::<crate::db::domain::GetExternalMatches>() {
                 view.update(data.clone());
             }
             let ext_status = {
@@ -759,7 +700,7 @@ fn run_app<B: ratatui::backend::Backend>(
             ref mut library_file_counts,
         }) = app.view
         {
-            if let Some(status) = app.cached.get::<crate::db::domain::GetDeployStatus>() {
+            if let Some(status) = app.witch.cached.get::<crate::db::domain::GetDeployStatus>() {
                 *library_file_counts = status.library_file_counts.clone();
             }
         }
@@ -777,24 +718,24 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Flag demand for cached UI data
         // Always want deploy status — titlebar needs it for purple indicator
-        app.cache.want::<crate::db::domain::GetDeployStatus>();
+        app.witch.subscribe::<crate::db::domain::GetDeployStatus>();
         if matches!(app.view, ActiveView::Insights(_)) {
-            app.cache.want::<crate::db::domain::GetInsights>();
+            app.witch.subscribe::<crate::db::domain::GetInsights>();
         }
         if matches!(app.view, ActiveView::Inbox(_)) {
-            app.cache.want::<crate::db::domain::GetInboxOverview>();
+            app.witch.subscribe::<crate::db::domain::GetInboxOverview>();
         }
         if matches!(app.view, ActiveView::History(_)) {
-            app.cache.want::<crate::db::domain::GetEditHistory>();
+            app.witch.subscribe::<crate::db::domain::GetEditHistory>();
         }
         if matches!(app.view, ActiveView::CorpusBrowser(_)) {
-            app.cache.want::<crate::db::domain::GetPackingDirs>();
+            app.witch.subscribe::<crate::db::domain::GetPackingDirs>();
         }
         if let ActiveView::ExternalMatches(ref view) = app.view {
             if view.fetch_active {
-                app.cache.want_urgent::<crate::db::domain::GetExternalMatches>();
+                app.witch.subscribe_urgent::<crate::db::domain::GetExternalMatches>();
             } else {
-                app.cache.want::<crate::db::domain::GetExternalMatches>();
+                app.witch.subscribe::<crate::db::domain::GetExternalMatches>();
             }
         }
 

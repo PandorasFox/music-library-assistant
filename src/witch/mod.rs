@@ -39,7 +39,7 @@ mod transaction;
 pub(crate) mod types;
 // Re-export public types
 pub use client::WitchClient;
-pub use handle::WitchHandle;
+pub use handle::{PendingQuery, WitchHandle};
 pub use types::{
     MaintenanceWitness, MutationExecutionWitness, PendingTransaction, ReasoningLevel,
     SpawnedMutation, Task, TaskLabel, TransactionSnapshot, WatcherState, WitchStartupState,
@@ -259,6 +259,10 @@ pub struct Witch {
     /// Spawned in `run()`, before the UI thread.
     auth_thread_handle: Option<auth_thread::AuthThreadHandle>,
 
+    /// Client-facing auth handle for server-side token validation.
+    /// Stored on the Witch so dispatch_command can gate protocol messages.
+    auth_handle: Option<auth_thread::AuthHandle>,
+
     /// Handle for the autonomous external fetch thread (AcoustID lookups).
     /// None when no API key is configured or shared_config not yet available.
     external_fetch: Option<external_fetch::ExternalFetchHandle>,
@@ -290,7 +294,7 @@ impl Witch {
     /// Linger duration for completed session display.
     const LINGER_DURATION: Duration = Duration::from_secs(30);
 
-    pub fn new(
+    fn new(
         startup_state: types::WitchStartupState,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
     ) -> (
@@ -347,6 +351,7 @@ impl Witch {
             pending_observed_images: Vec::new(),
             fs_watcher: fs_watcher_handle,
             auth_thread_handle: None, // Spawned in run(), not new()
+            auth_handle: None,       // Set in run() alongside auth_thread_handle
             external_fetch: None,
             fetch_progress: None,
         };
@@ -355,7 +360,7 @@ impl Witch {
     }
 
     /// Create a new Witch with opinions applied (Ready state).
-    pub fn with_opinions(
+    fn with_opinions(
         cfg: &Config,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
     ) -> (
@@ -387,7 +392,7 @@ impl Witch {
     /// `run_loop()` on this thread. Does not return until shutdown.
     pub fn run(
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
-        ui_factory: impl FnOnce(WitchHandle, cache_thread::CacheHandle, auth_thread::AuthHandle, std::sync::mpsc::Receiver<WitchNotice>) + Send + 'static,
+        ui_factory: impl FnOnce(WitchHandle, std::sync::mpsc::Receiver<WitchNotice>) + Send + 'static,
     ) {
         // Detect startup state
         let db_path = config::get_db_path().expect("XDG data dir");
@@ -435,6 +440,7 @@ impl Witch {
         let auth_db_path = if has_db { Some(db_path) } else { None };
         let (auth_handle, auth_witch_handle) = auth_thread::spawn(auth_db_path);
         she.auth_thread_handle = Some(auth_witch_handle);
+        she.auth_handle = Some(auth_handle);
 
         // Shared state: Witch writes, handle reads
         let status = std::sync::Arc::new(std::sync::RwLock::new(she.publish_status()));
@@ -442,12 +448,12 @@ impl Witch {
         // Command channel: handle sends, Witch receives
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
-        let handle = WitchHandle::new(std::sync::Arc::clone(&status), cmd_tx);
+        let handle = WitchHandle::new(std::sync::Arc::clone(&status), cmd_tx, cache_handle);
 
         // Spawn the UI as a client thread
         let ui_thread = std::thread::Builder::new()
             .name("tui".into())
-            .spawn(move || ui_factory(handle, cache_handle, auth_handle, notice_rx))
+            .spawn(move || ui_factory(handle, notice_rx))
             .expect("Failed to spawn UI thread");
 
         // Witch owns the main thread
@@ -505,71 +511,208 @@ impl Witch {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Auth Gate
+    // -------------------------------------------------------------------------
+
+    /// Resolve authorization level from a session token.
+    ///
+    /// Two system states:
+    /// - No auth_handle (no users exist) → FirstTimeSetup
+    /// - Auth_handle present + valid token → Authenticated
+    /// - Auth_handle present + missing token → Unauthorized
+    /// - Auth_handle present + invalid token → InvalidSession
+    fn resolve_auth(
+        &self,
+        token: Option<&crate::auth::SessionToken>,
+    ) -> Result<crate::meta::protocol::AuthorizationLevel, crate::meta::protocol::ProtocolError> {
+        use crate::meta::protocol::{AuthorizationLevel, ProtocolError};
+        match &self.auth_handle {
+            None => Ok(AuthorizationLevel::FirstTimeSetup),
+            Some(auth) => match token {
+                Some(t) if auth.validate_token(t) => Ok(AuthorizationLevel::Authenticated),
+                Some(_) => Err(ProtocolError::InvalidSession),
+                None => Err(ProtocolError::Unauthorized),
+            },
+        }
+    }
+
+    /// Auth gate. Fail-closed exact-match semantics.
+    ///
+    /// Each system state accepts ONLY its own endpoints:
+    /// - FirstTimeSetup → only FirstTimeSetup endpoints (CompleteSetup)
+    /// - Unauthenticated → only Unauthenticated endpoints (login, when it becomes protocol)
+    /// - AuthRequired → only AuthRequired endpoints (everything operational)
+    ///
+    /// There is no hierarchy. An authenticated client cannot call setup endpoints.
+    /// A setup-state client cannot call auth endpoints. Fail closed.
+    fn gate<T>(
+        &mut self,
+        token: Option<&crate::auth::SessionToken>,
+        required: crate::meta::protocol::AuthorizationLevel,
+        handler: impl FnOnce(&mut Self) -> Result<T, crate::meta::protocol::ProtocolError>,
+    ) -> Result<T, crate::meta::protocol::ProtocolError> {
+        use crate::meta::protocol::ProtocolError;
+        let level = self.resolve_auth(token)?;
+        if level == required {
+            handler(self)
+        } else {
+            Err(ProtocolError::Unauthorized)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Protocol Dispatch
+    // -------------------------------------------------------------------------
+
+    /// Handle a WitchCommand, mapping results to CommandResponse.
+    fn handle_command(
+        &mut self,
+        cmd: crate::meta::protocol::WitchCommand,
+    ) -> Result<crate::meta::protocol::CommandResponse, crate::meta::protocol::ProtocolError> {
+        use crate::meta::protocol::{CommandResponse, WitchCommand};
+
+        match cmd {
+            WitchCommand::StartTransaction { label } => {
+                self.start_transaction(&label)
+                    .map(|()| CommandResponse::Ok)
+                    .map_err(crate::meta::protocol::ProtocolError::Transaction)
+            }
+            WitchCommand::RemoveDecision { key } => {
+                self.remove_decision(&key)
+                    .map(|()| CommandResponse::Ok)
+                    .map_err(crate::meta::protocol::ProtocolError::Transaction)
+            }
+            WitchCommand::ConfirmTransaction => {
+                self.confirm_transaction()
+                    .map(|()| CommandResponse::Ok)
+                    .map_err(crate::meta::protocol::ProtocolError::Transaction)
+            }
+            WitchCommand::DiscardTransaction => {
+                self.discard_transaction()
+                    .map(|_| CommandResponse::Ok)
+                    .map_err(crate::meta::protocol::ProtocolError::Transaction)
+            }
+            WitchCommand::RequestExternalFetch => {
+                self.request_external_fetch();
+                Ok(CommandResponse::Ok)
+            }
+            WitchCommand::RequestReleasePacking => {
+                self.request_release_packing();
+                Ok(CommandResponse::Ok)
+            }
+            WitchCommand::QueueSchemaReconciliation => {
+                self.queue_schema_reconciliation();
+                Ok(CommandResponse::Ok)
+            }
+            WitchCommand::QueueVacuum => {
+                self.queue_vacuum();
+                Ok(CommandResponse::Ok)
+            }
+            WitchCommand::AddDecision { .. } => {
+                // AddDecision over wire is not yet supported (mutations aren't serializable).
+                // In-process path uses HandleCommand::AddDecision directly.
+                todo!("Remote AddDecision requires server-side decision lookup")
+            }
+            WitchCommand::LatchReadOnlyForSafety { .. } => {
+                todo!("LatchReadOnlyForSafety not yet implemented")
+            }
+        }
+    }
+
     /// Dispatch a single command from the handle.
     fn dispatch_command(&mut self, cmd: handle::HandleCommand) {
+        use crate::meta::protocol::{Authorized, AuthorizationLevel};
         use handle::HandleCommand;
 
         match cmd {
-            HandleCommand::StartTransaction { label, reply } => {
-                let _ = reply.send(self.start_transaction(&label));
+            HandleCommand::Command { token, command, reply } => {
+                let required = command.required_authorization();
+                let result = self.gate(token.as_ref(), required, |w| w.handle_command(command));
+                let _ = reply.send(result);
             }
-            HandleCommand::AddDecision {
-                key,
-                decision,
-                reply,
-            } => {
-                let _ = reply.send(self.add_decision(key, decision));
+            HandleCommand::AddDecision { token, key, decision, reply } => {
+                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |w| {
+                    w.add_decision(key, decision)
+                        .map_err(crate::meta::protocol::ProtocolError::Transaction)
+                });
+                let _ = reply.send(result);
             }
-            HandleCommand::RemoveDecision { key, reply } => {
-                let _ = reply.send(self.remove_decision(&key));
+            HandleCommand::GetTransactionDetails { token, reply } => {
+                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |w| {
+                    let details = w
+                        .pending_transaction
+                        .as_ref()
+                        .map(|txn| {
+                            txn.decisions
+                                .iter()
+                                .map(|(k, d)| client::DecisionDetail {
+                                    key: k.clone(),
+                                    label: d.label.clone(),
+                                    mutations: d.mutations.clone(),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Ok(details)
+                });
+                let _ = reply.send(result);
             }
-            HandleCommand::ConfirmTransaction { reply } => {
-                let _ = reply.send(self.confirm_transaction());
+            HandleCommand::CompleteSetup { token, root, first_user, reply } => {
+                let result = self.gate(token.as_ref(), AuthorizationLevel::FirstTimeSetup, |w| {
+                    w.complete_setup_impl(root, first_user)
+                        .map_err(crate::meta::protocol::ProtocolError::Internal)
+                });
+                let _ = reply.send(result);
             }
-            HandleCommand::DiscardTransaction { reply } => {
-                let _ = reply.send(self.discard_transaction());
+            HandleCommand::ValidateConfig { token, config, reply } => {
+                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |_w| {
+                    config.validate()
+                        .map_err(|e| crate::meta::protocol::ProtocolError::Internal(format!("{:#}", e)))
+                });
+                let _ = reply.send(result);
             }
-            HandleCommand::GetTransactionDetails { reply } => {
-                let details = self
-                    .pending_transaction
-                    .as_ref()
-                    .map(|txn| {
-                        txn.decisions
-                            .iter()
-                            .map(|(k, d)| client::DecisionDetail {
-                                key: k.clone(),
-                                label: d.label.clone(),
-                                mutations: d.mutations.clone(),
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let _ = reply.send(details);
+            HandleCommand::SetSharedConfig { token, shared, reply } => {
+                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |w| {
+                    w.set_shared_config(shared);
+                    Ok(())
+                });
+                let _ = reply.send(result);
             }
-            HandleCommand::RequestExternalFetch => {
-                self.request_external_fetch();
+            HandleCommand::StartWatching { token, reply } => {
+                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |w| {
+                    Ok(w.start_watching())
+                });
+                let _ = reply.send(result);
             }
-            HandleCommand::RequestReleasePacking => {
-                self.request_release_packing();
+            HandleCommand::UpdatePerformance { token, opinions, reply } => {
+                let result = self.gate(token.as_ref(), AuthorizationLevel::Authenticated, |w| {
+                    w.update_performance_impl(opinions);
+                    Ok(())
+                });
+                let _ = reply.send(result);
             }
-            HandleCommand::CompleteSetup {
-                root,
-                first_user,
-                reply,
-            } => {
-                let _ = reply.send(self.complete_setup_impl(root, first_user));
+            HandleCommand::Auth { request, reply } => {
+                use crate::meta::protocol::{AuthRequest, AuthResponse};
+                let response = match request {
+                    AuthRequest::Login { username, password } => {
+                        match &self.auth_handle {
+                            Some(auth) => {
+                                match auth.login(&username, &password, crate::auth::SessionLifetime::CloseOnExit) {
+                                    Ok(token) => AuthResponse::Token(token),
+                                    Err(msg) => AuthResponse::Failed(msg),
+                                }
+                            }
+                            None => AuthResponse::Failed("Auth not available".to_string()),
+                        }
+                    }
+                };
+                let _ = reply.send(response);
             }
-            HandleCommand::ValidateConfig { config, reply } => {
-                let _ = reply.send(config.validate().map_err(|e| format!("{:#}", e)));
-            }
-            HandleCommand::SetSharedConfig { shared } => {
-                self.set_shared_config(shared);
-            }
-            HandleCommand::StartWatching { reply } => {
-                let _ = reply.send(self.start_watching());
-            }
-            HandleCommand::UpdatePerformance { opinions } => {
-                self.update_performance_impl(opinions);
+            HandleCommand::NotifyDbReady => {
+                if let Some(ref auth_handle) = self.auth_thread_handle {
+                    auth_handle.notify_db_ready();
+                }
             }
             HandleCommand::Shutdown => {
                 // Handled by caller (run_loop checks for this)

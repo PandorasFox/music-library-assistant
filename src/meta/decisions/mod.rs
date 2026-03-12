@@ -295,8 +295,6 @@ pub enum TransactionError {
     /// Attempted to confirm transaction but the Witch is not accepting mutations.
     /// This happens if eyeballing hasn't completed or read-only mode is enabled.
     NotAcceptingMutations,
-    /// Session is missing or invalid — caller must authenticate first.
-    Unauthorized,
 }
 
 impl std::fmt::Display for TransactionError {
@@ -308,7 +306,6 @@ impl std::fmt::Display for TransactionError {
                 f,
                 "Not accepting mutations (eyeballing incomplete or read-only mode)"
             ),
-            TransactionError::Unauthorized => write!(f, "Unauthorized: session missing or invalid"),
         }
     }
 }

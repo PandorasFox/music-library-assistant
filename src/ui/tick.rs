@@ -86,7 +86,7 @@ impl App {
                 ProgressPhase::ContentAnalysis | ProgressPhase::SignalRefresh => {
                     // Invalidate all caches before transitioning - startup analysis just completed
                     use crate::meta::recomputation::RecomputationScope;
-                    self.cache.invalidate_scope(
+                    self.witch.invalidate_cache(
                         RecomputationScope::TAGS
                             | RecomputationScope::FILES
                             | RecomputationScope::DEPLOY
@@ -127,12 +127,11 @@ impl App {
             reasoning
         ));
 
-        self.cache
-            .domain_query(crate::db::domain::GetIntakeConfirmation {
+        self.witch
+            .query(crate::db::domain::GetIntakeConfirmation {
                 source: startup::IntakeSource::Startup,
                 zone: None,
             })
-            .recv()
     }
 
     // =========================================================================
@@ -205,12 +204,11 @@ impl App {
         // Load compound split data from the group via cache thread
         // Progressive worker only used for corpus compound splits (Ctrl+A in safe mode)
         let data = match self
-            .cache
-            .domain_query(crate::db::domain::GetCompoundSplitGroupData {
+            .witch
+            .query(crate::db::domain::GetCompoundSplitGroupData {
                 group: group.clone(),
                 zone: crate::db::types::Zone::Corpus,
             })
-            .recv()
         {
             Some(d) => d,
             None => {

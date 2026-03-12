@@ -172,12 +172,11 @@ impl App {
 
         // Batch query: load summaries + full detail for all recordings at once
         let batch = self
-            .cache
-            .domain_query(crate::db::domain::GetRecordingBatchData {
+            .witch
+            .query(crate::db::domain::GetRecordingBatchData {
                 recording_ids,
                 preferred_locales,
-            })
-            .recv();
+            });
 
         let state =
             external_match_modal::ExternalMatchReviewState::new(entries, batch.summaries, batch.details);
@@ -213,11 +212,10 @@ impl App {
                     | PackingCategory::UnsolvedNoMatch => unreachable!(),
                 };
                 let result = self
-                    .cache
-                    .domain_query(crate::db::domain::GetPackingBrowserData {
+                    .witch
+                    .query(crate::db::domain::GetPackingBrowserData {
                         category_prefix: prefix.to_string(),
-                    })
-                    .recv();
+                    });
 
                 let crate::db::domain::PackingBrowserData {
                     packed,
@@ -252,11 +250,10 @@ impl App {
                     _ => unreachable!(),
                 };
                 let filtered = self
-                    .cache
-                    .domain_query(crate::db::domain::GetUnsolvedPackingData {
+                    .witch
+                    .query(crate::db::domain::GetUnsolvedPackingData {
                         category: cat_str.to_string(),
-                    })
-                    .recv();
+                    });
 
                 if filtered.is_empty() {
                     self.status_message = Some("No unsolved files in this category".to_string());
@@ -277,9 +274,8 @@ impl App {
     /// Load knot signal data and launch the knot browser.
     fn launch_knot_browser(&mut self) {
         let knots = self
-            .cache
-            .domain_query(crate::db::domain::GetPackingKnots)
-            .recv();
+            .witch
+            .query(crate::db::domain::GetPackingKnots);
 
         if knots.is_empty() {
             self.status_message = Some("No knots found".to_string());
@@ -287,9 +283,8 @@ impl App {
         }
 
         let corpus_paths: std::collections::HashMap<i64, String> = self
-            .cache
-            .domain_query(crate::db::domain::GetPackingInodePaths)
-            .recv()
+            .witch
+            .query(crate::db::domain::GetPackingInodePaths)
             .into_iter()
             .collect();
 
@@ -465,13 +460,12 @@ impl App {
 
         // Batch query: load MB cache + current tags
         let staging = self
-            .cache
-            .domain_query(crate::db::domain::GetReleaseStagingData {
+            .witch
+            .query(crate::db::domain::GetReleaseStagingData {
                 release_ids,
                 recording_ids,
                 inodes: all_inodes,
-            })
-            .recv();
+            });
         let bundle = staging.bundle;
         let inode_tags = staging.inode_tags;
 

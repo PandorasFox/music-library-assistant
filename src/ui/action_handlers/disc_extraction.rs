@@ -148,11 +148,10 @@ impl App {
         let config = self.config().opinions.disc_extraction.clone();
 
         let data = self
-            .cache
-            .domain_query(GetDiscExtractionData {
+            .witch
+            .query(GetDiscExtractionData {
                 map_letters_to_numbers: config.map_letters_to_numbers,
-            })
-            .recv();
+            });
 
         if data.groups.is_empty() {
             self.status_message = Some("No disc extraction signals found".to_string());

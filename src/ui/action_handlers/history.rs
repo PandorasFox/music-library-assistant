@@ -105,11 +105,10 @@ impl App {
     /// Expand a session: one-shot query for edits + inode paths.
     fn expand_history_session(&mut self, session_id: String) {
         let result = self
-            .cache
-            .domain_query(crate::db::domain::GetSessionEditDetail {
+            .witch
+            .query(crate::db::domain::GetSessionEditDetail {
                 session_id: session_id.clone(),
-            })
-            .recv();
+            });
 
         if let ActiveView::History(ref mut state) = self.view {
             state.set_detail(session_id, result.edits, result.inode_paths);
@@ -149,9 +148,8 @@ impl App {
             .map(|e| (e.inode, e.field_name.clone()))
             .collect();
         let current_values = self
-            .cache
-            .domain_query(crate::db::domain::GetCurrentTagValues { queries })
-            .recv();
+            .witch
+            .query(crate::db::domain::GetCurrentTagValues { queries });
 
         // Classify edits as clean reversals or conflicts
         let mut clean = Vec::new();
@@ -304,11 +302,10 @@ impl App {
         };
 
         let rows = self
-            .cache
-            .domain_query(crate::db::domain::GetSessionEditHistory {
+            .witch
+            .query(crate::db::domain::GetSessionEditHistory {
                 session_id: session_id.clone(),
-            })
-            .recv();
+            });
 
         self.finalize_jettison(rows, "Jettisoned", |sender| {
             sender.clear_tag_edit_history_session(&session_id);
@@ -321,9 +318,8 @@ impl App {
     /// Execute jettison-all: export everything to log, delete all from DB.
     fn execute_jettison_all(&mut self) {
         let rows = self
-            .cache
-            .domain_query(crate::db::domain::GetAllEditHistory)
-            .recv();
+            .witch
+            .query(crate::db::domain::GetAllEditHistory);
 
         self.finalize_jettison(rows, "Jettisoned all", |sender| {
             sender.clear_tag_edit_history();

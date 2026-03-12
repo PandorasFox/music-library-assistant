@@ -18,9 +18,8 @@ use crate::witch::WitchClient;
 macro_rules! start_resolution {
     ($self:ident, $query:expr, $preview:path, $view:ident) => {{
         let data = $self
-            .cache
-            .domain_query($query)
-            .recv();
+            .witch
+            .query($query);
         let preview = <$preview>::new(data);
         $self.view = ActiveView::$view(preview);
     }};
@@ -207,12 +206,11 @@ impl HandleAction for super::super::directory_cluster_modal::DirectoryClusterPre
                 if let Some(inodes) = edit_tags_inodes {
                     if !inodes.is_empty() {
                         let audio_files = app
-                            .cache
-                            .domain_query(crate::db::domain::GetAudioFilesByInodes {
+                            .witch
+                            .query(crate::db::domain::GetAudioFilesByInodes {
                                 inodes,
                                 zone: crate::db::types::Zone::Corpus,
-                            })
-                            .recv();
+                            });
                         if !audio_files.is_empty() {
                             app.open_unified_tag_editor_bulk(
                                 audio_files,
@@ -353,9 +351,8 @@ impl App {
 
     pub(in crate::ui) fn start_shit_format_resolution(&mut self) {
         let mut data = self
-            .cache
-            .domain_query(crate::db::domain::GetShitFormatData)
-            .recv();
+            .witch
+            .query(crate::db::domain::GetShitFormatData);
         data.lossy_to_flac = self.config().opinions.lossy_shit_formats_to_flac;
         let preview = shit_format_modal::ShitFormatPreviewState::new(data);
         self.view = ActiveView::ShitFormatResolution(preview);
@@ -385,9 +382,8 @@ impl App {
     pub(in crate::ui) fn start_release_overlap_resolution(&mut self) {
         use super::super::directory_cluster_modal;
         let data = self
-            .cache
-            .domain_query(crate::db::domain::GetReleaseOverlapData)
-            .recv();
+            .witch
+            .query(crate::db::domain::GetReleaseOverlapData);
         let preview = directory_cluster_modal::DirectoryClusterPreviewState::new(data);
         self.view = ActiveView::DirectoryClusterResolution(preview);
     }

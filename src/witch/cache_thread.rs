@@ -42,7 +42,7 @@ use crate::meta::recomputation::RecomputationScope;
 type CacheSlotFactory = Box<dyn FnOnce() -> RegisteredSlot + Send>;
 
 /// Requests from UI/Witch → cache thread.
-pub(crate) enum CacheRequest {
+pub(super) enum CacheRequest {
     /// Signal demand for a cached query. Factory is used to register the slot
     /// on first request; subsequent requests just set the `wanted` flag.
     Want {
@@ -63,7 +63,7 @@ pub(crate) enum CacheRequest {
 }
 
 /// A single periodic refresh result from cache thread → UI.
-pub(crate) struct CacheReady {
+pub(super) struct CacheReady {
     pub type_id: TypeId,
     pub value: Box<dyn Any + Send>,
 }
@@ -73,7 +73,7 @@ pub(crate) struct CacheReady {
 // ============================================================================
 
 /// A registered cache slot with its execution closure and throttle state.
-pub(crate) struct RegisteredSlot {
+pub(super) struct RegisteredSlot {
     /// Closure that executes the query and returns a boxed result.
     execute: Box<dyn Fn(&ReadOnlyDb<'_>) -> Box<dyn Any + Send> + Send>,
     /// Normal throttle interval.
@@ -147,19 +147,19 @@ impl GenericCache {
 /// Handle for UI code to interact with the cache thread.
 ///
 /// Cheap to clone (just channel senders/receivers are Arc-wrapped internally).
-pub(crate) struct CacheHandle {
+pub(super) struct CacheHandle {
     request_tx: Sender<CacheRequest>,
     ready_rx: Receiver<CacheReady>,
 }
 
 impl CacheHandle {
     /// Signal demand for a cached query (normal throttle).
-    pub(crate) fn want<Q: CachedQuery>(&self) {
+    pub(super) fn want<Q: CachedQuery>(&self) {
         self.send_want::<Q>(false);
     }
 
     /// Signal urgent demand for a cached query (uses urgent throttle if defined).
-    pub(crate) fn want_urgent<Q: CachedQuery>(&self) {
+    pub(super) fn want_urgent<Q: CachedQuery>(&self) {
         self.send_want::<Q>(true);
     }
 
@@ -182,20 +182,20 @@ impl CacheHandle {
     }
 
     /// Invalidate cached entries whose scope overlaps with the given scope.
-    pub(crate) fn invalidate_scope(&self, scope: RecomputationScope) {
+    pub(super) fn invalidate_scope(&self, scope: RecomputationScope) {
         let _ = self.request_tx.send(CacheRequest::InvalidateScope(scope));
     }
 
     /// Tell the cache thread to close and reopen its DB connection.
     /// Used after schema migrations.
-    pub(crate) fn reconnect_db(&self) {
+    pub(super) fn reconnect_db(&self) {
         let _ = self.request_tx.send(CacheRequest::ReconnectDb);
     }
 
     /// Drain all ready results from the cache thread.
     ///
     /// Non-blocking. Returns whatever is available right now.
-    pub(crate) fn drain_ready(&self) -> Vec<CacheReady> {
+    pub(super) fn drain_ready(&self) -> Vec<CacheReady> {
         let mut results = Vec::new();
         while let Ok(item) = self.ready_rx.try_recv() {
             results.push(item);
@@ -225,7 +225,7 @@ impl CacheHandle {
     ///
     /// All UI→DB reads go through this method. The query runs on the cache
     /// thread and the result arrives via the returned `DbQuery` handle.
-    pub(crate) fn domain_query<Q: DomainQuery>(&self, q: Q) -> DbQuery<Q::Response> {
+    pub(super) fn domain_query<Q: DomainQuery>(&self, q: Q) -> DbQuery<Q::Response> {
         self.query(move |db| q.execute(db))
     }
 }
@@ -238,13 +238,13 @@ impl CacheHandle {
 ///
 /// Wraps a channel receiver. The query runs on the cache thread;
 /// the result arrives when complete.
-pub(crate) struct DbQuery<T> {
-    rx: Receiver<T>,
+pub(super) struct DbQuery<T> {
+    pub(super) rx: Receiver<T>,
 }
 
 impl<T> DbQuery<T> {
     /// Blocking wait for the result.
-    pub(crate) fn recv(self) -> T {
+    pub(super) fn recv(self) -> T {
         self.rx.recv().expect("cache thread dropped query sender")
     }
 
@@ -252,7 +252,7 @@ impl<T> DbQuery<T> {
     ///
     /// Returns `Ok(value)` if ready, `Err(self)` if still pending (returns self
     /// back so you can try again next frame).
-    pub(crate) fn try_recv(self) -> Result<T, Self> {
+    pub(super) fn try_recv(self) -> Result<T, Self> {
         match self.rx.try_recv() {
             Ok(value) => Ok(value),
             Err(std::sync::mpsc::TryRecvError::Empty) => Err(self),
@@ -275,13 +275,13 @@ pub(crate) struct CacheThreadHandle {
 
 impl CacheThreadHandle {
     /// Tell the cache thread to invalidate entries whose scope overlaps.
-    pub(crate) fn invalidate_scope(&self, scope: RecomputationScope) {
+    pub(super) fn invalidate_scope(&self, scope: RecomputationScope) {
         let _ = self.request_tx.send(CacheRequest::InvalidateScope(scope));
     }
 
     /// Tell the cache thread to close and reopen its DB connection.
     /// Used after first-time setup creates the DB.
-    pub(crate) fn reconnect_db(&self) {
+    pub(super) fn reconnect_db(&self) {
         let _ = self.request_tx.send(CacheRequest::ReconnectDb);
     }
 
@@ -313,7 +313,7 @@ impl Drop for CacheThreadHandle {
 // ============================================================================
 
 /// Spawn the cache thread. Returns the UI handle and the Witch handle.
-pub(crate) fn spawn() -> (CacheHandle, CacheThreadHandle) {
+pub(super) fn spawn() -> (CacheHandle, CacheThreadHandle) {
     let (request_tx, request_rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
 

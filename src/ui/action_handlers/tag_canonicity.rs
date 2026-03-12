@@ -40,18 +40,16 @@ impl App {
         let (signal_keys, kind) = match &insight_type {
             insights_view::InsightType::InconsistentAlbumArtist => {
                 let keys = self
-                    .cache
-                    .domain_query(crate::db::domain::GetInconsistentAlbumArtistKeys)
-                    .recv();
+                    .witch
+                    .query(crate::db::domain::GetInconsistentAlbumArtistKeys);
                 (keys, CanonicitySignalKind::InconsistentAlbumArtist)
             }
             insights_view::InsightType::TagCanonicity { tag_name } => {
                 let keys = self
-                    .cache
-                    .domain_query(crate::db::domain::GetTagCanonicityKeys {
+                    .witch
+                    .query(crate::db::domain::GetTagCanonicityKeys {
                         tag_filter: Some(tag_name.clone()),
-                    })
-                    .recv();
+                    });
                 (keys, CanonicitySignalKind::TagCanonicity)
             }
             _ => {
@@ -406,8 +404,8 @@ impl App {
 
         let kind = clusters.kind;
         let pending = self
-            .cache
-            .domain_query(crate::db::domain::GetTagCanonicitySignalData {
+            .witch
+            .query_async(crate::db::domain::GetTagCanonicitySignalData {
                 signal_key,
                 kind,
             });

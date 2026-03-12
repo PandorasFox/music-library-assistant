@@ -167,9 +167,8 @@ impl App {
         use crate::ui::missing_album_modal;
 
         let signals = self
-            .cache
-            .domain_query(crate::db::domain::GetMissingAlbumSingleSignals)
-            .recv();
+            .witch
+            .query(crate::db::domain::GetMissingAlbumSingleSignals);
 
         let data = missing_album_modal::MissingAlbumData::from_signals(signals);
         let suffix = self

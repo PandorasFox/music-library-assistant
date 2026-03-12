@@ -63,8 +63,6 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::db::ReadOnlyDb;
-use crate::meta::protocol::AuthorizationLevel;
-
 // ============================================================================
 // Core Traits
 // ============================================================================
@@ -80,13 +78,6 @@ use crate::meta::protocol::AuthorizationLevel;
 pub trait DomainQuery: Send + 'static {
     /// The response type. Must be `Serialize` for web transport readiness.
     type Response: Serialize + Send + 'static;
-
-    /// Authorization level required to execute this query.
-    ///
-    /// Defaults to `AuthRequired` — every new query is auth-gated unless
-    /// explicitly marked `public` in the macro. This makes it impossible
-    /// to forget auth on new queries.
-    const AUTH: AuthorizationLevel = AuthorizationLevel::AuthRequired;
 
     /// Execute the query against a read-only database connection.
     fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response;
@@ -219,44 +210,6 @@ macro_rules! define_domain_query {
 
             fn execute(self, $db: &ReadOnlyDb<'_>) -> Self::Response {
                 $body
-            }
-        }
-    };
-
-    // Body form, uncached, public (no auth required)
-    (
-        $( #[doc = $doc:expr] )*
-        $name:ident => $response:ty, uncached, public, |$db:ident| $body:block
-    ) => {
-        $( #[doc = $doc] )*
-        #[derive(serde::Serialize, serde::Deserialize)]
-        pub struct $name;
-
-        impl DomainQuery for $name {
-            type Response = $response;
-            const AUTH: AuthorizationLevel = AuthorizationLevel::Unauthenticated;
-
-            fn execute(self, $db: &ReadOnlyDb<'_>) -> Self::Response {
-                $body
-            }
-        }
-    };
-
-    // Simple form, uncached, public (no auth required)
-    (
-        $( #[doc = $doc:expr] )*
-        $name:ident => $response:ty, uncached, public, db.$method:ident()
-    ) => {
-        $( #[doc = $doc] )*
-        #[derive(serde::Serialize, serde::Deserialize)]
-        pub struct $name;
-
-        impl DomainQuery for $name {
-            type Response = $response;
-            const AUTH: AuthorizationLevel = AuthorizationLevel::Unauthenticated;
-
-            fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
-                db.$method().unwrap_or_default()
             }
         }
     };
@@ -1030,24 +983,6 @@ define_domain_query! {
 }
 
 // ============================================================================
-// Auth Queries
-// ============================================================================
-
-/// System auth state: user count for NeedsSetup vs NeedsAuth determination.
-#[derive(Default, Serialize, Clone, Debug)]
-pub struct AuthStateData {
-    pub user_count: i64,
-}
-
-define_domain_query! {
-    /// System auth state: user count for NeedsSetup vs NeedsAuth determination.
-    GetAuthState => AuthStateData, uncached, public, |db| {
-        let count = db.user_count().unwrap_or(0);
-        AuthStateData { user_count: count }
-    }
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1443,39 +1378,6 @@ mod tests {
         serde_json::to_string(&GetMissingTagAudioFiles.execute(&read_db)).unwrap();
         serde_json::to_string(&GetSessionEditDetail { session_id: "x".to_string() }.execute(&read_db)).unwrap();
         serde_json::to_string(&GetCurrentTagValues { queries: vec![] }.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetAuthState.execute(&read_db)).unwrap();
     }
 
-    #[test]
-    fn get_auth_state_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetAuthState.execute(&read_db);
-        assert_eq!(result.user_count, 0);
-    }
-
-    #[test]
-    fn get_auth_state_with_users() {
-        let db = test_db();
-        db.create_user("alice", "hash").unwrap();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetAuthState.execute(&read_db);
-        assert_eq!(result.user_count, 1);
-    }
-
-    // -- Auth level annotations --
-
-    #[test]
-    fn get_auth_state_is_public() {
-        use crate::meta::protocol::AuthorizationLevel;
-        assert_eq!(GetAuthState::AUTH, AuthorizationLevel::Unauthenticated);
-    }
-
-    #[test]
-    fn default_queries_are_auth_required() {
-        use crate::meta::protocol::AuthorizationLevel;
-        assert_eq!(GetInsights::AUTH, AuthorizationLevel::AuthRequired);
-        assert_eq!(GetOobSyncFiles::AUTH, AuthorizationLevel::AuthRequired);
-        assert_eq!(GetDeployStatus::AUTH, AuthorizationLevel::AuthRequired);
-    }
 }

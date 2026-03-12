@@ -78,17 +78,15 @@ impl App {
     ) {
         // Load compound signal groups filtered by safety classification and tag
         let groups = if zone == Zone::Inbox {
-            self.cache
-                .domain_query(crate::db::domain::GetInboxCompoundSignalGroups)
-                .recv()
+            self.witch
+                .query(crate::db::domain::GetInboxCompoundSignalGroups)
         } else {
             let tag_filter_owned = tag_filter.map(|s| s.to_string());
-            self.cache
-                .domain_query(crate::db::domain::GetCompoundSignalGroups {
+            self.witch
+                .query(crate::db::domain::GetCompoundSignalGroups {
                     safe_only,
                     tag_filter: tag_filter_owned,
                 })
-                .recv()
         };
 
         if groups.is_empty() {
@@ -113,12 +111,11 @@ impl App {
 
         // Load the first group into modal data
         let data = self
-            .cache
-            .domain_query(crate::db::domain::GetCompoundSplitGroupData {
+            .witch
+            .query(crate::db::domain::GetCompoundSplitGroupData {
                 group: clusters.all_groups()[0].clone(),
                 zone,
-            })
-            .recv();
+            });
 
         let data = match data {
             Some(d) => d,
@@ -417,12 +414,11 @@ impl App {
         };
 
         let data = self
-            .cache
-            .domain_query(crate::db::domain::GetCompoundSplitGroupData {
+            .witch
+            .query(crate::db::domain::GetCompoundSplitGroupData {
                 group,
                 zone,
-            })
-            .recv();
+            });
 
         let Some(data) = data else {
             self.status_message = Some("Failed to parse signal data".to_string());
@@ -474,12 +470,11 @@ impl App {
         let (group_index, total) = (clusters.current_index(), clusters.total());
 
         let data = self
-            .cache
-            .domain_query(crate::db::domain::GetCompoundSplitGroupData {
+            .witch
+            .query(crate::db::domain::GetCompoundSplitGroupData {
                 group,
                 zone,
-            })
-            .recv();
+            });
 
         let Some(data) = data else {
             self.status_message = Some("Failed to parse signal data".to_string());

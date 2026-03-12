@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::decisions::{DecisionKey, DecisionKeyKind, TransactionError};
+use crate::auth::SessionToken;
 use crate::witch::external_fetch::FetchProgress;
 use crate::witch::{ReasoningLevel, WorkStatus};
 
@@ -27,18 +28,52 @@ pub struct SessionId(pub u128);
 // Authorization
 // ============================================================================
 
-/// Authorization level for a client session.
+/// Authorization level required by a protocol endpoint.
 ///
-/// Determines which commands a session may issue. The Witch checks this
-/// on every incoming command.
+/// Two system states, two levels. The Witch's gate checks
+/// `resolve_auth(token) == endpoint.required_authorization()`
+/// with exact-match, fail-closed semantics.
+///
+/// Login is not an authorization level — it's the mechanism by which
+/// a client *obtains* a token. When login becomes a protocol command,
+/// it will be special-cased in dispatch (pre-gate), not given a level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuthorizationLevel {
-    /// No users exist yet. Only setup commands accepted.
+    /// No users exist yet. Only `CompleteSetup` accepted.
     FirstTimeSetup,
-    /// Before login. Status queries only (is the system up? needs setup?).
-    Unauthenticated,
-    /// Valid session token. Everything available. Default operational mode.
-    AuthRequired,
+    /// Valid session token. All operational endpoints.
+    Authenticated,
+}
+
+// ============================================================================
+// Auth (pre-gate — no session token required)
+// ============================================================================
+
+/// Auth request. Dispatched pre-gate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AuthRequest {
+    Login { username: String, password: String },
+}
+
+/// Auth response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AuthResponse {
+    /// Login succeeded.
+    Token(SessionToken),
+    /// Login failed.
+    Failed(String),
+}
+
+// ============================================================================
+// Authorized trait
+// ============================================================================
+
+/// Structural auth contract. Every protocol message declares its required
+/// authorization level. The Witch's dispatch gate checks this automatically
+/// before any handler runs — handlers are structurally unreachable without
+/// passing auth.
+pub trait Authorized {
+    fn required_authorization(&self) -> AuthorizationLevel;
 }
 
 // ============================================================================
@@ -122,30 +157,15 @@ pub enum WitchCommand {
     LatchReadOnlyForSafety { reason: String },
 }
 
-impl WitchQuery {
-    /// The minimum authorization level required to execute this query.
-    ///
-    /// Schema queries are available pre-login (the TUI needs to know
-    /// whether to prompt for schema reconciliation before auth).
-    /// Everything else requires a valid session.
-    pub fn required_authorization(&self) -> AuthorizationLevel {
-        match self {
-            WitchQuery::NeedsSchemaUpdate | WitchQuery::PendingSchemaDescriptions => {
-                AuthorizationLevel::Unauthenticated
-            }
-            // Catch-all: any new variant defaults to AuthRequired.
-            _ => AuthorizationLevel::AuthRequired,
-        }
+impl Authorized for WitchQuery {
+    fn required_authorization(&self) -> AuthorizationLevel {
+        AuthorizationLevel::Authenticated
     }
 }
 
-impl WitchCommand {
-    /// The minimum authorization level required to execute this command.
-    pub fn required_authorization(&self) -> AuthorizationLevel {
-        // All commands currently require full authentication.
-        // FirstTimeSetup-only commands will be added when the auth
-        // subsystem is implemented.
-        AuthorizationLevel::AuthRequired
+impl Authorized for WitchCommand {
+    fn required_authorization(&self) -> AuthorizationLevel {
+        AuthorizationLevel::Authenticated
     }
 }
 
@@ -252,8 +272,7 @@ mod tests {
         // AuthorizationLevel — all variants
         for level in [
             AuthorizationLevel::FirstTimeSetup,
-            AuthorizationLevel::Unauthenticated,
-            AuthorizationLevel::AuthRequired,
+            AuthorizationLevel::Authenticated,
         ] {
             let json = serde_json::to_string(&level).unwrap();
             let rt: AuthorizationLevel = serde_json::from_str(&json).unwrap();
@@ -344,7 +363,6 @@ mod tests {
             CommandResponse::TransactionError(TransactionError::AlreadyActive),
             CommandResponse::TransactionError(TransactionError::NoActiveTransaction),
             CommandResponse::TransactionError(TransactionError::NotAcceptingMutations),
-            CommandResponse::TransactionError(TransactionError::Unauthorized),
         ];
         for r in &cmd_responses {
             let json = serde_json::to_string(r).unwrap();
@@ -364,22 +382,39 @@ mod tests {
             let _rt: ProtocolError = serde_json::from_str(&json).unwrap();
         }
 
-        // WitchQuery authorization levels
+        // AuthRequest/AuthResponse
+        let auth_requests = vec![
+            AuthRequest::Login {
+                username: "alice".into(),
+                password: "secret".into(),
+            },
+        ];
+        for r in &auth_requests {
+            let json = serde_json::to_string(r).unwrap();
+            let _rt: AuthRequest = serde_json::from_str(&json).unwrap();
+        }
+
+        let auth_responses = vec![
+            AuthResponse::Token(SessionToken::from_bytes(vec![0xAB; 32])),
+            AuthResponse::Failed("bad password".into()),
+        ];
+        for r in &auth_responses {
+            let json = serde_json::to_string(r).unwrap();
+            let _rt: AuthResponse = serde_json::from_str(&json).unwrap();
+        }
+
+        // All protocol messages require Authenticated (via Authorized trait)
         assert_eq!(
             WitchQuery::Status.required_authorization(),
-            AuthorizationLevel::AuthRequired,
+            AuthorizationLevel::Authenticated,
         );
         assert_eq!(
             WitchQuery::NeedsSchemaUpdate.required_authorization(),
-            AuthorizationLevel::Unauthenticated,
-        );
-        assert_eq!(
-            WitchQuery::PendingSchemaDescriptions.required_authorization(),
-            AuthorizationLevel::Unauthenticated,
+            AuthorizationLevel::Authenticated,
         );
         assert_eq!(
             WitchCommand::RequestExternalFetch.required_authorization(),
-            AuthorizationLevel::AuthRequired,
+            AuthorizationLevel::Authenticated,
         );
 
         // TransactionSummaryData
@@ -393,5 +428,11 @@ mod tests {
         assert_eq!(summary.label, rt.label);
         assert_eq!(summary.decision_count, rt.decision_count);
         assert_eq!(summary.mutation_count, rt.mutation_count);
+    }
+
+    /// Two system states, two levels, fail-closed exact-match.
+    #[test]
+    fn authorization_levels_are_distinct() {
+        assert_ne!(AuthorizationLevel::FirstTimeSetup, AuthorizationLevel::Authenticated);
     }
 }

@@ -12,10 +12,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Terminal;
 
-use crate::auth::{SessionLifetime, SessionToken};
+use crate::auth::SessionToken;
 use crate::ui::input;
 use crate::ui::widgets::TextInputState;
-use crate::witch::auth_thread::AuthHandle;
+use crate::witch::{WitchClient, WitchHandle};
 
 /// Focus state for the login form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +68,7 @@ impl LoginState {
 /// Returns the session token on success.
 pub fn run_login_screen<B: Backend>(
     terminal: &mut Terminal<B>,
-    auth: &AuthHandle,
+    witch: &mut WitchHandle,
 ) -> Result<SessionToken> {
     let mut state = LoginState::new();
 
@@ -95,7 +95,7 @@ pub fn run_login_screen<B: Backend>(
                         continue;
                     }
 
-                    match auth.login(&username, &password, SessionLifetime::CloseOnExit) {
+                    match witch.login(&username, &password) {
                         Ok(token) => return Ok(token),
                         Err(e) => {
                             state.error_message = Some(e);

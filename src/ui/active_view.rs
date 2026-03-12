@@ -13,7 +13,7 @@ use crate::ui::{
     shit_format_modal, startup, subpar_duplicate_modal, tabbed_transaction_review,
     tag_canonicity_v2, tag_editor, tag_search, transaction_review, tree_browser,
 };
-use crate::witch::cache_thread::DbQuery;
+use crate::witch::PendingQuery;
 
 // ============================================================================
 // ActiveView
@@ -77,7 +77,7 @@ pub(crate) enum ActiveView {
     },
     /// Loading state while fetching next cluster signal from cache thread.
     TagCanonicityLoading {
-        pending: DbQuery<Option<tag_canonicity_v2::TagCanonicalityModalDataV2>>,
+        pending: PendingQuery<Option<tag_canonicity_v2::TagCanonicalityModalDataV2>>,
         clusters: TagCanonicityClusters,
     },
     CompoundTagSplit {

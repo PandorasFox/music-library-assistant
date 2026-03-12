@@ -14,8 +14,10 @@
 
 use std::path::PathBuf;
 
-use crate::meta::decisions::{DecisionKey, DiscardSummary, TransactionError, WitnessedDecision};
+use crate::auth::SessionToken;
+use crate::meta::decisions::{DecisionKey, DiscardSummary, WitnessedDecision};
 use crate::meta::mutations::Mutation;
+use crate::meta::protocol::ProtocolError;
 use crate::witch::WitchStatus;
 
 /// Detail record for a single decision in the active transaction.
@@ -33,6 +35,11 @@ pub struct DecisionDetail {
 ///
 /// The state machine is read via `witch_status()` — a snapshot of all
 /// observable Witch state. Commands are methods that mutate state.
+///
+/// All methods that route through the server return `Result<T, ProtocolError>`.
+/// ProtocolError subsumes TransactionError (via `ProtocolError::Transaction`),
+/// and adds auth errors (InvalidSession, Unauthorized) and server errors
+/// (NotReady, Internal).
 pub trait WitchClient {
     // ====================================================================
     // State machine read
@@ -53,34 +60,43 @@ pub trait WitchClient {
     ///
     /// Called by the client after the operator selects an archive root path and
     /// creates the first user account. `first_user` is `(username, password_hash)`.
+    ///
+    /// Auth-gated: only valid when system is in FirstTimeSetup state.
     fn complete_setup(
         &mut self,
         root: PathBuf,
         first_user: Option<(String, String)>,
-    ) -> Result<(), String>;
+    ) -> Result<(), ProtocolError>;
+
+    // ====================================================================
+    // Auth
+    // ====================================================================
+
+    /// Attempt login. Returns a session token on success.
+    fn login(&mut self, username: &str, password: &str) -> Result<SessionToken, String>;
 
     // ====================================================================
     // Transaction commands
     // ====================================================================
 
     /// Open a new transaction with the given label.
-    fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError>;
+    fn start_transaction(&mut self, label: &str) -> Result<(), ProtocolError>;
 
     /// Stage a decision in the active transaction.
     fn add_decision(
         &mut self,
         key: DecisionKey,
         decision: WitnessedDecision,
-    ) -> Result<(), TransactionError>;
+    ) -> Result<(), ProtocolError>;
 
     /// Remove a staged decision from the active transaction.
-    fn remove_decision(&mut self, key: &DecisionKey) -> Result<(), TransactionError>;
+    fn remove_decision(&mut self, key: &DecisionKey) -> Result<(), ProtocolError>;
 
     /// Commit the active transaction (execute all staged mutations).
-    fn confirm_transaction(&mut self) -> Result<(), TransactionError>;
+    fn confirm_transaction(&mut self) -> Result<(), ProtocolError>;
 
     /// Discard the active transaction without executing.
-    fn discard_transaction(&mut self) -> Result<DiscardSummary, TransactionError>;
+    fn discard_transaction(&mut self) -> Result<DiscardSummary, ProtocolError>;
 
     // ====================================================================
     // Transaction queries (heavier than status snapshot)
@@ -91,17 +107,17 @@ pub trait WitchClient {
     /// Returns per-decision mutation data needed for diff display in the
     /// transaction review view. For lightweight access (keys, labels,
     /// counts), use `witch_status().transaction` instead.
-    fn transaction_decision_details(&self) -> Result<Vec<DecisionDetail>, TransactionError>;
+    fn transaction_decision_details(&self) -> Result<Vec<DecisionDetail>, ProtocolError>;
 
     // ====================================================================
     // External fetch commands
     // ====================================================================
 
     /// Kick off external fetch (AcoustID + MusicBrainz lookups).
-    fn request_external_fetch(&mut self) -> Result<(), TransactionError>;
+    fn request_external_fetch(&mut self) -> Result<(), ProtocolError>;
 
     /// Kick off release bin-packing computation.
-    fn request_release_packing(&mut self) -> Result<(), TransactionError>;
+    fn request_release_packing(&mut self) -> Result<(), ProtocolError>;
 
     // ====================================================================
     // Lifecycle commands
@@ -109,17 +125,18 @@ pub trait WitchClient {
 
     /// Validate a config blob before staging it as a mutation.
     ///
-    /// Returns Ok(()) if valid, Err(reason) if rejected.
-    fn validate_config(&self, config: &crate::config::Config) -> Result<(), String>;
+    /// Returns Ok(()) if valid, Err with details if rejected.
+    /// Auth-gated: requires authenticated session.
+    fn validate_config(&self, config: &crate::config::Config) -> Result<(), ProtocolError>;
 
     /// Inject shared config (called during startup).
-    fn set_shared_config(&mut self, shared: crate::config::SharedConfig) -> Result<(), TransactionError>;
+    fn set_shared_config(&mut self, shared: crate::config::SharedConfig) -> Result<(), ProtocolError>;
 
     /// Start the filesystem watcher. Returns true if watching started.
-    fn start_watching(&mut self) -> Result<bool, TransactionError>;
+    fn start_watching(&mut self) -> Result<bool, ProtocolError>;
 
     /// Update performance config at runtime (pool resize, cache_size).
-    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) -> Result<(), TransactionError>;
+    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) -> Result<(), ProtocolError>;
 }
 
 // ========================================================================
@@ -131,39 +148,51 @@ impl WitchClient for super::Witch {
         self.publish_status()
     }
 
+    fn login(&mut self, username: &str, password: &str) -> Result<SessionToken, String> {
+        match &self.auth_handle {
+            Some(auth) => auth.login(
+                username,
+                password,
+                crate::auth::SessionLifetime::CloseOnExit,
+            ),
+            None => Err("Auth not available".to_string()),
+        }
+    }
+
     fn complete_setup(
         &mut self,
         root: PathBuf,
         first_user: Option<(String, String)>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ProtocolError> {
         self.complete_setup_impl(root, first_user)
+            .map_err(|e| ProtocolError::Internal(e))
     }
 
-    fn start_transaction(&mut self, label: &str) -> Result<(), TransactionError> {
-        self.start_transaction(label)
+    fn start_transaction(&mut self, label: &str) -> Result<(), ProtocolError> {
+        self.start_transaction(label).map_err(ProtocolError::Transaction)
     }
 
     fn add_decision(
         &mut self,
         key: DecisionKey,
         decision: WitnessedDecision,
-    ) -> Result<(), TransactionError> {
-        self.add_decision(key, decision)
+    ) -> Result<(), ProtocolError> {
+        self.add_decision(key, decision).map_err(ProtocolError::Transaction)
     }
 
-    fn remove_decision(&mut self, key: &DecisionKey) -> Result<(), TransactionError> {
-        self.remove_decision(key)
+    fn remove_decision(&mut self, key: &DecisionKey) -> Result<(), ProtocolError> {
+        self.remove_decision(key).map_err(ProtocolError::Transaction)
     }
 
-    fn confirm_transaction(&mut self) -> Result<(), TransactionError> {
-        self.confirm_transaction()
+    fn confirm_transaction(&mut self) -> Result<(), ProtocolError> {
+        self.confirm_transaction().map_err(ProtocolError::Transaction)
     }
 
-    fn discard_transaction(&mut self) -> Result<DiscardSummary, TransactionError> {
-        self.discard_transaction()
+    fn discard_transaction(&mut self) -> Result<DiscardSummary, ProtocolError> {
+        self.discard_transaction().map_err(ProtocolError::Transaction)
     }
 
-    fn transaction_decision_details(&self) -> Result<Vec<DecisionDetail>, TransactionError> {
+    fn transaction_decision_details(&self) -> Result<Vec<DecisionDetail>, ProtocolError> {
         Ok(self.pending_transaction
             .as_ref()
             .map(|txn| {
@@ -179,30 +208,30 @@ impl WitchClient for super::Witch {
             .unwrap_or_default())
     }
 
-    fn request_external_fetch(&mut self) -> Result<(), TransactionError> {
+    fn request_external_fetch(&mut self) -> Result<(), ProtocolError> {
         self.request_external_fetch();
         Ok(())
     }
 
-    fn request_release_packing(&mut self) -> Result<(), TransactionError> {
+    fn request_release_packing(&mut self) -> Result<(), ProtocolError> {
         self.request_release_packing();
         Ok(())
     }
 
-    fn validate_config(&self, config: &crate::config::Config) -> Result<(), String> {
-        config.validate().map_err(|e| format!("{:#}", e))
+    fn validate_config(&self, config: &crate::config::Config) -> Result<(), ProtocolError> {
+        config.validate().map_err(|e| ProtocolError::Internal(format!("{:#}", e)))
     }
 
-    fn set_shared_config(&mut self, shared: crate::config::SharedConfig) -> Result<(), TransactionError> {
+    fn set_shared_config(&mut self, shared: crate::config::SharedConfig) -> Result<(), ProtocolError> {
         self.set_shared_config(shared);
         Ok(())
     }
 
-    fn start_watching(&mut self) -> Result<bool, TransactionError> {
+    fn start_watching(&mut self) -> Result<bool, ProtocolError> {
         Ok(self.start_watching())
     }
 
-    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) -> Result<(), TransactionError> {
+    fn update_performance(&mut self, opinions: crate::config::PerformanceOpinions) -> Result<(), ProtocolError> {
         self.update_performance_impl(opinions);
         Ok(())
     }

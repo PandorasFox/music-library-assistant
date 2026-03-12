@@ -1,17 +1,15 @@
 # Domain Query Layer Strategy
 
-This document defines the long-term strategy for transforming MM's read path into a formal domain query vocabulary. The goal: any client (TUI, web API, future tooling) communicates with the Witch through the same typed protocol. The Witch is the sole authority; clients are interchangeable consumers of Her services.
+This document defines the strategy for MM's read path: a formal domain query vocabulary where any client (TUI, web API, future tooling) communicates with the Witch through the same typed protocol. The Witch is the sole authority; clients are interchangeable consumers of Her services.
 
-## Architectural Context
+## Current State
 
-Today the TUI communicates with the Witch's cache thread via two mechanisms:
+The read path is fully protocol-driven. All client→DB reads flow through typed `DomainQuery` structs:
 
-1. **Demand-flag polling** (`want_insights()` → `CacheReady::Insights(...)`) — periodic, throttled refreshes of view-shaped data blobs
-2. **Closure escape hatch** (`cache.query(|db| ...)`) — ad-hoc one-shot queries using raw `ReadOnlyDb` access
+- **Summary queries** — periodic, throttled, scope-invalidated via `CachedQuery` trait
+- **Detail queries** — one-shot, triggered by user action via `CacheHandle::domain_query()`
 
-Both are TUI-specific. The demand-flag protocol assumes a single consumer polling in a render loop. The closure escape hatch passes raw DB handles through an untyped channel, making it impossible to serve the same queries over HTTP or any other transport.
-
-The target architecture replaces both with a **typed domain query vocabulary** that any client can speak.
+38 domain query types are defined. Zero closure callsites remain. The closure escape hatch (`cache.query(|db| ...)`) is dead — `query()` is private, only reachable through `domain_query::<Q>()`.
 
 ## The Witch Owns All Read Access
 
@@ -29,35 +27,22 @@ Every domain query falls into one of two categories. Respecting this distinction
 
 ### Summary Queries
 
-Cheap aggregate data for populating lists, dashboards, and overview screens. No inode resolution. Returns counts, group keys, and lightweight metadata.
+Cheap aggregate data for populating lists, dashboards, and overview screens. No inode resolution. Returns counts, group keys, and lightweight metadata. These refresh on intervals via the generic cache. A web client might poll these or subscribe via SSE.
 
-```
-CorpusSummary        → file counts, index state, zone stats
-InboxOverview        → inbox file counts by category
-InsightsSummary      → signal group counts by type
-DeployStatus         → library health, stale/leftover counts
-ExternalMatchBuckets → match counts by confidence tier
-PackingDirectories   → directory list with packing categories
-EditSessions         → session list with timestamps and edit counts
-MissingTagGroups     → list of (tag_name, affected_count)
-CompoundTagGroups    → list of (tag_name, group_count, safe_count)
-```
+Currently 6 cached summary queries, each defined with scope-based invalidation:
 
-These are the queries that refresh on intervals (the current `CacheReady` variants). A web client might poll these or subscribe via SSE.
+| Query | Scope | Throttle | Urgent |
+|-------|-------|----------|--------|
+| `GetInsights` | `TAGS \| FILES` | 30s | — |
+| `GetInboxOverview` | `FILES \| INBOX` | 15s | — |
+| `GetDeployStatus` | `DEPLOY \| FILES` | 15s | — |
+| `GetEditHistory` | `TAGS` | 30s | — |
+| `GetExternalMatches` | `EXTERNAL` | 15s | 5s |
+| `GetPackingDirs` | `EXTERNAL \| FILES` | 30s | — |
 
 ### Detail Queries
 
 Expensive, fully-enriched data for a specific item the operator has selected. Triggered by user action (opening a modal, drilling into a group), not by periodic refresh.
-
-```
-MissingTagDetail     { tag_name }     → Vec<{ inode, path, existing_tags }>
-CompoundSplitDetail  { group }        → full split preview with file metadata
-SessionEdits         { session_id }   → edits with inode→path resolution
-OobConflictDetail    { inode }        → tag diff (db vs disk)
-ExternalMatchDetail  { recording_ids} → recording cache + release summaries
-AudioFilesByInodes   { inodes, zone } → resolved file metadata
-TagEditFiles         { directory }    → files with tags for editing
-```
 
 **The key rule: detail queries are self-contained.** If a query requires inode resolution to be useful to the caller, the resolution happens *inside* the query. Callers must never need a follow-up `get_audio_files_by_inodes` round-trip. The inode→file join is an implementation detail, not a domain concept.
 
@@ -70,76 +55,63 @@ Eager joining kills responsiveness. A modal showing 50 signal groups should open
 
 Web API consumers benefit identically: list endpoints are fast, detail endpoints do the work.
 
-## Consolidation: The `get_audio_files_by_inodes` Pattern
+## Generic Cache Infrastructure
 
-The single most common ad-hoc query (~10 callsites) is fetching signal data, then immediately resolving the embedded inodes to file metadata in a second round-trip. This two-step pattern should not leak into the domain vocabulary.
+The cache thread manages a `TypeId`-keyed `GenericCache` where each slot is a `RegisteredSlot` carrying:
+- Execute closure (reconstructs the query via `Q::default()` and runs it)
+- Throttle duration and optional urgent throttle
+- `RecomputationScope` — which mutation domains invalidate this entry
+- Demand flags (`wanted`, `urgent`)
 
-**Current pattern (eliminate):**
-```rust
-let signals = cache.query(|db| db.get_missing_tag_signals()).recv();
-let inodes: Vec<i64> = signals.iter().flat_map(|s| &s.inodes).collect();
-let files = cache.query(|db| db.get_audio_files_by_inodes(&inodes, Zone::Corpus)).recv();
-// manually zip signals + files
-```
+### Adding a Cached Query
 
-**Target pattern:**
-```rust
-// Single domain query, returns enriched data
-let detail = witch.query(MissingTagDetail { tag_name }).await;
-// detail.entries: Vec<{ inode, path, tags, signal_data }>
-```
+Three touch points:
 
-`get_audio_files_by_inodes` may still exist as an internal helper within query implementations, but it is not a domain query that clients should ever need to call directly.
+1. **Define** with scope in `src/db/domain.rs`:
+   ```rust
+   define_domain_query! {
+       GetFoo => FooData, cached(30, TAGS | FILES), db.get_foo_data()
+   }
+   ```
 
-## The Closure Escape Hatch
+2. **Signal demand** in the event loop:
+   ```rust
+   app.cache.want::<GetFoo>();
+   ```
 
-`cache.query(|db| ...)` currently accepts arbitrary closures over `ReadOnlyDb`. This is the primary migration target — every callsite needs to become a named `DomainQuery` variant.
+3. **Read** in view code:
+   ```rust
+   app.cached.get::<GetFoo>()
+   ```
 
-The closure form has served well for rapid iteration, but it is:
+### Scope-Based Invalidation
 
-- **Untyped** — the channel carries `Box<dyn FnOnce>`, invisible to any protocol layer
-- **Non-serializable** — cannot be sent over HTTP, logged, or traced
-- **Unreviewable** — the actual query is buried in a closure at the callsite
+When mutations complete, the Witch sends `invalidate_scope(session_recomputation_scope)` — only cache slots whose `SCOPE` overlaps the mutation scope are invalidated. A tag edit doesn't re-query deploy status; a library deploy doesn't re-query edit history.
 
-Each closure callsite should be examined and converted to either a summary or detail query variant. Some callsites are composite (fetch signals + resolve inodes + compute derived state) — these become single self-contained detail queries.
+### Demand-Not-Timing
 
-## Modal Init Loaders
+Clients express **demand** ("I want this data"), not **timing** ("refresh if stale"). The cache thread decides whether to serve cached data or refresh:
 
-Several modals already have composite loader functions (`DeployModalData::load(db)`, `ManualReviewData::load(db, kind)`, `IntakeConfirmationState::gather(db, ...)`). These are the right shape — named, typed, self-contained. They just receive a raw `&ReadOnlyDb` instead of being invoked through the query protocol.
-
-Migration path: wrap each loader as a `DomainQuery` variant. The implementation calls the same loader function internally. The external interface becomes protocol-driven.
-
-## Cache and Throttle Layer
-
-The cache thread's throttle logic (per-query `_last_refreshed` timestamps, configurable intervals) remains valuable but becomes an implementation detail of the query service, not something clients interact with.
-
-Clients express **demand** ("I want corpus summary data"), not **timing** ("refresh if stale"). The query service decides whether to serve cached data or refresh. This maps to:
-
-- **TUI**: demand flags per frame, same as today, but over the domain protocol
+- **TUI**: `want::<Q>()` per frame — cache thread throttles
 - **Web API**: each request is implicit demand; the service decides freshness
 - **SSE/WebSocket**: the service pushes when cached data refreshes
 
 ## Trait-Driven Design (Macro-Forward)
 
-The query vocabulary must be designed with proc-macro extraction as an explicit goal. This means **deliberate uniformity** — every query must fit the same trait shape, no exceptions. Resist the temptation to add one-off convenience methods or special-case certain queries. If a query doesn't fit the trait, reshape the query, not the trait.
+The query vocabulary is designed with proc-macro extraction as an explicit goal. **Deliberate uniformity** — every query fits the same trait shape, no exceptions.
 
 ### Core Traits
 
 ```rust
-/// Every domain query implements this. The trait is the contract
-/// that a future proc-macro will generate against.
-trait DomainQuery: Serialize + Send + 'static {
+trait DomainQuery: Send + 'static {
     type Response: Serialize + Send + 'static;
-
-    /// All inputs come from `self`. All outputs go in `Response`.
-    /// No side channels, no &mut, no extra context parameters.
     fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response;
 }
 
-/// Summary queries that benefit from throttled caching.
-/// Detail queries implement only DomainQuery.
-trait CachedQuery: DomainQuery {
+trait CachedQuery: DomainQuery + Default {
     const THROTTLE: Duration;
+    const SCOPE: RecomputationScope;
+    const URGENT_THROTTLE: Option<Duration> = None;
 }
 ```
 
@@ -151,7 +123,7 @@ These rules exist so that a proc-macro can eventually generate the plumbing for 
 
 2. **All outputs are in the `Response` type.** No side-channel `Sender<T>`, no writing to shared state, no logging-as-output. The response struct is the complete result.
 
-3. **`execute` takes `self` by value and `&ReadOnlyDb` — nothing else.** This is the rigid function signature the macro will target. If you need something beyond the DB (e.g., config for a deploy query), it goes in the query struct as a field populated by the caller.
+3. **`execute` takes `self` by value and `&ReadOnlyDb` — nothing else.** This is the rigid function signature the macro targets. If you need something beyond the DB (e.g., config for a deploy query), it goes in the query struct as a field populated by the caller.
 
 4. **Response types are `Serialize`.** Every response must be serializable from day one, even before the web API exists. This catches "I stuck a `PathBuf` with platform-specific semantics in here" problems early and ensures web-readiness is never a retrofit.
 
@@ -161,19 +133,25 @@ These rules exist so that a proc-macro can eventually generate the plumbing for 
 
 ### The `define_domain_query!` Macro
 
-The macro is implemented as `macro_rules!` in `src/db/domain.rs`. It supports four forms:
+The macro is implemented as `macro_rules!` in `src/db/domain.rs`. Supported forms:
 
 ```rust
-// Simple cached: unit struct, single db method, unwrap_or_default
+// Simple cached with scope: unit struct, single db method, unwrap_or_default
 define_domain_query! {
     /// Doc comment
-    GetFoo => FooData, cached(15), db.get_foo_data()
+    GetFoo => FooData, cached(15, TAGS | FILES), db.get_foo_data()
+}
+
+// Simple cached with urgent throttle:
+define_domain_query! {
+    /// Doc comment
+    GetFoo => FooData, cached(15, EXTERNAL, urgent(5)), db.get_foo_data()
 }
 
 // Body cached: custom execute logic with db in scope
 define_domain_query! {
     /// Doc comment
-    GetBar => BarData, cached(30), |db| {
+    GetBar => BarData, cached(30, TAGS), |db| {
         let x = db.get_x().unwrap_or_default();
         let y = db.get_y().unwrap_or_default();
         BarData { x, y }
@@ -191,44 +169,52 @@ define_domain_query! {
     /// Doc comment
     GetQux => QuxData, uncached, |db| { ... }
 }
+
+// Modal load shorthand: unit struct, Response::load(db).ok().unwrap_or_default()
+define_domain_query! {
+    /// Doc comment
+    GetModal => ModalData, uncached, modal_load
+}
+
+// Parameterized: struct with fields, custom execute body
+define_domain_query! {
+    /// Doc comment
+    GetQuux { field1: Type1, field2: Type2 } => QuuxData, uncached, |s, db| {
+        db.some_query(&s.field1, s.field2).unwrap_or_default()
+    }
+}
 ```
 
 Each invocation generates:
-- The query struct with `#[derive(Serialize, Deserialize)]`
+- The query struct with `#[derive(Serialize, Deserialize)]` (and `Default` for cached)
 - The `DomainQuery` impl with the specified response type and execute body
-- The `CachedQuery` impl (if `cached`) with the throttle duration
+- The `CachedQuery` impl (if `cached`) with throttle, scope, and optional urgent throttle
 
 **When adding new queries, always use the macro.** If a query doesn't fit the macro's forms, that's a signal to reshape the query (or extend the macro with a new form), not to hand-write the impls.
 
-## Migration Strategy
+## Migration History
 
-This is incremental work. The TUI continues functioning throughout. The trait-driven design is not a later phase — it applies from the first query converted.
+All phases complete:
 
-1. ~~**Establish the `DomainQuery` trait and dispatch infrastructure.**~~ **DONE.** Traits defined in `src/db/domain.rs`. Cache thread refresh path routes through `DomainQuery::execute()`.
+1. ~~**Establish the `DomainQuery` trait and dispatch infrastructure.**~~ Traits defined in `src/db/domain.rs`. Cache thread refresh path routes through `DomainQuery::execute()`.
 
-2. ~~**Convert `CacheReady` variants to trait-implementing summary query structs.**~~ **DONE.** All 6 variants (Insights, InboxOverview, DeployStatus, EditHistory, ExternalMatches, PackingDirs) converted. `Serialize` added to all response types and their transitive dependencies.
+2. ~~**Convert `CacheReady` variants to trait-implementing summary query structs.**~~ All 6 variants converted. `Serialize` added to all response types and their transitive dependencies.
 
-3. ~~**Extract `define_domain_query!` macro.**~~ **DONE.** `macro_rules!` macro in `src/db/domain.rs` handles simple/body × cached/uncached forms. All 6 summary queries use the macro.
+3. ~~**Extract `define_domain_query!` macro.**~~ `macro_rules!` macro handles all forms. All 6 summary queries use the macro.
 
-4. **Convert closure callsites to detail query structs.** **MOSTLY DONE.** Each `cache.query(|db| ...)` becomes a named struct with fields for its parameters. `CacheHandle::domain_query()` method added as the typed entry point. 38 domain query types defined, 36 tests passing. Callsite conversions complete:
-   - **Wave 1** (13 callsites): OOB sync/bucketed/moved files, packing knots/paths, compound splits, tag canonicity keys, missing album singles, edit history export
-   - **Wave 2** (signal key queries): InconsistentAlbumArtist keys, TagCanonicity keys, InboxTagCanonicity keys, DiscExtraction with paths
-   - **Wave 3** (modal init loaders — 14 callsites): `start_resolution!` macro (5 uses), ShitFormat, ReleaseOverlap, InboxCorpusMatch, Deploy, ManualReview, CorpusTags, PackingBrowser, UnsolvedPacking
-   - **Wave 4** (composite queries — 5 callsites): MissingTagAudioFiles, AudioFilesByInodes (2 uses), SessionEditDetail, CurrentTagValues, AllAudioFilesWithTags
-   - `Serialize` added to `FileEntry`, `AudioInfo`, `AudioFile`, and ~30 modal/view types
+4. ~~**Convert closure callsites to detail query structs.**~~ All closures converted across 4 waves. 38 domain query types defined. `CacheHandle::domain_query()` is the sole entry point. `Serialize` added to `FileEntry`, `AudioInfo`, `AudioFile`, and ~30 modal/view types.
 
-   **Remaining ~17 closures** — all require design work beyond mechanical conversion:
-   - **Stateful loaders** (6): `IntakeConfirmationState::gather_*` (3), `InboxOrganizeState::load_*` (1), `CompoundSplitDataV2::from_compound_group` (2 — filesystem I/O: read tags from disk)
-   - **Disk-touching queries** (2): `compute_tag_diff` (compares DB tags vs on-disk tags)
-   - **Complex composites** (4): tag editor ops (2, file resolution + tag loading), MusicBrainz recording detail (1, JSON parsing), tag search file matching (1, full corpus scan + tag resolution)
-   - **Tag canonicity signal dispatch** (1): dispatches to 3 different signal kinds each building modal data with secondary DB reads
-   - **Startup/tick** (2): startup intake gather, tick-based polling
+5. ~~**Eliminate `get_audio_files_by_inodes` as a client-facing query.**~~ Folded into self-contained detail queries. Remains as an internal DB helper only.
 
-5. **Eliminate `get_audio_files_by_inodes` as a client-facing query.** It remains as an internal helper within `execute` implementations, but no client should ever call it directly.
+6. ~~**Remove the closure escape hatch.**~~ Zero `cache.query(|db| ...)` callsites remain. `query()` is private, only reachable through `domain_query::<Q>()`. The `CacheRequest::Query` variant still exists as internal plumbing for `domain_query()` but is not exposed to clients.
 
-6. **Remove the closure escape hatch** once all callsites are converted.
+7. ~~**Generic cache with scope-based invalidation.**~~ Hardcoded `ThrottleState` replaced with `TypeId`-keyed `GenericCache`. `CachedQuery` trait carries `SCOPE` and `URGENT_THROTTLE`. Invalidation is targeted by `RecomputationScope`, not blanket. Adding a cached query is 3 touch points instead of 8.
 
-At any point after step 2, a web server can be introduced as a second client speaking the same protocol. The `Serialize` bound on all response types (enforced from step 1) guarantees web-readiness without retrofit.
+## Future Work
+
+- **Web API client**: can be introduced at any time — all response types are `Serialize`, all queries are protocol-driven. The cache infrastructure is client-agnostic.
+- **Proc-macro extraction**: the `macro_rules!` macro can be promoted to a proc-macro for richer compile-time validation and code generation when the query surface stabilizes.
+- **Typed one-shot protocol**: `CacheRequest::Query` still carries `Box<dyn FnOnce>` internally. Could be replaced with a typed enum dispatch, but the untyped form is sealed behind `domain_query::<Q>()` so this is polish, not architecture.
 
 ## Non-Goals
 

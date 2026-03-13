@@ -19,11 +19,30 @@ pub trait SignalContentHash {
 /// Declares the complete signal registry.
 ///
 /// Generates `TypedSignalWrite`, dispatch methods, `count_signal_type()`,
-/// and `signal_table_entries()` from a single declaration.
+/// `signal_table_entries()`, and corpus signal clearing functions from a
+/// single declaration.
+///
+/// Corpus signals are sub-categorized into three groups:
+/// - `mutable`: signals that should be cleared when a file's state changes
+/// - `inherent`: signals discovered from intrinsic file properties (CorruptFile, ShitFormat)
+/// - `inbox`: signals specific to inbox-zone files
+///
+/// The macro generates three clearing functions:
+/// - `clear_mutable_corpus_signals(conn, inode)` — clears `mutable` signals
+/// - `clear_all_corpus_signals(conn, inode)` — clears `mutable` + `inherent` signals
+/// - `clear_inbox_signals(conn, inode)` — clears `inbox` signals
 macro_rules! signal_registry {
     (
         corpus {
-            $($c_variant:ident($c_type:ty, $c_slug:literal)),* $(,)?
+            mutable {
+                $($m_variant:ident($m_type:ty, $m_slug:literal)),* $(,)?
+            }
+            inherent {
+                $($i_variant:ident($i_type:ty, $i_slug:literal)),* $(,)?
+            }
+            inbox {
+                $($inbox_variant:ident($inbox_type:ty, $inbox_slug:literal)),* $(,)?
+            }
         }
         aggregate {
             $($a_variant:ident($a_type:ty, $a_slug:literal)),* $(,)?
@@ -35,7 +54,9 @@ macro_rules! signal_registry {
         /// Each variant wraps the typed signal data struct and maps 1:1 to a table.
         #[derive(Debug, Clone)]
         pub enum TypedSignalWrite {
-            $($c_variant($c_type),)*
+            $($m_variant($m_type),)*
+            $($i_variant($i_type),)*
+            $($inbox_variant($inbox_type),)*
             $($a_variant($a_type),)*
         }
 
@@ -44,7 +65,9 @@ macro_rules! signal_registry {
             pub fn insert(self, conn: &rusqlite::Connection) -> rusqlite::Result<()> {
                 use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
                 match self {
-                    $(Self::$c_variant(s) => s.insert(conn),)*
+                    $(Self::$m_variant(s) => s.insert(conn),)*
+                    $(Self::$i_variant(s) => s.insert(conn),)*
+                    $(Self::$inbox_variant(s) => s.insert(conn),)*
                     $(Self::$a_variant(s) => s.insert(conn),)*
                 }
             }
@@ -53,7 +76,9 @@ macro_rules! signal_registry {
             pub fn exists(&self, conn: &rusqlite::Connection) -> bool {
                 use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
                 let result = match self {
-                    $(Self::$c_variant(s) => <$c_type>::exists(conn, s.inode),)*
+                    $(Self::$m_variant(s) => <$m_type>::exists(conn, s.inode),)*
+                    $(Self::$i_variant(s) => <$i_type>::exists(conn, s.inode),)*
+                    $(Self::$inbox_variant(s) => <$inbox_type>::exists(conn, s.inode),)*
                     $(Self::$a_variant(s) => <$a_type>::exists(conn, &s.key),)*
                 };
                 result.unwrap_or(false)
@@ -67,7 +92,9 @@ macro_rules! signal_registry {
                 let mut hasher = std::hash::DefaultHasher::new();
                 std::mem::discriminant(self).hash(&mut hasher);
                 match self {
-                    $(Self::$c_variant(s) => s.content_hash_fields(&mut hasher),)*
+                    $(Self::$m_variant(s) => s.content_hash_fields(&mut hasher),)*
+                    $(Self::$i_variant(s) => s.content_hash_fields(&mut hasher),)*
+                    $(Self::$inbox_variant(s) => s.content_hash_fields(&mut hasher),)*
                     $(Self::$a_variant(s) => s.content_hash_fields(&mut hasher),)*
                 }
                 hasher.finish()
@@ -83,7 +110,9 @@ macro_rules! signal_registry {
         ) -> rusqlite::Result<usize> {
             use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
             let count = match signal_type {
-                $($c_slug => <$c_type>::count(conn)?,)*
+                $($m_slug => <$m_type>::count(conn)?,)*
+                $($i_slug => <$i_type>::count(conn)?,)*
+                $($inbox_slug => <$inbox_type>::count(conn)?,)*
                 $($a_slug => <$a_type>::count(conn)?,)*
                 _ => 0,
             };
@@ -100,9 +129,25 @@ macro_rules! signal_registry {
             let mut entries = Vec::new();
             $(
                 entries.push(TableEntry {
-                    name: <$c_type as CorpusSignalStore>::TABLE_NAME,
-                    kind: signal_registry!(@table_kind $c_slug),
-                    create_sql: <$c_type as CorpusSignalStore>::TABLE_SQL,
+                    name: <$m_type as CorpusSignalStore>::TABLE_NAME,
+                    kind: signal_registry!(@table_kind $m_slug),
+                    create_sql: <$m_type as CorpusSignalStore>::TABLE_SQL,
+                    index_sql: &[],
+                });
+            )*
+            $(
+                entries.push(TableEntry {
+                    name: <$i_type as CorpusSignalStore>::TABLE_NAME,
+                    kind: signal_registry!(@table_kind $i_slug),
+                    create_sql: <$i_type as CorpusSignalStore>::TABLE_SQL,
+                    index_sql: &[],
+                });
+            )*
+            $(
+                entries.push(TableEntry {
+                    name: <$inbox_type as CorpusSignalStore>::TABLE_NAME,
+                    kind: signal_registry!(@table_kind $inbox_slug),
+                    create_sql: <$inbox_type as CorpusSignalStore>::TABLE_SQL,
                     index_sql: &[],
                 });
             )*
@@ -115,6 +160,34 @@ macro_rules! signal_registry {
                 });
             )*
             entries
+        }
+
+        /// Clear mutable corpus signals for an inode.
+        ///
+        /// Clears signals that represent mutable file state (tags, paths, deploy status).
+        /// Does NOT clear inherent signals (CorruptFile, ShitFormat) which represent
+        /// intrinsic file properties discovered during indexing.
+        pub fn clear_mutable_corpus_signals(conn: &rusqlite::Connection, inode: i64) {
+            use crate::meta::signals::store::CorpusSignalStore;
+            $(let _ = <$m_type>::clear_by_inode(conn, inode);)*
+        }
+
+        /// Clear all corpus signals for an inode (mutable + inherent).
+        ///
+        /// Used when a file is being fully re-indexed or removed — clears everything
+        /// including file-inherent signals like CorruptFile and ShitFormat.
+        pub fn clear_all_corpus_signals(conn: &rusqlite::Connection, inode: i64) {
+            use crate::meta::signals::store::CorpusSignalStore;
+            $(let _ = <$m_type>::clear_by_inode(conn, inode);)*
+            $(let _ = <$i_type>::clear_by_inode(conn, inode);)*
+        }
+
+        /// Clear inbox signals for an inode.
+        ///
+        /// Used when dropping inbox file state for inodes no longer observed on disk.
+        pub fn clear_inbox_signals(conn: &rusqlite::Connection, inode: i64) {
+            use crate::meta::signals::store::CorpusSignalStore;
+            $(let _ = <$inbox_type>::clear_by_inode(conn, inode);)*
         }
 
     };
@@ -160,32 +233,38 @@ use super::data::*;
 
 signal_registry! {
     corpus {
-        FileInCorpus(FileInCorpusSignal, "file_in_corpus"),
-        UnindexedFile(UnindexedFileSignal, "unindexed_file"),
-        HealthyFile(HealthyFileSignal, "healthy_file"),
-        FileInInbox(FileInInboxSignal, "file_in_inbox"),
-        InboxUnindexed(InboxUnindexedSignal, "inbox_unindexed"),
-        InboxHealthy(InboxHealthySignal, "inbox_healthy"),
-        InboxCorpusMatch(InboxCorpusMatchSignal, "inbox_corpus_match"),
-        CorruptFile(CorruptFileSignal, "corrupt_file"),
-        MtimeOnlyMismatch(MtimeOnlyMismatchSignal, "mtime_only_mismatch"),
-        MissingDirectory(MissingDirectorySignal, "missing_directory"),
-        MissingFile(MissingFileSignal, "missing_file"),
-        MovedFile(MovedFileSignal, "moved_file"),
-        ShitFormat(ShitFormatSignal, "shit_format"),
-        DeployReady(DeployReadySignal, "deploy_ready"),
-        DeployedHealthy(DeployedHealthySignal, "deployed_healthy"),
-        SidecarDeployReady(SidecarDeployReadySignal, "sidecar_deploy_ready"),
-        OutOfBandTagSync(OutOfBandTagSyncSignal, "oob_tag_sync"),
-        OutOfBandTagConflict(OutOfBandTagConflictSignal, "oob_tag_conflict"),
-        SubparDuplicate(SubparDuplicateSignal, "subpar_duplicate"),
-        CompoundTag(CompoundTagSignal, "compound_tag"),
-        PathTagMismatch(PathTagMismatchSignal, "path_tag_mismatch"),
-        ExternalMatch(ExternalMatchSignal, "external_match"),
-        ReleasePacking(ReleasePackingSignal, "release_packing"),
-        UnmatchedCorpusTrack(UnmatchedCorpusTrackSignal, "unmatched_corpus_track"),
-        ExpectedMissingTag(ExpectedMissingTagSignal, "expected_missing_tag"),
-        InboxCompoundTag(InboxCompoundTagSignal, "inbox_compound_tag"),
+        mutable {
+            FileInCorpus(FileInCorpusSignal, "file_in_corpus"),
+            UnindexedFile(UnindexedFileSignal, "unindexed_file"),
+            HealthyFile(HealthyFileSignal, "healthy_file"),
+            MtimeOnlyMismatch(MtimeOnlyMismatchSignal, "mtime_only_mismatch"),
+            MissingDirectory(MissingDirectorySignal, "missing_directory"),
+            MissingFile(MissingFileSignal, "missing_file"),
+            MovedFile(MovedFileSignal, "moved_file"),
+            DeployReady(DeployReadySignal, "deploy_ready"),
+            DeployedHealthy(DeployedHealthySignal, "deployed_healthy"),
+            SidecarDeployReady(SidecarDeployReadySignal, "sidecar_deploy_ready"),
+            OutOfBandTagSync(OutOfBandTagSyncSignal, "oob_tag_sync"),
+            OutOfBandTagConflict(OutOfBandTagConflictSignal, "oob_tag_conflict"),
+            SubparDuplicate(SubparDuplicateSignal, "subpar_duplicate"),
+            CompoundTag(CompoundTagSignal, "compound_tag"),
+            PathTagMismatch(PathTagMismatchSignal, "path_tag_mismatch"),
+            ExternalMatch(ExternalMatchSignal, "external_match"),
+            ReleasePacking(ReleasePackingSignal, "release_packing"),
+            UnmatchedCorpusTrack(UnmatchedCorpusTrackSignal, "unmatched_corpus_track"),
+            ExpectedMissingTag(ExpectedMissingTagSignal, "expected_missing_tag"),
+        }
+        inherent {
+            CorruptFile(CorruptFileSignal, "corrupt_file"),
+            ShitFormat(ShitFormatSignal, "shit_format"),
+        }
+        inbox {
+            FileInInbox(FileInInboxSignal, "file_in_inbox"),
+            InboxUnindexed(InboxUnindexedSignal, "inbox_unindexed"),
+            InboxHealthy(InboxHealthySignal, "inbox_healthy"),
+            InboxCorpusMatch(InboxCorpusMatchSignal, "inbox_corpus_match"),
+            InboxCompoundTag(InboxCompoundTagSignal, "inbox_compound_tag"),
+        }
     }
     aggregate {
         CanonicalTag(CanonicalTagSignal, "canonical_tag"),

@@ -10,7 +10,8 @@ mod packing_ops;
 use rusqlite::params;
 
 use crate::db::Database;
-use crate::meta::signals::data::*;
+use crate::meta::signals::data::MovedFileSignal;
+use crate::meta::signals::registry;
 use crate::meta::signals::store::CorpusSignalStore;
 
 use super::DbWriteOp;
@@ -96,32 +97,6 @@ where
 // Typed Signal Table Helpers
 // ============================================================================
 
-/// Clear corpus signals for an inode from typed tables.
-///
-/// When `include_inherent` is true, also clears file-inherent signals
-/// (CorruptFile, ShitFormat). These represent intrinsic file properties
-/// discovered during indexing and should persist across mutations that don't
-/// remove/replace the file; pass `false` to preserve them.
-fn typed_clear_corpus_signals(db: &Database, inode: i64, include_inherent: bool) {
-    let conn = db.conn();
-    let _ = FileInCorpusSignal::clear_by_inode(conn, inode);
-    let _ = UnindexedFileSignal::clear_by_inode(conn, inode);
-    let _ = HealthyFileSignal::clear_by_inode(conn, inode);
-    let _ = MissingFileSignal::clear_by_inode(conn, inode);
-    let _ = MissingDirectorySignal::clear_by_inode(conn, inode);
-    let _ = MovedFileSignal::clear_by_inode(conn, inode);
-    let _ = OutOfBandTagSyncSignal::clear_by_inode(conn, inode);
-    let _ = OutOfBandTagConflictSignal::clear_by_inode(conn, inode);
-    let _ = MtimeOnlyMismatchSignal::clear_by_inode(conn, inode);
-    if include_inherent {
-        let _ = CorruptFileSignal::clear_by_inode(conn, inode);
-        let _ = ShitFormatSignal::clear_by_inode(conn, inode);
-    }
-    let _ = SubparDuplicateSignal::clear_by_inode(conn, inode);
-    let _ = CompoundTagSignal::clear_by_inode(conn, inode);
-    let _ = DeployReadySignal::clear_by_inode(conn, inode);
-    let _ = DeployedHealthySignal::clear_by_inode(conn, inode);
-}
 
 // ============================================================================
 // Inbox / Dirty / Library Operations
@@ -152,10 +127,7 @@ fn execute_drop_inbox_file_state(db: &Database, inode: i64) -> anyhow::Result<()
     )?;
 
     // Clear per-inode inbox signals
-    let _ = FileInInboxSignal::clear_by_inode(conn, inode);
-    let _ = InboxUnindexedSignal::clear_by_inode(conn, inode);
-    let _ = InboxHealthySignal::clear_by_inode(conn, inode);
-    let _ = InboxCorpusMatchSignal::clear_by_inode(conn, inode);
+    registry::clear_inbox_signals(conn, inode);
 
     // Clear MovedFile — inbox->X moves become disappear+reappear
     let _ = MovedFileSignal::clear_by_inode(conn, inode);
@@ -259,10 +231,10 @@ pub(super) fn execute_signal_op(db: &Database, op: &DbWriteOp) {
             }
         }
         DbWriteOp::ClearAllCorpusSignals { inode } => {
-            typed_clear_corpus_signals(db, *inode, true);
+            registry::clear_all_corpus_signals(db.conn(), *inode);
         }
         DbWriteOp::ClearMutableCorpusSignals { inode } => {
-            typed_clear_corpus_signals(db, *inode, false);
+            registry::clear_mutable_corpus_signals(db.conn(), *inode);
         }
         DbWriteOp::ClearAggregateSignalByKey {
             clear_fn,

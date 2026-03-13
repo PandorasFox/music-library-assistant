@@ -306,7 +306,7 @@ pub(super) fn execute_drop_from_index(db: &Database, path: &str) -> anyhow::Resu
     }
 
     // Clear all corpus signals for this inode from typed tables
-    super::typed_clear_corpus_signals(db, inode, true);
+    crate::meta::signals::registry::clear_all_corpus_signals(db.conn(), inode);
 
     Ok(())
 }

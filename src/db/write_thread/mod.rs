@@ -337,10 +337,6 @@ enum DbWriteOp {
         value: bool,
     },
 
-    // TODO: Refactor signal clearing into a unified system with signal categories.
-    // File-inherent signals (CorruptFile, ShitFormat) vs tag-based signals (OOB, mtime)
-    // should be distinguished at the type level, not via SQL string matching.
-
     // =========================================================================
     // Inbox State Operations (Awakening phase cascade cleanup)
     // =========================================================================

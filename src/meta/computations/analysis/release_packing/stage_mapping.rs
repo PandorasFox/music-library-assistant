@@ -17,6 +17,7 @@ use super::components::{
     orchestrate_partial_tier,
 };
 use super::types::{
+    build_manifest_map, build_manifest_map_owned,
     classify_proposal, AlternativeRelease, ComponentData, Proposal, ProposalTier,
     ReleaseMappingState, SharedComponentData, SharedMappingState,
 };
@@ -71,19 +72,7 @@ pub fn execute_compute_release_mappings(
         }
     };
 
-    let manifest_map: HashMap<&str, (&str, &str, i32)> = manifest
-        .iter()
-        .map(|r| {
-            (
-                r.release_id.as_str(),
-                (
-                    r.release_title.as_str(),
-                    r.release_artist.as_str(),
-                    r.total_tracks,
-                ),
-            )
-        })
-        .collect();
+    let manifest_map = build_manifest_map(&manifest);
 
     // Media count lookup for pinned release conflict detection
     let release_media_counts: HashMap<&str, i32> = manifest
@@ -439,39 +428,13 @@ pub(crate) fn execute_map_perfect_releases(
 
     // Load manifest + corpus paths for isolated-node emission
     let manifest = read_only_db.get_packing_manifest().unwrap_or_default();
-    let manifest_map: HashMap<&str, (&str, &str, i32)> = manifest
-        .iter()
-        .map(|r| {
-            (
-                r.release_id.as_str(),
-                (
-                    r.release_title.as_str(),
-                    r.release_artist.as_str(),
-                    r.total_tracks,
-                ),
-            )
-        })
-        .collect();
+    let manifest_map = build_manifest_map(&manifest);
     let corpus_paths: HashMap<i64, String> = read_only_db
         .get_packing_inode_paths()
         .unwrap_or_default()
         .into_iter()
         .collect();
-
-    // Build owned manifest_map for component data
-    let manifest_map_owned: HashMap<String, (String, String, i32)> = manifest
-        .iter()
-        .map(|r| {
-            (
-                r.release_id.clone(),
-                (
-                    r.release_title.clone(),
-                    r.release_artist.clone(),
-                    r.total_tracks,
-                ),
-            )
-        })
-        .collect();
+    let manifest_map_owned = build_manifest_map_owned(&manifest);
 
     let mut spawned: Vec<AnalysisComputation> = Vec::new();
     let mut isolated_count = 0usize;

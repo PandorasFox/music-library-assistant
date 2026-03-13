@@ -12,17 +12,209 @@ use crate::meta::computations::helpers::reconcile_corpus_signals;
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::computations::{Computation, PipelineStage};
 use crate::meta::external::ExternalSource;
-use crate::meta::signals::data::{PackingScoreBreakdown, ReleasePackingSignal};
+use crate::meta::signals::data::ReleasePackingSignal;
 
 use super::hungarian::{
     kuhn_munkres, localized_release_artist, score_all_directories,
     TargetDirs,
 };
-use super::scoring::{compute_score, weighted_composite};
+use super::scoring::{
+    compute_elimination_breakdown, compute_score, compute_title_similarity, weighted_composite,
+};
 use super::types::{
     group_all_per_inode, CandidateAssignment, CorpusFileInfo, RecordingMatch,
 };
 use crate::meta::computations::analysis::{Computation as AnalysisComputation, Result};
+use crate::meta::signals::data::PackingScoreBreakdown;
+
+/// Compute title similarity matrix between unassigned files and unfilled slots.
+///
+/// Returns a `n_files × n_slots` matrix where `[i][j]` is the best title
+/// similarity between file `i`'s tags and slot `j`'s track.
+fn compute_title_similarity_matrix(
+    unassigned_tags: &[HashMap<String, Vec<String>>],
+    unfilled: &[(u32, u32, &musicbrainz::MbTrack)],
+) -> Vec<Vec<f64>> {
+    unassigned_tags
+        .iter()
+        .map(|tags| {
+            unfilled
+                .iter()
+                .map(|(_, _, track)| compute_title_similarity(tags, track))
+                .collect()
+        })
+        .collect()
+}
+
+/// Find unambiguous 1:1 title pre-assignments above a similarity threshold.
+///
+/// A pre-assignment is made when a file has exactly one slot above threshold
+/// and that slot has exactly one file above threshold. Per-medium affinity is
+/// respected: if a file has a known medium, only slots from that medium qualify.
+///
+/// Returns `(file_idx, slot_idx)` pairs into the unassigned/unfilled arrays.
+fn find_unambiguous_preassignments(
+    title_sims: &[Vec<f64>],
+    threshold: f64,
+    file_medium: &[Option<u32>],
+    unfilled: &[(u32, u32, &musicbrainz::MbTrack)],
+) -> Vec<(usize, usize)> {
+    let n_files = title_sims.len();
+    let n_slots = if n_files > 0 { title_sims[0].len() } else { 0 };
+
+    let medium_ok = |ui: usize, fi: usize| -> bool {
+        file_medium[ui].is_none_or(|fm| unfilled[fi].0 == fm)
+    };
+
+    // file_candidates[ui] = slot indices above threshold (respecting medium affinity)
+    let file_candidates: Vec<Vec<usize>> = (0..n_files)
+        .map(|ui| {
+            (0..n_slots)
+                .filter(|&fi| title_sims[ui][fi] > threshold && medium_ok(ui, fi))
+                .collect()
+        })
+        .collect();
+
+    // slot_candidates[fi] = file indices above threshold
+    let slot_candidates: Vec<Vec<usize>> = (0..n_slots)
+        .map(|fi| {
+            (0..n_files)
+                .filter(|&ui| title_sims[ui][fi] > threshold && medium_ok(ui, fi))
+                .collect()
+        })
+        .collect();
+
+    let mut result = Vec::new();
+    for (ui, fc) in file_candidates.iter().enumerate() {
+        if fc.len() != 1 {
+            continue;
+        }
+        let fi = fc[0];
+        if slot_candidates[fi].len() != 1 {
+            continue;
+        }
+        result.push((ui, fi));
+    }
+    result
+}
+
+/// Run Hungarian assignment on remaining (non-preassigned) files and slots.
+///
+/// Builds a cost matrix from elimination breakdowns, solves via Kuhn-Munkres,
+/// and returns `PackingScoreRow`s for each assignment.
+fn run_elimination_hungarian(
+    remaining_unassigned: &[usize],
+    remaining_unfilled: &[usize],
+    all_unassigned: &[(i64, String, Option<String>, Option<i64>)],
+    unfilled: &[(u32, u32, &musicbrainz::MbTrack)],
+    unassigned_tags: &[HashMap<String, Vec<String>>],
+    file_medium: &[Option<u32>],
+    release_id: &str,
+    release: &MbRelease,
+    resolved_artist: &str,
+    duration_tolerance_pct: f64,
+    elimination_weights: &crate::config::PackingWeights,
+) -> Vec<PackingScoreRow> {
+    let n_unassigned = remaining_unassigned.len();
+    let n_unfilled = remaining_unfilled.len();
+    let n = n_unassigned.max(n_unfilled);
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let mut cost = vec![vec![0.0f64; n]; n];
+    for (ri, &ui) in remaining_unassigned.iter().enumerate() {
+        let tags = &unassigned_tags[ui];
+        let dur_ms = &all_unassigned[ui].3;
+        for (rj, &fi) in remaining_unfilled.iter().enumerate() {
+            if let Some(fm) = file_medium[ui] {
+                if unfilled[fi].0 != fm {
+                    cost[ri][rj] = 1e9;
+                    continue;
+                }
+            }
+            let (_, _, track) = &unfilled[fi];
+            let elim_breakdown = compute_elimination_breakdown(
+                tags, track, resolved_artist, &release.title,
+                *dur_ms, duration_tolerance_pct,
+            );
+            cost[ri][rj] = -weighted_composite(&elim_breakdown, elimination_weights);
+        }
+    }
+
+    let col_to_row = kuhn_munkres(&cost, n);
+    let mut rows = Vec::new();
+
+    for (j, &row) in col_to_row.iter().enumerate().skip(1) {
+        if row == 0 {
+            continue;
+        }
+        let ri = row - 1;
+        let rj = j - 1;
+        if ri >= n_unassigned || rj >= n_unfilled {
+            continue;
+        }
+
+        let ui = remaining_unassigned[ri];
+        let fi = remaining_unfilled[rj];
+
+        let (inode, _path, fingerprint_hex, dur_ms) = &all_unassigned[ui];
+        let (medium_pos, track_pos, track) = &unfilled[fi];
+        let corpus_tags = &unassigned_tags[ui];
+
+        let breakdown = compute_elimination_breakdown(
+            corpus_tags, track, resolved_artist, &release.title,
+            *dur_ms, duration_tolerance_pct,
+        );
+        rows.push(build_elimination_score_row(
+            release_id, *inode, track, *medium_pos, *track_pos,
+            &release.media, &breakdown, elimination_weights,
+            fingerprint_hex.clone(), *dur_ms,
+        ));
+    }
+
+    rows
+}
+
+/// Build a `PackingScoreRow` for an elimination match.
+///
+/// Computes the weighted score and serializes the breakdown, looking up the
+/// medium format from the release media list.
+fn build_elimination_score_row(
+    release_id: &str,
+    inode: i64,
+    track: &musicbrainz::MbTrack,
+    medium_pos: u32,
+    track_pos: u32,
+    media: &[musicbrainz::MbMedium],
+    breakdown: &PackingScoreBreakdown,
+    weights: &crate::config::PackingWeights,
+    fingerprint_hex: Option<String>,
+    raw_duration_ms: Option<i64>,
+) -> PackingScoreRow {
+    let score = weighted_composite(breakdown, weights);
+    let breakdown_bytes = bincode::serialize(breakdown).unwrap_or_default();
+
+    PackingScoreRow {
+        release_id: release_id.to_string(),
+        inode,
+        recording_id: track.recording.id.clone(),
+        medium_pos: medium_pos as i32,
+        track_pos: track_pos as i32,
+        track_title: track.title.clone(),
+        medium_format: media
+            .iter()
+            .find(|m| m.position == medium_pos)
+            .and_then(|m| m.format.clone()),
+        track_number: track.number.clone(),
+        score,
+        score_breakdown: breakdown_bytes,
+        is_optimal: true,
+        match_method: 1,
+        fingerprint_hex,
+        raw_duration_ms,
+    }
+}
 
 // ============================================================================
 // Stage 1: PackReleases (orchestrator)
@@ -860,72 +1052,15 @@ pub fn execute_score_release_candidates(
             // tracknumber from stealing slots that have clear title matches
             // when the rip's track ordering diverges from MB.
 
-            // Compute title similarity for every file × slot pair
-            let title_sims: Vec<Vec<f64>> = unassigned_tags
-                .iter()
-                .map(|tags| {
-                    unfilled
-                        .iter()
-                        .map(|(_, _, track)| {
-                            tags.get("TITLE")
-                                .and_then(|v| v.first())
-                                .map(|t| {
-                                    let track_sim = strsim::normalized_levenshtein(t, &track.title);
-                                    let rec_sim =
-                                        strsim::normalized_levenshtein(t, &track.recording.title);
-                                    track_sim.max(rec_sim)
-                                })
-                                .unwrap_or(0.0)
-                        })
-                        .collect()
-                })
-                .collect();
+            let title_sims = compute_title_similarity_matrix(&unassigned_tags, &unfilled);
+            let preassignments = find_unambiguous_preassignments(
+                &title_sims, title_preassign_threshold, &file_medium, &unfilled,
+            );
 
-            // Find unambiguous 1:1 matches above threshold
             let mut preassigned_files: HashSet<usize> = HashSet::new();
             let mut preassigned_slots: HashSet<usize> = HashSet::new();
 
-            // For each file, find slots above threshold; for each slot, find files above threshold
-            let n_files = all_unassigned.len();
-            let n_slots = unfilled.len();
-
-            // file_candidates[ui] = list of slot indices with sim > threshold
-            // For PerMedium targets, only consider slots from the file's medium
-            let file_candidates: Vec<Vec<usize>> = (0..n_files)
-                .map(|ui| {
-                    (0..n_slots)
-                        .filter(|&fi| {
-                            title_sims[ui][fi] > title_preassign_threshold
-                                && file_medium[ui]
-                                    .map_or(true, |fm| unfilled[fi].0 == fm)
-                        })
-                        .collect()
-                })
-                .collect();
-
-            // slot_candidates[fi] = list of file indices with sim > threshold
-            let slot_candidates: Vec<Vec<usize>> = (0..n_slots)
-                .map(|fi| {
-                    (0..n_files)
-                        .filter(|&ui| {
-                            title_sims[ui][fi] > title_preassign_threshold
-                                && file_medium[ui]
-                                    .map_or(true, |fm| unfilled[fi].0 == fm)
-                        })
-                        .collect()
-                })
-                .collect();
-
-            // Assign where both sides have exactly one candidate (unambiguous 1:1)
-            for ui in 0..n_files {
-                if file_candidates[ui].len() != 1 {
-                    continue;
-                }
-                let fi = file_candidates[ui][0];
-                if slot_candidates[fi].len() != 1 {
-                    continue;
-                }
-                // Unambiguous: this file matches exactly one slot, that slot matches exactly one file
+            for &(ui, fi) in &preassignments {
                 preassigned_files.insert(ui);
                 preassigned_slots.insert(fi);
 
@@ -934,74 +1069,24 @@ pub fn execute_score_release_candidates(
                 let tags = &unassigned_tags[ui];
 
                 // Build full breakdown for the pre-assigned match
-                let mb_dur = track.length.or(track.recording.length);
-                let duration_match = match (*dur_ms, mb_dur) {
-                    (Some(corpus_dur), Some(mb_d)) if mb_d > 0 => {
-                        let ratio = (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
-                        if ratio > duration_tolerance_pct {
-                            0.0
-                        } else {
-                            1.0 - (ratio / duration_tolerance_pct)
-                        }
-                    }
-                    _ => 0.5,
-                };
-
-                let artist_sim = tags
-                    .get("ARTIST")
-                    .and_then(|v| v.first())
-                    .map(|a| strsim::normalized_levenshtein(a, &resolved_artist))
-                    .unwrap_or(0.0);
-
-                let album_sim = tags
-                    .get("ALBUM")
-                    .and_then(|v| v.first())
-                    .map(|a| strsim::normalized_levenshtein(a, &release.title))
-                    .unwrap_or(0.0);
-
-                let track_number_match = tags
-                    .get("TRACKNUMBER")
-                    .and_then(|v| v.first())
-                    .and_then(|tn| tn.parse::<u32>().ok())
-                    .map(|tn| if tn == *track_pos { 1.0 } else { 0.0 })
-                    .unwrap_or(0.0);
-
-                let breakdown = PackingScoreBreakdown {
-                    acoustid_confidence: 0.0,
-                    duration_match,
-                    title_match: title_sims[ui][fi],
-                    artist_match: artist_sim,
-                    album_match: album_sim,
-                    track_number_match,
-                };
-                let score = weighted_composite(&breakdown, &elimination_weights);
-                let breakdown_bytes = bincode::serialize(&breakdown).unwrap_or_default();
-
-                score_rows.push(PackingScoreRow {
-                    release_id: release_id.to_string(),
-                    inode: *inode,
-                    recording_id: track.recording.id.clone(),
-                    medium_pos: *medium_pos as i32,
-                    track_pos: *track_pos as i32,
-                    track_title: track.title.clone(),
-                    medium_format: release
-                        .media
-                        .iter()
-                        .find(|m| m.position == *medium_pos)
-                        .and_then(|m| m.format.clone()),
-                    track_number: track.number.clone(),
-                    score,
-                    score_breakdown: breakdown_bytes,
-                    is_optimal: true,
-                    match_method: 1,
-                    fingerprint_hex: fingerprint_hex.clone(),
-                    raw_duration_ms: *dur_ms,
-                });
+                let mut breakdown = compute_elimination_breakdown(
+                    tags, track, &resolved_artist, &release.title,
+                    *dur_ms, duration_tolerance_pct,
+                );
+                // Override title_match with the pre-computed matrix value
+                breakdown.title_match = title_sims[ui][fi];
+                score_rows.push(build_elimination_score_row(
+                    release_id, *inode, track, *medium_pos, *track_pos,
+                    &release.media, &breakdown, &elimination_weights,
+                    fingerprint_hex.clone(), *dur_ms,
+                ));
 
                 elimination_count += 1;
             }
 
             // Filter out pre-assigned entries for the Hungarian pass
+            let n_files = all_unassigned.len();
+            let n_slots = unfilled.len();
             let remaining_unassigned: Vec<usize> = (0..n_files)
                 .filter(|ui| !preassigned_files.contains(ui))
                 .collect();
@@ -1012,177 +1097,14 @@ pub fn execute_score_release_candidates(
             // =============================================================
             // Phase 2: Hungarian assignment on remaining files × slots
             // =============================================================
-            let n_unassigned = remaining_unassigned.len();
-            let n_unfilled = remaining_unfilled.len();
-            let n = n_unassigned.max(n_unfilled);
-            let mut cost = vec![vec![0.0f64; n]; n];
-
-            for (ri, &ui) in remaining_unassigned.iter().enumerate() {
-                let tags = &unassigned_tags[ui];
-                let dur_ms = &all_unassigned[ui].3;
-                for (rj, &fi) in remaining_unfilled.iter().enumerate() {
-                    // Per-medium affinity: prohibit cross-medium assignment
-                    if let Some(fm) = file_medium[ui] {
-                        if unfilled[fi].0 != fm {
-                            cost[ri][rj] = 1e9;
-                            continue;
-                        }
-                    }
-                    let (_, _, track) = &unfilled[fi];
-                    let mb_dur = track.length.or(track.recording.length);
-                    let duration_match = match (*dur_ms, mb_dur) {
-                        (Some(corpus_dur), Some(mb_d)) if mb_d > 0 => {
-                            let ratio = (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
-                            if ratio > duration_tolerance_pct {
-                                0.0
-                            } else {
-                                1.0 - (ratio / duration_tolerance_pct)
-                            }
-                        }
-                        _ => 0.5,
-                    };
-
-                    let title_sim = tags
-                        .get("TITLE")
-                        .and_then(|v| v.first())
-                        .map(|t| {
-                            let track_sim = strsim::normalized_levenshtein(t, &track.title);
-                            let rec_sim = strsim::normalized_levenshtein(t, &track.recording.title);
-                            track_sim.max(rec_sim)
-                        })
-                        .unwrap_or(0.0);
-
-                    let artist_sim = tags
-                        .get("ARTIST")
-                        .and_then(|v| v.first())
-                        .map(|a| strsim::normalized_levenshtein(a, &resolved_artist))
-                        .unwrap_or(0.0);
-
-                    let album_sim = tags
-                        .get("ALBUM")
-                        .and_then(|v| v.first())
-                        .map(|a| strsim::normalized_levenshtein(a, &release.title))
-                        .unwrap_or(0.0);
-
-                    let track_number_match = tags
-                        .get("TRACKNUMBER")
-                        .and_then(|v| v.first())
-                        .and_then(|tn| tn.parse::<u32>().ok())
-                        .map(|tn| if tn == track.position { 1.0 } else { 0.0 })
-                        .unwrap_or(0.0);
-
-                    let elim_breakdown = PackingScoreBreakdown {
-                        acoustid_confidence: 0.0,
-                        duration_match,
-                        title_match: title_sim,
-                        artist_match: artist_sim,
-                        album_match: album_sim,
-                        track_number_match,
-                    };
-                    cost[ri][rj] = -weighted_composite(&elim_breakdown, &elimination_weights);
-                }
-            }
-
-            let col_to_row = if n > 0 {
-                kuhn_munkres(&cost, n)
-            } else {
-                Vec::new()
-            };
-            for (j, &row) in col_to_row.iter().enumerate().skip(1) {
-                if row == 0 {
-                    continue;
-                }
-                let ri = row - 1;
-                let rj = j - 1;
-                if ri >= n_unassigned || rj >= n_unfilled {
-                    continue;
-                }
-
-                // Map back to original indices
-                let ui = remaining_unassigned[ri];
-                let fi = remaining_unfilled[rj];
-
-                let (inode, _path, fingerprint_hex, dur_ms) = &all_unassigned[ui];
-                let (medium_pos, track_pos, track) = &unfilled[fi];
-                let corpus_tags = &unassigned_tags[ui];
-
-                // Compute full score breakdown for the elimination match
-                let mb_dur = track.length.or(track.recording.length);
-                let duration_match = match (*dur_ms, mb_dur) {
-                    (Some(corpus_dur), Some(mb_d)) if mb_d > 0 => {
-                        let ratio = (corpus_dur as f64 - mb_d as f64).abs() / mb_d as f64;
-                        if ratio > duration_tolerance_pct {
-                            0.0
-                        } else {
-                            1.0 - (ratio / duration_tolerance_pct)
-                        }
-                    }
-                    _ => 0.5,
-                };
-
-                let title_sim = corpus_tags
-                    .get("TITLE")
-                    .and_then(|v| v.first())
-                    .map(|t| {
-                        let track_sim = strsim::normalized_levenshtein(t, &track.title);
-                        let rec_sim = strsim::normalized_levenshtein(t, &track.recording.title);
-                        track_sim.max(rec_sim)
-                    })
-                    .unwrap_or(0.0);
-
-                let artist_sim = corpus_tags
-                    .get("ARTIST")
-                    .and_then(|v| v.first())
-                    .map(|a| strsim::normalized_levenshtein(a, &resolved_artist))
-                    .unwrap_or(0.0);
-
-                let album_sim = corpus_tags
-                    .get("ALBUM")
-                    .and_then(|v| v.first())
-                    .map(|a| strsim::normalized_levenshtein(a, &release.title))
-                    .unwrap_or(0.0);
-
-                let track_number_match = corpus_tags
-                    .get("TRACKNUMBER")
-                    .and_then(|v| v.first())
-                    .and_then(|tn| tn.parse::<u32>().ok())
-                    .map(|tn| if tn == *track_pos { 1.0 } else { 0.0 })
-                    .unwrap_or(0.0);
-
-                let breakdown = PackingScoreBreakdown {
-                    acoustid_confidence: 0.0,
-                    duration_match,
-                    title_match: title_sim,
-                    artist_match: artist_sim,
-                    album_match: album_sim,
-                    track_number_match,
-                };
-                let score = weighted_composite(&breakdown, &elimination_weights);
-                let breakdown_bytes = bincode::serialize(&breakdown).unwrap_or_default();
-
-                score_rows.push(PackingScoreRow {
-                    release_id: release_id.to_string(),
-                    inode: *inode,
-                    recording_id: track.recording.id.clone(),
-                    medium_pos: *medium_pos as i32,
-                    track_pos: *track_pos as i32,
-                    track_title: track.title.clone(),
-                    medium_format: release
-                        .media
-                        .iter()
-                        .find(|m| m.position == *medium_pos)
-                        .and_then(|m| m.format.clone()),
-                    track_number: track.number.clone(),
-                    score,
-                    score_breakdown: breakdown_bytes,
-                    is_optimal: true,
-                    match_method: 1,
-                    fingerprint_hex: fingerprint_hex.clone(),
-                    raw_duration_ms: *dur_ms,
-                });
-
-                elimination_count += 1;
-            }
+            let hungarian_rows = run_elimination_hungarian(
+                &remaining_unassigned, &remaining_unfilled,
+                &all_unassigned, &unfilled, &unassigned_tags, &file_medium,
+                release_id, &release, &resolved_artist,
+                duration_tolerance_pct, &elimination_weights,
+            );
+            elimination_count += hungarian_rows.len() as u32;
+            score_rows.extend(hungarian_rows);
         }
     }
 
@@ -1199,4 +1121,171 @@ pub fn execute_score_release_candidates(
     ));
 
     Result::success(computation, Vec::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_track(title: &str, rec_title: &str, position: u32, length: Option<i64>) -> musicbrainz::MbTrack {
+        musicbrainz::MbTrack {
+            position,
+            number: position.to_string(),
+            title: title.to_string(),
+            length,
+            recording: musicbrainz::MbTrackRecording {
+                id: format!("rec-{}", position),
+                title: rec_title.to_string(),
+                length,
+            },
+        }
+    }
+
+    fn tags_with(pairs: &[(&str, &str)]) -> HashMap<String, Vec<String>> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), vec![v.to_string()]))
+            .collect()
+    }
+
+    // --- compute_title_similarity_matrix ---
+
+    #[test]
+    fn test_title_similarity_matrix_exact_match() {
+        let tags = vec![
+            tags_with(&[("TITLE", "Song A")]),
+            tags_with(&[("TITLE", "Song B")]),
+        ];
+        let track_a = make_track("Song A", "Song A", 1, None);
+        let track_b = make_track("Song B", "Song B", 2, None);
+        let unfilled = vec![(1u32, 1u32, &track_a), (1, 2, &track_b)];
+
+        let matrix = compute_title_similarity_matrix(&tags, &unfilled);
+
+        assert_eq!(matrix.len(), 2);
+        assert!((matrix[0][0] - 1.0).abs() < 1e-10); // Song A → Song A
+        assert!((matrix[1][1] - 1.0).abs() < 1e-10); // Song B → Song B
+        assert!(matrix[0][1] < 0.9); // Song A → Song B should be low
+    }
+
+    #[test]
+    fn test_title_similarity_matrix_empty_tags() {
+        let tags: Vec<HashMap<String, Vec<String>>> = vec![HashMap::new()];
+        let track = make_track("Track", "Track", 1, None);
+        let unfilled = vec![(1u32, 1u32, &track)];
+
+        let matrix = compute_title_similarity_matrix(&tags, &unfilled);
+        assert!((matrix[0][0]).abs() < 1e-10); // No TITLE tag → 0.0
+    }
+
+    // --- find_unambiguous_preassignments ---
+
+    #[test]
+    fn test_preassignment_unambiguous_1to1() {
+        // File 0 matches only slot 0 (sim=1.0), File 1 matches only slot 1
+        let title_sims = vec![
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+        ];
+        let track_a = make_track("A", "A", 1, None);
+        let track_b = make_track("B", "B", 2, None);
+        let unfilled = vec![(1u32, 1u32, &track_a), (1, 2, &track_b)];
+        let file_medium = vec![None, None];
+
+        let result = find_unambiguous_preassignments(&title_sims, 0.9, &file_medium, &unfilled);
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&(0, 0)));
+        assert!(result.contains(&(1, 1)));
+    }
+
+    #[test]
+    fn test_preassignment_ambiguous_skipped() {
+        // File 0 matches both slots → ambiguous, no assignment
+        let title_sims = vec![
+            vec![1.0, 1.0],
+        ];
+        let track_a = make_track("A", "A", 1, None);
+        let track_b = make_track("B", "B", 2, None);
+        let unfilled = vec![(1u32, 1u32, &track_a), (1, 2, &track_b)];
+        let file_medium = vec![None];
+
+        let result = find_unambiguous_preassignments(&title_sims, 0.9, &file_medium, &unfilled);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_preassignment_respects_medium_affinity() {
+        // File 0 is on medium 1, but slot 0 is on medium 2 → blocked
+        let title_sims = vec![
+            vec![1.0, 0.5],
+        ];
+        let track_a = make_track("A", "A", 1, None);
+        let track_b = make_track("B", "B", 2, None);
+        let unfilled = vec![(2u32, 1u32, &track_a), (1, 2, &track_b)];
+        let file_medium = vec![Some(1u32)]; // File belongs to medium 1
+
+        let result = find_unambiguous_preassignments(&title_sims, 0.4, &file_medium, &unfilled);
+        // File 0 can only match slot 1 (medium 1), and if that's unambiguous...
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], (0, 1));
+    }
+
+    #[test]
+    fn test_preassignment_below_threshold_ignored() {
+        let title_sims = vec![
+            vec![0.5], // below threshold
+        ];
+        let track = make_track("A", "A", 1, None);
+        let unfilled = vec![(1u32, 1u32, &track)];
+        let file_medium = vec![None];
+
+        let result = find_unambiguous_preassignments(&title_sims, 0.9, &file_medium, &unfilled);
+        assert!(result.is_empty());
+    }
+
+    // --- build_elimination_score_row ---
+
+    #[test]
+    fn test_build_elimination_score_row_fields() {
+        let track = make_track("Test Track", "Test Track", 3, Some(200000));
+        let media = vec![musicbrainz::MbMedium {
+            position: 1,
+            format: Some("CD".to_string()),
+            tracks: vec![track.clone()],
+        }];
+        let breakdown = PackingScoreBreakdown {
+            acoustid_confidence: 0.0,
+            duration_match: 1.0,
+            title_match: 0.9,
+            artist_match: 0.8,
+            album_match: 0.7,
+            track_number_match: 1.0,
+        };
+        let weights = crate::config::PackingWeights {
+            acoustid_confidence: 0.0,
+            duration_match: 1.0,
+            title_match: 1.0,
+            artist_match: 1.0,
+            album_match: 1.0,
+            track_number_match: 1.0,
+        };
+
+        let row = build_elimination_score_row(
+            "rel-123", 42, &track, 1, 3, &media, &breakdown, &weights,
+            Some("abc123".to_string()), Some(200000),
+        );
+
+        assert_eq!(row.release_id, "rel-123");
+        assert_eq!(row.inode, 42);
+        assert_eq!(row.recording_id, "rec-3");
+        assert_eq!(row.medium_pos, 1);
+        assert_eq!(row.track_pos, 3);
+        assert_eq!(row.track_title, "Test Track");
+        assert_eq!(row.medium_format.as_deref(), Some("CD"));
+        assert!(row.is_optimal);
+        assert_eq!(row.match_method, 1);
+        assert_eq!(row.fingerprint_hex.as_deref(), Some("abc123"));
+        assert_eq!(row.raw_duration_ms, Some(200000));
+        assert!(row.score > 0.0);
+    }
 }

@@ -16,6 +16,7 @@ use crate::meta::signals::registry::TypedSignalWrite;
 
 use super::mis::MisCandidate;
 use super::types::{
+    build_manifest_map, build_manifest_map_owned,
     AlternativeRelease, ComponentData, Proposal, ProposalTier, SharedComponentData,
 };
 use crate::meta::computations::analysis::{Computation as AnalysisComputation, Result};
@@ -438,7 +439,45 @@ pub(super) fn emit_knot_component_signals(
         .filter(|(_, sel)| *sel)
         .map(|(idx, _)| *idx)
         .collect();
-    let proposals_data: Vec<KnotProposalEntry> = (0..component_proposals.len())
+    let proposals_data = build_knot_proposals_data(
+        component_proposals, &selected_set, manifest_map,
+    );
+
+    let mut contested: Vec<i64> = comp_inodes.into_iter().collect();
+    contested.sort_unstable();
+
+    let key = format!("{}:{}", tier.as_str(), knot_id);
+    signals_batch.push(TypedSignalWrite::PackingKnot(PackingKnotSignal {
+        key,
+        data: PackingKnotData {
+            tier: tier.as_str().to_string(),
+            knot_id,
+            classification,
+            ratio,
+            contested_inodes: contested,
+            proposals: proposals_data,
+        },
+    }));
+
+    // Knots are unresolved contention — emit the knot signal only, no picks.
+    // Contested inodes remain unclaimed for manual review.
+    if !signals_batch.is_empty() {
+        sender.write_typed_signal_batch(signals_batch, witness);
+    }
+
+    Vec::new()
+}
+
+/// Build the `KnotProposalEntry` list for a knot signal.
+///
+/// Each proposal gets an entry with its release metadata, assignment details,
+/// and whether it was selected by the greedy resolver.
+fn build_knot_proposals_data(
+    component_proposals: &[&Proposal],
+    selected_set: &HashSet<usize>,
+    manifest_map: &HashMap<&str, (&str, &str, i32)>,
+) -> Vec<KnotProposalEntry> {
+    (0..component_proposals.len())
         .map(|original_idx| {
             let proposal = component_proposals[original_idx];
             let selected = selected_set.contains(&original_idx);
@@ -475,31 +514,84 @@ pub(super) fn emit_knot_component_signals(
                 assignments,
             }
         })
-        .collect();
+        .collect()
+}
 
-    let mut contested: Vec<i64> = comp_inodes.into_iter().collect();
-    contested.sort_unstable();
-
-    let key = format!("{}:{}", tier.as_str(), knot_id);
-    signals_batch.push(TypedSignalWrite::PackingKnot(PackingKnotSignal {
-        key,
-        data: PackingKnotData {
-            tier: tier.as_str().to_string(),
-            knot_id,
-            classification,
-            ratio,
-            contested_inodes: contested,
-            proposals: proposals_data,
-        },
-    }));
-
-    // Knots are unresolved contention — emit the knot signal only, no picks.
-    // Contested inodes remain unclaimed for manual review.
-    if !signals_batch.is_empty() {
-        sender.write_typed_signal_batch(signals_batch, witness);
+/// Deduplicate proposals by inode signature.
+///
+/// Groups proposals by sorted inode set. For each group with multiple members,
+/// keeps only the highest-scoring proposal. Losers become `AlternativeRelease`
+/// siblings of the keeper. Requires a manifest map for release metadata lookup.
+///
+/// Returns `(deduped_proposals, siblings_per_deduped_index, removed_count)`.
+pub(super) fn dedup_by_signature(
+    proposals: Vec<Proposal>,
+    manifest_map: &HashMap<&str, (&str, &str)>,
+) -> (Vec<Proposal>, HashMap<usize, Vec<AlternativeRelease>>, usize) {
+    let mut sig_groups: HashMap<Vec<i64>, Vec<usize>> = HashMap::new();
+    for (i, p) in proposals.iter().enumerate() {
+        let mut sig: Vec<i64> = p.inode_set.iter().copied().collect();
+        sig.sort_unstable();
+        sig_groups.entry(sig).or_default().push(i);
     }
 
-    Vec::new()
+    let mut keep_indices: HashSet<usize> = HashSet::new();
+    let mut effective_siblings: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
+
+    for group in sig_groups.values() {
+        let best_idx = *group
+            .iter()
+            .max_by(|&&a, &&b| {
+                proposals[a]
+                    .total_score
+                    .partial_cmp(&proposals[b].total_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        keep_indices.insert(best_idx);
+
+        if group.len() > 1 {
+            let siblings: Vec<AlternativeRelease> = group
+                .iter()
+                .filter(|&&i| i != best_idx)
+                .map(|&i| {
+                    let p = &proposals[i];
+                    let release_id = &p.rows[0].release_id;
+                    let (title, artist) = manifest_map
+                        .get(release_id.as_str())
+                        .map(|&(t, a)| (t.to_string(), a.to_string()))
+                        .unwrap_or_default();
+                    AlternativeRelease {
+                        release_id: release_id.clone(),
+                        release_title: title,
+                        release_artist: artist,
+                        total_score: p.total_score,
+                    }
+                })
+                .collect();
+            if !siblings.is_empty() {
+                effective_siblings.insert(best_idx, siblings);
+            }
+        }
+    }
+
+    let removed = proposals.len() - keep_indices.len();
+
+    // Collect kept proposals preserving order, remapping sibling indices
+    let mut deduped: Vec<Proposal> = Vec::with_capacity(keep_indices.len());
+    let mut deduped_siblings: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
+
+    for (i, p) in proposals.into_iter().enumerate() {
+        if keep_indices.contains(&i) {
+            let deduped_idx = deduped.len();
+            if let Some(sibs) = effective_siblings.remove(&i) {
+                deduped_siblings.insert(deduped_idx, sibs);
+            }
+            deduped.push(p);
+        }
+    }
+
+    (deduped, deduped_siblings, removed)
 }
 
 /// Orchestrate a "partial" tier (FullMatch, Incomplete, or Single).
@@ -531,80 +623,14 @@ pub(super) fn orchestrate_partial_tier(
     let culled = pool_size - effective.len();
 
     // --- Step 2: Dedup by inode signature ---
-    // Multiple proposals wanting the exact same set of inodes keep only best-scoring.
-    // Losers become alternative siblings of the keeper.
-    let mut sig_groups: HashMap<Vec<i64>, Vec<usize>> = HashMap::new();
-    for (i, p) in effective.iter().enumerate() {
-        let mut sig: Vec<i64> = p.inode_set.iter().copied().collect();
-        sig.sort_unstable();
-        sig_groups.entry(sig).or_default().push(i);
-    }
-
-    // Load manifest for building AlternativeRelease metadata
     let manifest_for_siblings = read_only_db.get_packing_manifest().unwrap_or_default();
     let sibling_manifest_map: HashMap<&str, (&str, &str)> = manifest_for_siblings
         .iter()
         .map(|r| (r.release_id.as_str(), (r.release_title.as_str(), r.release_artist.as_str())))
         .collect();
 
-    let mut keep_indices: HashSet<usize> = HashSet::new();
-    // Map from effective index (keeper) → siblings
-    let mut effective_siblings: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
-
-    for group in sig_groups.values() {
-        // Find best-scorer in group
-        let best_idx = *group
-            .iter()
-            .max_by(|&&a, &&b| {
-                effective[a]
-                    .total_score
-                    .partial_cmp(&effective[b].total_score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .unwrap();
-        keep_indices.insert(best_idx);
-
-        if group.len() > 1 {
-            let siblings: Vec<AlternativeRelease> = group
-                .iter()
-                .filter(|&&i| i != best_idx)
-                .filter_map(|&i| {
-                    let p = &effective[i];
-                    let release_id = &p.rows[0].release_id;
-                    let (title, artist) = sibling_manifest_map
-                        .get(release_id.as_str())
-                        .map(|&(t, a)| (t.to_string(), a.to_string()))
-                        .unwrap_or_default();
-                    Some(AlternativeRelease {
-                        release_id: release_id.clone(),
-                        release_title: title,
-                        release_artist: artist,
-                        total_score: p.total_score,
-                    })
-                })
-                .collect();
-            if !siblings.is_empty() {
-                effective_siblings.insert(best_idx, siblings);
-            }
-        }
-    }
-    let dedup_removed = effective.len() - keep_indices.len();
-
-    // Collect kept proposals (preserving order for determinism)
-    // Build a mapping from effective index → deduped index
-    let mut deduped: Vec<Proposal> = Vec::with_capacity(keep_indices.len());
-    let mut deduped_siblings: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
-    let mut effective_to_deduped: HashMap<usize, usize> = HashMap::new();
-    for (i, p) in effective.into_iter().enumerate() {
-        if keep_indices.contains(&i) {
-            let deduped_idx = deduped.len();
-            effective_to_deduped.insert(i, deduped_idx);
-            if let Some(sibs) = effective_siblings.remove(&i) {
-                deduped_siblings.insert(deduped_idx, sibs);
-            }
-            deduped.push(p);
-        }
-    }
+    let (deduped, deduped_siblings, dedup_removed) =
+        dedup_by_signature(effective, &sibling_manifest_map);
 
     log_general(format!(
         "[COMPUTE] {} partial: pool={}, culled={} (tainted), deduped={} (identical sigs), {} pristine remain",
@@ -626,39 +652,13 @@ pub(super) fn orchestrate_partial_tier(
 
     // Load manifest + corpus paths for signal emission
     let manifest = read_only_db.get_packing_manifest().unwrap_or_default();
-    let manifest_map: HashMap<&str, (&str, &str, i32)> = manifest
-        .iter()
-        .map(|r| {
-            (
-                r.release_id.as_str(),
-                (
-                    r.release_title.as_str(),
-                    r.release_artist.as_str(),
-                    r.total_tracks,
-                ),
-            )
-        })
-        .collect();
+    let manifest_map = build_manifest_map(&manifest);
     let corpus_paths: HashMap<i64, String> = read_only_db
         .get_packing_inode_paths()
         .unwrap_or_default()
         .into_iter()
         .collect();
-
-    // Build owned manifest_map for component data
-    let manifest_map_owned: HashMap<String, (String, String, i32)> = manifest
-        .iter()
-        .map(|r| {
-            (
-                r.release_id.clone(),
-                (
-                    r.release_title.clone(),
-                    r.release_artist.clone(),
-                    r.total_tracks,
-                ),
-            )
-        })
-        .collect();
+    let manifest_map_owned = build_manifest_map_owned(&manifest);
 
     let mut spawned: Vec<AnalysisComputation> = Vec::new();
     let mut isolated_count = 0usize;
@@ -1191,5 +1191,137 @@ mod tests {
     fn test_components_empty() {
         let components = find_conflict_components(&[]);
         assert!(components.is_empty());
+    }
+
+    // --- dedup_by_signature ---
+
+    fn proposal_with_release(inodes: &[i64], release_id: &str, score: f64) -> Proposal {
+        use crate::db::queries::external::OptimalPackingScoreRow;
+        Proposal {
+            total_tracks: inodes.len() as i32,
+            rows: vec![OptimalPackingScoreRow {
+                release_id: release_id.to_string(),
+                inode: inodes[0],
+                recording_id: "rec-1".to_string(),
+                medium_pos: 1,
+                track_pos: 1,
+                track_title: "Track".to_string(),
+                medium_format: None,
+                track_number: "1".to_string(),
+                score,
+                score_breakdown: Vec::new(),
+                match_method: 0,
+                fingerprint_hex: None,
+                raw_duration_ms: None,
+            }],
+            inode_set: inodes.iter().copied().collect(),
+            total_score: score,
+            tier: ProposalTier::FullMatch,
+        }
+    }
+
+    #[test]
+    fn test_dedup_single_proposal() {
+        let proposals = vec![proposal_with_release(&[1, 2], "rel-A", 5.0)];
+        let manifest: HashMap<&str, (&str, &str)> = HashMap::new();
+
+        let (deduped, siblings, removed) = dedup_by_signature(proposals, &manifest);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(removed, 0);
+        assert!(siblings.is_empty());
+    }
+
+    #[test]
+    fn test_dedup_same_signature_keeps_best() {
+        // Two proposals with same inodes {1, 2} — keep higher score
+        let proposals = vec![
+            proposal_with_release(&[1, 2], "rel-A", 3.0),
+            proposal_with_release(&[1, 2], "rel-B", 5.0),
+        ];
+        let mut manifest: HashMap<&str, (&str, &str)> = HashMap::new();
+        manifest.insert("rel-A", ("Album A", "Artist A"));
+        manifest.insert("rel-B", ("Album B", "Artist B"));
+
+        let (deduped, siblings, removed) = dedup_by_signature(proposals, &manifest);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(removed, 1);
+        assert_eq!(deduped[0].rows[0].release_id, "rel-B"); // higher score
+        assert_eq!(siblings.get(&0).unwrap().len(), 1);
+        assert_eq!(siblings[&0][0].release_id, "rel-A");
+    }
+
+    #[test]
+    fn test_dedup_different_signatures_kept() {
+        // Different inode sets → both kept
+        let proposals = vec![
+            proposal_with_release(&[1, 2], "rel-A", 5.0),
+            proposal_with_release(&[3, 4], "rel-B", 5.0),
+        ];
+        let manifest: HashMap<&str, (&str, &str)> = HashMap::new();
+
+        let (deduped, _, removed) = dedup_by_signature(proposals, &manifest);
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_dedup_siblings_populated() {
+        let proposals = vec![
+            proposal_with_release(&[1, 2], "rel-A", 3.0),
+            proposal_with_release(&[1, 2], "rel-B", 5.0),
+            proposal_with_release(&[1, 2], "rel-C", 4.0),
+        ];
+        let mut manifest: HashMap<&str, (&str, &str)> = HashMap::new();
+        manifest.insert("rel-A", ("Album A", "Artist A"));
+        manifest.insert("rel-B", ("Album B", "Artist B"));
+        manifest.insert("rel-C", ("Album C", "Artist C"));
+
+        let (deduped, siblings, removed) = dedup_by_signature(proposals, &manifest);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(removed, 2);
+        // The winner should be rel-B (score 5.0)
+        assert_eq!(deduped[0].rows[0].release_id, "rel-B");
+        // Two siblings: rel-A and rel-C
+        let sibs = &siblings[&0];
+        assert_eq!(sibs.len(), 2);
+        let sib_ids: HashSet<&str> = sibs.iter().map(|s| s.release_id.as_str()).collect();
+        assert!(sib_ids.contains("rel-A"));
+        assert!(sib_ids.contains("rel-C"));
+    }
+
+    // --- build_knot_proposals_data ---
+
+    #[test]
+    fn test_knot_proposals_data_selected_flag() {
+        let p1 = proposal_with_release(&[1, 2], "rel-A", 5.0);
+        let p2 = proposal_with_release(&[2, 3], "rel-B", 3.0);
+        let proposals: Vec<&Proposal> = vec![&p1, &p2];
+
+        let mut selected = HashSet::new();
+        selected.insert(0usize); // Only first selected
+
+        let mut manifest: HashMap<&str, (&str, &str, i32)> = HashMap::new();
+        manifest.insert("rel-A", ("Album A", "Artist A", 2));
+        manifest.insert("rel-B", ("Album B", "Artist B", 2));
+
+        let data = build_knot_proposals_data(&proposals, &selected, &manifest);
+
+        assert_eq!(data.len(), 2);
+        assert!(data[0].selected);
+        assert!(!data[1].selected);
+        assert_eq!(data[0].release_id, "rel-A");
+        assert_eq!(data[1].release_id, "rel-B");
+    }
+
+    #[test]
+    fn test_knot_proposals_data_missing_manifest() {
+        let p = proposal_with_release(&[1], "rel-X", 1.0);
+        let proposals: Vec<&Proposal> = vec![&p];
+        let selected: HashSet<usize> = HashSet::new();
+        let manifest: HashMap<&str, (&str, &str, i32)> = HashMap::new();
+
+        let data = build_knot_proposals_data(&proposals, &selected, &manifest);
+        assert_eq!(data[0].release_title, "");
+        assert_eq!(data[0].release_artist, "");
     }
 }

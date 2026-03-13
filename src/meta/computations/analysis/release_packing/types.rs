@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::db::queries::external::{ExternalMatchRow, OptimalPackingScoreRow};
+use crate::db::queries::external::{ExternalMatchRow, OptimalPackingScoreRow, PackingManifestRow};
 use crate::meta::signals::data::PackingScoreBreakdown;
 
 // ============================================================================
@@ -330,6 +330,48 @@ pub(super) fn classify_proposal(
 // ============================================================================
 // Shared helpers
 // ============================================================================
+
+/// Build a manifest lookup map: `release_id → (title, artist, total_tracks)`.
+///
+/// This pattern appears in many packing stages — centralized here.
+pub(super) fn build_manifest_map(
+    manifest: &[PackingManifestRow],
+) -> HashMap<&str, (&str, &str, i32)> {
+    manifest
+        .iter()
+        .map(|r| {
+            (
+                r.release_id.as_str(),
+                (
+                    r.release_title.as_str(),
+                    r.release_artist.as_str(),
+                    r.total_tracks,
+                ),
+            )
+        })
+        .collect()
+}
+
+/// Build an owned manifest map: `release_id → (title, artist, total_tracks)`.
+///
+/// Used when the map must outlive the manifest slice (e.g. packaged into component data).
+pub(super) fn build_manifest_map_owned(
+    manifest: &[PackingManifestRow],
+) -> HashMap<String, (String, String, i32)> {
+    manifest
+        .iter()
+        .map(|r| {
+            (
+                r.release_id.clone(),
+                (
+                    r.release_title.clone(),
+                    r.release_artist.clone(),
+                    r.total_tracks,
+                ),
+            )
+        })
+        .collect()
+}
 
 /// Group external match rows by inode, keeping all recordings per inode.
 pub(super) fn group_all_per_inode(

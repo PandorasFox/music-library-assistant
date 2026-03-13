@@ -445,6 +445,11 @@ mod tests {
     use super::*;
     use crate::config::types::{Config, Opinions};
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    /// Env vars are process-global. Tests that call set_var + apply_env_overrides
+    /// + remove_var race when run in parallel. This mutex serializes them.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Build a minimal Config for testing (no filesystem needed).
     fn test_config() -> Config {
@@ -458,6 +463,7 @@ mod tests {
 
     #[test]
     fn curated_mm_root_overrides_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let mut config = test_config();
         assert_eq!(config.root, PathBuf::from("/original/root"));
 
@@ -470,6 +476,7 @@ mod tests {
 
     #[test]
     fn curated_mm_worker_threads_overrides_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let mut config = test_config();
         assert_eq!(config.opinions.performance.worker_threads, None);
 
@@ -482,6 +489,7 @@ mod tests {
 
     #[test]
     fn curated_mm_db_cache_accepts_size_string() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let mut config = test_config();
 
         env::set_var("MM_DB_CACHE", "1gb");
@@ -493,6 +501,7 @@ mod tests {
 
     #[test]
     fn curated_mm_watcher_poll_interval_accepts_humantime() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let mut config = test_config();
 
         env::set_var("MM_WATCHER_POLL_INTERVAL", "5m");
@@ -504,6 +513,7 @@ mod tests {
 
     #[test]
     fn generic_mm_cfg_overrides_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let mut config = test_config();
         assert!((config.opinions.duplicate_analysis.fingerprint_similarity_threshold - 95.0).abs() < f64::EPSILON);
 
@@ -516,6 +526,7 @@ mod tests {
 
     #[test]
     fn generic_unknown_field_does_not_panic() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let mut config = test_config();
         let original = config.clone();
 
@@ -523,7 +534,7 @@ mod tests {
         apply_env_overrides(&mut config);
         env::remove_var("MM_CFG__NONEXISTENT__FAKE_FIELD");
 
-        // Config unchanged (except for any curated vars, which we didn't set)
+        // Config unchanged (no curated vars leaked from other tests)
         assert_eq!(config.root, original.root);
     }
 

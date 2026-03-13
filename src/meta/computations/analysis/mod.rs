@@ -353,116 +353,111 @@ impl Computation {
     pub fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
         match self {
             Computation::ScheduleContentAnalysis { ref scope } => {
-                execute_schedule_content_analysis(ctx.read_db, scope)
+                execute_schedule_content_analysis(ctx, scope)
             }
             Computation::DetectFingerprintOverlaps => {
-                execute_detect_fingerprint_overlaps(ctx.read_db, ctx.witness)
+                execute_detect_fingerprint_overlaps(ctx)
             }
             Computation::DetectDuplicateInodes => {
-                execute_detect_duplicate_inodes(ctx.read_db, ctx.witness)
+                execute_detect_duplicate_inodes(ctx)
             }
             Computation::DetectMissingTags => {
-                execute_detect_missing_tags(ctx.read_db, ctx.witness)
+                execute_detect_missing_tags(ctx)
             }
             Computation::DetectMetadataDuplicates => {
-                execute_detect_metadata_duplicates(ctx.read_db, ctx.witness)
+                execute_detect_metadata_duplicates(ctx)
             }
             Computation::DetectTagCanonicalizations => {
-                execute_detect_tag_canonicalizations(ctx.read_db, ctx.witness)
+                execute_detect_tag_canonicalizations(ctx)
             }
             Computation::DetectInconsistentAlbumArtist => {
-                execute_detect_inconsistent_album_artist(ctx.read_db, ctx.witness)
+                execute_detect_inconsistent_album_artist(ctx)
             }
             Computation::DetectCompoundTagValues => {
-                execute_detect_compound_tag_values(ctx.read_db, ctx.witness)
+                execute_detect_compound_tag_values(ctx)
             }
             Computation::DetectCompoundTagsForInode { inode } => {
-                execute_detect_compound_tags_for_inode(ctx.read_db, *inode, ctx.witness)
+                execute_detect_compound_tags_for_inode(ctx, *inode)
             }
             Computation::DetectShitFormats => {
-                execute_detect_shit_formats(ctx.read_db, ctx.witness)
+                execute_detect_shit_formats(ctx)
             }
             Computation::AnalyzeFingerprintOverlaps => {
-                execute_analyze_fingerprint_overlaps(ctx.read_db, ctx.witness)
+                execute_analyze_fingerprint_overlaps(ctx)
             }
             Computation::DetectCrossSourceOverlaps => {
-                execute_detect_cross_source_overlaps(ctx.read_db, ctx.witness)
+                execute_detect_cross_source_overlaps(ctx)
             }
             Computation::DetectDeployConflicts => {
-                execute_detect_deploy_conflicts(ctx.read_db, ctx.witness)
+                execute_detect_deploy_conflicts(ctx)
             }
             Computation::DetectReleaseOverlaps => {
-                execute_detect_release_overlaps(ctx.read_db, ctx.witness)
+                execute_detect_release_overlaps(ctx)
             }
             Computation::DeriveDeployHealthSignals {
                 library_name,
                 library_root,
                 corpus_path_prefixes,
             } => execute_derive_deploy_health_signals(
-                ctx.read_db,
+                ctx,
                 library_name,
                 library_root,
                 corpus_path_prefixes,
-                ctx.witness,
             ),
             Computation::DeriveCorpusDeployStatus => {
-                execute_derive_corpus_deploy_status(ctx.read_db, ctx.witness)
+                execute_derive_corpus_deploy_status(ctx)
             }
             Computation::DetectInboxCorpusMatches => {
-                execute_detect_inbox_corpus_matches(ctx.read_db, ctx.witness)
+                execute_detect_inbox_corpus_matches(ctx)
             }
             Computation::DetectInboxTagCanonicity => {
-                execute_detect_inbox_tag_canonicity(ctx.read_db, ctx.witness)
+                execute_detect_inbox_tag_canonicity(ctx)
             }
             Computation::DetectInboxMissingTags => {
-                execute_detect_inbox_missing_tags(ctx.read_db, ctx.witness)
+                execute_detect_inbox_missing_tags(ctx)
             }
             Computation::DetectInboxCompoundTags => {
-                execute_detect_inbox_compound_tags(ctx.read_db, ctx.witness)
+                execute_detect_inbox_compound_tags(ctx)
             }
             Computation::DetectDiscExtractions => {
-                execute_detect_disc_extractions(ctx.read_db, ctx.witness)
+                execute_detect_disc_extractions(ctx)
             }
             Computation::DetectPathTagMismatches => {
-                execute_detect_path_tag_mismatches(ctx.read_db, ctx.witness)
+                execute_detect_path_tag_mismatches(ctx)
             }
-            Computation::PackReleases => execute_pack_releases(ctx.read_db, ctx.witness),
+            Computation::PackReleases => execute_pack_releases(ctx),
             Computation::ScoreReleaseCandidates { ref release_id } => {
-                execute_score_release_candidates(ctx.read_db, release_id, ctx.witness)
+                execute_score_release_candidates(ctx, release_id)
             }
             Computation::ComputeReleaseMappings => {
-                execute_compute_release_mappings(ctx.read_db, ctx.witness)
+                execute_compute_release_mappings(ctx)
             }
             Computation::MapPerfectReleases { ref state } => {
-                execute_map_perfect_releases(state, ctx.read_db, ctx.witness)
+                execute_map_perfect_releases(ctx, state)
             }
             Computation::MapFullMatchReleases { ref state } => {
-                execute_map_full_match_releases(state, ctx.read_db, ctx.witness)
+                execute_map_full_match_releases(ctx, state)
             }
             Computation::MapIncompleteReleases { ref state } => {
-                execute_map_incomplete_releases(state, ctx.read_db, ctx.witness)
+                execute_map_incomplete_releases(ctx, state)
             }
             Computation::MapSingleReleases { ref state } => {
-                execute_map_single_releases(state, ctx.read_db, ctx.witness)
+                execute_map_single_releases(ctx, state)
             }
             Computation::ResolvePackingComponent { ref data } => {
-                execute_resolve_packing_component(data, ctx.read_db, ctx.witness)
+                execute_resolve_packing_component(ctx, data)
             }
             Computation::EmitUnmatchedSignals => {
-                execute_emit_unmatched_signals(ctx.read_db, ctx.witness)
+                execute_emit_unmatched_signals(ctx)
             }
             Computation::DeriveExternalMatches => {
-                execute_derive_external_matches(ctx.read_db, ctx.witness)
+                execute_derive_external_matches(ctx)
             }
             Computation::SeedCompoundTagDirtyInodes { ref new_separators } => {
-                execute_seed_compound_tag_dirty_inodes(
-                    ctx.read_db,
-                    new_separators,
-                    ctx.witness,
-                )
+                execute_seed_compound_tag_dirty_inodes(ctx, new_separators)
             }
             Computation::IndexObservedImages { ref images } => {
-                execute_index_observed_images(images, ctx.witness)
+                execute_index_observed_images(ctx, images)
             }
         }
     }

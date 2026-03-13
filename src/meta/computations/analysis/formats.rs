@@ -4,10 +4,9 @@
 
 
 use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::drop_stale_corpus_signal;
-use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::signals::data::{ShitFormatSignal};
 use crate::meta::signals::registry::TypedSignalWrite;
 
@@ -31,9 +30,10 @@ const SHIT_FORMAT_COMPUTATION: &str = "shit_format";
 /// of scanning the entire corpus. Format is immutable after indexing, so only
 /// newly-indexed files need checking.
 pub fn execute_detect_shit_formats(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DetectShitFormats;
 
     let sender = require_sender!(computation);

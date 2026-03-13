@@ -6,7 +6,7 @@
 use crate::corpus::paths;
 use crate::corpus::tags;
 use crate::logging::log_general;
-use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::traits::ComputationContext;
 use crate::witch::fs_watcher::ObservedImage;
 
 pub(crate) use mm_meta::tags::{COVER_BACK_NAMES, COVER_FRONT_NAMES};
@@ -19,9 +19,10 @@ use super::{Computation, Result};
 /// executor extracts format, dimensions, and role from the file content,
 /// then writes to both `files` and `image_info` tables.
 pub fn execute_index_observed_images(
+    ctx: &ComputationContext<'_>,
     images: &[ObservedImage],
-    witness: &ComputationWitness,
 ) -> Result {
+    let witness = ctx.witness;
     let computation = Computation::IndexObservedImages { images: images.to_vec() };
     let sender = require_sender!(computation);
 

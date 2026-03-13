@@ -16,6 +16,7 @@ use crate::meta::computations::helpers::{
     reconcile_aggregate_signals, reconcile_corpus_signals, ComputedAggregateSignal,
     ComputedCorpusSignal,
 };
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
     DeployConflictSignal, DeployLifecyclePhase, DeployReadySignal, DeployedHealthySignal,
@@ -42,9 +43,10 @@ struct PrecomputedFile {
 
 /// Execute DetectDeployConflicts - bulk detection of deploy path collisions.
 pub fn execute_detect_deploy_conflicts(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DetectDeployConflicts;
 
     let sender = require_sender!(computation);
@@ -128,22 +130,15 @@ pub fn execute_detect_deploy_conflicts(
 /// target the same album directory, emits a ReleaseOverlapSignal.
 /// Intra-source overlaps (same source, different release dirs) are skipped.
 pub fn execute_detect_release_overlaps(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DetectReleaseOverlaps;
 
     let sender = require_sender!(computation);
 
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(_) => {
-            return Result::failure(
-                computation,
-                "Failed to load config".to_string(),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     let healthy_signals = match read_only_db.get_healthy_file_signals() {
         Ok(v) => v,
@@ -311,12 +306,13 @@ pub fn execute_detect_release_overlaps(
 /// Reads library file data from files table (zone='library') and compares against
 /// corpus index to identify leftovers and stale deployments.
 pub fn execute_derive_deploy_health_signals(
-    read_only_db: &ReadOnlyDb<'_>,
+    ctx: &ComputationContext<'_>,
     library_name: &str,
-    library_root: &Path,
-    corpus_path_prefixes: &[std::path::PathBuf],
-    witness: &ComputationWitness,
+    library_root: &PathBuf,
+    corpus_path_prefixes: &[PathBuf],
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DeriveDeployHealthSignals {
         library_name: library_name.to_string(),
         library_root: library_root.to_path_buf(),
@@ -773,9 +769,10 @@ fn compute_expected_library_path(
 /// - DeployReady: healthy file not in any library
 /// - DeployedHealthy: healthy file correctly deployed (in library, not stale)
 pub fn execute_derive_corpus_deploy_status(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DeriveCorpusDeployStatus;
 
     let sender = require_sender!(computation);
@@ -821,15 +818,7 @@ pub fn execute_derive_corpus_deploy_status(
     }
 
     // Get deploy-configured corpus paths to filter healthy files
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(_) => {
-            return Result::failure(
-                computation,
-                "Failed to load config".to_string(),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     // Phase 1: Compute deploy paths for ALL indexed corpus files to build
     // the collision map.  A file cannot be DeployReady if ANY other corpus

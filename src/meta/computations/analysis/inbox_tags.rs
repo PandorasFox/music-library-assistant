@@ -23,11 +23,10 @@ type TagNormalizer<'a> = Vec<(&'a str, Box<dyn Fn(&str) -> String>)>;
 use crate::corpus::health::normalization::{
     normalize_album, normalize_album_artist, normalize_artist, normalize_genre,
 };
-use crate::db::ReadOnlyDb;
 use crate::zones::TaggedZone;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{reconcile_aggregate_signals, ComputedAggregateSignal};
-use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::signals::data::{
     InboxCompoundTagSignal, InboxMissingTagSignal,
     InboxTagCanonicityData, InboxTagCanonicitySignal, MissingTagData};
@@ -46,22 +45,15 @@ use super::{Computation, Result};
 /// 5. Group non-matching inbox values by normalized key
 /// 6. Emit InboxTagCanonicitySignal per group with corpus variants
 pub fn execute_detect_inbox_tag_canonicity(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DetectInboxTagCanonicity;
 
     let sender = require_sender!(computation);
 
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     let strip_format_suffixes = config.opinions.canonicalization.strip_album_format_suffixes;
 
@@ -212,22 +204,15 @@ pub fn execute_detect_inbox_tag_canonicity(
 /// - Skips ALBUM_ARTIST from required set when `album_artist_only_required_if_compilation`
 ///   is true (will be caught post-intake)
 pub fn execute_detect_inbox_missing_tags(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DetectInboxMissingTags;
 
     let sender = require_sender!(computation);
 
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     let mut required_tags: HashSet<String> = config
         .opinions
@@ -330,22 +315,15 @@ pub fn execute_detect_inbox_missing_tags(
 /// 4. Write/clear per-inode InboxCompoundTagSignal
 /// 5. Clean up signals for inodes no longer in inbox healthy set
 pub fn execute_detect_inbox_compound_tags(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DetectInboxCompoundTags;
 
     let sender = require_sender!(computation);
 
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     let tag_splitting = &config.opinions.tag_splitting;
     let collab_keywords: Vec<String> = tag_splitting

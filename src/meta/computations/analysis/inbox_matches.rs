@@ -7,10 +7,9 @@
 
 
 use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpusSignal};
-use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::signals::data::{
     CorpusMatchQuality, InboxCorpusMatch, InboxCorpusMatchData, InboxCorpusMatchSignal};
 use crate::meta::signals::registry::TypedSignalWrite;
@@ -25,23 +24,16 @@ use super::{Computation, Result};
 /// within duration tolerance, using the same similarity threshold as duplicate
 /// detection. Emits InboxCorpusMatchSignal for matches.
 pub fn execute_detect_inbox_corpus_matches(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DetectInboxCorpusMatches;
 
     let sender = require_sender!(computation);
 
     // Load config for similarity threshold and duration tolerance
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     let similarity_threshold = config
         .opinions

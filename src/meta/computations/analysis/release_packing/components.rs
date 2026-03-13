@@ -1,10 +1,12 @@
 //! Component discovery, knot extraction, and per-component MIS solving.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use crate::db::write_thread::{self};
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
     AlternativeReleasePackingData, AlternativeReleasePackingSignal,
@@ -25,7 +27,7 @@ use crate::meta::computations::analysis::{Computation as AnalysisComputation, Re
 ///
 /// Two proposals conflict if they share any inode. Returns a list of
 /// components, each being a sorted Vec of indices into the input slice.
-pub(super) fn find_conflict_components(proposals: &[Proposal]) -> Vec<Vec<usize>> {
+pub(super) fn find_conflict_components(proposals: &[Arc<Proposal>]) -> Vec<Vec<usize>> {
     let n = proposals.len();
     if n == 0 {
         return Vec::new();
@@ -525,9 +527,9 @@ fn build_knot_proposals_data(
 ///
 /// Returns `(deduped_proposals, siblings_per_deduped_index, removed_count)`.
 pub(super) fn dedup_by_signature(
-    proposals: Vec<Proposal>,
+    proposals: Vec<Arc<Proposal>>,
     manifest_map: &HashMap<&str, (&str, &str)>,
-) -> (Vec<Proposal>, HashMap<usize, Vec<AlternativeRelease>>, usize) {
+) -> (Vec<Arc<Proposal>>, HashMap<usize, Vec<AlternativeRelease>>, usize) {
     let mut sig_groups: HashMap<Vec<i64>, Vec<usize>> = HashMap::new();
     for (i, p) in proposals.iter().enumerate() {
         let mut sig: Vec<i64> = p.inode_set.iter().copied().collect();
@@ -578,7 +580,7 @@ pub(super) fn dedup_by_signature(
     let removed = proposals.len() - keep_indices.len();
 
     // Collect kept proposals preserving order, remapping sibling indices
-    let mut deduped: Vec<Proposal> = Vec::with_capacity(keep_indices.len());
+    let mut deduped: Vec<Arc<Proposal>> = Vec::with_capacity(keep_indices.len());
     let mut deduped_siblings: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
 
     for (i, p) in proposals.into_iter().enumerate() {
@@ -601,7 +603,7 @@ pub(super) fn dedup_by_signature(
 ///
 /// Returns (spawned_computations, log_message).
 pub(super) fn orchestrate_partial_tier(
-    pool: Vec<Proposal>,
+    pool: Vec<Arc<Proposal>>,
     tier: ProposalTier,
     assigned_inodes: &HashSet<i64>,
     knot_ratio: f64,
@@ -616,7 +618,7 @@ pub(super) fn orchestrate_partial_tier(
     let pool_size = pool.len();
 
     // --- Step 1: Cull tainted proposals ---
-    let effective: Vec<Proposal> = pool
+    let effective: Vec<Arc<Proposal>> = pool
         .into_iter()
         .filter(|p| p.inode_set.iter().all(|i| !assigned_inodes.contains(i)))
         .collect();
@@ -653,12 +655,12 @@ pub(super) fn orchestrate_partial_tier(
     // Load manifest + corpus paths for signal emission
     let manifest = read_only_db.get_packing_manifest().unwrap_or_default();
     let manifest_map = build_manifest_map(&manifest);
-    let corpus_paths: HashMap<i64, String> = read_only_db
+    let corpus_paths: Arc<HashMap<i64, String>> = Arc::new(read_only_db
         .get_packing_inode_paths()
         .unwrap_or_default()
         .into_iter()
-        .collect();
-    let manifest_map_owned = build_manifest_map_owned(&manifest);
+        .collect());
+    let manifest_map_owned: Arc<HashMap<String, (String, String, i32)>> = Arc::new(build_manifest_map_owned(&manifest));
 
     let mut spawned: Vec<AnalysisComputation> = Vec::new();
     let mut isolated_count = 0usize;
@@ -706,7 +708,7 @@ pub(super) fn orchestrate_partial_tier(
             };
 
             let component_proposals: Vec<&Proposal> =
-                component.iter().map(|&i| &deduped[i]).collect();
+                component.iter().map(|&i| &*deduped[i]).collect();
 
             emit_knot_component_signals(
                 knot_id,
@@ -730,21 +732,14 @@ pub(super) fn orchestrate_partial_tier(
             // Clean component — spawn solver
             // Remap deduped indices to component-local indices for signature_siblings
             let mut component_siblings: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
-            let component_proposals: Vec<Proposal> = component
+            let component_proposals: Vec<Arc<Proposal>> = component
                 .iter()
                 .enumerate()
                 .map(|(local_idx, &deduped_idx)| {
                     if let Some(sibs) = deduped_siblings.get(&deduped_idx) {
                         component_siblings.insert(local_idx, sibs.clone());
                     }
-                    let p = &deduped[deduped_idx];
-                    Proposal {
-                        total_tracks: p.total_tracks,
-                        rows: p.rows.clone(),
-                        inode_set: p.inode_set.clone(),
-                        total_score: p.total_score,
-                        tier: p.tier,
-                    }
+                    Arc::clone(&deduped[deduped_idx])
                 })
                 .collect();
 
@@ -752,8 +747,8 @@ pub(super) fn orchestrate_partial_tier(
                 data: SharedComponentData::new(ComponentData {
                     proposals: component_proposals,
                     tier,
-                    corpus_paths: corpus_paths.clone(),
-                    manifest_map: manifest_map_owned.clone(),
+                    corpus_paths: Arc::clone(&corpus_paths),
+                    manifest_map: Arc::clone(&manifest_map_owned),
                     signature_siblings: component_siblings,
                 }),
             });
@@ -785,10 +780,10 @@ pub(super) fn orchestrate_partial_tier(
 /// Self-contained: builds local conflict graph, solves, emits signals.
 /// Spawned in parallel by tier orchestrators.
 pub(crate) fn execute_resolve_packing_component(
+    ctx: &ComputationContext<'_>,
     shared: &SharedComponentData,
-    _read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
 ) -> Result {
+    let witness = ctx.witness;
     let computation = AnalysisComputation::ResolvePackingComponent {
         data: shared.clone(),
     };
@@ -832,12 +827,12 @@ pub(crate) fn execute_resolve_packing_component(
         .collect();
 
     // Load low-confidence thresholds from config
-    let (lc_acoustid_ratio, lc_album_match) = match crate::config::load_config() {
-        Ok(c) => (
+    let (lc_acoustid_ratio, lc_album_match) = match ctx.snapshot.config.as_deref() {
+        Some(c) => (
             c.opinions.release_packing.low_confidence_max_acoustid_ratio,
             c.opinions.release_packing.low_confidence_max_album_match,
         ),
-        Err(_) => {
+        None => {
             let d = crate::config::ReleasePackingOpinions::default();
             (d.low_confidence_max_acoustid_ratio, d.low_confidence_max_album_match)
         }
@@ -1076,7 +1071,7 @@ fn emit_va_override_from_competing(
     release_title: &str,
     release_artist: &str,
     winner_inodes: &HashSet<i64>,
-    all_proposals: &[Proposal],
+    all_proposals: &[Arc<Proposal>],
     manifest_map: &HashMap<&str, (&str, &str, i32)>,
     signals_batch: &mut Vec<TypedSignalWrite>,
 ) {
@@ -1121,14 +1116,14 @@ mod tests {
     use super::*;
     use mm_utils::t;
 
-    fn proposal(inodes: &[i64]) -> Proposal {
-        Proposal {
+    fn proposal(inodes: &[i64]) -> Arc<Proposal> {
+        Arc::new(Proposal {
             total_tracks: inodes.len() as i32,
             rows: Vec::new(),
             inode_set: inodes.iter().copied().collect(),
             total_score: 1.0,
             tier: ProposalTier::FullMatch,
-        }
+        })
     }
 
     #[test]
@@ -1196,9 +1191,9 @@ mod tests {
 
     // --- dedup_by_signature ---
 
-    fn proposal_with_release(inodes: &[i64], release_id: &str, score: f64) -> Proposal {
+    fn proposal_with_release(inodes: &[i64], release_id: &str, score: f64) -> Arc<Proposal> {
         use crate::db::queries::external::OptimalPackingScoreRow;
-        Proposal {
+        Arc::new(Proposal {
             total_tracks: inodes.len() as i32,
             rows: vec![OptimalPackingScoreRow {
                 release_id: release_id.to_string(),
@@ -1218,7 +1213,7 @@ mod tests {
             inode_set: inodes.iter().copied().collect(),
             total_score: score,
             tier: ProposalTier::FullMatch,
-        }
+        })
     }
 
     #[test]
@@ -1296,7 +1291,7 @@ mod tests {
     fn test_knot_proposals_data_selected_flag() {
         let p1 = proposal_with_release(&[1, 2], "rel-A", 5.0);
         let p2 = proposal_with_release(&[2, 3], "rel-B", 3.0);
-        let proposals: Vec<&Proposal> = vec![&p1, &p2];
+        let proposals: Vec<&Proposal> = vec![&*p1, &*p2];
 
         let mut selected = HashSet::new();
         selected.insert(0usize); // Only first selected
@@ -1317,7 +1312,7 @@ mod tests {
     #[test]
     fn test_knot_proposals_data_missing_manifest() {
         let p = proposal_with_release(&[1], "rel-X", 1.0);
-        let proposals: Vec<&Proposal> = vec![&p];
+        let proposals: Vec<&Proposal> = vec![&*p];
         let selected: HashSet<usize> = HashSet::new();
         let manifest: HashMap<&str, (&str, &str, i32)> = HashMap::new();
 

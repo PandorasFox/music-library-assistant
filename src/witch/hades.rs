@@ -147,8 +147,10 @@ fn run_hades(
     let mut pool = build_pool(initial_threads);
 
     // Atomic config store — snapshot creation is just an Arc clone from here.
+    // Stores Option<Arc<Config>> so snapshot creation is a cheap Arc clone, not a deep copy.
     // None only during AwaitingSetup (no config on disk yet).
-    let config: ArcSwap<Option<Config>> = ArcSwap::from_pointee(initial_config);
+    let config: ArcSwap<Option<Arc<Config>>> =
+        ArcSwap::from_pointee(initial_config.map(Arc::new));
 
     // Internal channel: rayon workers → Hades loop
     let (result_tx, result_rx) = mpsc::channel::<TaskResult>();
@@ -157,11 +159,11 @@ fn run_hades(
         // Check for commands (non-blocking with short timeout)
         match command_rx.recv_timeout(Duration::from_millis(5)) {
             Ok(HadesCommand::Dispatch { task, label }) => {
-                // Build a snapshot for this task — Arc clones from the ArcSwap
+                // Build a snapshot for this task — just Arc refcount bumps
                 let snapshot = {
                     let guard = config.load();
                     HadesSnapshot {
-                        config: guard.as_ref().as_ref().map(|c| Arc::new(c.clone())),
+                        config: (**guard).clone(),
                     }
                 };
                 let tx = result_tx.clone();
@@ -202,7 +204,7 @@ fn run_hades(
             }
             Ok(HadesCommand::UpdateConfig { config: new_config, opinions }) => {
                 // Swap config atomically — next dispatched task sees it immediately
-                config.store(Arc::new(Some(new_config)));
+                config.store(Arc::new(Some(Arc::new(new_config))));
 
                 let new_thread_count = opinions
                     .worker_threads
@@ -248,7 +250,7 @@ fn run_hades(
         while let Ok(result) = result_rx.try_recv() {
             // Intercept config updates — Hades sees them before the Witch
             if let Some(ref new_config) = result.config_update {
-                config.store(Arc::new(Some(new_config.clone())));
+                config.store(Arc::new(Some(Arc::new(new_config.clone()))));
             }
             let _ = message_tx.send(HadesMessage::Result(result));
         }

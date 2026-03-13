@@ -1,9 +1,9 @@
 //! Schedule Content Analysis executor.
 
 
-use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::get_configured_library_names;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::recomputation::RecomputationScope;
 
 use super::{Computation, Result};
@@ -15,7 +15,7 @@ use super::{Computation, Result};
 /// - `scope = Some(s)`: post-mutation — spawn only computations whose domains
 ///   overlap with `s`.
 pub fn execute_schedule_content_analysis(
-    read_only_db: &ReadOnlyDb<'_>,
+    ctx: &ComputationContext<'_>,
     scope: &Option<RecomputationScope>,
 ) -> Result {
     let run_all = scope.is_none();
@@ -77,8 +77,8 @@ pub fn execute_schedule_content_analysis(
     // Deploy health: tags OR deploy
     if run_all || s.touches_any(&[RecomputationScope::TAGS, RecomputationScope::DEPLOY]) {
         // Spawn DeriveDeployHealthSignals for each configured library
-        if let Ok(config) = crate::config::load_config() {
-            let library_names = get_configured_library_names(&config);
+        if let Some(config) = ctx.snapshot.config.as_deref() {
+            let library_names = get_configured_library_names(config);
             log_general(format!(
                 "[COMPUTE] ScheduleContentAnalysis: libraries_dir={:?}, configured_libraries={:?}",
                 config.libraries_dir(),
@@ -129,9 +129,6 @@ pub fn execute_schedule_content_analysis(
         spawn.len(),
         total_possible
     ));
-
-    // Suppress unused read_only_db warning - not used in this function
-    let _ = read_only_db;
 
     Result::success(
         Computation::ScheduleContentAnalysis { scope: *scope },

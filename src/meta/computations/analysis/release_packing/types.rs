@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::corpus::tags::TagSet;
 use crate::db::queries::external::{ExternalMatchRow, OptimalPackingScoreRow, PackingManifestRow};
@@ -141,10 +142,10 @@ pub(crate) struct AlternativeRelease {
 
 /// Data for a single connected component to be solved independently.
 pub(crate) struct ComponentData {
-    pub proposals: Vec<Proposal>,
+    pub proposals: Vec<Arc<Proposal>>,
     pub tier: ProposalTier,
-    pub corpus_paths: HashMap<i64, String>,
-    pub manifest_map: HashMap<String, (String, String, i32)>,
+    pub corpus_paths: Arc<HashMap<i64, String>>,
+    pub manifest_map: Arc<HashMap<String, (String, String, i32)>>,
     /// Per proposal index in `proposals`: dedup-removed siblings with identical inode signature.
     pub signature_siblings: HashMap<usize, Vec<AlternativeRelease>>,
 }
@@ -205,10 +206,10 @@ impl<'de> serde::Deserialize<'de> for SharedComponentData {
 /// per-component within each tier — no accumulation across rounds.
 pub(crate) struct ReleaseMappingState {
     /// Proposal pools — each consumed by its corresponding tier orchestrator.
-    pub perfect_pool: Vec<Proposal>,
-    pub full_match_pool: Vec<Proposal>,
-    pub incomplete_pool: Vec<Proposal>,
-    pub single_pool: Vec<Proposal>,
+    pub perfect_pool: Vec<Arc<Proposal>>,
+    pub full_match_pool: Vec<Arc<Proposal>>,
+    pub incomplete_pool: Vec<Arc<Proposal>>,
+    pub single_pool: Vec<Arc<Proposal>>,
     /// Knot extraction threshold: connected components where
     /// proposals/inodes >= this ratio are too tangled for MIS (many releases
     /// competing over few files). Extracted and resolved by best-scorer.

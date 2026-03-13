@@ -8,11 +8,10 @@ use std::collections::HashMap;
 
 use crate::db::queries::external::ExternalMatchRow;
 use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::external::acoustid::{self, AcoustIdRecording, AcoustIdResponse};
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpusSignal};
-use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::external::ExternalSource;
 use crate::meta::signals::data::{
     ExternalMatchData, ExternalMatchSignal, ExternalTagDiff, MatchClassification};
@@ -22,9 +21,10 @@ use super::{Computation, Result};
 
 /// Execute DeriveExternalMatches — compare AcoustID metadata against corpus tags.
 pub fn execute_derive_external_matches(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DeriveExternalMatches;
 
     let sender = require_sender!(computation);

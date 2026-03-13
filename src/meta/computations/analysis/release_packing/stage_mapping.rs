@@ -1,11 +1,12 @@
 //! Stage 3: ComputeReleaseMappings and tier orchestrators (MapPerfect/FullMatch/Incomplete/Single).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::db::write_thread::{self};
 use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
-use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::computations::{Computation, PipelineStage};
 use crate::meta::signals::data::{
     AlternativeReleasePackingSignal, PackedReleaseSignal, PackingKnotSignal,
@@ -33,9 +34,10 @@ use crate::meta::computations::analysis::{Computation as AnalysisComputation, Re
 /// Loads scoring data, classifies proposals into quality tiers, packages
 /// state, and defers MIS rounds as separate computations for visibility.
 pub fn execute_compute_release_mappings(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = AnalysisComputation::ComputeReleaseMappings;
 
     let sender = require_sender!(computation);
@@ -107,10 +109,10 @@ pub fn execute_compute_release_mappings(
             .push(row.clone());
     }
 
-    let mut perfect_pool: Vec<Proposal> = Vec::new();
-    let mut full_match_pool: Vec<Proposal> = Vec::new();
-    let mut incomplete_pool: Vec<Proposal> = Vec::new();
-    let mut single_pool: Vec<Proposal> = Vec::new();
+    let mut perfect_pool: Vec<Arc<Proposal>> = Vec::new();
+    let mut full_match_pool: Vec<Arc<Proposal>> = Vec::new();
+    let mut incomplete_pool: Vec<Arc<Proposal>> = Vec::new();
+    let mut single_pool: Vec<Arc<Proposal>> = Vec::new();
 
     for (release_id, rows) in proposals_map {
         let total_tracks = manifest_map
@@ -129,13 +131,13 @@ pub fn execute_compute_release_mappings(
 
         let tier = classify_proposal(&rows, total_tracks, media_count, &inode_dir_map);
 
-        let proposal = Proposal {
+        let proposal = Arc::new(Proposal {
             total_tracks,
             rows,
             inode_set,
             total_score,
             tier,
-        };
+        });
 
         match proposal.tier {
             ProposalTier::Perfect => perfect_pool.push(proposal),
@@ -152,8 +154,8 @@ pub fn execute_compute_release_mappings(
     // Conflict detection: if a release is pinned by more directories than it has
     // media (e.g., 1-medium release pinned by 2 dirs), that's an invariant violation.
     // We emit a hard-stop PinnedReleaseConflict signal and skip that release entirely.
-    let pinned_release_dirs: HashMap<String, Vec<String>> = match crate::config::load_config() {
-        Ok(cfg) => {
+    let pinned_release_dirs: HashMap<String, Vec<String>> = match ctx.snapshot.config.as_deref() {
+        Some(cfg) => {
             let mut map: HashMap<String, Vec<String>> = HashMap::new();
             for sd in &cfg.source_dirs {
                 if let Some(ref release_id) = sd.pinned_release {
@@ -164,7 +166,7 @@ pub fn execute_compute_release_mappings(
             }
             map
         }
-        Err(_) => HashMap::new(),
+        None => HashMap::new(),
     };
 
     if !pinned_release_dirs.is_empty() {
@@ -224,17 +226,11 @@ pub fn execute_compute_release_mappings(
             let mut pinned_accepted = 0usize;
 
             // Drain pinned proposals from all pools and emit signals
-            let drain_pinned = |pool: &mut Vec<Proposal>, tier: ProposalTier| -> Vec<Proposal> {
+            let drain_pinned = |pool: &mut Vec<Arc<Proposal>>| -> Vec<Arc<Proposal>> {
                 let mut pinned = Vec::new();
                 pool.retain(|p| {
                     if !p.rows.is_empty() && pinned_release_ids.contains(&p.rows[0].release_id) {
-                        pinned.push(Proposal {
-                            total_tracks: p.total_tracks,
-                            rows: p.rows.clone(),
-                            inode_set: p.inode_set.clone(),
-                            total_score: p.total_score,
-                            tier,
-                        });
+                        pinned.push(Arc::clone(p));
                         false
                     } else {
                         true
@@ -243,17 +239,17 @@ pub fn execute_compute_release_mappings(
                 pinned
             };
 
-            let mut all_pinned: Vec<(Proposal, ProposalTier)> = Vec::new();
-            for p in drain_pinned(&mut perfect_pool, ProposalTier::Perfect) {
+            let mut all_pinned: Vec<(Arc<Proposal>, ProposalTier)> = Vec::new();
+            for p in drain_pinned(&mut perfect_pool) {
                 all_pinned.push((p, ProposalTier::Perfect));
             }
-            for p in drain_pinned(&mut full_match_pool, ProposalTier::FullMatch) {
+            for p in drain_pinned(&mut full_match_pool) {
                 all_pinned.push((p, ProposalTier::FullMatch));
             }
-            for p in drain_pinned(&mut incomplete_pool, ProposalTier::Incomplete) {
+            for p in drain_pinned(&mut incomplete_pool) {
                 all_pinned.push((p, ProposalTier::Incomplete));
             }
-            for p in drain_pinned(&mut single_pool, ProposalTier::Single) {
+            for p in drain_pinned(&mut single_pool) {
                 all_pinned.push((p, ProposalTier::Single));
             }
 
@@ -281,7 +277,7 @@ pub fn execute_compute_release_mappings(
                 ));
 
                 // Reverse constraint: reject non-pinned proposals that overlap with pinned dirs
-                let reject_overlapping = |pool: &mut Vec<Proposal>| {
+                let reject_overlapping = |pool: &mut Vec<Arc<Proposal>>| {
                     pool.retain(|p| !p.inode_set.iter().any(|i| pinned_inodes.contains(i)));
                 };
                 reject_overlapping(&mut perfect_pool);
@@ -293,7 +289,7 @@ pub fn execute_compute_release_mappings(
 
         // Also reject proposals for conflicted releases — neither dir gets packed
         if !conflicted_releases.is_empty() {
-            let reject_conflicted = |pool: &mut Vec<Proposal>| {
+            let reject_conflicted = |pool: &mut Vec<Arc<Proposal>>| {
                 pool.retain(|p| {
                     p.rows.is_empty() || !conflicted_releases.contains(&p.rows[0].release_id)
                 });
@@ -306,7 +302,7 @@ pub fn execute_compute_release_mappings(
     }
 
     // Sort each pool for deterministic MIS input: highest score first, then release_id
-    let sort_pool = |pool: &mut Vec<Proposal>| {
+    let sort_pool = |pool: &mut Vec<Arc<Proposal>>| {
         pool.sort_by(|a, b| {
             b.total_score
                 .partial_cmp(&a.total_score)
@@ -320,7 +316,7 @@ pub fn execute_compute_release_mappings(
     sort_pool(&mut single_pool);
 
     // Log tier distribution
-    let tier_summary = |pool: &[Proposal]| -> (usize, i32) {
+    let tier_summary = |pool: &[Arc<Proposal>]| -> (usize, i32) {
         (pool.len(), pool.iter().map(|p| p.total_tracks).sum())
     };
     let (p_count, p_tracks) = tier_summary(&perfect_pool);
@@ -343,9 +339,9 @@ pub fn execute_compute_release_mappings(
     ));
 
     // Load config for MIS parameters
-    let rp = match crate::config::load_config() {
-        Ok(c) => c.opinions.release_packing.clone(),
-        Err(_) => ReleasePackingOpinions::default(),
+    let rp = match ctx.snapshot.config.as_deref() {
+        Some(c) => c.opinions.release_packing.clone(),
+        None => ReleasePackingOpinions::default(),
     };
 
     // Package state and defer Round 1
@@ -382,10 +378,11 @@ pub fn execute_compute_release_mappings(
 /// components, emits isolated nodes directly, spawns per-component solvers
 /// for the rest. Defers MapFullMatchReleases as next barrier phase.
 pub(crate) fn execute_map_perfect_releases(
+    ctx: &ComputationContext<'_>,
     shared: &SharedMappingState,
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = AnalysisComputation::MapPerfectReleases {
         state: shared.clone(),
     };
@@ -398,7 +395,7 @@ pub(crate) fn execute_map_perfect_releases(
         .unwrap_or_default();
 
     // Filter: proposals whose entire inode set is unclaimed
-    let eligible: Vec<Proposal> = std::mem::take(&mut state.perfect_pool)
+    let eligible: Vec<Arc<Proposal>> = std::mem::take(&mut state.perfect_pool)
         .into_iter()
         .filter(|p| {
             !p.inode_set.is_empty() && p.inode_set.iter().all(|i| !assigned_inodes.contains(i))
@@ -429,12 +426,12 @@ pub(crate) fn execute_map_perfect_releases(
     // Load manifest + corpus paths for isolated-node emission
     let manifest = read_only_db.get_packing_manifest().unwrap_or_default();
     let manifest_map = build_manifest_map(&manifest);
-    let corpus_paths: HashMap<i64, String> = read_only_db
+    let corpus_paths: Arc<HashMap<i64, String>> = Arc::new(read_only_db
         .get_packing_inode_paths()
         .unwrap_or_default()
         .into_iter()
-        .collect();
-    let manifest_map_owned = build_manifest_map_owned(&manifest);
+        .collect());
+    let manifest_map_owned: Arc<HashMap<String, (String, String, i32)>> = Arc::new(build_manifest_map_owned(&manifest));
 
     let mut spawned: Vec<AnalysisComputation> = Vec::new();
     let mut isolated_count = 0usize;
@@ -461,27 +458,20 @@ pub(crate) fn execute_map_perfect_releases(
             // Multi-node component — spawn solver
             // Remap eligible indices to component-local indices for signature_siblings
             let mut component_siblings: HashMap<usize, Vec<AlternativeRelease>> = HashMap::new();
-            let component_proposals: Vec<Proposal> =
+            let component_proposals: Vec<Arc<Proposal>> =
                 component.iter().enumerate().map(|(local_idx, &eligible_idx)| {
                     if let Some(sibs) = eligible_siblings.get(&eligible_idx) {
                         component_siblings.insert(local_idx, sibs.clone());
                     }
-                    let p = &eligible[eligible_idx];
-                    Proposal {
-                        total_tracks: p.total_tracks,
-                        rows: p.rows.clone(),
-                        inode_set: p.inode_set.clone(),
-                        total_score: p.total_score,
-                        tier: p.tier,
-                    }
+                    Arc::clone(&eligible[eligible_idx])
                 }).collect();
 
             spawned.push(AnalysisComputation::ResolvePackingComponent {
                 data: SharedComponentData::new(ComponentData {
                     proposals: component_proposals,
                     tier: ProposalTier::Perfect,
-                    corpus_paths: corpus_paths.clone(),
-                    manifest_map: manifest_map_owned.clone(),
+                    corpus_paths: Arc::clone(&corpus_paths),
+                    manifest_map: Arc::clone(&manifest_map_owned),
                     signature_siblings: component_siblings,
                 }),
             });
@@ -518,10 +508,11 @@ pub(crate) fn execute_map_perfect_releases(
 /// finds connected components among clean proposals, spawns per-component
 /// solvers. Defers next tier based on singles_before_incompletes config.
 pub(crate) fn execute_map_full_match_releases(
+    ctx: &ComputationContext<'_>,
     shared: &SharedMappingState,
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = AnalysisComputation::MapFullMatchReleases {
         state: shared.clone(),
     };
@@ -574,10 +565,11 @@ pub(crate) fn execute_map_full_match_releases(
 
 /// Execute MapIncompleteReleases — orchestrator for partial-coverage proposals.
 pub(crate) fn execute_map_incomplete_releases(
+    ctx: &ComputationContext<'_>,
     shared: &SharedMappingState,
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = AnalysisComputation::MapIncompleteReleases {
         state: shared.clone(),
     };
@@ -633,10 +625,11 @@ pub(crate) fn execute_map_incomplete_releases(
 /// has a 1-element inode set, so the MIS solver naturally picks the
 /// best-scoring release per unclaimed inode.
 pub(crate) fn execute_map_single_releases(
+    ctx: &ComputationContext<'_>,
     shared: &SharedMappingState,
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = AnalysisComputation::MapSingleReleases {
         state: shared.clone(),
     };
@@ -692,7 +685,7 @@ pub(crate) fn execute_map_single_releases(
 /// the best-scorer is the "keeper" and the rest become its `AlternativeRelease` siblings.
 /// Returns a map from keeper index to its siblings.
 fn build_signature_siblings(
-    proposals: &[Proposal],
+    proposals: &[Arc<Proposal>],
     read_only_db: &ReadOnlyDb<'_>,
 ) -> HashMap<usize, Vec<AlternativeRelease>> {
     let mut sig_groups: HashMap<Vec<i64>, Vec<usize>> = HashMap::new();

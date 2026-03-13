@@ -10,7 +10,7 @@ use crate::db::ReadOnlyDb;
 use crate::external::musicbrainz::{self, MbRelease};
 use crate::logging::log_general;
 use crate::meta::computations::helpers::reconcile_corpus_signals;
-use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::computations::{Computation, PipelineStage};
 use crate::meta::external::ExternalSource;
 use crate::meta::signals::data::ReleasePackingSignal;
@@ -227,22 +227,15 @@ fn build_elimination_score_row(
 /// manifest and per-inode recording maps, then spawns N ScoreReleaseCandidates
 /// and defers Resolve + Analyze as barrier-separated phases.
 pub fn execute_pack_releases(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = AnalysisComputation::PackReleases;
 
     let sender = require_sender!(computation);
 
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
     let min_confidence = config.opinions.release_packing.min_confidence;
     let preferred_locales = config.opinions.external_matching.preferred_locales.clone();
 
@@ -1095,25 +1088,18 @@ fn run_elimination_phase(
 /// per-release assignment via Hungarian algorithm, then fills remaining slots via
 /// elimination matching. Writes results to `release_packing_scores`.
 pub fn execute_score_release_candidates(
-    read_only_db: &ReadOnlyDb<'_>,
+    ctx: &ComputationContext<'_>,
     release_id: &str,
-    witness: &ComputationWitness,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = AnalysisComputation::ScoreReleaseCandidates {
         release_id: release_id.to_string(),
     };
 
     let sender = require_sender!(computation);
 
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
     let duration_tolerance_pct = config.opinions.release_packing.duration_tolerance_pct;
     let candidate_weights = config.opinions.release_packing.candidate_weights.clone();
     let elimination_weights = config.opinions.release_packing.elimination_weights.clone();

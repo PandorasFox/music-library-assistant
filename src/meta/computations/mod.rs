@@ -53,6 +53,25 @@ macro_rules! require_sender {
     };
 }
 
+/// Extract config from the computation context's snapshot, or return early with `Result::failure`.
+///
+/// Returns `&MagicConfig` from `ctx.snapshot.config`. If config is not available
+/// (pre-setup state), returns a failure result. Callers must have `Result` and
+/// `Computation` in scope.
+macro_rules! require_config {
+    ($ctx:expr, $computation:expr) => {
+        match $ctx.snapshot.config.as_deref() {
+            Some(c) => c,
+            None => {
+                return Result::failure(
+                    $computation,
+                    "Config not available (pre-setup)".to_string(),
+                );
+            }
+        }
+    };
+}
+
 // Module declarations
 pub mod analysis;
 pub mod derivation;

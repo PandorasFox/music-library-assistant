@@ -8,10 +8,9 @@ use std::path::Path;
 
 use crate::config::path_schema::PathSchemaMatchResult;
 use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{reconcile_corpus_signals, ComputedCorpusSignal};
-use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::signals::data::{
     PathMismatchKind, PathTagMismatchData, PathTagMismatchSignal, PathTagValueMismatch};
 use crate::meta::signals::registry::TypedSignalWrite;
@@ -20,22 +19,15 @@ use super::{Computation, Result};
 
 /// Execute DetectPathTagMismatches — compare file paths against configured schemas.
 pub fn execute_detect_path_tag_mismatches(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DetectPathTagMismatches;
 
     let sender = require_sender!(computation);
 
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     // Check if any source dirs have schemas (direct or inherited).
     let has_any_schema = config.source_dirs.iter().any(|sd| sd.path_schema.is_some());

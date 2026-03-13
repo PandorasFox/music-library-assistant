@@ -2,14 +2,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::db::ReadOnlyDb;
 use crate::external::musicbrainz;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
     reconcile_aggregate_signals, reconcile_corpus_signals, ComputedAggregateSignal,
     ComputedCorpusSignal,
 };
-use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::signals::data::{
     ReleasePackingSignal, UnfilledReleaseSlotData, UnfilledReleaseSlotSignal,
     UnmatchedCorpusTrackData, UnmatchedCorpusTrackSignal, UnsolvedCategory};
@@ -23,9 +22,10 @@ use crate::meta::computations::analysis::{Computation as AnalysisComputation, Re
 
 /// Execute EmitUnmatchedSignals — emit unmatched corpus track and unfilled slot signals.
 pub fn execute_emit_unmatched_signals(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = AnalysisComputation::EmitUnmatchedSignals;
 
     let sender = require_sender!(computation);

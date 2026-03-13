@@ -9,13 +9,12 @@ use std::path::{Path, PathBuf};
 use mm_utils::tag_names::find_tag_in_map;
 
 use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::computations::helpers::{
     parse_inodes_csv, reconcile_aggregate_signals, reconcile_corpus_signals,
     ComputedAggregateSignal, ComputedCorpusSignal,
 };
-use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::signals::data::{
     SameRecordingDifferentReleaseEntry, SameRecordingDifferentReleaseData, SameRecordingDifferentReleaseSignal,
     CrossSourceOverlapData, CrossSourceOverlapSignal, CrossSourceTrackPair, DuplicateInodeSignal,
@@ -70,25 +69,18 @@ impl UnionFind {
 /// Execute DetectFingerprintOverlaps - bulk detection of fingerprint overlaps
 /// using similarity-based grouping rather than exact byte matching.
 pub fn execute_detect_fingerprint_overlaps(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
+
     use crate::db::queries::files::fingerprint_to_text;
 
     let computation = Computation::DetectFingerprintOverlaps;
 
     let sender = require_sender!(computation);
 
-    // Load config for similarity threshold and duration tolerance
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     let similarity_threshold = config
         .opinions
@@ -258,9 +250,10 @@ pub fn execute_detect_fingerprint_overlaps(
 
 /// Execute DetectDuplicateInodes - bulk detection of duplicate inodes.
 pub fn execute_detect_duplicate_inodes(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DetectDuplicateInodes;
 
     let sender = require_sender!(computation);
@@ -310,9 +303,10 @@ pub fn execute_detect_duplicate_inodes(
 
 /// Execute DetectMetadataDuplicates - detect exact metadata duplicates.
 pub fn execute_detect_metadata_duplicates(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
     let computation = Computation::DetectMetadataDuplicates;
 
     let sender = require_sender!(computation);
@@ -736,23 +730,16 @@ impl SubparReason {
 
 /// Execute AnalyzeFingerprintOverlaps - deep analysis of fingerprint overlap groups.
 pub fn execute_analyze_fingerprint_overlaps(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
+
     let computation = Computation::AnalyzeFingerprintOverlaps;
 
     let sender = require_sender!(computation);
 
-    // Load configuration
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     let similarity_threshold = config
         .opinions
@@ -1177,23 +1164,16 @@ fn cluster_by_duration(
 /// - "web/releases/bandcamp|web/releases/indie" -> 1023 overlapping tracks
 /// - "tracks-trans|tracks-dab" -> 47 overlapping tracks
 pub fn execute_detect_cross_source_overlaps(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
+
     let computation = Computation::DetectCrossSourceOverlaps;
 
     let sender = require_sender!(computation);
 
-    // Load config to get source directories
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     // Get all FingerprintOverlap signals
     let fp_overlap_signals = read_only_db

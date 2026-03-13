@@ -11,7 +11,7 @@ use crate::logging::log_general;
 use crate::meta::computations::helpers::{
     self, reconcile_aggregate_signals, ComputedAggregateSignal,
 };
-use crate::meta::computations::types::ComputationWitness;
+use crate::meta::computations::traits::ComputationContext;
 use crate::meta::signals::data::{
     CompoundTagEntry as TypedCompoundEntry, CompoundTagSignal, DiscExtractionData,
     DiscExtractionSignal, DiscExtractionSource, InconsistentAlbumArtistData,
@@ -28,24 +28,18 @@ use super::{Computation, Result};
 
 /// Execute DetectMissingTags - detect tracks missing required tags.
 pub fn execute_detect_missing_tags(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
     use std::collections::HashSet;
+
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
 
     let computation = Computation::DetectMissingTags;
 
     let sender = require_sender!(computation);
 
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     let mut required_tags: HashSet<String> = config
         .opinions
@@ -223,27 +217,21 @@ pub fn execute_detect_missing_tags(
 /// Respects `strip_album_format_suffixes` from config for album collision detection.
 /// Skips collision groups where any variant has a CanonicalTag signal.
 pub fn execute_detect_tag_canonicalizations(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
     use crate::corpus::health::collision::{
         get_album_artist_collisions, get_album_collisions, get_artist_collisions,
         get_genre_collisions,
     };
 
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
+
     let computation = Computation::DetectTagCanonicalizations;
 
     let sender = require_sender!(computation);
 
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(e) => {
-            return Result::failure(
-                computation,
-                format!("Failed to load config: {}", e),
-            );
-        }
-    };
+    let config = require_config!(ctx, computation);
 
     let strip_format_suffixes = config.opinions.canonicalization.strip_album_format_suffixes;
 
@@ -321,9 +309,10 @@ const COMPOUND_TAG_COMPUTATION: &str = "compound_tag";
 /// for inodes that have been marked dirty (tags changed since last computation).
 /// Migration v5→v6 seeds all corpus inodes as dirty for initial population.
 pub fn execute_detect_compound_tag_values(
-    read_only_db: &ReadOnlyDb<'_>,
-    _witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+
     let computation = Computation::DetectCompoundTagValues;
 
     // Query dirty inodes instead of all corpus inodes
@@ -484,10 +473,12 @@ pub(super) fn detect_compounds_in_tags(
 /// a per-file CompoundTag signal if any compound values are found. Clears the
 /// dirty flag after processing regardless of outcome.
 pub fn execute_detect_compound_tags_for_inode(
-    read_only_db: &ReadOnlyDb<'_>,
+    ctx: &ComputationContext<'_>,
     inode: i64,
-    witness: &ComputationWitness,
 ) -> Result {
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
+
     let computation = Computation::DetectCompoundTagsForInode { inode };
 
     let sender = require_sender!(computation);
@@ -518,12 +509,9 @@ pub fn execute_detect_compound_tags_for_inode(
     }
 
     // Get tag splitting config from opinions
-    let config = match crate::config::load_config() {
-        Ok(c) => c,
-        Err(_) => {
-            sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
-            return Result::success(computation, Vec::new());
-        }
+    let Some(config) = ctx.snapshot.config.as_deref() else {
+        sender.clear_dirty_inode(inode, COMPOUND_TAG_COMPUTATION, witness);
+        return Result::success(computation, Vec::new());
     };
     let tag_splitting = &config.opinions.tag_splitting;
     let collab_keywords: Vec<String> = tag_splitting
@@ -576,11 +564,13 @@ pub fn execute_detect_compound_tags_for_inode(
 /// tag values contain the separator, then marks those inodes dirty for compound_tag
 /// detection so DetectCompoundTagValues will reprocess them.
 pub fn execute_seed_compound_tag_dirty_inodes(
-    read_only_db: &ReadOnlyDb<'_>,
+    ctx: &ComputationContext<'_>,
     new_separators: &[(String, String)],
-    witness: &ComputationWitness,
 ) -> Result {
     use std::collections::HashSet;
+
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
 
     let computation = Computation::SeedCompoundTagDirtyInodes {
         new_separators: new_separators.to_vec(),
@@ -627,10 +617,12 @@ pub fn execute_seed_compound_tag_dirty_inodes(
 /// - Multiple artists are present on the same album
 /// - album_artist tags are missing or inconsistent
 pub fn execute_detect_inconsistent_album_artist(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
     use crate::corpus::health::album_artist_detection::detect_inconsistent_album_artist;
+
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
 
     let computation = Computation::DetectInconsistentAlbumArtist;
 
@@ -693,10 +685,12 @@ pub fn execute_detect_inconsistent_album_artist(
 /// grouping by release context (album + album_artist + prefix).
 /// Emits DiscExtraction aggregate signals.
 pub fn execute_detect_disc_extractions(
-    read_only_db: &ReadOnlyDb<'_>,
-    witness: &ComputationWitness,
+    ctx: &ComputationContext<'_>,
 ) -> Result {
     use regex::Regex;
+
+    let read_only_db = ctx.read_db;
+    let witness = ctx.witness;
 
     let computation = Computation::DetectDiscExtractions;
 

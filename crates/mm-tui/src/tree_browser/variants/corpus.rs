@@ -509,10 +509,10 @@ impl CorpusBrowserVariant {
         }
 
         // Wizard pane captures nav keys for scrolling
-        if self.wizard_state.is_showing_pane() {
-            if self.wizard_pane.handle_input(action) {
-                return None;
-            }
+        if self.wizard_state.is_showing_pane()
+            && self.wizard_pane.handle_input(action)
+        {
+            return None;
             // Esc handled by handle_escape; other keys fall through to tree
         }
 

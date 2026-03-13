@@ -142,6 +142,7 @@ fn render_controls(f: &mut Frame, area: Rect, has_release: bool, is_release_cate
 // List Row Rendering (closure for StandardList)
 // ============================================================================
 
+#[allow(clippy::too_many_arguments)]
 fn render_list_row(
     entry: &PackingListEntry,
     is_cursor: bool,

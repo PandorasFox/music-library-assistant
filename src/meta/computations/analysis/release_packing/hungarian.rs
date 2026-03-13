@@ -176,6 +176,7 @@ impl TargetDirs {
 /// so a snug-fitting directory beats a larger one even if the larger directory fills
 /// more absolute slots. Deterministic tiebreak chain:
 ///   fewest leftovers → most assigned slots → highest score → lexicographic dir path.
+#[allow(clippy::type_complexity)]
 pub(super) fn score_all_directories(
     candidates: &[CandidateAssignment],
     corpus_info: &HashMap<i64, CorpusFileInfo>,

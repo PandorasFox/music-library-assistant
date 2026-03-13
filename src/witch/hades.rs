@@ -30,7 +30,7 @@ use super::types::{HadesSnapshot, ManagedThread, TaskKind, TaskResult, Task};
 
 enum HadesCommand {
     Dispatch { task: Task, label: String },
-    UpdateConfig { config: Config, opinions: PerformanceOpinions },
+    UpdateConfig { config: Box<Config>, opinions: PerformanceOpinions },
     Shutdown,
 }
 
@@ -94,7 +94,7 @@ impl HadesHandle {
     /// Send updated config to Hades for snapshot + pool rebuild.
     pub fn update_config(&self, config: &Config, opinions: &PerformanceOpinions) {
         let _ = self.command_tx.send(HadesCommand::UpdateConfig {
-            config: config.clone(),
+            config: Box::new(config.clone()),
             opinions: opinions.clone(),
         });
     }
@@ -204,7 +204,7 @@ fn run_hades(
             }
             Ok(HadesCommand::UpdateConfig { config: new_config, opinions }) => {
                 // Swap config atomically — next dispatched task sees it immediately
-                config.store(Arc::new(Some(Arc::new(new_config))));
+                config.store(Arc::new(Some(Arc::new(*new_config))));
 
                 let new_thread_count = opinions
                     .worker_threads

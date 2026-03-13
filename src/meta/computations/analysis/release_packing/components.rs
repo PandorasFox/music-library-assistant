@@ -145,6 +145,7 @@ fn check_low_confidence(
 ///
 /// Used by tier orchestrators to handle trivially-selected proposals without
 /// spawning a computation. Returns the number of inode signals emitted.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_isolated_proposal_signals(
     proposal: &Proposal,
     tier: ProposalTier,
@@ -295,6 +296,7 @@ pub(super) fn emit_isolated_proposal_signals(
 }
 
 /// Emit knot signals for extracted knot components. Returns the selected pool indices.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_knot_component_signals(
     knot_id: usize,
     component_proposals: &[&Proposal],
@@ -602,6 +604,7 @@ pub(super) fn dedup_by_signature(
 /// find components → emit isolated directly → spawn N component solvers.
 ///
 /// Returns (spawned_computations, log_message).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn orchestrate_partial_tier(
     pool: Vec<Arc<Proposal>>,
     tier: ProposalTier,

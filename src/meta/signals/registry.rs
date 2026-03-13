@@ -94,6 +94,7 @@ macro_rules! signal_registry {
         ///
         /// Decision signals (canonical_tag, expected_overlap, expected_duplicate,
         /// expected_missing_tag) use `TableKind::Decision`; all others use `Computed`.
+        #[allow(clippy::vec_init_then_push)] // macro repetition blocks prevent vec![] syntax
         pub fn signal_table_entries() -> Vec<TableEntry> {
             use crate::meta::signals::store::{AggregateSignalStore, CorpusSignalStore};
             let mut entries = Vec::new();

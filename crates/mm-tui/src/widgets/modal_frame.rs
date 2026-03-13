@@ -36,13 +36,19 @@ pub struct FrameState<B: ModalButtons> {
     pub click_targets: ListClickTargets,
 }
 
-impl<B: ModalButtons> FrameState<B> {
-    pub fn new() -> Self {
+impl<B: ModalButtons> Default for FrameState<B> {
+    fn default() -> Self {
         Self {
             focus_pane: FocusPane::List,
             buttons: ButtonRowState::new(),
             click_targets: ListClickTargets::new(),
         }
+    }
+}
+
+impl<B: ModalButtons> FrameState<B> {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 

@@ -130,9 +130,9 @@ impl<B: ModalButtons> ButtonRowState<B> {
             return;
         };
         // Scan rightward for the next enabled button.
-        for i in (current_idx + 1)..all.len() {
-            if all[i].enabled(ctx) {
-                self.selected = all[i];
+        for button in &all[(current_idx + 1)..] {
+            if button.enabled(ctx) {
+                self.selected = *button;
                 return;
             }
         }
@@ -148,16 +148,16 @@ impl<B: ModalButtons> ButtonRowState<B> {
         let all = B::all();
         let current_idx = all.iter().position(|b| *b == self.selected).unwrap_or(0);
         // Try rightward first.
-        for i in (current_idx + 1)..all.len() {
-            if all[i].enabled(ctx) {
-                self.selected = all[i];
+        for button in &all[(current_idx + 1)..] {
+            if button.enabled(ctx) {
+                self.selected = *button;
                 return;
             }
         }
         // Then leftward.
-        for i in (0..current_idx).rev() {
-            if all[i].enabled(ctx) {
-                self.selected = all[i];
+        for button in all[..current_idx].iter().rev() {
+            if button.enabled(ctx) {
+                self.selected = *button;
                 return;
             }
         }
@@ -178,7 +178,7 @@ impl<B: ModalButtons> ButtonRowState<B> {
     pub fn handle_click(&mut self, x: u16, y: u16, ctx: &B::Context) -> Option<B::Action> {
         let all = B::all();
         if let Some(name) = self.button_rects.hit_test(x, y) {
-            if let Some(idx) = name.parse::<usize>().ok() {
+            if let Ok(idx) = name.parse::<usize>() {
                 if let Some(&button) = all.get(idx) {
                     if button.enabled(ctx) {
                         self.selected = button;

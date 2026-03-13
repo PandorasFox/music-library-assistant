@@ -106,7 +106,7 @@ fn render_fetch_line(is_cursor: bool, snap: &RenderSnapshot) -> Line<'static> {
     let (status_label, status_color) = if !snap.has_api_key {
         ("No API Key".to_string(), Color::Red)
     } else if snap.fetch_active {
-        if let Some(ref p) = snap.fetch_progress {
+        if let Some(p) = &snap.fetch_progress {
             let a = &p.acoustid;
             let m = &p.mb;
             if m.total > 0 && a.total > 0 {

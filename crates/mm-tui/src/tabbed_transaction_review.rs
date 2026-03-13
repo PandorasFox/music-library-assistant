@@ -21,11 +21,17 @@ pub struct TabbedTransactionReviewState {
     pub review: TransactionReviewState,
 }
 
-impl TabbedTransactionReviewState {
-    pub fn new() -> Self {
+impl Default for TabbedTransactionReviewState {
+    fn default() -> Self {
         Self {
             review: TransactionReviewState::new_tabbed(),
         }
+    }
+}
+
+impl TabbedTransactionReviewState {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Handle input. CycleNext/CyclePrev are intercepted centrally by `App::handle_input`.

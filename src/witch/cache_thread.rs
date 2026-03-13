@@ -30,7 +30,7 @@ pub(super) enum CacheRequest {
     /// The read thread executes the query, wraps in AuthenticatedResponse, and
     /// replies directly — the Witch never touches the response path.
     DomainQuery {
-        payload: DomainQueryPayload,
+        payload: Box<DomainQueryPayload>,
         reply: AuthReply,
     },
     /// Invalidate cached results whose scope overlaps with the given scope.
@@ -65,7 +65,7 @@ impl CacheThreadHandle {
     ) {
         let _ = self
             .request_tx
-            .send(CacheRequest::DomainQuery { payload, reply });
+            .send(CacheRequest::DomainQuery { payload: Box::new(payload), reply });
     }
 
     /// Tell the read thread to invalidate cached results whose scope overlaps.
@@ -170,9 +170,9 @@ fn process_request(
         CacheRequest::DomainQuery { payload, reply } => {
             if let Some(ref db_conn) = db {
                 let read_db = ReadOnlyDb::new(db_conn);
-                let result = dispatch_domain_query(payload, &read_db);
+                let result = dispatch_domain_query(*payload, &read_db);
                 let response = crate::meta::protocol::AuthenticatedResponse::Query(
-                    crate::meta::protocol::QueryResponse::Domain(result),
+                    Box::new(crate::meta::protocol::QueryResponse::Domain(result)),
                 );
                 let _ = reply.send(Ok(response));
             } else {

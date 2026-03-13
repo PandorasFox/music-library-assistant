@@ -178,7 +178,7 @@ fn handle_connection(
                     return;
                 }
                 match rx.recv() {
-                    Ok(result) => WireResponse::Authenticated(result),
+                    Ok(result) => WireResponse::Authenticated(Box::new(result)),
                     Err(_) => return, // Witch dropped the reply channel.
                 }
             }

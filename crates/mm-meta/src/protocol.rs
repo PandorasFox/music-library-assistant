@@ -92,7 +92,7 @@ pub enum AuthResponse {
 pub enum AuthenticatedBody {
     Query(QueryPayload),
     Transaction(TransactionPayload),
-    Command(CommandPayload),
+    Command(Box<CommandPayload>),
 }
 
 /// Response to authenticated requests.
@@ -101,7 +101,7 @@ pub enum AuthenticatedBody {
 /// matching the request area.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuthenticatedResponse {
-    Query(QueryResponse),
+    Query(Box<QueryResponse>),
     Transaction(TransactionResponse),
     Command(CommandResponse),
 }
@@ -118,7 +118,7 @@ pub enum QueryPayload {
     /// Current config snapshot.
     Config,
     /// Domain-specific DB query (dispatched to cache thread).
-    Domain(crate::domain_queries::DomainQueryPayload),
+    Domain(Box<crate::domain_queries::DomainQueryPayload>),
 }
 
 /// Query response variants.
@@ -127,7 +127,7 @@ pub enum QueryResponse {
     /// Full Witch status snapshot.
     Status(WitchStatus),
     /// Config snapshot.
-    Config(Config),
+    Config(Box<Config>),
     /// Domain query result.
     Domain(crate::domain_queries::DomainQueryResult),
 }
@@ -178,7 +178,7 @@ impl ProtocolQuery for ConfigQuery {
 
     fn extract_response(resp: QueryResponse) -> Config {
         match resp {
-            QueryResponse::Config(c) => c,
+            QueryResponse::Config(c) => *c,
             _ => unreachable!("protocol bug: expected Config response"),
         }
     }

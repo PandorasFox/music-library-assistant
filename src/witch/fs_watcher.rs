@@ -834,6 +834,7 @@ fn read_tags(path: &Path) -> crate::corpus::tags::TagSet {
 }
 
 /// If `path` is an image file, send an `ImageFileObserved` message.
+#[allow(clippy::too_many_arguments)]
 fn maybe_send_image_observed(
     path: &Path,
     zone: Zone,
@@ -1018,7 +1019,7 @@ fn collect_tracked_files(
 fn is_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| crate::config::is_audio_extension(ext))
+        .map(crate::config::is_audio_extension)
         .unwrap_or(false)
 }
 

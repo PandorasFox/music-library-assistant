@@ -119,7 +119,7 @@ pub fn generate_tag_ops(
 /// Returns deduplicated list of locale-resolved artist names. Sources:
 /// 1. Recording artist_credit entries (each credit → one artist)
 /// 2. Recording relations where routing routes to `artist`
-/// Deduplicated by artist MBID.
+///    Deduplicated by artist MBID.
 pub fn extract_individual_artists(
     recording: &MbRecording,
     artists: &HashMap<String, MbArtist>,

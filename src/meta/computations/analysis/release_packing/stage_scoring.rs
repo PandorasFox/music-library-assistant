@@ -103,6 +103,7 @@ fn find_unambiguous_preassignments(
 ///
 /// Builds a cost matrix from elimination breakdowns, solves via Kuhn-Munkres,
 /// and returns `PackingScoreRow`s for each assignment.
+#[allow(clippy::too_many_arguments)]
 fn run_elimination_hungarian(
     remaining_unassigned: &[usize],
     remaining_unfilled: &[usize],
@@ -181,6 +182,7 @@ fn run_elimination_hungarian(
 ///
 /// Computes the weighted score and serializes the breakdown, looking up the
 /// medium format from the release media list.
+#[allow(clippy::too_many_arguments)]
 fn build_elimination_score_row(
     release_id: &str,
     inode: i64,
@@ -592,11 +594,10 @@ pub fn execute_pack_releases(
         for (inode, info) in &corpus_info {
             if info.parent_dir == *dir_path {
                 let key = (release_id.clone(), *inode);
-                if !deduped.contains_key(&key) {
+                if let std::collections::hash_map::Entry::Vacant(entry) = deduped.entry(key) {
                     let inode_path = corpus_inode_paths.get(inode).cloned().unwrap_or_default();
                     let dir_file_count = dir_total_files.get(dir_path).copied().unwrap_or(1);
-                    deduped.insert(
-                        key,
+                    entry.insert(
                         write_thread::PackingCandidateRow {
                             release_id: release_id.clone(),
                             inode: *inode,
@@ -839,6 +840,7 @@ fn score_candidates_against_tracklist(
 ///
 /// Applies pinned release constraints, filters candidates to the winning directory,
 /// and returns `(score_rows, assigned_inodes, target_dirs, optimal_pairs)`.
+#[allow(clippy::type_complexity)]
 fn run_directory_constrained_packing(
     mut candidates: Vec<CandidateAssignment>,
     corpus_info: &HashMap<i64, CorpusFileInfo>,
@@ -925,6 +927,7 @@ fn run_directory_constrained_packing(
 ///
 /// Uses title pre-assignment for high-confidence 1:1 matches, then Hungarian
 /// assignment on the remainder. Returns `(elimination_count, additional_score_rows)`.
+#[allow(clippy::too_many_arguments)]
 fn run_elimination_phase(
     read_only_db: &ReadOnlyDb<'_>,
     corpus_info: &HashMap<i64, CorpusFileInfo>,

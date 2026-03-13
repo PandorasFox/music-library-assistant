@@ -598,6 +598,7 @@ struct TrackReleaseIdentity {
 }
 
 /// Relationship between two tracks sharing a fingerprint.
+#[allow(clippy::enum_variant_names)]
 enum ReleaseRelationship {
     /// Same recording on the same release (true duplicate — quality tiering).
     SameRelease,
@@ -712,6 +713,7 @@ fn is_same_release_heuristic(
 
 /// Reason why a track is subpar.
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::enum_variant_names)]
 enum SubparReason {
     SubparFormat,
     SubparBitrate,
@@ -909,7 +911,7 @@ pub fn execute_analyze_fingerprint_overlaps(
                                 };
                                 same_recording_different_release_groups
                                     .entry(recording_id.clone())
-                                    .or_insert_with(Vec::new)
+                                    .or_default()
                                     .push(entry);
                             }
                             variant_skipped += 1;

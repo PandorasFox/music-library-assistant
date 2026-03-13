@@ -25,10 +25,9 @@ impl MutationExecutor for ApplyConfigEditsMutation {
         let result = crate::config::write_config_to_disk(
             &self.original_kdl, &self.old_config, &self.new_config,
         );
-        if result.is_ok() {
-            crate::logging::log_general("[CONFIG] Config written to disk successfully");
-        } else {
-            crate::logging::log_error(format!("[CONFIG] Config write failed: {:#}", result.as_ref().unwrap_err()));
+        match &result {
+            Ok(()) => crate::logging::log_general("[CONFIG] Config written to disk successfully"),
+            Err(e) => crate::logging::log_error(format!("[CONFIG] Config write failed: {e:#}")),
         }
         MutationResult::from_unit_result(
             super::Mutation::ApplyConfigEdits(Box::new(self.clone())), result, start,

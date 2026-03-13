@@ -99,13 +99,19 @@ pub struct InboxViewState {
     pub busy: bool,
 }
 
-impl InboxViewState {
-    pub fn new() -> Self {
+impl Default for InboxViewState {
+    fn default() -> Self {
         Self {
             entries: Vec::new(),
             list: StandardListState::new(StandardListConfig::default()),
             busy: false,
         }
+    }
+}
+
+impl InboxViewState {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Handle mouse click for cursor selection.

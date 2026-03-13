@@ -470,6 +470,7 @@ impl CompoundSplitClustersV2 {
         self.current == 0
     }
 
+    #[allow(clippy::should_implement_trait)] // Not an Iterator; advances group cursor
     pub fn next(&mut self) -> bool {
         if self.current < self.groups.len().saturating_sub(1) {
             self.current += 1;

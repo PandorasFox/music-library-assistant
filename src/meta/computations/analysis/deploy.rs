@@ -1049,7 +1049,7 @@ pub fn execute_derive_corpus_deploy_status(
     let sidecar_count = derive_sidecar_deploy_signals(
         &precomputed,
         &library_inode_to_paths,
-        &config,
+        config,
         read_only_db,
         &sender,
         witness,

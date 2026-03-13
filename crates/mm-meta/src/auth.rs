@@ -29,11 +29,12 @@ impl std::fmt::Debug for SessionToken {
 ///
 /// Zero-sized witness type. The Witch and first-time setup code create this
 /// to prove setup context to the database creation function.
+#[derive(Default)]
 pub struct FirstTimeSetupToken(());
 
 impl FirstTimeSetupToken {
     /// Create a setup token. Only the Witch and first-time setup code should call this.
     pub fn new() -> Self {
-        Self(())
+        Self::default()
     }
 }

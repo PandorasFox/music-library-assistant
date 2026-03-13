@@ -558,7 +558,7 @@ pub fn execute_update_corpus_file_signals(
 
     // Convert absolute path to relative for DB queries
     let resolver = paths::get_resolver();
-    let path_str = to_relative_str(&resolver, path);
+    let path_str = to_relative_str(resolver, path);
 
     let file_exists = path.exists() && is_audio_file(path);
 
@@ -649,7 +649,7 @@ pub fn execute_update_library_file_signals(
 
     // Convert absolute path to relative for signal keys
     let resolver = paths::get_resolver();
-    let path_str = to_relative_str(&resolver, path);
+    let path_str = to_relative_str(resolver, path);
 
     // For library files, we check if the file exists and clear any leftover/stale signals
     // The full library health is recomputed during the Analysis phase
@@ -781,8 +781,8 @@ pub fn execute_update_deploy_signals(
 
     // Convert absolute paths to relative for DB queries and signal keys
     let resolver = paths::get_resolver();
-    let library_path_str = to_relative_str(&resolver, library_path);
-    let corpus_path_str = to_relative_str(&resolver, corpus_path);
+    let library_path_str = to_relative_str(resolver, library_path);
+    let corpus_path_str = to_relative_str(resolver, corpus_path);
 
     log_general(format!(
         "[COMPUTE] UpdateDeploySignals: corpus={} library={}",

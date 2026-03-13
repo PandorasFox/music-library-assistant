@@ -31,7 +31,7 @@ pub enum WireRequest {
     /// Authenticated protocol request (queries, transactions, commands).
     Authenticated {
         token: SessionToken,
-        body: AuthenticatedBody,
+        body: Box<AuthenticatedBody>,
     },
     /// Unauthenticated protocol request (login, setup query).
     Unauthenticated(UnauthenticatedBody),
@@ -43,7 +43,7 @@ pub enum WireRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WireResponse {
     /// Response to an authenticated request.
-    Authenticated(Result<AuthenticatedResponse, ProtocolError>),
+    Authenticated(Box<Result<AuthenticatedResponse, ProtocolError>>),
     /// Response to an unauthenticated request.
     Unauthenticated(Result<UnauthenticatedResponse, ProtocolError>),
     /// Acknowledgement for lifecycle signals (NotifyDbReady).

@@ -368,7 +368,7 @@ macro_rules! domain_query_protocol {
                 type Response = $response;
 
                 fn into_payload(self) -> crate::protocol::QueryPayload {
-                    crate::protocol::QueryPayload::Domain(DomainQueryPayload::$query(self))
+                    crate::protocol::QueryPayload::Domain(Box::new(DomainQueryPayload::$query(self)))
                 }
 
                 fn extract_response(

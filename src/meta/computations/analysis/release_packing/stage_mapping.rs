@@ -721,19 +721,19 @@ fn build_signature_siblings(
         let siblings: Vec<AlternativeRelease> = group
             .iter()
             .filter(|&&i| i != best_idx)
-            .filter_map(|&i| {
+            .map(|&i| {
                 let p = &proposals[i];
                 let release_id = &p.rows[0].release_id;
                 let (title, artist) = manifest_map
                     .get(release_id.as_str())
                     .map(|&(t, a)| (t.to_string(), a.to_string()))
                     .unwrap_or_default();
-                Some(AlternativeRelease {
+                AlternativeRelease {
                     release_id: release_id.clone(),
                     release_title: title,
                     release_artist: artist,
                     total_score: p.total_score,
-                })
+                }
             })
             .collect();
 

@@ -86,15 +86,14 @@ pub enum ArtCacheKey {
 /// Cache for album art image protocols, keyed by source.
 ///
 /// Holds at most a few entries (one per visible context).
+#[derive(Default)]
 pub struct AlbumArtCache {
     entries: HashMap<ArtCacheKey, CachedArtProtocol>,
 }
 
 impl AlbumArtCache {
     pub fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Load a sidecar image from disk and cache its protocol.
@@ -105,11 +104,9 @@ impl AlbumArtCache {
         picker: &mut AlbumArtPicker,
     ) -> &mut CachedArtProtocol {
         let key = ArtCacheKey::Sidecar(path.to_path_buf());
-        if !self.entries.contains_key(&key) {
-            let entry = load_sidecar_image(path, picker);
-            self.entries.insert(key.clone(), entry);
-        }
-        self.entries.get_mut(&key).unwrap()
+        self.entries
+            .entry(key)
+            .or_insert_with(|| load_sidecar_image(path, picker))
     }
 
     /// Load embedded art from an audio file and cache its protocol.

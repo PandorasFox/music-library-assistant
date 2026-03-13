@@ -75,7 +75,7 @@ fn render_header(f: &mut Frame, area: Rect, state: &KnotBrowserState) {
         ),
         Span::styled("— ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            format!("{}", knot.tier),
+            knot.tier.to_string(),
             Style::default().fg(Color::Yellow),
         ),
         Span::styled(

@@ -72,6 +72,7 @@ pub enum ListInputResult<A> {
 
 /// Configuration for constructing a StandardList.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct StandardListConfig {
     /// Whether items can be toggle-selected with Space.
     pub multi_select: bool,
@@ -81,14 +82,7 @@ pub struct StandardListConfig {
     pub pane_min_width: u16,
 }
 
-impl Default for StandardListConfig {
-    fn default() -> Self {
-        Self {
-            multi_select: false,
-            pane_min_width: 0,
-        }
-    }
-}
+// Default is derived — both fields default to false/0.
 
 /// Unified list state machine.
 #[derive(Debug)]
@@ -346,11 +340,11 @@ impl StandardListState {
             .get(self.cursor)
             .and_then(|i| i.wizard(area.width));
 
-        let has_pane_data = match (&self.wizard_state, &offer) {
-            (WizardState::ShowingPane, Some(WizardOffer::Pane { .. })) => true,
-            (WizardState::ShowingPane, Some(WizardOffer::Both { .. })) => true,
-            _ => false,
-        };
+        let has_pane_data = matches!(
+            (&self.wizard_state, &offer),
+            (WizardState::ShowingPane, Some(WizardOffer::Pane { .. }))
+                | (WizardState::ShowingPane, Some(WizardOffer::Both { .. }))
+        );
 
         let (list_area, pane_area, pane_is_overlay) = if has_pane_data {
             let normal_pane_width = area.width * 40 / 100;
@@ -409,11 +403,11 @@ impl StandardListState {
         }
 
         // Render wizard popup overlay if active.
-        let has_popup_data = match (&self.wizard_state, &offer) {
-            (WizardState::ShowingPopup, Some(WizardOffer::Popup(_))) => true,
-            (WizardState::ShowingPopup, Some(WizardOffer::Both { .. })) => true,
-            _ => false,
-        };
+        let has_popup_data = matches!(
+            (&self.wizard_state, &offer),
+            (WizardState::ShowingPopup, Some(WizardOffer::Popup(_)))
+                | (WizardState::ShowingPopup, Some(WizardOffer::Both { .. }))
+        );
 
         if has_popup_data {
             if let Some(ref offer) = offer {
@@ -440,6 +434,7 @@ impl StandardListState {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_list_inner<T>(
         &mut self,
         f: &mut Frame,

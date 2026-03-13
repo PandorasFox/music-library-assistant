@@ -299,7 +299,7 @@ impl Witch {
         // Spawn the filesystem watcher thread
         let fs_watcher_handle = fs_watcher::FsWatcherHandle::spawn();
 
-        let she = Self {
+        Self {
             startup_state,
             vacuum_threshold: 0.0,
             startup_schema_descriptions: Vec::new(),
@@ -333,9 +333,7 @@ impl Witch {
             socket_listener_handle: None, // Spawned in run()
             external_fetch: None,
             fetch_progress: None,
-        };
-
-        she
+        }
     }
 
     /// Create a new Witch with opinions applied (Ready state).
@@ -543,9 +541,11 @@ impl Witch {
 
         match cmd {
             HandleCommand::Authenticated { token, body, reply } => {
+                let body = *body;
                 // Domain queries bypass synchronous dispatch — they forward
                 // the reply channel to the read thread so it replies directly.
                 if let AuthenticatedBody::Query(QueryPayload::Domain(domain_payload)) = body {
+                    let domain_payload = *domain_payload;
                     // Validate auth before forwarding.
                     match self.resolve_auth(Some(&token)) {
                         Ok(AuthorizationLevel::Authenticated) => {
@@ -569,13 +569,13 @@ impl Witch {
                                 QueryPayload::Config => {
                                     let config = w.read_config(|c| c.clone())
                                         .ok_or(ProtocolError::NotReady)?;
-                                    QueryResponse::Config(config)
+                                    QueryResponse::Config(Box::new(config))
                                 }
                                 QueryPayload::Domain(_) => {
                                     unreachable!("domain queries handled above")
                                 }
                             };
-                            Ok(AuthenticatedResponse::Query(response))
+                            Ok(AuthenticatedResponse::Query(Box::new(response)))
                         }
 
                         // -- Transaction area --
@@ -634,7 +634,7 @@ impl Witch {
 
                         // -- Command area --
                         AuthenticatedBody::Command(payload) => {
-                            let response = match payload {
+                            let response = match *payload {
                                 CommandPayload::RequestExternalFetch => {
                                     w.request_external_fetch();
                                     CommandResponse::Ok
@@ -986,7 +986,7 @@ impl Witch {
         // Build cache entries for corpus files
         for (inode, (mtime_secs, mtime_nanos)) in &corpus_mtimes {
             let tags = tags_by_inode.remove(inode)
-                .map(|pairs| crate::corpus::tags::TagSet::new(pairs))
+                .map(crate::corpus::tags::TagSet::new)
                 .unwrap_or_else(crate::corpus::tags::TagSet::empty);
             cache.insert(*inode, fs_watcher::CachedInodeState {
                 mtime_secs: *mtime_secs,

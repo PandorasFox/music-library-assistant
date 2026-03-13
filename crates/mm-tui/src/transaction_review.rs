@@ -215,6 +215,12 @@ pub struct TransactionReviewState {
     button_ctx: ReviewButtonCtx,
 }
 
+impl Default for TransactionReviewState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransactionReviewState {
     /// Create state for suspending mode (Cancel button available).
     pub fn new() -> Self {

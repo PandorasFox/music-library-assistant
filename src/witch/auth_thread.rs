@@ -96,7 +96,7 @@ impl AuthHandle {
         match map.get(&hash) {
             Some(entry) => entry
                 .expires_at
-                .map_or(true, |exp| Instant::now() < exp),
+                .is_none_or(|exp| Instant::now() < exp),
             None => false,
         }
     }
@@ -284,7 +284,7 @@ fn attempt_login(
 
     // Lazily evict expired sessions while we're here
     let now = Instant::now();
-    new_map.retain(|_, e| e.expires_at.map_or(true, |exp| now < exp));
+    new_map.retain(|_, e| e.expires_at.is_none_or(|exp| now < exp));
 
     new_map.insert(token_hash, entry);
     sessions.store(Arc::new(new_map));

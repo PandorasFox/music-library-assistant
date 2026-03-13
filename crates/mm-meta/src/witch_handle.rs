@@ -42,7 +42,7 @@ pub enum HandleCommand {
     /// Authenticated protocol request (queries, transactions, commands).
     Authenticated {
         token: SessionToken,
-        body: AuthenticatedBody,
+        body: Box<AuthenticatedBody>,
         reply: mpsc::Sender<Result<AuthenticatedResponse, ProtocolError>>,
     },
 
@@ -158,7 +158,7 @@ impl WitchHandle {
                 cmd_tx
                     .send(HandleCommand::Authenticated {
                         token,
-                        body,
+                        body: Box::new(body),
                         reply: tx,
                     })
                     .expect("Witch thread has shut down unexpectedly");
@@ -167,13 +167,13 @@ impl WitchHandle {
             }
             Transport::Socket(stream) => {
                 let mut stream = stream.lock().expect("socket mutex poisoned");
-                let req = WireRequest::Authenticated { token, body };
+                let req = WireRequest::Authenticated { token, body: Box::new(body) };
                 wire::write_frame(&mut *stream, &req)
                     .map_err(|e| ProtocolError::Internal(format!("socket write: {e}")))?;
                 let resp: WireResponse = wire::read_frame(&mut *stream)
                     .map_err(|e| ProtocolError::Internal(format!("socket read: {e}")))?;
                 match resp {
-                    WireResponse::Authenticated(result) => result,
+                    WireResponse::Authenticated(result) => *result,
                     _ => Err(ProtocolError::Internal(
                         "unexpected wire response type".to_string(),
                     )),
@@ -189,7 +189,7 @@ impl WitchHandle {
     pub fn send_query<Q: ProtocolQuery>(&self, q: Q) -> Q::Response {
         let body = AuthenticatedBody::Query(q.into_payload());
         match self.send_authenticated(body) {
-            Ok(AuthenticatedResponse::Query(qr)) => Q::extract_response(qr),
+            Ok(AuthenticatedResponse::Query(qr)) => Q::extract_response(*qr),
             Ok(_) => unreachable!("protocol bug: wrong response area"),
             Err(e) => panic!("protocol query failed: {e}"),
         }
@@ -212,7 +212,7 @@ impl WitchHandle {
 
     /// Send a command and return the command response.
     pub fn send_command(&self, payload: CommandPayload) -> Result<CommandResponse, ProtocolError> {
-        let body = AuthenticatedBody::Command(payload);
+        let body = AuthenticatedBody::Command(Box::new(payload));
         match self.send_authenticated(body)? {
             AuthenticatedResponse::Command(cr) => Ok(cr),
             _ => unreachable!("protocol bug: wrong response area"),

@@ -73,7 +73,7 @@ pub trait CorpusSignalStore: Sized {
 
     /// Delete all signals from this table.
     fn clear_all(conn: &Connection) -> Result<usize> {
-        Ok(conn.execute(&format!("DELETE FROM {}", Self::TABLE_NAME), [])?)
+        conn.execute(&format!("DELETE FROM {}", Self::TABLE_NAME), [])
     }
 
     /// Query inode→data_hash map for BLOB signal types.
@@ -127,7 +127,7 @@ pub trait AggregateSignalStore: Sized {
 
     /// Delete all signals from this table.
     fn clear_all(conn: &Connection) -> Result<usize> {
-        Ok(conn.execute(&format!("DELETE FROM {}", Self::TABLE_NAME), [])?)
+        conn.execute(&format!("DELETE FROM {}", Self::TABLE_NAME), [])
     }
 
     /// Query all keys for this signal type.

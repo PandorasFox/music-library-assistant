@@ -321,11 +321,11 @@ impl App {
         // treat it as quit for lateral views. Views that handle Cancel as a domain
         // action (ConfigEditor→Discard, CorpusBrowser→Cancel, TagSearch→Cancel)
         // produce Some(action), so the fallback never fires for them.
-        if matches!(&view_action, ViewAction::None) && matches!(action, InputAction::Cancel) {
-            if self.view.lateral_view().is_some() {
-                self.handle_request_quit();
-                return;
-            }
+        if matches!(&view_action, ViewAction::None) && matches!(action, InputAction::Cancel)
+            && self.view.lateral_view().is_some()
+        {
+            self.handle_request_quit();
+            return;
         }
 
         // Phase 2: dispatch with confirmation flag

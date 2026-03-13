@@ -91,8 +91,9 @@ impl MutationExecutor for StashFromZoneMutation {
             .map(|m| vec![m.ino() as i64])
             .unwrap_or_default();
 
-        let result = match ctx.stash_root {
-            Some(root) => execute_move_to_stash(&self.path, &self.stash_name, root),
+        let stash_root = ctx.snapshot.config.as_ref().map(|c| c.stash_dir());
+        let result = match stash_root {
+            Some(ref root) => execute_move_to_stash(&self.path, &self.stash_name, root),
             None => Err(anyhow::anyhow!(
                 "Stash directory not configured. File: {}",
                 self.path.display()
@@ -154,8 +155,9 @@ impl MutationExecutor for StashLeftoversMutation {
             .map(|m| vec![m.ino() as i64])
             .unwrap_or_default();
 
-        let result = match ctx.stash_root {
-            Some(root) => execute_move_to_stash(&self.path, "library_leftovers", root),
+        let stash_root = ctx.snapshot.config.as_ref().map(|c| c.stash_dir());
+        let result = match stash_root {
+            Some(ref root) => execute_move_to_stash(&self.path, "library_leftovers", root),
             None => Err(anyhow::anyhow!(
                 "Stash directory not configured. File: {}",
                 self.path.display()

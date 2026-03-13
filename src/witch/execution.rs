@@ -28,7 +28,6 @@
 
 use std::cell::RefCell;
 use std::os::unix::fs::MetadataExt;
-use crate::config;
 use crate::corpus::paths;
 use crate::db::write_thread;
 use crate::meta::computations::{derivation, with_read_only_db, Computation};
@@ -39,7 +38,7 @@ use crate::meta::signals::registry::TypedSignalWrite;
 use crate::meta::maintenance::DbMaintenanceTask;
 
 use super::external_fetch::{ExternalFetchTask, FetchOutcome, MbEntityKind};
-use super::types::{MutationExecutionWitness, Task, TaskKind, TaskResult};
+use super::types::{HadesSnapshot, MutationExecutionWitness, Task, TaskKind, TaskResult};
 
 // ============================================================================
 // Task Execution
@@ -47,12 +46,12 @@ use super::types::{MutationExecutionWitness, Task, TaskKind, TaskResult};
 
 /// Execute a single task (mutation, computation, maintenance, or external fetch).
 /// Opens DB/HTTP connections as needed via thread-local caches.
-pub(super) fn execute_task(task: Task, label: String) -> TaskResult {
+pub(super) fn execute_task(task: Task, label: String, snapshot: &HadesSnapshot) -> TaskResult {
     let kind = TaskKind::from_task(&task);
 
     let mut result = match task {
-        Task::Mutation(mutation) => execute_mutation(*mutation, label),
-        Task::Computation(computation) => execute_computation(computation, label),
+        Task::Mutation(mutation) => execute_mutation(*mutation, label, snapshot),
+        Task::Computation(computation) => execute_computation(computation, label, snapshot),
         Task::Maintenance(task) => execute_maintenance(task, label),
         Task::ExternalFetch(fetch_task) => execute_external_fetch(fetch_task, label),
     };
@@ -67,6 +66,7 @@ pub(super) fn execute_task(task: Task, label: String) -> TaskResult {
 pub(super) fn execute_mutation(
     mutation: Mutation,
     label: String,
+    snapshot: &HadesSnapshot,
 ) -> TaskResult {
     use crate::meta::mutations::traits::MutationContext;
 
@@ -79,10 +79,6 @@ pub(super) fn execute_mutation(
     // Create execution witness - proves we're inside the Witch's execution context
     let witness = MutationExecutionWitness::new();
 
-    // Load config for stash_root access (needed by file_ops and transcode)
-    let loaded_config = config::load_config().ok();
-    let stash_root = loaded_config.as_ref().map(|c| c.stash_dir());
-
     let session_id: &str = &label;
 
     // Execute mutation via MutationExecutor trait dispatch.
@@ -92,7 +88,7 @@ pub(super) fn execute_mutation(
         let ctx = MutationContext {
             read_db,
             witness: &witness,
-            stash_root: stash_root.as_deref(),
+            snapshot,
             session_id,
         };
         let r = executor.execute(&ctx);
@@ -217,10 +213,11 @@ pub(super) fn execute_mutation(
 pub(super) fn execute_computation(
     computation: Computation,
     label: String,
+    snapshot: &HadesSnapshot,
 ) -> TaskResult {
     use crate::meta::computations;
 
-    let result = computations::execute_single(&computation);
+    let result = computations::execute_single(&computation, snapshot);
 
     // Collect all spawned computations (already wrapped in unified Computation enum)
     let spawn = result.all_spawned();

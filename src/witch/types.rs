@@ -7,9 +7,11 @@
 //! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use super::external_fetch::ExternalFetchTask;
+use crate::config::Config;
 use crate::meta::computations::Computation;
 use crate::meta::maintenance::DbMaintenanceTask;
 use crate::meta::mutations::Mutation;
@@ -17,6 +19,23 @@ use crate::meta::recomputation::RecomputationScope;
 
 // Re-export protocol-visible types from mm-meta.
 pub use mm_meta::witch_types::*;
+
+// ============================================================================
+// HadesSnapshot — Phase-Level Read-Only Data Envelope
+// ============================================================================
+
+/// Point-in-time snapshot of Hades's read-only pipeline data.
+///
+/// Arc-cloned into each dispatched task. Each field is individually Arc'd
+/// so snapshot creation is just atomic refcount bumps, not deep copies.
+/// Adding new phase-level data = add a field here.
+#[derive(Clone)]
+pub struct HadesSnapshot {
+    /// Current config at dispatch time. `None` only during AwaitingSetup
+    /// (before first-time setup completes — no config exists on disk yet).
+    pub config: Option<Arc<Config>>,
+    // Future: pub proposals: Option<Arc<ProposalSet>>,
+}
 
 // ============================================================================
 // ManagedThread Trait

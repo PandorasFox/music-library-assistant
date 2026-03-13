@@ -196,7 +196,10 @@ impl ComputationResult {
 ///
 /// Dispatches to the appropriate phase-specific executor based on the
 /// computation variant. Uses thread-local cached read-only connection.
-pub fn execute_single(computation: &Computation) -> ComputationResult {
+pub fn execute_single(
+    computation: &Computation,
+    snapshot: &crate::witch::types::HadesSnapshot,
+) -> ComputationResult {
     // Create witness for signal operations
     let witness = ComputationWitness::new();
 
@@ -206,6 +209,7 @@ pub fn execute_single(computation: &Computation) -> ComputationResult {
         let ctx = traits::ComputationContext {
             read_db: read_only_db,
             witness: &witness,
+            snapshot,
         };
 
         match computation {

@@ -10,9 +10,12 @@
 
 use super::types::ComputationWitness;
 use crate::db::ReadOnlyDb;
+use crate::witch::types::HadesSnapshot;
 
 /// Context provided to computation executors at execution time.
 pub struct ComputationContext<'a> {
     pub read_db: &'a ReadOnlyDb<'a>,
     pub witness: &'a ComputationWitness,
+    /// Hades phase-level data envelope (config, future proposals, etc.).
+    pub snapshot: &'a HadesSnapshot,
 }

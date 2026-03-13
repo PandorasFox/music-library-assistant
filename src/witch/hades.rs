@@ -13,13 +13,16 @@
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::config::{self as config_mod, PerformanceOpinions};
+use arc_swap::ArcSwap;
+
+use crate::config::{self as config_mod, Config, PerformanceOpinions};
 
 use super::execution::execute_task;
-use super::types::{ManagedThread, TaskKind, TaskResult, Task};
+use super::types::{HadesSnapshot, ManagedThread, TaskKind, TaskResult, Task};
 
 // ============================================================================
 // Protocol
@@ -27,7 +30,7 @@ use super::types::{ManagedThread, TaskKind, TaskResult, Task};
 
 enum HadesCommand {
     Dispatch { task: Task, label: String },
-    UpdateConfig { opinions: PerformanceOpinions },
+    UpdateConfig { config: Config, opinions: PerformanceOpinions },
     Shutdown,
 }
 
@@ -48,7 +51,9 @@ pub(super) struct HadesHandle {
 
 impl HadesHandle {
     /// Spawn the Hades thread. Creates a rayon ThreadPool sized per global config.
-    pub fn spawn() -> Self {
+    ///
+    /// `initial_config` is `None` only during AwaitingSetup (no config on disk yet).
+    pub fn spawn(initial_config: Option<Config>) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let (message_tx, message_rx) = mpsc::channel();
 
@@ -57,7 +62,7 @@ impl HadesHandle {
         let handle = std::thread::Builder::new()
             .name("mm-hades".to_string())
             .spawn(move || {
-                run_hades(command_rx, message_tx, initial_threads);
+                run_hades(command_rx, message_tx, initial_threads, initial_config);
             })
             .expect("failed to spawn Hades thread");
 
@@ -86,9 +91,10 @@ impl HadesHandle {
         })
     }
 
-    /// Send updated performance config to Hades for pool rebuild.
-    pub fn update_config(&self, opinions: &PerformanceOpinions) {
+    /// Send updated config to Hades for snapshot + pool rebuild.
+    pub fn update_config(&self, config: &Config, opinions: &PerformanceOpinions) {
         let _ = self.command_tx.send(HadesCommand::UpdateConfig {
+            config: config.clone(),
             opinions: opinions.clone(),
         });
     }
@@ -134,10 +140,15 @@ fn run_hades(
     command_rx: Receiver<HadesCommand>,
     message_tx: Sender<HadesMessage>,
     initial_threads: usize,
+    initial_config: Option<Config>,
 ) {
     crate::logging::log_general("[HADES] Thread started");
 
     let mut pool = build_pool(initial_threads);
+
+    // Atomic config store — snapshot creation is just an Arc clone from here.
+    // None only during AwaitingSetup (no config on disk yet).
+    let config: ArcSwap<Option<Config>> = ArcSwap::from_pointee(initial_config);
 
     // Internal channel: rayon workers → Hades loop
     let (result_tx, result_rx) = mpsc::channel::<TaskResult>();
@@ -146,13 +157,20 @@ fn run_hades(
         // Check for commands (non-blocking with short timeout)
         match command_rx.recv_timeout(Duration::from_millis(5)) {
             Ok(HadesCommand::Dispatch { task, label }) => {
+                // Build a snapshot for this task — Arc clones from the ArcSwap
+                let snapshot = {
+                    let guard = config.load();
+                    HadesSnapshot {
+                        config: guard.as_ref().as_ref().map(|c| Arc::new(c.clone())),
+                    }
+                };
                 let tx = result_tx.clone();
                 let label_for_panic = label.clone();
                 let kind_for_panic = TaskKind::from_task(&task);
                 pool.spawn(move || {
                     let result =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            execute_task(task, label)
+                            execute_task(task, label, &snapshot)
                         }));
                     let result = match result {
                         Ok(r) => r,
@@ -182,7 +200,10 @@ fn run_hades(
                     let _ = tx.send(result);
                 });
             }
-            Ok(HadesCommand::UpdateConfig { opinions }) => {
+            Ok(HadesCommand::UpdateConfig { config: new_config, opinions }) => {
+                // Swap config atomically — next dispatched task sees it immediately
+                config.store(Arc::new(Some(new_config)));
+
                 let new_thread_count = opinions
                     .worker_threads
                     .unwrap_or_else(|| {
@@ -225,6 +246,10 @@ fn run_hades(
 
         // Drain completed results from rayon workers → forward to Witch
         while let Ok(result) = result_rx.try_recv() {
+            // Intercept config updates — Hades sees them before the Witch
+            if let Some(ref new_config) = result.config_update {
+                config.store(Arc::new(Some(new_config.clone())));
+            }
             let _ = message_tx.send(HadesMessage::Result(result));
         }
     }

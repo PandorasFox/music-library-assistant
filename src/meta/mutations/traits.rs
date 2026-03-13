@@ -5,12 +5,11 @@
 //! This replaces the centralized match dispatch in `witch/execution.rs` and
 //! the exhaustive match methods on the `Mutation` enum in `types.rs`.
 
-use std::path::Path;
-
 use crate::db::ReadOnlyDb;
 use crate::meta::computations::Computation;
 use crate::meta::recomputation::RecomputationScope;
 use crate::witch::MutationExecutionWitness;
+use crate::witch::types::HadesSnapshot;
 
 use mm_meta::mutations::{MutationExecutionStage, MutationOrigin};
 
@@ -19,15 +18,12 @@ use super::types::{MutationResult, SignalClearScope, SignalToClear};
 /// Context provided to mutation executors at execution time.
 ///
 /// Contains everything a mutation needs to execute: read-only DB access,
-/// execution witness, optional stash root, and session ID.
+/// execution witness, Hades snapshot (config etc.), and session ID.
 pub struct MutationContext<'a> {
     pub read_db: &'a ReadOnlyDb<'a>,
     pub witness: &'a MutationExecutionWitness,
-    /// Stash root directory for file operations and transcode.
-    // TODO: eventually replace with a single read-only ARC for the active
-    // config blob (which will contain stash root etc) — will cleanly contain
-    // "all config" that mutations might want access to, not just stash root.
-    pub stash_root: Option<&'a Path>,
+    /// Hades phase-level data envelope (config, future proposals, etc.).
+    pub snapshot: &'a HadesSnapshot,
     pub session_id: &'a str,
 }
 

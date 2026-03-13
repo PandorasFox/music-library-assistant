@@ -45,13 +45,14 @@ impl MutationExecutor for TranscodeMutation {
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
         let start = std::time::Instant::now();
 
+        let stash_root = ctx.snapshot.config.as_ref().map(|c| c.stash_dir());
         let result = execute_transcode_impl(
             ctx.read_db,
             self.inode,
             &self.source_path,
             self.target_format,
             &self.stash_name,
-            ctx.stash_root,
+            stash_root.as_deref(),
             ctx.witness,
         );
 

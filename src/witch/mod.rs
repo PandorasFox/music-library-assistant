@@ -279,6 +279,7 @@ impl Witch {
 
     fn new(
         startup_state: types::WitchStartupState,
+        initial_config: Option<Config>,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
     ) -> Self {
         // Spawn the logging thread if we have the receiver
@@ -286,7 +287,8 @@ impl Witch {
 
         // Spawn Hades — the pipeline overseer thread that owns the rayon pool.
         // Uses a dedicated ThreadPool instance (not the global pool).
-        let hades = hades::HadesHandle::spawn();
+        // Config is None during AwaitingSetup (no config on disk yet).
+        let hades = hades::HadesHandle::spawn(initial_config);
 
         // Spawn db_thread early. Migrations coexist with an idle db_thread — they open
         // their own write connections on rayon threads, and in WAL mode concurrent
@@ -343,7 +345,7 @@ impl Witch {
         cfg: &Config,
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
     ) -> Self {
-        let mut she = Self::new(types::WitchStartupState::Ready, log_rx);
+        let mut she = Self::new(types::WitchStartupState::Ready, Some(cfg.clone()), log_rx);
         she.force_check_all_files_at_startup =
             cfg.opinions.startup.force_check_all_files_at_startup;
         she.vacuum_threshold = cfg.opinions.startup.vacuum_threshold;
@@ -392,7 +394,7 @@ impl Witch {
         } else {
             // No DB — Witch boots in AwaitingSetup
             crate::logging::log_general("[WITCH] No database found — entering AwaitingSetup");
-            Self::new(types::WitchStartupState::AwaitingSetup, log_rx)
+            Self::new(types::WitchStartupState::AwaitingSetup, None, log_rx)
         };
 
         // Auto-detect and queue startup maintenance (schema reconciliation, vacuum)
@@ -835,8 +837,14 @@ impl Witch {
     fn update_performance_impl(&mut self, opinions: crate::config::PerformanceOpinions) {
         let new_cache_kb = -(opinions.db_cache_mb as i64 * 1024);
 
+        // Read current config for Hades snapshot update
+        let current_config = self.shared_config.as_ref()
+            .map(|sc| sc.read().expect("SharedConfig lock poisoned").clone());
+
         // Hades handles rayon pool rebuild + thread-local cache_size (lazy propagation)
-        self.hades.update_config(&opinions);
+        if let Some(ref cfg) = current_config {
+            self.hades.update_config(cfg, &opinions);
+        }
 
         // Explicit cache_size update for long-lived thread connections
         crate::db::write_thread::set_cache_size(new_cache_kb);

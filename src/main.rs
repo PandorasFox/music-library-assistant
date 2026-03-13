@@ -38,11 +38,7 @@ pub static _rjem_malloc_conf: &[u8] =
 // Version Information
 // ============================================================================
 
-/// MM release version string (shown in title bar and reports)
-pub const MM_VERSION: &str = "beta 9";
-
-/// Full application title with version
-pub const MM_TITLE: &str = "Music Magic (mm beta 9)";
+pub use mm_meta::{MM_TITLE, MM_VERSION};
 
 mod auth;
 mod config;
@@ -51,7 +47,6 @@ mod db;
 mod external;
 mod logging;
 mod meta;
-mod ui;
 mod witch;
 pub mod zones;
 
@@ -65,16 +60,8 @@ fn main() -> Result<()> {
     let config_dir = config::get_config_dir()?;
     std::fs::create_dir_all(&config_dir)?;
 
-    // Clear terminal
-    print!("\x1B[2J\x1B[1;1H");
-
-    // Witch owns the main thread. TUI is spawned as a client thread.
-    // The Witch detects startup state (AwaitingSetup vs Ready) internally.
-    witch::Witch::run(Some(log_rx), move |handle| {
-        if let Err(e) = ui::run_tui(handle) {
-            eprintln!("TUI error: {:?}", e);
-        }
-    });
+    // Witch owns the main thread. Clients connect over Unix socket.
+    witch::Witch::run(Some(log_rx));
 
     Ok(())
 }

@@ -108,3 +108,96 @@ pub struct InboxOrganizeFile {
     /// Just the filename (for display)
     pub filename: String,
 }
+
+// ============================================================================
+// Directory Grouping
+// ============================================================================
+
+/// Group organizable files into InboxDirectory structs based on granularity.
+pub fn group_into_directories(
+    files: &[(i64, String)],
+    inbox_dir: &std::path::Path,
+    granularity: crate::config::InboxOrganizeGranularity,
+    resolver: &crate::paths::PathResolver,
+) -> Vec<InboxDirectory> {
+    use std::collections::BTreeMap;
+    use crate::config::InboxOrganizeGranularity;
+
+    // Convert relative paths to absolute, group by parent directory
+    let mut dir_groups: BTreeMap<PathBuf, Vec<InboxOrganizeFile>> = BTreeMap::new();
+
+    for (inode, rel_path) in files {
+        let abs_path = resolver.resolve(std::path::Path::new(rel_path));
+
+        let parent = match abs_path.parent() {
+            Some(p) => p.to_path_buf(),
+            None => continue,
+        };
+        let filename = abs_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        dir_groups
+            .entry(parent)
+            .or_default()
+            .push(InboxOrganizeFile {
+                inode: *inode,
+                path: abs_path,
+                filename,
+            });
+    }
+
+    match granularity {
+        InboxOrganizeGranularity::Leaf => {
+            // Use directories as-is (deepest dirs containing files)
+            dir_groups
+                .into_iter()
+                .map(|(dir_path, files)| {
+                    let dir_name = dir_path
+                        .strip_prefix(inbox_dir)
+                        .unwrap_or(&dir_path)
+                        .to_string_lossy()
+                        .to_string();
+                    InboxDirectory {
+                        dir_name,
+                        dir_path,
+                        files,
+                    }
+                })
+                .collect()
+        }
+        InboxOrganizeGranularity::TopLevel => {
+            // Group by top-level child of inbox/
+            let mut top_groups: BTreeMap<PathBuf, Vec<InboxOrganizeFile>> = BTreeMap::new();
+
+            for (dir_path, files) in dir_groups {
+                // Find the top-level directory under inbox/
+                let rel = dir_path.strip_prefix(inbox_dir).unwrap_or(&dir_path);
+                let top_component = rel
+                    .components()
+                    .next()
+                    .map(|c| inbox_dir.join(c.as_os_str()))
+                    .unwrap_or_else(|| dir_path.clone());
+
+                top_groups.entry(top_component).or_default().extend(files);
+            }
+
+            top_groups
+                .into_iter()
+                .map(|(dir_path, files)| {
+                    let dir_name = dir_path
+                        .strip_prefix(inbox_dir)
+                        .unwrap_or(&dir_path)
+                        .to_string_lossy()
+                        .to_string();
+                    InboxDirectory {
+                        dir_name,
+                        dir_path,
+                        files,
+                    }
+                })
+                .collect()
+        }
+    }
+}

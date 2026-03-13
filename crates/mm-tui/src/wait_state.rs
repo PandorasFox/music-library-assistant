@@ -1,0 +1,126 @@
+//! Wait State Helper
+//!
+//! Standardized pattern for UI components that need to wait for Witch work to complete.
+//! Used by progress screens and modals that trigger mutations.
+//!
+//! ## Usage Pattern
+//!
+//! ```rust,ignore
+//! struct MyModal {
+//!     wait_state: WaitState,
+//!     // ... other state
+//! }
+//!
+//! impl MyModal {
+//!     fn trigger_work(&mut self, witch: &mut Witch) {
+//!         witch.queue_computation(...);
+//!         self.wait_state.start();
+//!     }
+//!
+//!     fn tick(&mut self, witch: &Witch) -> bool {
+//!         if self.wait_state.tick(witch) {
+//!             // Work is complete
+//!             return true;
+//!         }
+//!         false
+//!     }
+//! }
+//! ```
+
+use mm_meta::witch_types::{WitchStatus, WorkStateSnapshot};
+
+/// Helper for waiting on Witch work completion.
+///
+/// Tracks whether we've seen the Witch working and detects when work completes.
+/// This avoids false positives from checking Witch state before work starts.
+#[derive(Debug, Clone, Default)]
+pub struct WaitState {
+    /// Whether we're currently waiting for work to complete.
+    waiting: bool,
+    /// Whether we've seen the Witch enter Working state (to distinguish idle-before from idle-after).
+    seen_working: bool,
+}
+
+impl WaitState {
+    /// Create a new wait state (not waiting).
+    pub fn new() -> Self {
+        Self {
+            waiting: false,
+            seen_working: false,
+        }
+    }
+
+    /// Start waiting for Witch work to complete.
+    ///
+    /// Call this after queuing work to the Witch.
+    pub fn start(&mut self) {
+        self.waiting = true;
+        self.seen_working = false;
+    }
+
+    /// Tick the wait state, checking for completion.
+    ///
+    /// Returns `true` when waiting is complete (Witch was working and is now idle/completed).
+    /// Call this each frame while waiting.
+    pub fn tick(&mut self, ws: &WitchStatus) -> bool {
+        if !self.waiting {
+            return false;
+        }
+
+        let status = &ws.work;
+
+        // Track when the Witch starts working
+        if status.state == WorkStateSnapshot::Working {
+            self.seen_working = true;
+        }
+
+        // Check for completion:
+        // - Must have seen working state (to avoid false positive from initial idle)
+        // - No pending tasks
+        // - The Witch is now Idle or Done
+        if self.seen_working && status.pending == 0 {
+            match status.state {
+                WorkStateSnapshot::Idle | WorkStateSnapshot::Done => {
+                    self.waiting = false;
+                    return true; // Complete!
+                }
+                WorkStateSnapshot::Working => {
+                    // Still working, not complete
+                }
+            }
+        }
+
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wait_state_initial() {
+        let state = WaitState::new();
+        assert!(!state.waiting);
+        assert!(!state.seen_working);
+    }
+
+    #[test]
+    fn test_wait_state_start() {
+        let mut state = WaitState::new();
+        state.start();
+        assert!(state.waiting);
+        assert!(!state.seen_working);
+    }
+
+    #[test]
+    fn test_wait_state_reset() {
+        let mut state = WaitState::new();
+        state.start();
+        state.seen_working = true;
+        // Reset by creating new state
+        state = WaitState::new();
+        assert!(!state.waiting);
+        assert!(!state.seen_working);
+    }
+}

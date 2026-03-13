@@ -13,5 +13,5 @@ pub mod strings;
 pub mod tag_names;
 
 // Re-export commonly used items at crate root
-pub use audio::{is_audio_extension, AUDIO_EXTENSIONS};
+pub use audio::{is_audio_extension, is_image_extension, AUDIO_EXTENSIONS, IMAGE_EXTENSIONS};
 pub use paths::{get_config_dir, get_data_dir, get_db_path, get_logs_dir};

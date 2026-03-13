@@ -105,6 +105,14 @@ impl WitchHandle {
         }
     }
 
+    /// Default socket path: `$XDG_RUNTIME_DIR/mm.sock`.
+    ///
+    /// Returns `None` if `XDG_RUNTIME_DIR` is not set.
+    pub fn default_socket_path() -> Option<std::path::PathBuf> {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(|dir| std::path::Path::new(&dir).join("mm.sock"))
+    }
+
     /// Connect to a running Witch over a Unix domain socket.
     pub fn connect(socket_path: &Path) -> std::io::Result<Self> {
         let stream = std::os::unix::net::UnixStream::connect(socket_path)?;
@@ -403,6 +411,20 @@ impl WitchHandle {
         opinions: crate::config::PerformanceOpinions,
     ) -> Result<(), ProtocolError> {
         self.send_command(CommandPayload::UpdatePerformance { opinions })?;
+        Ok(())
+    }
+
+    /// Delete edit history for a specific session.
+    pub fn jettison_edit_history_session(&self, session_id: &str) -> Result<(), ProtocolError> {
+        self.send_command(CommandPayload::JettisonEditHistorySession {
+            session_id: session_id.to_owned(),
+        })?;
+        Ok(())
+    }
+
+    /// Delete all edit history.
+    pub fn jettison_edit_history_all(&self) -> Result<(), ProtocolError> {
+        self.send_command(CommandPayload::JettisonEditHistoryAll)?;
         Ok(())
     }
 

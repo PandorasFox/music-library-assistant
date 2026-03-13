@@ -1,0 +1,49 @@
+[package]
+name = "mm-tui"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal UI for MM (Music Magic)"
+
+[[bin]]
+name = "mm-tui"
+path = "src/main.rs"
+
+[lib]
+name = "mm_tui"
+path = "src/lib.rs"
+
+[dependencies]
+mm-meta = { path = "../mm-meta" }
+mm-utils = { path = "../mm-utils" }
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Terminal image rendering
+ratatui-image = { version = "4.2", default-features = false, features = ["crossterm"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+
+# Signal handling
+signal-hook = "0.3"
+
+# Error handling
+anyhow = "1.0"
+
+# Serialization (for protocol types)
+serde = { version = "1.0", features = ["derive"] }
+
+# String width calculation
+unicode-width = "0.2"
+
+# Regex (for search/filter)
+regex = "1.10"
+
+# Duration formatting
+chrono = "0.4"
+
+# Audio metadata (for album art extraction from audio files)
+lofty = "0.23.2"
+
+# Duration formatting
+humantime = "2"

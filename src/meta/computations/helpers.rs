@@ -50,7 +50,7 @@ impl std::fmt::Display for ReconcileStats {
 // ============================================================================
 
 /// Image file extensions we recognise.
-pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp"];
+pub(crate) use mm_utils::IMAGE_EXTENSIONS;
 
 /// Check if a filename is a macOS resource fork (AppleDouble) file.
 ///

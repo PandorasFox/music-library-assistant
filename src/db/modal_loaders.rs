@@ -27,8 +27,8 @@ use crate::db::ReadOnlyDb;
 /// We get the inode from the filesystem directly since the file exists on disk.
 pub fn load_corrupt_file_data(
     read_db: &ReadOnlyDb<'_>,
-) -> Result<crate::ui::corrupt_file_modal::types::CorruptFileModalData> {
-    use crate::ui::corrupt_file_modal::types::{CorruptFileEntry, CorruptFileModalData};
+) -> Result<mm_meta::views::health_modals::CorruptFileModalData> {
+    use mm_meta::views::health_modals::{CorruptFileEntry, CorruptFileModalData};
 
     let corrupt_paths = read_db.get_corrupt_file_paths()?;
 
@@ -60,8 +60,8 @@ pub fn load_corrupt_file_data(
 /// Load and categorize missing files from the database.
 pub fn load_missing_file_data(
     read_db: &ReadOnlyDb<'_>,
-) -> Result<crate::ui::missing_file_modal::types::MissingFileModalData> {
-    use crate::ui::missing_file_modal::types::{
+) -> Result<mm_meta::views::health_modals::MissingFileModalData> {
+    use mm_meta::views::health_modals::{
         MissingFileModalData, NonRestorableMissingFile, RestorableMissingFile,
     };
 
@@ -123,9 +123,9 @@ pub fn load_missing_file_data(
 /// Load missing directory data from the database.
 pub fn load_missing_directory_data(
     read_db: &ReadOnlyDb<'_>,
-) -> Result<crate::ui::missing_directory_modal::MissingDirectoryModalData> {
+) -> Result<mm_meta::views::health_modals::MissingDirectoryModalData> {
     let directories = read_db.get_missing_directory_paths()?;
-    Ok(crate::ui::missing_directory_modal::MissingDirectoryModalData { directories })
+    Ok(mm_meta::views::health_modals::MissingDirectoryModalData { directories })
 }
 
 // ============================================================================
@@ -135,8 +135,8 @@ pub fn load_missing_directory_data(
 /// Load subpar duplicate files from the database.
 pub fn load_subpar_duplicate_data(
     read_db: &ReadOnlyDb<'_>,
-) -> Result<crate::ui::subpar_duplicate_modal::types::SubparDuplicateModalData> {
-    use crate::ui::subpar_duplicate_modal::types::{SubparDuplicateModalData, SubparFileEntry};
+) -> Result<mm_meta::views::health_modals::SubparDuplicateModalData> {
+    use mm_meta::views::health_modals::{SubparDuplicateModalData, SubparFileEntry};
 
     let subpar_entries = read_db.get_subpar_duplicate_files()?;
 
@@ -187,8 +187,8 @@ pub fn load_subpar_duplicate_data(
 /// Load shit format files from the database.
 pub fn load_shit_format_data(
     read_db: &ReadOnlyDb<'_>,
-) -> Result<crate::ui::shit_format_modal::types::ShitFormatModalData> {
-    use crate::ui::shit_format_modal::types::{ShitFormatEntry, ShitFormatModalData};
+) -> Result<mm_meta::views::cluster_deploy::ShitFormatModalData> {
+    use mm_meta::views::cluster_deploy::{ShitFormatEntry, ShitFormatModalData};
 
     let shit_format_files = read_db.get_shit_format_files()?;
     let file_counts_raw = read_db.get_shit_format_counts_by_type()?;
@@ -252,8 +252,8 @@ fn format_summary_from_counts(format_counts: &HashMap<String, usize>) -> String 
 /// Load cross-source overlap clusters from the database.
 pub fn load_directory_cluster_data(
     read_db: &ReadOnlyDb<'_>,
-) -> Result<crate::ui::directory_cluster_modal::types::DirectoryClusterModalData> {
-    use crate::ui::directory_cluster_modal::types::{
+) -> Result<mm_meta::views::cluster_deploy::DirectoryClusterModalData> {
+    use mm_meta::views::cluster_deploy::{
         DirectoryClusterEntry, DirectoryClusterModalData, DirectoryGroupEntry,
     };
 
@@ -346,8 +346,8 @@ pub fn load_directory_cluster_data(
 /// Load release overlap clusters from the database.
 pub fn load_release_overlap_data(
     read_db: &ReadOnlyDb<'_>,
-) -> Result<crate::ui::directory_cluster_modal::types::DirectoryClusterModalData> {
-    use crate::ui::directory_cluster_modal::types::{
+) -> Result<mm_meta::views::cluster_deploy::DirectoryClusterModalData> {
+    use mm_meta::views::cluster_deploy::{
         DirectoryClusterEntry, DirectoryClusterModalData, DirectoryGroupEntry,
     };
 
@@ -429,8 +429,8 @@ pub fn load_release_overlap_data(
 /// Build a metadata cache for all unique inodes across clusters.
 fn build_meta_cache(
     read_db: &ReadOnlyDb<'_>,
-    clusters: &[crate::ui::directory_cluster_modal::types::DirectoryClusterEntry],
-) -> HashMap<i64, crate::ui::manual_review_modal::types::FileMetaSummary> {
+    clusters: &[mm_meta::views::cluster_deploy::DirectoryClusterEntry],
+) -> HashMap<i64, mm_meta::views::review_match::FileMetaSummary> {
     let mut cache = HashMap::new();
     for cluster in clusters {
         for dir in &cluster.directories {
@@ -455,8 +455,8 @@ fn build_meta_cache(
 pub fn load_deploy_data(
     read_db: &ReadOnlyDb<'_>,
     config: Option<&crate::config::Config>,
-) -> Result<crate::ui::deploy_modal::types::DeployModalData> {
-    use crate::ui::deploy_modal::types::{
+) -> Result<mm_meta::views::cluster_deploy::DeployModalData> {
+    use mm_meta::views::cluster_deploy::{
         DeployModalData,
     };
 
@@ -528,8 +528,8 @@ pub fn load_deploy_data(
 
 fn load_deploy_sidecars(
     read_db: &ReadOnlyDb<'_>,
-) -> Vec<crate::ui::deploy_modal::types::SidecarDeployEntry> {
-    use crate::ui::deploy_modal::types::SidecarDeployEntry;
+) -> Vec<mm_meta::views::cluster_deploy::SidecarDeployEntry> {
+    use mm_meta::views::cluster_deploy::SidecarDeployEntry;
 
     let signals = match read_db.get_sidecar_deploy_ready_signals() {
         Ok(s) => s,
@@ -564,8 +564,8 @@ fn load_deploy_sidecars(
 
 fn aggregate_by_directory<'a>(
     paths: impl Iterator<Item = &'a str>,
-) -> Vec<crate::ui::deploy_modal::types::DirectoryAggregate> {
-    use crate::ui::deploy_modal::types::DirectoryAggregate;
+) -> Vec<mm_meta::views::cluster_deploy::DirectoryAggregate> {
+    use mm_meta::views::cluster_deploy::DirectoryAggregate;
 
     let mut counts: HashMap<String, usize> = HashMap::new();
     for path in paths {
@@ -590,10 +590,10 @@ fn aggregate_by_directory<'a>(
 }
 
 fn merge_sidecar_counts(
-    new_by_dir: &mut Vec<crate::ui::deploy_modal::types::DirectoryAggregate>,
-    sidecars: &[crate::ui::deploy_modal::types::SidecarDeployEntry],
+    new_by_dir: &mut Vec<mm_meta::views::cluster_deploy::DirectoryAggregate>,
+    sidecars: &[mm_meta::views::cluster_deploy::SidecarDeployEntry],
 ) {
-    use crate::ui::deploy_modal::types::DirectoryAggregate;
+    use mm_meta::views::cluster_deploy::DirectoryAggregate;
 
     if sidecars.is_empty() {
         return;
@@ -632,8 +632,8 @@ fn compute_per_library(
     stale: &[crate::meta::views::StaleSignalFile],
     _conflicts: &[crate::meta::views::ConflictGroup],
     new_destinations: &HashSet<String>,
-) -> Vec<crate::ui::deploy_modal::types::LibrarySummary> {
-    use crate::ui::deploy_modal::types::LibrarySummary;
+) -> Vec<mm_meta::views::cluster_deploy::LibrarySummary> {
+    use mm_meta::views::cluster_deploy::LibrarySummary;
 
     let mut libs: HashMap<String, LibrarySummary> = HashMap::new();
 
@@ -712,8 +712,8 @@ fn compute_per_library(
 pub fn load_file_meta_summary(
     read_db: &ReadOnlyDb<'_>,
     inode: i64,
-) -> Option<crate::ui::manual_review_modal::types::FileMetaSummary> {
-    use crate::ui::manual_review_modal::types::FileMetaSummary;
+) -> Option<mm_meta::views::review_match::FileMetaSummary> {
+    use mm_meta::views::review_match::FileMetaSummary;
 
     let info = read_db.get_audio_info(inode).ok().flatten()?;
     let tags = read_db
@@ -745,9 +745,9 @@ pub fn load_file_meta_summary(
 /// Load review data from the database based on review kind.
 pub fn load_manual_review_data(
     read_db: &ReadOnlyDb<'_>,
-    kind: crate::ui::manual_review_modal::types::ReviewKind,
-) -> Result<crate::ui::manual_review_modal::types::ManualReviewData> {
-    use crate::ui::manual_review_modal::types::ReviewKind;
+    kind: mm_meta::views::review_match::ReviewKind,
+) -> Result<mm_meta::views::review_match::ManualReviewData> {
+    use mm_meta::views::review_match::ReviewKind;
 
     let mut data = match kind {
         ReviewKind::RedundantDuplicate => load_redundant_duplicates(read_db)?,
@@ -767,8 +767,8 @@ pub fn load_manual_review_data(
 
 fn load_redundant_duplicates(
     read_db: &ReadOnlyDb<'_>,
-) -> Result<crate::ui::manual_review_modal::types::ManualReviewData> {
-    use crate::ui::manual_review_modal::types::{ManualReviewData, ReviewFileEntry, ReviewGroup};
+) -> Result<mm_meta::views::review_match::ManualReviewData> {
+    use mm_meta::views::review_match::{ManualReviewData, ReviewFileEntry, ReviewGroup};
 
     let signal_groups = read_db.get_redundant_duplicate_groups()?;
 
@@ -809,8 +809,8 @@ fn load_redundant_duplicates(
 
 fn load_deploy_conflicts(
     read_db: &ReadOnlyDb<'_>,
-) -> Result<crate::ui::manual_review_modal::types::ManualReviewData> {
-    use crate::ui::manual_review_modal::types::{ManualReviewData, ReviewFileEntry, ReviewGroup};
+) -> Result<mm_meta::views::review_match::ManualReviewData> {
+    use mm_meta::views::review_match::{ManualReviewData, ReviewFileEntry, ReviewGroup};
 
     let conflict_groups = read_db.get_deploy_conflict_groups()?;
 
@@ -844,8 +844,8 @@ fn load_deploy_conflicts(
 
 fn load_metadata_duplicates(
     read_db: &ReadOnlyDb<'_>,
-) -> Result<crate::ui::manual_review_modal::types::ManualReviewData> {
-    use crate::ui::manual_review_modal::types::{ManualReviewData, ReviewFileEntry, ReviewGroup};
+) -> Result<mm_meta::views::review_match::ManualReviewData> {
+    use mm_meta::views::review_match::{ManualReviewData, ReviewFileEntry, ReviewGroup};
 
     let signal_groups = read_db.get_metadata_duplicate_groups()?;
 
@@ -890,9 +890,9 @@ fn load_metadata_duplicates(
 pub fn load_inbox_corpus_match_data(
     read_db: &ReadOnlyDb<'_>,
     bitrate_fuzz_percent: f64,
-) -> Result<crate::ui::inbox_corpus_match_modal::types::InboxCorpusMatchModalData> {
+) -> Result<mm_meta::views::review_match::InboxCorpusMatchModalData> {
     use crate::meta::views::MatchClassification;
-    use crate::ui::inbox_corpus_match_modal::types::InboxCorpusMatchModalData;
+    use mm_meta::views::review_match::InboxCorpusMatchModalData;
 
     let mut entries = read_db.get_inbox_corpus_match_entries(bitrate_fuzz_percent)?;
 
@@ -914,8 +914,8 @@ pub fn load_compound_split_data(
     group: &crate::meta::signals::data::CompoundGroup,
     read_db: &ReadOnlyDb,
     zone: Zone,
-) -> Option<crate::ui::compound_split_v2::CompoundSplitDataV2> {
-    use crate::ui::compound_split_v2::types::{CompoundEntry, CompoundSplitDataV2, FileTagInfo};
+) -> Option<mm_meta::views::canonicity_compound::CompoundSplitDataV2> {
+    use mm_meta::views::canonicity_compound::{CompoundEntry, CompoundSplitDataV2, FileTagInfo};
 
     if group.inodes.is_empty() {
         return None;
@@ -984,8 +984,8 @@ fn load_file_info_for_zone(
     inodes: &[i64],
     read_db: &ReadOnlyDb,
     zone: Zone,
-) -> Vec<crate::ui::tag_canonicity_v2::types::FileTagInfo> {
-    use crate::ui::tag_canonicity_v2::types::FileTagInfo;
+) -> Vec<mm_meta::views::canonicity_compound::FileTagInfo> {
+    use mm_meta::views::canonicity_compound::FileTagInfo;
 
     let resolver = paths::get_resolver();
     let mut files = Vec::new();
@@ -1023,8 +1023,8 @@ fn load_file_info_for_zone(
 pub fn load_tag_canonicity_data(
     signal: &crate::meta::signals::data::TagCanonicitySignal,
     read_db: &ReadOnlyDb,
-) -> Option<crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2> {
-    use crate::ui::tag_canonicity_v2::types::{TagCanonicalityModalDataV2, TagVariantEntry};
+) -> Option<mm_meta::views::canonicity_compound::TagCanonicalityModalDataV2> {
+    use mm_meta::views::canonicity_compound::{TagCanonicalityModalDataV2, TagVariantEntry};
 
     let tag_name = signal.tag_name.clone();
 
@@ -1057,8 +1057,8 @@ pub fn load_tag_canonicity_data(
 pub fn load_inconsistent_album_artist_data(
     signal: &crate::meta::signals::data::InconsistentAlbumArtistSignal,
     read_db: &ReadOnlyDb,
-) -> Option<crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2> {
-    use crate::ui::tag_canonicity_v2::types::{TagCanonicalityModalDataV2, TagVariantEntry};
+) -> Option<mm_meta::views::canonicity_compound::TagCanonicalityModalDataV2> {
+    use mm_meta::views::canonicity_compound::{TagCanonicalityModalDataV2, TagVariantEntry};
 
     let tag_name = "ALBUMARTIST".to_string();
     let context_label = Some(signal.data.album.clone());
@@ -1092,8 +1092,8 @@ pub fn load_inconsistent_album_artist_data(
 pub fn load_inbox_tag_canonicity_data(
     signal: &crate::meta::signals::data::InboxTagCanonicitySignal,
     read_db: &ReadOnlyDb,
-) -> Option<crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2> {
-    use crate::ui::tag_canonicity_v2::types::{TagCanonicalityModalDataV2, TagVariantEntry};
+) -> Option<mm_meta::views::canonicity_compound::TagCanonicalityModalDataV2> {
+    use mm_meta::views::canonicity_compound::{TagCanonicalityModalDataV2, TagVariantEntry};
 
     let tag_name = signal.tag_name.clone();
 
@@ -1140,10 +1140,10 @@ pub fn load_inbox_tag_canonicity_data(
 /// Gather intake confirmation state for a specific zone.
 pub fn gather_intake_zone<Z: crate::zones::AudioZone>(
     read_db: &ReadOnlyDb<'_>,
-    source: crate::ui::startup::IntakeSource,
-) -> Option<crate::ui::startup::IntakeConfirmationState> {
+    source: mm_meta::views::startup_organize::IntakeSource,
+) -> Option<mm_meta::views::startup_organize::IntakeConfirmationState> {
     use crate::logging::log_general;
-    use crate::ui::startup::intake_confirmation::{
+    use mm_meta::views::startup_organize::{
         DirectoryGroup, IntakeConfirmationState, UnindexedFileEntry,
     };
 
@@ -1239,10 +1239,10 @@ pub fn gather_intake_zone<Z: crate::zones::AudioZone>(
 /// Gather intake confirmation state for startup: checks both corpus AND inbox.
 pub fn gather_intake_startup(
     read_db: &ReadOnlyDb<'_>,
-) -> Option<crate::ui::startup::IntakeConfirmationState> {
+) -> Option<mm_meta::views::startup_organize::IntakeConfirmationState> {
     use crate::logging::log_general;
-    use crate::ui::startup::intake_confirmation::IntakeConfirmationState;
-    use crate::ui::startup::IntakeSource;
+    use mm_meta::views::startup_organize::IntakeConfirmationState;
+    use mm_meta::views::startup_organize::IntakeSource;
     use crate::zones::{CorpusZone, InboxZone};
 
     let corpus_state = gather_intake_zone::<CorpusZone>(read_db, IntakeSource::Startup);

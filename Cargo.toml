@@ -1,5 +1,6 @@
 [workspace]
-members = [".", "crates/mm-utils", "crates/mm-derive", "crates/mm-meta"]
+members = [".", "crates/mm-utils", "crates/mm-derive", "crates/mm-meta", "crates/mm-tui"]
+default-members = [".", "crates/mm-tui"]
 
 [package]
 name = "mm"
@@ -20,12 +21,7 @@ bincode = "1"
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# TUI
-ratatui = "0.29"
-crossterm = "0.28"
-
-# Terminal image rendering
-ratatui-image = { version = "4.2", default-features = false, features = ["crossterm"] }
+# Image metadata (for corpus image indexing)
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
 
 # Audio metadata
@@ -69,9 +65,6 @@ humantime = "2"
 # Regex
 regex = "1.10"
 
-# Signal handling
-signal-hook = "0.3"
-
 # UUID generation
 uuid = { version = "1.0", features = ["v4"] }
 
@@ -90,8 +83,6 @@ serde_json = "1"
 
 # Base64 encoding (for chromaprint fingerprint compression)
 base64 = "0.22"
-unicode-width = "0.2"
-
 # String similarity (for MusicBrainz release matching)
 strsim = "0.11"
 

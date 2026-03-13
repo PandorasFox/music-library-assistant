@@ -369,11 +369,11 @@ impl Witch {
     /// If both config and DB exist, loads config + performance globals and
     /// runs normally.
     ///
-    /// Spawns the UI as a client thread via `ui_factory`, then enters
-    /// `run_loop()` on this thread. Does not return until shutdown.
+    /// Binds the Unix domain socket and enters the run loop on the calling
+    /// thread. Clients (TUI, web, tooling) connect over the socket.
+    /// Does not return until a client sends Shutdown or all senders disconnect.
     pub fn run(
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
-        ui_factory: impl FnOnce(WitchHandle) + Send + 'static,
     ) {
         // Detect startup state
         let db_path = config::get_db_path().expect("XDG data dir");
@@ -393,7 +393,9 @@ impl Witch {
                     std::process::exit(1);
                 }
             };
-            Self::with_opinions(&cfg, log_rx)
+            let mut w = Self::with_opinions(&cfg, log_rx);
+            w.set_shared_config(cfg.into_shared());
+            w
         } else {
             // No DB — Witch boots in AwaitingSetup
             crate::logging::log_general("[WITCH] No database found — entering AwaitingSetup");
@@ -414,7 +416,7 @@ impl Witch {
             }
         }
 
-        // Spawn auth thread BEFORE UI — auth must be available for login flow.
+        // Spawn auth thread BEFORE socket — auth must be available for login flow.
         // If DB exists, auth thread opens a read-only connection immediately.
         // If no DB (AwaitingSetup), auth thread starts in no-DB mode and opens
         // its connection when notified via DbReady after first-time setup.
@@ -423,53 +425,24 @@ impl Witch {
         she.auth_thread_handle = Some(auth_witch_handle);
         she.auth_handle = Some(auth_handle);
 
-        // Command channel: handle sends, Witch receives
+        // Command channel: socket handler threads send, Witch receives
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
         // Spawn the Unix domain socket listener. Binds synchronously — the
         // socket is ready for connections when this returns.
-        she.socket_listener_handle = socket::spawn_listener(cmd_tx.clone());
+        she.socket_listener_handle = socket::spawn_listener(cmd_tx);
 
-        // Route the TUI through the socket when available, falling back to
-        // in-process mpsc if the socket couldn't be created.
-        let ui_thread = if let Some(ref path) = socket::socket_path() {
-            if she.socket_listener_handle.is_some() {
-                // TUI connects over the socket. Keep cmd_tx as a shutdown
-                // sender — when ui_factory returns, we signal the Witch.
-                let shutdown_tx = cmd_tx;
-                let socket_path = path.clone();
-                std::thread::Builder::new()
-                    .name("tui".into())
-                    .spawn(move || {
-                        let handle = WitchHandle::connect(&socket_path)
-                            .expect("Failed to connect to Witch socket");
-                        ui_factory(handle);
-                        // TUI exited — signal the Witch to shut down.
-                        let _ = shutdown_tx.send(handle::HandleCommand::Shutdown);
-                    })
-                    .expect("Failed to spawn UI thread")
-            } else {
-                // Socket bind failed — fall back to in-process channel.
-                let handle = WitchHandle::new(cmd_tx);
-                std::thread::Builder::new()
-                    .name("tui".into())
-                    .spawn(move || ui_factory(handle))
-                    .expect("Failed to spawn UI thread")
-            }
-        } else {
-            // No XDG_RUNTIME_DIR — in-process channel only.
-            let handle = WitchHandle::new(cmd_tx);
-            std::thread::Builder::new()
-                .name("tui".into())
-                .spawn(move || ui_factory(handle))
-                .expect("Failed to spawn UI thread")
-        };
+        if she.socket_listener_handle.is_none() {
+            eprintln!("ERROR: Failed to bind socket (is XDG_RUNTIME_DIR set?)");
+            std::process::exit(1);
+        }
 
-        // Witch owns the main thread
+        if let Some(path) = socket::socket_path() {
+            println!("mm: listening on {}", path.display());
+        }
+
+        // Witch owns the main thread — blocks here until shutdown
         she.run_loop(cmd_rx);
-
-        // Wait for UI thread to finish
-        let _ = ui_thread.join();
     }
 
     /// The Witch's self-owned run loop.
@@ -699,6 +672,12 @@ impl Witch {
                                     w.queue_vacuum();
                                     CommandResponse::Ok
                                 }
+                                CommandPayload::JettisonEditHistorySession { session_id } => {
+                                    todo!("wire up JettisonEditHistorySession for session {session_id}")
+                                }
+                                CommandPayload::JettisonEditHistoryAll => {
+                                    todo!("wire up JettisonEditHistoryAll")
+                                }
                                 CommandPayload::Shutdown => {
                                     CommandResponse::Goodbye
                                 }
@@ -781,7 +760,7 @@ impl Witch {
         root: std::path::PathBuf,
         first_user: Option<(String, String)>,
     ) -> Result<(), String> {
-        use crate::ui::startup::first_time_setup::FirstTimeSetupToken;
+        use mm_meta::auth::FirstTimeSetupToken;
 
         if !config::config_exists() {
             // Fresh install — write initial config.kdl with root
@@ -815,7 +794,9 @@ impl Witch {
             .map_err(|e| format!("Failed to create database: {}", e))?;
 
         // Create the first user if credentials were provided
-        if let Some((username, password_hash)) = first_user {
+        if let Some((username, plaintext_password)) = first_user {
+            let password_hash = crate::auth::hash_password(&plaintext_password)
+                .map_err(|e| format!("Failed to hash password: {}", e))?;
             db.create_user(&username, &password_hash)
                 .map_err(|e| format!("Failed to create first user: {}", e))?;
             crate::logging::log_general(format!(

@@ -34,7 +34,7 @@ pub use queries::{Database, ReadOnlyDb};
 /// requiring proof of first-time-setup context via the token.
 pub(crate) fn create_database(
     path: &std::path::Path,
-    _token: &crate::ui::startup::first_time_setup::FirstTimeSetupToken,
+    _token: &mm_meta::auth::FirstTimeSetupToken,
 ) -> anyhow::Result<Database> {
     Database::open(path)
 }

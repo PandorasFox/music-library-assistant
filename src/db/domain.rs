@@ -123,15 +123,19 @@ use crate::meta::views::{
 };
 
 use crate::db::modal_loaders;
-use crate::ui::corrupt_file_modal;
-use crate::ui::deploy_modal;
-use crate::ui::directory_cluster_modal;
-use crate::ui::inbox_corpus_match_modal;
-use crate::ui::manual_review_modal;
-use crate::ui::missing_directory_modal;
-use crate::ui::missing_file_modal;
-use crate::ui::shit_format_modal;
-use crate::ui::subpar_duplicate_modal;
+use mm_meta::views::canonicity_compound::CanonicitySignalKind;
+use mm_meta::views::cluster_deploy::{
+    DeployModalData, DirectoryClusterModalData, ShitFormatModalData,
+};
+use mm_meta::views::health_modals::{
+    CorruptFileModalData, MissingDirectoryModalData, MissingFileModalData,
+    SubparDuplicateModalData,
+};
+use mm_meta::views::review_match::{
+    InboxCorpusMatchModalData, ManualReviewData, RecordingDetail, RecordingSummary,
+};
+use mm_meta::views::startup_organize::{IntakeConfirmationState, IntakeSource, InboxDirectory};
+use mm_meta::views::canonicity_compound::{CompoundSplitDataV2, TagCanonicalityModalDataV2};
 
 // ============================================================================
 // Summary Queries
@@ -317,7 +321,7 @@ impl_domain_query! {
                     per_file,
                 } => {
                     let disc_value = if s.map_letters_to_numbers {
-                        crate::ui::disc_extraction_modal::letter_to_number(disc_prefix)
+                        mm_meta::domain_queries::letter_to_number(disc_prefix)
                     } else {
                         disc_prefix.clone()
                     };
@@ -357,49 +361,49 @@ impl_domain_query! {
 // ============================================================================
 
 impl_domain_query! {
-    GetMissingFileData => missing_file_modal::MissingFileModalData, |db| {
+    GetMissingFileData => MissingFileModalData, |db| {
         modal_loaders::load_missing_file_data(db).ok().unwrap_or_default()
     }
 }
 
 impl_domain_query! {
-    GetMissingDirectoryData => missing_directory_modal::MissingDirectoryModalData, |db| {
+    GetMissingDirectoryData => MissingDirectoryModalData, |db| {
         modal_loaders::load_missing_directory_data(db).ok().unwrap_or_default()
     }
 }
 
 impl_domain_query! {
-    GetCorruptFileData => corrupt_file_modal::CorruptFileModalData, |db| {
+    GetCorruptFileData => CorruptFileModalData, |db| {
         modal_loaders::load_corrupt_file_data(db).ok().unwrap_or_default()
     }
 }
 
 impl_domain_query! {
-    GetSubparDuplicateData => subpar_duplicate_modal::SubparDuplicateModalData, |db| {
+    GetSubparDuplicateData => SubparDuplicateModalData, |db| {
         modal_loaders::load_subpar_duplicate_data(db).ok().unwrap_or_default()
     }
 }
 
 impl_domain_query! {
-    GetDirectoryClusterData => directory_cluster_modal::DirectoryClusterModalData, |db| {
+    GetDirectoryClusterData => DirectoryClusterModalData, |db| {
         modal_loaders::load_directory_cluster_data(db).ok().unwrap_or_default()
     }
 }
 
 impl_domain_query! {
-    GetReleaseOverlapData => directory_cluster_modal::DirectoryClusterModalData, |db| {
+    GetReleaseOverlapData => DirectoryClusterModalData, |db| {
         modal_loaders::load_release_overlap_data(db).ok().unwrap_or_default()
     }
 }
 
 impl_domain_query! {
-    GetShitFormatData => shit_format_modal::ShitFormatModalData, |db| {
+    GetShitFormatData => ShitFormatModalData, |db| {
         modal_loaders::load_shit_format_data(db).ok().unwrap_or_default()
     }
 }
 
 impl_domain_query! {
-    GetInboxCorpusMatchData => inbox_corpus_match_modal::InboxCorpusMatchModalData, |s, db| {
+    GetInboxCorpusMatchData => InboxCorpusMatchModalData, |s, db| {
         modal_loaders::load_inbox_corpus_match_data(db, s.bitrate_fuzz_percent)
             .ok()
             .unwrap_or_default()
@@ -407,14 +411,14 @@ impl_domain_query! {
 }
 
 impl_domain_query! {
-    GetDeployData => deploy_modal::DeployModalData, |s, db| {
+    GetDeployData => DeployModalData, |s, db| {
         modal_loaders::load_deploy_data(db, s.config.as_ref())
             .unwrap_or_default()
     }
 }
 
 impl_domain_query! {
-    GetManualReviewData => manual_review_modal::types::ManualReviewData, |s, db| {
+    GetManualReviewData => ManualReviewData, |s, db| {
         modal_loaders::load_manual_review_data(db, s.kind)
             .ok()
             .unwrap_or_default()
@@ -513,7 +517,7 @@ impl_domain_query! {
 // ============================================================================
 
 impl_domain_query! {
-    GetIntakeConfirmation => Option<crate::ui::startup::IntakeConfirmationState>, |s, db| {
+    GetIntakeConfirmation => Option<IntakeConfirmationState>, |s, db| {
         match s.zone {
             Some(crate::db::types::Zone::Corpus) => {
                 modal_loaders::gather_intake_zone::<crate::zones::CorpusZone>(db, s.source)
@@ -528,13 +532,13 @@ impl_domain_query! {
 }
 
 impl_domain_query! {
-    GetCompoundSplitGroupData => Option<crate::ui::compound_split_v2::CompoundSplitDataV2>, |s, db| {
+    GetCompoundSplitGroupData => Option<CompoundSplitDataV2>, |s, db| {
         modal_loaders::load_compound_split_data(&s.group, db, s.zone)
     }
 }
 
 impl_domain_query! {
-    GetTagCanonicitySignalData => Option<crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2>, |s, db| {
+    GetTagCanonicitySignalData => Option<TagCanonicalityModalDataV2>, |s, db| {
         load_tag_canonicity_signal_data(&s.signal_key, s.kind, db)
     }
 }
@@ -545,10 +549,9 @@ impl_domain_query! {
 /// from the domain query without needing `&self`.
 fn load_tag_canonicity_signal_data(
     key: &str,
-    kind: crate::ui::CanonicitySignalKind,
+    kind: CanonicitySignalKind,
     read_db: &ReadOnlyDb,
-) -> Option<crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2> {
-    use crate::ui::CanonicitySignalKind;
+) -> Option<TagCanonicalityModalDataV2> {
     match kind {
         CanonicitySignalKind::TagCanonicity => {
             let signal = read_db.get_tag_canonicity_signal(key).ok()??;
@@ -580,7 +583,7 @@ fn load_recording_batch_data(
     db: &ReadOnlyDb,
 ) -> RecordingBatchResult {
     use crate::external::musicbrainz;
-    use crate::ui::external_match_modal::types::{RecordingDetail, RecordingSummary};
+    // RecordingDetail and RecordingSummary imported at module level from mm_meta::views::review_match
     use std::collections::HashSet;
 
     let mut summaries = Vec::new();
@@ -753,14 +756,15 @@ fn load_tag_editor_files(
 }
 
 impl_domain_query! {
-    GetInboxOrganizeData => Vec<crate::ui::inbox_organize::InboxDirectory>, |s, db| {
+    GetInboxOrganizeData => Vec<InboxDirectory>, |s, db| {
         let files = db.get_organizable_inbox_files().unwrap_or_default();
         if files.is_empty() {
             return Vec::new();
         }
         let inbox_dir = s.config.inbox_dir();
         let granularity = s.config.opinions.inbox_organize.directory_granularity;
-        crate::ui::inbox_organize::group_into_directories(&files, &inbox_dir, granularity)
+        let resolver = mm_meta::paths::PathResolver::from_config(&s.config);
+        mm_meta::views::startup_organize::group_into_directories(&files, &inbox_dir, granularity, &resolver)
     }
 }
 
@@ -1134,7 +1138,7 @@ mod tests {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
         let result = GetManualReviewData {
-            kind: manual_review_modal::types::ReviewKind::RedundantDuplicate,
+            kind: mm_meta::views::review_match::ReviewKind::RedundantDuplicate,
         }.execute(&read_db);
         assert!(result.groups.is_empty());
     }
@@ -1259,7 +1263,7 @@ mod tests {
         serde_json::to_string(&GetShitFormatData.execute(&read_db)).unwrap();
         serde_json::to_string(&GetInboxCorpusMatchData { bitrate_fuzz_percent: 5.0 }.execute(&read_db)).unwrap();
         serde_json::to_string(&GetManualReviewData {
-            kind: manual_review_modal::types::ReviewKind::RedundantDuplicate,
+            kind: mm_meta::views::review_match::ReviewKind::RedundantDuplicate,
         }.execute(&read_db)).unwrap();
         serde_json::to_string(&GetCorpusTags { inode: 1 }.execute(&read_db)).unwrap();
         serde_json::to_string(&GetPackingBrowserData { category_prefix: "x".to_string() }.execute(&read_db)).unwrap();

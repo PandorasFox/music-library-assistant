@@ -9,6 +9,14 @@ pub const AUDIO_EXTENSIONS: &[&str] = &[
     "flac", "mp3", "ogg", "m4a", "opus", "wav", "aiff", "aif", "aac", "wma", "ape", "wv",
 ];
 
+/// Image file extensions recognised by MM.
+pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp"];
+
+/// Check if a file extension is a recognised image format.
+pub fn is_image_extension(ext: &str) -> bool {
+    IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+}
+
 /// Check if a file extension is a supported audio format.
 ///
 /// Comparison is case-insensitive.

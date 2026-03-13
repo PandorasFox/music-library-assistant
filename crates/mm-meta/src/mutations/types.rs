@@ -301,4 +301,15 @@ impl Mutation {
             Mutation::ApplyBatchDirConfigEdits(_) => "Dir config batch update",
         }
     }
+
+    /// Diff entries for transaction review display.
+    ///
+    /// Returns field-level diffs (label, old_value, new_value) for rendering
+    /// red→green change visualization in the TUI.
+    ///
+    /// TODO: move per-struct diff_entries implementations from MutationExecutor
+    /// impls in mm to inherent methods here.
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        Vec::new()
+    }
 }

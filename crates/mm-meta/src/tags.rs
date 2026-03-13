@@ -176,3 +176,13 @@ pub enum DiffClassification {
     RightOnly,
     Conflict,
 }
+
+// =============================================================================
+// Album Art Constants
+// =============================================================================
+
+/// Sidecar image filenames that map to CoverFront.
+pub const COVER_FRONT_NAMES: &[&str] = &["cover", "folder", "albumart", "album", "front"];
+
+/// Sidecar image filenames that map to CoverBack.
+pub const COVER_BACK_NAMES: &[&str] = &["back"];

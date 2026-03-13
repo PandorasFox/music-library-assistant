@@ -9,11 +9,7 @@ use crate::logging::log_general;
 use crate::meta::computations::types::ComputationWitness;
 use crate::witch::fs_watcher::ObservedImage;
 
-/// Sidecar image filenames that map to CoverFront.
-pub(crate) const COVER_FRONT_NAMES: &[&str] = &["cover", "folder", "albumart", "album", "front"];
-
-/// Sidecar image filenames that map to CoverBack.
-pub(crate) const COVER_BACK_NAMES: &[&str] = &["back"];
+pub(crate) use mm_meta::tags::{COVER_BACK_NAMES, COVER_FRONT_NAMES};
 
 use super::{Computation, Result};
 

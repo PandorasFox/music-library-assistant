@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::meta::wire::{self, WireRequest, WireResponse};
 
-use super::handle::HandleCommand;
+use super::handle::{HandleCommand, WitchHandle};
 
 /// Handle to the socket listener thread for lifecycle management.
 pub(super) struct SocketListenerHandle {
@@ -51,7 +51,7 @@ impl SocketListenerHandle {
 
 /// Resolve the socket path: `$XDG_RUNTIME_DIR/mm.sock`.
 pub fn socket_path() -> Option<PathBuf> {
-    std::env::var_os("XDG_RUNTIME_DIR").map(|dir| Path::new(&dir).join("mm.sock"))
+    WitchHandle::default_socket_path()
 }
 
 /// Spawn the socket listener thread.

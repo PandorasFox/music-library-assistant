@@ -261,6 +261,10 @@ pub enum CommandPayload {
     QueueVacuum,
     /// Initiate server shutdown.
     Shutdown,
+    /// Delete edit history for a specific session (by session_id).
+    JettisonEditHistorySession { session_id: String },
+    /// Delete all edit history.
+    JettisonEditHistoryAll,
 }
 
 /// Command response variants.

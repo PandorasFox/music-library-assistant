@@ -43,6 +43,20 @@ pub struct DiscExtractionModalData {
     pub groups: Vec<DiscExtractionGroup>,
 }
 
+/// Convert letter prefix to disc number: A→1, B→2, etc.
+///
+/// Used by disc extraction query when `map_letters_to_numbers` is set.
+pub fn letter_to_number(prefix: &str) -> String {
+    if prefix.len() == 1 {
+        let ch = prefix.chars().next().unwrap().to_ascii_uppercase();
+        if ch.is_ascii_uppercase() {
+            return ((ch as u32 - 'A' as u32) + 1).to_string();
+        }
+    }
+    // Multi-letter or non-alpha: return as-is
+    prefix.to_string()
+}
+
 // TODO: move to crate::signals::data once signal wrapper types are extracted.
 
 /// Wire-safe projection of MissingAlbumSingleSignal (key + data).

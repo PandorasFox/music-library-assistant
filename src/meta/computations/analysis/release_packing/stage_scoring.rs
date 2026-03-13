@@ -764,22 +764,17 @@ fn build_candidate_structures(
             });
 
         corpus_info.entry(row.inode).or_insert_with(|| {
-            let mut pairs = Vec::new();
-            if let Some(ref v) = row.tag_title {
-                pairs.push(("TITLE".to_string(), v.clone()));
-            }
-            if let Some(ref v) = row.tag_artist {
-                pairs.push(("ARTIST".to_string(), v.clone()));
-            }
-            if let Some(ref v) = row.tag_album {
-                pairs.push(("ALBUM".to_string(), v.clone()));
-            }
-            if let Some(ref v) = row.tag_tracknumber {
-                pairs.push(("TRACKNUMBER".to_string(), v.clone()));
-            }
+            let tag_iter = [
+                ("TITLE", &row.tag_title),
+                ("ARTIST", &row.tag_artist),
+                ("ALBUM", &row.tag_album),
+                ("TRACKNUMBER", &row.tag_tracknumber),
+            ]
+            .into_iter()
+            .filter_map(|(k, v)| v.as_ref().map(|val| (k.to_owned(), val.clone())));
             CorpusFileInfo {
                 parent_dir: row.parent_dir.clone(),
-                tags: TagSet::new(pairs),
+                tags: TagSet::new(tag_iter),
                 duration_ms: row.duration_ms,
             }
         });

@@ -874,13 +874,19 @@ pub fn execute_derive_corpus_deploy_status(
             && config.is_path_in_source(Path::new(corpus_path));
 
         if keep {
-            // Clone into counts map, move into PrecomputedFile.
-            *deploy_path_counts.entry(deploy_path.clone()).or_insert(0) += 1;
+            // Move into PrecomputedFile, then count via reference to stored string.
             precomputed.push(PrecomputedFile {
                 inode,
                 corpus_path: corpus_path.clone(),
                 deploy_path,
             });
+            let stored = &precomputed.last().unwrap().deploy_path;
+            // Entry API needs owned key on first insert; borrow-check on existing.
+            if let Some(count) = deploy_path_counts.get_mut(stored.as_str()) {
+                *count += 1;
+            } else {
+                deploy_path_counts.insert(stored.clone(), 1);
+            }
         } else {
             // Move directly into counts map — no clone needed.
             *deploy_path_counts.entry(deploy_path).or_insert(0) += 1;

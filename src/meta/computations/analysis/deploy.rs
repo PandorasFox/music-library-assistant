@@ -648,10 +648,12 @@ fn check_sidecar_stale(
         .unwrap_or_default();
 
     // Lazily populate album_dir for this corpus directory
-    let album_dir = dir_to_album_dir
-        .entry(corpus_dir.clone())
-        .or_insert_with(|| lookup_album_dir_from_sibling(read_only_db, &corpus_dir))
-        .clone();
+    let album_dir = if let Some(v) = dir_to_album_dir.get(&corpus_dir) {
+        v.clone()
+    } else {
+        let v = lookup_album_dir_from_sibling(read_only_db, &corpus_dir);
+        dir_to_album_dir.entry(corpus_dir).or_insert(v).clone()
+    };
 
     let album_dir = match album_dir {
         Some(dir) => dir,
@@ -745,10 +747,12 @@ fn compute_expected_library_path(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let album_dir = dir_to_album_dir
-        .entry(corpus_dir.clone())
-        .or_insert_with(|| lookup_album_dir_from_sibling(read_only_db, &corpus_dir))
-        .clone()?;
+    let album_dir = if let Some(v) = dir_to_album_dir.get(&corpus_dir) {
+        v.clone()?
+    } else {
+        let v = lookup_album_dir_from_sibling(read_only_db, &corpus_dir);
+        dir_to_album_dir.entry(corpus_dir).or_insert(v).clone()?
+    };
 
     let filename = Path::new(corpus_path)
         .file_name()

@@ -840,7 +840,7 @@ fn score_candidates_against_tracklist(
 /// Applies pinned release constraints, filters candidates to the winning directory,
 /// and returns `(score_rows, assigned_inodes, target_dirs, optimal_pairs)`.
 fn run_directory_constrained_packing(
-    candidates: &mut Vec<CandidateAssignment>,
+    mut candidates: Vec<CandidateAssignment>,
     corpus_info: &HashMap<i64, CorpusFileInfo>,
     release: &MbRelease,
     dir_file_counts: &HashMap<String, usize>,
@@ -853,7 +853,7 @@ fn run_directory_constrained_packing(
 ) {
     let mut dir_candidate_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
 
-    for candidate in candidates.iter() {
+    for candidate in &candidates {
         if let Some(corpus) = corpus_info.get(&candidate.inode) {
             dir_candidate_inodes
                 .entry(corpus.parent_dir.clone())
@@ -871,7 +871,7 @@ fn run_directory_constrained_packing(
     }
 
     let (target_dirs, optimal_pairs) = score_all_directories(
-        candidates,
+        &candidates,
         corpus_info,
         &dir_candidate_inodes,
         &release.media,
@@ -886,11 +886,11 @@ fn run_directory_constrained_packing(
             .unwrap_or(false)
     });
 
-    // Build score rows, marking optimal assignments
+    // Build score rows, marking optimal assignments — consume candidates by value
     let mut score_rows: Vec<PackingScoreRow> = Vec::new();
     let mut assigned_inodes: HashSet<i64> = HashSet::new();
 
-    for candidate in candidates.iter() {
+    for candidate in candidates {
         let slot = (candidate.medium_pos, candidate.track_pos);
         let is_optimal = optimal_pairs.contains(&(candidate.inode, slot));
 
@@ -901,14 +901,14 @@ fn run_directory_constrained_packing(
         let breakdown_bytes = bincode::serialize(&candidate.breakdown).unwrap_or_default();
 
         score_rows.push(PackingScoreRow {
-            release_id: candidate.release_id.clone(),
+            release_id: candidate.release_id,
             inode: candidate.inode,
-            recording_id: candidate.recording_id.clone(),
+            recording_id: candidate.recording_id,
             medium_pos: candidate.medium_pos as i32,
             track_pos: candidate.track_pos as i32,
-            track_title: candidate.track_title.clone(),
-            medium_format: candidate.medium_format.clone(),
-            track_number: candidate.track_number.clone(),
+            track_title: candidate.track_title,
+            medium_format: candidate.medium_format,
+            track_number: candidate.track_number,
             score: candidate.score,
             score_breakdown: breakdown_bytes,
             is_optimal,
@@ -927,7 +927,6 @@ fn run_directory_constrained_packing(
 /// assignment on the remainder. Returns `(elimination_count, additional_score_rows)`.
 fn run_elimination_phase(
     read_only_db: &ReadOnlyDb<'_>,
-    candidates: &[CandidateAssignment],
     corpus_info: &HashMap<i64, CorpusFileInfo>,
     release: &MbRelease,
     release_id: &str,
@@ -942,16 +941,13 @@ fn run_elimination_phase(
     let mut dir_acoustid_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
     let mut all_filled_slots: HashSet<(u32, u32)> = HashSet::new();
 
-    for candidate in candidates {
-        let slot = (candidate.medium_pos, candidate.track_pos);
-        if optimal_pairs.contains(&(candidate.inode, slot)) {
-            all_filled_slots.insert(slot);
-            if let Some(corpus) = corpus_info.get(&candidate.inode) {
-                dir_acoustid_inodes
-                    .entry(corpus.parent_dir.clone())
-                    .or_default()
-                    .insert(candidate.inode);
-            }
+    for &(inode, slot) in optimal_pairs {
+        all_filled_slots.insert(slot);
+        if let Some(corpus) = corpus_info.get(&inode) {
+            dir_acoustid_inodes
+                .entry(corpus.parent_dir.clone())
+                .or_default()
+                .insert(inode);
         }
     }
 
@@ -1137,7 +1133,7 @@ pub fn execute_score_release_candidates(
     let (candidate_inodes, corpus_info, dir_file_counts) =
         build_candidate_structures(&candidate_rows);
 
-    let mut candidates = score_candidates_against_tracklist(
+    let candidates = score_candidates_against_tracklist(
         &candidate_inodes,
         &corpus_info,
         &release,
@@ -1157,7 +1153,7 @@ pub fn execute_score_release_candidates(
 
     let (mut score_rows, assigned_inodes, target_dirs, optimal_pairs) =
         run_directory_constrained_packing(
-            &mut candidates,
+            candidates,
             &corpus_info,
             &release,
             &dir_file_counts,
@@ -1167,7 +1163,6 @@ pub fn execute_score_release_candidates(
     // Elimination: fill unfilled slots from target directory
     let (elimination_count, elimination_rows) = run_elimination_phase(
         read_only_db,
-        &candidates,
         &corpus_info,
         &release,
         release_id,
@@ -1185,9 +1180,8 @@ pub fn execute_score_release_candidates(
     }
 
     log_general(format!(
-        "[COMPUTE] ScoreReleaseCandidates {}: {} candidates, {} optimal AcoustID picks, {} elimination picks",
+        "[COMPUTE] ScoreReleaseCandidates {}: {} optimal AcoustID picks, {} elimination picks",
         release_id,
-        candidates.len(),
         assigned_inodes.len(),
         elimination_count
     ));

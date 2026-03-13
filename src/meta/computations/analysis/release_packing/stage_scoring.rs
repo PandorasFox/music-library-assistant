@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::corpus::tags::TagSet;
 use crate::db::types::Zone;
 use crate::db::write_thread::{self, PackingScoreRow};
 use crate::db::ReadOnlyDb;
@@ -32,7 +33,7 @@ use crate::meta::signals::data::PackingScoreBreakdown;
 /// Returns a `n_files × n_slots` matrix where `[i][j]` is the best title
 /// similarity between file `i`'s tags and slot `j`'s track.
 fn compute_title_similarity_matrix(
-    unassigned_tags: &[HashMap<String, Vec<String>>],
+    unassigned_tags: &[TagSet],
     unfilled: &[(u32, u32, &musicbrainz::MbTrack)],
 ) -> Vec<Vec<f64>> {
     unassigned_tags
@@ -107,7 +108,7 @@ fn run_elimination_hungarian(
     remaining_unfilled: &[usize],
     all_unassigned: &[(i64, String, Option<String>, Option<i64>)],
     unfilled: &[(u32, u32, &musicbrainz::MbTrack)],
-    unassigned_tags: &[HashMap<String, Vec<String>>],
+    unassigned_tags: &[TagSet],
     file_medium: &[Option<u32>],
     release_id: &str,
     release: &MbRelease,
@@ -303,11 +304,15 @@ pub fn execute_pack_releases(
             .unwrap_or_default();
         let inode = af.inode();
         corpus_inode_paths.insert(inode, path);
+        let tag_set = TagSet::new(
+            tags.into_iter()
+                .flat_map(|(k, vs)| vs.into_iter().map(move |v| (k.clone(), v))),
+        );
         corpus_info.insert(
             inode,
             CorpusFileInfo {
                 parent_dir,
-                tags,
+                tags: tag_set,
                 duration_ms: af.audio.duration_ms,
             },
         );
@@ -553,20 +558,16 @@ pub fn execute_pack_releases(
                             let duration_ms = corpus.and_then(|c| c.duration_ms);
                             let tag_title = corpus
                                 .and_then(|c| c.tags.get("TITLE"))
-                                .and_then(|v| v.first())
-                                .cloned();
+                                .map(|s| s.to_string());
                             let tag_artist = corpus
                                 .and_then(|c| c.tags.get("ARTIST"))
-                                .and_then(|v| v.first())
-                                .cloned();
+                                .map(|s| s.to_string());
                             let tag_album = corpus
                                 .and_then(|c| c.tags.get("ALBUM"))
-                                .and_then(|v| v.first())
-                                .cloned();
+                                .map(|s| s.to_string());
                             let tag_tracknumber = corpus
                                 .and_then(|c| c.tags.get("TRACKNUMBER"))
-                                .and_then(|v| v.first())
-                                .cloned();
+                                .map(|s| s.to_string());
 
                             e.insert(write_thread::PackingCandidateRow {
                                 release_id: release_id.clone(),
@@ -614,23 +615,19 @@ pub fn execute_pack_releases(
                             tag_title: info
                                 .tags
                                 .get("TITLE")
-                                .and_then(|v| v.first())
-                                .cloned(),
+                                .map(|s| s.to_string()),
                             tag_artist: info
                                 .tags
                                 .get("ARTIST")
-                                .and_then(|v| v.first())
-                                .cloned(),
+                                .map(|s| s.to_string()),
                             tag_album: info
                                 .tags
                                 .get("ALBUM")
-                                .and_then(|v| v.first())
-                                .cloned(),
+                                .map(|s| s.to_string()),
                             tag_tracknumber: info
                                 .tags
                                 .get("TRACKNUMBER")
-                                .and_then(|v| v.first())
-                                .cloned(),
+                                .map(|s| s.to_string()),
                             dir_file_count,
                         },
                     );
@@ -695,6 +692,402 @@ pub fn execute_pack_releases(
 // Stage 2: ScoreReleaseCandidates
 // ============================================================================
 
+/// Load a release from the MB cache and resolve its locale-aware artist name.
+fn load_release_with_artist(
+    read_only_db: &ReadOnlyDb<'_>,
+    release_id: &str,
+    preferred_locales: &[String],
+) -> Option<(MbRelease, String)> {
+    let release = match read_only_db.get_mb_release_cache(release_id) {
+        Ok(Some((raw_json, _))) => match musicbrainz::parse_release(&raw_json) {
+            Ok(r) if !r.media.is_empty() => r,
+            _ => return None,
+        },
+        _ => return None,
+    };
+
+    let release_artist_data: HashMap<String, Vec<(String, Option<musicbrainz::MbArtist>)>> =
+        if preferred_locales.is_empty() {
+            HashMap::new()
+        } else {
+            let mut artist_cache: HashMap<String, musicbrainz::MbArtist> = HashMap::new();
+            for credit in &release.artist_credit {
+                if let Ok(Some((json, _))) = read_only_db.get_mb_artist_cache(&credit.artist.id) {
+                    if let Ok(artist) = musicbrainz::parse_artist(&json) {
+                        artist_cache.insert(credit.artist.id.clone(), artist);
+                    }
+                }
+            }
+            let artists: Vec<(String, Option<musicbrainz::MbArtist>)> = release
+                .artist_credit
+                .iter()
+                .map(|c| {
+                    let cached = artist_cache.get(&c.artist.id).cloned();
+                    (c.artist.id.clone(), cached)
+                })
+                .collect();
+            let mut map = HashMap::new();
+            map.insert(release_id.to_string(), artists);
+            map
+        };
+
+    let resolved_artist = localized_release_artist(
+        &release.artist_credit,
+        &release_artist_data,
+        release_id,
+        preferred_locales,
+    );
+
+    Some((release, resolved_artist))
+}
+
+/// Parse candidate rows into lookup structures for scoring.
+///
+/// Returns `(candidate_inodes, corpus_info, dir_file_counts)`:
+/// - `candidate_inodes`: best recording match per inode
+/// - `corpus_info`: file metadata (tags, duration, parent dir) per inode
+/// - `dir_file_counts`: total audio file count per directory
+fn build_candidate_structures(
+    candidate_rows: &[crate::db::queries::external::PackingCandidateRow],
+) -> (
+    HashMap<i64, RecordingMatch>,
+    HashMap<i64, CorpusFileInfo>,
+    HashMap<String, usize>,
+) {
+    let mut candidate_inodes: HashMap<i64, RecordingMatch> = HashMap::new();
+    let mut corpus_info: HashMap<i64, CorpusFileInfo> = HashMap::new();
+    let mut dir_file_counts: HashMap<String, usize> = HashMap::new();
+
+    for row in candidate_rows {
+        dir_file_counts
+            .entry(row.parent_dir.clone())
+            .or_insert(row.dir_file_count as usize);
+        candidate_inodes
+            .entry(row.inode)
+            .or_insert_with(|| RecordingMatch {
+                recording_id: row.recording_id.clone(),
+                confidence: row.confidence,
+            });
+
+        corpus_info.entry(row.inode).or_insert_with(|| {
+            let mut pairs = Vec::new();
+            if let Some(ref v) = row.tag_title {
+                pairs.push(("TITLE".to_string(), v.clone()));
+            }
+            if let Some(ref v) = row.tag_artist {
+                pairs.push(("ARTIST".to_string(), v.clone()));
+            }
+            if let Some(ref v) = row.tag_album {
+                pairs.push(("ALBUM".to_string(), v.clone()));
+            }
+            if let Some(ref v) = row.tag_tracknumber {
+                pairs.push(("TRACKNUMBER".to_string(), v.clone()));
+            }
+            CorpusFileInfo {
+                parent_dir: row.parent_dir.clone(),
+                tags: TagSet::new(pairs),
+                duration_ms: row.duration_ms,
+            }
+        });
+    }
+
+    (candidate_inodes, corpus_info, dir_file_counts)
+}
+
+/// Score each (inode, track_slot) pairing against the release tracklist.
+fn score_candidates_against_tracklist(
+    candidate_inodes: &HashMap<i64, RecordingMatch>,
+    corpus_info: &HashMap<i64, CorpusFileInfo>,
+    release: &MbRelease,
+    release_id: &str,
+    resolved_artist: &str,
+    duration_tolerance_pct: f64,
+    candidate_weights: &crate::config::PackingWeights,
+) -> Vec<CandidateAssignment> {
+    let mut candidates = Vec::new();
+
+    for (inode, rec_match) in candidate_inodes {
+        let corpus = corpus_info.get(inode);
+
+        for medium in &release.media {
+            for track in &medium.tracks {
+                if track.recording.id == rec_match.recording_id {
+                    let (score, breakdown) = compute_score(
+                        rec_match,
+                        track,
+                        resolved_artist,
+                        &release.title,
+                        corpus,
+                        duration_tolerance_pct,
+                        candidate_weights,
+                    );
+
+                    candidates.push(CandidateAssignment {
+                        inode: *inode,
+                        recording_id: rec_match.recording_id.clone(),
+                        release_id: release_id.to_string(),
+                        medium_pos: medium.position,
+                        track_pos: track.position,
+                        medium_format: medium.format.clone(),
+                        track_number: track.number.clone(),
+                        track_title: track.title.clone(),
+                        score,
+                        breakdown,
+                    });
+                }
+            }
+        }
+    }
+
+    candidates
+}
+
+/// Run directory-constrained packing: Hungarian per directory, pick best, write score rows.
+///
+/// Applies pinned release constraints, filters candidates to the winning directory,
+/// and returns `(score_rows, assigned_inodes, target_dirs, optimal_pairs)`.
+fn run_directory_constrained_packing(
+    candidates: &mut Vec<CandidateAssignment>,
+    corpus_info: &HashMap<i64, CorpusFileInfo>,
+    release: &MbRelease,
+    dir_file_counts: &HashMap<String, usize>,
+    pinned_dirs_for_release: &[String],
+) -> (
+    Vec<PackingScoreRow>,
+    HashSet<i64>,
+    TargetDirs,
+    HashSet<(i64, (u32, u32))>,
+) {
+    let mut dir_candidate_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
+
+    for candidate in candidates.iter() {
+        if let Some(corpus) = corpus_info.get(&candidate.inode) {
+            dir_candidate_inodes
+                .entry(corpus.parent_dir.clone())
+                .or_default()
+                .insert(candidate.inode);
+        }
+    }
+
+    // Pinned release constraint: restrict to pinned dirs only
+    if !pinned_dirs_for_release.is_empty() {
+        dir_candidate_inodes.retain(|dir, _| pinned_dirs_for_release.contains(dir));
+        for pinned_dir in pinned_dirs_for_release {
+            dir_candidate_inodes.entry(pinned_dir.clone()).or_default();
+        }
+    }
+
+    let (target_dirs, optimal_pairs) = score_all_directories(
+        candidates,
+        corpus_info,
+        &dir_candidate_inodes,
+        &release.media,
+        dir_file_counts,
+    );
+
+    // Filter candidates to winning directory only (per-medium aware)
+    candidates.retain(|c| {
+        corpus_info
+            .get(&c.inode)
+            .map(|ci| target_dirs.contains(&ci.parent_dir, c.medium_pos))
+            .unwrap_or(false)
+    });
+
+    // Build score rows, marking optimal assignments
+    let mut score_rows: Vec<PackingScoreRow> = Vec::new();
+    let mut assigned_inodes: HashSet<i64> = HashSet::new();
+
+    for candidate in candidates.iter() {
+        let slot = (candidate.medium_pos, candidate.track_pos);
+        let is_optimal = optimal_pairs.contains(&(candidate.inode, slot));
+
+        if is_optimal {
+            assigned_inodes.insert(candidate.inode);
+        }
+
+        let breakdown_bytes = bincode::serialize(&candidate.breakdown).unwrap_or_default();
+
+        score_rows.push(PackingScoreRow {
+            release_id: candidate.release_id.clone(),
+            inode: candidate.inode,
+            recording_id: candidate.recording_id.clone(),
+            medium_pos: candidate.medium_pos as i32,
+            track_pos: candidate.track_pos as i32,
+            track_title: candidate.track_title.clone(),
+            medium_format: candidate.medium_format.clone(),
+            track_number: candidate.track_number.clone(),
+            score: candidate.score,
+            score_breakdown: breakdown_bytes,
+            is_optimal,
+            match_method: 0,
+            fingerprint_hex: None,
+            raw_duration_ms: None,
+        });
+    }
+
+    (score_rows, assigned_inodes, target_dirs, optimal_pairs)
+}
+
+/// Fill unfilled track slots via elimination matching within the target directory.
+///
+/// Uses title pre-assignment for high-confidence 1:1 matches, then Hungarian
+/// assignment on the remainder. Returns `(elimination_count, additional_score_rows)`.
+fn run_elimination_phase(
+    read_only_db: &ReadOnlyDb<'_>,
+    candidates: &[CandidateAssignment],
+    corpus_info: &HashMap<i64, CorpusFileInfo>,
+    release: &MbRelease,
+    release_id: &str,
+    resolved_artist: &str,
+    target_dirs: &TargetDirs,
+    optimal_pairs: &HashSet<(i64, (u32, u32))>,
+    duration_tolerance_pct: f64,
+    title_preassign_threshold: f64,
+    elimination_weights: &crate::config::PackingWeights,
+) -> (u32, Vec<PackingScoreRow>) {
+    // Build per-directory AcoustID inodes + global filled slots from optimal pairs
+    let mut dir_acoustid_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
+    let mut all_filled_slots: HashSet<(u32, u32)> = HashSet::new();
+
+    for candidate in candidates {
+        let slot = (candidate.medium_pos, candidate.track_pos);
+        if optimal_pairs.contains(&(candidate.inode, slot)) {
+            all_filled_slots.insert(slot);
+            if let Some(corpus) = corpus_info.get(&candidate.inode) {
+                dir_acoustid_inodes
+                    .entry(corpus.parent_dir.clone())
+                    .or_default()
+                    .insert(candidate.inode);
+            }
+        }
+    }
+
+    // Enumerate unfilled slots
+    let mut unfilled: Vec<(u32, u32, &musicbrainz::MbTrack)> = Vec::new();
+    for medium in &release.media {
+        for track in &medium.tracks {
+            let slot = (medium.position, track.position);
+            if !all_filled_slots.contains(&slot) {
+                unfilled.push((medium.position, track.position, track));
+            }
+        }
+    }
+
+    if unfilled.is_empty() {
+        return (0, Vec::new());
+    }
+
+    // Collect unassigned audio files from target dirs only.
+    // For per-medium dirs, only include files from the dir assigned to a medium
+    // that still has unfilled slots (prevents cross-medium contamination).
+    let mut all_unassigned: Vec<(i64, String, Option<String>, Option<i64>)> = Vec::new();
+    let unfilled_media: HashSet<u32> = unfilled.iter().map(|(m, _, _)| *m).collect();
+    let mut scanned_dirs: HashSet<String> = HashSet::new();
+    for &medium_pos in &unfilled_media {
+        if let Some(dir) = target_dirs.dir_for_medium(medium_pos) {
+            if scanned_dirs.insert(dir.to_string()) {
+                let acoustid_inodes =
+                    dir_acoustid_inodes.get(dir).cloned().unwrap_or_default();
+                match read_only_db.get_unassigned_audio_in_directory(dir, &acoustid_inodes) {
+                    Ok(files) => all_unassigned.extend(files),
+                    Err(_) => continue,
+                }
+            }
+        }
+    }
+
+    if all_unassigned.is_empty() {
+        return (0, Vec::new());
+    }
+
+    // For PerMedium targets, map each file to its medium based on parent dir.
+    // This prevents cross-medium contamination in elimination.
+    let dir_to_medium: HashMap<String, u32> = match target_dirs {
+        TargetDirs::PerMedium(mapping) => {
+            mapping.iter().map(|(mp, d)| (d.clone(), *mp)).collect()
+        }
+        _ => HashMap::new(),
+    };
+    let file_medium: Vec<Option<u32>> = all_unassigned
+        .iter()
+        .map(|(_, path, _, _)| {
+            if dir_to_medium.is_empty() {
+                None
+            } else {
+                Path::new(path)
+                    .parent()
+                    .and_then(|p| p.to_str())
+                    .and_then(|parent| dir_to_medium.get(parent).copied())
+            }
+        })
+        .collect();
+
+    // Pre-load tags for each unassigned file
+    let unassigned_tags: Vec<TagSet> = all_unassigned
+        .iter()
+        .map(|(inode, _, _, _)| {
+            let raw = read_only_db.get_tags::<crate::zones::CorpusZone>(*inode).unwrap_or_default();
+            TagSet::new(raw.into_iter().map(|t| (t.tag_name, t.tag_value)))
+        })
+        .collect();
+
+    let mut elimination_count = 0u32;
+    let mut score_rows = Vec::new();
+
+    // Phase 1: High-confidence title pre-assignment
+    // Lock in files where title similarity is unambiguously high and 1:1.
+    let title_sims = compute_title_similarity_matrix(&unassigned_tags, &unfilled);
+    let preassignments = find_unambiguous_preassignments(
+        &title_sims, title_preassign_threshold, &file_medium, &unfilled,
+    );
+
+    let mut preassigned_files: HashSet<usize> = HashSet::new();
+    let mut preassigned_slots: HashSet<usize> = HashSet::new();
+
+    for &(ui, fi) in &preassignments {
+        preassigned_files.insert(ui);
+        preassigned_slots.insert(fi);
+
+        let (inode, _path, fingerprint_hex, dur_ms) = &all_unassigned[ui];
+        let (medium_pos, track_pos, track) = &unfilled[fi];
+        let tags = &unassigned_tags[ui];
+
+        let mut breakdown = compute_elimination_breakdown(
+            tags, track, resolved_artist, &release.title,
+            *dur_ms, duration_tolerance_pct,
+        );
+        breakdown.title_match = title_sims[ui][fi];
+        score_rows.push(build_elimination_score_row(
+            release_id, *inode, track, *medium_pos, *track_pos,
+            &release.media, &breakdown, elimination_weights,
+            fingerprint_hex.clone(), *dur_ms,
+        ));
+
+        elimination_count += 1;
+    }
+
+    // Phase 2: Hungarian assignment on remaining files × slots
+    let n_files = all_unassigned.len();
+    let n_slots = unfilled.len();
+    let remaining_unassigned: Vec<usize> = (0..n_files)
+        .filter(|ui| !preassigned_files.contains(ui))
+        .collect();
+    let remaining_unfilled: Vec<usize> = (0..n_slots)
+        .filter(|fi| !preassigned_slots.contains(fi))
+        .collect();
+
+    let hungarian_rows = run_elimination_hungarian(
+        &remaining_unassigned, &remaining_unfilled,
+        &all_unassigned, &unfilled, &unassigned_tags, &file_medium,
+        release_id, release, resolved_artist,
+        duration_tolerance_pct, elimination_weights,
+    );
+    elimination_count += hungarian_rows.len() as u32;
+    score_rows.extend(hungarian_rows);
+
+    (elimination_count, score_rows)
+}
+
 /// Execute ScoreReleaseCandidates — score all candidate inodes for one release.
 ///
 /// Reads pre-filtered candidates from `release_packing_candidates` (written by Stage 1),
@@ -727,57 +1120,18 @@ pub fn execute_score_release_candidates(
     let title_preassign_threshold = config.opinions.release_packing.title_preassign_threshold;
     let preferred_locales = config.opinions.external_matching.preferred_locales.clone();
 
-    // Load the release tracklist
-    let release = match read_only_db.get_mb_release_cache(release_id) {
-        Ok(Some((raw_json, _))) => match musicbrainz::parse_release(&raw_json) {
-            Ok(r) if !r.media.is_empty() => r,
-            _ => {
-                return Result::failure(
-                    computation,
-                    format!("Release {} has no parseable tracklist", release_id),
-                );
-            }
-        },
-        _ => {
+    // Load release tracklist and resolve locale-aware artist name
+    let (release, resolved_artist) = match load_release_with_artist(
+        read_only_db, release_id, &preferred_locales,
+    ) {
+        Some(pair) => pair,
+        None => {
             return Result::failure(
                 computation,
-                format!("Release {} not in cache", release_id),
+                format!("Release {} not in cache or has no parseable tracklist", release_id),
             );
         }
     };
-
-    // Load artist data for locale-aware name resolution
-    let release_artist_data: HashMap<String, Vec<(String, Option<musicbrainz::MbArtist>)>> =
-        if preferred_locales.is_empty() {
-            HashMap::new()
-        } else {
-            let mut artist_cache: HashMap<String, musicbrainz::MbArtist> = HashMap::new();
-            for credit in &release.artist_credit {
-                if let Ok(Some((json, _))) = read_only_db.get_mb_artist_cache(&credit.artist.id) {
-                    if let Ok(artist) = musicbrainz::parse_artist(&json) {
-                        artist_cache.insert(credit.artist.id.clone(), artist);
-                    }
-                }
-            }
-            let artists: Vec<(String, Option<musicbrainz::MbArtist>)> = release
-                .artist_credit
-                .iter()
-                .map(|c| {
-                    let cached = artist_cache.get(&c.artist.id).cloned();
-                    (c.artist.id.clone(), cached)
-                })
-                .collect();
-            let mut map = HashMap::new();
-            map.insert(release_id.to_string(), artists);
-            map
-        };
-
-    let resolved_artist = localized_release_artist(
-        &release.artist_credit,
-        &release_artist_data,
-        release_id,
-        &preferred_locales,
-    );
 
     // Load pre-filtered candidates from intermediate table (written by Stage 1)
     let candidate_rows = match read_only_db.get_packing_candidates_for_release(release_id) {
@@ -794,98 +1148,20 @@ pub fn execute_score_release_candidates(
         return Result::success(computation, Vec::new());
     }
 
-    // Build candidate_inodes, corpus_info, and dir_file_counts from candidate rows
-    let mut candidate_inodes: HashMap<i64, RecordingMatch> = HashMap::new();
-    let mut corpus_info: HashMap<i64, CorpusFileInfo> = HashMap::new();
-    let mut dir_file_counts: HashMap<String, usize> = HashMap::new();
+    let (candidate_inodes, corpus_info, dir_file_counts) =
+        build_candidate_structures(&candidate_rows);
 
-    for row in &candidate_rows {
-        dir_file_counts
-            .entry(row.parent_dir.clone())
-            .or_insert(row.dir_file_count as usize);
-        candidate_inodes
-            .entry(row.inode)
-            .or_insert_with(|| RecordingMatch {
-                recording_id: row.recording_id.clone(),
-                confidence: row.confidence,
-            });
+    let mut candidates = score_candidates_against_tracklist(
+        &candidate_inodes,
+        &corpus_info,
+        &release,
+        release_id,
+        &resolved_artist,
+        duration_tolerance_pct,
+        &candidate_weights,
+    );
 
-        corpus_info.entry(row.inode).or_insert_with(|| {
-            let mut tags = HashMap::new();
-            if let Some(ref v) = row.tag_title {
-                tags.insert("TITLE".to_string(), vec![v.clone()]);
-            }
-            if let Some(ref v) = row.tag_artist {
-                tags.insert("ARTIST".to_string(), vec![v.clone()]);
-            }
-            if let Some(ref v) = row.tag_album {
-                tags.insert("ALBUM".to_string(), vec![v.clone()]);
-            }
-            if let Some(ref v) = row.tag_tracknumber {
-                tags.insert("TRACKNUMBER".to_string(), vec![v.clone()]);
-            }
-            CorpusFileInfo {
-                parent_dir: row.parent_dir.clone(),
-                tags,
-                duration_ms: row.duration_ms,
-            }
-        });
-    }
-
-    // Build candidates by matching against the release tracklist
-    let mut candidates: Vec<CandidateAssignment> = Vec::new();
-
-    for (inode, rec_match) in &candidate_inodes {
-        let corpus = corpus_info.get(inode);
-
-        for medium in &release.media {
-            for track in &medium.tracks {
-                if track.recording.id == rec_match.recording_id {
-                    let (score, breakdown) = compute_score(
-                        rec_match,
-                        track,
-                        &resolved_artist,
-                        &release.title,
-                        corpus,
-                        duration_tolerance_pct,
-                        &candidate_weights,
-                    );
-
-                    candidates.push(CandidateAssignment {
-                        inode: *inode,
-                        recording_id: rec_match.recording_id.clone(),
-                        release_id: release_id.to_string(),
-                        medium_pos: medium.position,
-                        track_pos: track.position,
-                        medium_format: medium.format.clone(),
-                        track_number: track.number.clone(),
-                        track_title: track.title.clone(),
-                        score,
-                        breakdown,
-                    });
-                }
-            }
-        }
-    }
-
-    // --- Directory-constrained packing ---
-    // Run Hungarian for every candidate directory, keep the best-scoring assignment.
-    // This replaces the old greedy heuristic (select_target_directory) with exhaustive
-    // per-directory scoring for deterministic results.
-
-    let mut dir_candidate_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
-
-    for candidate in &candidates {
-        if let Some(corpus) = corpus_info.get(&candidate.inode) {
-            dir_candidate_inodes
-                .entry(corpus.parent_dir.clone())
-                .or_default()
-                .insert(candidate.inode);
-        }
-    }
-
-    // === Pinned release constraint: restrict to pinned dirs only ===
-    // If this release is pinned by any dir(s), discard all non-pinned dirs.
+    // Compute pinned directory constraint
     let pinned_dirs_for_release: Vec<String> = config
         .source_dirs
         .iter()
@@ -893,220 +1169,30 @@ pub fn execute_score_release_candidates(
         .map(|sd| format!("corpus/{}", sd.path.display()))
         .collect();
 
-    if !pinned_dirs_for_release.is_empty() {
-        dir_candidate_inodes.retain(|dir, _| pinned_dirs_for_release.contains(dir));
-        // Also include pinned dirs that have files but no AcoustID candidates
-        // (their inodes were injected as synthetic candidates in Stage 1,
-        // but might only appear in the elimination phase)
-        for pinned_dir in &pinned_dirs_for_release {
-            dir_candidate_inodes.entry(pinned_dir.clone()).or_default();
-        }
-    }
+    let (mut score_rows, assigned_inodes, target_dirs, optimal_pairs) =
+        run_directory_constrained_packing(
+            &mut candidates,
+            &corpus_info,
+            &release,
+            &dir_file_counts,
+            &pinned_dirs_for_release,
+        );
 
-    let (target_dirs, optimal_pairs) = score_all_directories(
+    // Elimination: fill unfilled slots from target directory
+    let (elimination_count, elimination_rows) = run_elimination_phase(
+        read_only_db,
         &candidates,
         &corpus_info,
-        &dir_candidate_inodes,
-        &release.media,
-        &dir_file_counts,
+        &release,
+        release_id,
+        &resolved_artist,
+        &target_dirs,
+        &optimal_pairs,
+        duration_tolerance_pct,
+        title_preassign_threshold,
+        &elimination_weights,
     );
-
-    // Filter candidates to winning directory only (per-medium aware)
-    candidates.retain(|c| {
-        corpus_info
-            .get(&c.inode)
-            .map(|ci| target_dirs.contains(&ci.parent_dir, c.medium_pos))
-            .unwrap_or(false)
-    });
-
-    // Write all candidates to scoring table, marking optimal ones
-    let mut score_rows: Vec<PackingScoreRow> = Vec::new();
-    let mut assigned_inodes: HashSet<i64> = HashSet::new();
-
-    for candidate in &candidates {
-        let slot = (candidate.medium_pos, candidate.track_pos);
-        let is_optimal = optimal_pairs.contains(&(candidate.inode, slot));
-
-        if is_optimal {
-            assigned_inodes.insert(candidate.inode);
-        }
-
-        let breakdown_bytes = bincode::serialize(&candidate.breakdown).unwrap_or_default();
-
-        score_rows.push(PackingScoreRow {
-            release_id: candidate.release_id.clone(),
-            inode: candidate.inode,
-            recording_id: candidate.recording_id.clone(),
-            medium_pos: candidate.medium_pos as i32,
-            track_pos: candidate.track_pos as i32,
-            track_title: candidate.track_title.clone(),
-            medium_format: candidate.medium_format.clone(),
-            track_number: candidate.track_number.clone(),
-            score: candidate.score,
-            score_breakdown: breakdown_bytes,
-            is_optimal,
-            match_method: 0,
-            fingerprint_hex: None,
-            raw_duration_ms: None,
-        });
-    }
-
-    // =====================================================================
-    // Per-release elimination: fill unfilled slots from target directory only
-    // =====================================================================
-    // Scan ONLY the target dir(s) for unassigned audio files to fill remaining slots.
-    // This is the key constraint: elimination never reaches outside the selected directory.
-
-    let mut elimination_count = 0u32;
-
-    // Build per-directory AcoustID inodes + global filled slots from optimal pairs
-    let mut dir_acoustid_inodes: HashMap<String, HashSet<i64>> = HashMap::new();
-    let mut all_filled_slots: HashSet<(u32, u32)> = HashSet::new();
-
-    for candidate in &candidates {
-        let slot = (candidate.medium_pos, candidate.track_pos);
-        if optimal_pairs.contains(&(candidate.inode, slot)) {
-            all_filled_slots.insert(slot);
-            if let Some(corpus) = corpus_info.get(&candidate.inode) {
-                dir_acoustid_inodes
-                    .entry(corpus.parent_dir.clone())
-                    .or_default()
-                    .insert(candidate.inode);
-            }
-        }
-    }
-
-    // Enumerate unfilled slots ONCE
-    let mut unfilled: Vec<(u32, u32, &musicbrainz::MbTrack)> = Vec::new();
-    for medium in &release.media {
-        for track in &medium.tracks {
-            let slot = (medium.position, track.position);
-            if !all_filled_slots.contains(&slot) {
-                unfilled.push((medium.position, track.position, track));
-            }
-        }
-    }
-
-    if !unfilled.is_empty() {
-        // Collect unassigned audio files from target dirs only.
-        // For per-medium dirs, only include files from the dir assigned to a medium
-        // that still has unfilled slots (prevents cross-medium contamination).
-        let mut all_unassigned: Vec<(i64, String, Option<String>, Option<i64>)> = Vec::new();
-        let unfilled_media: HashSet<u32> = unfilled.iter().map(|(m, _, _)| *m).collect();
-        let mut scanned_dirs: HashSet<String> = HashSet::new();
-        for &medium_pos in &unfilled_media {
-            if let Some(dir) = target_dirs.dir_for_medium(medium_pos) {
-                if scanned_dirs.insert(dir.to_string()) {
-                    let acoustid_inodes =
-                        dir_acoustid_inodes.get(dir).cloned().unwrap_or_default();
-                    match read_only_db.get_unassigned_audio_in_directory(dir, &acoustid_inodes) {
-                        Ok(files) => all_unassigned.extend(files),
-                        Err(_) => continue,
-                    }
-                }
-            }
-        }
-
-        // For PerMedium targets, map each file to its medium based on parent dir.
-        // This prevents cross-medium contamination in elimination: Disc 1 files
-        // can only fill Medium 1 slots, Disc 2 files only Medium 2 slots.
-        let dir_to_medium: HashMap<String, u32> = match &target_dirs {
-            TargetDirs::PerMedium(mapping) => {
-                mapping.iter().map(|(mp, d)| (d.clone(), *mp)).collect()
-            }
-            _ => HashMap::new(),
-        };
-        let file_medium: Vec<Option<u32>> = all_unassigned
-            .iter()
-            .map(|(_, path, _, _)| {
-                if dir_to_medium.is_empty() {
-                    None // Single target — no per-medium constraint
-                } else {
-                    Path::new(path)
-                        .parent()
-                        .and_then(|p| p.to_str())
-                        .and_then(|parent| dir_to_medium.get(parent).copied())
-                }
-            })
-            .collect();
-
-        if !all_unassigned.is_empty() {
-            // Pre-load tags for each unassigned file
-            let unassigned_tags: Vec<HashMap<String, Vec<String>>> = all_unassigned
-                .iter()
-                .map(|(inode, _, _, _)| {
-                    let raw = read_only_db.get_tags::<crate::zones::CorpusZone>(*inode).unwrap_or_default();
-                    let mut tags: HashMap<String, Vec<String>> = HashMap::new();
-                    for tag in raw {
-                        tags.entry(tag.tag_name).or_default().push(tag.tag_value);
-                    }
-                    tags
-                })
-                .collect();
-
-            // =============================================================
-            // Phase 1: High-confidence title pre-assignment
-            // =============================================================
-            // Before the full Hungarian, lock in files where title similarity
-            // is unambiguously high (>0.95) and the match is 1:1. This prevents
-            // tracknumber from stealing slots that have clear title matches
-            // when the rip's track ordering diverges from MB.
-
-            let title_sims = compute_title_similarity_matrix(&unassigned_tags, &unfilled);
-            let preassignments = find_unambiguous_preassignments(
-                &title_sims, title_preassign_threshold, &file_medium, &unfilled,
-            );
-
-            let mut preassigned_files: HashSet<usize> = HashSet::new();
-            let mut preassigned_slots: HashSet<usize> = HashSet::new();
-
-            for &(ui, fi) in &preassignments {
-                preassigned_files.insert(ui);
-                preassigned_slots.insert(fi);
-
-                let (inode, _path, fingerprint_hex, dur_ms) = &all_unassigned[ui];
-                let (medium_pos, track_pos, track) = &unfilled[fi];
-                let tags = &unassigned_tags[ui];
-
-                // Build full breakdown for the pre-assigned match
-                let mut breakdown = compute_elimination_breakdown(
-                    tags, track, &resolved_artist, &release.title,
-                    *dur_ms, duration_tolerance_pct,
-                );
-                // Override title_match with the pre-computed matrix value
-                breakdown.title_match = title_sims[ui][fi];
-                score_rows.push(build_elimination_score_row(
-                    release_id, *inode, track, *medium_pos, *track_pos,
-                    &release.media, &breakdown, &elimination_weights,
-                    fingerprint_hex.clone(), *dur_ms,
-                ));
-
-                elimination_count += 1;
-            }
-
-            // Filter out pre-assigned entries for the Hungarian pass
-            let n_files = all_unassigned.len();
-            let n_slots = unfilled.len();
-            let remaining_unassigned: Vec<usize> = (0..n_files)
-                .filter(|ui| !preassigned_files.contains(ui))
-                .collect();
-            let remaining_unfilled: Vec<usize> = (0..n_slots)
-                .filter(|fi| !preassigned_slots.contains(fi))
-                .collect();
-
-            // =============================================================
-            // Phase 2: Hungarian assignment on remaining files × slots
-            // =============================================================
-            let hungarian_rows = run_elimination_hungarian(
-                &remaining_unassigned, &remaining_unfilled,
-                &all_unassigned, &unfilled, &unassigned_tags, &file_medium,
-                release_id, &release, &resolved_artist,
-                duration_tolerance_pct, &elimination_weights,
-            );
-            elimination_count += hungarian_rows.len() as u32;
-            score_rows.extend(hungarian_rows);
-        }
-    }
+    score_rows.extend(elimination_rows);
 
     if !score_rows.is_empty() {
         sender.write_packing_scores(score_rows, witness);
@@ -1141,11 +1227,8 @@ mod tests {
         }
     }
 
-    fn tags_with(pairs: &[(&str, &str)]) -> HashMap<String, Vec<String>> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), vec![v.to_string()]))
-            .collect()
+    fn tags_with(pairs: &[(&str, &str)]) -> TagSet {
+        TagSet::new(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())))
     }
 
     // --- compute_title_similarity_matrix ---
@@ -1170,7 +1253,7 @@ mod tests {
 
     #[test]
     fn test_title_similarity_matrix_empty_tags() {
-        let tags: Vec<HashMap<String, Vec<String>>> = vec![HashMap::new()];
+        let tags: Vec<TagSet> = vec![TagSet::empty()];
         let track = make_track("Track", "Track", 1, None);
         let unfilled = vec![(1u32, 1u32, &track)];
 

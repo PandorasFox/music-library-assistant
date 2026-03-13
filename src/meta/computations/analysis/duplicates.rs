@@ -17,7 +17,7 @@ use crate::meta::computations::helpers::{
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
-    CrossReleaseEntry, CrossReleaseRecordingData, CrossReleaseRecordingSignal,
+    SameRecordingDifferentReleaseEntry, SameRecordingDifferentReleaseData, SameRecordingDifferentReleaseSignal,
     CrossSourceOverlapData, CrossSourceOverlapSignal, CrossSourceTrackPair, DuplicateInodeSignal,
     FingerprintOverlapSignal, MetadataDuplicateData, MetadataDuplicateSignal,
     RedundantDuplicateData, RedundantDuplicateSignal, SubparDuplicateData, SubparDuplicateSignal};
@@ -783,16 +783,16 @@ pub fn execute_analyze_fingerprint_overlaps(
             Vec::new(),
             witness,
         );
-        let cross_release_stats = reconcile_aggregate_signals::<CrossReleaseRecordingSignal>(
+        let same_recording_different_release_stats = reconcile_aggregate_signals::<SameRecordingDifferentReleaseSignal>(
             read_only_db,
             &sender,
             Vec::new(),
             witness,
         );
-        if subpar_stats.cleared > 0 || redundant_stats.cleared > 0 || cross_release_stats.cleared > 0 {
+        if subpar_stats.cleared > 0 || redundant_stats.cleared > 0 || same_recording_different_release_stats.cleared > 0 {
             log_general(format!(
-                "[COMPUTE] AnalyzeFingerprintOverlaps: cleared {} stale SubparDuplicate + {} stale RedundantDuplicate + {} stale CrossReleaseRecording",
-                subpar_stats.cleared, redundant_stats.cleared, cross_release_stats.cleared
+                "[COMPUTE] AnalyzeFingerprintOverlaps: cleared {} stale SubparDuplicate + {} stale RedundantDuplicate + {} stale SameRecordingDifferentRelease",
+                subpar_stats.cleared, redundant_stats.cleared, same_recording_different_release_stats.cleared
             ));
         }
         return Result::success(computation, Vec::new());
@@ -807,7 +807,7 @@ pub fn execute_analyze_fingerprint_overlaps(
     let mut computed_subpar: Vec<ComputedCorpusSignal> = Vec::new();
     let mut computed_redundant: Vec<ComputedAggregateSignal> = Vec::new();
     // Cross-release groups: recording_id → entries (deduped by inode later)
-    let mut cross_release_groups: HashMap<String, Vec<CrossReleaseEntry>> = HashMap::new();
+    let mut same_recording_different_release_groups: HashMap<String, Vec<SameRecordingDifferentReleaseEntry>> = HashMap::new();
 
     for signal in &fp_dup_signals {
         let inodes = signal.inodes.clone();
@@ -909,7 +909,7 @@ pub fn execute_analyze_fingerprint_overlaps(
                             for &idx in &[i, j] {
                                 let identity = &identities[idx];
                                 let af = &cluster[idx];
-                                let entry = CrossReleaseEntry {
+                                let entry = SameRecordingDifferentReleaseEntry {
                                     inode: identity.inode,
                                     path: identity.path.clone(),
                                     mb_release_id: identity.mb_release_id.clone(),
@@ -920,7 +920,7 @@ pub fn execute_analyze_fingerprint_overlaps(
                                     sample_rate: af.audio.sample_rate,
                                     duration_ms: af.audio.duration_ms,
                                 };
-                                cross_release_groups
+                                same_recording_different_release_groups
                                     .entry(recording_id.clone())
                                     .or_insert_with(Vec::new)
                                     .push(entry);
@@ -1077,22 +1077,22 @@ pub fn execute_analyze_fingerprint_overlaps(
         witness,
     );
 
-    // Build CrossReleaseRecording signals from collected groups (dedup entries by inode)
-    let mut computed_cross_release: Vec<ComputedAggregateSignal> = Vec::new();
-    for (recording_id, entries) in &cross_release_groups {
+    // Build SameRecordingDifferentRelease signals from collected groups (dedup entries by inode)
+    let mut computed_same_recording_different_release: Vec<ComputedAggregateSignal> = Vec::new();
+    for (recording_id, entries) in &same_recording_different_release_groups {
         // Dedup entries by inode
         let mut seen_inodes = HashSet::new();
-        let deduped: Vec<CrossReleaseEntry> = entries
+        let deduped: Vec<SameRecordingDifferentReleaseEntry> = entries
             .iter()
             .filter(|e| seen_inodes.insert(e.inode))
             .cloned()
             .collect();
         if deduped.len() >= 2 {
-            computed_cross_release.push(ComputedAggregateSignal::new(
+            computed_same_recording_different_release.push(ComputedAggregateSignal::new(
                 recording_id.clone(),
-                TypedSignalWrite::CrossReleaseRecording(CrossReleaseRecordingSignal {
+                TypedSignalWrite::SameRecordingDifferentRelease(SameRecordingDifferentReleaseSignal {
                     key: recording_id.clone(),
-                    data: CrossReleaseRecordingData {
+                    data: SameRecordingDifferentReleaseData {
                         recording_id: recording_id.clone(),
                         entries: deduped,
                     },
@@ -1101,19 +1101,19 @@ pub fn execute_analyze_fingerprint_overlaps(
         }
     }
 
-    let cross_release_stats = reconcile_aggregate_signals::<CrossReleaseRecordingSignal>(
+    let same_recording_different_release_stats = reconcile_aggregate_signals::<SameRecordingDifferentReleaseSignal>(
         read_only_db,
         &sender,
-        computed_cross_release,
+        computed_same_recording_different_release,
         witness,
     );
 
     log_general(format!(
-        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, {} SubparDuplicate ({}) + {} RedundantDuplicate ({}) + {} CrossReleaseRecording ({}), skipped {} variants, {} expected, {} interior-suppressed",
+        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, {} SubparDuplicate ({}) + {} RedundantDuplicate ({}) + {} SameRecordingDifferentRelease ({}), skipped {} variants, {} expected, {} interior-suppressed",
         total_groups,
         subpar_stats.active(), subpar_stats,
         redundant_stats.active(), redundant_stats,
-        cross_release_stats.active(), cross_release_stats,
+        same_recording_different_release_stats.active(), same_recording_different_release_stats,
         variant_skipped, expected_skipped, interior_skipped
     ));
 

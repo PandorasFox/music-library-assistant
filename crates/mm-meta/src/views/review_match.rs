@@ -23,7 +23,7 @@ pub enum ReviewKind {
     MetadataDuplicate,
     /// Same MusicBrainz recording on different releases.
     /// Informational for dedup reasoning and release packing.
-    CrossReleaseRecording,
+    SameRecordingDifferentRelease,
 }
 
 impl ReviewKind {
@@ -33,7 +33,7 @@ impl ReviewKind {
             Self::RedundantDuplicate => "Redundant Duplicate Review",
             Self::DeployConflict => "Deploy Conflict Review",
             Self::MetadataDuplicate => "Metadata Duplicate Review",
-            Self::CrossReleaseRecording => "Cross-Release Recording Review",
+            Self::SameRecordingDifferentRelease => "Same Recording, Different Release Review",
         }
     }
 
@@ -43,7 +43,7 @@ impl ReviewKind {
             Self::RedundantDuplicate => "redundant",
             Self::DeployConflict => "deploy_conflict",
             Self::MetadataDuplicate => "metadata_dup",
-            Self::CrossReleaseRecording => "cross_release",
+            Self::SameRecordingDifferentRelease => "cross_release",
         }
     }
 
@@ -53,7 +53,7 @@ impl ReviewKind {
             Self::RedundantDuplicate => "Redundant duplicate resolution",
             Self::DeployConflict => "Deploy conflict resolution",
             Self::MetadataDuplicate => "Metadata duplicate resolution",
-            Self::CrossReleaseRecording => "Cross-release recording resolution",
+            Self::SameRecordingDifferentRelease => "Same recording, different release resolution",
         }
     }
 

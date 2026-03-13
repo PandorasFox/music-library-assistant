@@ -753,7 +753,7 @@ pub fn load_manual_review_data(
         ReviewKind::RedundantDuplicate => load_redundant_duplicates(read_db)?,
         ReviewKind::DeployConflict => load_deploy_conflicts(read_db)?,
         ReviewKind::MetadataDuplicate => load_metadata_duplicates(read_db)?,
-        ReviewKind::CrossReleaseRecording => load_cross_release_recordings(read_db)?,
+        ReviewKind::SameRecordingDifferentRelease => load_same_recording_different_releases(read_db)?,
     };
 
     // Enrich with metadata
@@ -883,12 +883,12 @@ fn load_metadata_duplicates(
     Ok(ManualReviewData { groups })
 }
 
-fn load_cross_release_recordings(
+fn load_same_recording_different_releases(
     read_db: &ReadOnlyDb<'_>,
 ) -> Result<mm_meta::views::review_match::ManualReviewData> {
     use mm_meta::views::review_match::{ManualReviewData, ReviewFileEntry, ReviewGroup};
 
-    let signal_groups = read_db.get_cross_release_recording_groups()?;
+    let signal_groups = read_db.get_same_recording_different_release_groups()?;
 
     let mut groups = Vec::new();
     for (key, data) in signal_groups {

@@ -627,7 +627,7 @@ impl<'a> ReadOnlyDb<'a> {
 
     delegate_read! {
         fn get_redundant_duplicate_groups() -> Result<Vec<(String, crate::meta::signals::data::RedundantDuplicateData)>>;
-        fn get_cross_release_recording_groups() -> Result<Vec<(String, crate::meta::signals::data::CrossReleaseRecordingData)>>;
+        fn get_same_recording_different_release_groups() -> Result<Vec<(String, crate::meta::signals::data::SameRecordingDifferentReleaseData)>>;
         fn get_metadata_duplicate_groups() -> Result<Vec<(String, crate::meta::signals::data::MetadataDuplicateData)>>;
     }
 

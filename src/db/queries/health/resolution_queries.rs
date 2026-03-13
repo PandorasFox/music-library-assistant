@@ -112,12 +112,12 @@ impl Database {
         )
     }
 
-    /// Get all cross-release recording groups with deserialized data.
-    pub fn get_cross_release_recording_groups(
+    /// Get all same-recording-different-release groups with deserialized data.
+    pub fn get_same_recording_different_release_groups(
         &self,
-    ) -> Result<Vec<(String, crate::meta::signals::data::CrossReleaseRecordingData)>> {
+    ) -> Result<Vec<(String, crate::meta::signals::data::SameRecordingDifferentReleaseData)>> {
         self.query_signal_key_blobs(
-            "SELECT key, data FROM signal_cross_release_recording ORDER BY key",
+            "SELECT key, data FROM signal_same_recording_different_release ORDER BY key",
         )
     }
 

@@ -129,7 +129,7 @@ impl Database {
 
         let path_tag_mismatch_count = self.count_signal_type("path_tag_mismatch")?;
 
-        let cross_release_recording_count = self.count_signal_type("cross_release_recording")?;
+        let same_recording_different_release_count = self.count_signal_type("same_recording_different_release")?;
 
         Ok(TagSquashBucket {
             directory_overlap_cluster_count,
@@ -142,7 +142,7 @@ impl Database {
             missing_album_single_count,
             disc_extraction_count,
             path_tag_mismatch_count,
-            cross_release_recording_count,
+            same_recording_different_release_count,
         })
     }
 

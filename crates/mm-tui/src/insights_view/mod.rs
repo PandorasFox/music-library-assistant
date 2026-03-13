@@ -90,7 +90,7 @@ pub enum InsightType {
     MissingAlbumSingle,
     DiscExtraction,
     PathTagMismatch,
-    CrossReleaseRecordings,
+    SameRecordingDifferentRelease,
     // Other bucket - dynamic entries identified by index
     OtherSignal { index: usize },
 }
@@ -126,7 +126,7 @@ impl InsightType {
             | InsightType::MissingAlbumSingle
             | InsightType::DiscExtraction
             | InsightType::PathTagMismatch
-            | InsightType::CrossReleaseRecordings
+            | InsightType::SameRecordingDifferentRelease
             | InsightType::OtherSignal { .. } => None,
         }
     }
@@ -302,8 +302,8 @@ impl CachedBucketEntries {
         if bucket.redundant_duplicate_count > 0 {
             entries.push(BucketEntry::counted(InsightType::RedundantDuplicates, "Redundant duplicates", bucket.redundant_duplicate_count, Color::Yellow, Color::Green, InsightAction::LaunchManualReview(crate::manual_review_modal::ReviewKind::RedundantDuplicate)));
         }
-        if bucket.cross_release_recording_count > 0 {
-            entries.push(BucketEntry::counted(InsightType::CrossReleaseRecordings, "Cross-release recordings", bucket.cross_release_recording_count, Color::Cyan, Color::Green, InsightAction::LaunchManualReview(crate::manual_review_modal::ReviewKind::CrossReleaseRecording)));
+        if bucket.same_recording_different_release_count > 0 {
+            entries.push(BucketEntry::counted(InsightType::SameRecordingDifferentRelease, "Same recording, different releases", bucket.same_recording_different_release_count, Color::Cyan, Color::Green, InsightAction::LaunchManualReview(crate::manual_review_modal::ReviewKind::SameRecordingDifferentRelease)));
         }
         if bucket.inconsistent_album_artist_count > 0 {
             entries.push(BucketEntry::counted(InsightType::InconsistentAlbumArtist, "Inconsistent album_artist", bucket.inconsistent_album_artist_count, Color::Yellow, Color::Green, InsightAction::LaunchTagCanonicityResolution));
@@ -547,7 +547,7 @@ fn detail_lines_for_entry(
             "Neither file is subpar \u{2014} requires",
             "operator choice.",
         ], None, tc, hc),
-        InsightType::CrossReleaseRecordings => detail_popup("Cross-Release Recordings", &[
+        InsightType::SameRecordingDifferentRelease => detail_popup("Same Recording, Different Release", &[
             "Same MusicBrainz recording on different",
             "releases (e.g., album vs compilation).",
             "Informational for release packing.",
@@ -855,7 +855,7 @@ mod tests {
                 missing_album_single_count: 0,
                 disc_extraction_count: 0,
                 path_tag_mismatch_count: 0,
-                cross_release_recording_count: 0,
+                same_recording_different_release_count: 0,
             },
             bucket_other: OtherSignalsBucket { entries: vec![] },
         }

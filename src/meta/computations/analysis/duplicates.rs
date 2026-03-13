@@ -17,6 +17,7 @@ use crate::meta::computations::helpers::{
 };
 use crate::meta::computations::types::ComputationWitness;
 use crate::meta::signals::data::{
+    CrossReleaseEntry, CrossReleaseRecordingData, CrossReleaseRecordingSignal,
     CrossSourceOverlapData, CrossSourceOverlapSignal, CrossSourceTrackPair, DuplicateInodeSignal,
     FingerprintOverlapSignal, MetadataDuplicateData, MetadataDuplicateSignal,
     RedundantDuplicateData, RedundantDuplicateSignal, SubparDuplicateData, SubparDuplicateSignal};
@@ -594,8 +595,63 @@ struct TrackReleaseIdentity {
     title: String,
     isrc: String,
     catalog_number: String,
+    /// MUSICBRAINZ_TRACKID (recording MBID)
+    mb_recording_id: String,
+    /// MUSICBRAINZ_ALBUMID (release MBID)
+    mb_release_id: String,
+    /// MUSICBRAINZ_RELEASETRACKID (release-track MBID)
+    mb_track_id: String,
 }
 
+/// Relationship between two tracks sharing a fingerprint.
+enum ReleaseRelationship {
+    /// Same recording on the same release (true duplicate — quality tiering).
+    SameRelease,
+    /// Same MB recording on different MB releases (cross-release — informational).
+    SameRecordingDifferentRelease,
+    /// Different releases entirely (skip).
+    DifferentRelease,
+}
+
+/// Classify the release relationship between two tracks.
+///
+/// When both have MB recording IDs:
+/// - Matching recording IDs + differing release IDs → SameRecordingDifferentRelease
+/// - Matching recording IDs + same/missing release IDs → SameRelease
+/// - Different recording IDs → DifferentRelease
+///
+/// Fallthrough to existing heuristics when MB data is absent.
+fn classify_release_relationship(
+    a: &TrackReleaseIdentity,
+    b: &TrackReleaseIdentity,
+    elide_variants: bool,
+) -> ReleaseRelationship {
+    // MB recording IDs present on both: strongest signal
+    if !a.mb_recording_id.is_empty() && !b.mb_recording_id.is_empty() {
+        if a.mb_recording_id.eq_ignore_ascii_case(&b.mb_recording_id) {
+            // Same recording — check if different releases
+            if !a.mb_release_id.is_empty()
+                && !b.mb_release_id.is_empty()
+                && !a.mb_release_id.eq_ignore_ascii_case(&b.mb_release_id)
+            {
+                return ReleaseRelationship::SameRecordingDifferentRelease;
+            }
+            return ReleaseRelationship::SameRelease;
+        }
+        // Different recording IDs = definitively different
+        return ReleaseRelationship::DifferentRelease;
+    }
+
+    // Fallthrough: use existing heuristics
+    if is_same_release_heuristic(a, b, elide_variants) {
+        ReleaseRelationship::SameRelease
+    } else {
+        ReleaseRelationship::DifferentRelease
+    }
+}
+
+/// Heuristic same-release check (catalog numbers, album names, ISRCs, variant titles).
+///
 /// Check if two tracks are from the same release (true duplicates, not variants).
 ///
 /// Tracks are "same release" if:
@@ -610,7 +666,7 @@ struct TrackReleaseIdentity {
 /// IMPORTANT: When no catalog numbers are present, album is checked BEFORE ISRC because
 /// ISRC identifies the recording, not the release — same ISRC on different albums (e.g.
 /// solo release vs compilation) means different releases, not redundant copies.
-fn is_same_release(
+fn is_same_release_heuristic(
     a: &TrackReleaseIdentity,
     b: &TrackReleaseIdentity,
     elide_variants: bool,
@@ -727,10 +783,16 @@ pub fn execute_analyze_fingerprint_overlaps(
             Vec::new(),
             witness,
         );
-        if subpar_stats.cleared > 0 || redundant_stats.cleared > 0 {
+        let cross_release_stats = reconcile_aggregate_signals::<CrossReleaseRecordingSignal>(
+            read_only_db,
+            &sender,
+            Vec::new(),
+            witness,
+        );
+        if subpar_stats.cleared > 0 || redundant_stats.cleared > 0 || cross_release_stats.cleared > 0 {
             log_general(format!(
-                "[COMPUTE] AnalyzeFingerprintOverlaps: cleared {} stale SubparDuplicate + {} stale RedundantDuplicate",
-                subpar_stats.cleared, redundant_stats.cleared
+                "[COMPUTE] AnalyzeFingerprintOverlaps: cleared {} stale SubparDuplicate + {} stale RedundantDuplicate + {} stale CrossReleaseRecording",
+                subpar_stats.cleared, redundant_stats.cleared, cross_release_stats.cleared
             ));
         }
         return Result::success(computation, Vec::new());
@@ -744,6 +806,8 @@ pub fn execute_analyze_fingerprint_overlaps(
     // Collect all computed signals for reconciliation
     let mut computed_subpar: Vec<ComputedCorpusSignal> = Vec::new();
     let mut computed_redundant: Vec<ComputedAggregateSignal> = Vec::new();
+    // Cross-release groups: recording_id → entries (deduped by inode later)
+    let mut cross_release_groups: HashMap<String, Vec<CrossReleaseEntry>> = HashMap::new();
 
     for signal in &fp_dup_signals {
         let inodes = signal.inodes.clone();
@@ -797,6 +861,9 @@ pub fn execute_analyze_fingerprint_overlaps(
                     catalog_number: find_tag_in_map(&tag_map, "catalognumber")
                         .map(|s| s.to_string())
                         .unwrap_or_default(),
+                    mb_recording_id: tag_map.get("MUSICBRAINZ_TRACKID").cloned().unwrap_or_default(),
+                    mb_release_id: tag_map.get("MUSICBRAINZ_ALBUMID").cloned().unwrap_or_default(),
+                    mb_track_id: tag_map.get("MUSICBRAINZ_RELEASETRACKID").cloned().unwrap_or_default(),
                 });
             }
 
@@ -829,15 +896,41 @@ pub fn execute_analyze_fingerprint_overlaps(
                         }
                     }
 
-                    // Check if same release
-                    if !is_same_release(&identities[i], &identities[j], elide_variant_titles) {
-                        variant_skipped += 1;
-                        continue; // Different variants
+                    // Classify release relationship
+                    match classify_release_relationship(&identities[i], &identities[j], elide_variant_titles) {
+                        ReleaseRelationship::SameRelease => {
+                            // True duplicate — add to group for quality tiering
+                            group.push(j);
+                            assigned[j] = true;
+                        }
+                        ReleaseRelationship::SameRecordingDifferentRelease => {
+                            // Cross-release recording — collect for signal emission
+                            let recording_id = identities[i].mb_recording_id.clone();
+                            for &idx in &[i, j] {
+                                let identity = &identities[idx];
+                                let af = &cluster[idx];
+                                let entry = CrossReleaseEntry {
+                                    inode: identity.inode,
+                                    path: identity.path.clone(),
+                                    mb_release_id: identity.mb_release_id.clone(),
+                                    mb_track_id: identity.mb_track_id.clone(),
+                                    album: identity.album.clone(),
+                                    file_type: af.audio.file_type.clone(),
+                                    bitrate_kbps: af.audio.bitrate_kbps,
+                                    sample_rate: af.audio.sample_rate,
+                                    duration_ms: af.audio.duration_ms,
+                                };
+                                cross_release_groups
+                                    .entry(recording_id.clone())
+                                    .or_insert_with(Vec::new)
+                                    .push(entry);
+                            }
+                            variant_skipped += 1;
+                        }
+                        ReleaseRelationship::DifferentRelease => {
+                            variant_skipped += 1;
+                        }
                     }
-
-                    // This is a true duplicate of the group leader
-                    group.push(j);
-                    assigned[j] = true;
                 }
 
                 if group.len() >= 2 {
@@ -984,11 +1077,43 @@ pub fn execute_analyze_fingerprint_overlaps(
         witness,
     );
 
+    // Build CrossReleaseRecording signals from collected groups (dedup entries by inode)
+    let mut computed_cross_release: Vec<ComputedAggregateSignal> = Vec::new();
+    for (recording_id, entries) in &cross_release_groups {
+        // Dedup entries by inode
+        let mut seen_inodes = HashSet::new();
+        let deduped: Vec<CrossReleaseEntry> = entries
+            .iter()
+            .filter(|e| seen_inodes.insert(e.inode))
+            .cloned()
+            .collect();
+        if deduped.len() >= 2 {
+            computed_cross_release.push(ComputedAggregateSignal::new(
+                recording_id.clone(),
+                TypedSignalWrite::CrossReleaseRecording(CrossReleaseRecordingSignal {
+                    key: recording_id.clone(),
+                    data: CrossReleaseRecordingData {
+                        recording_id: recording_id.clone(),
+                        entries: deduped,
+                    },
+                }),
+            ));
+        }
+    }
+
+    let cross_release_stats = reconcile_aggregate_signals::<CrossReleaseRecordingSignal>(
+        read_only_db,
+        &sender,
+        computed_cross_release,
+        witness,
+    );
+
     log_general(format!(
-        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, {} SubparDuplicate ({}) + {} RedundantDuplicate ({}), skipped {} variants, {} expected, {} interior-suppressed",
+        "[COMPUTE] AnalyzeFingerprintOverlaps: analyzed {} groups, {} SubparDuplicate ({}) + {} RedundantDuplicate ({}) + {} CrossReleaseRecording ({}), skipped {} variants, {} expected, {} interior-suppressed",
         total_groups,
         subpar_stats.active(), subpar_stats,
         redundant_stats.active(), redundant_stats,
+        cross_release_stats.active(), cross_release_stats,
         variant_skipped, expected_skipped, interior_skipped
     ));
 

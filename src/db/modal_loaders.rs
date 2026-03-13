@@ -753,6 +753,7 @@ pub fn load_manual_review_data(
         ReviewKind::RedundantDuplicate => load_redundant_duplicates(read_db)?,
         ReviewKind::DeployConflict => load_deploy_conflicts(read_db)?,
         ReviewKind::MetadataDuplicate => load_metadata_duplicates(read_db)?,
+        ReviewKind::CrossReleaseRecording => load_cross_release_recordings(read_db)?,
     };
 
     // Enrich with metadata
@@ -875,6 +876,40 @@ fn load_metadata_duplicates(
                 label,
                 files,
                 signal_key: None,
+            });
+        }
+    }
+
+    Ok(ManualReviewData { groups })
+}
+
+fn load_cross_release_recordings(
+    read_db: &ReadOnlyDb<'_>,
+) -> Result<mm_meta::views::review_match::ManualReviewData> {
+    use mm_meta::views::review_match::{ManualReviewData, ReviewFileEntry, ReviewGroup};
+
+    let signal_groups = read_db.get_cross_release_recording_groups()?;
+
+    let mut groups = Vec::new();
+    for (key, data) in signal_groups {
+        let label = format!("Recording {}", key);
+
+        let mut files = Vec::new();
+        for entry in &data.entries {
+            files.push(ReviewFileEntry {
+                corpus_path: entry.path.clone(),
+                inode: entry.inode,
+                context: format!("{} (release: {})", entry.album, entry.mb_release_id),
+                stashed: false,
+                meta: None,
+            });
+        }
+
+        if files.len() >= 2 {
+            groups.push(ReviewGroup {
+                label,
+                files,
+                signal_key: Some(key),
             });
         }
     }

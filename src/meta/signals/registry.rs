@@ -190,5 +190,6 @@ signal_registry! {
         AlternativeReleasePacking(AlternativeReleasePackingSignal, "alternative_release_packing"),
         VariousArtistsOverride(VariousArtistsOverrideSignal, "various_artists_override"),
         PinnedReleaseConflict(PinnedReleaseConflictSignal, "pinned_release_conflict"),
+        CrossReleaseRecording(CrossReleaseRecordingSignal, "cross_release_recording"),
     }
 }

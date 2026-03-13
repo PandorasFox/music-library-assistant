@@ -77,6 +77,8 @@ pub struct TagSquashBucket {
     pub disc_extraction_count: usize,
     /// Files where filename-derived tags don't match embedded tags
     pub path_tag_mismatch_count: usize,
+    /// Same MB recording on different releases (cross-release recordings)
+    pub cross_release_recording_count: usize,
 }
 
 /// Entry for tag squash signals (grouped by tag name)

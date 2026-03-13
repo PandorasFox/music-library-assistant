@@ -557,7 +557,7 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_missing_directory_paths() -> Result<Vec<String>>;
         fn get_album_values_with_inodes() -> Result<Vec<(i64, String)>>;
         #[allow(clippy::type_complexity)]
-        fn get_album_data_for_collision_detection() -> Result<Vec<(String, String, String, String, String, String)>>;
+        fn get_album_data_for_collision_detection() -> Result<Vec<(String, String, String, String, String, String, String)>>;
         #[allow(clippy::type_complexity)]
         fn get_album_artist_data() -> Result<Vec<(i64, String, String, String, String, String, String, String)>>;
         fn directory_entry_fresh(zone: &str, inode: i64, mtime_secs: i64, mtime_nanos: i64) -> bool;
@@ -627,6 +627,7 @@ impl<'a> ReadOnlyDb<'a> {
 
     delegate_read! {
         fn get_redundant_duplicate_groups() -> Result<Vec<(String, crate::meta::signals::data::RedundantDuplicateData)>>;
+        fn get_cross_release_recording_groups() -> Result<Vec<(String, crate::meta::signals::data::CrossReleaseRecordingData)>>;
         fn get_metadata_duplicate_groups() -> Result<Vec<(String, crate::meta::signals::data::MetadataDuplicateData)>>;
     }
 

@@ -6,8 +6,8 @@ use rusqlite::params;
 use super::Database;
 
 /// A row from the album collision detection query:
-/// (album, artist_context, isrc, catalog_number, year, date).
-pub type AlbumCollisionRow = (String, String, String, String, String, String);
+/// (album, artist_context, isrc, catalog_number, year, date, mb_release_id).
+pub type AlbumCollisionRow = (String, String, String, String, String, String, String);
 
 impl Database {
     // ========================================================================
@@ -19,10 +19,6 @@ impl Database {
     /// Only considers corpus files.
     /// Returns Vec of (album_value, artist_context, isrc, catalog_number).
     ///
-    /// TODO: Expand query to include additional release identifiers when we need them:
-    /// - MUSICBRAINZ_ALBUMID, MUSICBRAINZ_RELEASEGROUPID
-    /// - DISCOGS_RELEASE_ID
-    /// - BARCODE
     pub fn get_album_data_for_collision_detection(&self) -> Result<Vec<AlbumCollisionRow>> {
         use mm_utils::tag_names::compound_tag_sql_in;
 
@@ -36,7 +32,8 @@ impl Database {
                    COALESCE(isrc.tag_value, '') as isrc,
                    COALESCE(catalog.tag_value, '') as catalog_number,
                    COALESCE(year.tag_value, '') as year,
-                   COALESCE(date.tag_value, '') as date
+                   COALESCE(date.tag_value, '') as date,
+                   COALESCE(mb_release.tag_value, '') as mb_release_id
                FROM corpus_tags album
                INNER JOIN files f ON album.inode = f.inode AND f.zone = 'corpus'
                LEFT JOIN corpus_tags album_artist
@@ -57,6 +54,9 @@ impl Database {
                LEFT JOIN corpus_tags date
                    ON album.inode = date.inode
                    AND UPPER(date.tag_name) = 'DATE'
+               LEFT JOIN corpus_tags mb_release
+                   ON album.inode = mb_release.inode
+                   AND UPPER(mb_release.tag_name) = 'MUSICBRAINZ_ALBUMID'
                WHERE UPPER(album.tag_name) = 'ALBUM'
                    AND album.tag_value IS NOT NULL
                    AND album.tag_value != ''"#
@@ -72,6 +72,7 @@ impl Database {
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
             ))
         })?;
 

@@ -1142,6 +1142,18 @@ impl_aggregate_signal!(PinnedReleaseConflictSignal, "signal_pinned_release_confl
     blob: data,
 );
 
+impl_aggregate_signal!(CrossReleaseRecordingSignal, "signal_cross_release_recording",
+    "CREATE TABLE IF NOT EXISTS signal_cross_release_recording (
+        key TEXT PRIMARY KEY,
+        data BLOB NOT NULL,
+        data_hash INTEGER NOT NULL DEFAULT 0,
+        discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )",
+    insert_sql: "INSERT OR REPLACE INTO signal_cross_release_recording (key, data, data_hash) VALUES (?1, ?2, ?3)",
+    fields: [key],
+    blob: data,
+);
+
 // Table creation is now handled by `db::table_schema::schema_inventory()`.
 // Signal TABLE_SQL consts on each type remain as the source of truth,
 // referenced by the inventory entries.

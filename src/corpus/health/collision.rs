@@ -134,7 +134,7 @@ pub fn get_album_collisions(
     // For each group, track: variant -> (count, isrcs, catalog_numbers)
     let mut buckets: HashMap<(String, String), HashMap<String, VariantData>> = HashMap::new();
 
-    for (album, artist_context, isrc, catalog_number, year, date) in rows {
+    for (album, artist_context, isrc, catalog_number, year, date, mb_release_id) in rows {
         let normalized_artist = normalize_artist(&artist_context);
         let normalized_album = normalize_album(&album, strip_format_suffixes);
         let key = (normalized_artist, normalized_album);
@@ -147,6 +147,9 @@ pub fn get_album_collisions(
         }
         if !catalog_number.is_empty() {
             variant_data.catalog_numbers.insert(catalog_number);
+        }
+        if !mb_release_id.is_empty() {
+            variant_data.mb_release_ids.insert(mb_release_id);
         }
         // Extract release year from either `year` tag or leading 4 digits of `date` tag
         let release_year = extract_release_year(&year, &date);
@@ -173,17 +176,13 @@ pub fn get_album_collisions(
 }
 
 /// Data collected per album variant for collision detection.
-///
-/// TODO: Expand to include other release identifiers when we parse them:
-/// - MusicBrainz release ID (MUSICBRAINZ_ALBUMID)
-/// - MusicBrainz release group ID (MUSICBRAINZ_RELEASEGROUPID)
-/// - Discogs release ID (DISCOGS_RELEASE_ID)
-/// - Barcode/UPC
 #[derive(Default)]
 struct VariantData {
     count: usize,
     isrcs: HashSet<String>,
     catalog_numbers: HashSet<String>,
+    /// MusicBrainz release IDs (MUSICBRAINZ_ALBUMID).
+    mb_release_ids: HashSet<String>,
     /// Release years extracted from `year` and/or `date` tags.
     years: HashSet<u16>,
 }
@@ -215,17 +214,28 @@ fn extract_release_year(year_tag: &str, date_tag: &str) -> Option<u16> {
 /// Check if album variants have disjoint release identifiers.
 ///
 /// Returns true if the variants are distinct releases (no collision),
-/// i.e., ALL variants have non-empty, non-overlapping ISRC or catalog number sets.
+/// i.e., ALL variants have non-empty, non-overlapping identifier sets.
 ///
 /// Returns false (collision) if:
 /// - Any variant has no identifiers (can't distinguish)
-/// - Variants share ISRCs or catalog numbers (same release, different naming)
+/// - Variants share identifiers (same release, different naming)
 ///
-/// TODO: When we add support for additional release identifiers (MusicBrainz,
-/// Discogs, barcode), check those here as well. A single disjoint identifier
-/// type should be sufficient to distinguish releases.
+/// Check order: MB release ID (strongest), ISRC, catalog number, year.
 fn variants_have_disjoint_release_ids(variants: &HashMap<String, VariantData>) -> bool {
     let variant_list: Vec<_> = variants.values().collect();
+
+    // Check MusicBrainz release ID disjointness (strongest signal)
+    let all_have_mb = variant_list.iter().all(|v| !v.mb_release_ids.is_empty());
+    if all_have_mb {
+        for (i, v1) in variant_list.iter().enumerate() {
+            for v2 in variant_list.iter().skip(i + 1) {
+                if !v1.mb_release_ids.is_disjoint(&v2.mb_release_ids) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 
     // Check ISRC disjointness - ALL variants must have ISRCs and be pairwise disjoint
     let all_have_isrcs = variant_list.iter().all(|v| !v.isrcs.is_empty());
@@ -546,5 +556,96 @@ mod tests {
     fn test_extract_release_year_prefers_year_tag() {
         // year tag wins when both present
         assert_eq!(extract_release_year("2012", "2013-06-15"), Some(2012));
+    }
+
+    #[test]
+    fn test_disjoint_mb_release_ids_are_distinct_releases() {
+        // Different MUSICBRAINZ_ALBUMID values — strongest disjointness signal
+        let mut variants = HashMap::new();
+        variants.insert(
+            "Album".to_string(),
+            VariantData {
+                count: 10,
+                mb_release_ids: ["aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                ..Default::default()
+            },
+        );
+        variants.insert(
+            "Album EP".to_string(),
+            VariantData {
+                count: 4,
+                mb_release_ids: ["11111111-2222-3333-4444-555555555555"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                ..Default::default()
+            },
+        );
+
+        assert!(variants_have_disjoint_release_ids(&variants));
+    }
+
+    #[test]
+    fn test_overlapping_mb_release_ids_are_collision() {
+        // Same MUSICBRAINZ_ALBUMID shared between variants = same release
+        let mbid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string();
+        let mut variants = HashMap::new();
+        variants.insert(
+            "Album".to_string(),
+            VariantData {
+                count: 10,
+                mb_release_ids: [mbid.clone()].into_iter().collect(),
+                ..Default::default()
+            },
+        );
+        variants.insert(
+            "Album EP".to_string(),
+            VariantData {
+                count: 4,
+                mb_release_ids: [mbid].into_iter().collect(),
+                ..Default::default()
+            },
+        );
+
+        assert!(!variants_have_disjoint_release_ids(&variants));
+    }
+
+    #[test]
+    fn test_mb_release_id_checked_before_isrc() {
+        // MB release IDs disjoint should return true even if ISRCs overlap
+        // (MB release ID is the strongest signal, checked first)
+        let shared_isrc = "USXXXX1234567".to_string();
+        let mut variants = HashMap::new();
+        variants.insert(
+            "Album".to_string(),
+            VariantData {
+                count: 10,
+                isrcs: [shared_isrc.clone()].into_iter().collect(),
+                mb_release_ids: ["aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                ..Default::default()
+            },
+        );
+        variants.insert(
+            "Album EP".to_string(),
+            VariantData {
+                count: 4,
+                isrcs: [shared_isrc].into_iter().collect(),
+                mb_release_ids: ["11111111-2222-3333-4444-555555555555"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                ..Default::default()
+            },
+        );
+
+        // MB release IDs are disjoint, so this returns true (distinct releases)
+        // even though ISRCs overlap
+        assert!(variants_have_disjoint_release_ids(&variants));
     }
 }

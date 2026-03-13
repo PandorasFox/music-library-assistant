@@ -112,6 +112,15 @@ impl Database {
         )
     }
 
+    /// Get all cross-release recording groups with deserialized data.
+    pub fn get_cross_release_recording_groups(
+        &self,
+    ) -> Result<Vec<(String, crate::meta::signals::data::CrossReleaseRecordingData)>> {
+        self.query_signal_key_blobs(
+            "SELECT key, data FROM signal_cross_release_recording ORDER BY key",
+        )
+    }
+
     /// Get all metadata duplicate groups with deserialized data.
     pub fn get_metadata_duplicate_groups(
         &self,

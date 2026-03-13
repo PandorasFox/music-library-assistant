@@ -290,6 +290,35 @@ pub struct RedundantDuplicateData {
     pub paths: Vec<String>, // parallel to inodes
 }
 
+// ============================================================================
+// Cross-Release Recording Data
+// ============================================================================
+
+/// Bincode-serialized payload for CrossReleaseRecording.
+///
+/// Tracks the same recording appearing on different MusicBrainz releases
+/// (e.g., album vs compilation vs single). Valuable for dedup reasoning
+/// and release packing decisions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossReleaseRecordingData {
+    pub recording_id: String,
+    pub entries: Vec<CrossReleaseEntry>,
+}
+
+/// A single file within a cross-release recording group.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossReleaseEntry {
+    pub inode: i64,
+    pub path: String,
+    pub mb_release_id: String,
+    pub mb_track_id: String,
+    pub album: String,
+    pub file_type: String,
+    pub bitrate_kbps: Option<i32>,
+    pub sample_rate: Option<i32>,
+    pub duration_ms: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissingAlbumSingleData {
     pub artist: String, // display-cased artist name

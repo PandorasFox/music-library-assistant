@@ -36,8 +36,6 @@ pub mod transcode;
 mod types;
 
 pub use types::*;
-// MutationContext and MutationExecutor accessible via crate::meta::mutations::traits::{...}
-pub use traits::{MutationExecutionStage, MutationStaging};
 
 /// Access control for corpus-mutating operations.
 ///
@@ -81,7 +79,7 @@ pub use sealed::MutationToken;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{types::MutationDispatch, *};
 
     #[test]
     fn test_create_bulk_tag_mutations() {

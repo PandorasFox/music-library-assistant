@@ -17,7 +17,7 @@ use std::path::Path;
 pub type PendingTagEdits = HashMap<i64, Vec<(String, String, String)>>;
 
 use crate::corpus::paths;
-use crate::corpus::tags::TagSet;
+use crate::corpus::tags::{self as tags};
 use crate::db::types::Zone;
 use crate::meta::mutations::indexing::EmitCanonicalTagMutation;
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
@@ -409,7 +409,7 @@ impl CompoundSplitStateV2 {
 
             // Load current tags to verify file still has the compound value
             let abs_path = resolver.resolve(Path::new(&file.path));
-            let Ok(current_tagset) = TagSet::from_file(&abs_path) else {
+            let Ok(current_tagset) = tags::from_file(&abs_path) else {
                 continue;
             };
 

@@ -13,7 +13,7 @@
 //!
 //! ## Entry Points
 //!
-//! - [`TagSet::from_file()`] - Read all tags from audio file
+//! - [`from_file()`] - Read all tags from audio file
 //! - [`write_file_tags()`] - Write complete tag set to file
 //! - [`TagSet::diff()`] - Compare two tag sets
 //!
@@ -27,12 +27,14 @@ use anyhow::{Context, Result};
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
 use lofty::ogg::OggPictureStorage;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::db::write_thread;
 use crate::meta::mutations::MutationToken;
 use crate::witch::MutationExecutionWitness;
+
+// Re-export data types from mm-meta
+pub use mm_meta::tags::{DiffClassification, PictureInfo, TagSet, TagSetDiff};
 
 /// Extract lowercase file extension from a path.
 fn path_ext(path: &Path) -> String {
@@ -50,370 +52,174 @@ fn open_buffered(path: &Path) -> Result<std::io::BufReader<std::fs::File>> {
 }
 
 // =============================================================================
-// PictureInfo - Embedded picture metadata
+// File I/O — Tag Reading
 // =============================================================================
 
-/// Metadata about an embedded picture (album art) in an audio file.
+/// Read tags from an audio file.
+    ///
+/// For Vorbis-format files (FLAC, Opus, OGG Vorbis), reads directly from
+/// VorbisComments — raw key=value pairs with exact key names, no ItemKey mapping.
+/// This eliminates the non-bijective ItemKey::Unknown round-trip problem.
 ///
-/// Extracted from the first CoverFront picture found (or first picture if
-/// no CoverFront). Resolution is available for PNG and JPEG; zeroed for others.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PictureInfo {
-    /// Format: "jpeg", "png", "gif", "bmp", or "unknown"
-    pub format: String,
-    /// Width in pixels (0 if unknown/unsupported format)
-    pub width: u32,
-    /// Height in pixels (0 if unknown/unsupported format)
-    pub height: u32,
-    /// Total number of embedded pictures
-    pub count: u32,
+/// For other formats (mp3, m4a, etc.), falls back to lofty's generic Tag/Probe.
+/// Binary tags (album art, etc.) are skipped.
+pub fn from_file(path: &Path) -> Result<TagSet> {
+    match path_ext(path).as_str() {
+        "flac" => {
+            let mut reader = open_buffered(path)?;
+            let flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
+                .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
+            Ok(tagset_from_vorbis_comments(flac.vorbis_comments()))
+        }
+        "opus" => {
+            let mut reader = open_buffered(path)?;
+            let opus = lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default())
+                .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
+            Ok(tagset_from_vorbis_comments(Some(opus.vorbis_comments())))
+        }
+        "ogg" => {
+            let mut reader = open_buffered(path)?;
+            let vorbis =
+                lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default())
+                    .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
+            Ok(tagset_from_vorbis_comments(Some(vorbis.vorbis_comments())))
+        }
+        _ => tagset_from_generic_tag(path),
+    }
 }
 
-// =============================================================================
-// TagSet - The canonical representation of tags
-// =============================================================================
+/// Extract metadata about embedded pictures from an audio file.
+///
+/// Returns info for the first CoverFront picture found (or first picture if
+/// no CoverFront). Resolution is extracted via `PictureInformation` (PNG/JPEG
+/// only; zeroed for other formats).
+///
+/// Non-fatal — returns None on read errors.
+pub fn extract_picture_info(path: &Path) -> Option<PictureInfo> {
+    match path_ext(path).as_str() {
+        "flac" => {
+            let file = std::fs::File::open(path).ok()?;
+            let mut reader = std::io::BufReader::new(file);
+            let flac =
+                lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default()).ok()?;
 
-/// Complete set of tags for a track.
-///
-/// Semantically a Set<(key, value)> - the same key can appear multiple times
-/// with different values (e.g., multiple genre tags).
-///
-/// Keys are normalized to UPPERCASE, matching VorbisComments convention on disk.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TagSet {
-    /// Sorted, deduplicated (key, value) pairs.
-    /// Sorting is by (UPPERCASE_key, value) for stable comparison.
-    tags: Vec<(String, String)>,
+            let mut all_pics: Vec<&(
+                lofty::picture::Picture,
+                lofty::picture::PictureInformation,
+            )> = flac.pictures().iter().collect();
+            if let Some(vc) = flac.vorbis_comments() {
+                all_pics.extend(vc.pictures().iter());
+            }
+            pick_picture_info(&all_pics)
+        }
+        "opus" => {
+            let file = std::fs::File::open(path).ok()?;
+            let mut reader = std::io::BufReader::new(file);
+            let opus =
+                lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+            pick_picture_info(opus.vorbis_comments().pictures())
+        }
+        "ogg" => {
+            let file = std::fs::File::open(path).ok()?;
+            let mut reader = std::io::BufReader::new(file);
+            let vorbis =
+                lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default()).ok()?;
+            pick_picture_info(vorbis.vorbis_comments().pictures())
+        }
+        _ => {
+            use lofty::file::TaggedFileExt;
+            use lofty::picture::PictureInformation;
+            use lofty::probe::Probe;
+
+            let tagged_file = Probe::open(path).ok().and_then(|p| p.read().ok())?;
+            let all_pictures: Vec<&lofty::picture::Picture> =
+                tagged_file.tags().iter().flat_map(|t| t.pictures()).collect();
+
+            if all_pictures.is_empty() {
+                return None;
+            }
+
+            let count = all_pictures.len() as u32;
+            let pic = all_pictures
+                .iter()
+                .find(|p| p.pic_type() == lofty::picture::PictureType::CoverFront)
+                .or_else(|| all_pictures.first())
+                .unwrap();
+
+            let info = PictureInformation::from_picture(pic).unwrap_or_default();
+            Some(PictureInfo {
+                format: mime_type_to_format(pic.mime_type()),
+                width: info.width,
+                height: info.height,
+                count,
+            })
+        }
+    }
 }
 
-impl TagSet {
-    /// Create from raw (key, value) pairs.
-    ///
-    /// Normalizes keys to UPPERCASE, deduplicates exact (key, value) pairs,
-    /// and sorts for stable comparison.
-    pub fn new(raw: impl IntoIterator<Item = (String, String)>) -> Self {
-        let mut tags: Vec<(String, String)> = raw
-            .into_iter()
-            .filter(|(_, v)| !v.is_empty()) // Skip empty values
-            .map(|(k, v)| (k.to_uppercase(), v))
-            .collect();
+/// Build a TagSet from VorbisComments (shared by FLAC, Opus, OGG Vorbis).
+///
+/// Reads raw key=value pairs directly — no ItemKey mapping, no bijection problem.
+fn tagset_from_vorbis_comments(vc: Option<&lofty::ogg::VorbisComments>) -> TagSet {
+    let Some(vc) = vc else {
+        return TagSet::empty();
+    };
+    let tags: Vec<(String, String)> = vc
+        .items()
+        .filter(|(k, _)| !is_binary_tag_key(k))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    TagSet::new(tags)
+}
 
-        // Sort by (key, value) for stable comparison
-        tags.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+/// Fallback tag reading for non-Vorbis formats (mp3, m4a, etc.).
+///
+/// Uses lofty's generic Probe/Tag items(), mapping keys to canonical Vorbis names
+/// via `ItemKey::map_key(TagType::VorbisComments)`.
+/// These formats are read-only (pre-transcode initial indexing) and never written to.
+fn tagset_from_generic_tag(path: &Path) -> Result<TagSet> {
+    use lofty::file::TaggedFileExt;
+    use lofty::probe::Probe;
+    use lofty::tag::TagType;
 
-        // Deduplicate exact (key, value) pairs
-        tags.dedup();
+    let tagged_file = Probe::open(path)
+        .with_context(|| format!("Failed to open file for tag reading: {}", path.display()))?
+        .read()
+        .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
 
-        Self { tags }
-    }
+    let mut all_tags = Vec::new();
 
-    /// Create an empty TagSet.
-    pub fn empty() -> Self {
-        Self { tags: Vec::new() }
-    }
+    if let Some(tag) = tagged_file.primary_tag() {
+        let tag_type = tag.tag_type();
 
-    /// Read tags from an audio file.
-    ///
-    /// For Vorbis-format files (FLAC, Opus, OGG Vorbis), reads directly from
-    /// VorbisComments — raw key=value pairs with exact key names, no ItemKey mapping.
-    /// This eliminates the non-bijective ItemKey::Unknown round-trip problem.
-    ///
-    /// For other formats (mp3, m4a, etc.), falls back to lofty's generic Tag/Probe.
-    /// Binary tags (album art, etc.) are skipped.
-    pub fn from_file(path: &Path) -> Result<Self> {
-        match path_ext(path).as_str() {
-            "flac" => {
-                let mut reader = open_buffered(path)?;
-                let flac = lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default())
-                    .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
-                Ok(Self::from_vorbis_comments(flac.vorbis_comments()))
-            }
-            "opus" => {
-                let mut reader = open_buffered(path)?;
-                let opus = lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default())
-                    .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
-                Ok(Self::from_vorbis_comments(Some(opus.vorbis_comments())))
-            }
-            "ogg" => {
-                let mut reader = open_buffered(path)?;
-                let vorbis =
-                    lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default())
-                        .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
-                Ok(Self::from_vorbis_comments(Some(vorbis.vorbis_comments())))
-            }
-            _ => Self::from_generic_tag(path),
-        }
-    }
-
-    /// Extract metadata about embedded pictures from an audio file.
-    ///
-    /// Returns info for the first CoverFront picture found (or first picture if
-    /// no CoverFront). Resolution is extracted via `PictureInformation` (PNG/JPEG
-    /// only; zeroed for other formats).
-    ///
-    /// Non-fatal — returns None on read errors.
-    pub fn extract_picture_info(path: &Path) -> Option<PictureInfo> {
-        match path_ext(path).as_str() {
-            "flac" => {
-                let file = std::fs::File::open(path).ok()?;
-                let mut reader = std::io::BufReader::new(file);
-                let flac =
-                    lofty::flac::FlacFile::read_from(&mut reader, ParseOptions::default()).ok()?;
-
-                let mut all_pics: Vec<&(
-                    lofty::picture::Picture,
-                    lofty::picture::PictureInformation,
-                )> = flac.pictures().iter().collect();
-                if let Some(vc) = flac.vorbis_comments() {
-                    all_pics.extend(vc.pictures().iter());
-                }
-                pick_picture_info(&all_pics)
-            }
-            "opus" => {
-                let file = std::fs::File::open(path).ok()?;
-                let mut reader = std::io::BufReader::new(file);
-                let opus =
-                    lofty::ogg::OpusFile::read_from(&mut reader, ParseOptions::default()).ok()?;
-                pick_picture_info(opus.vorbis_comments().pictures())
-            }
-            "ogg" => {
-                let file = std::fs::File::open(path).ok()?;
-                let mut reader = std::io::BufReader::new(file);
-                let vorbis =
-                    lofty::ogg::VorbisFile::read_from(&mut reader, ParseOptions::default()).ok()?;
-                pick_picture_info(vorbis.vorbis_comments().pictures())
-            }
-            _ => {
-                use lofty::file::TaggedFileExt;
-                use lofty::picture::PictureInformation;
-                use lofty::probe::Probe;
-
-                let tagged_file = Probe::open(path).ok().and_then(|p| p.read().ok())?;
-                let all_pictures: Vec<&lofty::picture::Picture> =
-                    tagged_file.tags().iter().flat_map(|t| t.pictures()).collect();
-
-                if all_pictures.is_empty() {
-                    return None;
-                }
-
-                let count = all_pictures.len() as u32;
-                let pic = all_pictures
-                    .iter()
-                    .find(|p| p.pic_type() == lofty::picture::PictureType::CoverFront)
-                    .or_else(|| all_pictures.first())
-                    .unwrap();
-
-                let info = PictureInformation::from_picture(pic).unwrap_or_default();
-                Some(PictureInfo {
-                    format: mime_type_to_format(pic.mime_type()),
-                    width: info.width,
-                    height: info.height,
-                    count,
-                })
-            }
-        }
-    }
-
-    /// Build a TagSet from VorbisComments (shared by FLAC, Opus, OGG Vorbis).
-    ///
-    /// Reads raw key=value pairs directly — no ItemKey mapping, no bijection problem.
-    fn from_vorbis_comments(vc: Option<&lofty::ogg::VorbisComments>) -> Self {
-        let Some(vc) = vc else { return Self::empty() };
-        let tags: Vec<(String, String)> = vc
-            .items()
-            .filter(|(k, _)| !is_binary_tag_key(k))
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        Self::new(tags)
-    }
-
-    /// Fallback tag reading for non-Vorbis formats (mp3, m4a, etc.).
-    ///
-    /// Uses lofty's generic Probe/Tag items(), mapping keys to canonical Vorbis names
-    /// via `ItemKey::map_key(TagType::VorbisComments)`.
-    /// These formats are read-only (pre-transcode initial indexing) and never written to.
-    fn from_generic_tag(path: &Path) -> Result<Self> {
-        use lofty::file::TaggedFileExt;
-        use lofty::probe::Probe;
-        use lofty::tag::TagType;
-
-        let tagged_file = Probe::open(path)
-            .with_context(|| format!("Failed to open file for tag reading: {}", path.display()))?
-            .read()
-            .with_context(|| format!("Failed to read tags from: {}", path.display()))?;
-
-        let mut all_tags = Vec::new();
-
-        if let Some(tag) = tagged_file.primary_tag() {
-            let tag_type = tag.tag_type();
-
-            for item in tag.items() {
-                // Canonical Vorbis name is primary (ARTIST, TRACKNUMBER, etc.)
-                // Fall back to source format's native name for tags without Vorbis mapping
-                let key = match item.key().map_key(TagType::VorbisComments) {
+        for item in tag.items() {
+            // Canonical Vorbis name is primary (ARTIST, TRACKNUMBER, etc.)
+            // Fall back to source format's native name for tags without Vorbis mapping
+            let key = match item.key().map_key(TagType::VorbisComments) {
+                Some(k) => k.to_string(),
+                None => match item.key().map_key(tag_type) {
                     Some(k) => k.to_string(),
-                    None => match item.key().map_key(tag_type) {
-                        Some(k) => k.to_string(),
-                        None => continue,
-                    },
-                };
+                    None => continue,
+                },
+            };
 
-                if is_binary_tag_key(&key) {
-                    continue;
-                }
+            if is_binary_tag_key(&key) {
+                continue;
+            }
 
-                let value = match item.value() {
-                    lofty::tag::ItemValue::Text(s) => s.clone(),
-                    lofty::tag::ItemValue::Locator(s) => s.clone(),
-                    lofty::tag::ItemValue::Binary(_) => continue,
-                };
+            let value = match item.value() {
+                lofty::tag::ItemValue::Text(s) => s.clone(),
+                lofty::tag::ItemValue::Locator(s) => s.clone(),
+                lofty::tag::ItemValue::Binary(_) => continue,
+            };
 
-                if !value.is_empty() {
-                    all_tags.push((key, value));
-                }
+            if !value.is_empty() {
+                all_tags.push((key, value));
             }
         }
-
-        Ok(Self::new(all_tags))
     }
 
-    /// Check if a specific (key, value) pair exists.
-    ///
-    /// Key comparison is case-insensitive.
-    pub fn contains(&self, key: &str, value: &str) -> bool {
-        let key_upper = key.to_uppercase();
-        self.tags.iter().any(|(k, v)| k == &key_upper && v == value)
-    }
-
-    /// Get all values for a key (case-insensitive).
-    pub fn values_for(&self, key: &str) -> impl Iterator<Item = &str> {
-        let key_upper = key.to_uppercase();
-        self.tags
-            .iter()
-            .filter(move |(k, _)| k == &key_upper)
-            .map(|(_, v)| v.as_str())
-    }
-
-    /// Get all values for a key, matching by normalized tag name (strips separators + uppercases).
-    ///
-    /// Returns `(actual_key, value)` pairs so callers know which exact key form the file uses.
-    /// This correctly matches `ALBUMARTIST` ≈ `ALBUM_ARTIST` ≈ `ALBUM ARTIST`.
-    pub fn values_for_normalized(&self, key: &str) -> Vec<(&str, &str)> {
-        let normalized = mm_utils::tag_names::normalize_tag_name(key);
-        self.tags
-            .iter()
-            .filter(|(k, _)| mm_utils::tag_names::normalize_tag_name(k) == normalized)
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect()
-    }
-
-    /// Get the first value for a key (case-insensitive).
-    ///
-    /// For single-value fields, this is THE value.
-    /// For multi-value fields, this returns an arbitrary one.
-    #[cfg(test)]
-    pub fn get(&self, key: &str) -> Option<&str> {
-        self.values_for(key).next()
-    }
-
-    /// Iterate over all (key, value) pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.tags.iter().map(|(k, v)| (k.as_str(), v.as_str()))
-    }
-
-    /// Number of tag pairs (not unique keys).
-    #[cfg(test)]
-    pub fn len(&self) -> usize {
-        self.tags.len()
-    }
-
-    /// True if no tags.
-    #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
-        self.tags.is_empty()
-    }
-
-    /// Convert to raw vec (for DB storage, etc).
-    pub fn into_vec(self) -> Vec<(String, String)> {
-        self.tags
-    }
-
-    /// Borrow as slice (for DB storage, etc).
-    #[cfg(test)]
-    pub fn as_slice(&self) -> &[(String, String)] {
-        &self.tags
-    }
-
-    /// Compute what's different between self and other.
-    ///
-    /// Returns a `TagSetDiff` containing:
-    /// - `only_left`: tags in self but not in other
-    /// - `only_right`: tags in other but not in self
-    /// - `common`: tags in both
-    pub fn diff(&self, other: &TagSet) -> TagSetDiff {
-        use std::collections::HashSet;
-
-        let self_set: HashSet<(&str, &str)> = self.iter().collect();
-        let other_set: HashSet<(&str, &str)> = other.iter().collect();
-
-        let only_left: Vec<(String, String)> = self_set
-            .difference(&other_set)
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-
-        let only_right: Vec<(String, String)> = other_set
-            .difference(&self_set)
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-
-        TagSetDiff {
-            only_left: TagSet::new(only_left),
-            only_right: TagSet::new(only_right),
-        }
-    }
-}
-
-// =============================================================================
-// TagSetDiff - Result of comparing two TagSets
-// =============================================================================
-
-/// Result of comparing two TagSets.
-#[derive(Debug, Clone)]
-pub struct TagSetDiff {
-    /// Tags in the first set but not the second.
-    pub only_left: TagSet,
-    /// Tags in the second set but not the first.
-    pub only_right: TagSet,
-}
-
-impl TagSetDiff {
-    /// Classify the difference for OOB detection.
-    #[cfg(test)]
-    pub fn classify(&self) -> DiffClassification {
-        match (
-            self.only_left.tags.is_empty(),
-            self.only_right.tags.is_empty(),
-        ) {
-            (true, true) => DiffClassification::Identical,
-            (false, true) => DiffClassification::LeftOnly,
-            (true, false) => DiffClassification::RightOnly,
-            (false, false) => DiffClassification::Conflict,
-        }
-    }
-}
-
-/// Classification of tag differences between two sources.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiffClassification {
-    /// No differences - tags are identical.
-    Identical,
-    /// Only the left side has extra tags.
-    LeftOnly,
-    /// Only the right side has extra tags.
-    RightOnly,
-    /// Both sides have different tags (true conflict).
-    Conflict,
+    Ok(TagSet::new(all_tags))
 }
 
 // =============================================================================
@@ -760,7 +566,7 @@ mod tests {
     /// Write tags to a file and verify they round-trip without loss.
     fn assert_round_trip(path: &Path, tags: &TagSet, format_name: &str) {
         write_tags_to_file(path, tags).unwrap_or_else(|e| panic!("write tags to {format_name}: {e}"));
-        let readback = TagSet::from_file(path).unwrap_or_else(|e| panic!("read tags from {format_name}: {e}"));
+        let readback = from_file(path).unwrap_or_else(|e| panic!("read tags from {format_name}: {e}"));
         let diff = tags.diff(&readback);
         assert!(
             diff.only_left.is_empty(),
@@ -962,7 +768,7 @@ mod tests {
         ]);
         write_tags_to_file(&path, &tags).expect("write multi-value tags to FLAC");
 
-        let readback = TagSet::from_file(&path).expect("read back multi-value tags from FLAC");
+        let readback = from_file(&path).expect("read back multi-value tags from FLAC");
         assert_eq!(readback.len(), 4);
         let genres: Vec<&str> = readback.values_for("genre").collect();
         assert!(genres.contains(&"Rock"));
@@ -982,7 +788,7 @@ mod tests {
         let tags = TagSet::new(vec![("title".to_string(), "New Song".to_string())]);
         write_tags_to_file(&path, &tags).expect("write to tagless FLAC");
 
-        let readback = TagSet::from_file(&path).expect("read from FLAC");
+        let readback = from_file(&path).expect("read from FLAC");
         assert!(readback.contains("title", "New Song"));
     }
 
@@ -1006,7 +812,7 @@ mod tests {
         ]);
         write_tags_to_file(&path, &tags2).unwrap();
 
-        let readback = TagSet::from_file(&path).unwrap();
+        let readback = from_file(&path).unwrap();
         assert!(readback.contains("artist", "New Artist"));
         assert!(readback.contains("genre", "Jazz"));
         // Old tags should be gone
@@ -1035,7 +841,7 @@ mod tests {
         );
 
         // Verify tags survived
-        let readback = TagSet::from_file(&path).unwrap();
+        let readback = from_file(&path).unwrap();
         assert!(readback.contains("artist", "Test Artist"));
 
         // Verify file size is reasonable (not truncated or ballooned)
@@ -1116,7 +922,7 @@ mod tests {
         ]);
         write_tags_to_file(&path, &tags).expect("write multi-value to Opus");
 
-        let readback = TagSet::from_file(&path).unwrap();
+        let readback = from_file(&path).unwrap();
         let genres: Vec<&str> = readback.values_for("genre").collect();
         assert!(genres.contains(&"Rock"));
         assert!(genres.contains(&"Metal"));
@@ -1169,7 +975,7 @@ mod tests {
         ]);
         write_tags_to_file(&path, &tags).unwrap();
 
-        let readback = TagSet::from_file(&path).unwrap();
+        let readback = from_file(&path).unwrap();
         // Keys should be uppercased
         assert!(readback.contains("artist", "Foo"));
         assert!(readback.contains("album", "Bar"));
@@ -1229,7 +1035,7 @@ mod tests {
         let tags = TagSet::new(vec![("comment".to_string(), long_value.clone())]);
         write_tags_to_file(&path, &tags).unwrap();
 
-        let readback = TagSet::from_file(&path).unwrap();
+        let readback = from_file(&path).unwrap();
         assert_eq!(readback.get("comment"), Some(long_value.as_str()));
     }
 
@@ -1305,7 +1111,7 @@ mod tests {
         generate_flac_fixture(&path);
 
         // Fresh FLAC has no VorbisComments block
-        let tags = TagSet::from_file(&path).unwrap();
+        let tags = from_file(&path).unwrap();
         assert!(
             tags.is_empty(),
             "Fresh FLAC should have no tags, got {:?}",
@@ -1320,7 +1126,7 @@ mod tests {
         generate_opus_fixture(&path);
 
         // Fresh Opus has OpusTags header but no user tags
-        let tags = TagSet::from_file(&path).unwrap();
+        let tags = from_file(&path).unwrap();
         assert!(
             tags.is_empty(),
             "Fresh Opus should have no user tags, got {:?}",
@@ -1339,7 +1145,7 @@ mod tests {
         );
         vc.push("TITLE".to_string(), "Bar".to_string());
 
-        let tags = TagSet::from_vorbis_comments(Some(&vc));
+        let tags = tagset_from_vorbis_comments(Some(&vc));
         assert_eq!(tags.len(), 2);
         assert!(tags.contains("artist", "Foo"));
         assert!(tags.contains("title", "Bar"));

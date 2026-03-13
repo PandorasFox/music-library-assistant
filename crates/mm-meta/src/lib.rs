@@ -14,7 +14,12 @@
 pub mod auth;
 pub mod config;
 pub mod db_types;
+pub mod decisions;
+pub mod external;
 pub mod logging;
+pub mod mutations;
 pub mod paths;
 pub mod tags;
+pub mod signals;
 pub mod transcode;
+pub mod views;

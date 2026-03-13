@@ -3,42 +3,21 @@
 //! Writes edited config to disk (comment-preserving KDL modification).
 //! Returns the new Config in-band via TaskResult.config_update.
 
-use serde::{Deserialize, Serialize};
-
 use super::traits::{MutationContext, MutationExecutor};
 use crate::config::Config;
 use crate::meta::computations::Computation;
 use crate::meta::mutations::types::{DiffEntry, MutationResult, SignalClearScope, SignalToClear};
 use crate::meta::recomputation::RecomputationScope;
 
-/// Mutation that applies config edits to disk.
-///
-/// Carries the original KDL text (for comment-preserving modification),
-/// the old config (for diffing), and the new config (to write).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApplyConfigEditsMutation {
-    /// The original KDL text from the config file.
-    pub original_kdl: String,
-    /// The config as it was before editing (for diffing).
-    pub old_config: Config,
-    /// The new config with edits applied.
-    pub new_config: Config,
-}
-
-// Manual PartialEq — Config doesn't derive PartialEq, but Mutation enum requires it.
-// Config edits are always unique (compare by original_kdl identity).
-impl PartialEq for ApplyConfigEditsMutation {
-    fn eq(&self, other: &Self) -> bool {
-        self.original_kdl == other.original_kdl
-    }
-}
+// Re-export struct definition from mm-meta
+pub use mm_meta::mutations::config_edit::ApplyConfigEditsMutation;
 
 impl MutationExecutor for ApplyConfigEditsMutation {
     fn label(&self) -> &'static str {
         "Config update"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::Config)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::Config)
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {

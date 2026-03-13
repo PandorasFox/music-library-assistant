@@ -7,7 +7,6 @@
 //! - LibraryMove: Move a file within a library
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,83 +19,11 @@ use super::types::{
     path_filename, DiffEntry, Mutation, MutationResult, SignalClearScope, SignalToClear,
 };
 
-// ============================================================================
-// Mutation Structs
-// ============================================================================
-
-/// Move a file from source to destination.
-///
-/// NOTE: This mutation is fully plumbed but intentionally not yet utilized in UI.
-/// It will be used by the inbox intake for moving files from inbox to corpus.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MoveMutation {
-    pub source: PathBuf,
-    pub destination: PathBuf,
-}
-
-/// Stash a corpus or inbox file (operator-driven eviction).
-///
-/// Always paired with `DropFromIndex` by callers.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StashFromZoneMutation {
-    pub path: PathBuf,
-    pub stash_name: String,
-}
-
-/// Stash orphaned library files during deploy cleanup.
-///
-/// NOT paired with DropFromIndex — execution.rs Phase 1b handles the files table drop.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StashLeftoversMutation {
-    pub path: PathBuf,
-}
-
-/// Create a hard link from source to destination (for deployment).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HardLinkMutation {
-    pub source: PathBuf,
-    pub destination: PathBuf,
-}
-
-/// Move a file within a library (e.g., stale file to correct location).
-///
-/// Unlike corpus Move, this operates only on library paths and triggers
-/// library signal updates (clears LibraryStale for old path).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LibraryMoveMutation {
-    pub source: PathBuf,
-    pub destination: PathBuf,
-}
-
-/// Move an inbox file into the corpus.
-///
-/// Combines a filesystem move with a zone change (inbox → corpus) and
-/// tag migration (inbox_tags → corpus_tags). Used by the inbox organize workflow.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InboxToCorpusMutation {
-    pub inode: i64,
-    pub inbox_path: PathBuf,
-    pub corpus_path: PathBuf,
-}
-
-/// A tracked audio file within an inbox directory being emplaced.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InboxDirTrackedFile {
-    pub inode: i64,
-    pub corpus_path: PathBuf,
-}
-
-/// Move an entire inbox directory into the corpus.
-///
-/// Uses fs::rename on the directory itself so that non-audio content (cover
-/// images, booklets, etc.) travels with the audio files. After the rename,
-/// updates DB records for each tracked audio file within the directory.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InboxDirToCorpusMutation {
-    pub inbox_dir_path: PathBuf,
-    pub corpus_dir_path: PathBuf,
-    pub tracked_files: Vec<InboxDirTrackedFile>,
-}
+// Re-export struct definitions from mm-meta
+pub use mm_meta::mutations::file_ops::{
+    HardLinkMutation, InboxDirToCorpusMutation, InboxDirTrackedFile, InboxToCorpusMutation,
+    LibraryMoveMutation, MoveMutation, StashFromZoneMutation, StashLeftoversMutation,
+};
 
 // ============================================================================
 // MutationExecutor Implementations
@@ -106,8 +33,8 @@ impl MutationExecutor for MoveMutation {
     fn label(&self) -> &'static str {
         "File move"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush)
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
@@ -144,8 +71,8 @@ impl MutationExecutor for StashFromZoneMutation {
     fn label(&self) -> &'static str {
         "File stash"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush)
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
@@ -204,8 +131,8 @@ impl MutationExecutor for StashLeftoversMutation {
     fn label(&self) -> &'static str {
         "Library leftover stash"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush)
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
@@ -279,8 +206,8 @@ impl MutationExecutor for HardLinkMutation {
     fn label(&self) -> &'static str {
         "Hard link"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskDeploy)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::DiskDeploy)
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
@@ -326,8 +253,8 @@ impl MutationExecutor for LibraryMoveMutation {
     fn label(&self) -> &'static str {
         "Library move"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskDeploy)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::DiskDeploy)
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
@@ -379,8 +306,8 @@ impl MutationExecutor for InboxToCorpusMutation {
     fn label(&self) -> &'static str {
         "Inbox → Corpus"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::DB)
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
@@ -430,8 +357,8 @@ impl MutationExecutor for InboxDirToCorpusMutation {
     fn label(&self) -> &'static str {
         "Inbox dir → Corpus"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::DB)
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {

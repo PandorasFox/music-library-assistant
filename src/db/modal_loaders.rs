@@ -13,7 +13,7 @@ use std::os::unix::fs::MetadataExt;
 use anyhow::Result;
 
 use crate::corpus::paths;
-use crate::corpus::tags::TagSet;
+use crate::corpus::tags::{self as tags, TagSet};
 use crate::db::types::Zone;
 use crate::db::ReadOnlyDb;
 
@@ -954,7 +954,7 @@ pub fn load_compound_split_data(
                 .unwrap_or_else(|| path.to_string());
 
             let abs_path = resolver.resolve(Path::new(path));
-            let tagset = TagSet::from_file(&abs_path).unwrap_or_else(|_| TagSet::empty());
+            let tagset = tags::from_file(&abs_path).unwrap_or_else(|_| TagSet::empty());
 
             let tag_values: Vec<(String, String)> = tagset
                 .iter()
@@ -999,7 +999,7 @@ fn load_file_info_for_zone(
                 .unwrap_or_else(|| path.to_string());
 
             let abs_path = resolver.resolve(Path::new(path));
-            let tagset = TagSet::from_file(&abs_path).unwrap_or_else(|_| TagSet::empty());
+            let tagset = tags::from_file(&abs_path).unwrap_or_else(|_| TagSet::empty());
 
             let tag_values: Vec<(String, String)> = tagset
                 .iter()

@@ -32,7 +32,7 @@ use crate::config;
 use crate::corpus::paths;
 use crate::db::write_thread;
 use crate::meta::computations::{derivation, with_read_only_db, Computation};
-use crate::meta::mutations::{Mutation, PendingSignal};
+use crate::meta::mutations::{Mutation, MutationDispatch, PendingSignal};
 use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::registry::TypedSignalWrite;
 

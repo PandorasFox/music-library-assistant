@@ -12,7 +12,9 @@ use crate::meta::mutations::dir_config_edit::{
     ApplyBatchDirConfigEditsMutation, DirConfigEditEntry,
 };
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
-use crate::meta::mutations::{Mutation, MutationExecutionStage, MutationStaging, TagOp};
+use crate::meta::mutations::{
+    Mutation, MutationDispatch, MutationExecutionStage, MutationStaging, TagOp,
+};
 
 /// Coalesce ApplyTagOps mutations into per-zone mutations.
 ///

@@ -12,7 +12,6 @@
 //! 6. Spawn AssimilateDiskTagsToDb to sync tags from new file to index
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -29,24 +28,15 @@ use super::indexing::AssimilateDiskTagsToDbMutation;
 use super::traits::{MutationContext, MutationExecutor};
 use super::types::{path_filename, DiffEntry, Mutation, MutationResult, SignalClearScope};
 
-/// Transcode a file to a different container/codec format.
-///
-/// On success: creates new file at same path with different extension,
-/// stashes original under stash_name, and updates the track record.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TranscodeMutation {
-    pub inode: i64,
-    pub source_path: PathBuf,
-    pub target_format: TranscodeTarget,
-    pub stash_name: String,
-}
+// Re-export struct definition from mm-meta
+pub use mm_meta::mutations::transcode::TranscodeMutation;
 
 impl MutationExecutor for TranscodeMutation {
     fn label(&self) -> &'static str {
         "Transcode"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush)
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {

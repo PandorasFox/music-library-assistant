@@ -668,7 +668,7 @@ fn copy_pictures(source: &Path, dest: &Path) -> Result<()> {
 /// Reads all text tags from the source via TagSet and writes them to the
 /// destination using format-specific concrete types (no lofty generic Tag).
 fn copy_tags(source: &Path, dest: &Path) -> Result<()> {
-    let source_tags = crate::corpus::tags::TagSet::from_file(source)?;
+    let source_tags = crate::corpus::tags::from_file(source)?;
     if source_tags.iter().count() == 0 {
         return Ok(());
     }

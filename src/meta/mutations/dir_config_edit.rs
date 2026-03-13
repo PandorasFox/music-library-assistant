@@ -5,42 +5,23 @@
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
-
 use super::traits::{MutationContext, MutationExecutor};
-use crate::config::{Config, SourceDir};
+use crate::config::SourceDir;
 use crate::meta::computations::Computation;
 use crate::meta::mutations::types::{DiffEntry, MutationResult, SignalClearScope, SignalToClear};
 use crate::meta::recomputation::RecomputationScope;
 
-/// Mutation that applies a single source directory config edit to dirs.kdl.
-///
-/// Carries the full resulting `Config` so the Witch can update `SharedConfig`
-/// in-memory after successful execution (same pattern as `ApplyConfigEdits`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApplyDirConfigEditMutation {
-    /// Which source dir was edited (relative path within corpus).
-    pub source_path: PathBuf,
-    /// The config as it was before editing (for diffing).
-    pub old_dir: SourceDir,
-    /// The new config with edits applied.
-    pub new_dir: SourceDir,
-    /// Full config with the dir edit applied, for SharedConfig update.
-    pub new_config: crate::config::Config,
-}
-
-impl PartialEq for ApplyDirConfigEditMutation {
-    fn eq(&self, other: &Self) -> bool {
-        self.source_path == other.source_path
-    }
-}
+// Re-export struct definitions from mm-meta
+pub use mm_meta::mutations::dir_config_edit::{
+    ApplyBatchDirConfigEditsMutation, ApplyDirConfigEditMutation, DirConfigEditEntry,
+};
 
 impl MutationExecutor for ApplyDirConfigEditMutation {
     fn label(&self) -> &'static str {
         "Dir config update"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::Config)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::Config)
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
@@ -176,42 +157,13 @@ fn format_opt_bool(v: Option<bool>) -> &'static str {
 // Batch Dir Config Edit Mutation
 // ============================================================================
 
-/// A single dir config edit entry within a batch.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DirConfigEditEntry {
-    pub source_path: PathBuf,
-    pub old_dir: SourceDir,
-    pub new_dir: SourceDir,
-}
-
-/// Batch mutation that atomically applies multiple dir config edits to dirs.kdl.
-/// Produced by coalescing individual ApplyDirConfigEdit mutations at commit time —
-/// never directly staged by UI code.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApplyBatchDirConfigEditsMutation {
-    pub edits: Vec<DirConfigEditEntry>,
-    /// Full config with all edits applied, for SharedConfig update.
-    pub new_config: Config,
-}
-
-impl PartialEq for ApplyBatchDirConfigEditsMutation {
-    fn eq(&self, other: &Self) -> bool {
-        self.edits.len() == other.edits.len()
-            && self
-                .edits
-                .iter()
-                .zip(other.edits.iter())
-                .all(|(a, b)| a.source_path == b.source_path)
-    }
-}
-
 impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
     fn label(&self) -> &'static str {
         "Batch dir config update"
     }
 
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::Config)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::Config)
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {

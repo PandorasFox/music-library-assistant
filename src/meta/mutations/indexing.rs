@@ -11,11 +11,10 @@
 //! - EmitCanonicalTag: Emit CanonicalTag signal
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::corpus::paths;
-use crate::corpus::tags::TagSet;
+use crate::corpus::tags::{self as tags, TagSet};
 use crate::db::types::Zone;
 use crate::db::ReadOnlyDb;
 use crate::meta::recomputation::RecomputationScope;
@@ -27,6 +26,15 @@ use super::traits::{MutationContext, MutationExecutor};
 use super::types::{
     path_filename, DiffEntry, ExtractedMetadata, Mutation, MutationResult, PendingSignal,
     SignalClearScope,
+};
+
+// Re-export struct definitions from mm-meta
+pub use mm_meta::mutations::indexing::{
+    AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation,
+    DropDirectoryFromIndexMutation, DropExternalMatchMutation, DropFromIndexMutation,
+    EmitCanonicalTagMutation, EmitExpectedDuplicateMutation, EmitExpectedMissingTagMutation,
+    EmitExpectedOverlapMutation, FlushTagsToDiskMutation, IndexFileFromPathMutation,
+    UpdateFilePathMutation,
 };
 
 /// Macro to reduce boilerplate for the common `MutationExecutor` pattern where
@@ -54,7 +62,7 @@ macro_rules! impl_mutation_executor {
     ) => {
         impl MutationExecutor for $struct_name {
             fn label(&self) -> &'static str { $label }
-            fn staging(&self) -> super::traits::MutationStaging { $staging }
+            fn staging(&self) -> super::MutationStaging { $staging }
 
             fn execute(&self, ctx: &MutationContext) -> MutationResult {
                 let $self_ = self;
@@ -102,124 +110,6 @@ fn is_shit_format(file_type: &str) -> bool {
     SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str())
 }
 
-// ============================================================================
-// Mutation Structs
-// ============================================================================
-
-/// Index a file from path only - extracts metadata during execution.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct IndexFileFromPathMutation {
-    pub path: PathBuf,
-    pub zone: String,
-}
-
-/// Update file path in files table (for relocated files).
-///
-/// When `new_zone` is set and differs from `zone`, this is a cross-zone move:
-/// the zone column is updated and tags are migrated between tag tables.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UpdateFilePathMutation {
-    pub zone: String,
-    pub inode: i64,
-    pub new_path: PathBuf,
-    /// If set, update the zone column to this value (cross-zone move).
-    pub new_zone: Option<String>,
-}
-
-/// Drop file from index (for missing files or orphaned signals).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DropFromIndexMutation {
-    pub path: PathBuf,
-    /// Inode to also remove from files table (None for orphaned signals)
-    pub inode: Option<i64>,
-    pub zone: Option<String>,
-}
-
-/// Drop a directory and all its contents from the index.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DropDirectoryFromIndexMutation {
-    /// Relative path of the directory
-    pub directory_path: PathBuf,
-}
-
-/// Acknowledge mtime-only change - update file mtime, clear MtimeOnlyMismatch signal.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AcknowledgeMtimeOnlyMutation {
-    /// Inodes with their absolute paths: (inode, abs_path)
-    pub tracks: Vec<(i64, PathBuf)>,
-}
-
-/// Apply DB tags to disk file (defer to db / reject disk changes).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ApplyDbTagsToDiskMutation {
-    pub inode: i64,
-    pub path: PathBuf,
-    /// Zone determines which tag table to read from (corpus_tags or inbox_tags).
-    pub zone: Zone,
-}
-
-/// Assimilate disk tags into DB (defer to corpus / accept disk changes).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AssimilateDiskTagsToDbMutation {
-    pub inode: i64,
-    pub path: PathBuf,
-    /// File zone, carried in-band when chain-spawned from Transcode to avoid
-    /// a race where the old inode has already been deleted by db_thread before
-    /// this mutation's read-only connection snapshots.
-    /// None for standalone OOB resolution (no race — inode is stable).
-    pub zone: Option<String>,
-}
-
-/// Flush committed DB tags to disk, with validation against expected state.
-///
-/// Drains the DB write queue first to ensure all pending writes commit,
-/// then reads committed tags from DB and validates them against the
-/// carried `expected_tags`. If they match, writes to disk and clears
-/// `needs_disk_flush`. If they diverge, returns an error and leaves
-/// the flag raised for OOB resolution.
-///
-/// ApplyDbTagsToDisk remains for standalone OOB resolution where the DB
-/// write happened in a previous operator session (no race).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct FlushTagsToDiskMutation {
-    pub inode: i64,
-    pub path: PathBuf,
-    pub expected_tags: TagSet,
-    /// Zone determines which tag table to read from for validation.
-    pub zone: Zone,
-}
-
-/// Emit a CanonicalTag signal to whitelist a tag value.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EmitCanonicalTagMutation {
-    pub tag_name: String,
-    pub canonical_value: String,
-}
-
-/// Mark a source pair overlap as expected (suppress future CrossSourceOverlap signals).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EmitExpectedOverlapMutation {
-    pub source_a: String,
-    pub source_b: String,
-}
-
-/// Mark a fingerprint overlap group as expected (suppress future RedundantDuplicate/SubparDuplicate signals).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EmitExpectedDuplicateMutation {
-    pub fingerprint_key: String,
-}
-
-/// Mark inodes as expected-missing-tag (suppress future MissingAlbumSingle signals).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EmitExpectedMissingTagMutation {
-    pub inodes: Vec<i64>,
-}
-
-/// Drop external match data for an inode.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DropExternalMatchMutation {
-    pub inode: i64,
-}
 
 // ============================================================================
 // MutationExecutor Implementations
@@ -229,8 +119,8 @@ impl MutationExecutor for IndexFileFromPathMutation {
     fn label(&self) -> &'static str {
         "Indexing"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::DB)
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
@@ -289,7 +179,7 @@ impl MutationExecutor for IndexFileFromPathMutation {
 impl_mutation_executor!(
     UpdateFilePathMutation, UpdateFilePath,
     label: "Path update",
-    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
     signal_clear_scope: SignalClearScope::MutableOnly,
     recomputation_scope: RecomputationScope::FILES | RecomputationScope::TAGS,
     execute: |s, ctx| execute_update_file_path(
@@ -307,7 +197,7 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     DropFromIndexMutation, DropFromIndex,
     label: "Drop from index",
-    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush),
+    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush),
     signal_clear_scope: SignalClearScope::All,
     recomputation_scope: RecomputationScope::FILES | RecomputationScope::DEPLOY,
     execute: |s, ctx| execute_drop_from_index(
@@ -324,7 +214,7 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     DropDirectoryFromIndexMutation, DropDirectoryFromIndex,
     label: "Drop directory from index",
-    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DiskFlush),
+    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush),
     signal_clear_scope: SignalClearScope::All,
     recomputation_scope: RecomputationScope::FILES | RecomputationScope::DEPLOY,
     execute: |s, ctx| execute_drop_directory_from_index(ctx.read_db, &s.directory_path, ctx.witness),
@@ -339,7 +229,7 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     AcknowledgeMtimeOnlyMutation, AcknowledgeMtimeOnly,
     label: "Acknowledge mtime",
-    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
     signal_clear_scope: SignalClearScope::MutableOnly,
     recomputation_scope: RecomputationScope::EMPTY,
     execute: |s, ctx| execute_acknowledge_mtime_only(ctx.read_db, &s.tracks, ctx.witness).map(|_| ()),
@@ -356,7 +246,7 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     ApplyDbTagsToDiskMutation, ApplyDbTagsToDisk,
     label: "Tag sync (DB→disk)",
-    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
     signal_clear_scope: SignalClearScope::MutableOnly,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_apply_db_tags_to_disk(
@@ -374,7 +264,7 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     FlushTagsToDiskMutation, FlushTagsToDisk,
     label: "Tag flush",
-    staging: super::traits::MutationStaging::ChainEmitted,
+    staging: super::MutationStaging::ChainEmitted,
     signal_clear_scope: SignalClearScope::MutableOnly,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_flush_tags_to_disk(
@@ -387,7 +277,7 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     AssimilateDiskTagsToDbMutation, AssimilateDiskTagsToDb,
     label: "Tag sync (disk→DB)",
-    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
     signal_clear_scope: SignalClearScope::MutableOnly,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_assimilate_disk_tags_to_db(
@@ -405,7 +295,7 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     EmitCanonicalTagMutation, EmitCanonicalTag,
     label: "Mark canonical",
-    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_emit_canonical_tag(
@@ -422,7 +312,7 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     EmitExpectedOverlapMutation, EmitExpectedOverlap,
     label: "Mark expected overlap",
-    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::FILES,
     execute: |s, ctx| execute_emit_expected_overlap(&s.source_a, &s.source_b, ctx.witness),
@@ -437,7 +327,7 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     EmitExpectedDuplicateMutation, EmitExpectedDuplicate,
     label: "Mark expected duplicate",
-    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::FILES,
     execute: |s, ctx| execute_emit_expected_duplicate(&s.fingerprint_key, ctx.witness),
@@ -452,7 +342,7 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     DropExternalMatchMutation, DropExternalMatch,
     label: "Drop external match",
-    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::EMPTY,
     execute: |s, ctx| execute_drop_external_match(s.inode, ctx.witness),
@@ -467,7 +357,7 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     EmitExpectedMissingTagMutation, EmitExpectedMissingTag,
     label: "Mark expected missing tag",
-    staging: super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB),
+    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_emit_expected_missing_tag(&s.inodes, ctx.witness),
@@ -568,7 +458,7 @@ pub fn execute_index_file_from_path(
 
     // Read tags using TagSet and populate the extracted metadata
     extracted.tags =
-        TagSet::from_file(path).with_context(|| format!("Failed to read tags from {:?}", path))?;
+        tags::from_file(path).with_context(|| format!("Failed to read tags from {:?}", path))?;
 
     // Build pending signals from extracted metadata BEFORE the async DB write.
     // This avoids the race condition where post-execution DB queries don't see
@@ -1041,7 +931,6 @@ pub fn execute_assimilate_disk_tags_to_db(
     witness: &MutationExecutionWitness,
 ) -> Result<()> {
     use crate::corpus::paths;
-    use crate::corpus::tags::TagSet;
     use crate::db::write_thread;
     use std::os::unix::fs::MetadataExt;
 
@@ -1067,7 +956,7 @@ pub fn execute_assimilate_disk_tags_to_db(
     };
 
     // Read disk tags using TagSet
-    let disk_tagset = TagSet::from_file(abs_path)
+    let disk_tagset = tags::from_file(abs_path)
         .with_context(|| format!("Failed to read tags from {}", abs_path.display()))?;
 
     // Determine tag table from zone

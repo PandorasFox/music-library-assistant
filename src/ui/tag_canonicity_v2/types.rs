@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 pub type PendingTagEdits = HashMap<i64, Vec<(String, String, String)>>;
 
 use crate::corpus::paths;
-use crate::corpus::tags::TagSet;
+use crate::corpus::tags::{self as tags, TagSet};
 use crate::db::types::Zone;
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::meta::mutations::{Mutation, TagOp};
@@ -384,7 +384,7 @@ impl TagCanonicalityStateV2 {
             .iter()
             .filter_map(|f| {
                 let abs_path = resolver.resolve(Path::new(&f.path));
-                let tagset = TagSet::from_file(&abs_path).ok()?;
+                let tagset = tags::from_file(&abs_path).ok()?;
                 Some((f.inode, (abs_path, tagset)))
             })
             .collect();

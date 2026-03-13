@@ -833,7 +833,7 @@ fn handle_notify_error(error: notify::Error) -> bool {
 
 /// Read tags from an audio file. Returns empty vec on error.
 fn read_tags(path: &Path) -> crate::corpus::tags::TagSet {
-    match crate::corpus::tags::TagSet::from_file(path) {
+    match crate::corpus::tags::from_file(path) {
         Ok(tagset) => tagset,
         Err(e) => {
             crate::logging::log_error(format!(

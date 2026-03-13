@@ -839,8 +839,8 @@ define_domain_query! {
         recording_ids: Vec<String>,
         inodes: Vec<i64>,
     } => ReleaseStagingData, uncached, |s, db| {
-        use crate::external::musicbrainz::MbCacheBundle;
-        let bundle = MbCacheBundle::load(db, &s.release_ids, &s.recording_ids);
+        use crate::external::musicbrainz::load_mb_cache_bundle;
+        let bundle = load_mb_cache_bundle(db, &s.release_ids, &s.recording_ids);
         let mut tags = std::collections::HashMap::new();
         for inode in &s.inodes {
             tags.insert(
@@ -977,7 +977,7 @@ fn load_file_tag_values(
     db: &ReadOnlyDb,
 ) -> Vec<(i64, Vec<(String, String)>)> {
     use crate::corpus::paths;
-    use crate::corpus::tags::TagSet;
+    use crate::corpus::tags::{self as tags};
 
     let resolver = paths::get_resolver();
     let path_map = db
@@ -991,7 +991,7 @@ fn load_file_tag_values(
             continue;
         };
         let abs_path = resolver.resolve(std::path::Path::new(rel_path));
-        let tags = match TagSet::from_file(&abs_path) {
+        let tags = match tags::from_file(&abs_path) {
             Ok(ts) => ts.into_vec(),
             Err(e) => {
                 crate::logging::log_error(format!(

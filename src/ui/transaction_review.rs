@@ -16,7 +16,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::meta::decisions::DecisionKey;
-use crate::meta::mutations::{DiffEntry, Mutation};
+use crate::meta::mutations::{DiffEntry, Mutation, MutationDispatch};
 use crate::ui::widgets::rich_text::{RichBlock, RichSpan};
 use crate::ui::widgets::standard_list::{
     ListEntry, ListInputResult, StandardListConfig, StandardListState,

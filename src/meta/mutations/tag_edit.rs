@@ -13,7 +13,6 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 
 use crate::corpus::paths;
 use crate::db::types::Zone;
@@ -28,31 +27,15 @@ use super::indexing::FlushTagsToDiskMutation;
 use super::traits::{MutationContext, MutationExecutor};
 use super::types::{DiffEntry, Mutation, MutationResult, SignalClearScope, TagOp};
 
-// ============================================================================
-// Mutation Struct
-// ============================================================================
-
-/// Apply a set of incremental tag operations to tracks.
-///
-/// Operations are pre-coalesced by inode. At execution time:
-/// 1. Group ops by inode
-/// 2. For each inode: read current tags, validate expected old_values
-/// 3. If ANY validation fails for an inode, that inode's ops fail (others continue)
-/// 4. Apply tag ops directly via apply_index_tag_ops (INSERT/UPDATE/DELETE)
-/// 5. Spawn ApplyDbTagsToDisk for each modified inode
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ApplyTagOpsMutation {
-    pub ops: Vec<TagOp>,
-    /// Which zone the target files belong to (determines tag table).
-    pub zone: Zone,
-}
+// Re-export struct definition from mm-meta
+pub use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
 
 impl MutationExecutor for ApplyTagOpsMutation {
     fn label(&self) -> &'static str {
         "Tag edit"
     }
-    fn staging(&self) -> super::traits::MutationStaging {
-        super::traits::MutationStaging::Staged(super::traits::MutationExecutionStage::DB)
+    fn staging(&self) -> super::MutationStaging {
+        super::MutationStaging::Staged(super::MutationExecutionStage::DB)
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {

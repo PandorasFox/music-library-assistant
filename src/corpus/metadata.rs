@@ -10,7 +10,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 use crate::config::is_audio_extension;
-use crate::corpus::tags::TagSet;
+use crate::corpus::tags::{self, TagSet};
 use crate::meta::mutations::ExtractedMetadata;
 
 pub struct AudioMetadata {
@@ -69,7 +69,7 @@ pub fn extract_metadata(path: &Path, _source: &str) -> Result<ExtractedMetadata>
     };
 
     // Check for embedded pictures (album art) — uses lofty, format-aware
-    let pic_info = TagSet::extract_picture_info(path);
+    let pic_info = tags::extract_picture_info(path);
     let has_pictures = pic_info.is_some();
 
     // Note: Tags are returned empty - caller should use TagSet::from_file() to populate

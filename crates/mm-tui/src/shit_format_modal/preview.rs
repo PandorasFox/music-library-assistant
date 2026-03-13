@@ -20,11 +20,10 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{SelectedButton, ShitFormatModalData};
+use super::types::{ShitFormatButton, ShitFormatModalData};
 use crate::helpers::render_pane;
 use crate::widgets::{
-    render_button_row, render_file_path_list, ButtonRects, ConfirmationButton, ListClickTargets,
-    PathEntry,
+    render_file_path_list, ButtonRowState, ListClickTargets, PathEntry,
 };
 
 /// Actions returned from the shit format preview.
@@ -49,12 +48,10 @@ pub struct ShitFormatPreviewState {
     pub cached_data: ShitFormatModalData,
     /// Scroll position for the file list.
     pub scroll: usize,
-    /// Which button is selected.
-    pub selected_button: SelectedButton,
+    /// Button row state.
+    pub buttons: ButtonRowState<ShitFormatButton>,
     /// Click targets for file list items (set during render).
     pub click_targets: ListClickTargets,
-    /// Click targets for buttons (set during render).
-    pub button_rects: ButtonRects,
 }
 
 impl ShitFormatPreviewState {
@@ -76,21 +73,20 @@ impl ShitFormatPreviewState {
 
     /// Create a new preview state with cached data.
     pub fn new(cached_data: ShitFormatModalData) -> Self {
-        // Default to first available action
-        let default_button = if cached_data.has_lossless() {
-            SelectedButton::RemuxLossless
+        let mut buttons = ButtonRowState::new();
+        // Default to first available action button
+        if cached_data.has_lossless() {
+            buttons.selected = ShitFormatButton::RemuxLossless;
         } else if cached_data.has_lossy() {
-            SelectedButton::TranscodeLossy
-        } else {
-            SelectedButton::Cancel
-        };
+            buttons.selected = ShitFormatButton::TranscodeLossy;
+        }
+        // else stays on Cancel (the Default)
 
         Self {
             cached_data,
             scroll: 0,
-            selected_button: default_button,
+            buttons,
             click_targets: ListClickTargets::new(),
-            button_rects: ButtonRects::new(),
         }
     }
 
@@ -101,36 +97,9 @@ impl ShitFormatPreviewState {
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<ShitFormatPreviewAction> {
-        let has_lossless = self.cached_data.has_lossless();
-        let has_lossy = self.cached_data.has_lossy();
-
         // Check buttons first
-        if let Some(button_name) = self.button_rects.hit_test(x, y) {
-            match button_name {
-                "remux_lossless" => {
-                    self.selected_button = SelectedButton::RemuxLossless;
-                    if has_lossless {
-                        return Some(ShitFormatPreviewAction::ConfirmRemuxLossless);
-                    }
-                }
-                "transcode_lossy" => {
-                    self.selected_button = SelectedButton::TranscodeLossy;
-                    if has_lossy {
-                        return Some(ShitFormatPreviewAction::ConfirmTranscodeLossy);
-                    }
-                }
-                "convert_all" => {
-                    self.selected_button = SelectedButton::ConvertAll;
-                    if has_lossless || has_lossy {
-                        return Some(ShitFormatPreviewAction::ConfirmConvertAll);
-                    }
-                }
-                "cancel" => {
-                    self.selected_button = SelectedButton::Cancel;
-                    return Some(ShitFormatPreviewAction::Cancel);
-                }
-                _ => {}
-            }
+        if let Some(action) = self.buttons.handle_click(x, y, &self.cached_data) {
+            return Some(action);
         }
         // Check list items
         if let Some(id) = self.click_targets.hit_test(x, y) {
@@ -145,8 +114,6 @@ impl ShitFormatPreviewState {
 
     /// Handle input action.
     pub fn handle_input(&mut self, action: &InputAction) -> ShitFormatPreviewAction {
-        let has_lossless = self.cached_data.has_lossless();
-        let has_lossy = self.cached_data.has_lossy();
         let total_files = self.cached_data.total_count();
 
         if crate::helpers::handle_scroll_input(&mut self.scroll, action, total_files) {
@@ -154,52 +121,43 @@ impl ShitFormatPreviewState {
         }
 
         match action {
-            // Bitrate adjustment (only when on lossy buttons, and not in FLAC capture mode)
+            // Left/Right: bitrate adjustment when on lossy buttons, otherwise button nav
             InputAction::NavLeft => {
-                let on_lossy_button = self.selected_button == SelectedButton::TranscodeLossy
-                    || self.selected_button == SelectedButton::ConvertAll;
+                let on_lossy_button = self.buttons.selected == ShitFormatButton::TranscodeLossy
+                    || self.buttons.selected == ShitFormatButton::ConvertAll;
                 if on_lossy_button && !self.cached_data.lossy_to_flac {
                     self.cached_data.decrease_bitrate();
                 } else {
-                    self.selected_button.prev(has_lossless, has_lossy);
+                    self.buttons.nav_left(&self.cached_data);
                 }
                 ShitFormatPreviewAction::None
             }
             InputAction::NavRight => {
-                let on_lossy_button = self.selected_button == SelectedButton::TranscodeLossy
-                    || self.selected_button == SelectedButton::ConvertAll;
+                let on_lossy_button = self.buttons.selected == ShitFormatButton::TranscodeLossy
+                    || self.buttons.selected == ShitFormatButton::ConvertAll;
                 if on_lossy_button && !self.cached_data.lossy_to_flac {
                     self.cached_data.increase_bitrate();
                 } else {
-                    self.selected_button.next(has_lossless, has_lossy);
+                    self.buttons.nav_right(&self.cached_data);
                 }
                 ShitFormatPreviewAction::None
             }
 
             // Tab cycles between buttons
             InputAction::CycleNext => {
-                self.selected_button.next(has_lossless, has_lossy);
+                self.buttons.nav_right(&self.cached_data);
                 ShitFormatPreviewAction::None
             }
             InputAction::CyclePrev => {
-                self.selected_button.prev(has_lossless, has_lossy);
+                self.buttons.nav_left(&self.cached_data);
                 ShitFormatPreviewAction::None
             }
 
             // Execute selected button
-            InputAction::Confirm => match self.selected_button {
-                SelectedButton::RemuxLossless if has_lossless => {
-                    ShitFormatPreviewAction::ConfirmRemuxLossless
-                }
-                SelectedButton::TranscodeLossy if has_lossy => {
-                    ShitFormatPreviewAction::ConfirmTranscodeLossy
-                }
-                SelectedButton::ConvertAll if has_lossless || has_lossy => {
-                    ShitFormatPreviewAction::ConfirmConvertAll
-                }
-                SelectedButton::Cancel => ShitFormatPreviewAction::Cancel,
-                _ => ShitFormatPreviewAction::None,
-            },
+            InputAction::Confirm => {
+                self.buttons.confirm(&self.cached_data)
+                    .unwrap_or(ShitFormatPreviewAction::None)
+            }
 
             // Cancel
             InputAction::Cancel => ShitFormatPreviewAction::Cancel,
@@ -473,10 +431,6 @@ impl ShitFormatPreviewState {
     }
 
     fn render_controls(&mut self, f: &mut Frame, area: Rect) {
-        let has_lossless = self.cached_data.has_lossless();
-        let has_lossy = self.cached_data.has_lossy();
-        let has_both = has_lossless && has_lossy;
-
         let block = Block::default().borders(Borders::TOP);
         let inner = render_pane(f, area, block);
 
@@ -491,72 +445,14 @@ impl ShitFormatPreviewState {
             ..inner
         };
 
-        // Build button list and track click rects dynamically
-        let mut buttons = Vec::new();
-        let mut button_names: Vec<&str> = Vec::new();
-
-        if has_lossless {
-            button_names.push("remux_lossless");
-            buttons.push(
-                ConfirmationButton::new(
-                    format!("Remux {} to FLAC", self.cached_data.lossless_files.len()),
-                    Color::Green,
-                )
-                .selected(self.selected_button == SelectedButton::RemuxLossless),
-            );
-        }
-        if has_lossy {
-            button_names.push("transcode_lossy");
-            let label = if self.cached_data.lossy_to_flac {
-                format!("Capture {} to FLAC", self.cached_data.lossy_files.len())
-            } else {
-                format!(
-                    "Transcode {} to Opus ({} kbps)",
-                    self.cached_data.lossy_files.len(),
-                    self.cached_data.opus_bitrate_kbps
-                )
-            };
-            buttons.push(
-                ConfirmationButton::new(label, Color::Cyan)
-                    .selected(self.selected_button == SelectedButton::TranscodeLossy),
-            );
-        }
-        if has_both {
-            button_names.push("convert_all");
-            buttons.push(
-                ConfirmationButton::new("Convert All", Color::Yellow)
-                    .selected(self.selected_button == SelectedButton::ConvertAll),
-            );
-        }
-        button_names.push("cancel");
-        buttons.push(
-            ConfirmationButton::new("Cancel", Color::White)
-                .selected(self.selected_button == SelectedButton::Cancel),
-        );
-
-        // Track click rects
-        let n = button_names.len();
-        let chunk_width = button_area.width / n as u16;
-        self.button_rects.clear();
-        for (i, &name) in button_names.iter().enumerate() {
-            let x = button_area.x + (i as u16) * chunk_width;
-            let w = if i == n - 1 {
-                button_area.width - (i as u16) * chunk_width
-            } else {
-                chunk_width
-            };
-            self.button_rects
-                .set(name, Rect { x, width: w, ..button_area });
-        }
-
-        render_button_row(f, button_area, &buttons);
+        self.buttons.render(f, button_area, &self.cached_data, true);
 
         // Hints
         let mut hints = Vec::new();
         let show_bitrate_hint = !self.cached_data.lossy_to_flac
-            && (self.selected_button == SelectedButton::TranscodeLossy
-                || self.selected_button == SelectedButton::ConvertAll)
-            && has_lossy;
+            && (self.buttons.selected == ShitFormatButton::TranscodeLossy
+                || self.buttons.selected == ShitFormatButton::ConvertAll)
+            && self.cached_data.has_lossy();
         if show_bitrate_hint {
             hints.push(Span::styled(
                 " [\u{2190}/\u{2192}] adjust bitrate",

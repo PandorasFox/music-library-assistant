@@ -5,8 +5,15 @@
 
 pub use mm_meta::views::health_modals::{SubparDuplicateModalData, SubparFileEntry};
 
+use std::borrow::Cow;
+
+use ratatui::style::Color;
+
 use mm_meta::mutations::Mutation;
 use crate::helpers::stash_file_mutations;
+use crate::widgets::modal_buttons::ModalButtons;
+
+use super::preview::SubparDuplicatePreviewAction;
 
 /// Generate StashFromZone + DropFromIndex mutations for all subpar files.
 pub fn stash_and_drop_mutations(
@@ -19,5 +26,48 @@ pub fn stash_and_drop_mutations(
         .collect()
 }
 
-/// Re-export shared button state.
-pub type SelectedButton = crate::helpers::StashCancelButton;
+/// Button choices for the subpar duplicate resolution modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SubparButton {
+    StashAll,
+    #[default]
+    Cancel,
+}
+
+impl ModalButtons for SubparButton {
+    type Context = SubparDuplicateModalData;
+    type Action = SubparDuplicatePreviewAction;
+
+    fn all() -> &'static [Self] {
+        &[Self::StashAll, Self::Cancel]
+    }
+
+    fn label(&self, _ctx: &Self::Context) -> Cow<'static, str> {
+        match self {
+            Self::StashAll => "Stash & Drop All".into(),
+            Self::Cancel => "Cancel".into(),
+        }
+    }
+
+    fn color(&self, ctx: &Self::Context) -> Color {
+        match self {
+            Self::StashAll if ctx.has_files() => Color::Cyan,
+            Self::StashAll => Color::DarkGray,
+            Self::Cancel => Color::White,
+        }
+    }
+
+    fn enabled(&self, ctx: &Self::Context) -> bool {
+        match self {
+            Self::StashAll => ctx.has_files(),
+            Self::Cancel => true,
+        }
+    }
+
+    fn action(&self, _ctx: &Self::Context) -> SubparDuplicatePreviewAction {
+        match self {
+            Self::StashAll => SubparDuplicatePreviewAction::ConfirmStashAll,
+            Self::Cancel => SubparDuplicatePreviewAction::Cancel,
+        }
+    }
+}

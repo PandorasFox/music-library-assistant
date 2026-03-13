@@ -19,11 +19,10 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{MissingFileModalData, SelectedButton};
+use super::types::{MissingFileButton, MissingFileModalData};
 use crate::helpers::render_pane;
 use crate::widgets::{
-    render_button_row, render_file_path_list, ButtonRects, ConfirmationButton, ListClickTargets,
-    PathEntry,
+    render_file_path_list, ButtonRowState, ListClickTargets, PathEntry,
 };
 
 /// Actions returned from the missing file preview.
@@ -48,14 +47,12 @@ pub struct MissingFilePreviewState {
     pub focused_list: usize,
     /// Scroll position for each list.
     pub scroll: [usize; 2],
-    /// Which button is selected.
-    pub selected_button: SelectedButton,
+    /// Button row state.
+    pub buttons: ButtonRowState<MissingFileButton>,
     /// Click targets for restorable list (set during render).
     pub click_targets_restorable: ListClickTargets,
     /// Click targets for non-restorable list (set during render).
     pub click_targets_non_restorable: ListClickTargets,
-    /// Click targets for buttons (set during render).
-    pub button_rects: ButtonRects,
 }
 
 impl MissingFilePreviewState {
@@ -90,10 +87,9 @@ impl MissingFilePreviewState {
             cached_data,
             focused_list,
             scroll: [0, 0],
-            selected_button: SelectedButton::Cancel,
+            buttons: ButtonRowState::new(),
             click_targets_restorable: ListClickTargets::new(),
             click_targets_non_restorable: ListClickTargets::new(),
-            button_rects: ButtonRects::new(),
         }
     }
 
@@ -104,27 +100,9 @@ impl MissingFilePreviewState {
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<MissingFilePreviewAction> {
-        let has_restorable = self.cached_data.has_restorable();
-
         // Check buttons first
-        if let Some(button_name) = self.button_rects.hit_test(x, y) {
-            match button_name {
-                "restore_all" => {
-                    self.selected_button = SelectedButton::RestoreAll;
-                    if has_restorable {
-                        return Some(MissingFilePreviewAction::ConfirmRestore);
-                    }
-                }
-                "drop_lost" => {
-                    self.selected_button = SelectedButton::DropLost;
-                    return Some(MissingFilePreviewAction::ConfirmDrop);
-                }
-                "cancel" => {
-                    self.selected_button = SelectedButton::Cancel;
-                    return Some(MissingFilePreviewAction::Cancel);
-                }
-                _ => {}
-            }
+        if let Some(action) = self.buttons.handle_click(x, y, &self.cached_data) {
+            return Some(action);
         }
         // Check restorable list
         if let Some(id) = self.click_targets_restorable.hit_test(x, y) {
@@ -174,23 +152,19 @@ impl MissingFilePreviewState {
 
             // Button navigation
             InputAction::NavLeft => {
-                self.selected_button.left(has_restorable);
+                self.buttons.nav_left(&self.cached_data);
                 MissingFilePreviewAction::None
             }
             InputAction::NavRight => {
-                self.selected_button.right(has_restorable);
+                self.buttons.nav_right(&self.cached_data);
                 MissingFilePreviewAction::None
             }
 
             // Execute selected button
-            InputAction::Confirm => match self.selected_button {
-                SelectedButton::RestoreAll if has_restorable => {
-                    MissingFilePreviewAction::ConfirmRestore
-                }
-                SelectedButton::DropLost => MissingFilePreviewAction::ConfirmDrop,
-                SelectedButton::Cancel => MissingFilePreviewAction::Cancel,
-                _ => MissingFilePreviewAction::None,
-            },
+            InputAction::Confirm => {
+                self.buttons.confirm(&self.cached_data)
+                    .unwrap_or(MissingFilePreviewAction::None)
+            }
 
             // Cancel
             InputAction::Cancel => MissingFilePreviewAction::Cancel,
@@ -348,27 +322,9 @@ impl MissingFilePreviewState {
     }
 
     fn render_controls(&mut self, f: &mut Frame, area: Rect) {
-        let has_restorable = self.cached_data.has_restorable();
-
         let block = Block::default().borders(Borders::TOP);
         let inner = render_pane(f, area, block);
 
-        // Track button rects for click detection
-        let third = inner.width / 3;
-        self.button_rects.clear();
-        self.button_rects.set("restore_all", Rect { width: third, ..inner });
-        self.button_rects.set("drop_lost", Rect { x: inner.x + third, width: third, ..inner });
-        self.button_rects.set("cancel", Rect { x: inner.x + 2 * third, width: inner.width - 2 * third, ..inner });
-
-        let restore_color = if has_restorable { Color::Green } else { Color::DarkGray };
-        let buttons = vec![
-            ConfirmationButton::new("Restore All", restore_color)
-                .selected(has_restorable && self.selected_button == SelectedButton::RestoreAll),
-            ConfirmationButton::new("Drop Missing", Color::Red)
-                .selected(self.selected_button == SelectedButton::DropLost),
-            ConfirmationButton::new("Cancel", Color::White)
-                .selected(self.selected_button == SelectedButton::Cancel),
-        ];
-        render_button_row(f, inner, &buttons);
+        self.buttons.render(f, inner, &self.cached_data, true);
     }
 }

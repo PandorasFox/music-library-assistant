@@ -3,12 +3,19 @@
 //! Data structures for the inbox corpus match resolution modal, including
 //! file entries, quality classification, and button state.
 
+use std::borrow::Cow;
 use std::path::PathBuf;
+
+use ratatui::style::Color;
 
 use mm_meta::mutations::file_ops::StashFromZoneMutation;
 use mm_meta::mutations::indexing::DropFromIndexMutation;
 use mm_meta::mutations::Mutation;
 use mm_meta::views::MatchClassification;
+
+use crate::widgets::modal_buttons::ModalButtons;
+
+use super::preview::InboxCorpusMatchPreviewAction;
 
 pub use mm_meta::views::review_match::InboxCorpusMatchModalData;
 
@@ -83,9 +90,9 @@ fn stash_mutations_for(
     mutations
 }
 
-/// Which action button is selected in the modal.
+/// Button choices for the inbox corpus match resolution modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SelectedButton {
+pub enum InboxMatchButton {
     /// Stash only equivalent + subpar entries
     StashEquivalents,
     /// Stash ALL inbox duplicates (including better-quality ones)
@@ -94,20 +101,49 @@ pub enum SelectedButton {
     Cancel,
 }
 
-impl SelectedButton {
-    pub fn left(&mut self) {
-        *self = match *self {
-            Self::Cancel => Self::StashAll,
-            Self::StashAll => Self::StashEquivalents,
-            Self::StashEquivalents => Self::StashEquivalents,
-        };
+impl ModalButtons for InboxMatchButton {
+    type Context = InboxCorpusMatchModalData;
+    type Action = InboxCorpusMatchPreviewAction;
+
+    fn all() -> &'static [Self] {
+        &[Self::StashEquivalents, Self::StashAll, Self::Cancel]
     }
 
-    pub fn right(&mut self) {
-        *self = match *self {
-            Self::StashEquivalents => Self::StashAll,
-            Self::StashAll => Self::Cancel,
-            Self::Cancel => Self::Cancel,
-        };
+    fn label(&self, ctx: &Self::Context) -> Cow<'static, str> {
+        match self {
+            Self::StashEquivalents => {
+                format!("Stash {} equiv+subpar", ctx.stashable_count()).into()
+            }
+            Self::StashAll => {
+                format!("Stash all {}", ctx.total_count()).into()
+            }
+            Self::Cancel => "Cancel".into(),
+        }
+    }
+
+    fn color(&self, ctx: &Self::Context) -> Color {
+        match self {
+            Self::StashEquivalents if ctx.stashable_count() > 0 => Color::Cyan,
+            Self::StashEquivalents => Color::DarkGray,
+            Self::StashAll if ctx.total_count() > 0 => Color::Yellow,
+            Self::StashAll => Color::DarkGray,
+            Self::Cancel => Color::White,
+        }
+    }
+
+    fn enabled(&self, ctx: &Self::Context) -> bool {
+        match self {
+            Self::StashEquivalents => ctx.stashable_count() > 0,
+            Self::StashAll => !ctx.entries.is_empty(),
+            Self::Cancel => true,
+        }
+    }
+
+    fn action(&self, _ctx: &Self::Context) -> InboxCorpusMatchPreviewAction {
+        match self {
+            Self::StashEquivalents => InboxCorpusMatchPreviewAction::ConfirmStash,
+            Self::StashAll => InboxCorpusMatchPreviewAction::ConfirmStashAll,
+            Self::Cancel => InboxCorpusMatchPreviewAction::Cancel,
+        }
     }
 }

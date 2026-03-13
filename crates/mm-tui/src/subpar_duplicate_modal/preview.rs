@@ -20,10 +20,10 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{SelectedButton, SubparDuplicateModalData};
+use super::types::{SubparButton, SubparDuplicateModalData};
 use crate::helpers::{render_pane, truncate_left};
 use crate::widgets::{
-    render_button_row, ConfirmationButton, FocusPane, ListClickTargets, PathField, CURSOR_STYLE,
+    ButtonRowState, FocusPane, ListClickTargets, PathField, CURSOR_STYLE,
 };
 
 /// Actions returned from the subpar duplicate preview.
@@ -44,8 +44,8 @@ pub struct SubparDuplicatePreviewState {
     pub cached_data: SubparDuplicateModalData,
     /// Scroll position for the file list.
     pub scroll: usize,
-    /// Which button is selected.
-    pub selected_button: SelectedButton,
+    /// Button row state.
+    pub buttons: ButtonRowState<SubparButton>,
     /// Which pane has focus
     pub focus_pane: FocusPane,
     /// Click targets for file list items (set during render)
@@ -66,7 +66,7 @@ impl SubparDuplicatePreviewState {
         Self {
             cached_data,
             scroll: 0,
-            selected_button: SelectedButton::Cancel,
+            buttons: ButtonRowState::new(),
             focus_pane: FocusPane::List,
             click_targets: ListClickTargets::new(),
         }
@@ -92,8 +92,6 @@ impl SubparDuplicatePreviewState {
 
     /// Handle input action.
     pub fn handle_input(&mut self, action: &InputAction) -> SubparDuplicatePreviewAction {
-        let has_files = self.cached_data.has_files();
-
         // FocusUp/FocusDown: move focus between panes
         match action {
             InputAction::FocusUp => {
@@ -132,23 +130,18 @@ impl SubparDuplicatePreviewState {
 
             // Button navigation (when buttons focused)
             InputAction::NavLeft if self.focus_pane == FocusPane::Buttons => {
-                self.selected_button.left(has_files);
+                self.buttons.nav_left(&self.cached_data);
                 SubparDuplicatePreviewAction::None
             }
             InputAction::NavRight if self.focus_pane == FocusPane::Buttons => {
-                self.selected_button.right();
+                self.buttons.nav_right(&self.cached_data);
                 SubparDuplicatePreviewAction::None
             }
 
             // Execute selected button (only when buttons focused)
             InputAction::Confirm if self.focus_pane == FocusPane::Buttons => {
-                match self.selected_button {
-                    SelectedButton::StashAll if has_files => {
-                        SubparDuplicatePreviewAction::ConfirmStashAll
-                    }
-                    SelectedButton::Cancel => SubparDuplicatePreviewAction::Cancel,
-                    _ => SubparDuplicatePreviewAction::None,
-                }
+                self.buttons.confirm(&self.cached_data)
+                    .unwrap_or(SubparDuplicatePreviewAction::None)
             }
 
             // Cancel
@@ -360,8 +353,7 @@ impl SubparDuplicatePreviewState {
         }
     }
 
-    fn render_controls(&self, f: &mut Frame, area: Rect) {
-        let has_files = self.cached_data.has_files();
+    fn render_controls(&mut self, f: &mut Frame, area: Rect) {
         let buttons_focused = self.focus_pane == FocusPane::Buttons;
 
         let block = Block::default()
@@ -379,14 +371,7 @@ impl SubparDuplicatePreviewState {
             .constraints([Constraint::Length(1), Constraint::Length(1)])
             .split(inner);
 
-        let stash_color = if has_files { Color::Cyan } else { Color::DarkGray };
-        let buttons = vec![
-            ConfirmationButton::new("Stash & Drop All", stash_color)
-                .selected(buttons_focused && has_files && self.selected_button == SelectedButton::StashAll),
-            ConfirmationButton::new("Cancel", Color::White)
-                .selected(buttons_focused && self.selected_button == SelectedButton::Cancel),
-        ];
-        render_button_row(f, inner_chunks[0], &buttons);
+        self.buttons.render(f, inner_chunks[0], &self.cached_data, buttons_focused);
 
         let hint = Paragraph::new(Line::from(Span::styled(
             "Shift+\u{2191}\u{2193} focus  \u{2190}\u{2192} select  Enter confirm",

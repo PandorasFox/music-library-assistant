@@ -23,10 +23,10 @@ use ratatui::{
 use mm_meta::views::MatchClassification;
 use crate::helpers::{render_pane, truncate_left};
 use crate::widgets::{
-    render_button_row, ConfirmationButton, FocusPane, ListClickTargets, PathField, CURSOR_STYLE,
+    ButtonRowState, FocusPane, ListClickTargets, PathField, CURSOR_STYLE,
 };
 
-use super::types::{InboxCorpusMatchModalData, SelectedButton};
+use super::types::{InboxCorpusMatchModalData, InboxMatchButton};
 
 /// Actions returned from the inbox corpus match preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +44,7 @@ pub enum InboxCorpusMatchPreviewAction {
 pub struct InboxCorpusMatchPreviewState {
     pub cached_data: InboxCorpusMatchModalData,
     pub scroll: usize,
-    pub selected_button: SelectedButton,
+    pub buttons: ButtonRowState<InboxMatchButton>,
     pub focus_pane: FocusPane,
     /// Click targets for list items (set during render)
     pub click_targets: ListClickTargets,
@@ -62,7 +62,7 @@ impl InboxCorpusMatchPreviewState {
         Self {
             cached_data,
             scroll: 0,
-            selected_button: SelectedButton::Cancel,
+            buttons: ButtonRowState::new(),
             focus_pane: FocusPane::List,
             click_targets: ListClickTargets::new(),
         }
@@ -120,26 +120,17 @@ impl InboxCorpusMatchPreviewState {
             }
 
             InputAction::NavLeft if self.focus_pane == FocusPane::Buttons => {
-                self.selected_button.left();
+                self.buttons.nav_left(&self.cached_data);
                 InboxCorpusMatchPreviewAction::None
             }
             InputAction::NavRight if self.focus_pane == FocusPane::Buttons => {
-                self.selected_button.right();
+                self.buttons.nav_right(&self.cached_data);
                 InboxCorpusMatchPreviewAction::None
             }
 
             InputAction::Confirm if self.focus_pane == FocusPane::Buttons => {
-                let has_entries = !self.cached_data.entries.is_empty();
-                match self.selected_button {
-                    SelectedButton::StashEquivalents if self.cached_data.stashable_count() > 0 => {
-                        InboxCorpusMatchPreviewAction::ConfirmStash
-                    }
-                    SelectedButton::StashAll if has_entries => {
-                        InboxCorpusMatchPreviewAction::ConfirmStashAll
-                    }
-                    SelectedButton::Cancel => InboxCorpusMatchPreviewAction::Cancel,
-                    _ => InboxCorpusMatchPreviewAction::None,
-                }
+                self.buttons.confirm(&self.cached_data)
+                    .unwrap_or(InboxCorpusMatchPreviewAction::None)
             }
 
             InputAction::Cancel => InboxCorpusMatchPreviewAction::Cancel,
@@ -345,11 +336,7 @@ impl InboxCorpusMatchPreviewState {
         f.render_widget(para, inner);
     }
 
-    fn render_controls(&self, f: &mut Frame, area: Rect) {
-        let stashable = self.cached_data.stashable_count();
-        let total = self.cached_data.total_count();
-        let has_stashable = stashable > 0;
-        let has_entries = total > 0;
+    fn render_controls(&mut self, f: &mut Frame, area: Rect) {
         let buttons_focused = self.focus_pane == FocusPane::Buttons;
 
         let block = Block::default()
@@ -370,32 +357,7 @@ impl InboxCorpusMatchPreviewState {
             ])
             .split(inner);
 
-        // Buttons via standard widget
-        let stash_color = if has_stashable {
-            Color::Cyan
-        } else {
-            Color::DarkGray
-        };
-        let stash_all_color = if has_entries {
-            Color::Yellow
-        } else {
-            Color::DarkGray
-        };
-        let stash_selected = has_stashable
-            && buttons_focused
-            && self.selected_button == SelectedButton::StashEquivalents;
-        let stash_all_selected =
-            has_entries && buttons_focused && self.selected_button == SelectedButton::StashAll;
-        let cancel_selected = buttons_focused && self.selected_button == SelectedButton::Cancel;
-
-        let buttons = vec![
-            ConfirmationButton::new(format!("Stash {} equiv+subpar", stashable), stash_color)
-                .selected(stash_selected),
-            ConfirmationButton::new(format!("Stash all {}", total), stash_all_color)
-                .selected(stash_all_selected),
-            ConfirmationButton::new("Cancel", Color::White).selected(cancel_selected),
-        ];
-        render_button_row(f, inner_chunks[0], &buttons);
+        self.buttons.render(f, inner_chunks[0], &self.cached_data, buttons_focused);
 
         // Hint
         let hint = Paragraph::new(Line::from(Span::styled(

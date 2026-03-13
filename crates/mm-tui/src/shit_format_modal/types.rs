@@ -5,9 +5,17 @@
 
 pub use mm_meta::views::cluster_deploy::{ShitFormatEntry, ShitFormatModalData};
 
-/// Which action button is selected in the modal.
+use std::borrow::Cow;
+
+use ratatui::style::Color;
+
+use crate::widgets::modal_buttons::ModalButtons;
+
+use super::preview::ShitFormatPreviewAction;
+
+/// Button choices for the shit format resolution modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SelectedButton {
+pub enum ShitFormatButton {
     /// Remux lossless files to FLAC
     RemuxLossless,
     /// Transcode lossy files to Opus
@@ -18,54 +26,60 @@ pub enum SelectedButton {
     Cancel,
 }
 
-impl SelectedButton {
-    /// Cycle to previous button.
-    pub fn prev(&mut self, has_lossless: bool, has_lossy: bool) {
-        *self = match *self {
-            Self::Cancel => {
-                if has_lossless && has_lossy {
-                    Self::ConvertAll
-                } else if has_lossy {
-                    Self::TranscodeLossy
-                } else if has_lossless {
-                    Self::RemuxLossless
-                } else {
-                    Self::Cancel
-                }
-            }
-            Self::ConvertAll => Self::TranscodeLossy,
-            Self::TranscodeLossy => {
-                if has_lossless {
-                    Self::RemuxLossless
-                } else {
-                    Self::TranscodeLossy
-                }
-            }
-            Self::RemuxLossless => Self::RemuxLossless,
-        };
+impl ModalButtons for ShitFormatButton {
+    type Context = ShitFormatModalData;
+    type Action = ShitFormatPreviewAction;
+
+    fn all() -> &'static [Self] {
+        &[Self::RemuxLossless, Self::TranscodeLossy, Self::ConvertAll, Self::Cancel]
     }
 
-    /// Cycle to next button.
-    pub fn next(&mut self, has_lossless: bool, has_lossy: bool) {
-        *self = match *self {
+    fn label(&self, ctx: &Self::Context) -> Cow<'static, str> {
+        match self {
             Self::RemuxLossless => {
-                if has_lossy {
-                    Self::TranscodeLossy
-                } else if has_lossless && has_lossy {
-                    Self::ConvertAll
-                } else {
-                    Self::Cancel
-                }
+                format!("Remux {} to FLAC", ctx.lossless_files.len()).into()
             }
             Self::TranscodeLossy => {
-                if has_lossless && has_lossy {
-                    Self::ConvertAll
+                if ctx.lossy_to_flac {
+                    format!("Capture {} to FLAC", ctx.lossy_files.len()).into()
                 } else {
-                    Self::Cancel
+                    format!(
+                        "Transcode {} to Opus ({} kbps)",
+                        ctx.lossy_files.len(),
+                        ctx.opus_bitrate_kbps
+                    )
+                    .into()
                 }
             }
-            Self::ConvertAll => Self::Cancel,
-            Self::Cancel => Self::Cancel,
-        };
+            Self::ConvertAll => "Convert All".into(),
+            Self::Cancel => "Cancel".into(),
+        }
+    }
+
+    fn color(&self, _ctx: &Self::Context) -> Color {
+        match self {
+            Self::RemuxLossless => Color::Green,
+            Self::TranscodeLossy => Color::Cyan,
+            Self::ConvertAll => Color::Yellow,
+            Self::Cancel => Color::White,
+        }
+    }
+
+    fn enabled(&self, ctx: &Self::Context) -> bool {
+        match self {
+            Self::RemuxLossless => ctx.has_lossless(),
+            Self::TranscodeLossy => ctx.has_lossy(),
+            Self::ConvertAll => ctx.has_lossless() && ctx.has_lossy(),
+            Self::Cancel => true,
+        }
+    }
+
+    fn action(&self, _ctx: &Self::Context) -> ShitFormatPreviewAction {
+        match self {
+            Self::RemuxLossless => ShitFormatPreviewAction::ConfirmRemuxLossless,
+            Self::TranscodeLossy => ShitFormatPreviewAction::ConfirmTranscodeLossy,
+            Self::ConvertAll => ShitFormatPreviewAction::ConfirmConvertAll,
+            Self::Cancel => ShitFormatPreviewAction::Cancel,
+        }
     }
 }

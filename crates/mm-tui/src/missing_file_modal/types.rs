@@ -5,7 +5,14 @@
 
 pub use mm_meta::views::health_modals::*;
 
+use std::borrow::Cow;
+
+use ratatui::style::Color;
+
 use mm_meta::paths::PathResolver;
+use crate::widgets::modal_buttons::ModalButtons;
+
+use super::preview::MissingFilePreviewAction;
 
 /// Generate HardLink mutations for restorable files.
 ///
@@ -31,41 +38,53 @@ pub fn restore_mutations(data: &MissingFileModalData, resolver: &PathResolver) -
         .collect()
 }
 
-/// Which action button is selected in the modal.
+/// Button choices for the missing file resolution modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SelectedButton {
+pub enum MissingFileButton {
     RestoreAll,
     DropLost,
     #[default]
     Cancel,
 }
 
-impl SelectedButton {
-    /// Move selection left.
-    pub fn left(&mut self, has_restorable: bool) {
-        *self = match *self {
-            Self::Cancel => Self::DropLost,
-            Self::DropLost => {
-                if has_restorable {
-                    Self::RestoreAll
-                } else {
-                    Self::DropLost
-                }
-            }
-            Self::RestoreAll => Self::RestoreAll,
-        };
+impl ModalButtons for MissingFileButton {
+    type Context = MissingFileModalData;
+    type Action = MissingFilePreviewAction;
+
+    fn all() -> &'static [Self] {
+        &[Self::RestoreAll, Self::DropLost, Self::Cancel]
     }
 
-    /// Move selection right.
-    pub fn right(&mut self, has_restorable: bool) {
-        *self = match *self {
-            Self::RestoreAll => Self::DropLost,
-            Self::DropLost => Self::Cancel,
-            Self::Cancel => Self::Cancel,
-        };
-        // Ensure we don't land on disabled buttons
-        if *self == Self::RestoreAll && !has_restorable {
-            self.right(has_restorable);
+    fn label(&self, _ctx: &Self::Context) -> Cow<'static, str> {
+        match self {
+            Self::RestoreAll => "Restore All".into(),
+            Self::DropLost => "Drop Missing".into(),
+            Self::Cancel => "Cancel".into(),
+        }
+    }
+
+    fn color(&self, ctx: &Self::Context) -> Color {
+        match self {
+            Self::RestoreAll if ctx.has_restorable() => Color::Green,
+            Self::RestoreAll => Color::DarkGray,
+            Self::DropLost => Color::Red,
+            Self::Cancel => Color::White,
+        }
+    }
+
+    fn enabled(&self, ctx: &Self::Context) -> bool {
+        match self {
+            Self::RestoreAll => ctx.has_restorable(),
+            Self::DropLost => true,
+            Self::Cancel => true,
+        }
+    }
+
+    fn action(&self, _ctx: &Self::Context) -> MissingFilePreviewAction {
+        match self {
+            Self::RestoreAll => MissingFilePreviewAction::ConfirmRestore,
+            Self::DropLost => MissingFilePreviewAction::ConfirmDrop,
+            Self::Cancel => MissingFilePreviewAction::Cancel,
         }
     }
 }

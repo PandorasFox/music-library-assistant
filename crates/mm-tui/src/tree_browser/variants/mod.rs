@@ -50,7 +50,7 @@ impl BrowserVariant {
         &mut self,
         action: &InputAction,
         nav: &mut TreeNavigator,
-    ) -> TreeBrowserAction {
+    ) -> Option<TreeBrowserAction> {
         match self {
             BrowserVariant::CorpusBrowser(v) => v.handle_input(action, nav),
         }

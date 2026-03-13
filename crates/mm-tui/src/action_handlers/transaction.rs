@@ -5,7 +5,7 @@ use super::witness;
 use super::HandleAction;
 use crate::active_view::ActiveView;
 use crate::suspended_views::SuspendTarget;
-use crate::{progress_screen, transaction_review, widgets};
+use crate::{progress_screen, transaction_review};
 
 impl HandleAction for transaction_review::TransactionReviewAction {
     fn handle(self, app: &mut App, gesture: Option<&witness::ConfirmationGesture>) {
@@ -119,13 +119,6 @@ impl HandleAction for super::super::tabbed_transaction_review::TabbedTransaction
         use transaction_review::TransactionReviewAction;
 
         match self {
-            TabbedTransactionReviewAction::CycleNext => {
-                app.handle_lateral_cycle(widgets::LateralView::Transaction, true);
-            }
-            TabbedTransactionReviewAction::CyclePrev => {
-                app.handle_lateral_cycle(widgets::LateralView::Transaction, false);
-            }
-            TabbedTransactionReviewAction::RequestQuit => app.handle_request_quit(),
             TabbedTransactionReviewAction::Review(review_action) => match review_action {
                 TransactionReviewAction::None => {}
                 TransactionReviewAction::Cancel => {} // No cancel in tabbed mode

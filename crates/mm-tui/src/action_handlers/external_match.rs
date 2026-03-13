@@ -8,7 +8,7 @@ use super::super::App;
 use super::witness;
 use super::HandleAction;
 use mm_meta::views::ExternalMatchReviewEntry;
-use crate::{external_match_modal, external_match_view, widgets, ActiveView};
+use crate::{external_match_modal, external_match_view, ActiveView};
 
 // =========================================================================
 // External Matches Lateral View Actions
@@ -17,14 +17,6 @@ use crate::{external_match_modal, external_match_view, widgets, ActiveView};
 impl HandleAction for external_match_view::ExternalMatchesAction {
     fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            external_match_view::ExternalMatchesAction::None => {}
-            external_match_view::ExternalMatchesAction::CycleNext => {
-                app.handle_lateral_cycle(widgets::LateralView::ExternalMatches, true);
-            }
-            external_match_view::ExternalMatchesAction::CyclePrev => {
-                app.handle_lateral_cycle(widgets::LateralView::ExternalMatches, false);
-            }
-            external_match_view::ExternalMatchesAction::RequestQuit => app.handle_request_quit(),
             external_match_view::ExternalMatchesAction::RequestFetch => {
                 let _ = app.witch.request_external_fetch();
                 app.status_message = Some("External fetch requested".to_string());

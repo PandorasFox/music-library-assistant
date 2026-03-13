@@ -410,7 +410,6 @@ impl HandleAction for super::config_editor::ConfigEditorAction {
         use mm_meta::mutations::Mutation;
 
         match self {
-            super::config_editor::ConfigEditorAction::None => {}
             super::config_editor::ConfigEditorAction::Save => {
                 // Build mutation from editor state and stage for transaction review.
                 let mutation_data = if let ActiveView::ConfigEditor(ref state) = app.view {
@@ -474,14 +473,6 @@ impl HandleAction for super::config_editor::ConfigEditorAction {
 impl HandleAction for insights_view::InsightsAction {
     fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            insights_view::InsightsAction::None => {}
-            insights_view::InsightsAction::RequestQuit => app.handle_request_quit(),
-            insights_view::InsightsAction::CycleNext => {
-                app.handle_lateral_cycle(widgets::LateralView::Health, true);
-            }
-            insights_view::InsightsAction::CyclePrev => {
-                app.handle_lateral_cycle(widgets::LateralView::Health, false);
-            }
             insights_view::InsightsAction::Launch => {
                 // Use selected_action() to dispatch to appropriate modal
                 let selected = if let ActiveView::Insights(ref v) = app.view {
@@ -582,16 +573,9 @@ impl HandleAction for insights_view::InsightsAction {
 impl HandleAction for tag_search::TagSearchAction {
     fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            tag_search::TagSearchAction::None => {}
             tag_search::TagSearchAction::Cancel => {
                 // Return to Insights view
                 app.start_health_view();
-            }
-            tag_search::TagSearchAction::CycleNext => {
-                app.handle_lateral_cycle(widgets::LateralView::Search, true);
-            }
-            tag_search::TagSearchAction::CyclePrev => {
-                app.handle_lateral_cycle(widgets::LateralView::Search, false);
             }
             tag_search::TagSearchAction::ExecuteSearch => {
                 // Execute search via cache thread (blocking — fast single query)

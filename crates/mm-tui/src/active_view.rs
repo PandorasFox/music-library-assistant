@@ -184,6 +184,15 @@ impl ActiveView {
             _ => None,
         }
     }
+
+    /// Whether this view needs to handle CycleNext/CyclePrev as domain actions
+    /// rather than having them intercepted for automatic lateral cycling.
+    ///
+    /// ConfigEditor: defers cycle when unsaved edits, Tab means nav_right in button focus.
+    /// CorpusBrowser: captures Tab when config panel/search/filter is active.
+    pub(crate) fn wants_raw_cycle(&self) -> bool {
+        matches!(self, Self::ConfigEditor(_) | Self::CorpusBrowser(_))
+    }
 }
 
 // ============================================================================

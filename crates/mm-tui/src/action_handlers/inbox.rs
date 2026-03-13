@@ -21,14 +21,6 @@ impl HandleAction for super::super::inbox_view::InboxAction {
         use super::super::inbox_view::InboxAction;
 
         match self {
-            InboxAction::None => {}
-            InboxAction::RequestQuit => app.handle_request_quit(),
-            InboxAction::CycleNext => {
-                app.handle_lateral_cycle(crate::widgets::LateralView::Inbox, true);
-            }
-            InboxAction::CyclePrev => {
-                app.handle_lateral_cycle(crate::widgets::LateralView::Inbox, false);
-            }
             InboxAction::LaunchIntake => {
                 // Gather inbox unindexed files and show intake confirmation
                 let intake_state = app

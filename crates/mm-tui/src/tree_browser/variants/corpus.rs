@@ -484,7 +484,7 @@ impl CorpusBrowserVariant {
         &mut self,
         action: &InputAction,
         nav: &mut TreeNavigator,
-    ) -> TreeBrowserAction {
+    ) -> Option<TreeBrowserAction> {
         // Config panel has priority when focused
         if self.focus == CorpusBrowserFocus::ConfigPanel {
             return self.handle_config_panel_input(action);
@@ -495,15 +495,15 @@ impl CorpusBrowserVariant {
             match action {
                 InputAction::Confirm => {
                     self.apply_filter(nav);
-                    return TreeBrowserAction::None;
+                    return None;
                 }
                 InputAction::Cancel => {
                     // Esc handled by handle_escape
-                    return TreeBrowserAction::None;
+                    return None;
                 }
                 other => {
                     self.filter_input.handle_input(other);
-                    return TreeBrowserAction::None;
+                    return None;
                 }
             }
         }
@@ -511,7 +511,7 @@ impl CorpusBrowserVariant {
         // Wizard pane captures nav keys for scrolling
         if self.wizard_state.is_showing_pane() {
             if self.wizard_pane.handle_input(action) {
-                return TreeBrowserAction::None;
+                return None;
             }
             // Esc handled by handle_escape; other keys fall through to tree
         }
@@ -534,21 +534,21 @@ impl CorpusBrowserVariant {
         &mut self,
         action: &InputAction,
         nav: &mut TreeNavigator,
-    ) -> TreeBrowserAction {
+    ) -> Option<TreeBrowserAction> {
         // If we have search results visible, capture navigation keys
         if !self.search.matches.is_empty() {
             match action {
                 InputAction::NavUp => {
                     self.enter_match_and_up();
-                    return TreeBrowserAction::None;
+                    return None;
                 }
                 InputAction::NavDown => {
                     self.enter_match_and_down();
-                    return TreeBrowserAction::None;
+                    return None;
                 }
                 // Consume Left/Right to prevent tree navigation when search results visible
                 InputAction::NavLeft | InputAction::NavRight => {
-                    return TreeBrowserAction::None;
+                    return None;
                 }
                 _ => {}
             }
@@ -558,26 +558,26 @@ impl CorpusBrowserVariant {
             InputAction::Confirm => {
                 if let Some(entry) = nav.current_entry() {
                     if entry.is_directory() {
-                        TreeBrowserAction::EditDirectory(entry.path.clone())
+                        Some(TreeBrowserAction::EditDirectory(entry.path.clone()))
                     } else {
-                        TreeBrowserAction::EditFile(entry.path.clone())
+                        Some(TreeBrowserAction::EditFile(entry.path.clone()))
                     }
                 } else {
-                    TreeBrowserAction::None
+                    None
                 }
             }
             // C opens dir config panel on any corpus directory
             InputAction::Char('C') => {
                 if let Some(entry) = nav.current_entry() {
                     if entry.is_directory() && entry.path.starts_with(&self.corpus_dir) {
-                        return TreeBrowserAction::OpenDirConfig(entry.path.clone());
+                        return Some(TreeBrowserAction::OpenDirConfig(entry.path.clone()));
                     }
                 }
-                TreeBrowserAction::None
+                None
             }
             // R opens transaction review when pending dir config edits exist
             InputAction::Char('R') if self.has_pending_edits() => {
-                TreeBrowserAction::ReviewTransaction
+                Some(TreeBrowserAction::ReviewTransaction)
             }
             // Z opens/advances wizard popup/pane on entries with packing markers
             InputAction::Char('Z') => {
@@ -593,37 +593,37 @@ impl CorpusBrowserVariant {
                         }
                     }
                 }
-                TreeBrowserAction::None
+                None
             }
             // Tab cycles through [MB] directories
             InputAction::CycleNext => {
                 if self.cycle_packing_dirs(nav, true) {
-                    TreeBrowserAction::None
+                    None
                 } else {
-                    TreeBrowserAction::CycleNext
+                    Some(TreeBrowserAction::CycleNext)
                 }
             }
             InputAction::CyclePrev => {
                 if self.cycle_packing_dirs(nav, false) {
-                    TreeBrowserAction::None
+                    None
                 } else {
-                    TreeBrowserAction::CyclePrev
+                    Some(TreeBrowserAction::CyclePrev)
                 }
             }
             // Ctrl+/ activates inline filter
             InputAction::OpenFilter => {
                 self.activate_filter();
-                TreeBrowserAction::None
+                None
             }
-            _ => TreeBrowserAction::None,
+            _ => None,
         }
     }
 
     /// Handle input when config panel is focused.
-    fn handle_config_panel_input(&mut self, action: &InputAction) -> TreeBrowserAction {
+    fn handle_config_panel_input(&mut self, action: &InputAction) -> Option<TreeBrowserAction> {
         let panel = match self.config_panel {
             Some(ref mut p) => p,
-            None => return TreeBrowserAction::None,
+            None => return None,
         };
 
         // Text input mode intercepts all keys
@@ -650,15 +650,15 @@ impl CorpusBrowserVariant {
                         }
                     }
                     panel.text_input = None;
-                    return TreeBrowserAction::None;
+                    return None;
                 }
                 InputAction::Cancel => {
                     panel.text_input = None;
-                    return TreeBrowserAction::None;
+                    return None;
                 }
                 _ => {
                     input.handle_input(action);
-                    return TreeBrowserAction::None;
+                    return None;
                 }
             }
         }
@@ -670,32 +670,32 @@ impl CorpusBrowserVariant {
                     if panel.button_cursor > 0 {
                         panel.button_cursor -= 1;
                     }
-                    return TreeBrowserAction::None;
+                    return None;
                 }
                 InputAction::NavRight => {
                     if panel.button_cursor < 1 {
                         panel.button_cursor += 1;
                     }
-                    return TreeBrowserAction::None;
+                    return None;
                 }
                 InputAction::NavUp => {
                     panel.focus = PanelFocus::Fields;
-                    return TreeBrowserAction::None;
+                    return None;
                 }
                 InputAction::Confirm => {
                     if panel.button_cursor == 0 {
                         // Save
-                        return TreeBrowserAction::SaveDirConfig;
+                        return Some(TreeBrowserAction::SaveDirConfig);
                     } else {
                         // Discard
-                        return TreeBrowserAction::CloseDirConfig;
+                        return Some(TreeBrowserAction::CloseDirConfig);
                     }
                 }
                 InputAction::Cancel => {
                     panel.focus = PanelFocus::Fields;
-                    return TreeBrowserAction::None;
+                    return None;
                 }
-                _ => return TreeBrowserAction::None,
+                _ => return None,
             }
         }
 
@@ -717,7 +717,7 @@ impl CorpusBrowserVariant {
                     panel.field_cursor -= 1;
                     panel.lib_cursor = None;
                 }
-                TreeBrowserAction::None
+                None
             }
             InputAction::NavDown => {
                 panel.wizard_state.dismiss();
@@ -742,12 +742,12 @@ impl CorpusBrowserVariant {
                 } else if panel.field_cursor < 5 {
                     panel.field_cursor += 1;
                 }
-                TreeBrowserAction::None
+                None
             }
             InputAction::CycleNext => {
                 panel.focus = PanelFocus::Buttons;
                 panel.button_cursor = 0;
-                TreeBrowserAction::None
+                None
             }
             InputAction::Confirm | InputAction::Toggle => {
                 match panel.field_cursor {
@@ -788,7 +788,7 @@ impl CorpusBrowserVariant {
                     }
                     _ => {}
                 }
-                TreeBrowserAction::None
+                None
             }
             // n: add new library
             InputAction::Char('n') => {
@@ -796,7 +796,7 @@ impl CorpusBrowserVariant {
                     panel.lib_cursor = None; // New item, no cursor position
                     panel.text_input = Some(TextInputState::new());
                 }
-                TreeBrowserAction::None
+                None
             }
             // x: delete selected library
             InputAction::Char('x') => {
@@ -812,7 +812,7 @@ impl CorpusBrowserVariant {
                         }
                     }
                 }
-                TreeBrowserAction::None
+                None
             }
             InputAction::Char('z') | InputAction::Char('Z') => {
                 let help = DIR_FIELD_HELP[panel.field_cursor];
@@ -822,10 +822,10 @@ impl CorpusBrowserVariant {
                     let offer = WizardOffer::Popup(lines);
                     panel.wizard_state.advance(&offer);
                 }
-                TreeBrowserAction::None
+                None
             }
-            InputAction::Cancel => TreeBrowserAction::CloseDirConfig,
-            _ => TreeBrowserAction::None,
+            InputAction::Cancel => Some(TreeBrowserAction::CloseDirConfig),
+            _ => None,
         }
     }
 
@@ -834,11 +834,11 @@ impl CorpusBrowserVariant {
         &mut self,
         action: &InputAction,
         nav: &mut TreeNavigator,
-    ) -> TreeBrowserAction {
+    ) -> Option<TreeBrowserAction> {
         match action {
             InputAction::Confirm => {
                 self.handle_search_enter(nav);
-                TreeBrowserAction::None
+                None
             }
             InputAction::Cancel => {
                 // Clear search and return to tree
@@ -846,7 +846,7 @@ impl CorpusBrowserVariant {
                 self.search.clear();
                 self.focus = CorpusBrowserFocus::TreeBrowser;
                 self.search_input.focused = false;
-                TreeBrowserAction::None
+                None
             }
             InputAction::CycleNext => {
                 // Apply suggestion if available
@@ -854,32 +854,32 @@ impl CorpusBrowserVariant {
                     self.search_input.set_value(suggestion);
                     self.update_search_matches(nav);
                 }
-                TreeBrowserAction::None
+                None
             }
             // Up/Down navigate search results (if any), or do nothing
             InputAction::NavUp => {
                 if !self.search.matches.is_empty() {
                     self.enter_match_and_up();
                 }
-                TreeBrowserAction::None
+                None
             }
             InputAction::NavDown => {
                 if !self.search.matches.is_empty() {
                     self.enter_match_and_down();
                 }
-                TreeBrowserAction::None
+                None
             }
             // Arrow keys and Home/End for cursor navigation in text input
             InputAction::NavLeft | InputAction::NavRight | InputAction::Home | InputAction::End => {
                 self.search_input.handle_input(action);
-                TreeBrowserAction::None
+                None
             }
             // Character input
             InputAction::Char(c) => {
                 self.search_input.insert_char(*c);
                 self.update_search_matches(nav);
                 self.reset_match_selection();
-                TreeBrowserAction::None
+                None
             }
             InputAction::Backspace => {
                 self.search_input.backspace();
@@ -889,7 +889,7 @@ impl CorpusBrowserVariant {
                     self.update_search_matches(nav);
                 }
                 self.reset_match_selection();
-                TreeBrowserAction::None
+                None
             }
             InputAction::Delete => {
                 self.search_input.delete();
@@ -899,16 +899,16 @@ impl CorpusBrowserVariant {
                     self.update_search_matches(nav);
                 }
                 self.reset_match_selection();
-                TreeBrowserAction::None
+                None
             }
             // Ctrl+U clears input
             InputAction::KillToStart => {
                 self.search_input.clear();
                 self.search.clear();
                 self.reset_match_selection();
-                TreeBrowserAction::None
+                None
             }
-            _ => TreeBrowserAction::None,
+            _ => None,
         }
     }
 
@@ -941,25 +941,25 @@ impl CorpusBrowserVariant {
         &mut self,
         action: &InputAction,
         nav: &mut TreeNavigator,
-    ) -> TreeBrowserAction {
+    ) -> Option<TreeBrowserAction> {
         match action {
             InputAction::NavUp => {
                 self.enter_match_and_up();
-                TreeBrowserAction::None
+                None
             }
             InputAction::NavDown => {
                 self.enter_match_and_down();
-                TreeBrowserAction::None
+                None
             }
             InputAction::Confirm => {
                 self.confirm_match_selection(nav);
-                TreeBrowserAction::None
+                None
             }
             InputAction::Cancel => {
                 self.reset_match_selection();
-                TreeBrowserAction::None
+                None
             }
-            _ => TreeBrowserAction::None,
+            _ => None,
         }
     }
 

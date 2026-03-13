@@ -28,17 +28,11 @@ use mm_meta::views::InboxOverviewData;
 
 pub use render::render_inbox_view;
 
-/// Action returned from input handling.
+/// Domain action returned from input handling.
+///
+/// Protocol actions (CycleNext, CyclePrev, Cancel-as-quit) are handled centrally.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InboxAction {
-    /// No action needed
-    None,
-    /// Request to quit the application
-    RequestQuit,
-    /// Cycle to next view in ring
-    CycleNext,
-    /// Cycle to previous view in ring
-    CyclePrev,
     /// Launch intake confirmation for inbox unindexed files
     LaunchIntake,
     /// Launch inbox corpus match resolution modal
@@ -197,39 +191,35 @@ impl InboxViewState {
         self.entries.get(self.list.cursor)
     }
 
-    /// Handle a semantic input action and return the resulting action.
-    pub fn handle_input(&mut self, action: &InputAction) -> InboxAction {
+    /// Handle a semantic input action. Returns `None` for protocol actions
+    /// (cycle, cancel) which are handled centrally by `App::handle_input`.
+    pub fn handle_input(&mut self, action: &InputAction) -> Option<InboxAction> {
         let result = self.list.handle_input(action, &self.entries);
 
         match result {
             ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
-                InboxAction::None
+                None
             }
             ListInputResult::Confirm(insight_action) => {
                 if self.busy {
-                    return InboxAction::None;
+                    return None;
                 }
                 match insight_action {
-                    InboxInsightAction::LaunchIntake => InboxAction::LaunchIntake,
+                    InboxInsightAction::LaunchIntake => Some(InboxAction::LaunchIntake),
                     InboxInsightAction::LaunchCorpusMatchResolution => {
-                        InboxAction::LaunchCorpusMatchResolution
+                        Some(InboxAction::LaunchCorpusMatchResolution)
                     }
                     InboxInsightAction::LaunchInboxTagCanonicity => {
-                        InboxAction::LaunchInboxTagCanonicity
+                        Some(InboxAction::LaunchInboxTagCanonicity)
                     }
-                    InboxInsightAction::LaunchOrganize => InboxAction::LaunchOrganize,
+                    InboxInsightAction::LaunchOrganize => Some(InboxAction::LaunchOrganize),
                     InboxInsightAction::LaunchInboxCompoundSplit => {
-                        InboxAction::LaunchInboxCompoundSplit
+                        Some(InboxAction::LaunchInboxCompoundSplit)
                     }
-                    InboxInsightAction::Informational => InboxAction::None,
+                    InboxInsightAction::Informational => None,
                 }
             }
-            ListInputResult::Unhandled => match action {
-                InputAction::Cancel => InboxAction::RequestQuit,
-                InputAction::CycleNext => InboxAction::CycleNext,
-                InputAction::CyclePrev => InboxAction::CyclePrev,
-                _ => InboxAction::None,
-            },
+            ListInputResult::Unhandled => None,
         }
     }
 }

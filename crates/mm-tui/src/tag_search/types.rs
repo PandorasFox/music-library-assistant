@@ -282,17 +282,14 @@ pub enum TagSearchMode {
     Results,
 }
 
-/// Actions returned from tag search key handling.
+/// Domain actions returned from tag search key handling.
+///
+/// CycleNext/CyclePrev are handled centrally. Cancel is a domain action here
+/// because it has multi-modal behavior (dismiss modal, exit results, exit search).
 #[derive(Debug, Clone)]
 pub enum TagSearchAction {
-    /// No action needed.
-    None,
     /// Cancel tag search (Escape when nothing to cancel).
     Cancel,
-    /// Cycle to next lateral view (Tab).
-    CycleNext,
-    /// Cycle to previous lateral view (Shift-Tab).
-    CyclePrev,
     /// Execute the search query (requires db access).
     ExecuteSearch,
     /// Open tag editor for a single audio file.

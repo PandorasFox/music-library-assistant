@@ -205,8 +205,32 @@ impl App {
     }
 
     fn handle_input(&mut self, action: InputAction) {
-        // Macro for the common pattern: delegate handle_input, wrap in ViewAction
+        // Pre-dispatch: intercept CycleNext/CyclePrev for lateral views that
+        // don't need to handle them as domain actions (7 of 9 views).
+        if let Some(lv) = self.view.lateral_view() {
+            if !self.view.wants_raw_cycle() {
+                match action {
+                    InputAction::CycleNext => { self.handle_lateral_cycle(lv, true); return; }
+                    InputAction::CyclePrev => { self.handle_lateral_cycle(lv, false); return; }
+                    _ => {}
+                }
+            }
+        }
+
+        // Macro for views whose handle_input returns Option<DomainAction>:
+        // None → ViewAction::None, Some(a) → ViewAction::$variant(a)
         macro_rules! dispatch_input {
+            ($variant:ident, $state:expr) => {
+                match $state.handle_input(&action) {
+                    Some(a) => ViewAction::$variant(a),
+                    None => ViewAction::None,
+                }
+            };
+        }
+
+        // Macro for views whose handle_input still returns a concrete action type
+        // (ConfigEditor, CorpusBrowser — they keep CycleNext/CyclePrev variants)
+        macro_rules! dispatch_input_raw {
             ($variant:ident, $state:expr) => {
                 ViewAction::$variant($state.handle_input(&action))
             };
@@ -267,31 +291,42 @@ impl App {
                     .unwrap_or(10);
                 ViewAction::IntakeConfirmation(startup::intake_confirmation::handle_input(state, &action, visible_height))
             }
-            ActiveView::UnifiedTagEditor(s) => dispatch_input!(UnifiedTagEditor, s),
+            ActiveView::UnifiedTagEditor(s) => dispatch_input_raw!(UnifiedTagEditor, s),
             ActiveView::Deploy(s) => dispatch_input!(Deploy, s),
             ActiveView::ExternalMatches(s) => dispatch_input!(ExternalMatches, s),
-            ActiveView::MissingFileResolution(s) => dispatch_input!(MissingFileResolution, s),
-            ActiveView::MissingDirectoryResolution(s) => dispatch_input!(MissingDirectoryResolution, s),
-            ActiveView::CorruptFileResolution(s) => dispatch_input!(CorruptFileResolution, s),
-            ActiveView::ShitFormatResolution(s) => dispatch_input!(ShitFormatResolution, s),
-            ActiveView::SubparDuplicateResolution(s) => dispatch_input!(SubparDuplicateResolution, s),
-            ActiveView::InboxCorpusMatchResolution(s) => dispatch_input!(InboxCorpusMatchResolution, s),
-            ActiveView::InboxOrganize(s) => dispatch_input!(InboxOrganize, s),
-            ActiveView::DirectoryClusterResolution(s) => dispatch_input!(DirectoryClusterResolution, s),
-            ActiveView::MovedFileAcknowledge(s) => dispatch_input!(MovedFileAcknowledge, s),
-            ActiveView::OobSyncResolution(s) => dispatch_input!(OobSyncResolution, s),
-            ActiveView::OobConflictInspection(s) => dispatch_input!(OobConflictInspection, s),
-            ActiveView::ExternalMatchReview(s) => dispatch_input!(ExternalMatchReview, s),
-            ActiveView::ReleasePackingBrowser(s) => dispatch_input!(ReleasePackingBrowser, s),
-            ActiveView::KnotBrowser(s) => dispatch_input!(KnotBrowser, s),
+            ActiveView::MissingFileResolution(s) => dispatch_input_raw!(MissingFileResolution, s),
+            ActiveView::MissingDirectoryResolution(s) => dispatch_input_raw!(MissingDirectoryResolution, s),
+            ActiveView::CorruptFileResolution(s) => dispatch_input_raw!(CorruptFileResolution, s),
+            ActiveView::ShitFormatResolution(s) => dispatch_input_raw!(ShitFormatResolution, s),
+            ActiveView::SubparDuplicateResolution(s) => dispatch_input_raw!(SubparDuplicateResolution, s),
+            ActiveView::InboxCorpusMatchResolution(s) => dispatch_input_raw!(InboxCorpusMatchResolution, s),
+            ActiveView::InboxOrganize(s) => dispatch_input_raw!(InboxOrganize, s),
+            ActiveView::DirectoryClusterResolution(s) => dispatch_input_raw!(DirectoryClusterResolution, s),
+            ActiveView::MovedFileAcknowledge(s) => dispatch_input_raw!(MovedFileAcknowledge, s),
+            ActiveView::OobSyncResolution(s) => dispatch_input_raw!(OobSyncResolution, s),
+            ActiveView::OobConflictInspection(s) => dispatch_input_raw!(OobConflictInspection, s),
+            ActiveView::ExternalMatchReview(s) => dispatch_input_raw!(ExternalMatchReview, s),
+            ActiveView::ReleasePackingBrowser(s) => dispatch_input_raw!(ReleasePackingBrowser, s),
+            ActiveView::KnotBrowser(s) => dispatch_input_raw!(KnotBrowser, s),
             ActiveView::History(s) => dispatch_input!(History, s),
-            ActiveView::TagCanonicityResolution { state, .. } => dispatch_input!(TagCanonicityResolution, state),
-            ActiveView::CompoundTagSplit { state, .. } => dispatch_input!(CompoundTagSplit, state),
-            ActiveView::MissingAlbumSingleResolution(s) => dispatch_input!(MissingAlbumSingleResolution, s),
-            ActiveView::DiscExtractionResolution(s) => dispatch_input!(DiscExtractionResolution, s),
-            ActiveView::ManualReview(s) => dispatch_input!(ManualReview, s),
-            ActiveView::TransactionReview(s) => dispatch_input!(TransactionReview, s),
+            ActiveView::TagCanonicityResolution { state, .. } => dispatch_input_raw!(TagCanonicityResolution, state),
+            ActiveView::CompoundTagSplit { state, .. } => dispatch_input_raw!(CompoundTagSplit, state),
+            ActiveView::MissingAlbumSingleResolution(s) => dispatch_input_raw!(MissingAlbumSingleResolution, s),
+            ActiveView::DiscExtractionResolution(s) => dispatch_input_raw!(DiscExtractionResolution, s),
+            ActiveView::ManualReview(s) => dispatch_input_raw!(ManualReview, s),
+            ActiveView::TransactionReview(s) => dispatch_input_raw!(TransactionReview, s),
         };
+
+        // Post-dispatch: if no view produced a domain action and the input was Cancel,
+        // treat it as quit for lateral views. Views that handle Cancel as a domain
+        // action (ConfigEditor→Discard, CorpusBrowser→Cancel, TagSearch→Cancel)
+        // produce Some(action), so the fallback never fires for them.
+        if matches!(&view_action, ViewAction::None) && matches!(action, InputAction::Cancel) {
+            if self.view.lateral_view().is_some() {
+                self.handle_request_quit();
+                return;
+            }
+        }
 
         // Phase 2: dispatch with confirmation flag
         let is_confirmation = matches!(action, InputAction::Confirm);

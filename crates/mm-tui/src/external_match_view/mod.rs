@@ -27,15 +27,10 @@ use crate::widgets::wizard::{WizardItem, WizardOffer};
 // Actions
 // ============================================================================
 
-/// Actions produced by key dispatch.
+/// Domain actions produced by key dispatch.
+///
+/// Protocol actions (CycleNext, CyclePrev, Cancel-as-quit) are handled centrally.
 pub(crate) enum ExternalMatchesAction {
-    None,
-    /// Tab → next lateral view
-    CycleNext,
-    /// Shift-Tab → previous lateral view
-    CyclePrev,
-    /// Esc → quit request
-    RequestQuit,
     /// Enter on "Cache external metadata matches" entry
     RequestFetch,
     /// Enter on "Analyze release matches" entry
@@ -658,20 +653,20 @@ impl ExternalMatchesViewState {
 // ============================================================================
 
 impl ExternalMatchesViewState {
-    pub fn handle_input(&mut self, action: &InputAction) -> ExternalMatchesAction {
+    pub fn handle_input(&mut self, action: &InputAction) -> Option<ExternalMatchesAction> {
         let result = self.list.handle_input(action, &self.flat_items);
 
         match result {
             ListInputResult::Consumed
             | ListInputResult::CursorMoved
-            | ListInputResult::Toggled => ExternalMatchesAction::None,
+            | ListInputResult::Toggled => None,
 
             ListInputResult::Confirm(nav) => match nav {
                 NavigableEntry::FetchAction => {
                     if self.has_api_key && !self.fetch_active {
-                        ExternalMatchesAction::RequestFetch
+                        Some(ExternalMatchesAction::RequestFetch)
                     } else {
-                        ExternalMatchesAction::None
+                        None
                     }
                 }
                 NavigableEntry::PackReleasesAction => {
@@ -679,26 +674,21 @@ impl ExternalMatchesViewState {
                         !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty()
                     });
                     if !self.fetch_active && has_data {
-                        ExternalMatchesAction::RequestReleasePacking
+                        Some(ExternalMatchesAction::RequestReleasePacking)
                     } else {
-                        ExternalMatchesAction::None
+                        None
                     }
                 }
-                NavigableEntry::UntaggedMatches => ExternalMatchesAction::LaunchUntaggedReview,
+                NavigableEntry::UntaggedMatches => Some(ExternalMatchesAction::LaunchUntaggedReview),
                 NavigableEntry::ConfidenceBucket(tier) => {
-                    ExternalMatchesAction::LaunchTierReview(tier)
+                    Some(ExternalMatchesAction::LaunchTierReview(tier))
                 }
                 NavigableEntry::PackingCategory(cat) => {
-                    ExternalMatchesAction::LaunchPackingCategory(cat)
+                    Some(ExternalMatchesAction::LaunchPackingCategory(cat))
                 }
             },
 
-            ListInputResult::Unhandled => match action {
-                InputAction::Cancel => ExternalMatchesAction::RequestQuit,
-                InputAction::CycleNext => ExternalMatchesAction::CycleNext,
-                InputAction::CyclePrev => ExternalMatchesAction::CyclePrev,
-                _ => ExternalMatchesAction::None,
-            },
+            ListInputResult::Unhandled => None,
         }
     }
 }

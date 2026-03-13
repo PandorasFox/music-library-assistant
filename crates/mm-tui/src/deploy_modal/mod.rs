@@ -22,19 +22,13 @@ use ratatui::{
 use crate::helpers::format_si;
 use crate::widgets::{Modal, ModalStyle};
 
-/// Actions returned from the Deploy lateral view.
+/// Domain actions returned from the Deploy lateral view.
+///
+/// Protocol actions (CycleNext, CyclePrev, Cancel-as-quit) are handled centrally.
 #[derive(Debug, Clone)]
 pub enum DeployAction {
-    /// No action needed.
-    None,
-    /// Cycle to next lateral view (Tab).
-    CycleNext,
-    /// Cycle to previous lateral view (Shift-Tab).
-    CyclePrev,
     /// User confirmed deployment — generate mutations (Preview only).
     Confirm,
-    /// Request quit (Esc).
-    RequestQuit,
 }
 
 /// State for the Deploy lateral view tab.
@@ -49,34 +43,27 @@ pub enum DeployViewState {
 }
 
 impl DeployViewState {
-    /// Handle semantic input action for the Deploy view.
-    pub fn handle_input(&mut self, action: &InputAction) -> DeployAction {
+    /// Handle semantic input action for the Deploy view. Returns `None` for
+    /// protocol actions (cycle, cancel) handled centrally by `App::handle_input`.
+    pub fn handle_input(&mut self, action: &InputAction) -> Option<DeployAction> {
         match self {
-            DeployViewState::UpToDate { .. } => match action {
-                InputAction::CycleNext => DeployAction::CycleNext,
-                InputAction::CyclePrev => DeployAction::CyclePrev,
-                InputAction::Cancel => DeployAction::RequestQuit,
-                _ => DeployAction::None,
-            },
+            DeployViewState::UpToDate { .. } => None,
             DeployViewState::Preview(preview) => {
                 match action {
-                    InputAction::CycleNext => DeployAction::CycleNext,
-                    InputAction::CyclePrev => DeployAction::CyclePrev,
-                    InputAction::Cancel => DeployAction::RequestQuit,
-                    InputAction::Confirm => DeployAction::Confirm,
+                    InputAction::Confirm => Some(DeployAction::Confirm),
                     // Left/Right switch deploy tabs, Up/Down/PgUp/PgDn scroll
                     InputAction::NavLeft => {
                         preview.active_tab = preview.active_tab.prev();
-                        DeployAction::None
+                        None
                     }
                     InputAction::NavRight => {
                         preview.active_tab = preview.active_tab.next();
-                        DeployAction::None
+                        None
                     }
                     InputAction::NavUp => {
                         let idx = preview.active_tab.index();
                         preview.tab_scroll[idx] = preview.tab_scroll[idx].saturating_sub(1);
-                        DeployAction::None
+                        None
                     }
                     InputAction::NavDown => {
                         let idx = preview.active_tab.index();
@@ -84,20 +71,20 @@ impl DeployViewState {
                         if preview.tab_scroll[idx] < max_scroll {
                             preview.tab_scroll[idx] += 1;
                         }
-                        DeployAction::None
+                        None
                     }
                     InputAction::PageUp => {
                         let idx = preview.active_tab.index();
                         preview.tab_scroll[idx] = preview.tab_scroll[idx].saturating_sub(10);
-                        DeployAction::None
+                        None
                     }
                     InputAction::PageDown => {
                         let idx = preview.active_tab.index();
                         let max_scroll = preview.max_scroll_for_current_tab();
                         preview.tab_scroll[idx] = (preview.tab_scroll[idx] + 10).min(max_scroll);
-                        DeployAction::None
+                        None
                     }
-                    _ => DeployAction::None,
+                    _ => None,
                 }
             }
         }

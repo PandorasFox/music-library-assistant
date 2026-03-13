@@ -12,13 +12,6 @@ use crate::{deploy_modal, ActiveView};
 impl HandleAction for deploy_modal::DeployAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            deploy_modal::DeployAction::None => {}
-            deploy_modal::DeployAction::CycleNext => {
-                app.handle_lateral_cycle(crate::widgets::LateralView::Deploy, true);
-            }
-            deploy_modal::DeployAction::CyclePrev => {
-                app.handle_lateral_cycle(crate::widgets::LateralView::Deploy, false);
-            }
             deploy_modal::DeployAction::Confirm => {
                 let Some(w) = witness else { return };
                 // Extract cached data from Preview state
@@ -37,7 +30,6 @@ impl HandleAction for deploy_modal::DeployAction {
                     }
                 }
             }
-            deploy_modal::DeployAction::RequestQuit => app.handle_request_quit(),
         }
     }
 }

@@ -10,7 +10,6 @@ use crate::{tree_browser, widgets};
 impl HandleAction for tree_browser::TreeBrowserAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            tree_browser::TreeBrowserAction::None => {}
             tree_browser::TreeBrowserAction::Cancel => {
                 app.start_health_view();
             }

@@ -28,18 +28,13 @@ impl TabbedTransactionReviewState {
         }
     }
 
-    pub fn handle_input(&mut self, action: &InputAction) -> TabbedTransactionReviewAction {
-        // Intercept Tab/BackTab for lateral cycling
-        match action {
-            InputAction::CycleNext => return TabbedTransactionReviewAction::CycleNext,
-            InputAction::CyclePrev => return TabbedTransactionReviewAction::CyclePrev,
-            _ => {}
-        }
-
-        // Delegate everything else to the core
+    /// Handle input. CycleNext/CyclePrev are intercepted centrally by `App::handle_input`.
+    /// Cancel maps to `None` (centralized cancel-as-quit fires).
+    pub fn handle_input(&mut self, action: &InputAction) -> Option<TabbedTransactionReviewAction> {
         match self.review.handle_input(action) {
-            TransactionReviewAction::Cancel => TabbedTransactionReviewAction::RequestQuit,
-            other => TabbedTransactionReviewAction::Review(other),
+            TransactionReviewAction::Cancel => None, // Centralized cancel-as-quit handles this
+            TransactionReviewAction::None => None,
+            other => Some(TabbedTransactionReviewAction::Review(other)),
         }
     }
 }
@@ -48,12 +43,11 @@ impl TabbedTransactionReviewState {
 // Actions
 // ============================================================================
 
-/// Actions produced by the tabbed transaction review.
+/// Domain actions produced by the tabbed transaction review.
+///
+/// Protocol actions (CycleNext, CyclePrev, Cancel-as-quit) are handled centrally.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TabbedTransactionReviewAction {
-    CycleNext,
-    CyclePrev,
-    RequestQuit,
     /// Core action delegated from TransactionReviewState.
     Review(TransactionReviewAction),
 }

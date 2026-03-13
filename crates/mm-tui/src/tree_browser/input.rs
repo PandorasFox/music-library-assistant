@@ -17,16 +17,16 @@ pub fn handle_input(
     action: &InputAction,
     nav: &mut TreeNavigator,
     variant: &mut BrowserVariant,
-) -> TreeBrowserAction {
+) -> Option<TreeBrowserAction> {
     // Check if variant wants to capture navigation keys (e.g., search active)
     let variant_captures_nav = variant.wants_navigation_keys();
 
     // Handle Escape first - variant gets priority
     if matches!(action, InputAction::Cancel) {
         if variant.handle_escape(nav) {
-            return TreeBrowserAction::None;
+            return None;
         }
-        return TreeBrowserAction::Cancel;
+        return Some(TreeBrowserAction::Cancel);
     }
 
     // Tab for lateral ring cycling — but NOT when variant captures navigation
@@ -35,12 +35,8 @@ pub fn handle_input(
         match action {
             InputAction::CycleNext | InputAction::CyclePrev => {
                 // Let variant try to handle Tab first (e.g., cycling MB dirs).
-                // If variant returns CycleNext/CyclePrev, propagate as lateral ring.
-                let result = variant.handle_input(action, nav);
-                return match result {
-                    TreeBrowserAction::None => TreeBrowserAction::None,
-                    _ => result,
-                };
+                // If variant returns a domain action, propagate it.
+                return variant.handle_input(action, nav);
             }
             _ => {}
         }
@@ -56,20 +52,20 @@ pub fn handle_input(
         InputAction::NavUp => {
             nav.move_up();
             variant.on_cursor_move(nav);
-            return TreeBrowserAction::None;
+            return None;
         }
         InputAction::NavDown => {
             nav.move_down();
             variant.on_cursor_move(nav);
-            return TreeBrowserAction::None;
+            return None;
         }
         InputAction::NavRight => {
             nav.expand_current();
-            return TreeBrowserAction::None;
+            return None;
         }
         InputAction::NavLeft => {
             nav.collapse_or_parent();
-            return TreeBrowserAction::None;
+            return None;
         }
         _ => {}
     }

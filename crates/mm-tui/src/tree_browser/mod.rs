@@ -83,8 +83,9 @@ impl TreeBrowserState {
         }
     }
 
-    /// Handle a semantic input action.
-    pub fn handle_input(&mut self, action: &InputAction) -> TreeBrowserAction {
+    /// Handle a semantic input action. CorpusBrowser keeps CycleNext/CyclePrev/Cancel
+    /// as domain actions (complex Tab and Cancel behavior).
+    pub fn handle_input(&mut self, action: &InputAction) -> Option<TreeBrowserAction> {
         input::handle_input(action, &mut self.navigator, &mut self.variant)
     }
 

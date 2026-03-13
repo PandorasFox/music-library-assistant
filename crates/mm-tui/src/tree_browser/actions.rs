@@ -6,11 +6,12 @@
 use std::path::PathBuf;
 
 /// Actions returned from tree browser input handling.
+///
+/// CorpusBrowser keeps CycleNext/CyclePrev/Cancel as domain actions because
+/// it captures Tab when config panel/search/filter is active, and Cancel
+/// has multi-modal behavior (close panel, return to health).
 #[derive(Debug, Clone)]
 pub enum TreeBrowserAction {
-    /// No action needed, stay in browser
-    None,
-
     /// User pressed Esc - cancel and return to previous mode
     Cancel,
 

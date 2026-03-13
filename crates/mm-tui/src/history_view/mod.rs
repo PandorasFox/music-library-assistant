@@ -27,15 +27,10 @@ use crate::widgets::wizard::{WizardItem, WizardOffer};
 // Actions
 // ============================================================================
 
-/// Actions produced by history view key dispatch.
+/// Domain actions produced by history view key dispatch.
+///
+/// Protocol actions (CycleNext, CyclePrev, Cancel-as-quit) are handled centrally.
 pub(crate) enum HistoryAction {
-    None,
-    /// Tab → next lateral view
-    CycleNext,
-    /// Shift-Tab → previous lateral view
-    CyclePrev,
-    /// Esc from session list → quit request
-    RequestQuit,
     /// Enter on session → expand to detail
     ExpandSession(String),
     /// Esc from detail → back to session list
@@ -596,7 +591,7 @@ fn group_edits(
 // ============================================================================
 
 impl HistoryViewState {
-    pub fn handle_input(&mut self, action: &InputAction) -> HistoryAction {
+    pub fn handle_input(&mut self, action: &InputAction) -> Option<HistoryAction> {
         match self.phase {
             HistoryPhase::SessionList => self.handle_session_list_input(action),
             HistoryPhase::SessionDetail => self.handle_session_detail_input(action),
@@ -615,62 +610,57 @@ impl HistoryViewState {
         }
     }
 
-    fn handle_session_list_input(&mut self, action: &InputAction) -> HistoryAction {
+    fn handle_session_list_input(&mut self, action: &InputAction) -> Option<HistoryAction> {
         match self.session_list.handle_input(action, &self.sessions) {
             ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
-                HistoryAction::None
+                None
             }
             ListInputResult::Confirm(SessionAction::Expand(session_id)) => {
-                HistoryAction::ExpandSession(session_id)
+                Some(HistoryAction::ExpandSession(session_id))
             }
             ListInputResult::Unhandled => {
                 // Handle actions StandardList doesn't know about
                 match action {
                     InputAction::Char('d') => {
                         if self.sessions.is_empty() {
-                            HistoryAction::None
+                            None
                         } else {
-                            HistoryAction::JettisonSession
+                            Some(HistoryAction::JettisonSession)
                         }
                     }
                     InputAction::Char('D') => {
                         if self.sessions.is_empty() {
-                            HistoryAction::None
+                            None
                         } else {
-                            HistoryAction::JettisonAll
+                            Some(HistoryAction::JettisonAll)
                         }
                     }
-                    InputAction::CycleNext => HistoryAction::CycleNext,
-                    InputAction::CyclePrev => HistoryAction::CyclePrev,
-                    InputAction::Cancel => HistoryAction::RequestQuit,
-                    _ => HistoryAction::None,
+                    _ => None,
                 }
             }
         }
     }
 
-    fn handle_session_detail_input(&mut self, action: &InputAction) -> HistoryAction {
+    fn handle_session_detail_input(&mut self, action: &InputAction) -> Option<HistoryAction> {
         let detail = match self.detail {
             Some(ref mut d) => d,
-            None => return HistoryAction::CollapseDetail,
+            None => return Some(HistoryAction::CollapseDetail),
         };
 
         match detail.detail_list.handle_input(action, &detail.entries) {
             ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
-                HistoryAction::None
+                None
             }
             ListInputResult::Confirm(EditDetailAction::InitiateReversal) => {
-                HistoryAction::InitiateReversal
+                Some(HistoryAction::InitiateReversal)
             }
             ListInputResult::Unhandled => match action {
-                InputAction::CycleNext => HistoryAction::CycleNext,
-                InputAction::CyclePrev => HistoryAction::CyclePrev,
                 InputAction::Cancel => {
                     self.detail = None;
                     self.phase = HistoryPhase::SessionList;
-                    HistoryAction::None
+                    None
                 }
-                _ => HistoryAction::None,
+                _ => None,
             },
         }
     }
@@ -680,34 +670,34 @@ impl HistoryViewState {
 fn handle_jettison_confirm_input(
     action: &InputAction,
     confirm_action: HistoryAction,
-) -> HistoryAction {
+) -> Option<HistoryAction> {
     match action {
-        InputAction::Confirm => confirm_action,
-        InputAction::Cancel => HistoryAction::CancelJettison,
-        _ => HistoryAction::None,
+        InputAction::Confirm => Some(confirm_action),
+        InputAction::Cancel => Some(HistoryAction::CancelJettison),
+        _ => None,
     }
 }
 
 fn handle_conflict_resolution_input(
     state: &mut ConflictResolutionState,
     action: &InputAction,
-) -> HistoryAction {
+) -> Option<HistoryAction> {
     match action {
         InputAction::NavUp => {
             if state.conflict_cursor > 0 {
                 state.conflict_cursor -= 1;
             }
-            HistoryAction::None
+            None
         }
         InputAction::NavDown => {
             if !state.conflicts.is_empty() && state.conflict_cursor < state.conflicts.len() - 1 {
                 state.conflict_cursor += 1;
             }
-            HistoryAction::None
+            None
         }
-        InputAction::Toggle => HistoryAction::ToggleConflictDisposition(state.conflict_cursor),
-        InputAction::Confirm => HistoryAction::ConfirmReversal,
-        InputAction::Cancel => HistoryAction::CancelConflictResolution,
-        _ => HistoryAction::None,
+        InputAction::Toggle => Some(HistoryAction::ToggleConflictDisposition(state.conflict_cursor)),
+        InputAction::Confirm => Some(HistoryAction::ConfirmReversal),
+        InputAction::Cancel => Some(HistoryAction::CancelConflictResolution),
+        _ => None,
     }
 }

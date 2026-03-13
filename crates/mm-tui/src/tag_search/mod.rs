@@ -29,8 +29,10 @@ pub use types::{
 };
 
 impl TagSearchState {
-    /// Handle a semantic input action. Returns an action that may require db access.
-    pub fn handle_input(&mut self, action: &InputAction) -> TagSearchAction {
+    /// Handle a semantic input action. Returns `None` for protocol actions
+    /// (cycle) handled centrally. Cancel is a domain action here because it
+    /// has multi-modal behavior (dismiss modal, exit results, exit search).
+    pub fn handle_input(&mut self, action: &InputAction) -> Option<TagSearchAction> {
         // Handle modal first if active
         if self.modal.is_some() {
             return self.handle_modal_input(action);
@@ -42,25 +44,25 @@ impl TagSearchState {
         }
     }
 
-    fn handle_modal_input(&mut self, action: &InputAction) -> TagSearchAction {
+    fn handle_modal_input(&mut self, action: &InputAction) -> Option<TagSearchAction> {
         // GatheringTags modal is non-interactive - handled by tick
         if matches!(self.modal, Some(types::TagSearchModal::GatheringTags)) {
-            return TagSearchAction::None;
+            return None;
         }
 
         match action {
             // Enter or Escape dismisses the modal
             InputAction::Confirm | InputAction::Cancel => {
                 self.modal = None;
-                TagSearchAction::None
+                None
             }
-            _ => TagSearchAction::None,
+            _ => None,
         }
     }
 
-    fn handle_query_builder_input(&mut self, action: &InputAction) -> TagSearchAction {
+    fn handle_query_builder_input(&mut self, action: &InputAction) -> Option<TagSearchAction> {
         match action {
-            // Tab: if on TagName field with partial text, apply tab-completion; otherwise cycle views
+            // Tab: if on TagName field with partial text, apply tab-completion
             InputAction::CycleNext => {
                 if self.field_focus == QueryFieldFocus::TagName
                     && !self
@@ -70,58 +72,57 @@ impl TagSearchState {
                         .unwrap_or(true)
                 {
                     self.apply_tag_name_suggestion();
-                    TagSearchAction::None
+                    None
                 } else {
-                    TagSearchAction::CycleNext
+                    None // Centralized cycle handler fires
                 }
             }
-            InputAction::CyclePrev => TagSearchAction::CyclePrev,
 
-            // Escape
-            InputAction::Cancel => TagSearchAction::Cancel,
+            // Escape — domain action (exit search)
+            InputAction::Cancel => Some(TagSearchAction::Cancel),
 
             // Navigate between conditions and fields
             InputAction::NavUp => {
                 self.move_focus_up();
-                TagSearchAction::None
+                None
             }
             InputAction::NavDown => {
                 self.move_focus_down();
-                TagSearchAction::None
+                None
             }
             InputAction::NavLeft => {
                 self.move_focus_left();
-                TagSearchAction::None
+                None
             }
             InputAction::NavRight => {
                 self.move_focus_right();
-                TagSearchAction::None
+                None
             }
 
             // Enter to execute search or add condition
             InputAction::Confirm => {
                 if self.is_on_search_button() {
                     // Return action to execute search (db access happens in action handler)
-                    TagSearchAction::ExecuteSearch
+                    Some(TagSearchAction::ExecuteSearch)
                 } else if self.is_on_add_condition() {
                     self.add_condition();
-                    TagSearchAction::None
+                    None
                 } else if self.is_on_operator_field() {
                     self.cycle_operator();
-                    TagSearchAction::None
+                    None
                 } else if self.is_on_comparison_field() {
                     self.cycle_comparison();
-                    TagSearchAction::None
+                    None
                 } else if self.field_focus == QueryFieldFocus::ConditionType {
                     self.cycle_condition_type();
-                    TagSearchAction::None
+                    None
                 } else if self.field_focus == QueryFieldFocus::FileTypeCategory {
                     self.cycle_file_type_category();
-                    TagSearchAction::None
+                    None
                 } else {
                     // Move to next field
                     self.move_focus_right();
-                    TagSearchAction::None
+                    None
                 }
             }
 
@@ -137,14 +138,14 @@ impl TagSearchState {
             | InputAction::KillToStart
             | InputAction::KillToEnd => {
                 self.handle_text_input(action);
-                TagSearchAction::None
+                None
             }
 
-            _ => TagSearchAction::None,
+            _ => None,
         }
     }
 
-    fn handle_results_mode_input(&mut self, action: &InputAction) -> TagSearchAction {
+    fn handle_results_mode_input(&mut self, action: &InputAction) -> Option<TagSearchAction> {
         // Handle 'b'/'B' before StandardList (it would treat Char as Unhandled anyway)
         if matches!(action, InputAction::Char('b' | 'B')) {
             let audio_files = self.all_result_audio_files();
@@ -152,26 +153,24 @@ impl TagSearchState {
                 self.modal = Some(types::TagSearchModal::GatheringTags);
                 self.pending_bulk_edit = Some(audio_files);
             }
-            return TagSearchAction::None;
+            return None;
         }
 
         let result = self.results_list.handle_input(action, &self.results);
 
         match result {
             ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
-                TagSearchAction::None
+                None
             }
             ListInputResult::Confirm(audio_file) => {
-                TagSearchAction::EditAudioFile(audio_file)
+                Some(TagSearchAction::EditAudioFile(audio_file))
             }
             ListInputResult::Unhandled => match action {
                 InputAction::Cancel => {
                     self.mode = TagSearchMode::QueryBuilder;
-                    TagSearchAction::None
+                    None
                 }
-                InputAction::CycleNext => TagSearchAction::CycleNext,
-                InputAction::CyclePrev => TagSearchAction::CyclePrev,
-                _ => TagSearchAction::None,
+                _ => None,
             },
         }
     }

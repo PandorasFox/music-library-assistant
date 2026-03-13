@@ -42,17 +42,12 @@ use mm_meta::witch_types::WorkStatus;
 
 pub use render::render_insights_view;
 
-/// Action returned from input handling
+/// Domain action returned from input handling.
+///
+/// Protocol actions (CycleNext, CyclePrev, Cancel-as-quit) are handled centrally
+/// in `App::handle_input` — views return `None` for those inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsightsAction {
-    /// No action needed
-    None,
-    /// Request to quit the application (show confirmation)
-    RequestQuit,
-    /// Cycle to next view in ring
-    CycleNext,
-    /// Cycle to previous view in ring
-    CyclePrev,
     /// Launch modal for selected insight
     Launch,
 }
@@ -793,30 +788,23 @@ impl InsightsViewState {
         self.list.handle_click(x, y, &self.flat_items).is_some()
     }
 
-    /// Handle semantic input action
-    pub fn handle_input(&mut self, action: &InputAction) -> InsightsAction {
+    /// Handle semantic input action. Returns `None` for protocol actions
+    /// (cycle, cancel) which are handled centrally by `App::handle_input`.
+    pub fn handle_input(&mut self, action: &InputAction) -> Option<InsightsAction> {
         let result = self.list.handle_input(action, &self.flat_items);
 
         match result {
             ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
-                InsightsAction::None
+                None
             }
             ListInputResult::Confirm(_insight_type) => {
                 // Block launch if the Witch is busy
                 if self.is_witch_busy() {
-                    return InsightsAction::None;
+                    return None;
                 }
-                InsightsAction::Launch
+                Some(InsightsAction::Launch)
             }
-            ListInputResult::Unhandled => {
-                // Handle actions that StandardList doesn't know about
-                match action {
-                    InputAction::Cancel => InsightsAction::RequestQuit,
-                    InputAction::CycleNext => InsightsAction::CycleNext,
-                    InputAction::CyclePrev => InsightsAction::CyclePrev,
-                    _ => InsightsAction::None,
-                }
-            }
+            ListInputResult::Unhandled => None,
         }
     }
 }

@@ -68,8 +68,10 @@ impl ModalButtons for EditorButton {
 }
 
 /// Action produced by `handle_input`, consumed by the action handler.
+///
+/// ConfigEditor keeps CycleNext/CyclePrev as domain actions because Tab
+/// behavior depends on unsaved edits (defers cycle → focuses Save/Discard).
 pub enum ConfigEditorAction {
-    None,
     Save,
     Discard,
     /// Cycle to next lateral view (Tab).
@@ -266,7 +268,8 @@ impl ConfigEditorState {
     }
 
     /// Handle a semantic input action, producing an action for the dispatch layer.
-    pub fn handle_input(&mut self, action: &InputAction) -> ConfigEditorAction {
+    /// ConfigEditor keeps CycleNext/CyclePrev as domain actions (complex Tab behavior).
+    pub fn handle_input(&mut self, action: &InputAction) -> Option<ConfigEditorAction> {
         // Text input mode intercepts most keys
         if self.text_input.is_some() {
             return self.handle_text_input(action);
@@ -289,13 +292,13 @@ impl ConfigEditorState {
     }
 
     /// Handle input while editing within a collection field.
-    fn handle_collection_input(&mut self, action: &InputAction) -> ConfigEditorAction {
+    fn handle_collection_input(&mut self, action: &InputAction) -> Option<ConfigEditorAction> {
         let item_count = self.current_collection_len();
 
         match action {
             InputAction::NavUp => {
                 collection_nav_up(&mut self.collection_pos, item_count);
-                ConfigEditorAction::None
+                None
             }
             InputAction::NavDown => {
                 if collection_nav_down(&mut self.collection_pos, item_count) {
@@ -305,22 +308,22 @@ impl ConfigEditorState {
                         self.cursor += 1;
                     }
                 }
-                ConfigEditorAction::None
+                None
             }
-            InputAction::NavLeft | InputAction::NavRight => ConfigEditorAction::None,
+            InputAction::NavLeft | InputAction::NavRight => None,
             InputAction::Confirm => {
                 self.activate_collection_item();
-                ConfigEditorAction::None
+                None
             }
             InputAction::Char('x') | InputAction::Delete => {
                 self.delete_collection_item();
-                ConfigEditorAction::None
+                None
             }
             InputAction::Cancel => {
                 self.collection_pos = None;
-                ConfigEditorAction::None
+                None
             }
-            _ => ConfigEditorAction::None,
+            _ => None,
         }
     }
 
@@ -343,13 +346,13 @@ impl ConfigEditorState {
     }
 
     /// Handle input while editing within a separator sub-list.
-    fn handle_sub_collection_input(&mut self, action: &InputAction) -> ConfigEditorAction {
+    fn handle_sub_collection_input(&mut self, action: &InputAction) -> Option<ConfigEditorAction> {
         let item_count = self.current_sub_collection_len();
 
         match action {
             InputAction::NavUp => {
                 collection_nav_up(&mut self.sub_collection_pos, item_count);
-                ConfigEditorAction::None
+                None
             }
             InputAction::NavDown => {
                 if collection_nav_down(&mut self.sub_collection_pos, item_count) {
@@ -357,21 +360,21 @@ impl ConfigEditorState {
                     let collection_len = self.current_collection_len();
                     collection_nav_down(&mut self.collection_pos, collection_len);
                 }
-                ConfigEditorAction::None
+                None
             }
             InputAction::Confirm => {
                 self.activate_sub_collection_item();
-                ConfigEditorAction::None
+                None
             }
             InputAction::Char('x') | InputAction::Delete => {
                 self.delete_sub_collection_item();
-                ConfigEditorAction::None
+                None
             }
             InputAction::Cancel => {
                 self.sub_collection_pos = None;
-                ConfigEditorAction::None
+                None
             }
-            _ => ConfigEditorAction::None,
+            _ => None,
         }
     }
 
@@ -510,10 +513,10 @@ impl ConfigEditorState {
     }
 
     /// Input handling while navigating fields.
-    fn handle_fields_input(&mut self, action: &InputAction) -> ConfigEditorAction {
+    fn handle_fields_input(&mut self, action: &InputAction) -> Option<ConfigEditorAction> {
         let total = self.visible_field_count();
         if total == 0 {
-            return ConfigEditorAction::None;
+            return None;
         }
 
         match action {
@@ -522,50 +525,50 @@ impl ConfigEditorState {
                     self.cursor -= 1;
                     self.wizard_state.dismiss();
                 }
-                ConfigEditorAction::None
+                None
             }
             InputAction::FocusDown => {
                 self.focus = EditorFocus::Buttons;
-                ConfigEditorAction::None
+                None
             }
             InputAction::NavDown => {
                 if self.cursor + 1 < total {
                     self.cursor += 1;
                     self.wizard_state.dismiss();
                 }
-                ConfigEditorAction::None
+                None
             }
             InputAction::CyclePrev => self.try_cycle(CycleDirection::Prev),
             InputAction::CycleNext => self.try_cycle(CycleDirection::Next),
             InputAction::Confirm | InputAction::Toggle => {
                 self.activate_field();
-                ConfigEditorAction::None
+                None
             }
             InputAction::NavLeft => {
                 self.cycle_enum_left();
-                ConfigEditorAction::None
+                None
             }
             InputAction::NavRight => {
                 self.cycle_enum_right();
-                ConfigEditorAction::None
+                None
             }
             InputAction::Char('[') => {
                 self.jump_to_prev_group();
                 self.wizard_state.dismiss();
-                ConfigEditorAction::None
+                None
             }
             InputAction::Char(']') => {
                 self.jump_to_next_group();
                 self.wizard_state.dismiss();
-                ConfigEditorAction::None
+                None
             }
             InputAction::Char('r') => {
                 self.reset_current_field();
-                ConfigEditorAction::None
+                None
             }
             InputAction::Char('C') => {
                 self.toggle_current_group_collapse();
-                ConfigEditorAction::None
+                None
             }
             InputAction::Char('z') | InputAction::Char('Z') => {
                 if let Some((gi, fi)) = self.cursor_to_group_field() {
@@ -577,24 +580,24 @@ impl ConfigEditorState {
                         self.wizard_state.advance(&offer);
                     }
                 }
-                ConfigEditorAction::None
+                None
             }
-            InputAction::Cancel => ConfigEditorAction::Discard,
-            _ => ConfigEditorAction::None,
+            InputAction::Cancel => Some(ConfigEditorAction::Discard),
+            _ => None,
         }
     }
 
     /// Input handling while focused on buttons.
-    fn handle_buttons_input(&mut self, action: &InputAction) -> ConfigEditorAction {
+    fn handle_buttons_input(&mut self, action: &InputAction) -> Option<ConfigEditorAction> {
         let ctx = EditorButtonCtx;
         match action {
             InputAction::NavLeft => {
                 self.buttons.nav_left(&ctx);
-                ConfigEditorAction::None
+                None
             }
             InputAction::NavRight | InputAction::CycleNext => {
                 self.buttons.nav_right(&ctx);
-                ConfigEditorAction::None
+                None
             }
             InputAction::Confirm | InputAction::Toggle => {
                 match self.buttons.confirm(&ctx) {
@@ -602,56 +605,56 @@ impl ConfigEditorState {
                         // If we got here via Tab with unsaved edits, navigate
                         // to the requested view instead of returning to Insights.
                         match self.pending_cycle.take() {
-                            Some(CycleDirection::Next) => ConfigEditorAction::CycleNext,
-                            Some(CycleDirection::Prev) => ConfigEditorAction::CyclePrev,
-                            None => ConfigEditorAction::Discard,
+                            Some(CycleDirection::Next) => Some(ConfigEditorAction::CycleNext),
+                            Some(CycleDirection::Prev) => Some(ConfigEditorAction::CyclePrev),
+                            None => Some(ConfigEditorAction::Discard),
                         }
                     }
-                    Some(action) => action,
-                    None => ConfigEditorAction::None,
+                    Some(action) => Some(action),
+                    None => None,
                 }
             }
             InputAction::Cancel | InputAction::NavUp | InputAction::NavDown => {
                 self.focus = EditorFocus::Fields;
                 self.pending_cycle = None;
-                ConfigEditorAction::None
+                None
             }
-            _ => ConfigEditorAction::None,
+            _ => None,
         }
     }
 
     /// Attempt a lateral ring cycle. If no edits, cycle immediately.
     /// If edits exist, focus Save/Discard buttons and defer the navigation.
-    fn try_cycle(&mut self, direction: CycleDirection) -> ConfigEditorAction {
+    fn try_cycle(&mut self, direction: CycleDirection) -> Option<ConfigEditorAction> {
         if self.has_edits() {
             self.focus = EditorFocus::Buttons;
             self.buttons.selected = EditorButton::Save;
             self.pending_cycle = Some(direction);
-            ConfigEditorAction::None
+            None
         } else {
             match direction {
-                CycleDirection::Next => ConfigEditorAction::CycleNext,
-                CycleDirection::Prev => ConfigEditorAction::CyclePrev,
+                CycleDirection::Next => Some(ConfigEditorAction::CycleNext),
+                CycleDirection::Prev => Some(ConfigEditorAction::CyclePrev),
             }
         }
     }
 
     /// Input handling while text input is active.
-    fn handle_text_input(&mut self, action: &InputAction) -> ConfigEditorAction {
+    fn handle_text_input(&mut self, action: &InputAction) -> Option<ConfigEditorAction> {
         match action {
             InputAction::Confirm => {
                 self.commit_text_input();
-                ConfigEditorAction::None
+                None
             }
             InputAction::Cancel => {
                 self.text_input = None;
-                ConfigEditorAction::None
+                None
             }
             _ => {
                 if let Some(ref mut input) = self.text_input {
                     input.handle_input(action);
                 }
-                ConfigEditorAction::None
+                None
             }
         }
     }

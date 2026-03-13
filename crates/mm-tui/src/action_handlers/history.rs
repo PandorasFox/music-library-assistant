@@ -18,22 +18,11 @@ use crate::history_view::{
     ConflictDisposition, ConflictItem, HistoryAction, HistoryPhase, JettisonAllState,
     JettisonSessionState, ReversalItem,
 };
-use crate::{widgets, ActiveView};
+use crate::ActiveView;
 
 impl HandleAction for HistoryAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            HistoryAction::None => {}
-
-            HistoryAction::CycleNext => {
-                app.handle_lateral_cycle(widgets::LateralView::History, true);
-            }
-            HistoryAction::CyclePrev => {
-                app.handle_lateral_cycle(widgets::LateralView::History, false);
-            }
-
-            HistoryAction::RequestQuit => app.handle_request_quit(),
-
             HistoryAction::ExpandSession(session_id) => {
                 app.expand_history_session(session_id);
             }

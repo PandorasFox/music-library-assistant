@@ -885,6 +885,7 @@ dispatch_domain_query_impl! {
 mod tests {
     use super::*;
     use crate::db::{Database, ReadOnlyDb};
+    use mm_utils::t;
 
     /// Create a test database with full schema, return it for query testing.
     fn test_db() -> Database {
@@ -1228,51 +1229,51 @@ mod tests {
         let read_db = ReadOnlyDb::new(&db);
 
         // Summary queries
-        serde_json::to_string(&GetInsights.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetInboxOverview.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetDeployStatus.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetEditHistory.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetExternalMatches.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetPackingDirs.execute(&read_db)).unwrap();
+        t!(serde_json::to_string(&GetInsights.execute(&read_db)));
+        t!(serde_json::to_string(&GetInboxOverview.execute(&read_db)));
+        t!(serde_json::to_string(&GetDeployStatus.execute(&read_db)));
+        t!(serde_json::to_string(&GetEditHistory.execute(&read_db)));
+        t!(serde_json::to_string(&GetExternalMatches.execute(&read_db)));
+        t!(serde_json::to_string(&GetPackingDirs.execute(&read_db)));
 
         // Detail queries
-        serde_json::to_string(&GetOobSyncFiles.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetOobFilesBucketed.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetMovedFiles.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetMissingAlbumSingleSignals.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetAllEditHistory.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetCompoundSignalGroups {
+        t!(serde_json::to_string(&GetOobSyncFiles.execute(&read_db)));
+        t!(serde_json::to_string(&GetOobFilesBucketed.execute(&read_db)));
+        t!(serde_json::to_string(&GetMovedFiles.execute(&read_db)));
+        t!(serde_json::to_string(&GetMissingAlbumSingleSignals.execute(&read_db)));
+        t!(serde_json::to_string(&GetAllEditHistory.execute(&read_db)));
+        t!(serde_json::to_string(&GetCompoundSignalGroups {
             safe_only: false,
             tag_filter: None,
-        }.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetInboxCompoundSignalGroups.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetPackingKnots.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetPackingInodePaths.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetInconsistentAlbumArtistKeys.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetTagCanonicityKeys { tag_filter: None }.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetInboxTagCanonicityKeys.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetDiscExtractionData { map_letters_to_numbers: false }.execute(&read_db)).unwrap();
+        }.execute(&read_db)));
+        t!(serde_json::to_string(&GetInboxCompoundSignalGroups.execute(&read_db)));
+        t!(serde_json::to_string(&GetPackingKnots.execute(&read_db)));
+        t!(serde_json::to_string(&GetPackingInodePaths.execute(&read_db)));
+        t!(serde_json::to_string(&GetInconsistentAlbumArtistKeys.execute(&read_db)));
+        t!(serde_json::to_string(&GetTagCanonicityKeys { tag_filter: None }.execute(&read_db)));
+        t!(serde_json::to_string(&GetInboxTagCanonicityKeys.execute(&read_db)));
+        t!(serde_json::to_string(&GetDiscExtractionData { map_letters_to_numbers: false }.execute(&read_db)));
 
         // Modal init loaders
-        serde_json::to_string(&GetMissingFileData.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetMissingDirectoryData.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetCorruptFileData.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetSubparDuplicateData.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetDirectoryClusterData.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetReleaseOverlapData.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetShitFormatData.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetInboxCorpusMatchData { bitrate_fuzz_percent: 5.0 }.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetManualReviewData {
+        t!(serde_json::to_string(&GetMissingFileData.execute(&read_db)));
+        t!(serde_json::to_string(&GetMissingDirectoryData.execute(&read_db)));
+        t!(serde_json::to_string(&GetCorruptFileData.execute(&read_db)));
+        t!(serde_json::to_string(&GetSubparDuplicateData.execute(&read_db)));
+        t!(serde_json::to_string(&GetDirectoryClusterData.execute(&read_db)));
+        t!(serde_json::to_string(&GetReleaseOverlapData.execute(&read_db)));
+        t!(serde_json::to_string(&GetShitFormatData.execute(&read_db)));
+        t!(serde_json::to_string(&GetInboxCorpusMatchData { bitrate_fuzz_percent: 5.0 }.execute(&read_db)));
+        t!(serde_json::to_string(&GetManualReviewData {
             kind: mm_meta::views::review_match::ReviewKind::RedundantDuplicate,
-        }.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetCorpusTags { inode: 1 }.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetPackingBrowserData { category_prefix: "x".to_string() }.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetUnsolvedPackingData { category: "x".to_string() }.execute(&read_db)).unwrap();
+        }.execute(&read_db)));
+        t!(serde_json::to_string(&GetCorpusTags { inode: 1 }.execute(&read_db)));
+        t!(serde_json::to_string(&GetPackingBrowserData { category_prefix: "x".to_string() }.execute(&read_db)));
+        t!(serde_json::to_string(&GetUnsolvedPackingData { category: "x".to_string() }.execute(&read_db)));
 
         // Composite queries
-        serde_json::to_string(&GetMissingTagAudioFiles.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetSessionEditDetail { session_id: "x".to_string() }.execute(&read_db)).unwrap();
-        serde_json::to_string(&GetCurrentTagValues { queries: vec![] }.execute(&read_db)).unwrap();
+        t!(serde_json::to_string(&GetMissingTagAudioFiles.execute(&read_db)));
+        t!(serde_json::to_string(&GetSessionEditDetail { session_id: "x".to_string() }.execute(&read_db)));
+        t!(serde_json::to_string(&GetCurrentTagValues { queries: vec![] }.execute(&read_db)));
     }
 
 }

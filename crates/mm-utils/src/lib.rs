@@ -11,6 +11,7 @@ pub mod metadata_magic;
 pub mod paths;
 pub mod strings;
 pub mod tag_names;
+pub mod testing;
 
 // Re-export commonly used items at crate root
 pub use audio::{is_audio_extension, is_image_extension, AUDIO_EXTENSIONS, IMAGE_EXTENSIONS};

@@ -82,6 +82,7 @@ pub fn resolve_relative(path: &std::path::Path) -> anyhow::Result<std::path::Pat
 mod tests {
     use super::*;
     use crate::config::Config;
+    use mm_utils::t;
     use std::path::{Path, PathBuf};
 
     fn test_config() -> Config {
@@ -98,7 +99,7 @@ mod tests {
         let resolver = PathResolver::from_config(&test_config());
 
         let abs = Path::new("/archive/corpus/Artist/Album/track.mp3");
-        let rel = resolver.to_relative(abs).unwrap();
+        let rel = t!(resolver.to_relative(abs));
         assert_eq!(rel, PathBuf::from("corpus/Artist/Album/track.mp3"));
     }
 
@@ -136,7 +137,7 @@ mod tests {
         let resolver = PathResolver::from_config(&test_config());
 
         let original = PathBuf::from("/archive/corpus/Artist/Album/track.flac");
-        let rel = resolver.to_relative(&original).unwrap();
+        let rel = t!(resolver.to_relative(&original));
         let back = resolver.resolve(&rel);
         assert_eq!(back, original);
     }

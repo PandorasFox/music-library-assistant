@@ -155,6 +155,7 @@ pub fn write_dirs_to_disk(dirs: &[SourceDir]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mm_utils::t;
 
     #[test]
     fn test_parse_dirs_kdl() {
@@ -170,7 +171,7 @@ dir "web/releases/indie" {
 }
 "#;
 
-        let dirs = parse_dirs_kdl(kdl).unwrap();
+        let dirs = t!(parse_dirs_kdl(kdl));
         assert_eq!(dirs.len(), 2);
         assert_eq!(dirs[0].path, PathBuf::from("web/releases/bandcamp"));
         assert_eq!(dirs[0].libraries, vec!["music".to_string()]);
@@ -209,7 +210,7 @@ dir "web/releases/indie" {
         ];
 
         let serialized = serialize_dirs_kdl(&dirs);
-        let reparsed = parse_dirs_kdl(&serialized).unwrap();
+        let reparsed = t!(parse_dirs_kdl(&serialized));
         assert_eq!(dirs, reparsed);
     }
 
@@ -230,7 +231,7 @@ dir "web/releases/indie" {
         assert!(serialized.contains("can-stash-dupes true"));
         assert!(serialized.contains("interior-dupes true"));
         assert!(serialized.contains("enable-acoustid true"));
-        let reparsed = parse_dirs_kdl(&serialized).unwrap();
+        let reparsed = t!(parse_dirs_kdl(&serialized));
         assert_eq!(dirs, reparsed);
     }
 
@@ -241,14 +242,14 @@ dir "web/releases/indie" {
             libraries: vec!["music".to_string()],
             can_stash_dupes: None,
             interior_dupes: None,
-            path_schema: Some(parse_path_schema("$LABEL/$CATALOGNUMBER/$ARTIST - $TITLE").unwrap()),
+            path_schema: Some(t!(parse_path_schema("$LABEL/$CATALOGNUMBER/$ARTIST - $TITLE"))),
             enable_acoustid: None,
             pinned_release: None,
         }];
 
         let serialized = serialize_dirs_kdl(&dirs);
         assert!(serialized.contains("path-schema"));
-        let reparsed = parse_dirs_kdl(&serialized).unwrap();
+        let reparsed = t!(parse_dirs_kdl(&serialized));
         assert_eq!(dirs, reparsed);
     }
 
@@ -299,7 +300,7 @@ dir "web/releases/indie" {
         );
         assert!(serialized.contains("nodupe"));
 
-        let reparsed = parse_dirs_kdl(&serialized).unwrap();
+        let reparsed = t!(parse_dirs_kdl(&serialized));
         assert_eq!(reparsed.len(), 2);
     }
 
@@ -339,9 +340,8 @@ dir "web/releases/indie" {
             },
         ]);
 
-        let resolved = config
-            .resolve_source_config(std::path::Path::new("incoming/subdir/album/track.flac"))
-            .unwrap();
+        let resolved = t!(config
+            .resolve_source_config(std::path::Path::new("incoming/subdir/album/track.flac")));
 
         assert_eq!(resolved.source_path, PathBuf::from("incoming/subdir"));
         assert_eq!(
@@ -382,9 +382,8 @@ dir "web/releases/indie" {
             },
         ]);
 
-        let resolved = config
-            .resolve_source_config(std::path::Path::new("incoming/override/album/track.flac"))
-            .unwrap();
+        let resolved = t!(config
+            .resolve_source_config(std::path::Path::new("incoming/override/album/track.flac")));
 
         assert_eq!(
             resolved.can_stash_dupes, true,
@@ -405,9 +404,8 @@ dir "web/releases/indie" {
             pinned_release: None,
         }]);
 
-        let resolved = config
-            .resolve_source_config(std::path::Path::new("web/releases/track.flac"))
-            .unwrap();
+        let resolved = t!(config
+            .resolve_source_config(std::path::Path::new("web/releases/track.flac")));
 
         assert_eq!(resolved.can_stash_dupes, true, "system default");
         assert_eq!(resolved.interior_dupes, true, "system default");
@@ -442,9 +440,8 @@ dir "web/releases/indie" {
             pinned_release: None,
         }]);
 
-        let resolved = config
-            .resolve_source_config_for_db_path("corpus/web/track.flac")
-            .unwrap();
+        let resolved = t!(config
+            .resolve_source_config_for_db_path("corpus/web/track.flac"));
         assert_eq!(resolved.source_path, PathBuf::from("web"));
         assert_eq!(resolved.libraries, vec!["music".to_string()]);
     }

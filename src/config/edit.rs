@@ -26,7 +26,9 @@ pub fn apply_config_edits_to_kdl(
         doc.nodes_mut().push(node);
     }
 
-    let opinions_node = doc.get_mut("opinions").unwrap();
+    let opinions_node = doc
+        .get_mut("opinions")
+        .context("'opinions' block should exist after creation")?;
     let opinions_doc = opinions_node.ensure_children();
 
     // --- General opinions (direct children of "opinions") ---

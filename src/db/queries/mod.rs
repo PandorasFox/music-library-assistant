@@ -105,12 +105,12 @@ impl Database {
     /// The connection is read-write (no `query_only` pragma) so tests can
     /// insert fixture data, then wrap in `ReadOnlyDb` for query testing.
     pub fn open_in_memory() -> Self {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        use mm_utils::t;
+        let conn = t!(Connection::open_in_memory());
+        t!(conn.execute_batch(
             "PRAGMA foreign_keys = ON;
              PRAGMA temp_store = MEMORY;",
-        )
-        .unwrap();
+        ));
         let db = Database { conn };
         db.initialize_schema()
             .expect("failed to initialize test schema");

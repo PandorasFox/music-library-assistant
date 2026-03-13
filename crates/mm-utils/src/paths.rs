@@ -67,20 +67,21 @@ pub fn get_logs_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::t;
 
     #[test]
     fn test_paths_are_under_mm() {
         // These tests just verify the path structure, not actual filesystem
-        let config = get_config_dir().unwrap();
+        let config = t!(get_config_dir());
         assert!(config.ends_with("mm"));
 
-        let data = get_data_dir().unwrap();
+        let data = t!(get_data_dir());
         assert!(data.ends_with("mm"));
 
-        let db = get_db_path().unwrap();
+        let db = t!(get_db_path());
         assert!(db.ends_with("mm.db"));
 
-        let logs = get_logs_dir().unwrap();
+        let logs = t!(get_logs_dir());
         assert!(logs.ends_with("logs"));
     }
 }

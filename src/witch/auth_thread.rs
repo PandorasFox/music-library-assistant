@@ -362,6 +362,7 @@ fn attempt_login(
 mod tests {
     use super::*;
     use crate::auth;
+    use mm_utils::t;
     use std::time::Duration;
 
     #[test]
@@ -370,18 +371,17 @@ mod tests {
         let db = Database::open_in_memory();
 
         // Create a user
-        let hash = auth::hash_password("secret").unwrap();
-        db.create_user("alice", &hash).unwrap();
+        let hash = t!(auth::hash_password("secret"));
+        t!(db.create_user("alice", &hash));
 
         // Login
-        let token = attempt_login(
+        let token = t!(attempt_login(
             &db,
             "alice",
             "secret",
             SessionLifetime::CloseOnExit,
             &sessions,
-        )
-        .unwrap();
+        ));
 
         // Validate via the same sessions arc
         let handle = AuthHandle {
@@ -407,8 +407,8 @@ mod tests {
         let sessions = Arc::new(ArcSwap::from_pointee(HashMap::new()));
         let db = Database::open_in_memory();
 
-        let hash = auth::hash_password("correct").unwrap();
-        db.create_user("alice", &hash).unwrap();
+        let hash = t!(auth::hash_password("correct"));
+        t!(db.create_user("alice", &hash));
 
         let result = attempt_login(
             &db,
@@ -441,8 +441,8 @@ mod tests {
         let sessions = Arc::new(ArcSwap::from_pointee(HashMap::new()));
         let db = Database::open_in_memory();
 
-        let hash = auth::hash_password("secret").unwrap();
-        db.create_user("alice", &hash).unwrap();
+        let hash = t!(auth::hash_password("secret"));
+        t!(db.create_user("alice", &hash));
 
         // Login with already-expired duration
         let token = auth::generate_session_token();
@@ -470,17 +470,16 @@ mod tests {
         let sessions = Arc::new(ArcSwap::from_pointee(HashMap::new()));
         let db = Database::open_in_memory();
 
-        let hash = auth::hash_password("secret").unwrap();
-        db.create_user("alice", &hash).unwrap();
+        let hash = t!(auth::hash_password("secret"));
+        t!(db.create_user("alice", &hash));
 
-        let token = attempt_login(
+        let token = t!(attempt_login(
             &db,
             "alice",
             "secret",
             SessionLifetime::CloseOnExit,
             &sessions,
-        )
-        .unwrap();
+        ));
 
         let handle = AuthHandle {
             request_tx: mpsc::channel().0,
@@ -503,17 +502,16 @@ mod tests {
         let sessions = Arc::new(ArcSwap::from_pointee(HashMap::new()));
         let db = Database::open_in_memory();
 
-        let hash = auth::hash_password("secret").unwrap();
-        db.create_user("alice", &hash).unwrap();
+        let hash = t!(auth::hash_password("secret"));
+        t!(db.create_user("alice", &hash));
 
-        let token = attempt_login(
+        let token = t!(attempt_login(
             &db,
             "alice",
             "secret",
             SessionLifetime::CloseOnExit,
             &sessions,
-        )
-        .unwrap();
+        ));
 
         // Spawn multiple threads that all validate the same token
         let mut handles = Vec::new();
@@ -532,14 +530,14 @@ mod tests {
             }));
         }
         for h in handles {
-            h.join().unwrap();
+            t!(h.join());
         }
     }
 
     #[test]
     fn test_status_no_users() {
         let db = Database::open_in_memory();
-        let count = db.user_count().unwrap();
+        let count = t!(db.user_count());
         assert_eq!(count, 0);
         // Without users → NeedsSetup
     }
@@ -547,9 +545,9 @@ mod tests {
     #[test]
     fn test_status_with_users() {
         let db = Database::open_in_memory();
-        let hash = auth::hash_password("pass").unwrap();
-        db.create_user("admin", &hash).unwrap();
-        let count = db.user_count().unwrap();
+        let hash = t!(auth::hash_password("pass"));
+        t!(db.create_user("admin", &hash));
+        let count = t!(db.user_count());
         assert_eq!(count, 1);
         // With users → NeedsAuth
     }

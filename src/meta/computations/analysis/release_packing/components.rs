@@ -1119,6 +1119,7 @@ fn emit_va_override_from_competing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mm_utils::t;
 
     fn proposal(inodes: &[i64]) -> Proposal {
         Proposal {
@@ -1246,7 +1247,7 @@ mod tests {
         assert_eq!(deduped.len(), 1);
         assert_eq!(removed, 1);
         assert_eq!(deduped[0].rows[0].release_id, "rel-B"); // higher score
-        assert_eq!(siblings.get(&0).unwrap().len(), 1);
+        assert_eq!(t!(siblings.get(&0)).len(), 1);
         assert_eq!(siblings[&0][0].release_id, "rel-A");
     }
 

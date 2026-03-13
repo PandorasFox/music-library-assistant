@@ -364,6 +364,7 @@ fn urlencoded(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mm_utils::t;
 
     // Test cases from chromaprint's test_fingerprint_compressor.cpp.
 
@@ -438,9 +439,8 @@ mod tests {
         let fp = vec![42u32; 10];
         let encoded = compress_fingerprint(&fp, CHROMAPRINT_ALGORITHM);
         use base64::Engine;
-        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&encoded)
-            .unwrap();
+        let decoded = t!(base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&encoded));
         assert_eq!(decoded[0], CHROMAPRINT_ALGORITHM);
         let len =
             ((decoded[1] as usize) << 16) | ((decoded[2] as usize) << 8) | (decoded[3] as usize);

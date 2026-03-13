@@ -81,24 +81,25 @@ pub enum SessionLifetime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mm_utils::t;
 
     #[test]
     fn test_password_hash_and_verify() {
         let password = "correct-horse-battery-staple";
-        let hash = hash_password(password).unwrap();
+        let hash = t!(hash_password(password));
 
-        assert!(verify_password(password, &hash).unwrap());
-        assert!(!verify_password("wrong-password", &hash).unwrap());
+        assert!(t!(verify_password(password, &hash)));
+        assert!(!t!(verify_password("wrong-password", &hash)));
     }
 
     #[test]
     fn test_password_hash_uniqueness() {
         let password = "same-password";
-        let hash1 = hash_password(password).unwrap();
-        let hash2 = hash_password(password).unwrap();
+        let hash1 = t!(hash_password(password));
+        let hash2 = t!(hash_password(password));
         assert_ne!(hash1, hash2);
-        assert!(verify_password(password, &hash1).unwrap());
-        assert!(verify_password(password, &hash2).unwrap());
+        assert!(t!(verify_password(password, &hash1)));
+        assert!(t!(verify_password(password, &hash2)));
     }
 
     #[test]

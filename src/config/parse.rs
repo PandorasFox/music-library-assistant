@@ -686,6 +686,7 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mm_utils::t;
 
     #[test]
     fn test_parse_single_root() {
@@ -695,7 +696,7 @@ root "/Volumes/cerberus/archive"
 legacy-library true
 "#;
 
-        let config = parse_kdl_config(kdl).unwrap();
+        let config = t!(parse_kdl_config(kdl));
         assert_eq!(config.root, PathBuf::from("/Volumes/cerberus/archive"));
         assert_eq!(
             config.corpus_dir(),
@@ -731,7 +732,7 @@ legacy-library true
 root "/archive"
 "#;
 
-        let config = parse_kdl_config(kdl).unwrap();
+        let config = t!(parse_kdl_config(kdl));
         assert!(!config.legacy_enabled);
     }
 
@@ -751,7 +752,7 @@ opinions {
 }
 "#;
 
-        let config = parse_kdl_config(kdl).unwrap();
+        let config = t!(parse_kdl_config(kdl));
 
         assert_eq!(
             config
@@ -769,7 +770,7 @@ opinions {
 root "/archive"
 "#;
 
-        let config = parse_kdl_config(kdl).unwrap();
+        let config = t!(parse_kdl_config(kdl));
 
         assert!(!config.opinions.lossy_shit_formats_to_flac);
         assert_eq!(
@@ -792,7 +793,7 @@ opinions {
 }
 "#;
 
-        let config = parse_kdl_config(kdl).unwrap();
+        let config = t!(parse_kdl_config(kdl));
         assert!(config.opinions.lossy_shit_formats_to_flac);
 
         // Explicit false
@@ -803,7 +804,7 @@ opinions {
     lossy-shit-formats-to-flac false
 }
 "#;
-        let config_false = parse_kdl_config(kdl_false).unwrap();
+        let config_false = t!(parse_kdl_config(kdl_false));
         assert!(!config_false.opinions.lossy_shit_formats_to_flac);
     }
 
@@ -813,8 +814,8 @@ opinions {
 root "/archive"
 "#;
 
-        let mut config = parse_kdl_config(kdl).unwrap();
-        config.source_dirs = super::super::dirs::parse_dirs_kdl(
+        let mut config = t!(parse_kdl_config(kdl));
+        config.source_dirs = t!(super::super::dirs::parse_dirs_kdl(
             r#"
 dir "web/releases/bandcamp" {
     library "music"
@@ -824,8 +825,7 @@ dir "web/releases/steam" {
     library "soundtracks"
 }
 "#,
-        )
-        .unwrap();
+        ));
 
         // Relative paths (as stored in DB) should match
         assert!(config.is_path_in_source(std::path::Path::new(
@@ -853,7 +853,7 @@ dir "web/releases/steam" {
     fn test_startup_default_view_parsing() {
         // Default is Health when not specified
         let kdl = r#"root "/archive""#;
-        let config = parse_kdl_config(kdl).unwrap();
+        let config = t!(parse_kdl_config(kdl));
         assert_eq!(config.opinions.startup.default_view, StartupView::Health);
 
         // Explicit values
@@ -871,7 +871,7 @@ opinions {{
     }}
 }}"#
             );
-            let config = parse_kdl_config(&kdl).unwrap();
+            let config = t!(parse_kdl_config(&kdl));
             assert_eq!(
                 config.opinions.startup.default_view, expected,
                 "default-view \"{value}\" should parse to {expected:?}"

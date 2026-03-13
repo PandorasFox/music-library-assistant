@@ -94,13 +94,14 @@ pub fn read_mtime(metadata: &std::fs::Metadata) -> (i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mm_utils::t;
 
     #[test]
     fn test_to_relative() {
         let resolver = PathResolver::from_root(PathBuf::from("/archive"));
 
         let abs = Path::new("/archive/corpus/Artist/Album/track.mp3");
-        let rel = resolver.to_relative(abs).unwrap();
+        let rel = t!(resolver.to_relative(abs));
         assert_eq!(rel, PathBuf::from("corpus/Artist/Album/track.mp3"));
     }
 

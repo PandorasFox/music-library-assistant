@@ -96,6 +96,7 @@ pub fn detect_featuring_pattern(value: &str, keywords: &[String]) -> Option<(Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mm_utils::t;
 
     #[test]
     fn test_split_value_semicolon() {
@@ -175,7 +176,7 @@ mod tests {
         let kw = default_keywords();
         let result = detect_featuring_pattern("Galantis feat. Dolly Parton", &kw);
         assert!(result.is_some());
-        let (main, featured) = result.unwrap();
+        let (main, featured) = t!(result);
         assert_eq!(main, "Galantis");
         assert_eq!(featured, vec!["Dolly Parton"]);
     }
@@ -185,7 +186,7 @@ mod tests {
         let kw = default_keywords();
         let result = detect_featuring_pattern("Drake ft. Rihanna", &kw);
         assert!(result.is_some());
-        let (main, featured) = result.unwrap();
+        let (main, featured) = t!(result);
         assert_eq!(main, "Drake");
         assert_eq!(featured, vec!["Rihanna"]);
     }
@@ -195,7 +196,7 @@ mod tests {
         let kw = default_keywords();
         let result = detect_featuring_pattern("Kanye West featuring Jay-Z", &kw);
         assert!(result.is_some());
-        let (main, featured) = result.unwrap();
+        let (main, featured) = t!(result);
         assert_eq!(main, "Kanye West");
         assert_eq!(featured, vec!["Jay-Z"]);
     }
@@ -205,7 +206,7 @@ mod tests {
         let kw = default_keywords();
         let result = detect_featuring_pattern("Ken vs. Ryu", &kw);
         assert!(result.is_some());
-        let (main, featured) = result.unwrap();
+        let (main, featured) = t!(result);
         assert_eq!(main, "Ken");
         assert_eq!(featured, vec!["Ryu"]);
     }
@@ -215,7 +216,7 @@ mod tests {
         let kw = default_keywords();
         let result = detect_featuring_pattern("Skrillex & Diplo with Justin Bieber", &kw);
         assert!(result.is_some());
-        let (main, featured) = result.unwrap();
+        let (main, featured) = t!(result);
         assert_eq!(main, "Skrillex & Diplo");
         assert_eq!(featured, vec!["Justin Bieber"]);
     }
@@ -225,7 +226,7 @@ mod tests {
         let kw = default_keywords();
         let result = detect_featuring_pattern("Major Lazer (feat. DJ Snake)", &kw);
         assert!(result.is_some());
-        let (main, featured) = result.unwrap();
+        let (main, featured) = t!(result);
         assert_eq!(main, "Major Lazer");
         assert_eq!(featured, vec!["DJ Snake"]);
     }
@@ -254,7 +255,7 @@ mod tests {
         let kw = default_keywords();
         let result = detect_featuring_pattern("Artist A FEAT. Artist B", &kw);
         assert!(result.is_some());
-        let (main, _) = result.unwrap();
+        let (main, _) = t!(result);
         assert_eq!(main, "Artist A");
 
         let result = detect_featuring_pattern("Artist A Featuring Artist B", &kw);
@@ -271,7 +272,7 @@ mod tests {
         let kw = vec!["prod".to_string()];
         let result = detect_featuring_pattern("Track prod. Someone", &kw);
         assert!(result.is_some());
-        let (main, featured) = result.unwrap();
+        let (main, featured) = t!(result);
         assert_eq!(main, "Track");
         assert_eq!(featured, vec!["Someone"]);
     }

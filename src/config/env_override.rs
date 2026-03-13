@@ -444,6 +444,7 @@ fn parse_duration_secs(s: &str) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::config::types::{Config, Opinions};
+    use mm_utils::t;
     use std::path::PathBuf;
     use std::sync::Mutex;
 
@@ -463,7 +464,7 @@ mod tests {
 
     #[test]
     fn curated_mm_root_overrides_config() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = t!(ENV_LOCK.lock());
         let mut config = test_config();
         assert_eq!(config.root, PathBuf::from("/original/root"));
 
@@ -476,7 +477,7 @@ mod tests {
 
     #[test]
     fn curated_mm_worker_threads_overrides_config() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = t!(ENV_LOCK.lock());
         let mut config = test_config();
         assert_eq!(config.opinions.performance.worker_threads, None);
 
@@ -489,7 +490,7 @@ mod tests {
 
     #[test]
     fn curated_mm_db_cache_accepts_size_string() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = t!(ENV_LOCK.lock());
         let mut config = test_config();
 
         env::set_var("MM_DB_CACHE", "1gb");
@@ -501,7 +502,7 @@ mod tests {
 
     #[test]
     fn curated_mm_watcher_poll_interval_accepts_humantime() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = t!(ENV_LOCK.lock());
         let mut config = test_config();
 
         env::set_var("MM_WATCHER_POLL_INTERVAL", "5m");
@@ -513,7 +514,7 @@ mod tests {
 
     #[test]
     fn generic_mm_cfg_overrides_config() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = t!(ENV_LOCK.lock());
         let mut config = test_config();
         assert!((config.opinions.duplicate_analysis.fingerprint_similarity_threshold - 95.0).abs() < f64::EPSILON);
 
@@ -526,7 +527,7 @@ mod tests {
 
     #[test]
     fn generic_unknown_field_does_not_panic() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = t!(ENV_LOCK.lock());
         let mut config = test_config();
         let original = config.clone();
 

@@ -118,12 +118,13 @@ pub fn compute_popup_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mm_utils::t;
 
     #[test]
     fn popup_anchored_to_text_centered() {
         let list_area = Rect::new(0, 0, 80, 20);
         // Text ends at x=30, popup content is 20 wide
-        let r = compute_popup_rect(3, 20, 30, 10, list_area).unwrap();
+        let r = t!(compute_popup_rect(3, 20, 30, 10, list_area));
         assert_eq!(r.x, 30); // starts right after text
         // Centered: height=5, half=2, ideal_y=8, clamped within [0, 15]
         assert_eq!(r.y, 8);
@@ -134,7 +135,7 @@ mod tests {
     #[test]
     fn popup_clamped_to_list_bottom() {
         let list_area = Rect::new(0, 0, 80, 15);
-        let r = compute_popup_rect(5, 20, 30, 14, list_area).unwrap();
+        let r = t!(compute_popup_rect(5, 20, 30, 14, list_area));
         assert!(r.y + r.height <= list_area.y + list_area.height);
     }
 
@@ -142,7 +143,7 @@ mod tests {
     fn popup_clamped_to_list_top() {
         let list_area = Rect::new(0, 5, 80, 20);
         // anchor_y=6, height=5, half=2, ideal_y=4 → clamped to 5
-        let r = compute_popup_rect(3, 20, 30, 6, list_area).unwrap();
+        let r = t!(compute_popup_rect(3, 20, 30, 6, list_area));
         assert_eq!(r.y, 5); // clamped to list_area.y
     }
 

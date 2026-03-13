@@ -456,26 +456,27 @@ fn seed_dirty_inodes_all(conn: &Connection) -> Result<()> {
 mod tests {
     use super::*;
     use crate::db::table_schema::schema_inventory;
+    use mm_utils::t;
 
     #[test]
     fn test_fresh_db_no_reconciliation_needed() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = t!(Connection::open_in_memory());
 
         // Create all tables from inventory (simulating initialize_schema)
         for entry in schema_inventory() {
-            conn.execute_batch(entry.create_sql).unwrap();
+            t!(conn.execute_batch(entry.create_sql));
             for idx in entry.index_sql {
-                conn.execute_batch(idx).unwrap();
+                t!(conn.execute_batch(idx));
             }
         }
 
-        let plan = ReconciliationPlan::compute(&conn).unwrap();
+        let plan = t!(ReconciliationPlan::compute(&conn));
         assert!(plan.is_empty(), "Fresh DB should need no reconciliation");
     }
 
     #[test]
     fn test_missing_table_detected() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = t!(Connection::open_in_memory());
 
         // Create all tables EXCEPT one
         let inventory = schema_inventory();
@@ -483,13 +484,13 @@ mod tests {
             if i == 0 {
                 continue; // Skip first table
             }
-            conn.execute_batch(entry.create_sql).unwrap();
+            t!(conn.execute_batch(entry.create_sql));
             for idx in entry.index_sql {
-                conn.execute_batch(idx).unwrap();
+                t!(conn.execute_batch(idx));
             }
         }
 
-        let plan = ReconciliationPlan::compute(&conn).unwrap();
+        let plan = t!(ReconciliationPlan::compute(&conn));
         assert!(!plan.is_empty(), "Should detect missing table");
         assert_eq!(plan.new_tables.len(), 1);
         assert_eq!(plan.new_tables[0].name, inventory[0].name);
@@ -497,10 +498,10 @@ mod tests {
 
     #[test]
     fn test_missing_column_on_core_table() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = t!(Connection::open_in_memory());
 
         // Create audio_info WITHOUT pic_count column
-        conn.execute_batch(
+        t!(conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS audio_info (
                 inode INTEGER PRIMARY KEY,
                 file_type TEXT NOT NULL,
@@ -515,21 +516,20 @@ mod tests {
                 needs_tag_flush INTEGER NOT NULL DEFAULT 0,
                 tags_version INTEGER NOT NULL DEFAULT 0
             )",
-        )
-        .unwrap();
+        ));
 
         // Create all other tables normally
         for entry in schema_inventory() {
             if entry.name == "audio_info" {
                 continue;
             }
-            conn.execute_batch(entry.create_sql).unwrap();
+            t!(conn.execute_batch(entry.create_sql));
             for idx in entry.index_sql {
-                conn.execute_batch(idx).unwrap();
+                t!(conn.execute_batch(idx));
             }
         }
 
-        let plan = ReconciliationPlan::compute(&conn).unwrap();
+        let plan = t!(ReconciliationPlan::compute(&conn));
         assert!(!plan.is_empty(), "Should detect missing column");
         assert!(
             plan.new_columns
@@ -541,41 +541,37 @@ mod tests {
 
     #[test]
     fn test_column_diff_on_computed_table_triggers_recreate() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = t!(Connection::open_in_memory());
 
         // Create signal_file_in_corpus WITHOUT the generation column
-        conn.execute_batch(
+        t!(conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS signal_file_in_corpus (
                 inode INTEGER PRIMARY KEY,
                 path TEXT NOT NULL,
                 discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )",
-        )
-        .unwrap();
+        ));
 
         // Also need files/audio_info for the dirty inode seeding
-        conn.execute_batch(
+        t!(conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS files (
                 inode INTEGER NOT NULL, zone TEXT NOT NULL, path TEXT NOT NULL,
                 is_dir INTEGER NOT NULL, mtime_secs INTEGER NOT NULL,
                 mtime_nanos INTEGER NOT NULL, file_size INTEGER NOT NULL,
                 scanned_at INTEGER NOT NULL, PRIMARY KEY (inode, zone, path)
             )",
-        )
-        .unwrap();
-        conn.execute_batch(
+        ));
+        t!(conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS audio_info (
                 inode INTEGER PRIMARY KEY, file_type TEXT NOT NULL
             )",
-        )
-        .unwrap();
-        conn.execute_batch(
+        ));
+        t!(conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS dirty_inodes (
                 inode INTEGER NOT NULL, computation_type TEXT NOT NULL,
                 dirtied_at INTEGER NOT NULL, PRIMARY KEY (inode, computation_type)
             )",
-        )
-        .unwrap();
+        ));
 
         // Create all other tables normally
         for entry in schema_inventory() {
@@ -586,10 +582,10 @@ mod tests {
             {
                 continue;
             }
-            conn.execute_batch(entry.create_sql).unwrap();
+            t!(conn.execute_batch(entry.create_sql));
         }
 
-        let plan = ReconciliationPlan::compute(&conn).unwrap();
+        let plan = t!(ReconciliationPlan::compute(&conn));
         assert!(
             plan.recreated_signals
                 .iter()

@@ -61,14 +61,15 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mm_utils::t;
 
     #[test]
     fn test_create_user() {
         let db = Database::open_in_memory();
-        let id = db.create_user("alice", "$argon2id$hash").unwrap();
+        let id = t!(db.create_user("alice", "$argon2id$hash"));
         assert!(id > 0);
 
-        let user = db.get_user_by_username("alice").unwrap().unwrap();
+        let user = t!(t!(db.get_user_by_username("alice")));
         assert_eq!(user.username, "alice");
         assert_eq!(user.password_hash, "$argon2id$hash");
     }
@@ -76,7 +77,7 @@ mod tests {
     #[test]
     fn test_create_duplicate_username() {
         let db = Database::open_in_memory();
-        db.create_user("alice", "hash1").unwrap();
+        t!(db.create_user("alice", "hash1"));
         let result = db.create_user("alice", "hash2");
         assert!(result.is_err());
     }
@@ -84,27 +85,27 @@ mod tests {
     #[test]
     fn test_user_count_empty() {
         let db = Database::open_in_memory();
-        assert_eq!(db.user_count().unwrap(), 0);
+        assert_eq!(t!(db.user_count()), 0);
     }
 
     #[test]
     fn test_user_count_after_create() {
         let db = Database::open_in_memory();
-        db.create_user("alice", "hash1").unwrap();
-        assert_eq!(db.user_count().unwrap(), 1);
-        db.create_user("bob", "hash2").unwrap();
-        assert_eq!(db.user_count().unwrap(), 2);
+        t!(db.create_user("alice", "hash1"));
+        assert_eq!(t!(db.user_count()), 1);
+        t!(db.create_user("bob", "hash2"));
+        assert_eq!(t!(db.user_count()), 2);
     }
 
     #[test]
     fn test_get_user_by_username() {
         let db = Database::open_in_memory();
-        db.create_user("alice", "hash1").unwrap();
+        t!(db.create_user("alice", "hash1"));
 
-        let user = db.get_user_by_username("alice").unwrap().unwrap();
+        let user = t!(t!(db.get_user_by_username("alice")));
         assert_eq!(user.username, "alice");
 
-        let none = db.get_user_by_username("bob").unwrap();
+        let none = t!(db.get_user_by_username("bob"));
         assert!(none.is_none());
     }
 }

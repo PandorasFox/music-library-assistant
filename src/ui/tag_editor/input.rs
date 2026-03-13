@@ -428,10 +428,7 @@ impl UnifiedTagEditorState {
                         UnifiedTagEditorAction::StatusMessage("Changes reverted".to_string())
                     }
                     TagEditorButton::FillFromDisk => {
-                        self.fill_from_disk();
-                        UnifiedTagEditorAction::StatusMessage(
-                            "Tags refreshed from disk".to_string(),
-                        )
+                        UnifiedTagEditorAction::RequestFillFromDisk
                     }
                     TagEditorButton::FillFromDb => {
                         // Return action for UI layer to handle (requires DB access)

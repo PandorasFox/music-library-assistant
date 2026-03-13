@@ -104,7 +104,7 @@ impl App {
             )
         };
 
-        let mutations = types::stash_file_mutations(&corpus_path, inode, stash_name);
+        let mutations = types::stash_file_mutations(&corpus_path, inode, stash_name, &self.resolver);
 
         // Stage the decision
         let label = format!("Stash {}", corpus_path);

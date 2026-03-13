@@ -4,9 +4,7 @@
 //! These functions are stateless and operate on tag field data structures.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
-use crate::corpus::paths;
 use crate::db::types::{AudioFile, Zone};
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::meta::mutations::{Mutation, TagOp};
@@ -17,31 +15,12 @@ use super::types::{AggregatedTagField, AggregatedValue, TagChange, TagField};
 // Tag Loading
 // ============================================================================
 
-/// Load tag fields from disk for an audio file.
+/// Convert raw tag pairs (from domain query) into TagField structs.
 ///
-/// All tags are loaded from the audio file and sorted alphabetically.
-/// Multi-value tags (e.g., multiple genres) are loaded as separate entries.
-pub fn audio_file_to_tag_fields(audio_file: &AudioFile) -> Vec<TagField> {
-    use crate::corpus::tags::TagSet;
-
-    let resolver = paths::get_resolver();
-    let disk_path = resolver.resolve(Path::new(audio_file.path()));
-
-    let tag_set = match TagSet::from_file(&disk_path) {
-        Ok(tags) => tags,
-        Err(e) => {
-            crate::logging::log_error(format!(
-                "Could not read tags from {}: {}",
-                disk_path.display(),
-                e
-            ));
-            TagSet::empty()
-        }
-    };
-
-    // Convert to TagField - TagSet is already sorted
-    let mut tag_fields: Vec<TagField> = tag_set
-        .into_vec()
+/// The tag pairs come from `GetFileTagValues` which reads tags from disk
+/// on the server side. This function just wraps them as editable fields.
+pub fn tag_pairs_to_tag_fields(tags: Vec<(String, String)>) -> Vec<TagField> {
+    let mut tag_fields: Vec<TagField> = tags
         .into_iter()
         .map(|(name, value)| TagField {
             name,
@@ -60,6 +39,37 @@ pub fn audio_file_to_tag_fields(audio_file: &AudioFile) -> Vec<TagField> {
     });
 
     tag_fields
+}
+
+/// Load tag fields for a batch of audio files via domain query.
+///
+/// Returns per-file tag fields in the same order as the input audio files.
+pub fn load_tag_fields_batch(
+    audio_files: &[AudioFile],
+    witch: &crate::witch::WitchHandle,
+) -> Vec<Vec<TagField>> {
+    if audio_files.is_empty() {
+        return Vec::new();
+    }
+    let zone = audio_files[0].entry.zone;
+    let inodes: Vec<i64> = audio_files.iter().map(|af| af.inode()).collect();
+
+    let result = witch.query(crate::db::domain::GetFileTagValues { inodes: inodes.clone(), zone });
+
+    // Build a map from inode -> tags for fast lookup
+    let tag_map: HashMap<i64, Vec<(String, String)>> = result.into_iter().collect();
+
+    // Return fields in same order as audio_files
+    audio_files
+        .iter()
+        .map(|af| {
+            let tags = tag_map
+                .get(&af.inode())
+                .cloned()
+                .unwrap_or_default();
+            tag_pairs_to_tag_fields(tags)
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -251,7 +261,7 @@ pub fn changes_to_mutations(
 // Directory-Level Tag Aggregation
 // ============================================================================
 
-/// Aggregate tags across all audio files in a directory.
+/// Aggregate tags across all files from pre-loaded per-file tag fields.
 ///
 /// For each tag name (case-insensitive):
 /// - If all files have the same value → `AggregatedValue::Consistent(value)`
@@ -260,8 +270,8 @@ pub fn changes_to_mutations(
 /// Empty values are filtered out. Tags are sorted alphabetically.
 /// This provides a unified view for directory-level tag editing where the user
 /// can see which tags are consistent and which need attention.
-pub fn aggregate_tags_across_audio_files(audio_files: &[AudioFile]) -> Vec<AggregatedTagField> {
-    if audio_files.is_empty() {
+pub fn aggregate_tags_from_fields(all_fields: &[Vec<TagField>]) -> Vec<AggregatedTagField> {
+    if all_fields.is_empty() {
         return Vec::new();
     }
 
@@ -269,8 +279,7 @@ pub fn aggregate_tags_across_audio_files(audio_files: &[AudioFile]) -> Vec<Aggre
     // Key: normalized tag name, Value: (display name, set of unique non-empty values)
     let mut tag_values: HashMap<String, (String, HashSet<String>)> = HashMap::new();
 
-    for audio_file in audio_files {
-        let fields = audio_file_to_tag_fields(audio_file);
+    for fields in all_fields {
         for field in fields {
             if field.name == "New Tag" {
                 continue;
@@ -287,7 +296,7 @@ pub fn aggregate_tags_across_audio_files(audio_files: &[AudioFile]) -> Vec<Aggre
                 .entry(normalized.clone())
                 .or_insert_with(|| (field.name.clone(), HashSet::new()))
                 .1
-                .insert(field.value);
+                .insert(field.value.clone());
         }
     }
 

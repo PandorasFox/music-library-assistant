@@ -86,7 +86,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::config::{Config, SharedConfig};
+use crate::config::Config;
+use crate::corpus::paths::PathResolver;
 use crate::witch::WitchStatus;
 
 // ============================================================================
@@ -95,7 +96,6 @@ use crate::witch::WitchStatus;
 
 /// Main application state
 pub(crate) struct App {
-    pub(super) shared_config: SharedConfig,
     should_quit: bool,
     pub(super) status_message: Option<String>,
 
@@ -105,6 +105,10 @@ pub(crate) struct App {
     // Handle to the Witch — She owns the main thread, we command via channels.
     // Also owns cache channels and locally cached periodic data.
     pub(super) witch: crate::witch::WitchHandle,
+
+    /// Client-side path resolver for root-relative ↔ absolute path conversion.
+    /// Constructed from config after login.
+    pub(super) resolver: PathResolver,
 
     // View stack for push/pop navigation (TransactionReview, ProgressiveWork, etc.)
     pub(super) view_stack: Vec<SuspendedView>,
@@ -136,19 +140,20 @@ pub(crate) struct App {
 }
 
 impl App {
-    /// Create a new App with a Witch handle and shared config.
+    /// Create a new App with a Witch handle and config.
     fn new(
-        shared_config: SharedConfig,
-        witch: crate::witch::WitchHandle,
+        mut witch: crate::witch::WitchHandle,
         art_picker: widgets::AlbumArtPicker,
     ) -> Self {
         let cached_status = witch.witch_status();
+        let config = witch.config();
+        let resolver = PathResolver::new(&config);
         Self {
-            shared_config,
             should_quit: false,
             status_message: None,
             view: ActiveView::Insights(insights_view::InsightsViewState::new()),
             witch,
+            resolver,
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Health,
             startup_complete: false,
@@ -165,9 +170,9 @@ impl App {
 
     const STATUS_TTL: Duration = Duration::from_secs(1);
 
-    /// Read-lock the shared config for accessing config values.
-    pub(super) fn config(&self) -> std::sync::RwLockReadGuard<'_, Config> {
-        crate::config::read_shared_config(&self.shared_config)
+    /// Get a snapshot of the current config from the Witch (cached in handle).
+    pub(super) fn config(&mut self) -> Config {
+        self.witch.config()
     }
 
     /// Return a reference to the cached WitchStatus (refreshed once per loop iteration).
@@ -184,12 +189,12 @@ impl App {
     }
 
     /// Whether the Transaction tab should be visible in the lateral view ring.
-    fn transactions_open(&self) -> bool {
+    fn transactions_open(&mut self) -> bool {
         self.config().opinions.leave_transactions_open
     }
 
     /// Whether leave-transactions-open mode is active (alias for readability in control flow).
-    fn open_txn_mode(&self) -> bool {
+    fn open_txn_mode(&mut self) -> bool {
         self.config().opinions.leave_transactions_open
     }
 
@@ -290,7 +295,8 @@ impl App {
 
     /// Start the configured default view (post-startup landing screen).
     pub(super) fn start_default_view(&mut self) {
-        let default_view = self.config().opinions.startup.default_view;
+        let config = self.config();
+        let default_view = config.opinions.startup.default_view;
         match default_view {
             crate::config::StartupView::Health => self.start_health_view(),
             crate::config::StartupView::Search => self.start_tag_search(),
@@ -350,9 +356,7 @@ impl App {
         let has_api_key = ws.has_acoustid_api_key;
         let singles_before_incompletes = self
             .config()
-            .opinions
-            .release_packing
-            .singles_before_incompletes;
+            .opinions.release_packing.singles_before_incompletes;
         let mut state = external_match_view::ExternalMatchesViewState::new(
             fetch_active,
             has_api_key,
@@ -389,7 +393,7 @@ impl App {
     /// Start the config editor view.
     pub(super) fn start_config_editor(&mut self) {
         self.last_lateral_view = widgets::LateralView::Config;
-        let config = self.config().clone();
+        let config = self.config();
         let kdl_content = crate::config::get_config_dir()
             .ok()
             .map(|dir| dir.join("config.kdl"))
@@ -408,10 +412,11 @@ impl App {
         let deploy_status = self.witch.query(crate::db::domain::GetDeployStatus);
 
         if deploy_status.needs_action {
+            let config = self.config();
             let data = self
                 .witch
                 .query(crate::db::domain::GetDeployData {
-                    config: crate::config::load_config().ok(),
+                    config: Some(config),
                 });
             let preview = deploy_modal::DeploymentPreviewState::new(data);
             self.view =
@@ -435,7 +440,6 @@ impl App {
             .map(|sd| corpus_dir.join(&sd.path))
             .collect();
         let primary_zone_paths = vec![corpus_dir.clone(), config.inbox_dir(), config.stash_dir()];
-        drop(config);
         self.view = ActiveView::CorpusBrowser(tree_browser::TreeBrowserState::corpus_browser(
             archive_root,
             variant_config,
@@ -449,10 +453,10 @@ impl App {
     // Startup Flow
     // =========================================================================
 
-    /// Complete startup: inject shared config, open persistent txn,
+    /// Complete startup: inject config to Witch, open persistent txn,
     /// and transition to the appropriate view based on Witch state.
     pub(super) fn complete_startup(&mut self) {
-        let config = crate::config::read_shared_config(&self.shared_config).clone();
+        let config = self.config();
         let _ = self.witch.set_shared_config(config);
 
         // If leave_transactions_open is enabled, open a persistent transaction at startup
@@ -565,16 +569,8 @@ pub fn run_tui(
         startup::login::run_login_screen(&mut terminal, &mut witch)?;
     }
 
-    // Config + DB now guaranteed. Load shared config for App.
-    let config = crate::config::load_config()?;
-    if let Err(e) = config.validate() {
-        eprintln!("ERROR: Config validation failed\n");
-        eprintln!("{:#}", e);
-        std::process::exit(1);
-    }
-    let shared_config = config.into_shared();
-
-    let mut app = App::new(shared_config, witch, art_picker);
+    // Config + DB now guaranteed. App fetches config via protocol.
+    let mut app = App::new(witch, art_picker);
 
     // Check if the Witch is already Ready (no startup maintenance needed)
     // or if she's running maintenance (Reconciling/Vacuuming)
@@ -654,9 +650,13 @@ fn run_app<B: ratatui::backend::Backend>(
                 }
             }
 
-            // Config updated (already applied via shared_config on Witch side)
+            // Config updated — invalidate handle cache so next config() re-fetches
             if status.config_generation != app.prev_config_generation {
                 app.prev_config_generation = status.config_generation;
+                app.witch.invalidate_config_cache();
+                // Rebuild path resolver with new root
+                let new_config = app.witch.config();
+                app.resolver = PathResolver::new(&new_config);
             }
         }
 

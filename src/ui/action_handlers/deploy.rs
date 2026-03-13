@@ -6,7 +6,6 @@
 use super::super::App;
 use super::witness;
 use super::HandleAction;
-use crate::corpus::paths;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::{deploy_modal, ActiveView};
 
@@ -53,8 +52,7 @@ impl App {
         gesture: &witness::ConfirmationGesture,
     ) -> usize {
         let open_txn = self.open_txn_mode();
-        let resolver = paths::get_resolver();
-        let mutation_set = data.to_mutations(resolver);
+        let mutation_set = data.to_mutations(&self.resolver);
 
         if mutation_set.skipped > 0 {
             crate::logging::log_error(format!(

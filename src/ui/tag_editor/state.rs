@@ -11,8 +11,8 @@ use crate::meta::mutations::Mutation;
 use crate::ui::widgets::TextInputState;
 
 use super::mutations::{
-    aggregate_tags_across_audio_files, audio_file_to_tag_fields, changes_to_mutations,
-    compute_changes,
+    aggregate_tags_from_fields, changes_to_mutations, compute_changes,
+    load_tag_fields_batch, tag_pairs_to_tag_fields,
 };
 use super::types::{
     AggregatedTagField, AggregatedValue, FieldEditState, GroupContext, TagChange, TagEditContext,
@@ -153,9 +153,10 @@ impl UnifiedTagEditorState {
     // Constructors
     // ========================================================================
 
-    /// Create a new unified tag editor state.
+    /// Create a new unified tag editor state with pre-loaded tag fields.
     ///
     /// This is the primary constructor that handles both Individual and Aggregated modes.
+    /// Tag fields must be pre-loaded via `load_tag_fields_batch()` before calling this.
     ///
     /// - **Individual mode**: Edit audio files one at a time (Tab navigates between files)
     /// - **Aggregated mode**: Edit unified view (changes apply to all files)
@@ -164,6 +165,7 @@ impl UnifiedTagEditorState {
         audio_files: Vec<AudioFile>,
         source: TagEditorSource,
         group_context: Option<GroupContext>,
+        tag_fields: Vec<Vec<TagField>>,
     ) -> Self {
         // All files must belong to the same zone — tag mutations are per-zone.
         debug_assert!(
@@ -175,14 +177,11 @@ impl UnifiedTagEditorState {
 
         let total_items = audio_files.len();
 
-        // Load per-file tag fields from disk
-        let tag_fields: Vec<Vec<TagField>> =
-            audio_files.iter().map(audio_file_to_tag_fields).collect();
         let original_tag_fields = tag_fields.clone();
 
         // For Aggregated mode, also build aggregated view
         let aggregated_fields = if mode == TagEditorMode::Aggregated {
-            Some(aggregate_tags_across_audio_files(&audio_files))
+            Some(aggregate_tags_from_fields(&tag_fields))
         } else {
             None
         };
@@ -238,13 +237,11 @@ impl UnifiedTagEditorState {
         audio_file: AudioFile,
         source: TagEditorSource,
         group_context: Option<GroupContext>,
+        witch: &crate::witch::WitchHandle,
     ) -> Self {
-        Self::new(
-            TagEditorMode::Individual,
-            vec![audio_file],
-            source,
-            group_context,
-        )
+        let files = vec![audio_file];
+        let tag_fields = load_tag_fields_batch(&files, witch);
+        Self::new(TagEditorMode::Individual, files, source, group_context, tag_fields)
     }
 
     /// Create a new unified state for bulk editing from pre-loaded audio files (convenience wrapper).
@@ -254,32 +251,33 @@ impl UnifiedTagEditorState {
         audio_files: Vec<AudioFile>,
         source: TagEditorSource,
         group_context: Option<GroupContext>,
+        witch: &crate::witch::WitchHandle,
     ) -> Self {
-        Self::new(
-            TagEditorMode::Individual,
-            audio_files,
-            source,
-            group_context,
-        )
+        let tag_fields = load_tag_fields_batch(&audio_files, witch);
+        Self::new(TagEditorMode::Individual, audio_files, source, group_context, tag_fields)
     }
 
     /// Create a new unified state for aggregated bulk editing (convenience wrapper).
     ///
     /// Uses Aggregated mode - shows unified view, changes apply to all files at once.
-    pub fn aggregated_bulk(audio_files: Vec<AudioFile>, source: TagEditorSource) -> Self {
-        Self::new(TagEditorMode::Aggregated, audio_files, source, None)
+    pub fn aggregated_bulk(
+        audio_files: Vec<AudioFile>,
+        source: TagEditorSource,
+        witch: &crate::witch::WitchHandle,
+    ) -> Self {
+        let tag_fields = load_tag_fields_batch(&audio_files, witch);
+        Self::new(TagEditorMode::Aggregated, audio_files, source, None, tag_fields)
     }
 
     /// Create a new unified state for directory editing with aggregated tags (convenience wrapper).
     ///
     /// Uses Aggregated mode - shows unified view, changes apply to all files.
-    pub fn directory_aggregated(audio_files: Vec<AudioFile>) -> Self {
-        Self::new(
-            TagEditorMode::Aggregated,
-            audio_files,
-            TagEditorSource::DirectoryEdit,
-            None,
-        )
+    pub fn directory_aggregated(
+        audio_files: Vec<AudioFile>,
+        witch: &crate::witch::WitchHandle,
+    ) -> Self {
+        let tag_fields = load_tag_fields_batch(&audio_files, witch);
+        Self::new(TagEditorMode::Aggregated, audio_files, TagEditorSource::DirectoryEdit, None, tag_fields)
     }
 
     /// Builder method to set embedded mode (called after construction).
@@ -570,7 +568,7 @@ impl UnifiedTagEditorState {
     }
 
     /// Re-read tags from disk for the current audio file
-    pub fn fill_from_disk(&mut self) {
+    pub fn fill_from_disk(&mut self, witch: &crate::witch::WitchHandle) {
         let audio_file = match &self.context {
             TagEditContext::SingleFile { audio_file, .. } => audio_file.clone(),
             TagEditContext::BulkEdit { audio_files, .. } => {
@@ -581,8 +579,13 @@ impl UnifiedTagEditorState {
             }
         };
 
-        // Re-read tags from disk
-        let new_fields = audio_file_to_tag_fields(&audio_file);
+        // Re-read tags from disk via domain query
+        let result = witch.query(crate::db::domain::GetFileTagValues {
+            inodes: vec![audio_file.inode()],
+            zone: audio_file.entry.zone,
+        });
+        let tags = result.into_iter().next().map(|(_, t)| t).unwrap_or_default();
+        let new_fields = tag_pairs_to_tag_fields(tags);
 
         // Update current item's tag fields
         if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {

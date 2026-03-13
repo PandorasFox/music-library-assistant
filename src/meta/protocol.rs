@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use super::decisions::{DecisionKey, TransactionError};
 use crate::auth::SessionToken;
+use crate::config::Config;
 use crate::meta::decisions::{Decision, DiscardSummary};
 use crate::witch::WitchStatus;
 
@@ -115,6 +116,8 @@ pub enum AuthenticatedResponse {
 pub enum QueryPayload {
     /// Comprehensive Witch state snapshot.
     Status,
+    /// Current config snapshot.
+    Config,
     /// Domain-specific DB query (dispatched to cache thread).
     Domain(crate::db::domain::DomainQueryPayload),
 }
@@ -124,6 +127,8 @@ pub enum QueryPayload {
 pub enum QueryResponse {
     /// Full Witch status snapshot.
     Status(WitchStatus),
+    /// Config snapshot.
+    Config(Config),
     /// Domain query result.
     Domain(crate::db::domain::DomainQueryResult),
 }
@@ -158,6 +163,24 @@ impl ProtocolQuery for StatusQuery {
         match resp {
             QueryResponse::Status(s) => s,
             _ => unreachable!("protocol bug: expected Status response"),
+        }
+    }
+}
+
+/// Query for the current config snapshot.
+pub struct ConfigQuery;
+
+impl ProtocolQuery for ConfigQuery {
+    type Response = Config;
+
+    fn into_payload(self) -> QueryPayload {
+        QueryPayload::Config
+    }
+
+    fn extract_response(resp: QueryResponse) -> Config {
+        match resp {
+            QueryResponse::Config(c) => c,
+            _ => unreachable!("protocol bug: expected Config response"),
         }
     }
 }

@@ -3,13 +3,9 @@
 //! Data structures for the missing file resolution modal, including
 //! categorized files (restorable vs non-restorable) and button state.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::Result;
-
 use crate::corpus::paths;
-use crate::db::ReadOnlyDb;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 
 /// A missing corpus file that can be restored from library.
@@ -49,73 +45,6 @@ pub struct MissingFileModalData {
 }
 
 impl MissingFileModalData {
-    /// Load and categorize missing files from the database.
-    ///
-    /// A file is restorable if its inode exists in the files table (zone='library').
-    /// For missing files, the file doesn't exist on disk. We try to get the inode
-    /// from the database (files or audio_info tables).
-    pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
-        // Step 1: Get all MissingFile signals (issue_key = corpus path)
-        let missing_paths = read_db.get_missing_file_paths()?;
-
-        if missing_paths.is_empty() {
-            return Ok(Self::default());
-        }
-
-        // Step 2: Build inode -> library_path map from files table (library source)
-        let library_files = read_db.get_all_library_files()?;
-        let inode_to_library: HashMap<i64, String> = library_files
-            .into_iter()
-            .map(|e| (e.inode, e.file_path.to_string_lossy().to_string()))
-            .collect();
-
-        // Step 3: Categorize each missing file
-        let mut restorable = Vec::new();
-        let mut non_restorable = Vec::new();
-
-        for corpus_path in missing_paths {
-            // Try to get file info - first try audio_file (files+audio_info join)
-            let inode = if let Some(af) = read_db.get_audio_file_by_path(&corpus_path)? {
-                Some(af.inode())
-            } else if let Some(fe) = read_db.get_file_entry_by_path(&corpus_path, "corpus")? {
-                // Fallback: files table entry without audio_info (rare but possible)
-                Some(fe.inode)
-            } else {
-                // No database entry found - this is an orphaned signal
-                // (e.g., file was stashed/dropped, signal not cleared yet)
-                // Still show it so user can clear the stale signal
-                None
-            };
-
-            if let Some(inode) = inode {
-                // We have an inode - check if restorable from library
-                if let Some(library_path) = inode_to_library.get(&inode) {
-                    restorable.push(RestorableMissingFile {
-                        corpus_path,
-                        library_path: library_path.clone(),
-                        inode,
-                    });
-                } else {
-                    non_restorable.push(NonRestorableMissingFile {
-                        corpus_path,
-                        inode: Some(inode),
-                    });
-                }
-            } else {
-                // Orphaned signal - no DB entry, just needs signal cleared
-                non_restorable.push(NonRestorableMissingFile {
-                    corpus_path,
-                    inode: None,
-                });
-            }
-        }
-
-        Ok(Self {
-            restorable,
-            non_restorable,
-        })
-    }
-
     /// Total number of missing files.
     pub fn total_count(&self) -> usize {
         self.restorable.len() + self.non_restorable.len()

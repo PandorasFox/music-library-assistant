@@ -173,7 +173,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
             super::startup::intake_confirmation::render(f, area, state);
         }
         ActiveView::UnifiedTagEditor(ref mut editor) => {
-            editor.render(f, area, &mut app.art_picker, &mut app.art_cache);
+            editor.render(f, area, &mut app.art_picker, &mut app.art_cache, &app.resolver);
         }
         ActiveView::MissingFileResolution(ref mut preview) => {
             preview.render(f, area);

@@ -32,6 +32,12 @@ macro_rules! extract_mutations {
             _ => Vec::new(),
         }
     };
+    ($self:ident, $view_variant:ident, $method:ident, $resolver:expr) => {
+        match &$self.view {
+            ActiveView::$view_variant(ref p) => p.cached_data.$method($resolver),
+            _ => Vec::new(),
+        }
+    };
 }
 
 // =========================================================================
@@ -89,7 +95,7 @@ impl HandleAction for corrupt_file_modal::CorruptFilePreviewAction {
             corrupt_file_modal::CorruptFilePreviewAction::None => {}
             corrupt_file_modal::CorruptFilePreviewAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
-                let mutations = extract_mutations!(app, CorruptFileResolution, stash_and_drop_mutations);
+                let mutations = extract_mutations!(app, CorruptFileResolution, stash_and_drop_mutations, &app.resolver);
                 app.stage_resolution(mutations, "Stash corrupt files", DecisionKey::CorruptFile, "No files to stash", w);
             }
             corrupt_file_modal::CorruptFilePreviewAction::Cancel => {
@@ -153,7 +159,7 @@ impl HandleAction for subpar_duplicate_modal::SubparDuplicatePreviewAction {
             subpar_duplicate_modal::SubparDuplicatePreviewAction::None => {}
             subpar_duplicate_modal::SubparDuplicatePreviewAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
-                let mutations = extract_mutations!(app, SubparDuplicateResolution, stash_and_drop_mutations);
+                let mutations = extract_mutations!(app, SubparDuplicateResolution, stash_and_drop_mutations, &app.resolver);
                 app.stage_resolution(mutations, "Stash subpar duplicates", DecisionKey::SubparDuplicate, "No files to stash", w);
             }
             subpar_duplicate_modal::SubparDuplicatePreviewAction::Cancel => {

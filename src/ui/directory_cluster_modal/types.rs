@@ -6,15 +6,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::Result;
-
 use crate::corpus::paths;
-use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::meta::mutations::Mutation;
-use crate::ui::manual_review_modal::types::{load_file_meta_summary, FileMetaSummary};
+use crate::ui::manual_review_modal::types::FileMetaSummary;
 
 /// A source directory within an overlap cluster.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -65,23 +61,6 @@ pub struct StashFileEntry {
     pub inode: i64,
 }
 
-/// Build a human-readable format summary from format counts (e.g., "FLAC (3)" or "MP3 (2), FLAC (1)").
-fn format_summary_from_counts(format_counts: &std::collections::HashMap<String, usize>) -> String {
-    if format_counts.len() == 1 {
-        let (fmt, count) = format_counts.iter().next().unwrap();
-        format!("{} ({})", fmt, count)
-    } else if format_counts.is_empty() {
-        "unknown".to_string()
-    } else {
-        let mut parts: Vec<String> = format_counts
-            .iter()
-            .map(|(fmt, count)| format!("{} ({})", fmt, count))
-            .collect();
-        parts.sort();
-        parts.join(", ")
-    }
-}
-
 /// Cached data for the cross-source overlap resolution modal.
 ///
 /// Loaded once when the modal opens. All renders use this cached data.
@@ -94,204 +73,6 @@ pub struct DirectoryClusterModalData {
 }
 
 impl DirectoryClusterModalData {
-    /// Load cross-source overlap clusters from the database.
-    pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
-        // Get all CrossSourceOverlap signals (typed, no JSON parsing needed)
-        let signals = read_db
-            .get_cross_source_overlap_signals()
-            .unwrap_or_default();
-
-        if signals.is_empty() {
-            return Ok(Self::default());
-        }
-
-        let mut clusters = Vec::new();
-
-        for signal in signals {
-            let cluster_key = signal.key;
-            let data = signal.data;
-
-            let source_a = data.source_a;
-            let source_b = data.source_b;
-            let source_a_can_stash = data.source_a_can_stash;
-            let source_b_can_stash = data.source_b_can_stash;
-            let overlap_count = data.overlap_count;
-
-            // Collect all inodes for each source from typed track pairs
-            let source_a_inodes: Vec<i64> = data
-                .track_pairs
-                .iter()
-                .map(|tp| tp.source_a_inode)
-                .collect();
-            let source_b_inodes: Vec<i64> = data
-                .track_pairs
-                .iter()
-                .map(|tp| tp.source_b_inode)
-                .collect();
-
-            // Build directory entries for each source
-            let mut directories = Vec::new();
-
-            for (source_path, inodes, can_stash) in [
-                (&source_a, &source_a_inodes, source_a_can_stash),
-                (&source_b, &source_b_inodes, source_b_can_stash),
-            ] {
-                // Deduplicate inodes
-                let unique_inodes: Vec<i64> = {
-                    let mut seen = std::collections::HashSet::new();
-                    inodes.iter().copied().filter(|i| seen.insert(*i)).collect()
-                };
-
-                let mut paths = Vec::new();
-                let mut format_counts: std::collections::HashMap<String, usize> =
-                    std::collections::HashMap::new();
-
-                for &inode in &unique_inodes {
-                    if let Ok(Some(audio_file)) =
-                        read_db.get_audio_file_by_inode(inode, Zone::Corpus)
-                    {
-                        paths.push(audio_file.path().to_string());
-                        *format_counts
-                            .entry(audio_file.audio.file_type.to_uppercase())
-                            .or_insert(0) += 1;
-                    }
-                }
-
-                let format_summary = format_summary_from_counts(&format_counts);
-
-                directories.push(DirectoryGroupEntry {
-                    path_suffix: source_path.clone(),
-                    inodes: unique_inodes,
-                    paths,
-                    format_summary,
-                    can_stash_dupes: can_stash,
-                });
-            }
-
-            // Skip clusters with fewer than 2 sources (shouldn't happen)
-            if directories.len() < 2 {
-                continue;
-            }
-
-            clusters.push(DirectoryClusterEntry {
-                cluster_key,
-                directories,
-                overlap_count,
-            });
-        }
-
-        let file_meta_cache = Self::build_meta_cache(read_db, &clusters);
-
-        Ok(Self {
-            clusters,
-            file_meta_cache,
-        })
-    }
-
-    /// Load release overlap clusters from the database.
-    ///
-    /// Converts `ReleaseOverlapSignal` entries into `DirectoryClusterEntry` +
-    /// `DirectoryGroupEntry`, reusing the exact same types as cross-source overlaps.
-    pub fn load_release_overlaps(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
-        let signals = read_db.get_release_overlap_signals().unwrap_or_default();
-
-        if signals.is_empty() {
-            return Ok(Self::default());
-        }
-
-        let mut clusters = Vec::new();
-
-        for signal in signals {
-            let cluster_key = signal.key;
-            let data = signal.data;
-
-            let mut directories = Vec::new();
-
-            for entry in &data.releases {
-                // Use "source_dir/release_dir" as the path suffix
-                let path_suffix = if entry.release_dir.is_empty() {
-                    entry.source_dir.clone()
-                } else {
-                    format!("{}/{}", entry.source_dir, entry.release_dir)
-                };
-
-                // Deduplicate inodes
-                let unique_inodes: Vec<i64> = {
-                    let mut seen = std::collections::HashSet::new();
-                    entry
-                        .inodes
-                        .iter()
-                        .copied()
-                        .filter(|i| seen.insert(*i))
-                        .collect()
-                };
-
-                let mut paths = Vec::new();
-                let mut format_counts: std::collections::HashMap<String, usize> =
-                    std::collections::HashMap::new();
-
-                for &inode in &unique_inodes {
-                    if let Ok(Some(audio_file)) =
-                        read_db.get_audio_file_by_inode(inode, Zone::Corpus)
-                    {
-                        paths.push(audio_file.path().to_string());
-                        *format_counts
-                            .entry(audio_file.audio.file_type.to_uppercase())
-                            .or_insert(0) += 1;
-                    }
-                }
-
-                let format_summary = format_summary_from_counts(&format_counts);
-
-                directories.push(DirectoryGroupEntry {
-                    path_suffix,
-                    inodes: unique_inodes,
-                    paths,
-                    format_summary,
-                    can_stash_dupes: entry.can_stash,
-                });
-            }
-
-            if directories.len() < 2 {
-                continue;
-            }
-
-            clusters.push(DirectoryClusterEntry {
-                cluster_key,
-                directories,
-                overlap_count: data.file_count,
-            });
-        }
-
-        let file_meta_cache = Self::build_meta_cache(read_db, &clusters);
-
-        Ok(Self {
-            clusters,
-            file_meta_cache,
-        })
-    }
-
-    /// Build a metadata cache for all unique inodes across clusters.
-    fn build_meta_cache(
-        read_db: &ReadOnlyDb<'_>,
-        clusters: &[DirectoryClusterEntry],
-    ) -> HashMap<i64, FileMetaSummary> {
-        let mut cache = HashMap::new();
-        for cluster in clusters {
-            for dir in &cluster.directories {
-                for &inode in &dir.inodes {
-                    if cache.contains_key(&inode) {
-                        continue;
-                    }
-                    if let Some(meta) = load_file_meta_summary(read_db, inode) {
-                        cache.insert(inode, meta);
-                    }
-                }
-            }
-        }
-        cache
-    }
-
     /// Total number of clusters.
     pub fn total_count(&self) -> usize {
         self.clusters.len()

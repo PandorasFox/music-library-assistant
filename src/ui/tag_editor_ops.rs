@@ -6,7 +6,6 @@
 use crossterm::event;
 
 use super::App;
-use crate::corpus::paths;
 use crate::db::types::AudioFile;
 use crate::ui::suspended_views::SuspendTarget;
 use crate::ui::tag_editor;
@@ -30,10 +29,8 @@ impl App {
     /// The input path is an absolute filesystem path. We convert to relative
     /// for database queries since the DB stores paths relative to corpus_root.
     pub(super) fn start_tag_editor_for_path(&mut self, path: &std::path::Path, recursive: bool) {
-        let resolver = paths::get_resolver();
-
         // Convert absolute path to relative for DB queries (corpus browser uses corpus paths)
-        let rel_path = match resolver.to_relative(path) {
+        let rel_path = match self.resolver.to_relative(path) {
             Some(p) => p,
             None => {
                 self.abort_to_health(format!("Path not in corpus: {}", path.display()));
@@ -101,7 +98,7 @@ impl App {
 
         // NOTE: single_file reads tags from disk
         let editor =
-            tag_editor::UnifiedTagEditorState::single_file(audio_file, source, group_context);
+            tag_editor::UnifiedTagEditorState::single_file(audio_file, source, group_context, &self.witch);
 
         // Drain any keypresses that accumulated during loading
         drain_input_buffer();
@@ -130,6 +127,7 @@ impl App {
             audio_files,
             source,
             group_context,
+            &self.witch,
         );
 
         // Drain any keypresses that accumulated during loading
@@ -142,10 +140,8 @@ impl App {
     ///
     /// The input is an absolute filesystem path. We convert to relative for DB queries.
     pub(super) fn open_unified_tag_editor_for_directory(&mut self, directory: &std::path::Path) {
-        let resolver = paths::get_resolver();
-
         // Convert absolute path to relative for DB query
-        let rel_dir = match resolver.to_relative(directory) {
+        let rel_dir = match self.resolver.to_relative(directory) {
             Some(p) => p,
             None => {
                 self.status_message =
@@ -172,7 +168,7 @@ impl App {
 
         // Use directory_aggregated for aggregated tag view across all files
         // NOTE: This is slow - reads tags from disk for all files
-        let editor = tag_editor::UnifiedTagEditorState::directory_aggregated(audio_files);
+        let editor = tag_editor::UnifiedTagEditorState::directory_aggregated(audio_files, &self.witch);
 
         // Drain any keypresses that accumulated during the slow loading
         drain_input_buffer();
@@ -201,11 +197,13 @@ impl App {
         decision_key: crate::meta::decisions::DecisionKey,
         decision_label: String,
     ) {
+        let tag_fields = tag_editor::mutations::load_tag_fields_batch(&audio_files, &self.witch);
         let editor = tag_editor::UnifiedTagEditorState::new(
             mode,
             audio_files,
             tag_editor::TagEditorSource::HealthModal,
             None,
+            tag_fields,
         )
         .with_embedded_mode(decision_key, decision_label);
 
@@ -224,6 +222,7 @@ impl App {
         let editor = tag_editor::UnifiedTagEditorState::aggregated_bulk(
             audio_files,
             tag_editor::TagEditorSource::TagSearch,
+            &self.witch,
         );
 
         // Drain any keypresses that accumulated during loading

@@ -5,12 +5,8 @@
 
 use std::collections::HashMap;
 
-use anyhow::Result;
-
 use crate::corpus::paths;
 use crate::corpus::transcode::TranscodeTarget;
-use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::meta::mutations::transcode::TranscodeMutation;
 use crate::meta::mutations::Mutation;
 
@@ -86,51 +82,19 @@ impl Default for ShitFormatModalData {
 }
 
 impl ShitFormatModalData {
-    /// Load shit format files from the database.
-    pub fn load(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
-        // Get all ShitFormat signals with their file types
-        let shit_format_files = read_db.get_shit_format_files()?;
-        let file_counts_raw = read_db.get_shit_format_counts_by_type()?;
-
-        if shit_format_files.is_empty() {
-            return Ok(Self::default());
-        }
-
-        // Build file entries with track info, split by category
-        let mut lossless_files = Vec::new();
-        let mut lossy_files = Vec::new();
-
-        for (inode, _signal_path, file_type) in shit_format_files {
-            // Look up current path by inode (signal path may be stale after corpus reorganization)
-            let corpus_path = match read_db.get_audio_file_by_inode(inode, Zone::Corpus)? {
-                Some(af) => af.path().to_string(),
-                None => continue, // File no longer in corpus, skip
-            };
-
-            let entry = ShitFormatEntry {
-                corpus_path,
-                inode,
-                file_type,
-            };
-
-            if entry.is_lossless() {
-                lossless_files.push(entry);
-            } else if entry.is_lossy() {
-                lossy_files.push(entry);
-            }
-            // Unknown formats are silently ignored
-        }
-
-        // Build file counts map
-        let file_counts: HashMap<String, i64> = file_counts_raw.into_iter().collect();
-
-        Ok(Self {
+    /// Construct from pre-loaded data (used by modal_loaders).
+    pub fn new_from_loaded(
+        lossless_files: Vec<ShitFormatEntry>,
+        lossy_files: Vec<ShitFormatEntry>,
+        file_counts: HashMap<String, i64>,
+    ) -> Self {
+        Self {
             lossless_files,
             lossy_files,
             file_counts,
             opus_bitrate_kbps: DEFAULT_OPUS_BITRATE,
             lossy_to_flac: false,
-        })
+        }
     }
 
     /// Total number of shit format files.

@@ -10,7 +10,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear};
 use ratatui::Frame;
 
-use crate::corpus::paths;
 use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::meta::mutations::Mutation;
@@ -408,8 +407,12 @@ impl StashCancelButton {
 /// Generate StashFromZone + DropFromIndex mutations for a single corpus file.
 ///
 /// Used by resolution modals that stash problematic files (corrupt, subpar, etc.).
-pub fn stash_file_mutations(corpus_path: &str, inode: i64, stash_name: &str) -> Vec<Mutation> {
-    let resolver = paths::get_resolver();
+pub fn stash_file_mutations(
+    corpus_path: &str,
+    inode: i64,
+    stash_name: &str,
+    resolver: &crate::corpus::paths::PathResolver,
+) -> Vec<Mutation> {
     let abs_path = resolver.resolve(std::path::Path::new(corpus_path));
 
     vec![

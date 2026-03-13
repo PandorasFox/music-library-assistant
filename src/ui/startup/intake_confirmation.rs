@@ -7,7 +7,6 @@
 //! After confirmation, transitions immediately to the progress screen
 //! which handles showing indexing + content analysis progress.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -19,9 +18,7 @@ use ratatui::Frame;
 use crate::ui::input::InputAction;
 use crate::ui::widgets::centered_rect_fixed;
 
-use crate::corpus::paths;
 use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::logging::log_general;
 use crate::meta::mutations::indexing::IndexFileFromPathMutation;
 use crate::meta::mutations::Mutation;
@@ -91,157 +88,6 @@ pub enum IntakeConfirmationAction {
 }
 
 impl IntakeConfirmationState {
-    /// Gather intake confirmation state for a specific zone.
-    ///
-    /// Queries unindexed signals for the given zone, verifies file existence
-    /// on disk, and groups files by directory for display.
-    ///
-    /// Returns None if there are no unindexed files.
-    pub fn gather_zone<Z: crate::zones::AudioZone>(
-        read_db: &ReadOnlyDb<'_>,
-        source: IntakeSource,
-    ) -> Option<Self> {
-        let unindexed = match read_db.get_unindexed_signals_for::<Z>() {
-            Ok(u) => u,
-            Err(e) => {
-                crate::logging::log_error(format!(
-                    "IntakeConfirmation::gather_zone<{}>: query failed: {:?}",
-                    Z::ZONE_STR, e
-                ));
-                return None;
-            }
-        };
-
-        log_general(format!(
-            "IntakeConfirmation::gather_zone<{}>: found {} unindexed signals",
-            Z::ZONE_STR,
-            unindexed.len()
-        ));
-
-        if unindexed.is_empty() {
-            return None;
-        }
-
-        let resolver = paths::get_resolver();
-        let mut files: Vec<UnindexedFileEntry> = Vec::new();
-        let mut total_bytes: u64 = 0;
-        let mut directories: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-        let mut dir_to_files: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-        for (_inode, rel_path_str) in &unindexed {
-            let rel_path = std::path::Path::new(rel_path_str);
-            let abs_path = resolver.resolve(rel_path);
-
-            if abs_path.exists() && abs_path.is_file() {
-                if let Ok(meta) = std::fs::metadata(&abs_path) {
-                    total_bytes += meta.len();
-                }
-
-                if let Some(parent) = abs_path.parent() {
-                    directories.insert(parent.to_path_buf());
-                }
-
-                if let (Some(parent), Some(filename)) = (rel_path.parent(), rel_path.file_name()) {
-                    let dir_str = parent.to_string_lossy().to_string();
-                    let file_str = filename.to_string_lossy().to_string();
-                    dir_to_files.entry(dir_str).or_default().push(file_str);
-                }
-
-                files.push(UnindexedFileEntry {
-                    abs_path,
-                    zone: Z::ZONE,
-                });
-            }
-        }
-
-        if files.is_empty() {
-            return None;
-        }
-
-        let grouped_files: Vec<DirectoryGroup> = dir_to_files
-            .into_iter()
-            .map(|(dir, mut filenames)| {
-                filenames.sort();
-                DirectoryGroup {
-                    display_path: dir,
-                    filenames,
-                    zone: Z::ZONE,
-                }
-            })
-            .collect();
-
-        log_general(format!(
-            "IntakeConfirmation ({}): gathered {} files ({} bytes) from {} directories",
-            Z::ZONE_STR,
-            files.len(),
-            total_bytes,
-            directories.len()
-        ));
-
-        Some(Self {
-            file_count: files.len(),
-            total_bytes,
-            files,
-            source,
-            multi_zone: false,
-            _directory_count: directories.len(),
-            grouped_files,
-            scroll_offset: 0,
-        })
-    }
-
-    /// Gather intake confirmation state for startup: checks both corpus AND inbox.
-    ///
-    /// Queries unindexed signals for both zones, merging results with corpus
-    /// groups first, then inbox groups.
-    ///
-    /// Returns None if there are no unindexed files in either zone.
-    pub fn gather_startup(read_db: &ReadOnlyDb<'_>) -> Option<Self> {
-        use crate::zones::{CorpusZone, InboxZone};
-        let corpus_state = Self::gather_zone::<CorpusZone>(read_db, IntakeSource::Startup);
-        let inbox_state = Self::gather_zone::<InboxZone>(read_db, IntakeSource::Startup);
-
-        match (corpus_state, inbox_state) {
-            (None, None) => None,
-            (Some(mut state), None) => {
-                state.source = IntakeSource::Startup;
-                Some(state)
-            }
-            (None, Some(mut state)) => {
-                state.source = IntakeSource::Startup;
-                Some(state)
-            }
-            (Some(corpus), Some(inbox)) => {
-                // Merge: corpus groups first, then inbox groups
-                let mut files = corpus.files;
-                files.extend(inbox.files);
-
-                let mut grouped_files = corpus.grouped_files;
-                grouped_files.extend(inbox.grouped_files);
-
-                let file_count = files.len();
-                let total_bytes = corpus.total_bytes + inbox.total_bytes;
-                let directory_count = corpus._directory_count + inbox._directory_count;
-
-                log_general(format!(
-                    "IntakeConfirmation (startup): merged {} corpus + {} inbox = {} total files",
-                    corpus.file_count, inbox.file_count, file_count
-                ));
-
-                Some(Self {
-                    file_count,
-                    total_bytes,
-                    files,
-                    source: IntakeSource::Startup,
-                    multi_zone: true,
-                    _directory_count: directory_count,
-                    grouped_files,
-                    scroll_offset: 0,
-                })
-            }
-        }
-    }
-
     /// Compute total number of lines in the file list display
     fn total_list_lines(&self) -> usize {
         let group_lines: usize = self

@@ -3,9 +3,6 @@
 //! Data structures for the manual review modal, including review groups,
 //! file entries, and data loading from signal tables.
 
-use anyhow::Result;
-
-use crate::db::ReadOnlyDb;
 
 /// What kind of manual review this modal is performing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -68,31 +65,6 @@ pub struct FileMetaSummary {
     pub tags: Vec<(String, String)>,
 }
 
-/// Load audio metadata summary for a single inode from the database.
-///
-/// Returns `None` if no audio_info exists for this inode.
-pub fn load_file_meta_summary(read_db: &crate::db::ReadOnlyDb<'_>, inode: i64) -> Option<FileMetaSummary> {
-    let info = read_db.get_audio_info(inode).ok().flatten()?;
-    let tags = read_db.get_tags::<crate::zones::CorpusZone>(inode).ok().unwrap_or_default();
-    let has_pictures = read_db.get_has_pictures(inode).unwrap_or(false);
-    let file_size = read_db
-        .get_audio_file_by_inode(inode, crate::db::types::Zone::Corpus)
-        .ok()
-        .flatten()
-        .map(|af| af.entry.file_size)
-        .unwrap_or(0);
-
-    Some(FileMetaSummary {
-        file_type: info.file_type,
-        duration_ms: info.duration_ms,
-        bitrate_kbps: info.bitrate_kbps,
-        sample_rate: info.sample_rate,
-        file_size,
-        has_pictures,
-        tags: tags.into_iter().map(|t| (t.tag_name, t.tag_value)).collect(),
-    })
-}
-
 /// A single file entry within a review group.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReviewFileEntry {
@@ -126,132 +98,7 @@ pub struct ManualReviewData {
     pub groups: Vec<ReviewGroup>,
 }
 
-impl ManualReviewData {
-    /// Load review data from the database based on review kind.
-    pub fn load(read_db: &ReadOnlyDb<'_>, kind: ReviewKind) -> Result<Self> {
-        let mut data = match kind {
-            ReviewKind::RedundantDuplicate => Self::load_redundant_duplicates(read_db)?,
-            ReviewKind::DeployConflict => Self::load_deploy_conflicts(read_db)?,
-            ReviewKind::MetadataDuplicate => Self::load_metadata_duplicates(read_db)?,
-        };
-        data.enrich_with_metadata(read_db);
-        Ok(data)
-    }
-
-    fn load_redundant_duplicates(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
-        let signal_groups = read_db.get_redundant_duplicate_groups()?;
-
-        let mut groups = Vec::new();
-        for (key, data) in signal_groups {
-            let label = format!("{} ({}×)", data.file_type, data.inodes.len());
-
-            let mut files = Vec::new();
-            for (idx, &inode) in data.inodes.iter().enumerate() {
-                let path = data.paths.get(idx).cloned().unwrap_or_else(|| {
-                    read_db
-                        .get_path_for_inode::<crate::zones::CorpusZone>(inode)
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| format!("<inode {}>", inode))
-                });
-
-                files.push(ReviewFileEntry {
-                    corpus_path: path,
-                    inode,
-                    context: "Same fingerprint, equivalent quality".to_string(),
-                    stashed: false,
-                    meta: None,
-                });
-            }
-
-            if files.len() >= 2 {
-                groups.push(ReviewGroup {
-                    label,
-                    files,
-                    signal_key: Some(key),
-                });
-            }
-        }
-
-        Ok(Self { groups })
-    }
-
-    fn load_deploy_conflicts(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
-        let conflict_groups = read_db.get_deploy_conflict_groups()?;
-
-        let mut groups = Vec::new();
-        for group in conflict_groups {
-            let label = group.deploy_path.clone();
-
-            let files: Vec<ReviewFileEntry> = group
-                .conflicting_files
-                .into_iter()
-                .map(|(corpus_path, inode)| ReviewFileEntry {
-                    corpus_path,
-                    inode,
-                    context: format!("Deploys to: {}", group.deploy_path),
-                    stashed: false,
-                    meta: None,
-                })
-                .collect();
-
-            if files.len() >= 2 {
-                groups.push(ReviewGroup {
-                    label,
-                    files,
-                    signal_key: None,
-                });
-            }
-        }
-
-        Ok(Self { groups })
-    }
-
-    fn load_metadata_duplicates(read_db: &ReadOnlyDb<'_>) -> Result<Self> {
-        let signal_groups = read_db.get_metadata_duplicate_groups()?;
-
-        let mut groups = Vec::new();
-        for (_key, data) in signal_groups {
-            let label = data.tag_signature.clone();
-
-            let mut files = Vec::new();
-            for &inode in &data.inodes {
-                let path = read_db
-                    .get_path_for_inode::<crate::zones::CorpusZone>(inode)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| format!("<inode {}>", inode));
-
-                files.push(ReviewFileEntry {
-                    corpus_path: path,
-                    inode,
-                    context: data.tag_signature.clone(),
-                    stashed: false,
-                    meta: None,
-                });
-            }
-
-            if files.len() >= 2 {
-                groups.push(ReviewGroup {
-                    label,
-                    files,
-                    signal_key: None,
-                });
-            }
-        }
-
-        Ok(Self { groups })
-    }
-
-    /// Enrich all file entries with audio metadata and tags from the database.
-    fn enrich_with_metadata(&mut self, read_db: &ReadOnlyDb<'_>) {
-        for group in &mut self.groups {
-            for file in &mut group.files {
-                file.meta = load_file_meta_summary(read_db, file.inode);
-            }
-        }
-    }
-}
+impl ManualReviewData {}
 
 // Re-export from shared helpers for callers that import from here.
 pub use crate::ui::helpers::stash_file_mutations;

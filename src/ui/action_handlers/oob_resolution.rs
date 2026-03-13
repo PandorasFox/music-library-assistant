@@ -5,7 +5,6 @@
 use super::super::App;
 use super::witness;
 use super::HandleAction;
-use crate::corpus::paths;
 use crate::db::domain;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::{moved_file_modal, oob_conflict_modal, oob_sync_modal, ActiveView};
@@ -140,7 +139,7 @@ impl App {
         };
         let _ = selected_indices; // used above for collecting
 
-        let resolver = paths::get_resolver();
+        let resolver = &self.resolver;
 
         let tracks: Vec<(i64, std::path::PathBuf)> = files_ref
             .into_iter()
@@ -250,7 +249,7 @@ impl App {
             return;
         }
 
-        let resolver = paths::get_resolver();
+        let resolver = &self.resolver;
 
         // Convert to (inode, abs_path) pairs for individual mutations
         let tracks: Vec<(i64, std::path::PathBuf)> = files_data
@@ -310,7 +309,7 @@ impl App {
         use crate::meta::mutations::indexing::AcknowledgeMtimeOnlyMutation;
         use crate::meta::mutations::Mutation;
 
-        let resolver = paths::get_resolver();
+        let resolver = &self.resolver;
 
         let tracks = match &self.view {
             ActiveView::OobConflictInspection(ref state) => {

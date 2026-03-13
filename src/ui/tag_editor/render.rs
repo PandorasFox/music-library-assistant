@@ -31,6 +31,7 @@ impl UnifiedTagEditorState {
         area: Rect,
         art_picker: &mut AlbumArtPicker,
         art_cache: &mut AlbumArtCache,
+        resolver: &crate::corpus::paths::PathResolver,
     ) {
         // Layout: info pane | 3-column | status box
         let editor_layout = Layout::default()
@@ -42,7 +43,7 @@ impl UnifiedTagEditorState {
             .split(area);
 
         self.render_info_pane(f, editor_layout[0]);
-        self.render_three_column(f, editor_layout[1], art_picker, art_cache);
+        self.render_three_column(f, editor_layout[1], art_picker, art_cache, resolver);
 
         // Render modal overlay if active
         if let Some(modal) = &self.modal {
@@ -130,6 +131,7 @@ impl UnifiedTagEditorState {
         area: Rect,
         art_picker: &mut AlbumArtPicker,
         art_cache: &mut AlbumArtCache,
+        resolver: &crate::corpus::paths::PathResolver,
     ) {
         let layout = ThreePaneLayout::horizontal()
             .left(PaneConfig::new("", 30))
@@ -150,7 +152,7 @@ impl UnifiedTagEditorState {
             ])
             .split(right_area);
 
-        self.render_art_preview_pane(f, right_chunks[0], art_picker, art_cache);
+        self.render_art_preview_pane(f, right_chunks[0], art_picker, art_cache, resolver);
         self.render_action_panel(f, right_chunks[1]);
     }
 
@@ -583,6 +585,7 @@ impl UnifiedTagEditorState {
         area: Rect,
         art_picker: &mut AlbumArtPicker,
         art_cache: &mut AlbumArtCache,
+        resolver: &crate::corpus::paths::PathResolver,
     ) {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -603,8 +606,7 @@ impl UnifiedTagEditorState {
                 return;
             }
         };
-        let abs_path =
-            crate::corpus::paths::get_resolver().resolve(std::path::Path::new(&rel_path));
+        let abs_path = resolver.resolve(std::path::Path::new(&rel_path));
 
         // Evict stale cache entries (keep only the current file)
         let key = ArtCacheKey::Embedded(abs_path.clone());

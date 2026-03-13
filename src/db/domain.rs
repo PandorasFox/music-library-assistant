@@ -441,6 +441,7 @@ define_domain_query! {
 // Detail Queries (Wave 3: modal init loaders)
 // ============================================================================
 
+use crate::db::modal_loaders;
 use crate::ui::corrupt_file_modal;
 use crate::ui::deploy_modal;
 use crate::ui::directory_cluster_modal;
@@ -453,45 +454,57 @@ use crate::ui::subpar_duplicate_modal;
 
 define_domain_query! {
     /// Missing file data: restorable and non-restorable missing corpus files.
-    GetMissingFileData => missing_file_modal::MissingFileModalData, uncached, modal_load
+    GetMissingFileData => missing_file_modal::MissingFileModalData, uncached, |db| {
+        modal_loaders::load_missing_file_data(db).ok().unwrap_or_default()
+    }
 }
 
 define_domain_query! {
     /// Missing directory data: directories no longer present on disk.
-    GetMissingDirectoryData => missing_directory_modal::MissingDirectoryModalData, uncached, modal_load
+    GetMissingDirectoryData => missing_directory_modal::MissingDirectoryModalData, uncached, |db| {
+        modal_loaders::load_missing_directory_data(db).ok().unwrap_or_default()
+    }
 }
 
 define_domain_query! {
     /// Corrupt file data: files that failed indexing.
-    GetCorruptFileData => corrupt_file_modal::CorruptFileModalData, uncached, modal_load
+    GetCorruptFileData => corrupt_file_modal::CorruptFileModalData, uncached, |db| {
+        modal_loaders::load_corrupt_file_data(db).ok().unwrap_or_default()
+    }
 }
 
 define_domain_query! {
     /// Subpar duplicate data: lower-quality versions of existing files.
-    GetSubparDuplicateData => subpar_duplicate_modal::SubparDuplicateModalData, uncached, modal_load
+    GetSubparDuplicateData => subpar_duplicate_modal::SubparDuplicateModalData, uncached, |db| {
+        modal_loaders::load_subpar_duplicate_data(db).ok().unwrap_or_default()
+    }
 }
 
 define_domain_query! {
     /// Cross-source directory overlap clusters.
-    GetDirectoryClusterData => directory_cluster_modal::DirectoryClusterModalData, uncached, modal_load
+    GetDirectoryClusterData => directory_cluster_modal::DirectoryClusterModalData, uncached, |db| {
+        modal_loaders::load_directory_cluster_data(db).ok().unwrap_or_default()
+    }
 }
 
 define_domain_query! {
     /// Release overlap clusters (reuses directory cluster modal data).
     GetReleaseOverlapData => directory_cluster_modal::DirectoryClusterModalData, uncached, |db| {
-        directory_cluster_modal::DirectoryClusterModalData::load_release_overlaps(db).ok().unwrap_or_default()
+        modal_loaders::load_release_overlap_data(db).ok().unwrap_or_default()
     }
 }
 
 define_domain_query! {
     /// Shit format file data: non-Vorbis containers needing remux/transcode.
-    GetShitFormatData => shit_format_modal::ShitFormatModalData, uncached, modal_load
+    GetShitFormatData => shit_format_modal::ShitFormatModalData, uncached, |db| {
+        modal_loaders::load_shit_format_data(db).ok().unwrap_or_default()
+    }
 }
 
 define_domain_query! {
     /// Inbox corpus match data with configurable bitrate fuzz tolerance.
     GetInboxCorpusMatchData { bitrate_fuzz_percent: f64 } => inbox_corpus_match_modal::InboxCorpusMatchModalData, uncached, |s, db| {
-        inbox_corpus_match_modal::InboxCorpusMatchModalData::load(db, s.bitrate_fuzz_percent)
+        modal_loaders::load_inbox_corpus_match_data(db, s.bitrate_fuzz_percent)
             .ok()
             .unwrap_or_default()
     }
@@ -500,7 +513,7 @@ define_domain_query! {
 define_domain_query! {
     /// Deploy modal data with optional config for library assignment.
     GetDeployData { config: Option<crate::config::Config> } => deploy_modal::DeployModalData, uncached, |s, db| {
-        deploy_modal::DeployModalData::load(db, s.config.as_ref())
+        modal_loaders::load_deploy_data(db, s.config.as_ref())
             .unwrap_or_default()
     }
 }
@@ -508,7 +521,7 @@ define_domain_query! {
 define_domain_query! {
     /// Manual review data for a specific review kind.
     GetManualReviewData { kind: manual_review_modal::types::ReviewKind } => manual_review_modal::types::ManualReviewData, uncached, |s, db| {
-        manual_review_modal::types::ManualReviewData::load(db, s.kind)
+        modal_loaders::load_manual_review_data(db, s.kind)
             .ok()
             .unwrap_or_default()
     }
@@ -639,16 +652,15 @@ define_domain_query! {
         source: crate::ui::startup::IntakeSource,
         zone: Option<crate::db::types::Zone>,
     } => Option<crate::ui::startup::IntakeConfirmationState>, uncached, |s, db| {
-        use crate::ui::startup::IntakeConfirmationState;
         match s.zone {
             Some(crate::db::types::Zone::Corpus) => {
-                IntakeConfirmationState::gather_zone::<crate::zones::CorpusZone>(db, s.source)
+                modal_loaders::gather_intake_zone::<crate::zones::CorpusZone>(db, s.source)
             }
             Some(crate::db::types::Zone::Inbox) => {
-                IntakeConfirmationState::gather_zone::<crate::zones::InboxZone>(db, s.source)
+                modal_loaders::gather_intake_zone::<crate::zones::InboxZone>(db, s.source)
             }
             Some(_) => None,
-            None => IntakeConfirmationState::gather_startup(db),
+            None => modal_loaders::gather_intake_startup(db),
         }
     }
 }
@@ -659,7 +671,7 @@ define_domain_query! {
         group: crate::meta::signals::data::CompoundGroup,
         zone: crate::db::types::Zone,
     } => Option<crate::ui::compound_split_v2::CompoundSplitDataV2>, uncached, |s, db| {
-        crate::ui::compound_split_v2::CompoundSplitDataV2::from_compound_group(&s.group, db, s.zone)
+        modal_loaders::load_compound_split_data(&s.group, db, s.zone)
     }
 }
 
@@ -683,19 +695,18 @@ fn load_tag_canonicity_signal_data(
     read_db: &ReadOnlyDb,
 ) -> Option<crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2> {
     use crate::ui::CanonicitySignalKind;
-    use crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2;
     match kind {
         CanonicitySignalKind::TagCanonicity => {
             let signal = read_db.get_tag_canonicity_signal(key).ok()??;
-            TagCanonicalityModalDataV2::from_tag_canonicity(&signal, read_db)
+            modal_loaders::load_tag_canonicity_data(&signal, read_db)
         }
         CanonicitySignalKind::InconsistentAlbumArtist => {
             let signal = read_db.get_inconsistent_album_artist_signal(key).ok()??;
-            TagCanonicalityModalDataV2::from_inconsistent_album_artist(&signal, read_db)
+            modal_loaders::load_inconsistent_album_artist_data(&signal, read_db)
         }
         CanonicitySignalKind::InboxTagCanonicity => {
             let signal = read_db.get_inbox_tag_canonicity_signal(key).ok()??;
-            TagCanonicalityModalDataV2::from_inbox_tag_canonicity(&signal, read_db)
+            modal_loaders::load_inbox_tag_canonicity_data(&signal, read_db)
         }
     }
 }
@@ -945,6 +956,55 @@ define_domain_query! {
     }
 }
 
+define_domain_query! {
+    /// Read tags from disk for a batch of audio files (by inode).
+    ///
+    /// Resolves each inode's path from the DB, reads tags via TagSet::from_file,
+    /// and returns (inode, tag_pairs) for each. Used by the tag editor to avoid
+    /// client-side TagSet::from_file / get_resolver() coupling.
+    GetFileTagValues {
+        inodes: Vec<i64>,
+        zone: crate::db::types::Zone,
+    } => Vec<(i64, Vec<(String, String)>)>, uncached, |s, db| {
+        load_file_tag_values(&s.inodes, s.zone, db)
+    }
+}
+
+/// Read tags from disk for a batch of audio files.
+fn load_file_tag_values(
+    inodes: &[i64],
+    zone: crate::db::types::Zone,
+    db: &ReadOnlyDb,
+) -> Vec<(i64, Vec<(String, String)>)> {
+    use crate::corpus::paths;
+    use crate::corpus::tags::TagSet;
+
+    let resolver = paths::get_resolver();
+    let path_map = db
+        .get_file_paths_batch(zone, inodes)
+        .unwrap_or_default();
+
+    let mut results = Vec::with_capacity(inodes.len());
+    for &inode in inodes {
+        let Some(rel_path) = path_map.get(&inode) else {
+            results.push((inode, Vec::new()));
+            continue;
+        };
+        let abs_path = resolver.resolve(std::path::Path::new(rel_path));
+        let tags = match TagSet::from_file(&abs_path) {
+            Ok(ts) => ts.into_vec(),
+            Err(e) => {
+                crate::logging::log_error(format!(
+                    "Could not read tags from {}: {}", abs_path.display(), e
+                ));
+                Vec::new()
+            }
+        };
+        results.push((inode, tags));
+    }
+    results
+}
+
 // ============================================================================
 // Protocol Bridge — Domain Query Registry
 // ============================================================================
@@ -1052,6 +1112,7 @@ domain_query_protocol! {
     GetReleaseStagingData,
     GetTagEditorFiles,
     GetInboxOrganizeData,
+    GetFileTagValues,
 }
 
 // ============================================================================

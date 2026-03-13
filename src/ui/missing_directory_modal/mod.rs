@@ -8,7 +8,6 @@ pub mod preview;
 
 pub use preview::{MissingDirectoryPreviewAction, MissingDirectoryPreviewState};
 
-use crate::db::ReadOnlyDb;
 use crate::meta::mutations::indexing::DropDirectoryFromIndexMutation;
 use crate::meta::mutations::Mutation;
 use std::path::PathBuf;
@@ -21,12 +20,6 @@ pub struct MissingDirectoryModalData {
 }
 
 impl MissingDirectoryModalData {
-    /// Load missing directory data from the database.
-    pub fn load(read_db: &ReadOnlyDb<'_>) -> anyhow::Result<Self> {
-        let directories = read_db.get_missing_directory_paths()?;
-        Ok(Self { directories })
-    }
-
     /// Count of missing directories.
     pub fn count(&self) -> usize {
         self.directories.len()

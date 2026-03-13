@@ -127,6 +127,8 @@ pub enum UnifiedTagEditorAction {
     /// Request to fill tags from database (requires DB access from UI layer)
     /// inode is None if the file hasn't been indexed yet
     RequestFillFromDb { inode: Option<i64> },
+    /// Request to re-read tags from disk (requires domain query from UI layer)
+    RequestFillFromDisk,
     /// Request to show transaction review (requires daemon access to populate decisions)
     RequestTransactionReview,
     /// Close embedded tag editor without staging (Esc from embedded mode)

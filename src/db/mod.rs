@@ -17,6 +17,7 @@
 
 pub mod data_migrations;
 pub mod domain;
+pub mod modal_loaders;
 pub mod queries;
 pub mod reconciler;
 mod schema;

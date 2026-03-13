@@ -5,10 +5,6 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
-
-use crate::corpus::paths;
-use crate::db::ReadOnlyDb;
 use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::meta::mutations::Mutation;
@@ -24,23 +20,6 @@ pub struct InboxCorpusMatchModalData {
 }
 
 impl InboxCorpusMatchModalData {
-    /// Load inbox corpus match entries from the database.
-    ///
-    /// `bitrate_fuzz_percent` is the tolerance for treating near-identical
-    /// bitrates as equivalent (e.g. 5.0 = 5% tolerance).
-    pub fn load(read_db: &ReadOnlyDb<'_>, bitrate_fuzz_percent: f64) -> Result<Self> {
-        let mut entries = read_db.get_inbox_corpus_match_entries(bitrate_fuzz_percent)?;
-
-        // Sort: Equivalent first, then Subpar, then Better
-        entries.sort_by_key(|e| match e.classification {
-            MatchClassification::Equivalent => 0,
-            MatchClassification::Subpar => 1,
-            MatchClassification::Better => 2,
-        });
-
-        Ok(Self { entries })
-    }
-
     /// Total number of entries.
     pub fn total_count(&self) -> usize {
         self.entries.len()
@@ -78,8 +57,11 @@ impl InboxCorpusMatchModalData {
     ///
     /// Only Equivalent and Subpar entries are stashed. Better entries
     /// (inbox is higher quality) are left alone.
-    pub fn stash_and_drop_mutations(&self) -> Vec<Mutation> {
-        self.stash_mutations_for(|c| {
+    pub fn stash_and_drop_mutations(
+        &self,
+        resolver: &crate::corpus::paths::PathResolver,
+    ) -> Vec<Mutation> {
+        self.stash_mutations_for(resolver, |c| {
             matches!(
                 c,
                 MatchClassification::Equivalent | MatchClassification::Subpar
@@ -89,15 +71,18 @@ impl InboxCorpusMatchModalData {
 
     /// Generate StashFromZone + DropFromIndex mutations for ALL entries,
     /// including those classified as Better.
-    pub fn stash_all_mutations(&self) -> Vec<Mutation> {
-        self.stash_mutations_for(|_| true)
+    pub fn stash_all_mutations(
+        &self,
+        resolver: &crate::corpus::paths::PathResolver,
+    ) -> Vec<Mutation> {
+        self.stash_mutations_for(resolver, |_| true)
     }
 
     fn stash_mutations_for(
         &self,
+        resolver: &crate::corpus::paths::PathResolver,
         predicate: impl Fn(MatchClassification) -> bool,
     ) -> Vec<Mutation> {
-        let resolver = paths::get_resolver();
         let mut mutations = Vec::new();
 
         for entry in &self.entries {

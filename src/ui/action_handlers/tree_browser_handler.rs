@@ -78,8 +78,6 @@ impl App {
                     (vec![], None, None, None, None, None)
                 }
             };
-        drop(config);
-
         let panel = tree_browser::variants::corpus::DirConfigPanelState {
             source_path: relative,
             libraries: libraries.clone(),

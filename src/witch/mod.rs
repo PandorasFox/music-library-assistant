@@ -603,6 +603,11 @@ impl Witch {
                         AuthenticatedBody::Query(payload) => {
                             let response = match payload {
                                 QueryPayload::Status => QueryResponse::Status(w.publish_status()),
+                                QueryPayload::Config => {
+                                    let config = w.read_config(|c| c.clone())
+                                        .ok_or(ProtocolError::NotReady)?;
+                                    QueryResponse::Config(config)
+                                }
                                 QueryPayload::Domain(_) => {
                                     unreachable!("domain queries handled above")
                                 }

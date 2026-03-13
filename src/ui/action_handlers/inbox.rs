@@ -69,7 +69,7 @@ impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchPreviewAction {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
                     ActiveView::InboxCorpusMatchResolution(ref preview) => {
-                        preview.cached_data.stash_and_drop_mutations()
+                        preview.cached_data.stash_and_drop_mutations(&app.resolver)
                     }
                     _ => Vec::new(),
                 };
@@ -79,7 +79,7 @@ impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchPreviewAction {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
                     ActiveView::InboxCorpusMatchResolution(ref preview) => {
-                        preview.cached_data.stash_all_mutations()
+                        preview.cached_data.stash_all_mutations(&app.resolver)
                     }
                     _ => Vec::new(),
                 };

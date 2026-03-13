@@ -24,7 +24,7 @@ use crate::auth::SessionToken;
 use crate::meta::decisions::{Decision, DecisionKey, DiscardSummary};
 use crate::meta::protocol::{
     AuthResponse, AuthenticatedBody, AuthenticatedResponse, CommandPayload, CommandResponse,
-    DecisionDetail, ProtocolError, ProtocolQuery, StatusQuery,
+    ConfigQuery, DecisionDetail, ProtocolError, ProtocolQuery, StatusQuery,
     TransactionPayload, TransactionResponse, UnauthenticatedBody, UnauthenticatedResponse,
 };
 use crate::meta::wire::{self, WireRequest, WireResponse};
@@ -91,6 +91,10 @@ pub struct WitchHandle {
     /// Session token from the authenticated operator. Set after login.
     /// Threaded into every outgoing HandleCommand for server-side validation.
     session_token: Option<SessionToken>,
+
+    /// Cached config from server. Fetched once after login, invalidated on
+    /// config generation change.
+    cached_config: Option<crate::config::Config>,
 }
 
 impl WitchHandle {
@@ -101,6 +105,7 @@ impl WitchHandle {
         Self {
             transport: Transport::Channel(cmd_tx),
             session_token: None,
+            cached_config: None,
         }
     }
 
@@ -110,6 +115,7 @@ impl WitchHandle {
         Ok(Self {
             transport: Transport::Socket(std::sync::Mutex::new(stream)),
             session_token: None,
+            cached_config: None,
         })
     }
 
@@ -262,6 +268,23 @@ impl WitchHandle {
     /// the Witch thread. The Witch replies immediately from `publish_status()`.
     pub fn witch_status(&self) -> WitchStatus {
         self.send_query(StatusQuery)
+    }
+
+    /// Get the current config. Fetches from server on first call, then
+    /// returns the cached copy. Call `invalidate_config_cache()` when the
+    /// config generation counter changes.
+    pub fn config(&mut self) -> crate::config::Config {
+        if let Some(ref c) = self.cached_config {
+            return c.clone();
+        }
+        let config = self.send_query(ConfigQuery);
+        self.cached_config = Some(config.clone());
+        config
+    }
+
+    /// Drop the cached config so the next `config()` call re-fetches.
+    pub fn invalidate_config_cache(&mut self) {
+        self.cached_config = None;
     }
 
     /// Attempt login. Returns a session token on success.

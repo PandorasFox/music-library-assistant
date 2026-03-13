@@ -19,7 +19,6 @@ pub type PendingTagEdits = HashMap<i64, Vec<(String, String, String)>>;
 use crate::corpus::paths;
 use crate::corpus::tags::TagSet;
 use crate::db::types::Zone;
-use crate::db::ReadOnlyDb;
 use crate::meta::mutations::indexing::EmitCanonicalTagMutation;
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::meta::mutations::{Mutation, TagOp};
@@ -73,78 +72,6 @@ pub struct CompoundSplitDataV2 {
 }
 
 impl CompoundSplitDataV2 {
-    /// Construct from a `CompoundGroup` (aggregated by compound value).
-    ///
-    /// Loads the compound entry from the first inode's signal data, then
-    /// loads file info for ALL inodes in the group. This lets the operator
-    /// decide once per unique compound value, seeing all affected files.
-    pub fn from_compound_group(
-        group: &CompoundGroup,
-        read_db: &ReadOnlyDb,
-        zone: Zone,
-    ) -> Option<Self> {
-        if group.inodes.is_empty() {
-            return None;
-        }
-
-        // Load compound entry from the first inode's signal (dispatch by zone)
-        let first_compounds = if zone == Zone::Inbox {
-            read_db
-                .get_inbox_compound_tag_signal(group.inodes[0])
-                .ok()??
-                .compounds
-        } else {
-            read_db
-                .get_compound_tag_signal(group.inodes[0])
-                .ok()??
-                .compounds
-        };
-        let c = first_compounds
-            .iter()
-            .find(|c| c.tag_name == group.tag_name && c.compound_value == group.compound_value)?;
-        let compound = CompoundEntry {
-            tag_name: c.tag_name.clone(),
-            compound_value: c.compound_value.clone(),
-            split_parts: c.split_parts.clone(),
-            matching_parts: c.matching_parts.clone(),
-        };
-
-        // Load file info for all inodes in the group
-        let resolver = paths::get_resolver();
-        let mut files = Vec::new();
-
-        for &inode in &group.inodes {
-            if let Ok(Some(audio_file)) = read_db.get_audio_file_by_inode(inode, zone) {
-                let path = audio_file.path();
-                let filename = Path::new(path)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.to_string());
-
-                // Load tags from disk
-                let abs_path = resolver.resolve(Path::new(path));
-                let tagset = TagSet::from_file(&abs_path).unwrap_or_else(|_| TagSet::empty());
-
-                let tag_values: Vec<(String, String)> = tagset
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect();
-
-                files.push(FileTagInfo {
-                    inode,
-                    filename,
-                    path: path.to_string(),
-                    tag_values,
-                });
-            }
-        }
-
-        // Sort files alphabetically by filename for consistent display
-        files.sort_by(|a, b| a.filename.cmp(&b.filename));
-
-        Some(Self { compound, files })
-    }
-
     /// Create a CanonicalTag signal emission mutation.
     pub fn create_canonical_signal(&self) -> Mutation {
         Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {

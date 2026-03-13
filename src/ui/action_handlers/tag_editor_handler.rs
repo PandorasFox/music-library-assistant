@@ -117,6 +117,13 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
                 }
             },
 
+            UnifiedTagEditorAction::RequestFillFromDisk => {
+                if let ActiveView::UnifiedTagEditor(ref mut editor) = app.view {
+                    editor.fill_from_disk(&app.witch);
+                }
+                app.status_message = Some("Tags refreshed from disk".to_string());
+            }
+
             UnifiedTagEditorAction::CloseEmbedded => {
                 // Return to parent health modal without staging
                 if !app.pop_and_restore() {

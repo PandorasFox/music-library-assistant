@@ -165,9 +165,7 @@ impl App {
         }
 
         // Load preferred locales from config.
-        let preferred_locales = crate::config::load_config()
-            .map(|c| c.opinions.external_matching.preferred_locales.clone())
-            .unwrap_or_default();
+        let preferred_locales = self.config().opinions.external_matching.preferred_locales;
 
         // Batch query: load summaries + full detail for all recordings at once
         let batch = self
@@ -300,13 +298,7 @@ impl App {
     ) {
         use crate::meta::decisions::DecisionKey;
 
-        let config = match crate::config::load_config() {
-            Ok(c) => c,
-            Err(_) => {
-                self.status_message = Some("Failed to load config".to_string());
-                return;
-            }
-        };
+        let config = self.config();
 
         // Resolve unique source dirs from track paths
         let mut seen_dirs = std::collections::HashSet::new();
@@ -427,15 +419,9 @@ impl App {
         }
 
         // Load config for locales and credit routing
-        let config = match crate::config::load_config() {
-            Ok(c) => c,
-            Err(_) => {
-                self.status_message = Some("Failed to load config".to_string());
-                return;
-            }
-        };
-        let locales = config.opinions.external_matching.preferred_locales.clone();
-        let routing = config.opinions.external_matching.credit_routing.clone();
+        let config = self.config();
+        let locales = config.opinions.external_matching.preferred_locales;
+        let routing = config.opinions.external_matching.credit_routing;
 
         // Collect unique IDs for batch loading
         let mut release_ids: Vec<String> = Vec::new();

@@ -7,6 +7,8 @@
 //! - Enter: Execute selected button action
 //! - Escape: Cancel
 
+use std::borrow::Cow;
+
 use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 use ratatui::{
@@ -19,7 +21,7 @@ use ratatui::{
 
 use super::MissingDirectoryModalData;
 use crate::helpers::{render_pane, truncate_left};
-use crate::widgets::{render_button_row, ButtonRects, ConfirmationButton, ListClickTargets};
+use crate::widgets::{ButtonRowState, ListClickTargets, ModalButtons};
 
 /// Actions returned from the missing directory preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,22 +34,49 @@ pub enum MissingDirectoryPreviewAction {
     Cancel,
 }
 
-/// Which button is selected in the controls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectedButton {
+/// Button choices for the missing directory resolution modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MissingDirectoryButton {
+    #[default]
     Drop,
     Cancel,
 }
 
-impl SelectedButton {
-    pub fn left(&mut self, has_directories: bool) {
-        if has_directories {
-            *self = SelectedButton::Drop;
+impl ModalButtons for MissingDirectoryButton {
+    type Context = MissingDirectoryModalData;
+    type Action = MissingDirectoryPreviewAction;
+
+    fn all() -> &'static [Self] {
+        &[Self::Drop, Self::Cancel]
+    }
+
+    fn label(&self, _ctx: &Self::Context) -> Cow<'static, str> {
+        match self {
+            Self::Drop => "Drop All".into(),
+            Self::Cancel => "Cancel".into(),
         }
     }
 
-    pub fn right(&mut self) {
-        *self = SelectedButton::Cancel;
+    fn color(&self, ctx: &Self::Context) -> Color {
+        match self {
+            Self::Drop if ctx.count() > 0 => Color::Yellow,
+            Self::Drop => Color::DarkGray,
+            Self::Cancel => Color::White,
+        }
+    }
+
+    fn enabled(&self, ctx: &Self::Context) -> bool {
+        match self {
+            Self::Drop => ctx.count() > 0,
+            Self::Cancel => true,
+        }
+    }
+
+    fn action(&self, _ctx: &Self::Context) -> MissingDirectoryPreviewAction {
+        match self {
+            Self::Drop => MissingDirectoryPreviewAction::ConfirmDrop,
+            Self::Cancel => MissingDirectoryPreviewAction::Cancel,
+        }
     }
 }
 
@@ -58,12 +87,10 @@ pub struct MissingDirectoryPreviewState {
     pub cached_data: MissingDirectoryModalData,
     /// Scroll position for the directory list.
     pub scroll: usize,
-    /// Which button is selected.
-    pub selected_button: SelectedButton,
+    /// Button row state.
+    pub buttons: ButtonRowState<MissingDirectoryButton>,
     /// Click targets for directory list items (set during render).
     pub click_targets: ListClickTargets,
-    /// Click targets for buttons (set during render).
-    pub button_rects: ButtonRects,
 }
 
 impl MissingDirectoryPreviewState {
@@ -77,18 +104,17 @@ impl MissingDirectoryPreviewState {
 
     /// Create a new preview state with cached data.
     pub fn new(cached_data: MissingDirectoryModalData) -> Self {
-        let selected_button = if cached_data.count() > 0 {
-            SelectedButton::Drop
-        } else {
-            SelectedButton::Cancel
-        };
+        let mut buttons = ButtonRowState::new();
+        // Default to Drop if there are directories, otherwise Cancel.
+        if cached_data.count() > 0 {
+            buttons.selected = MissingDirectoryButton::Drop;
+        }
 
         Self {
             cached_data,
             scroll: 0,
-            selected_button,
+            buttons,
             click_targets: ListClickTargets::new(),
-            button_rects: ButtonRects::new(),
         }
     }
 
@@ -99,20 +125,8 @@ impl MissingDirectoryPreviewState {
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<MissingDirectoryPreviewAction> {
-        if let Some(button_name) = self.button_rects.hit_test(x, y) {
-            match button_name {
-                "drop" => {
-                    self.selected_button = SelectedButton::Drop;
-                    if self.cached_data.count() > 0 {
-                        return Some(MissingDirectoryPreviewAction::ConfirmDrop);
-                    }
-                }
-                "cancel" => {
-                    self.selected_button = SelectedButton::Cancel;
-                    return Some(MissingDirectoryPreviewAction::Cancel);
-                }
-                _ => {}
-            }
+        if let Some(action) = self.buttons.handle_click(x, y, &self.cached_data) {
+            return Some(action);
         }
         if let Some(id) = self.click_targets.hit_test(x, y) {
             if let Ok(idx) = id.parse::<usize>() {
@@ -126,8 +140,6 @@ impl MissingDirectoryPreviewState {
 
     /// Handle input action.
     pub fn handle_input(&mut self, action: &InputAction) -> MissingDirectoryPreviewAction {
-        let has_directories = self.cached_data.count() > 0;
-
         if crate::helpers::handle_scroll_input(&mut self.scroll, action, self.cached_data.count()) {
             return MissingDirectoryPreviewAction::None;
         }
@@ -135,22 +147,19 @@ impl MissingDirectoryPreviewState {
         match action {
             // Button navigation
             InputAction::NavLeft => {
-                self.selected_button.left(has_directories);
+                self.buttons.nav_left(&self.cached_data);
                 MissingDirectoryPreviewAction::None
             }
             InputAction::NavRight => {
-                self.selected_button.right();
+                self.buttons.nav_right(&self.cached_data);
                 MissingDirectoryPreviewAction::None
             }
 
             // Execute selected button
-            InputAction::Confirm => match self.selected_button {
-                SelectedButton::Drop if has_directories => {
-                    MissingDirectoryPreviewAction::ConfirmDrop
-                }
-                SelectedButton::Cancel => MissingDirectoryPreviewAction::Cancel,
-                _ => MissingDirectoryPreviewAction::None,
-            },
+            InputAction::Confirm => {
+                self.buttons.confirm(&self.cached_data)
+                    .unwrap_or(MissingDirectoryPreviewAction::None)
+            }
 
             // Cancel
             InputAction::Cancel => MissingDirectoryPreviewAction::Cancel,
@@ -265,26 +274,9 @@ impl MissingDirectoryPreviewState {
     }
 
     fn render_controls(&mut self, f: &mut Frame, area: Rect) {
-        let has_directories = self.cached_data.count() > 0;
-
         let block = Block::default().borders(Borders::TOP);
         let inner = render_pane(f, area, block);
 
-        // Track button rects for click detection
-        self.button_rects.clear();
-        let half = inner.width / 2;
-        let left = Rect { width: half, ..inner };
-        let right = Rect { x: inner.x + half, width: inner.width - half, ..inner };
-        self.button_rects.set("drop", left);
-        self.button_rects.set("cancel", right);
-
-        let drop_color = if has_directories { Color::Yellow } else { Color::DarkGray };
-        let buttons = vec![
-            ConfirmationButton::new("Drop All", drop_color)
-                .selected(has_directories && self.selected_button == SelectedButton::Drop),
-            ConfirmationButton::new("Cancel", Color::White)
-                .selected(self.selected_button == SelectedButton::Cancel),
-        ];
-        render_button_row(f, inner, &buttons);
+        self.buttons.render(f, inner, &self.cached_data, true);
     }
 }

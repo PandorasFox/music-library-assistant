@@ -18,11 +18,10 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{CorruptFileModalData, SelectedButton};
+use super::types::{CorruptButton, CorruptFileModalData};
 use crate::helpers::render_pane;
 use crate::widgets::{
-    render_button_row, render_file_path_list, ButtonRects, ConfirmationButton, ListClickTargets,
-    PathEntry,
+    render_file_path_list, ButtonRowState, ListClickTargets, PathEntry,
 };
 
 /// Actions returned from the corrupt file preview.
@@ -43,12 +42,10 @@ pub struct CorruptFilePreviewState {
     pub cached_data: CorruptFileModalData,
     /// Scroll position for the file list.
     pub scroll: usize,
-    /// Which button is selected.
-    pub selected_button: SelectedButton,
+    /// Button row state.
+    pub buttons: ButtonRowState<CorruptButton>,
     /// Click targets for file list items (set during render).
     pub click_targets: ListClickTargets,
-    /// Click targets for buttons (set during render).
-    pub button_rects: ButtonRects,
 }
 
 impl CorruptFilePreviewState {
@@ -65,9 +62,8 @@ impl CorruptFilePreviewState {
         Self {
             cached_data,
             scroll: 0,
-            selected_button: SelectedButton::Cancel,
+            buttons: ButtonRowState::new(),
             click_targets: ListClickTargets::new(),
-            button_rects: ButtonRects::new(),
         }
     }
 
@@ -79,20 +75,8 @@ impl CorruptFilePreviewState {
         _gesture: &ConfirmationGesture,
     ) -> Option<CorruptFilePreviewAction> {
         // Check buttons first
-        if let Some(button_name) = self.button_rects.hit_test(x, y) {
-            match button_name {
-                "stash_all" => {
-                    self.selected_button = SelectedButton::StashAll;
-                    if self.cached_data.has_files() {
-                        return Some(CorruptFilePreviewAction::ConfirmStashAll);
-                    }
-                }
-                "cancel" => {
-                    self.selected_button = SelectedButton::Cancel;
-                    return Some(CorruptFilePreviewAction::Cancel);
-                }
-                _ => {}
-            }
+        if let Some(action) = self.buttons.handle_click(x, y, &self.cached_data) {
+            return Some(action);
         }
         // Check list items
         if let Some(id) = self.click_targets.hit_test(x, y) {
@@ -107,8 +91,6 @@ impl CorruptFilePreviewState {
 
     /// Handle input action.
     pub fn handle_input(&mut self, action: &InputAction) -> CorruptFilePreviewAction {
-        let has_files = self.cached_data.has_files();
-
         if crate::helpers::handle_scroll_input(&mut self.scroll, action, self.cached_data.files.len()) {
             return CorruptFilePreviewAction::None;
         }
@@ -116,20 +98,19 @@ impl CorruptFilePreviewState {
         match action {
             // Button navigation
             InputAction::NavLeft => {
-                self.selected_button.left(has_files);
+                self.buttons.nav_left(&self.cached_data);
                 CorruptFilePreviewAction::None
             }
             InputAction::NavRight => {
-                self.selected_button.right();
+                self.buttons.nav_right(&self.cached_data);
                 CorruptFilePreviewAction::None
             }
 
             // Execute selected button
-            InputAction::Confirm => match self.selected_button {
-                SelectedButton::StashAll if has_files => CorruptFilePreviewAction::ConfirmStashAll,
-                SelectedButton::Cancel => CorruptFilePreviewAction::Cancel,
-                _ => CorruptFilePreviewAction::None,
-            },
+            InputAction::Confirm => {
+                self.buttons.confirm(&self.cached_data)
+                    .unwrap_or(CorruptFilePreviewAction::None)
+            }
 
             // Cancel
             InputAction::Cancel => CorruptFilePreviewAction::Cancel,
@@ -233,26 +214,10 @@ impl CorruptFilePreviewState {
     }
 
     fn render_controls(&mut self, f: &mut Frame, area: Rect) {
-        let has_files = self.cached_data.has_files();
-
         let block = Block::default().borders(Borders::TOP);
         let inner = render_pane(f, area, block);
 
-        // Track button rects for click detection
-        self.button_rects.clear();
-        let half = inner.width / 2;
-        let left = Rect { width: half, ..inner };
-        let right = Rect { x: inner.x + half, width: inner.width - half, ..inner };
-        self.button_rects.set("stash_all", left);
-        self.button_rects.set("cancel", right);
-
-        let stash_color = if has_files { Color::Red } else { Color::DarkGray };
-        let buttons = vec![
-            ConfirmationButton::new("Stash & Drop All", stash_color)
-                .selected(has_files && self.selected_button == SelectedButton::StashAll),
-            ConfirmationButton::new("Cancel", Color::White)
-                .selected(self.selected_button == SelectedButton::Cancel),
-        ];
-        render_button_row(f, inner, &buttons);
+        // Buttons render themselves and populate click rects.
+        self.buttons.render(f, inner, &self.cached_data, true);
     }
 }

@@ -2,13 +2,13 @@
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame,
 };
 
-use super::types::{MovedFileButton, MovedFileState};
+use super::types::MovedFileState;
 use crate::helpers::render_pane;
 use crate::widgets::{FocusPane, PathField, CURSOR_STYLE, LIST_ITEM_STYLE};
 
@@ -159,49 +159,6 @@ fn render_buttons(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
 
     let inner = render_pane(f, area, block);
 
-    // Button layout
-    let button_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(inner);
-
-    // Track button rects for click detection
-    state.button_rects.clear();
-    state.button_rects.set("acknowledge", button_chunks[0]);
-    state.button_rects.set("cancel", button_chunks[1]);
-
-    // Acknowledge button
-    let ack_selected = state.selected_button == MovedFileButton::Acknowledge && is_focused;
-    let ack_style = if ack_selected {
-        Style::default()
-            .bg(Color::Green)
-            .fg(Color::Black)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Green)
-    };
-    let ack_text = if state.files.is_empty() {
-        "[ Acknowledge (disabled) ]"
-    } else {
-        "[ Acknowledge ]"
-    };
-    let ack = Paragraph::new(ack_text)
-        .style(ack_style)
-        .alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(ack, button_chunks[0]);
-
-    // Cancel button
-    let cancel_selected = state.selected_button == MovedFileButton::Cancel && is_focused;
-    let cancel_style = if cancel_selected {
-        Style::default()
-            .bg(Color::Red)
-            .fg(Color::Black)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Red)
-    };
-    let cancel = Paragraph::new("[ Cancel ]")
-        .style(cancel_style)
-        .alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(cancel, button_chunks[1]);
+    let ctx = state.button_ctx();
+    state.buttons.render(f, inner, &ctx, is_focused);
 }

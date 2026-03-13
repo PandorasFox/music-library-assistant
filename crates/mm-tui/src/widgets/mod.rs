@@ -18,6 +18,7 @@ pub mod file_path_list;
 mod layout;
 mod list_click_targets;
 mod modal;
+pub mod modal_buttons;
 pub mod path_display;
 mod resolution_layout;
 pub mod selection_styles;
@@ -71,3 +72,6 @@ pub use three_col_table::{StyledCell, ThreeColTable};
 
 // Wizard system
 pub use wizard::{WizardItem, WizardOffer, WizardState};
+
+// Modal buttons
+pub use modal_buttons::{ButtonRowState, ModalButtons};

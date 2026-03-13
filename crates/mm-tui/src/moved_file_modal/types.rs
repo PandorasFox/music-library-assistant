@@ -1,13 +1,17 @@
 //! Types for moved file acknowledgement modal.
 
+use std::borrow::Cow;
+
+use ratatui::style::Color;
+
 use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 
 use mm_meta::views::MovedFileInfo;
-use crate::widgets::{ButtonRects, FocusPane, ListClickTargets};
+use crate::widgets::{ButtonRowState, FocusPane, ListClickTargets, ModalButtons};
 
 // ============================================================================
-// Button Selection
+// Button Definition
 // ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -17,18 +21,44 @@ pub enum MovedFileButton {
     Cancel,
 }
 
-impl MovedFileButton {
-    pub fn left(self) -> Self {
+/// Context for button enablement/labels.
+pub struct MovedFileButtonCtx {
+    pub has_files: bool,
+}
+
+impl ModalButtons for MovedFileButton {
+    type Context = MovedFileButtonCtx;
+    type Action = MovedFileAction;
+
+    fn all() -> &'static [Self] {
+        &[Self::Acknowledge, Self::Cancel]
+    }
+
+    fn label(&self, _ctx: &Self::Context) -> Cow<'static, str> {
         match self {
-            Self::Acknowledge => Self::Acknowledge,
-            Self::Cancel => Self::Acknowledge,
+            Self::Acknowledge => "Acknowledge".into(),
+            Self::Cancel => "Cancel".into(),
         }
     }
 
-    pub fn right(self) -> Self {
+    fn color(&self, _ctx: &Self::Context) -> Color {
         match self {
-            Self::Acknowledge => Self::Cancel,
-            Self::Cancel => Self::Cancel,
+            Self::Acknowledge => Color::Green,
+            Self::Cancel => Color::Red,
+        }
+    }
+
+    fn enabled(&self, ctx: &Self::Context) -> bool {
+        match self {
+            Self::Acknowledge => ctx.has_files,
+            Self::Cancel => true,
+        }
+    }
+
+    fn action(&self, _ctx: &Self::Context) -> MovedFileAction {
+        match self {
+            Self::Acknowledge => MovedFileAction::Acknowledge,
+            Self::Cancel => MovedFileAction::Cancel,
         }
     }
 }
@@ -55,12 +85,10 @@ pub struct MovedFileState {
     pub files: Vec<MovedFileInfo>,
     /// Currently selected file in the list
     pub current_file: usize,
-    /// Currently selected button
-    pub selected_button: MovedFileButton,
+    /// Button row state
+    pub buttons: ButtonRowState<MovedFileButton>,
     /// Current focus pane (List or Buttons)
     pub focus_pane: FocusPane,
-    /// Button rectangles for click detection (set during render)
-    pub button_rects: ButtonRects,
     /// Click targets for file list items (set during render)
     pub click_targets: ListClickTargets,
 }
@@ -77,10 +105,15 @@ impl MovedFileState {
         Self {
             files,
             current_file: 0,
-            selected_button: MovedFileButton::Acknowledge,
+            buttons: ButtonRowState::new(),
             focus_pane: FocusPane::List,
-            button_rects: ButtonRects::new(),
             click_targets: ListClickTargets::new(),
+        }
+    }
+
+    pub(super) fn button_ctx(&self) -> MovedFileButtonCtx {
+        MovedFileButtonCtx {
+            has_files: !self.files.is_empty(),
         }
     }
 
@@ -108,23 +141,10 @@ impl MovedFileState {
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<MovedFileAction> {
-        if let Some(button_name) = self.button_rects.hit_test(x, y) {
+        let ctx = self.button_ctx();
+        if let Some(action) = self.buttons.handle_click(x, y, &ctx) {
             self.focus_pane = FocusPane::Buttons;
-            return match button_name {
-                "acknowledge" => {
-                    self.selected_button = MovedFileButton::Acknowledge;
-                    if !self.files.is_empty() {
-                        Some(MovedFileAction::Acknowledge)
-                    } else {
-                        None
-                    }
-                }
-                "cancel" => {
-                    self.selected_button = MovedFileButton::Cancel;
-                    Some(MovedFileAction::Cancel)
-                }
-                _ => None,
-            };
+            return Some(action);
         }
         if let Some(id) = self.click_targets.hit_test(x, y) {
             if let Ok(idx) = id.parse::<usize>() {
@@ -138,6 +158,8 @@ impl MovedFileState {
     }
 
     pub fn handle_input(&mut self, action: &InputAction) -> MovedFileAction {
+        let ctx = self.button_ctx();
+
         // FocusUp / FocusDown: cycle focus pane
         match action {
             InputAction::FocusUp => {
@@ -169,13 +191,13 @@ impl MovedFileState {
             // Left/Right: navigate buttons when focused on buttons pane
             InputAction::NavLeft => {
                 if self.focus_pane == FocusPane::Buttons {
-                    self.selected_button = self.selected_button.left();
+                    self.buttons.nav_left(&ctx);
                 }
                 MovedFileAction::None
             }
             InputAction::NavRight => {
                 if self.focus_pane == FocusPane::Buttons {
-                    self.selected_button = self.selected_button.right();
+                    self.buttons.nav_right(&ctx);
                 }
                 MovedFileAction::None
             }
@@ -183,16 +205,8 @@ impl MovedFileState {
             // Confirm selected button (when focused on buttons)
             InputAction::Confirm => {
                 if self.focus_pane == FocusPane::Buttons {
-                    match self.selected_button {
-                        MovedFileButton::Acknowledge => {
-                            if !self.files.is_empty() {
-                                MovedFileAction::Acknowledge
-                            } else {
-                                MovedFileAction::None
-                            }
-                        }
-                        MovedFileButton::Cancel => MovedFileAction::Cancel,
-                    }
+                    self.buttons.confirm(&ctx)
+                        .unwrap_or(MovedFileAction::None)
                 } else {
                     MovedFileAction::None
                 }

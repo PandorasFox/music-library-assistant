@@ -1,11 +1,23 @@
 #!/bin/bash
 # Lines of Code Analysis for MM
-# Analyzes .rs files for LoC metrics at file and module level
+# Analyzes .rs files for LoC metrics, broken down by crate
 
 set -e
 
 PROJECT_ROOT="${1:-$(dirname "$0")/../..}"
 cd "$PROJECT_ROOT"
+
+# All crate source directories
+CRATES=(
+    "mm:src"
+    "mm-tui:crates/mm-tui/src"
+    "mm-meta:crates/mm-meta/src"
+    "mm-utils:crates/mm-utils/src"
+    "mm-derive:crates/mm-derive/src"
+)
+
+TEMP_FILE=$(mktemp)
+trap "rm -f $TEMP_FILE" EXIT
 
 echo "=============================================="
 echo "MM Lines of Code Analysis"
@@ -13,102 +25,117 @@ echo "Generated: $(date)"
 echo "=============================================="
 echo
 
-echo "## Per-File Line Counts (sorted by LoC, descending)"
-echo "---------------------------------------------------"
-echo
+# ── Per-crate analysis ──
 
-# Get line counts for all .rs files, sorted by count
-find ./src -name "*.rs" -type f -exec wc -l {} \; | sort -rn | head -150
+for entry in "${CRATES[@]}"; do
+    crate_name="${entry%%:*}"
+    crate_src="${entry#*:}"
 
-echo
-echo "=============================================="
-echo "## Top 25 Largest Files"
-echo "=============================================="
-echo
+    [ -d "$crate_src" ] || continue
 
-find ./src -name "*.rs" -type f -exec wc -l {} \; | sort -rn | head -25
+    file_count=$(find "$crate_src" -name "*.rs" -type f | wc -l | tr -d ' ')
+    [ "$file_count" -eq 0 ] && continue
 
-echo
-echo "=============================================="
-echo "## Module-Level Aggregation"
-echo "=============================================="
-echo
+    total_lines=$(find "$crate_src" -name "*.rs" -type f -exec cat {} + | wc -l | tr -d ' ')
 
-printf "%-20s %8s %8s %8s\n" "Module" "Files" "Total" "Mean"
-printf "%-20s %8s %8s %8s\n" "------" "-----" "-----" "----"
+    echo "=============================================="
+    echo "## Crate: $crate_name  ($file_count files, $total_lines lines)"
+    echo "=============================================="
+    echo
 
-# Root level files
-root_files=$(find ./src -maxdepth 1 -name "*.rs" -type f | wc -l | tr -d ' ')
-root_lines=$(find ./src -maxdepth 1 -name "*.rs" -type f -exec cat {} \; | wc -l | tr -d ' ')
-if [ "$root_files" -gt 0 ]; then
-    root_mean=$((root_lines / root_files))
-    printf "%-20s %8d %8d %8d\n" "(root)" "$root_files" "$root_lines" "$root_mean"
-fi
+    echo "### Top Files (by LoC)"
+    echo
+    find "$crate_src" -name "*.rs" -type f -exec wc -l {} \; | sort -rn | head -30 | \
+        while read count path; do
+            printf "%6d  %s\n" "$count" "${path#./}"
+        done
+    echo
 
-# Each top-level module
-for module_dir in ./src/*/; do
-    if [ -d "$module_dir" ]; then
-        module_name=$(basename "$module_dir")
-        module_files=$(find "$module_dir" -name "*.rs" -type f | wc -l | tr -d ' ')
-        if [ "$module_files" -gt 0 ]; then
-            module_lines=$(find "$module_dir" -name "*.rs" -type f -exec cat {} \; | wc -l | tr -d ' ')
-            module_mean=$((module_lines / module_files))
-            printf "%-20s %8d %8d %8d\n" "$module_name" "$module_files" "$module_lines" "$module_mean"
-        fi
+    echo "### Module Breakdown"
+    echo
+    printf "%-30s %8s %8s %8s\n" "Module" "Files" "Total" "Mean"
+    printf "%-30s %8s %8s %8s\n" "------" "-----" "-----" "----"
+
+    # Root-level files in this crate
+    root_files=$(find "$crate_src" -maxdepth 1 -name "*.rs" -type f | wc -l | tr -d ' ')
+    if [ "$root_files" -gt 0 ]; then
+        root_lines=$(find "$crate_src" -maxdepth 1 -name "*.rs" -type f -exec cat {} + | wc -l | tr -d ' ')
+        root_mean=$((root_lines / root_files))
+        printf "%-30s %8d %8d %8d\n" "(root)" "$root_files" "$root_lines" "$root_mean"
     fi
+
+    for module_dir in "$crate_src"/*/; do
+        [ -d "$module_dir" ] || continue
+        module_name=$(basename "$module_dir")
+        mod_files=$(find "$module_dir" -name "*.rs" -type f | wc -l | tr -d ' ')
+        if [ "$mod_files" -gt 0 ]; then
+            mod_lines=$(find "$module_dir" -name "*.rs" -type f -exec cat {} + | wc -l | tr -d ' ')
+            mod_mean=$((mod_lines / mod_files))
+            printf "%-30s %8d %8d %8d\n" "$module_name" "$mod_files" "$mod_lines" "$mod_mean"
+        fi
+    done
+
+    echo
+
+    # Save per-file counts for the cross-crate summary
+    find "$crate_src" -name "*.rs" -type f -exec wc -l {} \; | awk -v c="$crate_name" '{print $1, c}' >> "$TEMP_FILE"
 done
 
-echo
+# ── Cross-crate summary ──
+
 echo "=============================================="
-echo "## Quartile Analysis (All Files)"
+echo "## Cross-Crate Summary"
 echo "=============================================="
 echo
 
-# Get all line counts into a temp file, sorted
-TEMP_FILE=$(mktemp)
-trap "rm -f $TEMP_FILE" EXIT
-find ./src -name "*.rs" -type f -exec wc -l {} \; | awk '{print $1}' | sort -n > "$TEMP_FILE"
+printf "%-15s %8s %10s %8s %8s %8s\n" "Crate" "Files" "Lines" "Mean" "Median" "Max"
+printf "%-15s %8s %10s %8s %8s %8s\n" "-----" "-----" "-----" "----" "------" "---"
 
-total_files=$(wc -l < "$TEMP_FILE" | tr -d ' ')
-q1_line=$((total_files / 4))
-q2_line=$((total_files / 2))
-q3_line=$((3 * total_files / 4))
+total_files=0
+total_lines=0
 
-min_val=$(head -1 "$TEMP_FILE")
-max_val=$(tail -1 "$TEMP_FILE")
-q1_val=$(sed -n "${q1_line}p" "$TEMP_FILE")
-q2_val=$(sed -n "${q2_line}p" "$TEMP_FILE")
-q3_val=$(sed -n "${q3_line}p" "$TEMP_FILE")
+for entry in "${CRATES[@]}"; do
+    crate_name="${entry%%:*}"
+    crate_counts=$(mktemp)
+    grep " ${crate_name}$" "$TEMP_FILE" | awk '{print $1}' | sort -n > "$crate_counts"
 
-echo "Total files: $total_files"
+    c_files=$(wc -l < "$crate_counts" | tr -d ' ')
+    [ "$c_files" -eq 0 ] && rm -f "$crate_counts" && continue
+
+    c_total=$(awk '{sum+=$1} END {print sum}' "$crate_counts")
+    c_mean=$((c_total / c_files))
+    c_median=$(sed -n "$((c_files / 2 + 1))p" "$crate_counts")
+    c_max=$(tail -1 "$crate_counts")
+
+    printf "%-15s %8d %10d %8d %8d %8d\n" "$crate_name" "$c_files" "$c_total" "$c_mean" "$c_median" "$c_max"
+
+    total_files=$((total_files + c_files))
+    total_lines=$((total_lines + c_total))
+    rm -f "$crate_counts"
+done
+
+echo "------"
+printf "%-15s %8d %10d\n" "TOTAL" "$total_files" "$total_lines"
 echo
-echo "Min:      $min_val lines"
-echo "Q1 (25%): $q1_val lines"
-echo "Q2 (50%): $q2_val lines (median)"
-echo "Q3 (75%): $q3_val lines"
-echo "Max:      $max_val lines"
+
+# ── Size distribution (all crates) ──
+
+echo "=============================================="
+echo "## Size Distribution (all crates)"
+echo "=============================================="
 echo
 
-# Calculate distribution buckets
-small=$(awk '$1 < 100' "$TEMP_FILE" | wc -l | tr -d ' ')
-medium=$(awk '$1 >= 100 && $1 < 500' "$TEMP_FILE" | wc -l | tr -d ' ')
-large=$(awk '$1 >= 500 && $1 < 1000' "$TEMP_FILE" | wc -l | tr -d ' ')
-xlarge=$(awk '$1 >= 1000' "$TEMP_FILE" | wc -l | tr -d ' ')
+all_counts=$(mktemp)
+awk '{print $1}' "$TEMP_FILE" | sort -n > "$all_counts"
 
-echo "## Size Distribution"
-echo "-------------------"
+small=$(awk '$1 < 100' "$all_counts" | wc -l | tr -d ' ')
+medium=$(awk '$1 >= 100 && $1 < 500' "$all_counts" | wc -l | tr -d ' ')
+large=$(awk '$1 >= 500 && $1 < 1000' "$all_counts" | wc -l | tr -d ' ')
+xlarge=$(awk '$1 >= 1000' "$all_counts" | wc -l | tr -d ' ')
+
 printf "Small   (<100):     %3d files (%2d%%)\n" "$small" "$((100 * small / total_files))"
 printf "Medium  (100-500):  %3d files (%2d%%)\n" "$medium" "$((100 * medium / total_files))"
 printf "Large   (500-1000): %3d files (%2d%%)\n" "$large" "$((100 * large / total_files))"
 printf "X-Large (>1000):    %3d files (%2d%%)\n" "$xlarge" "$((100 * xlarge / total_files))"
 
-echo
-echo "=============================================="
-echo "## Total Project Statistics"
-echo "=============================================="
-echo
-
-total_lines=$(cat "$TEMP_FILE" | awk '{sum+=$1} END {print sum}')
-echo "Total .rs files: $total_files"
-echo "Total lines:     $total_lines"
-echo "Average LoC:     $((total_lines / total_files))"
+rm -f "$all_counts"

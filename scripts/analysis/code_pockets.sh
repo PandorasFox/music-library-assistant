@@ -1,6 +1,6 @@
 #!/bin/bash
 # Code Pockets Analysis for MM
-# Identifies potentially isolated/dead code clusters
+# Identifies potentially isolated/dead code clusters, broken down by crate
 #
 # Looks for:
 # - Functions with no external callers
@@ -11,6 +11,21 @@ set -e
 
 PROJECT_ROOT="${1:-$(dirname "$0")/../..}"
 cd "$PROJECT_ROOT"
+
+CRATES=(
+    "mm:src"
+    "mm-tui:crates/mm-tui/src"
+    "mm-meta:crates/mm-meta/src"
+    "mm-utils:crates/mm-utils/src"
+    "mm-derive:crates/mm-derive/src"
+)
+
+# All source dirs for cross-crate usage checks
+ALL_SRC_DIRS=()
+for entry in "${CRATES[@]}"; do
+    src="${entry#*:}"
+    [ -d "$src" ] && ALL_SRC_DIRS+=("$src")
+done
 
 echo "=============================================="
 echo "MM Code Pockets Analysis"
@@ -24,152 +39,142 @@ echo
 TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
 
-echo "## Public Functions Usage Analysis"
-echo "==================================="
-echo
-echo "Finding pub fn declarations and checking their usage across the codebase..."
-echo
+for entry in "${CRATES[@]}"; do
+    crate_name="${entry%%:*}"
+    crate_src="${entry#*:}"
 
-# Extract all pub fn names and their locations
-grep -rh '^[[:space:]]*pub fn \|^[[:space:]]*pub(crate) fn \|^[[:space:]]*pub async fn ' ./src --include="*.rs" 2>/dev/null | \
-    sed 's/pub(crate)/pub/' | \
-    sed -n 's/.*pub \(async \)\{0,1\}fn \([a-zA-Z_][a-zA-Z0-9_]*\).*/\2/p' | \
-    sort | uniq > "$TEMP_DIR/pub_fns.txt"
+    [ -d "$crate_src" ] || continue
 
-echo "Found $(wc -l < "$TEMP_DIR/pub_fns.txt" | tr -d ' ') public functions."
-echo
-echo "### Functions with potentially low usage (<=2 call sites):"
-echo
+    file_count=$(find "$crate_src" -name "*.rs" -type f | wc -l | tr -d ' ')
+    [ "$file_count" -eq 0 ] && continue
 
-low_usage_count=0
-while read fn_name; do
-    # Skip very common/generic names
-    case "$fn_name" in
-        new|default|from|into|clone|fmt|render|update|get|set|build|run|start|stop|init|open|close|read|write|len|is_empty)
-            continue
-            ;;
-    esac
+    echo "=============================================="
+    echo "## Crate: $crate_name"
+    echo "=============================================="
+    echo
 
-    # Count occurrences
-    usage_count=$(grep -r "${fn_name}(" ./src --include="*.rs" 2>/dev/null | wc -l | tr -d ' ')
+    # ── Public function usage ──
 
-    if [ "$usage_count" -le 2 ]; then
-        definition=$(grep -rn "pub fn ${fn_name}\|pub(crate) fn ${fn_name}\|pub async fn ${fn_name}" ./src --include="*.rs" 2>/dev/null | head -1)
-        if [ -n "$definition" ]; then
-            echo "  ${fn_name}() - $usage_count occurrences"
-            echo "    Defined: ${definition#./src/}"
-            echo
-            low_usage_count=$((low_usage_count + 1))
+    echo "### Public Functions with Low Usage (<=2 call sites)"
+    echo
+
+    grep -rh '^[[:space:]]*pub fn \|^[[:space:]]*pub(crate) fn \|^[[:space:]]*pub async fn ' "$crate_src" --include="*.rs" 2>/dev/null | \
+        sed 's/pub(crate)/pub/' | \
+        sed -n 's/.*pub \(async \)\{0,1\}fn \([a-zA-Z_][a-zA-Z0-9_]*\).*/\2/p' | \
+        sort | uniq > "$TEMP_DIR/pub_fns.txt"
+
+    low_fn_count=0
+    while read fn_name; do
+        case "$fn_name" in
+            new|default|from|into|clone|fmt|render|update|get|set|build|run|start|stop|init|open|close|read|write|len|is_empty)
+                continue ;;
+        esac
+
+        # Count usage across ALL crates (not just this one)
+        usage_count=0
+        for src_dir in "${ALL_SRC_DIRS[@]}"; do
+            c=$(grep -r "${fn_name}(" "$src_dir" --include="*.rs" 2>/dev/null | wc -l | tr -d ' ')
+            usage_count=$((usage_count + c))
+        done
+
+        if [ "$usage_count" -le 2 ]; then
+            definition=$(grep -rn "pub fn ${fn_name}\|pub(crate) fn ${fn_name}\|pub async fn ${fn_name}" "$crate_src" --include="*.rs" 2>/dev/null | head -1)
+            if [ -n "$definition" ]; then
+                echo "  ${fn_name}() - $usage_count occurrences"
+                echo "    Defined: ${definition#./}"
+                echo
+                low_fn_count=$((low_fn_count + 1))
+            fi
         fi
-    fi
-done < "$TEMP_DIR/pub_fns.txt"
+    done < "$TEMP_DIR/pub_fns.txt"
 
-echo "Total potentially low-usage functions: $low_usage_count"
-echo
+    echo "Total potentially low-usage functions: $low_fn_count"
+    echo
 
-echo "## Struct/Enum Usage Analysis"
-echo "=============================="
-echo
-echo "Finding type definitions with limited usage..."
-echo
+    # ── Type usage ──
 
-# Extract pub struct/enum names
-grep -rh '^pub struct \|^pub enum \|^pub(crate) struct \|^pub(crate) enum ' ./src --include="*.rs" 2>/dev/null | \
-    sed 's/pub(crate)/pub/' | \
-    sed -n 's/.*pub struct \([A-Z][a-zA-Z0-9_]*\).*/\1/p; s/.*pub enum \([A-Z][a-zA-Z0-9_]*\).*/\1/p' | \
-    sort | uniq > "$TEMP_DIR/pub_types.txt"
+    echo "### Types with Low Usage (<=3 occurrences)"
+    echo
 
-echo "Found $(wc -l < "$TEMP_DIR/pub_types.txt" | tr -d ' ') public types."
-echo
-echo "### Types with potentially low usage (<=3 occurrences):"
-echo
+    grep -rh '^pub struct \|^pub enum \|^pub(crate) struct \|^pub(crate) enum ' "$crate_src" --include="*.rs" 2>/dev/null | \
+        sed 's/pub(crate)/pub/' | \
+        sed -n 's/.*pub struct \([A-Z][a-zA-Z0-9_]*\).*/\1/p; s/.*pub enum \([A-Z][a-zA-Z0-9_]*\).*/\1/p' | \
+        sort | uniq > "$TEMP_DIR/pub_types.txt"
 
-low_type_count=0
-while read type_name; do
-    # Skip common names
-    case "$type_name" in
-        Error|Result|Config|State|Options|Builder|Context|Handle|Entry|Item|Node|Event|Action|Kind|Type|Status|Info|Data|Key|Value)
-            continue
-            ;;
-    esac
+    low_type_count=0
+    while read type_name; do
+        case "$type_name" in
+            Error|Result|Config|State|Options|Builder|Context|Handle|Entry|Item|Node|Event|Action|Kind|Type|Status|Info|Data|Key|Value)
+                continue ;;
+        esac
 
-    usage_count=$(grep -rw "$type_name" ./src --include="*.rs" 2>/dev/null | wc -l | tr -d ' ')
+        # Count usage across ALL crates
+        usage_count=0
+        for src_dir in "${ALL_SRC_DIRS[@]}"; do
+            c=$(grep -rw "$type_name" "$src_dir" --include="*.rs" 2>/dev/null | wc -l | tr -d ' ')
+            usage_count=$((usage_count + c))
+        done
 
-    if [ "$usage_count" -le 3 ]; then
-        definition=$(grep -rn "pub struct ${type_name}\|pub enum ${type_name}" ./src --include="*.rs" 2>/dev/null | head -1)
-        if [ -n "$definition" ]; then
-            echo "  $type_name - $usage_count occurrences"
-            echo "    Defined: ${definition#./src/}"
-            echo
-            low_type_count=$((low_type_count + 1))
+        if [ "$usage_count" -le 3 ]; then
+            definition=$(grep -rn "pub struct ${type_name}\|pub enum ${type_name}" "$crate_src" --include="*.rs" 2>/dev/null | head -1)
+            if [ -n "$definition" ]; then
+                echo "  $type_name - $usage_count occurrences"
+                echo "    Defined: ${definition#./}"
+                echo
+                low_type_count=$((low_type_count + 1))
+            fi
         fi
-    fi
-done < "$TEMP_DIR/pub_types.txt"
+    done < "$TEMP_DIR/pub_types.txt"
 
-echo "Total potentially low-usage types: $low_type_count"
-echo
+    echo "Total potentially low-usage types: $low_type_count"
+    echo
 
-echo "## Module-Level Isolation Analysis"
-echo "==================================="
-echo
-echo "Checking for modules with few exports used elsewhere..."
-echo
+    # ── Module isolation ──
 
-for module_dir in ./src/corpus ./src/ui ./src/witch; do
-    if [ -d "$module_dir" ]; then
+    echo "### Module Isolation (submodules with few external refs)"
+    echo
+
+    for module_dir in "$crate_src"/*/; do
+        [ -d "$module_dir" ] || continue
         module_name=$(basename "$module_dir")
-        echo "### Module: $module_name"
 
         pub_items=$(grep -r '^pub ' "$module_dir" --include="*.rs" 2>/dev/null | wc -l | tr -d ' ')
-        external_refs=$(grep -r "${module_name}::" ./src --include="*.rs" 2>/dev/null | \
+        [ "$pub_items" -eq 0 ] && continue
+
+        # External references from within the same crate
+        external_refs=$(grep -r "${module_name}::" "$crate_src" --include="*.rs" 2>/dev/null | \
+            grep -v "^${module_dir}" | wc -l | tr -d ' ')
+        use_refs=$(grep -r "use.*${module_name}" "$crate_src" --include="*.rs" 2>/dev/null | \
             grep -v "^${module_dir}" | wc -l | tr -d ' ')
 
-        echo "  Public items: $pub_items"
-        echo "  External references: $external_refs"
-        echo
-    fi
-done
-
-echo "## Submodule Isolation (within ui/)"
-echo "===================================="
-echo
-echo "Checking UI feature modules for external usage..."
-echo
-
-for feature_dir in ./src/ui/*/; do
-    if [ -d "$feature_dir" ]; then
-        feature_name=$(basename "$feature_dir")
-
-        if [ "$feature_name" = "widgets" ]; then
-            continue
-        fi
-
-        external_refs=$(grep -r "${feature_name}::" ./src/ui --include="*.rs" 2>/dev/null | \
-            grep -v "^${feature_dir}" | wc -l | tr -d ' ')
-
-        use_refs=$(grep -r "use.*${feature_name}" ./src/ui --include="*.rs" 2>/dev/null | \
-            grep -v "^${feature_dir}" | wc -l | tr -d ' ')
-
         total_refs=$((external_refs + use_refs))
-
         if [ "$total_refs" -lt 5 ]; then
-            echo "  $feature_name: $total_refs external references (potential isolation)"
+            echo "  $module_name: $pub_items pub items, $total_refs external refs"
         fi
-    fi
+    done
+
+    echo
 done
 
-echo
-echo "## Files with Many Imports (potential unused import candidates)"
-echo "================================================================"
+# ── Files with many imports (all crates) ──
+
+echo "=============================================="
+echo "## Files with Many Imports (>20 use statements)"
+echo "=============================================="
 echo
 
-find ./src -name "*.rs" -type f -print0 | while IFS= read -r -d '' file; do
-    use_count=$(grep -c '^use \|^    use ' "$file" 2>/dev/null || echo "0")
-    # Ensure it's a valid number
-    if [ "$use_count" -gt 20 ] 2>/dev/null; then
-        rel_path="${file#./src/}"
-        echo "  $rel_path: $use_count use statements"
-    fi
+for entry in "${CRATES[@]}"; do
+    crate_name="${entry%%:*}"
+    crate_src="${entry#*:}"
+    [ -d "$crate_src" ] || continue
+
+    find "$crate_src" -name "*.rs" -type f -print0 | while IFS= read -r -d '' file; do
+        use_count=$(grep -c '^use \|^    use ' "$file" 2>/dev/null || echo "0")
+        if [ "$use_count" -gt 20 ] 2>/dev/null; then
+            rel_path="${file#./}"
+            echo "  [$crate_name] $rel_path: $use_count use statements"
+        fi
+    done
 done
 
 echo

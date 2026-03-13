@@ -1,6 +1,6 @@
 #!/bin/bash
 # Token/Context Weight Estimation for MM
-# Estimates cognitive load and LLM context usage per file
+# Estimates cognitive load and LLM context usage per file, broken down by crate
 #
 # Approximation: ~4 characters per token (conservative for code)
 # Also factors in: imports, type definitions, function count
@@ -9,6 +9,17 @@ set -e
 
 PROJECT_ROOT="${1:-$(dirname "$0")/../..}"
 cd "$PROJECT_ROOT"
+
+CRATES=(
+    "mm:src"
+    "mm-tui:crates/mm-tui/src"
+    "mm-meta:crates/mm-meta/src"
+    "mm-utils:crates/mm-utils/src"
+    "mm-derive:crates/mm-derive/src"
+)
+
+TEMP_FILE=$(mktemp)
+trap "rm -f $TEMP_FILE" EXIT
 
 echo "=============================================="
 echo "MM Token/Context Weight Analysis"
@@ -19,84 +30,91 @@ echo "Estimation basis: ~4 chars/token (conservative for code)"
 echo "Weights: base tokens + complexity factors"
 echo
 
-TEMP_FILE=$(mktemp)
-trap "rm -f $TEMP_FILE" EXIT
+# ── Per-crate file tables ──
 
-# Header
-printf "%-50s %8s %8s %8s %8s %8s\n" "File" "Chars" "Lines" "~Tokens" "Funcs" "Weight"
-printf "%-50s %8s %8s %8s %8s %8s\n" "----" "-----" "-----" "-------" "-----" "------"
+for entry in "${CRATES[@]}"; do
+    crate_name="${entry%%:*}"
+    crate_src="${entry#*:}"
 
-find ./src -name "*.rs" -type f | sort | while read file; do
-    rel_path="${file#./src/}"
+    [ -d "$crate_src" ] || continue
 
-    # Basic metrics
-    chars=$(wc -c < "$file" | tr -d ' ')
-    lines=$(wc -l < "$file" | tr -d ' ')
-    base_tokens=$((chars / 4))
+    file_count=$(find "$crate_src" -name "*.rs" -type f | wc -l | tr -d ' ')
+    [ "$file_count" -eq 0 ] && continue
 
-    # Complexity factors (handle grep returning 1 on no match)
-    func_count=$(grep -c 'fn ' "$file" || true)
-    struct_count=$(grep -c '^struct \|^pub struct ' "$file" || true)
-    enum_count=$(grep -c '^enum \|^pub enum ' "$file" || true)
-    impl_count=$(grep -c '^impl ' "$file" || true)
+    echo "=============================================="
+    echo "## Crate: $crate_name"
+    echo "=============================================="
+    echo
 
-    # Ensure numbers
-    func_count=${func_count:-0}
-    struct_count=${struct_count:-0}
-    enum_count=${enum_count:-0}
-    impl_count=${impl_count:-0}
+    printf "%-55s %8s %8s %8s %8s\n" "File" "Lines" "~Tokens" "Funcs" "Weight"
+    printf "%-55s %8s %8s %8s %8s\n" "----" "-----" "-------" "-----" "------"
 
-    # Weight calculation: base + complexity bonus
-    complexity_bonus=$(( (struct_count + enum_count) * 50 + impl_count * 30 ))
-    weight=$((base_tokens + complexity_bonus))
+    find "$crate_src" -name "*.rs" -type f | sort | while read file; do
+        rel_path="${file#./}"
 
-    # Extract module
-    if [[ "$rel_path" == *"/"* ]]; then
-        module="${rel_path%%/*}"
-    else
-        module="(root)"
-    fi
+        chars=$(wc -c < "$file" | tr -d ' ')
+        lines=$(wc -l < "$file" | tr -d ' ')
+        base_tokens=$((chars / 4))
 
-    printf "%-50s %8d %8d %8d %8d %8d\n" "$rel_path" "$chars" "$lines" "$base_tokens" "$func_count" "$weight"
+        func_count=$(grep -c 'fn ' "$file" || true)
+        struct_count=$(grep -c '^struct \|^pub struct \|^pub(crate) struct ' "$file" || true)
+        enum_count=$(grep -c '^enum \|^pub enum \|^pub(crate) enum ' "$file" || true)
+        impl_count=$(grep -c '^impl ' "$file" || true)
 
-    # Save for later aggregation
-    echo "$weight $module $rel_path" >> "$TEMP_FILE"
+        func_count=${func_count:-0}
+        struct_count=${struct_count:-0}
+        enum_count=${enum_count:-0}
+        impl_count=${impl_count:-0}
+
+        complexity_bonus=$(( (struct_count + enum_count) * 50 + impl_count * 30 ))
+        weight=$((base_tokens + complexity_bonus))
+
+        printf "%-55s %8d %8d %8d %8d\n" "$rel_path" "$lines" "$base_tokens" "$func_count" "$weight"
+
+        echo "$weight $crate_name $rel_path" >> "$TEMP_FILE"
+    done
+
+    echo
+done
+
+# ── Top 25 heaviest files across all crates ──
+
+echo "=============================================="
+echo "## Top 25 Heaviest Files (all crates)"
+echo "=============================================="
+echo
+
+printf "%-55s %8s\n" "File" "Weight"
+printf "%-55s %8s\n" "----" "------"
+
+sort -rn "$TEMP_FILE" | head -25 | while read weight crate file; do
+    printf "%-55s %8d\n" "$file" "$weight"
 done
 
 echo
-echo "=============================================="
-echo "## Top 25 Heaviest Files (by context weight)"
-echo "=============================================="
-echo
 
-printf "%-50s %8s\n" "File" "Weight"
-printf "%-50s %8s\n" "----" "------"
+# ── Crate-level context weight ──
 
-sort -rn "$TEMP_FILE" | head -25 | while read weight module file; do
-    printf "%-50s %8d\n" "$file" "$weight"
-done
-
-echo
 echo "=============================================="
-echo "## Module-Level Context Weight"
+echo "## Crate-Level Context Weight"
 echo "=============================================="
 echo
 
-# Calculate total
 total_weight=$(awk '{sum+=$1} END {print sum}' "$TEMP_FILE")
 
-printf "%-20s %10s %10s\n" "Module" "Weight" "% of Total"
-printf "%-20s %10s %10s\n" "------" "------" "----------"
+printf "%-15s %10s %10s %8s\n" "Crate" "Weight" "% of Total" "Files"
+printf "%-15s %10s %10s %8s\n" "-----" "------" "----------" "-----"
 
-# Aggregate by module
-awk '{weights[$2]+=$1} END {for (m in weights) print weights[m], m}' "$TEMP_FILE" | sort -rn | while read weight module; do
-    pct=$((100 * weight / total_weight))
-    printf "%-20s %10d %9d%%\n" "$module" "$weight" "$pct"
+for entry in "${CRATES[@]}"; do
+    crate_name="${entry%%:*}"
+    c_weight=$(awk -v c="$crate_name" '$2==c {sum+=$1} END {print sum+0}' "$TEMP_FILE")
+    c_files=$(awk -v c="$crate_name" '$2==c' "$TEMP_FILE" | wc -l | tr -d ' ')
+    [ "$c_files" -eq 0 ] && continue
+    pct=$((100 * c_weight / total_weight))
+    printf "%-15s %10d %9d%% %8d\n" "$crate_name" "$c_weight" "$pct" "$c_files"
 done
 
-echo
 echo "------"
-printf "%-20s %10d %10s\n" "TOTAL" "$total_weight" "100%"
+printf "%-15s %10d %10s\n" "TOTAL" "$total_weight" "100%"
 echo
 echo "Estimated full-codebase context: ~$total_weight tokens"
-echo "(This is src/ only - excludes tests, docs, configs)"

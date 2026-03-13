@@ -17,7 +17,7 @@ echo
 
 {
     echo "################################################################"
-    echo "#                    MM CODEBASE ANALYSIS                    #"
+    echo "#                    MM CODEBASE ANALYSIS                      #"
     echo "#                    $(date)                    #"
     echo "################################################################"
     echo
@@ -65,6 +65,6 @@ echo "Full report: $REPORT_FILE"
 echo
 echo "Quick summary:"
 echo "--------------"
-grep -A 5 "## Total Project Statistics" "$REPORT_FILE" | tail -4 || true
+grep -A 20 "## Cross-Crate Summary" "$REPORT_FILE" | head -20 || true
 echo
-grep -A 6 "## Summary Statistics" "$REPORT_FILE" | tail -7 || true
+grep -A 10 "## Summary Statistics" "$REPORT_FILE" | tail -8 || true

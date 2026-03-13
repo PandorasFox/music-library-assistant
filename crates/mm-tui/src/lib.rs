@@ -172,7 +172,7 @@ impl App {
     const STATUS_TTL: Duration = Duration::from_secs(1);
 
     /// Get a snapshot of the current config from the Witch (cached in handle).
-    pub(crate) fn config(&mut self) -> Config {
+    pub(crate) fn config(&mut self) -> Arc<Config> {
         self.witch.config()
     }
 
@@ -468,7 +468,7 @@ impl App {
             let data = self
                 .witch
                 .query(mm_meta::domain_queries::GetDeployData {
-                    config: Some(config),
+                    config: Some((*config).clone()),
                 });
             let preview = deploy_modal::DeploymentPreviewState::new(data);
             self.view =
@@ -509,7 +509,9 @@ impl App {
     /// and transition to the appropriate view based on Witch state.
     pub(crate) fn complete_startup(&mut self) {
         let config = self.config();
-        let _ = self.witch.config_op(mm_meta::protocol::ConfigOp::SetShared(config));
+        let _ = self
+            .witch
+            .config_op(mm_meta::protocol::ConfigOp::SetShared((*config).clone()));
 
         // If leave_transactions_open is enabled, open a persistent transaction at startup
         if self.open_txn_mode() {
@@ -602,7 +604,7 @@ pub fn run_tui(
             startup::handle_db_setup_dialog(&mut terminal, &db_path)?;
             // Ask the Witch for the config root (she parsed it at startup)
             let cfg = witch.config();
-            cfg.root
+            cfg.root.clone()
         } else {
             // Fresh install — directory picker
             startup::run_directory_picker(&mut terminal)?

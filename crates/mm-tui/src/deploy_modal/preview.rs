@@ -7,6 +7,9 @@
 //! - Enter stages mutations and goes directly to TransactionReview
 //! - Escape returns to Insights view
 
+use std::borrow::Cow;
+use std::path::Path;
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -14,8 +17,6 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
-
-use std::path::Path;
 
 use super::types::DeployModalData;
 use crate::widgets::{DeployTab, SidecarSummary, SignalInfo, SignalInfoPane, TabbedSignalList};
@@ -230,40 +231,40 @@ impl DeploymentPreviewState {
     fn render_tabbed_list(&self, f: &mut Frame, area: Rect) {
         // Get display items for current tab
         // For New and Leftover, show "directory (count)" format
-        let items: Vec<String> = match self.active_tab {
+        let items: Vec<Cow<'_, str>> = match self.active_tab {
             DeployTab::Healthy => self
                 .cached_data
                 .healthy
                 .iter()
-                .map(|f| f.corpus_path.clone())
+                .map(|f| Cow::Borrowed(f.corpus_path.as_str()))
                 .collect(),
             DeployTab::New => self
                 .cached_data
                 .new_by_dir
                 .iter()
                 .map(|d| {
-                    if d.count == 0 {
+                    Cow::Owned(if d.count == 0 {
                         // Sidecar-only directory
                         format!("{} ({} covers)", d.directory, d.sidecar_count)
                     } else if d.sidecar_count > 0 {
                         format!("{} ({} + {} covers)", d.directory, d.count, d.sidecar_count)
                     } else {
                         format!("{} ({})", d.directory, d.count)
-                    }
+                    })
                 })
                 .collect(),
             DeployTab::Conflicts => {
-                let mut items: Vec<String> = self
+                let mut items: Vec<Cow<'_, str>> = self
                     .cached_data
                     .conflicts
                     .iter()
-                    .map(|g| g.deploy_path.clone())
+                    .map(|g| Cow::Borrowed(g.deploy_path.as_str()))
                     .collect();
                 items.extend(
                     self.cached_data
                         .sidecar_conflicts
                         .iter()
-                        .map(|g| format!("[img] {}/{}", g.library_name, g.deploy_path)),
+                        .map(|g| Cow::Owned(format!("[img] {}/{}", g.library_name, g.deploy_path))),
                 );
                 items
             }
@@ -271,17 +272,17 @@ impl DeploymentPreviewState {
                 .cached_data
                 .leftover_by_dir
                 .iter()
-                .map(|d| format!("{} ({})", d.directory, d.count))
+                .map(|d| Cow::Owned(format!("{} ({})", d.directory, d.count)))
                 .collect(),
             DeployTab::Stale => self
                 .cached_data
                 .stale
                 .iter()
-                .map(|f| f.library_path.clone())
+                .map(|f| Cow::Borrowed(f.library_path.as_str()))
                 .collect(),
         };
 
-        let paths: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
+        let paths: Vec<&str> = items.iter().map(|s| s.as_ref()).collect();
         let scroll = self.tab_scroll[self.active_tab.index()];
 
         let widget = TabbedSignalList::new(self.active_tab)
@@ -295,20 +296,24 @@ impl DeploymentPreviewState {
     fn render_info_pane(&self, f: &mut Frame, area: Rect) {
         let scroll = self.tab_scroll[self.active_tab.index()];
 
+        // Sidecar conflicts need an owned deploy_path from format!(), so we
+        // hold it here to keep it alive for the SignalInfo borrow.
+        let mut owned_deploy_path = String::new();
+
         let info = match self.active_tab {
             DeployTab::Healthy => {
                 self.cached_data
                     .healthy
                     .get(scroll)
                     .map(|file| SignalInfo::Healthy {
-                        corpus_path: file.corpus_path.clone(),
-                        library_path: file.deploy_path.clone(),
+                        corpus_path: &file.corpus_path,
+                        library_path: &file.deploy_path,
                     })
             }
             DeployTab::New => {
                 self.cached_data.new_by_dir.get(scroll).map(|dir| {
                     // Find sidecars matching this directory
-                    let sidecars: Vec<SidecarSummary> = self
+                    let sidecars: Vec<SidecarSummary<'_>> = self
                         .cached_data
                         .sidecars
                         .iter()
@@ -319,16 +324,16 @@ impl DeploymentPreviewState {
                                 .is_some_and(|p| p == dir.directory)
                         })
                         .map(|s| SidecarSummary {
-                            filename: s.filename.clone(),
-                            format: s.format.clone(),
+                            filename: &s.filename,
+                            format: &s.format,
                             width: s.width,
                             height: s.height,
-                            role: s.role.clone(),
+                            role: &s.role,
                         })
                         .collect();
 
                     SignalInfo::NewDirectory {
-                        directory: dir.directory.clone(),
+                        directory: &dir.directory,
                         file_count: dir.count,
                         sidecars,
                     }
@@ -341,30 +346,34 @@ impl DeploymentPreviewState {
                         .conflicts
                         .get(scroll)
                         .map(|group| SignalInfo::Conflict {
-                            deploy_path: group.deploy_path.clone(),
+                            deploy_path: Cow::Borrowed(&group.deploy_path),
                             conflicting_files: group
                                 .conflicting_files
                                 .iter()
-                                .map(|(path, _)| path.clone())
+                                .map(|(path, _)| path.as_str())
                                 .collect(),
                         })
                 } else {
                     self.cached_data
                         .sidecar_conflicts
                         .get(scroll - audio_len)
-                        .map(|group| SignalInfo::Conflict {
-                            deploy_path: format!("{}/{}", group.library_name, group.deploy_path),
-                            conflicting_files: group
-                                .conflicting_files
-                                .iter()
-                                .map(|(path, _)| path.clone())
-                                .collect(),
+                        .map(|group| {
+                            owned_deploy_path =
+                                format!("{}/{}", group.library_name, group.deploy_path);
+                            SignalInfo::Conflict {
+                                deploy_path: Cow::Borrowed(owned_deploy_path.as_str()),
+                                conflicting_files: group
+                                    .conflicting_files
+                                    .iter()
+                                    .map(|(path, _)| path.as_str())
+                                    .collect(),
+                            }
                         })
                 }
             }
             DeployTab::Leftover => self.cached_data.leftover_by_dir.get(scroll).map(|dir| {
                 SignalInfo::LeftoverDirectory {
-                    directory: dir.directory.clone(),
+                    directory: &dir.directory,
                     file_count: dir.count,
                 }
             }),
@@ -373,8 +382,8 @@ impl DeploymentPreviewState {
                 .stale
                 .get(scroll)
                 .map(|file| SignalInfo::Stale {
-                    library_path: file.library_path.clone(),
-                    expected_path: file.expected_path.clone(),
+                    library_path: &file.library_path,
+                    expected_path: &file.expected_path,
                 }),
         };
 

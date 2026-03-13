@@ -157,7 +157,7 @@ impl App {
         }
 
         // Load preferred locales from config.
-        let preferred_locales = self.config().opinions.external_matching.preferred_locales;
+        let preferred_locales = self.config().opinions.external_matching.preferred_locales.clone();
 
         // Batch query: load summaries + full detail for all recordings at once
         let batch = self
@@ -333,7 +333,7 @@ impl App {
 
             // Build the full new config with this edit applied
             let new_config = {
-                let mut cfg = config.clone();
+                let mut cfg = (*config).clone();
                 let mut found = false;
                 for sd in &mut cfg.source_dirs {
                     if sd.path == *source_path {
@@ -412,8 +412,8 @@ impl App {
 
         // Load config for locales and credit routing
         let config = self.config();
-        let locales = config.opinions.external_matching.preferred_locales;
-        let routing = config.opinions.external_matching.credit_routing;
+        let locales = config.opinions.external_matching.preferred_locales.clone();
+        let routing = config.opinions.external_matching.credit_routing.clone();
 
         // Collect unique IDs for batch loading
         let mut release_ids: Vec<String> = Vec::new();

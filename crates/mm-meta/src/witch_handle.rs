@@ -18,6 +18,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use crate::auth::SessionToken;
 use crate::decisions::{Decision, DecisionKey, DiscardSummary, TransactionError};
@@ -92,7 +93,7 @@ pub struct WitchHandle {
 
     /// Cached config from server. Fetched once after login, invalidated on
     /// config generation change.
-    cached_config: Option<crate::config::Config>,
+    cached_config: Option<Arc<crate::config::Config>>,
 }
 
 impl WitchHandle {
@@ -274,13 +275,13 @@ impl WitchHandle {
     /// Get the current config. Fetches from server on first call, then
     /// returns the cached copy. Call `invalidate_config_cache()` when the
     /// config generation counter changes.
-    pub fn config(&mut self) -> crate::config::Config {
+    pub fn config(&mut self) -> Arc<crate::config::Config> {
         if let Some(ref c) = self.cached_config {
-            return c.clone();
+            return Arc::clone(c);
         }
-        let config = self.send_query(ConfigQuery);
-        self.cached_config = Some(config.clone());
-        config
+        let arc = Arc::new(self.send_query(ConfigQuery));
+        self.cached_config = Some(Arc::clone(&arc));
+        arc
     }
 
     /// Drop the cached config so the next `config()` call re-fetches.

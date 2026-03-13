@@ -156,7 +156,7 @@ impl App {
         // Default entries (all-defaults, no meaningful config) are elided —
         // they carry no information and will be dropped from dirs.kdl on write.
         let new_config = {
-            let mut cfg = self.config().clone();
+            let mut cfg = (*self.config()).clone();
             let mut found = false;
             for sd in &mut cfg.source_dirs {
                 if sd.path == source_path {

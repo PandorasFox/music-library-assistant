@@ -511,26 +511,26 @@ pub fn execute_pack_releases(
     sender.write_packing_manifest(manifest_rows, witness);
 
     // === Compute directory file counts for cohesion scoring ===
-    let mut dir_total_files: HashMap<String, i32> = HashMap::new();
+    let mut dir_total_files: HashMap<&str, i32> = HashMap::new();
     for info in corpus_info.values() {
-        *dir_total_files.entry(info.parent_dir.clone()).or_default() += 1;
+        *dir_total_files.entry(&info.parent_dir).or_default() += 1;
     }
 
     // === Build inode→path lookup from all_per_inode ===
-    let inode_paths: HashMap<i64, String> = all_per_inode
+    let inode_paths: HashMap<i64, &str> = all_per_inode
         .iter()
-        .map(|(inode, rows)| (*inode, rows[0].path.clone()))
+        .map(|(inode, rows)| (*inode, rows[0].path.as_str()))
         .collect();
 
     // === Write candidate rows, deduplicating per (release_id, inode) ===
     // Keeps the highest-confidence recording for each pair.
-    let mut deduped: HashMap<(String, i64), write_thread::PackingCandidateRow> = HashMap::new();
+    let mut deduped: HashMap<(&str, i64), write_thread::PackingCandidateRow> = HashMap::new();
 
     for (inode, rec_matches) in &inode_recordings {
         let corpus = corpus_info.get(inode);
-        let inode_path = inode_paths.get(inode).cloned().unwrap_or_default();
-        let parent_dir = corpus.map(|c| c.parent_dir.clone()).unwrap_or_default();
-        let dir_file_count = dir_total_files.get(&parent_dir).copied().unwrap_or(1);
+        let inode_path = inode_paths.get(inode).copied().unwrap_or_default();
+        let parent_dir = corpus.map(|c| c.parent_dir.as_str()).unwrap_or_default();
+        let dir_file_count = dir_total_files.get(parent_dir).copied().unwrap_or(1);
 
         for rec_match in rec_matches {
             if let Some(release_ids) = recording_releases.get(&rec_match.recording_id) {
@@ -539,7 +539,7 @@ pub fn execute_pack_releases(
                         continue;
                     }
 
-                    let key = (release_id.clone(), *inode);
+                    let key = (release_id.as_str(), *inode);
                     let entry = deduped.entry(key);
                     use std::collections::hash_map::Entry;
                     match entry {
@@ -565,12 +565,12 @@ pub fn execute_pack_releases(
                                 .map(|s| s.to_string());
 
                             e.insert(write_thread::PackingCandidateRow {
-                                release_id: release_id.clone(),
+                                release_id: release_id.to_string(),
                                 inode: *inode,
                                 recording_id: rec_match.recording_id.clone(),
                                 confidence: rec_match.confidence,
-                                path: inode_path.clone(),
-                                parent_dir: parent_dir.clone(),
+                                path: inode_path.to_string(),
+                                parent_dir: parent_dir.to_string(),
                                 duration_ms,
                                 tag_title,
                                 tag_artist,
@@ -593,18 +593,18 @@ pub fn execute_pack_releases(
         // Find all corpus inodes in this directory
         for (inode, info) in &corpus_info {
             if info.parent_dir == *dir_path {
-                let key = (release_id.clone(), *inode);
+                let key = (release_id.as_str(), *inode);
                 if let std::collections::hash_map::Entry::Vacant(entry) = deduped.entry(key) {
-                    let inode_path = corpus_inode_paths.get(inode).cloned().unwrap_or_default();
-                    let dir_file_count = dir_total_files.get(dir_path).copied().unwrap_or(1);
+                    let inode_path = corpus_inode_paths.get(inode).map(|s| s.as_str()).unwrap_or_default();
+                    let dir_file_count = dir_total_files.get(dir_path.as_str()).copied().unwrap_or(1);
                     entry.insert(
                         write_thread::PackingCandidateRow {
                             release_id: release_id.clone(),
                             inode: *inode,
                             recording_id: String::new(), // synthetic — no AcoustID match
                             confidence: 1.0,
-                            path: inode_path,
-                            parent_dir: dir_path.clone(),
+                            path: inode_path.to_string(),
+                            parent_dir: dir_path.to_string(),
                             duration_ms: info.duration_ms,
                             tag_title: info
                                 .tags
@@ -637,9 +637,9 @@ pub fn execute_pack_releases(
         ));
     }
 
-    let mut releases_with_candidates: HashSet<String> = HashSet::new();
+    let mut releases_with_candidates: HashSet<&str> = HashSet::new();
     for (release_id, _) in deduped.keys() {
-        releases_with_candidates.insert(release_id.clone());
+        releases_with_candidates.insert(release_id);
     }
     let candidate_rows: Vec<write_thread::PackingCandidateRow> = deduped.into_values().collect();
 
@@ -658,7 +658,7 @@ pub fn execute_pack_releases(
     let spawn: Vec<AnalysisComputation> = releases_with_candidates
         .iter()
         .map(|release_id| AnalysisComputation::ScoreReleaseCandidates {
-            release_id: release_id.clone(),
+            release_id: release_id.to_string(),
         })
         .collect();
 

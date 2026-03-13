@@ -3,6 +3,8 @@
 //! Context-sensitive information display for deploy signals.
 //! Shows different information based on signal type.
 
+use std::borrow::Cow;
+
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -18,42 +20,42 @@ use super::tabbed_signal_list::DeployTab;
 
 /// Summary of a sidecar image for the info pane.
 #[derive(Debug, Clone)]
-pub struct SidecarSummary {
-    pub filename: String,
-    pub format: String,
+pub struct SidecarSummary<'a> {
+    pub filename: &'a str,
+    pub format: &'a str,
     pub width: u32,
     pub height: u32,
-    pub role: String,
+    pub role: &'a str,
 }
 
 /// Information about a deploy signal for display in the info pane.
 #[derive(Debug, Clone, Default)]
-pub enum SignalInfo {
+pub enum SignalInfo<'a> {
     /// Healthy file: corpus path and library path match.
     Healthy {
-        corpus_path: String,
-        library_path: String,
+        corpus_path: &'a str,
+        library_path: &'a str,
     },
     /// New files ready to deploy: aggregated by directory.
     NewDirectory {
-        directory: String,
+        directory: &'a str,
         file_count: usize,
-        sidecars: Vec<SidecarSummary>,
+        sidecars: Vec<SidecarSummary<'a>>,
     },
     /// Deploy conflict: multiple corpus files map to same library path.
     Conflict {
-        deploy_path: String,
-        conflicting_files: Vec<String>,
+        deploy_path: Cow<'a, str>,
+        conflicting_files: Vec<&'a str>,
     },
     /// Leftover files: aggregated by directory.
     LeftoverDirectory {
-        directory: String,
+        directory: &'a str,
         file_count: usize,
     },
     /// Stale file: library path differs from expected path.
     Stale {
-        library_path: String,
-        expected_path: String,
+        library_path: &'a str,
+        expected_path: &'a str,
     },
     /// No selection.
     #[default]
@@ -65,11 +67,11 @@ pub struct SignalInfoPane<'a> {
     /// The active tab determines the type of info shown.
     active_tab: DeployTab,
     /// Current signal info to display.
-    info: &'a SignalInfo,
+    info: &'a SignalInfo<'a>,
 }
 
 impl<'a> SignalInfoPane<'a> {
-    pub fn new(active_tab: DeployTab, info: &'a SignalInfo) -> Self {
+    pub fn new(active_tab: DeployTab, info: &'a SignalInfo<'a>) -> Self {
         Self { active_tab, info }
     }
 
@@ -112,7 +114,7 @@ impl<'a> SignalInfoPane<'a> {
             SignalInfo::Conflict {
                 deploy_path,
                 conflicting_files,
-            } => self.conflict_content(deploy_path, conflicting_files, width),
+            } => self.conflict_content(deploy_path.as_ref(), conflicting_files, width),
             SignalInfo::LeftoverDirectory {
                 directory,
                 file_count,
@@ -175,7 +177,7 @@ impl<'a> SignalInfoPane<'a> {
         &self,
         directory: &str,
         file_count: usize,
-        sidecars: &[SidecarSummary],
+        sidecars: &[SidecarSummary<'a>],
         width: u16,
     ) -> Vec<Line<'a>> {
         let mut lines = vec![
@@ -257,7 +259,7 @@ impl<'a> SignalInfoPane<'a> {
     fn conflict_content(
         &self,
         deploy_path: &str,
-        conflicting_files: &[String],
+        conflicting_files: &[&str],
         width: u16,
     ) -> Vec<Line<'a>> {
         let mut lines = vec![

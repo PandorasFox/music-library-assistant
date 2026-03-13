@@ -160,11 +160,11 @@ impl App {
 
     /// Start the inbox organize workflow.
     fn start_inbox_organize(&mut self) {
-        let config = self.config().clone();
+        let config = self.config();
         let directories = self
             .witch
             .query(mm_meta::domain_queries::GetInboxOrganizeData {
-                config: config.clone(),
+                config: (*config).clone(),
             });
 
         if let Some(state) =

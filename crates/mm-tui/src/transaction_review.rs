@@ -17,12 +17,13 @@ use ratatui::Frame;
 
 use mm_meta::decisions::DecisionKey;
 use mm_meta::mutations::{DiffEntry, Mutation};
+use crate::widgets::modal_buttons::ModalButtons;
 use crate::widgets::rich_text::{RichBlock, RichSpan};
 use crate::widgets::standard_list::{
     ListEntry, ListInputResult, StandardListConfig, StandardListState,
 };
 use crate::widgets::wizard::{WizardItem, WizardOffer};
-use crate::widgets::{centered_rect_fixed, render_button_row, ConfirmationButton};
+use crate::widgets::{centered_rect_fixed, ButtonRowState};
 use mm_meta::witch_handle::WitchHandle;
 
 // ============================================================================
@@ -109,9 +110,15 @@ impl ListEntry for DecisionSummary {
     }
 }
 
-/// Which button is focused.
+/// Context for ReviewButton enablement (show_cancel flag).
+#[derive(Debug, Clone, Copy)]
+pub struct ReviewButtonCtx {
+    pub show_cancel: bool,
+}
+
+/// Button choices for the transaction review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ReviewButtonFocus {
+pub enum ReviewButton {
     /// Cancel - return to source modal (safe default)
     #[default]
     Cancel,
@@ -119,6 +126,47 @@ pub enum ReviewButtonFocus {
     Discard,
     /// Confirm and execute all decisions
     Confirm,
+}
+
+impl ModalButtons for ReviewButton {
+    type Context = ReviewButtonCtx;
+    type Action = TransactionReviewAction;
+
+    fn all() -> &'static [Self] {
+        &[Self::Cancel, Self::Discard, Self::Confirm]
+    }
+
+    fn label(&self, _ctx: &Self::Context) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Cancel => "Cancel".into(),
+            Self::Discard => "Discard".into(),
+            Self::Confirm => "Confirm".into(),
+        }
+    }
+
+    fn color(&self, _ctx: &Self::Context) -> ratatui::style::Color {
+        match self {
+            Self::Cancel => Color::White,
+            Self::Discard => Color::Red,
+            Self::Confirm => Color::Green,
+        }
+    }
+
+    fn enabled(&self, ctx: &Self::Context) -> bool {
+        match self {
+            Self::Cancel => ctx.show_cancel,
+            Self::Discard => true,
+            Self::Confirm => true,
+        }
+    }
+
+    fn action(&self, _ctx: &Self::Context) -> TransactionReviewAction {
+        match self {
+            Self::Cancel => TransactionReviewAction::Cancel,
+            Self::Discard => TransactionReviewAction::Discard,
+            Self::Confirm => TransactionReviewAction::Confirm,
+        }
+    }
 }
 
 /// Action returned from handling input.
@@ -159,12 +207,12 @@ pub struct TransactionReviewState {
     pub list: StandardListState,
     /// Whether button row is focused.
     pub buttons_focused: bool,
-    pub button_focus: ReviewButtonFocus,
+    pub buttons: ButtonRowState<ReviewButton>,
     pub post_commit_phase: PostCommitPhase,
     /// When set, a confirmation popup is shown for removing this decision.
     pub pending_removal: Option<DecisionKey>,
-    /// Whether the Cancel button is available (false in tabbed mode).
-    show_cancel: bool,
+    /// Context for button enablement (carries show_cancel flag).
+    button_ctx: ReviewButtonCtx,
 }
 
 impl TransactionReviewState {
@@ -174,24 +222,31 @@ impl TransactionReviewState {
             decisions: Vec::new(),
             list: StandardListState::new(StandardListConfig::default()),
             buttons_focused: false,
-            button_focus: ReviewButtonFocus::Cancel,
+            buttons: ButtonRowState::new(), // defaults to Cancel
             post_commit_phase: PostCommitPhase::SignalRefresh,
             pending_removal: None,
-            show_cancel: true,
+            button_ctx: ReviewButtonCtx { show_cancel: true },
         }
     }
 
     /// Create state for tabbed mode (no Cancel button).
     pub fn new_tabbed() -> Self {
+        let mut buttons = ButtonRowState::new();
+        buttons.selected = ReviewButton::Confirm;
         Self {
             decisions: Vec::new(),
             list: StandardListState::new(StandardListConfig::default()),
             buttons_focused: false,
-            button_focus: ReviewButtonFocus::Confirm,
+            buttons,
             post_commit_phase: PostCommitPhase::SignalRefresh,
             pending_removal: None,
-            show_cancel: false,
+            button_ctx: ReviewButtonCtx { show_cancel: false },
         }
+    }
+
+    /// Get the button context for rendering.
+    pub fn button_ctx(&self) -> &ReviewButtonCtx {
+        &self.button_ctx
     }
 
     pub fn with_post_commit_phase(mut self, phase: PostCommitPhase) -> Self {
@@ -208,25 +263,6 @@ impl TransactionReviewState {
     /// Current cursor position (for action handler interop).
     pub fn cursor(&self) -> usize {
         self.list.cursor
-    }
-
-    /// Move button focus left (Cancel <- Discard <- Confirm).
-    pub fn focus_left(&mut self) {
-        self.button_focus = match self.button_focus {
-            ReviewButtonFocus::Confirm => ReviewButtonFocus::Discard,
-            ReviewButtonFocus::Discard if self.show_cancel => ReviewButtonFocus::Cancel,
-            ReviewButtonFocus::Discard => ReviewButtonFocus::Discard,
-            ReviewButtonFocus::Cancel => ReviewButtonFocus::Cancel,
-        };
-    }
-
-    /// Move button focus right (Cancel -> Discard -> Confirm).
-    pub fn focus_right(&mut self) {
-        self.button_focus = match self.button_focus {
-            ReviewButtonFocus::Cancel => ReviewButtonFocus::Discard,
-            ReviewButtonFocus::Discard => ReviewButtonFocus::Confirm,
-            ReviewButtonFocus::Confirm => ReviewButtonFocus::Confirm,
-        };
     }
 
     /// Handle input action.
@@ -290,22 +326,21 @@ impl TransactionReviewState {
     fn handle_buttons_input(&mut self, action: &InputAction) -> TransactionReviewAction {
         match action {
             InputAction::NavLeft => {
-                self.focus_left();
+                self.buttons.nav_left(&self.button_ctx);
                 TransactionReviewAction::None
             }
             InputAction::NavRight => {
-                self.focus_right();
+                self.buttons.nav_right(&self.button_ctx);
                 TransactionReviewAction::None
             }
             InputAction::FocusUp => {
                 self.buttons_focused = false;
                 TransactionReviewAction::None
             }
-            InputAction::Confirm | InputAction::Toggle => match self.button_focus {
-                ReviewButtonFocus::Cancel => TransactionReviewAction::Cancel,
-                ReviewButtonFocus::Discard => TransactionReviewAction::Discard,
-                ReviewButtonFocus::Confirm => TransactionReviewAction::Confirm,
-            },
+            InputAction::Confirm | InputAction::Toggle => {
+                self.buttons.confirm(&self.button_ctx)
+                    .unwrap_or(TransactionReviewAction::None)
+            }
             InputAction::Cancel => TransactionReviewAction::Cancel,
             InputAction::Char('y') | InputAction::Char('Y') => TransactionReviewAction::Confirm,
             InputAction::Shortcut('d') => TransactionReviewAction::Discard,
@@ -542,26 +577,10 @@ fn render_buttons_and_hints(
     f: &mut Frame,
     button_area: Rect,
     hint_area: Rect,
-    state: &TransactionReviewState,
+    state: &mut TransactionReviewState,
 ) {
-    let bf = state.buttons_focused;
-
-    let mut buttons = Vec::new();
-    if state.show_cancel {
-        buttons.push(
-            ConfirmationButton::new("Cancel", Color::White)
-                .selected(bf && state.button_focus == ReviewButtonFocus::Cancel),
-        );
-    }
-    buttons.push(
-        ConfirmationButton::new("Discard", Color::Red)
-            .selected(bf && state.button_focus == ReviewButtonFocus::Discard),
-    );
-    buttons.push(
-        ConfirmationButton::new("Confirm", Color::Green)
-            .selected(bf && state.button_focus == ReviewButtonFocus::Confirm),
-    );
-    render_button_row(f, button_area, &buttons);
+    let ctx = state.button_ctx;
+    state.buttons.render(f, button_area, &ctx, state.buttons_focused);
 
     use crate::widgets::control_colors as cc;
 
@@ -581,7 +600,7 @@ fn render_buttons_and_hints(
         cc::cancel("[Bksp]"),
         cc::text(" remove"),
     ];
-    if state.show_cancel {
+    if ctx.show_cancel {
         hint_spans.push(cc::text("  "));
         hint_spans.push(cc::cancel("[Esc]"));
         hint_spans.push(cc::text(" cancel"));

@@ -1,37 +1,73 @@
 //! Types for OOB tag sync resolution modal.
 
+use std::borrow::Cow;
+
+use ratatui::style::Color;
+
 use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 
 use mm_meta::views::{OobSyncDirection, OobSyncFile};
 use crate::bulk_selection::BulkSelectionState;
-use crate::widgets::{ButtonRects, FocusPane, TextInputState};
+use crate::widgets::modal_buttons::ModalButtons;
+use crate::widgets::{ButtonRowState, FocusPane, TextInputState};
 
 // ============================================================================
 // Button Selection
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Context for OobSyncButton enablement.
+#[derive(Debug, Clone, Copy)]
+pub struct OobSyncButtonCtx {
+    pub disk_to_index_count: usize,
+    pub index_to_disk_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OobSyncButton {
+    #[default]
     AcceptDisk,
     AcceptDb,
     Cancel,
 }
 
-impl OobSyncButton {
-    pub fn left(self) -> Self {
+impl ModalButtons for OobSyncButton {
+    type Context = OobSyncButtonCtx;
+    type Action = OobSyncAction;
+
+    fn all() -> &'static [Self] {
+        &[Self::AcceptDisk, Self::AcceptDb, Self::Cancel]
+    }
+
+    fn label(&self, ctx: &Self::Context) -> Cow<'static, str> {
         match self {
-            Self::AcceptDisk => Self::AcceptDisk,
-            Self::AcceptDb => Self::AcceptDisk,
-            Self::Cancel => Self::AcceptDb,
+            Self::AcceptDisk => format!("Accept Disk ({})", ctx.disk_to_index_count).into(),
+            Self::AcceptDb => format!("Accept DB ({})", ctx.index_to_disk_count).into(),
+            Self::Cancel => "Cancel".into(),
         }
     }
 
-    pub fn right(self) -> Self {
+    fn color(&self, _ctx: &Self::Context) -> Color {
         match self {
-            Self::AcceptDisk => Self::AcceptDb,
-            Self::AcceptDb => Self::Cancel,
-            Self::Cancel => Self::Cancel,
+            Self::AcceptDisk => Color::Cyan,
+            Self::AcceptDb => Color::Magenta,
+            Self::Cancel => Color::White,
+        }
+    }
+
+    fn enabled(&self, ctx: &Self::Context) -> bool {
+        match self {
+            Self::AcceptDisk => ctx.disk_to_index_count > 0,
+            Self::AcceptDb => ctx.index_to_disk_count > 0,
+            Self::Cancel => true,
+        }
+    }
+
+    fn action(&self, _ctx: &Self::Context) -> OobSyncAction {
+        match self {
+            Self::AcceptDisk => OobSyncAction::AcceptDisk,
+            Self::AcceptDb => OobSyncAction::AcceptDb,
+            Self::Cancel => OobSyncAction::Cancel,
         }
     }
 }
@@ -62,12 +98,10 @@ pub struct OobSyncState {
     pub current_file: usize,
     /// Scroll offset for file list
     pub scroll: usize,
-    /// Currently selected button
-    pub selected_button: OobSyncButton,
+    /// Button row state
+    pub buttons: ButtonRowState<OobSyncButton>,
     /// Current focus pane (List or Buttons)
     pub focus_pane: FocusPane,
-    /// Button rectangles for click detection (set during render)
-    pub button_rects: ButtonRects,
     /// Bulk selection state for multi-file operations
     pub selection: BulkSelectionState,
     /// Inline text filter input
@@ -91,11 +125,12 @@ impl OobSyncState {
         let has_disk_to_index = files
             .iter()
             .any(|f| f.direction == OobSyncDirection::DiskToIndex);
-        let default_button = if has_disk_to_index {
-            OobSyncButton::AcceptDisk
+        let mut buttons = ButtonRowState::new();
+        if has_disk_to_index {
+            buttons.selected = OobSyncButton::AcceptDisk;
         } else {
-            OobSyncButton::AcceptDb
-        };
+            buttons.selected = OobSyncButton::AcceptDb;
+        }
 
         let file_count = files.len();
         let mut selection = BulkSelectionState::new();
@@ -105,14 +140,21 @@ impl OobSyncState {
             files,
             current_file: 0,
             scroll: 0,
-            selected_button: default_button,
+            buttons,
             focus_pane: FocusPane::List,
-            button_rects: ButtonRects::new(),
             selection,
             filter_input: TextInputState::new(),
             filter_active: false,
             filter_text: None,
             filtered_indices: None,
+        }
+    }
+
+    /// Build the button context from current state.
+    pub fn button_ctx(&self) -> OobSyncButtonCtx {
+        OobSyncButtonCtx {
+            disk_to_index_count: self.disk_to_index_count(),
+            index_to_disk_count: self.index_to_disk_count(),
         }
     }
 
@@ -176,23 +218,10 @@ impl OobSyncState {
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<OobSyncAction> {
-        if let Some(button_name) = self.button_rects.hit_test(x, y) {
+        let ctx = self.button_ctx();
+        if let Some(action) = self.buttons.handle_click(x, y, &ctx) {
             self.focus_pane = FocusPane::Buttons;
-            match button_name {
-                "accept_disk" => {
-                    self.selected_button = OobSyncButton::AcceptDisk;
-                    Some(OobSyncAction::AcceptDisk)
-                }
-                "accept_db" => {
-                    self.selected_button = OobSyncButton::AcceptDb;
-                    Some(OobSyncAction::AcceptDb)
-                }
-                "cancel" => {
-                    self.selected_button = OobSyncButton::Cancel;
-                    Some(OobSyncAction::Cancel)
-                }
-                _ => None,
-            }
+            Some(action)
         } else {
             None
         }
@@ -267,13 +296,15 @@ impl OobSyncState {
             // Left/Right: navigate buttons when focused on buttons pane
             InputAction::NavLeft => {
                 if self.focus_pane == FocusPane::Buttons {
-                    self.selected_button = self.selected_button.left();
+                    let ctx = self.button_ctx();
+                    self.buttons.nav_left(&ctx);
                 }
                 OobSyncAction::None
             }
             InputAction::NavRight => {
                 if self.focus_pane == FocusPane::Buttons {
-                    self.selected_button = self.selected_button.right();
+                    let ctx = self.button_ctx();
+                    self.buttons.nav_right(&ctx);
                 }
                 OobSyncAction::None
             }
@@ -281,25 +312,10 @@ impl OobSyncState {
             // Confirm selected button (when focused on buttons)
             InputAction::Confirm => {
                 if self.focus_pane == FocusPane::Buttons {
-                    match self.selected_button {
-                        OobSyncButton::AcceptDisk => {
-                            if self.disk_to_index_count() > 0 {
-                                OobSyncAction::AcceptDisk
-                            } else {
-                                OobSyncAction::None
-                            }
-                        }
-                        OobSyncButton::AcceptDb => {
-                            if self.index_to_disk_count() > 0 {
-                                OobSyncAction::AcceptDb
-                            } else {
-                                OobSyncAction::None
-                            }
-                        }
-                        OobSyncButton::Cancel => OobSyncAction::Cancel,
-                    }
+                    let ctx = self.button_ctx();
+                    self.buttons.confirm(&ctx)
+                        .unwrap_or(OobSyncAction::None)
                 } else {
-                    // When on list, Enter could expand/select - for now do nothing
                     OobSyncAction::None
                 }
             }

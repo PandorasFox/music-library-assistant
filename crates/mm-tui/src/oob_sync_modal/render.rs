@@ -18,7 +18,7 @@ use crate::widgets::{
     ThreeColTable,
 };
 
-use super::types::{OobSyncButton, OobSyncState};
+use super::types::OobSyncState;
 
 pub fn render(f: &mut Frame, area: Rect, state: &mut OobSyncState) {
     // Use full area with 1-cell padding
@@ -240,77 +240,16 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobSyncState) {
         .border_style(Style::default().fg(border_color));
     let inner = render_pane(f, area, block);
 
-    // Clear stored button rects
-    state.button_rects.clear();
-
-    let disk_count = state.disk_to_index_count();
-    let db_count = state.index_to_disk_count();
-
-    let disk_label = format!(" Accept Disk ({}) ", disk_count);
-    let db_label = format!(" Accept DB ({}) ", db_count);
-    let cancel_label = " Cancel ";
-
-    // Calculate button positions for click detection
-    // Buttons are centered, so we need to compute their positions
-    let total_width = disk_label.len() + 2 + db_label.len() + 2 + cancel_label.len();
-    let start_x = inner.x + (inner.width.saturating_sub(total_width as u16)) / 2;
-
-    let mut x = start_x;
-
-    // Accept Disk button
-    let disk_rect = Rect::new(x, inner.y, disk_label.len() as u16, 1);
-    state.button_rects.set("accept_disk", disk_rect);
-    x += disk_label.len() as u16 + 2;
-
-    // Accept DB button
-    let db_rect = Rect::new(x, inner.y, db_label.len() as u16, 1);
-    state.button_rects.set("accept_db", db_rect);
-    x += db_label.len() as u16 + 2;
-
-    // Cancel button
-    let cancel_rect = Rect::new(x, inner.y, cancel_label.len() as u16, 1);
-    state.button_rects.set("cancel", cancel_rect);
-
-    // Style buttons
-    let disk_style = if state.selected_button == OobSyncButton::AcceptDisk && is_focused {
-        if disk_count > 0 {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::DarkGray).bg(Color::Black)
-        }
-    } else if disk_count > 0 {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
+    // Split inner into button row + hint line
+    let button_area = Rect { height: 1, ..inner };
+    let hint_area = Rect {
+        y: inner.y + 1,
+        height: inner.height.saturating_sub(1),
+        ..inner
     };
 
-    let db_style = if state.selected_button == OobSyncButton::AcceptDb && is_focused {
-        if db_count > 0 {
-            Style::default().fg(Color::Black).bg(Color::Magenta)
-        } else {
-            Style::default().fg(Color::DarkGray).bg(Color::Black)
-        }
-    } else if db_count > 0 {
-        Style::default().fg(Color::Magenta)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-
-    let cancel_style = if state.selected_button == OobSyncButton::Cancel && is_focused {
-        Style::default().fg(Color::Black).bg(Color::White)
-    } else {
-        Style::default().fg(Color::White)
-    };
-
-    let buttons_line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(disk_label, disk_style),
-        Span::raw("  "),
-        Span::styled(db_label, db_style),
-        Span::raw("  "),
-        Span::styled(cancel_label, cancel_style),
-        Span::raw("  "),
-    ]);
+    let ctx = state.button_ctx();
+    state.buttons.render(f, button_area, &ctx, is_focused);
 
     let hint_style = Style::default().fg(Color::DarkGray);
     let hint_line = Line::from(vec![
@@ -327,6 +266,6 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobSyncState) {
         Span::styled(" confirm", hint_style),
     ]);
 
-    let para = Paragraph::new(vec![buttons_line, hint_line]).alignment(Alignment::Center);
-    f.render_widget(para, inner);
+    let hint_para = Paragraph::new(hint_line).alignment(Alignment::Center);
+    f.render_widget(hint_para, hint_area);
 }

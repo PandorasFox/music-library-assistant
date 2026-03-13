@@ -18,7 +18,7 @@ use crate::widgets::{
     ThreeColTable,
 };
 
-use super::types::{OobConflictState, ResolutionButton};
+use super::types::OobConflictState;
 
 pub fn render(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
     // Use full area with 1-cell padding
@@ -247,106 +247,16 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
         .border_style(Style::default().fg(border_color));
     let inner = render_pane(f, area, block);
 
-    // Clear stored button rects
-    state.button_rects.clear();
-
-    let buttons_line = match state.active_bucket {
-        ConflictBucket::DbOnly | ConflictBucket::DiskOnly | ConflictBucket::Conflict => {
-            let apply_label = " Apply DB -> Files ";
-            let assimilate_label = " Assimilate Files -> DB ";
-            let cancel_label = " Cancel ";
-            let has_files = !state.active_bucket_state().files.is_empty();
-
-            // Calculate button positions for click detection
-            let total_width =
-                apply_label.len() + 3 + assimilate_label.len() + 3 + cancel_label.len();
-            let start_x = inner.x + (inner.width.saturating_sub(total_width as u16)) / 2;
-
-            let mut x = start_x;
-
-            // Apply DB button
-            let apply_rect = Rect::new(x, inner.y, apply_label.len() as u16, 1);
-            state.button_rects.set("apply_db", apply_rect);
-            x += apply_label.len() as u16 + 3;
-
-            // Assimilate Disk button
-            let assimilate_rect = Rect::new(x, inner.y, assimilate_label.len() as u16, 1);
-            state.button_rects.set("assimilate_disk", assimilate_rect);
-            x += assimilate_label.len() as u16 + 3;
-
-            // Cancel button
-            let cancel_rect = Rect::new(x, inner.y, cancel_label.len() as u16, 1);
-            state.button_rects.set("cancel", cancel_rect);
-
-            let apply_style =
-                if state.selected_button == ResolutionButton::ApplyDb && is_focused && has_files {
-                    Style::default().fg(Color::Black).bg(Color::Green)
-                } else if has_files {
-                    Style::default().fg(Color::Green)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-
-            let assimilate_style = if state.selected_button == ResolutionButton::AssimilateDisk
-                && is_focused
-                && has_files
-            {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else if has_files {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            let cancel_style = Style::default().fg(Color::White);
-
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(apply_label, apply_style),
-                Span::raw("   "),
-                Span::styled(assimilate_label, assimilate_style),
-                Span::raw("   "),
-                Span::styled(cancel_label, cancel_style),
-            ])
-        }
-        ConflictBucket::MtimeOnly => {
-            let ack_label = " Acknowledge Mtime ";
-            let cancel_label = " Cancel ";
-            let has_files = !state.active_bucket_state().files.is_empty();
-
-            // Calculate button positions for click detection
-            let total_width = ack_label.len() + 3 + cancel_label.len();
-            let start_x = inner.x + (inner.width.saturating_sub(total_width as u16)) / 2;
-
-            let mut x = start_x;
-
-            // Acknowledge button
-            let ack_rect = Rect::new(x, inner.y, ack_label.len() as u16, 1);
-            state.button_rects.set("acknowledge", ack_rect);
-            x += ack_label.len() as u16 + 3;
-
-            // Cancel button
-            let cancel_rect = Rect::new(x, inner.y, cancel_label.len() as u16, 1);
-            state.button_rects.set("cancel", cancel_rect);
-
-            let ack_style = if is_focused && has_files {
-                Style::default().fg(Color::Black).bg(Color::Green)
-            } else if has_files {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            let cancel_style = Style::default().fg(Color::White);
-
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(ack_label, ack_style),
-                Span::raw("   "),
-                Span::styled(cancel_label, cancel_style),
-            ])
-        }
+    // Split inner into button row + hint line
+    let button_area = Rect { height: 1, ..inner };
+    let hint_area = Rect {
+        y: inner.y + 1,
+        height: inner.height.saturating_sub(1),
+        ..inner
     };
+
+    let ctx = state.button_ctx();
+    state.buttons.render(f, button_area, &ctx, is_focused);
 
     let hint_style = Style::default().fg(Color::DarkGray);
     let hint_line = Line::from(vec![
@@ -363,6 +273,6 @@ fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
         Span::styled(" confirm", hint_style),
     ]);
 
-    let para = Paragraph::new(vec![buttons_line, hint_line]).alignment(Alignment::Center);
-    f.render_widget(para, inner);
+    let hint_para = Paragraph::new(hint_line).alignment(Alignment::Center);
+    f.render_widget(hint_para, hint_area);
 }

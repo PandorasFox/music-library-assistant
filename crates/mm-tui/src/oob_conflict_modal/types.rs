@@ -1,29 +1,82 @@
 //! Types for OOB tag bucketed resolution modal.
 
+use std::borrow::Cow;
+
+use ratatui::style::Color;
+
 use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 
 use mm_meta::views::{BucketedOobFile, ConflictBucket};
 use crate::bulk_selection::BulkSelectionState;
-use crate::widgets::{ButtonRects, FocusPane, TextInputState};
+use crate::widgets::modal_buttons::ModalButtons;
+use crate::widgets::{ButtonRowState, FocusPane, TextInputState};
 
 // ============================================================================
 // Resolution Button
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResolutionButton {
+/// Context for OobConflictButton enablement.
+#[derive(Debug, Clone, Copy)]
+pub struct OobConflictButtonCtx {
+    pub is_resolvable: bool,
+    pub is_acknowledgeable: bool,
+    pub has_files: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OobConflictButton {
     /// Make disk match DB (write db_value to files)
+    #[default]
     ApplyDb,
     /// Make DB match disk (assimilate disk_value into index)
     AssimilateDisk,
+    /// Acknowledge mtime-only changes
+    Acknowledge,
+    /// Cancel
+    Cancel,
 }
 
-impl ResolutionButton {
-    pub fn toggle(self) -> Self {
+impl ModalButtons for OobConflictButton {
+    type Context = OobConflictButtonCtx;
+    type Action = OobConflictAction;
+
+    fn all() -> &'static [Self] {
+        &[Self::ApplyDb, Self::AssimilateDisk, Self::Acknowledge, Self::Cancel]
+    }
+
+    fn label(&self, _ctx: &Self::Context) -> Cow<'static, str> {
         match self {
-            Self::ApplyDb => Self::AssimilateDisk,
-            Self::AssimilateDisk => Self::ApplyDb,
+            Self::ApplyDb => "Apply DB -> Files".into(),
+            Self::AssimilateDisk => "Assimilate Files -> DB".into(),
+            Self::Acknowledge => "Acknowledge Mtime".into(),
+            Self::Cancel => "Cancel".into(),
+        }
+    }
+
+    fn color(&self, _ctx: &Self::Context) -> Color {
+        match self {
+            Self::ApplyDb => Color::Green,
+            Self::AssimilateDisk => Color::Cyan,
+            Self::Acknowledge => Color::Green,
+            Self::Cancel => Color::White,
+        }
+    }
+
+    fn enabled(&self, ctx: &Self::Context) -> bool {
+        match self {
+            Self::ApplyDb => ctx.is_resolvable && ctx.has_files,
+            Self::AssimilateDisk => ctx.is_resolvable && ctx.has_files,
+            Self::Acknowledge => ctx.is_acknowledgeable && ctx.has_files,
+            Self::Cancel => true,
+        }
+    }
+
+    fn action(&self, _ctx: &Self::Context) -> OobConflictAction {
+        match self {
+            Self::ApplyDb | Self::AssimilateDisk => OobConflictAction::Resolve,
+            Self::Acknowledge => OobConflictAction::Acknowledge,
+            Self::Cancel => OobConflictAction::Cancel,
         }
     }
 }
@@ -168,12 +221,10 @@ pub struct OobConflictState {
     pub buckets: [BucketFileState; 4],
     /// Counts per bucket (for tab labels)
     pub bucket_counts: [usize; 4],
-    /// Resolution button selection (for resolvable buckets)
-    pub selected_button: ResolutionButton,
+    /// Button row state
+    pub buttons: ButtonRowState<OobConflictButton>,
     /// Current focus pane (List or Buttons)
     pub focus_pane: FocusPane,
-    /// Button rectangles for click detection (set during render)
-    pub button_rects: ButtonRects,
 }
 
 impl OobConflictState {
@@ -209,18 +260,26 @@ impl OobConflictState {
             .copied()
             .unwrap_or(ConflictBucket::MtimeOnly);
 
+        let buckets = [
+            BucketFileState::new(b0),
+            BucketFileState::new(b1),
+            BucketFileState::new(b2),
+            BucketFileState::new(b3),
+        ];
+
+        // Default button depends on initial bucket type
+        let mut buttons = ButtonRowState::new();
+        if initial_bucket.is_acknowledgeable() {
+            buttons.selected = OobConflictButton::Acknowledge;
+        }
+        // else stays on ApplyDb (the Default), which is fine for resolvable buckets
+
         Self {
             active_bucket: initial_bucket,
-            buckets: [
-                BucketFileState::new(b0),
-                BucketFileState::new(b1),
-                BucketFileState::new(b2),
-                BucketFileState::new(b3),
-            ],
+            buckets,
             bucket_counts,
-            selected_button: ResolutionButton::ApplyDb,
+            buttons,
             focus_pane: FocusPane::List,
-            button_rects: ButtonRects::new(),
         }
     }
 
@@ -234,6 +293,15 @@ impl OobConflictState {
 
     pub fn total_files(&self) -> usize {
         self.bucket_counts.iter().sum()
+    }
+
+    /// Build the button context from current state.
+    pub fn button_ctx(&self) -> OobConflictButtonCtx {
+        OobConflictButtonCtx {
+            is_resolvable: self.active_bucket.is_resolvable(),
+            is_acknowledgeable: self.active_bucket.is_acknowledgeable(),
+            has_files: !self.active_bucket_state().files.is_empty(),
+        }
     }
 
     /// Get tag mismatches for the currently selected file (from the signal data).
@@ -251,21 +319,10 @@ impl OobConflictState {
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<OobConflictAction> {
-        if let Some(button_name) = self.button_rects.hit_test(x, y) {
+        let ctx = self.button_ctx();
+        if let Some(action) = self.buttons.handle_click(x, y, &ctx) {
             self.focus_pane = FocusPane::Buttons;
-            match button_name {
-                "apply_db" => {
-                    self.selected_button = ResolutionButton::ApplyDb;
-                    Some(OobConflictAction::Resolve)
-                }
-                "assimilate_disk" => {
-                    self.selected_button = ResolutionButton::AssimilateDisk;
-                    Some(OobConflictAction::Resolve)
-                }
-                "acknowledge" => Some(OobConflictAction::Acknowledge),
-                "cancel" => Some(OobConflictAction::Cancel),
-                _ => None,
-            }
+            Some(action)
         } else {
             None
         }
@@ -331,10 +388,14 @@ impl OobConflictState {
             // Bucket tab navigation
             InputAction::CycleNext => {
                 self.active_bucket = self.active_bucket.next();
+                let ctx = self.button_ctx();
+                self.buttons.clamp(&ctx);
                 OobConflictAction::Navigate
             }
             InputAction::CyclePrev => {
                 self.active_bucket = self.active_bucket.prev();
+                let ctx = self.button_ctx();
+                self.buttons.clamp(&ctx);
                 OobConflictAction::Navigate
             }
 
@@ -368,26 +429,28 @@ impl OobConflictState {
                 }
             }
 
-            // Resolution button toggle (resolvable buckets only, when focused on buttons)
-            InputAction::NavLeft | InputAction::NavRight => {
-                if self.focus_pane == FocusPane::Buttons && self.active_bucket.is_resolvable() {
-                    self.selected_button = self.selected_button.toggle();
+            // Button navigation (when focused on buttons)
+            InputAction::NavLeft => {
+                if self.focus_pane == FocusPane::Buttons {
+                    let ctx = self.button_ctx();
+                    self.buttons.nav_left(&ctx);
+                }
+                OobConflictAction::None
+            }
+            InputAction::NavRight => {
+                if self.focus_pane == FocusPane::Buttons {
+                    let ctx = self.button_ctx();
+                    self.buttons.nav_right(&ctx);
                 }
                 OobConflictAction::None
             }
 
             // Confirm resolution (when focused on buttons)
             InputAction::Confirm => {
-                if self.focus_pane == FocusPane::Buttons
-                    && !self.active_bucket_state().files.is_empty()
-                {
-                    if self.active_bucket.is_acknowledgeable() {
-                        OobConflictAction::Acknowledge
-                    } else if self.active_bucket.is_resolvable() {
-                        OobConflictAction::Resolve
-                    } else {
-                        OobConflictAction::None
-                    }
+                if self.focus_pane == FocusPane::Buttons {
+                    let ctx = self.button_ctx();
+                    self.buttons.confirm(&ctx)
+                        .unwrap_or(OobConflictAction::None)
                 } else {
                     OobConflictAction::None
                 }

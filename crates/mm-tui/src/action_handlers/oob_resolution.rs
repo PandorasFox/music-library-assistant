@@ -220,7 +220,7 @@ impl App {
             ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation,
         };
         use mm_meta::mutations::Mutation;
-        use crate::oob_conflict_modal::types::ResolutionButton;
+        use crate::oob_conflict_modal::types::OobConflictButton;
 
         let (files_data, button) = match &self.view {
             ActiveView::OobConflictInspection(ref state) => {
@@ -239,7 +239,7 @@ impl App {
                     .filter_map(|&idx| bucket_state.files.get(idx))
                     .map(|f| (f.inode, f.path.clone()))
                     .collect();
-                (files, state.selected_button)
+                (files, state.buttons.selected)
             }
             _ => return,
         };
@@ -262,7 +262,7 @@ impl App {
 
         // Generate individual single-file mutations (batch scheduling at UI layer)
         let (label, mutations): (&str, Vec<Mutation>) = match button {
-            ResolutionButton::ApplyDb => (
+            OobConflictButton::ApplyDb => (
                 "Apply DB tags \u{2192} files",
                 tracks
                     .into_iter()
@@ -275,7 +275,7 @@ impl App {
                     })
                     .collect(),
             ),
-            ResolutionButton::AssimilateDisk => (
+            OobConflictButton::AssimilateDisk => (
                 "Assimilate file tags \u{2192} DB",
                 tracks
                     .into_iter()
@@ -288,6 +288,8 @@ impl App {
                     })
                     .collect(),
             ),
+            // Acknowledge and Cancel don't reach this function
+            _ => return,
         };
 
         let decision = gesture.decide(label, mutations);

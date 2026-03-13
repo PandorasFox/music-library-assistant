@@ -16,7 +16,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
 
 use std::sync::mpsc;
 
@@ -38,10 +37,9 @@ pub(crate) mod socket;
 mod transaction;
 pub(crate) mod types;
 // Re-export public types
-pub use handle::WitchHandle;
 pub use types::{
     MaintenanceWitness, MutationExecutionWitness, PendingTransaction, ReasoningLevel,
-    SpawnedMutation, Task, TaskLabel, TransactionSnapshot, WatcherState, WitchStartupState,
+    SpawnedMutation, Task, TaskLabel, TransactionSnapshot, WatcherState,
     WitchStatus, WorkState, WorkStateSnapshot, WorkStatus,
 };
 // Decision authority: TUI gates decisions via ConfirmationGesture (ui/action_handlers/witness.rs),
@@ -668,10 +666,30 @@ impl Witch {
                                     CommandResponse::Ok
                                 }
                                 CommandPayload::JettisonEditHistorySession { session_id } => {
-                                    todo!("wire up JettisonEditHistorySession for session {session_id}")
+                                    let now = chrono::Local::now().to_rfc3339();
+                                    let mutation = Mutation::JettisonEditHistory(
+                                        mm_meta::mutations::jettison::JettisonEditHistoryMutation {
+                                            session_id: Some(session_id.clone()),
+                                            timestamp: now,
+                                        },
+                                    );
+                                    let label = format!("Jettison edit history: session {}", session_id);
+                                    w.queue_mutations_internal(vec![mutation], Some(label));
+                                    CommandResponse::Ok
                                 }
                                 CommandPayload::JettisonEditHistoryAll => {
-                                    todo!("wire up JettisonEditHistoryAll")
+                                    let now = chrono::Local::now().to_rfc3339();
+                                    let mutation = Mutation::JettisonEditHistory(
+                                        mm_meta::mutations::jettison::JettisonEditHistoryMutation {
+                                            session_id: None,
+                                            timestamp: now,
+                                        },
+                                    );
+                                    w.queue_mutations_internal(
+                                        vec![mutation],
+                                        Some("Jettison edit history: all sessions".to_string()),
+                                    );
+                                    CommandResponse::Ok
                                 }
                                 CommandPayload::Shutdown => {
                                     CommandResponse::Goodbye

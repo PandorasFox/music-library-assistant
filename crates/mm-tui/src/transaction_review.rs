@@ -407,7 +407,8 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
             | Mutation::DropExternalMatch(_)
             | Mutation::ApplyConfigEdits(_)
             | Mutation::ApplyDirConfigEdit(_)
-            | Mutation::ApplyBatchDirConfigEdits(_) => {}
+            | Mutation::ApplyBatchDirConfigEdits(_)
+            | Mutation::JettisonEditHistory(_) => {}
 
             Mutation::InboxToCorpus(ref m) => {
                 inodes.insert(m.inode);

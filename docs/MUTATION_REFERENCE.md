@@ -35,7 +35,7 @@ deployment operations.
 | Stage | Order | Mutations |
 |-------|-------|-----------|
 | Config | 0 | ApplyConfigEdits, ApplyDirConfigEdit, ApplyBatchDirConfigEdits |
-| DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, InboxToCorpus, InboxDirToCorpus, ApplyDbTagsToDisk |
+| DB | 1 | ApplyTagOps, AcknowledgeMtimeOnly, EmitCanonicalTag, EmitExpectedOverlap, EmitExpectedDuplicate, EmitExpectedMissingTag, IndexFileFromPath, UpdateFilePath, InboxToCorpus, InboxDirToCorpus, ApplyDbTagsToDisk, JettisonEditHistory |
 | DiskFlush | 2 | Transcode, Move, StashFromZone, StashLeftovers, DropFromIndex, DropDirectoryFromIndex |
 | DiskDeploy | 3 | HardLink, LibraryMove |
 | *(ChainEmitted)* | — | FlushTagsToDisk, AssimilateDiskTagsToDb *(spawned during execution, never in transactions)* |
@@ -168,6 +168,14 @@ The EmitExpectedMissingTag mutation is used when an operator confirms that certa
 | ApplyBatchDirConfigEdits | — | — | — | — | Atomically applies multiple dir config edits to dirs.kdl in a single read-modify-write. Produced by coalescing multiple ApplyDirConfigEdit mutations at transaction commit time — never directly staged. Recomputation scope: union of per-entry scopes |
 
 The ApplyConfigEdits mutation is created by the Config Editor view when the operator saves edited config fields. It carries the original KDL text, old config, and new config. On execution, it backs up `config.kdl` to `config.kdl.bak`, then applies field-level edits to the KDL document preserving comments and formatting. The new config is propagated back to the main thread via `TaskResult.config_update`, where `Witch::tick()` updates the `SharedConfig` (Arc<RwLock<Config>>). `is_db_only: false` (writes to filesystem), `signal_clear_scope: None`, `affected_inodes: empty`. No spawned computations or signal effects.
+
+### Edit History Operations
+
+| Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
+|----------|---------------------|-----------------|-----------------|-------|
+| JettisonEditHistory | — | — | — | Delete tag edit history rows from the database. `is_db_only: true`, `signal_clear_scope: None`, `recomputation_scope: EMPTY`. Two modes: single-session (`session_id: Some(id)`) or all-sessions (`session_id: None`). |
+
+The JettisonEditHistory mutation is queued by the Witch's command handler in response to `JettisonEditHistorySession` or `JettisonEditHistoryAll` protocol commands. The TUI exports edit history rows to a flat log file *before* sending the command, so this mutation is a pure DB delete. Execution delegates to `write_thread::clear_tag_edit_history[_session]()`.
 
 ---
 

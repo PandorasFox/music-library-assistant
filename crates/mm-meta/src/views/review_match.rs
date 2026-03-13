@@ -42,7 +42,7 @@ impl ReviewKind {
         match self {
             Self::RedundantDuplicate => "redundant",
             Self::DeployConflict => "deploy_conflict",
-            Self::MetadataDuplicate => "metadata_dup",
+            Self::MetadataDuplicate => "metadata_duplicate",
             Self::SameRecordingDifferentRelease => "cross_release",
         }
     }

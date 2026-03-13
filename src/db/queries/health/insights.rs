@@ -71,7 +71,7 @@ impl Database {
 
         // Cross-source overlap clusters (easy resolutions - at top of bucket)
         // These are derived from fingerprint overlaps, clustered by source directory
-        let directory_overlap_cluster_count = self.count_signal_type("cross_source_overlap")?;
+        let cross_source_overlap_count = self.count_signal_type("cross_source_overlap")?;
 
         // Release overlaps (multiple releases → same album directory)
         let release_overlap_count = self.count_signal_type("release_overlap")?;
@@ -132,7 +132,7 @@ impl Database {
         let same_recording_different_release_count = self.count_signal_type("same_recording_different_release")?;
 
         Ok(TagSquashBucket {
-            directory_overlap_cluster_count,
+            cross_source_overlap_count,
             release_overlap_count,
             subpar_duplicate_count,
             redundant_duplicate_count,
@@ -221,9 +221,9 @@ impl Database {
         let mut entries = Vec::new();
 
         // Aggregate signals with affected counts
-        // Note: fingerprint_dup and subpar_duplicate are now in the TagSquash bucket
+        // Note: fingerprint_overlap and subpar_duplicate are now in the TagSquash bucket
         for (signal_type, label) in [
-            ("metadata_dup", "Metadata Duplicates"),
+            ("metadata_duplicate", "Metadata Duplicates"),
             ("duplicate_inode", "Duplicate Inodes"),
             ("missing_tag", "Missing Tags"),
             ("deploy_conflict", "Deploy Conflicts"),
@@ -257,7 +257,7 @@ impl Database {
     /// Reads from typed tables and counts inodes in bincode BLOB data.
     pub(super) fn count_affected_by_signal(&self, signal_type: &str) -> Result<usize> {
         let table = match signal_type {
-            "metadata_dup" => "signal_metadata_duplicate",
+            "metadata_duplicate" => "signal_metadata_duplicate",
             "duplicate_inode" => "signal_duplicate_inode",
             "missing_tag" => "signal_missing_tag",
             "deploy_conflict" => "signal_deploy_conflict",

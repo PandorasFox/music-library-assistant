@@ -540,7 +540,7 @@ impl HandleAction for insights_view::InsightsAction {
                     Some(insights_view::InsightAction::LaunchIntakeConfirmation) => {
                         app.start_intake_confirmation_from_health();
                     }
-                    Some(insights_view::InsightAction::LaunchDirectoryOverlapResolution) => {
+                    Some(insights_view::InsightAction::LaunchCrossSourceOverlapResolution) => {
                         app.start_directory_overlap_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchReleaseOverlapResolution) => {

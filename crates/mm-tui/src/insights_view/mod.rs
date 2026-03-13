@@ -158,7 +158,7 @@ pub enum InsightAction {
     /// Launch intake confirmation for unindexed files
     LaunchIntakeConfirmation,
     /// Launch fingerprint duplicate resolution modal
-    LaunchDirectoryOverlapResolution,
+    LaunchCrossSourceOverlapResolution,
     /// Launch release overlap resolution modal
     LaunchReleaseOverlapResolution,
     /// Launch subpar duplicate stash
@@ -237,7 +237,7 @@ impl BucketEntry {
             "TagCanonicity" | "InconsistentAlbumArtist" => InsightAction::LaunchTagCanonicityResolution,
             "CompoundTagValue" => InsightAction::LaunchCompoundTagSplitReview,
             "missing_tag" => InsightAction::LaunchMissingTagResolution,
-            "metadata_dup" => InsightAction::LaunchManualReview(crate::manual_review_modal::ReviewKind::MetadataDuplicate),
+            "metadata_duplicate" => InsightAction::LaunchManualReview(crate::manual_review_modal::ReviewKind::MetadataDuplicate),
             "deploy_conflict" => InsightAction::LaunchManualReview(crate::manual_review_modal::ReviewKind::DeployConflict),
             _ => InsightAction::NotImplemented,
         };
@@ -290,8 +290,8 @@ impl CachedBucketEntries {
     fn build_placeholder_entries(bucket: &TagSquashBucket) -> Vec<BucketEntry> {
         let mut entries = Vec::new();
 
-        if bucket.directory_overlap_cluster_count > 0 {
-            entries.push(BucketEntry::counted(InsightType::CrossSourceOverlaps, "Cross-source overlaps", bucket.directory_overlap_cluster_count, Color::Cyan, Color::Green, InsightAction::LaunchDirectoryOverlapResolution));
+        if bucket.cross_source_overlap_count > 0 {
+            entries.push(BucketEntry::counted(InsightType::CrossSourceOverlaps, "Cross-source overlaps", bucket.cross_source_overlap_count, Color::Cyan, Color::Green, InsightAction::LaunchCrossSourceOverlapResolution));
         }
         if bucket.release_overlap_count > 0 {
             entries.push(BucketEntry::counted(InsightType::ReleaseOverlaps, "Release overlaps", bucket.release_overlap_count, Color::Cyan, Color::Green, InsightAction::LaunchReleaseOverlapResolution));
@@ -845,7 +845,7 @@ mod tests {
                 _directory_breakdown: Default::default(),
             },
             bucket_placeholder: TagSquashBucket {
-                directory_overlap_cluster_count: 0,
+                cross_source_overlap_count: 0,
                 release_overlap_count: 0,
                 subpar_duplicate_count: 0,
                 redundant_duplicate_count: 0,

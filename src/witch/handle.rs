@@ -8,19 +8,26 @@
 //!
 //! All server-side concepts (read thread, auth thread, DB connections) are
 //! invisible to clients. The UI sees only WitchHandle.
+//!
+//! ## Transport
+//!
+//! WitchHandle supports two transports:
+//! - **Channel**: in-process mpsc to the Witch thread (default for TUI)
+//! - **Socket**: Unix domain socket with length-prefixed bincode framing
+//!   (for out-of-process clients)
 
 use std::sync::mpsc;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::auth::SessionToken;
-use crate::config::SharedConfig;
 use crate::meta::decisions::{Decision, DecisionKey, DiscardSummary};
 use crate::meta::protocol::{
     AuthResponse, AuthenticatedBody, AuthenticatedResponse, CommandPayload, CommandResponse,
     DecisionDetail, ProtocolError, ProtocolQuery, StatusQuery,
     TransactionPayload, TransactionResponse, UnauthenticatedBody, UnauthenticatedResponse,
 };
+use crate::meta::wire::{self, WireRequest, WireResponse};
 
 use super::WitchStatus;
 
@@ -55,6 +62,21 @@ pub(super) enum HandleCommand {
 }
 
 // ============================================================================
+// Transport
+// ============================================================================
+
+/// Transport backing a WitchHandle — either in-process mpsc or Unix socket.
+enum Transport {
+    /// In-process: direct mpsc channel to the Witch thread.
+    Channel(mpsc::Sender<HandleCommand>),
+    /// Remote: Unix domain socket with length-prefixed bincode framing.
+    /// Mutex satisfies the borrow checker — WitchHandle methods take `&self`,
+    /// but socket I/O needs exclusive access. Single-client handle, so no
+    /// real contention.
+    Socket(std::sync::Mutex<std::os::unix::net::UnixStream>),
+}
+
+// ============================================================================
 // WitchHandle
 // ============================================================================
 
@@ -63,8 +85,8 @@ pub(super) enum HandleCommand {
 /// The single interface between clients and the Witch. All communication
 /// goes through typed protocol messages — no shared memory, no bypass paths.
 pub struct WitchHandle {
-    /// Command channel to the Witch thread.
-    cmd_tx: mpsc::Sender<HandleCommand>,
+    /// Transport to the Witch (channel or socket).
+    transport: Transport,
 
     /// Session token from the authenticated operator. Set after login.
     /// Threaded into every outgoing HandleCommand for server-side validation.
@@ -72,19 +94,37 @@ pub struct WitchHandle {
 }
 
 impl WitchHandle {
-    /// Create a new handle from its components.
+    /// Create a new handle backed by an in-process mpsc channel.
     pub(super) fn new(
         cmd_tx: mpsc::Sender<HandleCommand>,
     ) -> Self {
         Self {
-            cmd_tx,
+            transport: Transport::Channel(cmd_tx),
             session_token: None,
         }
     }
 
+    /// Connect to a running Witch over a Unix domain socket.
+    pub fn connect(socket_path: &Path) -> std::io::Result<Self> {
+        let stream = std::os::unix::net::UnixStream::connect(socket_path)?;
+        Ok(Self {
+            transport: Transport::Socket(std::sync::Mutex::new(stream)),
+            session_token: None,
+        })
+    }
+
     /// Notify the Witch that the DB is now available (after first-time setup).
     pub fn notify_db_ready(&self) {
-        let _ = self.cmd_tx.send(HandleCommand::NotifyDbReady);
+        match &self.transport {
+            Transport::Channel(cmd_tx) => {
+                let _ = cmd_tx.send(HandleCommand::NotifyDbReady);
+            }
+            Transport::Socket(stream) => {
+                let mut stream = stream.lock().expect("socket mutex poisoned");
+                let _ = wire::write_frame(&mut *stream, &WireRequest::NotifyDbReady);
+                let _: Result<WireResponse, _> = wire::read_frame(&mut *stream);
+            }
+        }
     }
 
     // =========================================================================
@@ -101,16 +141,35 @@ impl WitchHandle {
             .session_token
             .clone()
             .expect("send_authenticated called before login");
-        let (tx, rx) = mpsc::channel();
-        self.cmd_tx
-            .send(HandleCommand::Authenticated {
-                token,
-                body,
-                reply: tx,
-            })
-            .expect("Witch thread has shut down unexpectedly");
-        rx.recv()
-            .expect("Witch thread dropped reply channel unexpectedly")
+
+        match &self.transport {
+            Transport::Channel(cmd_tx) => {
+                let (tx, rx) = mpsc::channel();
+                cmd_tx
+                    .send(HandleCommand::Authenticated {
+                        token,
+                        body,
+                        reply: tx,
+                    })
+                    .expect("Witch thread has shut down unexpectedly");
+                rx.recv()
+                    .expect("Witch thread dropped reply channel unexpectedly")
+            }
+            Transport::Socket(stream) => {
+                let mut stream = stream.lock().expect("socket mutex poisoned");
+                let req = WireRequest::Authenticated { token, body };
+                wire::write_frame(&mut *stream, &req)
+                    .map_err(|e| ProtocolError::Internal(format!("socket write: {e}")))?;
+                let resp: WireResponse = wire::read_frame(&mut *stream)
+                    .map_err(|e| ProtocolError::Internal(format!("socket read: {e}")))?;
+                match resp {
+                    WireResponse::Authenticated(result) => result,
+                    _ => Err(ProtocolError::Internal(
+                        "unexpected wire response type".to_string(),
+                    )),
+                }
+            }
+        }
     }
 
     /// Send a typed protocol query and extract the typed response.
@@ -159,12 +218,30 @@ impl WitchHandle {
         &self,
         body: UnauthenticatedBody,
     ) -> Result<UnauthenticatedResponse, ProtocolError> {
-        let (tx, rx) = mpsc::channel();
-        self.cmd_tx
-            .send(HandleCommand::Unauthenticated { body, reply: tx })
-            .expect("Witch thread has shut down unexpectedly");
-        rx.recv()
-            .expect("Witch thread dropped reply channel unexpectedly")
+        match &self.transport {
+            Transport::Channel(cmd_tx) => {
+                let (tx, rx) = mpsc::channel();
+                cmd_tx
+                    .send(HandleCommand::Unauthenticated { body, reply: tx })
+                    .expect("Witch thread has shut down unexpectedly");
+                rx.recv()
+                    .expect("Witch thread dropped reply channel unexpectedly")
+            }
+            Transport::Socket(stream) => {
+                let mut stream = stream.lock().expect("socket mutex poisoned");
+                let req = WireRequest::Unauthenticated(body);
+                wire::write_frame(&mut *stream, &req)
+                    .map_err(|e| ProtocolError::Internal(format!("socket write: {e}")))?;
+                let resp: WireResponse = wire::read_frame(&mut *stream)
+                    .map_err(|e| ProtocolError::Internal(format!("socket read: {e}")))?;
+                match resp {
+                    WireResponse::Unauthenticated(result) => result,
+                    _ => Err(ProtocolError::Internal(
+                        "unexpected wire response type".to_string(),
+                    )),
+                }
+            }
+        }
     }
 
     // =========================================================================
@@ -298,9 +375,9 @@ impl WitchHandle {
         Ok(())
     }
 
-    /// Inject shared config.
-    pub fn set_shared_config(&mut self, shared: SharedConfig) -> Result<(), ProtocolError> {
-        self.send_command(CommandPayload::SetSharedConfig { shared })?;
+    /// Inject shared config (in-process startup only).
+    pub fn set_shared_config(&mut self, config: crate::config::Config) -> Result<(), ProtocolError> {
+        self.send_command(CommandPayload::SetSharedConfig { config })?;
         Ok(())
     }
 
@@ -329,8 +406,10 @@ impl WitchHandle {
 
 impl Drop for WitchHandle {
     fn drop(&mut self) {
-        // Best-effort shutdown signal. If the channel is already closed
-        // (Witch panicked), that's fine — we're dropping anyway.
-        let _ = self.cmd_tx.send(HandleCommand::Shutdown);
+        // Best-effort shutdown signal. Only meaningful for in-process channel —
+        // socket clients don't own the server lifecycle.
+        if let Transport::Channel(ref cmd_tx) = self.transport {
+            let _ = cmd_tx.send(HandleCommand::Shutdown);
+        }
     }
 }

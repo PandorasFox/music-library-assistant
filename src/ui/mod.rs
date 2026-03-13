@@ -452,8 +452,8 @@ impl App {
     /// Complete startup: inject shared config, open persistent txn,
     /// and transition to the appropriate view based on Witch state.
     pub(super) fn complete_startup(&mut self) {
-        let shared = self.shared_config.clone();
-        let _ = self.witch.set_shared_config(shared);
+        let config = crate::config::read_shared_config(&self.shared_config).clone();
+        let _ = self.witch.set_shared_config(config);
 
         // If leave_transactions_open is enabled, open a persistent transaction at startup
         if self.open_txn_mode() {

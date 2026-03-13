@@ -38,7 +38,7 @@ use crate::ui::widgets::TextInputState;
 // ============================================================================
 
 /// A directory of inbox files to organize.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InboxDirectory {
     /// Display name for this directory group
     pub dir_name: String,
@@ -49,7 +49,7 @@ pub struct InboxDirectory {
 }
 
 /// A single organizable inbox file.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InboxOrganizeFile {
     pub inode: i64,
     /// Absolute path to the file

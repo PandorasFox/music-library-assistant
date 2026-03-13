@@ -39,7 +39,7 @@ pub enum IntakeSource {
 }
 
 /// A directory group for display purposes
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DirectoryGroup {
     /// Display path (relative to corpus root)
     pub display_path: String,
@@ -50,7 +50,7 @@ pub struct DirectoryGroup {
 }
 
 /// File entry with path for indexing.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UnindexedFileEntry {
     /// Absolute path for indexing
     pub abs_path: PathBuf,
@@ -59,7 +59,7 @@ pub struct UnindexedFileEntry {
 }
 
 /// State for the intake confirmation modal.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IntakeConfirmationState {
     /// Number of unindexed files detected
     pub file_count: usize,

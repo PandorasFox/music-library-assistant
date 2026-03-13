@@ -18,7 +18,7 @@ use crate::meta::views::{InboxCorpusMatchEntry, MatchClassification};
 ///
 /// Loaded once when the modal opens. All renders use this cached data.
 /// Entries sorted: Equivalent first, then Subpar, then Better.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct InboxCorpusMatchModalData {
     pub entries: Vec<InboxCorpusMatchEntry>,
 }

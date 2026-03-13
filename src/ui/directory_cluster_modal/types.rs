@@ -17,7 +17,7 @@ use crate::meta::mutations::Mutation;
 use crate::ui::manual_review_modal::types::{load_file_meta_summary, FileMetaSummary};
 
 /// A source directory within an overlap cluster.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DirectoryGroupEntry {
     /// Source directory path (e.g., "web/releases/bandcamp" or "web/releases/indie")
     pub path_suffix: String,
@@ -32,7 +32,7 @@ pub struct DirectoryGroupEntry {
 }
 
 /// A single cross-source overlap cluster ready for resolution.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DirectoryClusterEntry {
     /// Cluster key (sorted source paths joined by |)
     pub cluster_key: String,
@@ -85,7 +85,7 @@ fn format_summary_from_counts(format_counts: &std::collections::HashMap<String, 
 /// Cached data for the cross-source overlap resolution modal.
 ///
 /// Loaded once when the modal opens. All renders use this cached data.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct DirectoryClusterModalData {
     /// Cross-source overlap clusters
     pub clusters: Vec<DirectoryClusterEntry>,

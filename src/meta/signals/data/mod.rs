@@ -578,7 +578,7 @@ pub struct RedundantDuplicateData {
 }
 
 /// Tracks missing an ALBUM tag but having ARTIST and TITLE (album-less singles).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MissingAlbumSingleSignal {
     pub key: String, // lowercased artist name for dedup
     /// Serialized as bincode BLOB.

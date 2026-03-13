@@ -14,7 +14,7 @@ use crate::meta::mutations::Mutation;
 use std::path::PathBuf;
 
 /// Data for the missing directory resolution modal.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MissingDirectoryModalData {
     /// Missing directory paths
     pub directories: Vec<String>,

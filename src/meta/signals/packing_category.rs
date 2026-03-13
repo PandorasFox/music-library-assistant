@@ -6,7 +6,7 @@ use ratatui::style::Color;
 ///
 /// Used by the release packing browser for full-screen browsing and by the
 /// tree browser for compact `[MB]` markers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PackingCategory {
     Perfect,
     FullMatches,

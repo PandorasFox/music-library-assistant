@@ -28,7 +28,7 @@ pub enum ExternalMatchReviewAction {
 }
 
 /// Pre-loaded MB recording summary for inline display.
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RecordingSummary {
     pub title: String,
     pub artist_credit: String,
@@ -37,7 +37,7 @@ pub struct RecordingSummary {
 }
 
 /// Full recording detail data for building wizard pane lines.
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RecordingDetail {
     pub recording: MbRecording,
     pub artists: Vec<(String, Option<MbArtist>)>,

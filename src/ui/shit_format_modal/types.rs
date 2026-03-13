@@ -33,7 +33,7 @@ const LOSSLESS_FORMATS: &[&str] = &["wav", "aiff", "aif", "ape", "wv"];
 const LOSSY_FORMATS: &[&str] = &["mp3", "m4a", "aac", "wma"];
 
 /// A file with ShitFormat signal (non-Vorbis container).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShitFormatEntry {
     /// Corpus path (relative)
     pub corpus_path: String,
@@ -59,7 +59,7 @@ impl ShitFormatEntry {
 ///
 /// Loaded once when the modal opens. All renders use this cached data.
 /// Separates files into lossless (remux) and lossy (transcode) categories.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShitFormatModalData {
     /// Lossless files (WAV, AIFF, APE, WV) - remux to FLAC
     pub lossless_files: Vec<ShitFormatEntry>,

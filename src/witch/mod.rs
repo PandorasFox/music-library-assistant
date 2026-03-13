@@ -34,10 +34,12 @@ pub(crate) mod external_fetch;
 pub(crate) mod fs_watcher;
 mod hades;
 mod handle;
+pub(crate) mod socket;
 mod transaction;
 pub(crate) mod types;
 // Re-export public types
 pub use handle::WitchHandle;
+pub use socket::socket_path;
 pub use types::{
     MaintenanceWitness, MutationExecutionWitness, PendingTransaction, ReasoningLevel,
     SpawnedMutation, Task, TaskLabel, TransactionSnapshot, WatcherState, WitchStartupState,
@@ -244,6 +246,10 @@ pub struct Witch {
     /// Spawned in `run()`, before the UI thread.
     auth_thread_handle: Option<auth_thread::AuthThreadHandle>,
 
+    /// Handle to the Unix domain socket listener thread.
+    /// Spawned in `run()` for out-of-process client connections.
+    socket_listener_handle: Option<socket::SocketListenerHandle>,
+
     /// Client-facing auth handle for server-side token validation.
     /// Stored on the Witch so dispatch_command can gate protocol messages.
     auth_handle: Option<auth_thread::AuthHandle>,
@@ -332,6 +338,7 @@ impl Witch {
             fs_watcher: fs_watcher_handle,
             auth_thread_handle: None, // Spawned in run(), not new()
             auth_handle: None,       // Set in run() alongside auth_thread_handle
+            socket_listener_handle: None, // Spawned in run()
             external_fetch: None,
             fetch_progress: None,
         };
@@ -419,6 +426,10 @@ impl Witch {
 
         // Command channel: handle sends, Witch receives
         let (cmd_tx, cmd_rx) = mpsc::channel();
+
+        // Spawn the Unix domain socket listener for out-of-process clients.
+        // Socket connections share the same cmd_tx channel as the in-process TUI.
+        she.socket_listener_handle = socket::spawn_listener(cmd_tx.clone());
 
         let handle = WitchHandle::new(cmd_tx);
 
@@ -644,8 +655,8 @@ impl Witch {
                                     })?;
                                     CommandResponse::Ok
                                 }
-                                CommandPayload::SetSharedConfig { shared } => {
-                                    w.set_shared_config(shared);
+                                CommandPayload::SetSharedConfig { config } => {
+                                    w.set_shared_config(config.into_shared());
                                     CommandResponse::Ok
                                 }
                                 CommandPayload::UpdatePerformance { opinions } => {
@@ -2129,6 +2140,11 @@ impl Drop for Witch {
         // 2. Shut down Hades (closes thread-local connections on rayon workers, drops pool)
         // 3. DB thread checkpoints WAL and closes write connection
         // 4. Logging thread last so all shutdown messages get logged
+
+        // Step 0: Shut down socket listener (stops accepting new connections).
+        if let Some(ref mut handle) = self.socket_listener_handle {
+            handle.shutdown();
+        }
 
         // Step 0a: Shut down filesystem watcher thread.
         self.fs_watcher.shutdown();

@@ -13,7 +13,7 @@ use crate::meta::mutations::Mutation;
 use crate::ui::helpers::stash_file_mutations;
 
 /// A corrupt corpus file (tag parse error or waveform decode failure).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CorruptFileEntry {
     /// Corpus path (relative)
     pub corpus_path: String,
@@ -24,7 +24,7 @@ pub struct CorruptFileEntry {
 /// Cached data for the corrupt file resolution modal.
 ///
 /// Loaded once when the modal opens. All renders use this cached data.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CorruptFileModalData {
     /// Files with CorruptFile signals
     pub files: Vec<CorruptFileEntry>,

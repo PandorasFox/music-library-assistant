@@ -56,7 +56,7 @@ impl ReviewKind {
 }
 
 /// Audio metadata summary for the detail pane (loaded once at modal init).
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct FileMetaSummary {
     pub file_type: String,
     pub duration_ms: Option<i64>,
@@ -94,7 +94,7 @@ pub fn load_file_meta_summary(read_db: &crate::db::ReadOnlyDb<'_>, inode: i64) -
 }
 
 /// A single file entry within a review group.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReviewFileEntry {
     /// Corpus-relative path.
     pub corpus_path: String,
@@ -109,7 +109,7 @@ pub struct ReviewFileEntry {
 }
 
 /// A group of files requiring review together.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReviewGroup {
     /// Human-readable label for this group (fingerprint, deploy path, tag signature).
     pub label: String,
@@ -120,7 +120,7 @@ pub struct ReviewGroup {
 }
 
 /// Cached data for the manual review modal.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ManualReviewData {
     /// All groups to review.
     pub groups: Vec<ReviewGroup>,

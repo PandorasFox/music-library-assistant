@@ -47,7 +47,7 @@ pub enum AuthorizationLevel {
 /// Request body for unauthenticated operations.
 ///
 /// Login and first-time setup. These bypass the auth gate entirely.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UnauthenticatedBody {
     /// Attempt login with credentials.
     Login { username: String, password: String },
@@ -61,7 +61,7 @@ pub enum UnauthenticatedBody {
 }
 
 /// Response to unauthenticated requests.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UnauthenticatedResponse {
     /// Login result.
     Auth(AuthResponse),
@@ -88,6 +88,7 @@ pub enum AuthResponse {
 ///
 /// Three sub-areas: queries (read-only), transactions (decision lifecycle),
 /// and commands (operational actions).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuthenticatedBody {
     Query(QueryPayload),
     Transaction(TransactionPayload),
@@ -98,6 +99,7 @@ pub enum AuthenticatedBody {
 ///
 /// Mirrors the three sub-areas. Server dispatch returns the variant
 /// matching the request area.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuthenticatedResponse {
     Query(QueryResponse),
     Transaction(TransactionResponse),
@@ -109,6 +111,7 @@ pub enum AuthenticatedResponse {
 // ============================================================================
 
 /// Read-only query payloads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QueryPayload {
     /// Comprehensive Witch state snapshot.
     Status,
@@ -117,6 +120,7 @@ pub enum QueryPayload {
 }
 
 /// Query response variants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QueryResponse {
     /// Full Witch status snapshot.
     Status(WitchStatus),
@@ -167,7 +171,7 @@ impl ProtocolQuery for StatusQuery {
 /// Transactions are their own authenticated sub-area with typed responses.
 /// All variants are serializable — `Decision` is the protocol-level unit
 /// of operator intent (label + mutations).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransactionPayload {
     /// Open a new transaction.
     Start { label: String },
@@ -187,7 +191,7 @@ pub enum TransactionPayload {
 }
 
 /// Transaction operation response.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransactionResponse {
     /// Operation succeeded.
     Ok,
@@ -203,7 +207,7 @@ pub enum TransactionResponse {
 ///
 /// Heavier than what's in `TransactionSnapshot` — includes mutation data
 /// needed for the transaction review view's diff display.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionDetail {
     pub key: DecisionKey,
     pub label: String,
@@ -215,7 +219,7 @@ pub struct DecisionDetail {
 // ============================================================================
 
 /// Operational commands with no transaction semantics.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CommandPayload {
     /// Kick off external fetch (AcoustID + MusicBrainz lookups).
     RequestExternalFetch,
@@ -223,8 +227,8 @@ pub enum CommandPayload {
     RequestReleasePacking,
     /// Validate a config blob (returns Ok or error).
     ValidateConfig { config: crate::config::Config },
-    /// Inject shared config (called during startup).
-    SetSharedConfig { shared: crate::config::SharedConfig },
+    /// Inject shared config (called during startup, in-process only).
+    SetSharedConfig { config: crate::config::Config },
     /// Update performance config at runtime.
     UpdatePerformance {
         opinions: crate::config::PerformanceOpinions,
@@ -236,7 +240,7 @@ pub enum CommandPayload {
 }
 
 /// Command response variants.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CommandResponse {
     /// Command executed successfully.
     Ok,

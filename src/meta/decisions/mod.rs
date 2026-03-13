@@ -290,5 +290,5 @@ impl std::error::Error for TransactionError {}
 ///
 /// Unit struct - callers typically `let _ = discard_transaction(...)` since
 /// discarding always succeeds and the details aren't needed.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct DiscardSummary;

@@ -75,8 +75,8 @@ use crate::db::ReadOnlyDb;
 /// 3. No side channels, no `&mut`, no extra context parameters
 /// 4. Errors handled internally — return defaults, never `Result`
 pub trait DomainQuery: Send + 'static {
-    /// The response type. Must be `Serialize` for web transport readiness.
-    type Response: Serialize + Send + 'static;
+    /// The response type. Must be serializable for wire transport.
+    type Response: std::fmt::Debug + Clone + Serialize + serde::de::DeserializeOwned + Send + 'static;
 
     /// Execute the query against a read-only database connection.
     fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response;
@@ -99,7 +99,7 @@ macro_rules! define_domain_query {
         $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+), db.$method:ident()
     ) => {
         $( #[doc = $doc] )*
-        #[derive(Default, serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
         pub struct $name;
 
         impl DomainQuery for $name {
@@ -117,7 +117,7 @@ macro_rules! define_domain_query {
         $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+, urgent($urgent_secs:expr)), db.$method:ident()
     ) => {
         $( #[doc = $doc] )*
-        #[derive(Default, serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
         pub struct $name;
 
         impl DomainQuery for $name {
@@ -135,7 +135,7 @@ macro_rules! define_domain_query {
         $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+), |$db:ident| $body:block
     ) => {
         $( #[doc = $doc] )*
-        #[derive(Default, serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
         pub struct $name;
 
         impl DomainQuery for $name {
@@ -153,7 +153,7 @@ macro_rules! define_domain_query {
         $name:ident => $response:ty, uncached, db.$method:ident()
     ) => {
         $( #[doc = $doc] )*
-        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
         pub struct $name;
 
         impl DomainQuery for $name {
@@ -171,7 +171,7 @@ macro_rules! define_domain_query {
         $name:ident => $response:ty, uncached, |$db:ident| $body:block
     ) => {
         $( #[doc = $doc] )*
-        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
         pub struct $name;
 
         impl DomainQuery for $name {
@@ -189,7 +189,7 @@ macro_rules! define_domain_query {
         $name:ident => $response:ty, uncached, modal_load
     ) => {
         $( #[doc = $doc] )*
-        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
         pub struct $name;
 
         impl DomainQuery for $name {
@@ -207,7 +207,7 @@ macro_rules! define_domain_query {
         $name:ident { $( $field:ident : $ftype:ty ),+ $(,)? } => $response:ty, uncached, |$s:ident, $db:ident| $body:block
     ) => {
         $( #[doc = $doc] )*
-        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
         pub struct $name {
             $( pub $field: $ftype ),+
         }
@@ -228,7 +228,7 @@ macro_rules! define_domain_query {
         $name:ident { $( $field:ident : $ftype:ty ),+ $(,)? } => $response:ty, cached($secs:expr, $($scope:ident)|+), |$s:ident, $db:ident| $body:block
     ) => {
         $( #[doc = $doc] )*
-        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
         pub struct $name {
             $( pub $field: $ftype ),+
         }
@@ -261,7 +261,7 @@ use crate::meta::views::{
 };
 
 /// Cached packing directory data for tree browser markers.
-#[derive(Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PackingDirsData {
     /// Paths of files with release packing assignments.
     pub file_paths: std::collections::HashSet<std::path::PathBuf>,
@@ -526,7 +526,7 @@ define_domain_query! {
 }
 
 /// All data needed to build a release packing browser view.
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PackingBrowserData {
     pub packed: Vec<crate::meta::signals::data::PackedReleaseData>,
     pub packing: Vec<(i64, String, crate::meta::signals::data::ReleasePackingData)>,
@@ -593,7 +593,7 @@ define_domain_query! {
 }
 
 /// Response for session edit detail.
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionEditDetail {
     pub edits: Vec<crate::meta::views::EditRecord>,
     pub inode_paths: std::collections::HashMap<i64, String>,
@@ -701,7 +701,7 @@ fn load_tag_canonicity_signal_data(
 }
 
 /// Response type for batch recording data loading.
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RecordingBatchResult {
     pub summaries: Vec<(String, crate::ui::external_match_modal::types::RecordingSummary)>,
     pub details: Vec<(String, crate::ui::external_match_modal::types::RecordingDetail)>,
@@ -815,7 +815,7 @@ fn load_recording_batch_data(
 }
 
 /// Response type for release staging data loading.
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReleaseStagingData {
     pub bundle: crate::external::musicbrainz::MbCacheBundle,
     pub inode_tags: std::collections::HashMap<i64, Vec<(String, String)>>,
@@ -960,12 +960,14 @@ macro_rules! domain_query_protocol {
     ( $( $query:ident ),+ $(,)? ) => {
         /// Wire enum carrying a domain query payload.
         /// One variant per registered domain query type.
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
         pub enum DomainQueryPayload {
             $( $query($query), )+
         }
 
         /// Wire enum carrying a domain query result.
         /// One variant per registered domain query type.
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
         pub enum DomainQueryResult {
             $( $query(<$query as DomainQuery>::Response), )+
         }

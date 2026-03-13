@@ -31,7 +31,7 @@ use crate::ui::widgets::TextInputState;
 // ============================================================================
 
 /// File info with cached tag values for display.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FileTagInfo {
     /// Inode of the file
     pub inode: i64,
@@ -44,7 +44,7 @@ pub struct FileTagInfo {
 }
 
 /// A single compound value from the signal's compounds array.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompoundEntry {
     /// Tag name (e.g., "artist", "genre")
     pub tag_name: String,
@@ -64,7 +64,7 @@ impl CompoundEntry {
 }
 
 /// Modal data loaded from a compound tag signal.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompoundSplitDataV2 {
     /// The first compound entry (we process one at a time)
     pub compound: CompoundEntry,

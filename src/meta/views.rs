@@ -11,7 +11,7 @@
 
 /// Insights data for the bucketed Insights view.
 /// Computed at cache refresh time, never in render.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct InsightsData {
     pub bucket_corpus: CorpusFilesBucket,
     pub bucket_placeholder: PlaceholderBucket,
@@ -19,7 +19,7 @@ pub struct InsightsData {
 }
 
 /// Bucket 1: Corpus Files - file state overview
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CorpusFilesBucket {
     // OOB signals at top - highest priority within bucket
     pub oob_tag_sync: usize,
@@ -45,7 +45,7 @@ pub struct CorpusFilesBucket {
 }
 
 /// Bucket 2: Tag Squash - duplicates, tag canonicity, album_artist, and compound tag issues
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TagSquashBucket {
     /// Directory overlap clusters (grouped fingerprint overlaps for bulk resolution)
     pub directory_overlap_cluster_count: usize,
@@ -70,7 +70,7 @@ pub struct TagSquashBucket {
 }
 
 /// Entry for tag squash signals (grouped by tag name)
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TagSquashEntry {
     /// Tag name (e.g., "artist", "genre", "album")
     pub tag_name: String,
@@ -81,7 +81,7 @@ pub struct TagSquashEntry {
 }
 
 /// Entry for compound tag signals (grouped by tag name)
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CompoundTagEntry {
     /// Tag name (e.g., "artist", "genre")
     pub tag_name: String,
@@ -102,7 +102,7 @@ pub type PlaceholderBucket = TagSquashBucket;
 ///
 /// Read-only view: track → MB recording URL with confidence score.
 /// Actual tagging decisions come from the bin-packed release analysis.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExternalMatchReviewEntry {
     pub path: String,
     /// AcoustID confidence score.
@@ -116,7 +116,7 @@ pub struct ExternalMatchReviewEntry {
 // ============================================================================
 
 /// Confidence tier for bucketing external matches by AcoustID confidence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ConfidenceTier {
     /// confidence == 1.0
     Perfect,
@@ -166,7 +166,7 @@ impl ConfidenceTier {
 }
 
 /// A confidence bucket grouping external matches by AcoustID confidence tier.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConfidenceBucket {
     pub tier: ConfidenceTier,
     pub total: usize,
@@ -175,7 +175,7 @@ pub struct ConfidenceBucket {
 }
 
 /// Data for the External Matches lateral view (loaded via cache thread).
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ExternalMatchesData {
     /// MetadataOnly entries — fingerprint matches on files with no existing tags.
     pub untagged_entries: Vec<ExternalMatchReviewEntry>,
@@ -210,14 +210,14 @@ pub struct ExternalMatchesData {
 }
 
 /// Bucket 3: Other signals (sorted by magnitude)
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct OtherSignalsBucket {
     /// Sorted descending by count
     pub entries: Vec<OtherSignalEntry>,
 }
 
 /// Entry for other signals bucket
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OtherSignalEntry {
     pub signal_type: String,
     pub display_label: String,
@@ -227,14 +227,14 @@ pub struct OtherSignalEntry {
 }
 
 /// Directory breakdown for detail pane
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct DirectoryBreakdown {
     /// Sorted by count descending
     pub _entries: Vec<DirectoryBreakdownEntry>,
 }
 
 /// Single entry in directory breakdown
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DirectoryBreakdownEntry {
     pub _directory: String,
     pub _count: usize,
@@ -246,7 +246,7 @@ pub struct DirectoryBreakdownEntry {
 
 /// Aggregate overview data for the inbox view.
 /// Computed at cache refresh time, never in render.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct InboxOverviewData {
     /// Total files present in inbox
     pub file_in_inbox: usize,
@@ -269,7 +269,7 @@ pub struct InboxOverviewData {
 // ============================================================================
 
 /// A file with deploy info (for healthy/new files).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeploySignalFile {
     /// Target library name (e.g., "music", "soundtracks")
     pub library_name: String,
@@ -280,7 +280,7 @@ pub struct DeploySignalFile {
 }
 
 /// A stale library file (deployed path differs from expected).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StaleSignalFile {
     /// Library this file belongs to (e.g., "music")
     pub library_name: String,
@@ -291,7 +291,7 @@ pub struct StaleSignalFile {
 }
 
 /// A leftover file (in library but no corpus backing).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LeftoverSignalFile {
     /// Library this file belongs to (e.g., "music")
     pub library_name: String,
@@ -358,7 +358,7 @@ impl DeploySignalFile {
 }
 
 /// A deploy conflict group (multiple corpus files → same library path).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConflictGroup {
     /// The library path they all would deploy to
     pub deploy_path: String,
@@ -367,7 +367,7 @@ pub struct ConflictGroup {
 }
 
 /// A sidecar deploy conflict group (multiple corpus images → same library sidecar path).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SidecarConflictGroup {
     /// The library-relative deploy path they all target (e.g. "Artist/Album/cover.jpg")
     pub deploy_path: String,
@@ -399,7 +399,7 @@ pub struct SubparDuplicateEntry {
 // ============================================================================
 
 /// Direction of a syncable OOB tag mismatch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OobSyncDirection {
     /// Extra tags exist on disk only (db_value IS NULL) — sync disk -> index
     DiskToIndex,
@@ -411,7 +411,7 @@ pub enum OobSyncDirection {
 ///
 /// Mirrors the signal-level `TagMismatchEntry` with UI-friendly field naming.
 /// The signal computation already aggregates multi-value tags into display strings.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TagMismatchEntry {
     pub field: String,
     pub db_value: Option<String>,
@@ -419,7 +419,7 @@ pub struct TagMismatchEntry {
 }
 
 /// A file with purely sync-direction tag mismatches (all extras in one direction).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OobSyncFile {
     pub inode: i64,
     /// Relative path (as stored in signals/files)
@@ -435,7 +435,7 @@ pub struct OobSyncFile {
 /// - DbOnly: all mismatches have `disk_value IS NULL`
 /// - DiskOnly: all mismatches have `db_value IS NULL`
 /// - Conflict: both values present, or mixed null directions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ConflictBucket {
     MtimeOnly,
     DbOnly,
@@ -497,7 +497,7 @@ impl ConflictBucket {
 ///
 /// Carries the mismatch data from the signal so the UI never needs to
 /// re-read tags from disk.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BucketedOobFile {
     pub inode: i64,
     pub path: String,
@@ -511,7 +511,7 @@ pub struct BucketedOobFile {
 // ============================================================================
 
 /// Classification of an inbox file relative to its corpus matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MatchClassification {
     /// Inbox copy is better quality than all corpus matches
     Better,
@@ -533,7 +533,7 @@ impl From<crate::meta::signals::data::CorpusMatchQuality> for MatchClassificatio
 }
 
 /// Detail about a single corpus file matching an inbox file.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CorpusMatchDetail {
     pub _corpus_inode: i64,
     pub corpus_path: String,
@@ -542,7 +542,7 @@ pub struct CorpusMatchDetail {
 }
 
 /// An inbox file with corpus fingerprint matches and quality classification.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InboxCorpusMatchEntry {
     pub inbox_inode: i64,
     pub inbox_path: String,
@@ -553,7 +553,7 @@ pub struct InboxCorpusMatchEntry {
 
 /// Deploy status for the Deploy view and titlebar indicator.
 /// Computed at cache refresh time, never in render.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct DeployStatus {
     /// Whether there is actionable deploy work (deploy_ready, stale, or leftover signals exist).
     pub needs_action: bool,
@@ -566,7 +566,7 @@ pub struct DeployStatus {
 // ============================================================================
 
 /// Summary of one edit session for the History list.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EditSessionSummary {
     pub session_id: String,
     pub earliest_at: String,
@@ -575,7 +575,7 @@ pub struct EditSessionSummary {
 }
 
 /// Single edit record within a session.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EditRecord {
     pub id: i64,
     pub inode: i64,
@@ -586,7 +586,7 @@ pub struct EditRecord {
 }
 
 /// Full edit history row for export (includes session_id).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EditHistoryExportRow {
     pub id: i64,
     pub inode: i64,
@@ -598,13 +598,13 @@ pub struct EditHistoryExportRow {
 }
 
 /// Data payload for the History view cache refresh.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct EditHistoryData {
     pub sessions: Vec<EditSessionSummary>,
 }
 
 /// A file with a MovedFile signal (same inode, different path).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MovedFileInfo {
     pub inode: i64,
     pub old_path: String,

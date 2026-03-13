@@ -14,7 +14,7 @@ use anyhow::Result;
 
 /// Directory aggregate for grouped file display.
 /// Sorted by count descending.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DirectoryAggregate {
     /// Directory path
     pub directory: String,
@@ -25,7 +25,7 @@ pub struct DirectoryAggregate {
 }
 
 /// Per-library breakdown of deploy operations.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LibrarySummary {
     pub library_name: String,
     pub healthy_count: usize,
@@ -37,7 +37,7 @@ pub struct LibrarySummary {
 }
 
 /// A sidecar image file to deploy alongside audio files.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SidecarDeployEntry {
     /// Relative corpus path to the image file
     pub corpus_image_path: String,
@@ -92,7 +92,7 @@ pub struct DeployMutationSet {
 ///
 /// Loaded once when the modal opens, contains all signal lists.
 /// This prevents database queries during render.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct DeployModalData {
     /// Healthy files: deployed at correct library path
     pub healthy: Vec<DeploySignalFile>,

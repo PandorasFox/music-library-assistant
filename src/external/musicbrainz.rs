@@ -108,7 +108,7 @@ impl MusicBrainzClient {
 // ============================================================================
 
 /// A MusicBrainz recording with credits and relations.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbRecording {
     pub id: String,
     pub title: String,
@@ -124,7 +124,7 @@ pub struct MbRecording {
 }
 
 /// A release reference within a recording response (minimal).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbReleaseRef {
     pub id: String,
     pub title: Option<String>,
@@ -133,13 +133,13 @@ pub struct MbReleaseRef {
 }
 
 /// A release group reference (nested in release).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbReleaseGroupRef {
     pub id: String,
 }
 
 /// An artist credit entry on a recording or release.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbArtistCredit {
     /// Credited name on this recording (may differ from canonical).
     pub name: String,
@@ -151,7 +151,7 @@ pub struct MbArtistCredit {
 }
 
 /// Minimal artist reference (nested in credits/relations).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbArtistRef {
     pub id: String,
     pub name: String,
@@ -183,7 +183,7 @@ pub struct MbAlias {
 }
 
 /// A relation on a recording (artist-recording or work-level).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbRelation {
     /// Relation type: "vocal", "producer", "remixer", "composer", etc.
     #[serde(rename = "type")]
@@ -198,7 +198,7 @@ pub struct MbRelation {
 }
 
 /// A full MusicBrainz release with artist credits and tracklist (from release endpoint).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbRelease {
     pub id: String,
     pub title: String,
@@ -211,7 +211,7 @@ pub struct MbRelease {
 }
 
 /// A medium within a release (CD, vinyl side, digital media, etc.).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbMedium {
     /// Medium position (1-indexed: disc 1, disc 2, etc.).
     pub position: u32,
@@ -223,7 +223,7 @@ pub struct MbMedium {
 }
 
 /// A track within a medium (position + recording reference).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbTrack {
     /// Track position within the medium (1-indexed).
     pub position: u32,
@@ -239,7 +239,7 @@ pub struct MbTrack {
 }
 
 /// Minimal recording reference within a track.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MbTrackRecording {
     pub id: String,
     pub title: String,
@@ -366,7 +366,7 @@ pub fn parse_release(raw_json: &[u8]) -> Result<MbRelease> {
 /// Provides parsed releases, recordings, and artists in HashMaps keyed by MBID.
 /// Artist loading is transitive: artists referenced by release credits and
 /// recording credits/relations are automatically chased.
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MbCacheBundle {
     pub releases: HashMap<String, MbRelease>,
     pub recordings: HashMap<String, MbRecording>,

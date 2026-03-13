@@ -93,7 +93,6 @@ pub fn execute_detect_deploy_conflicts(
         if inodes.len() > 1 {
             let signal = TypedSignalWrite::DeployConflict(DeployConflictSignal {
                 key: deploy_path.clone(),
-                deploy_path: deploy_path.clone(),
                 inodes: inodes.clone(),
             });
             computed.push(ComputedAggregateSignal::new(deploy_path.clone(), signal));

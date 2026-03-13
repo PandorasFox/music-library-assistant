@@ -437,6 +437,7 @@ pub(super) fn localized_release_artist(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::corpus::tags::TagSet;
     use crate::meta::signals::data::PackingScoreBreakdown;
 
     fn dummy_breakdown() -> PackingScoreBreakdown {
@@ -537,17 +538,17 @@ mod tests {
         let mut corpus_info = HashMap::new();
         corpus_info.insert(100, CorpusFileInfo {
             parent_dir: "/music/album_a".to_string(),
-            tags: HashMap::new(),
+            tags: TagSet::empty(),
             duration_ms: None,
         });
         corpus_info.insert(200, CorpusFileInfo {
             parent_dir: "/music/album_a".to_string(),
-            tags: HashMap::new(),
+            tags: TagSet::empty(),
             duration_ms: None,
         });
         corpus_info.insert(300, CorpusFileInfo {
             parent_dir: "/music/album_b".to_string(),
-            tags: HashMap::new(),
+            tags: TagSet::empty(),
             duration_ms: None,
         });
 
@@ -581,12 +582,12 @@ mod tests {
         let mut corpus_info = HashMap::new();
         corpus_info.insert(100, CorpusFileInfo {
             parent_dir: "/music/zzz".to_string(),
-            tags: HashMap::new(),
+            tags: TagSet::empty(),
             duration_ms: None,
         });
         corpus_info.insert(200, CorpusFileInfo {
             parent_dir: "/music/aaa".to_string(),
-            tags: HashMap::new(),
+            tags: TagSet::empty(),
             duration_ms: None,
         });
 
@@ -640,7 +641,7 @@ mod tests {
             candidates.push(make_candidate(inode, 1, *track, 0.85));
             corpus_info.insert(inode, CorpusFileInfo {
                 parent_dir: "/corpus/see-without-eyes".to_string(),
-                tags: HashMap::new(),
+                tags: TagSet::empty(),
                 duration_ms: None,
             });
         }
@@ -651,7 +652,7 @@ mod tests {
             candidates.push(make_candidate(inode, 1, track, 0.85));
             corpus_info.insert(inode, CorpusFileInfo {
                 parent_dir: "/corpus/see-without-eyes-deluxe".to_string(),
-                tags: HashMap::new(),
+                tags: TagSet::empty(),
                 duration_ms: None,
             });
         }

@@ -933,13 +933,12 @@ impl_signal_query!(all, MissingAlbumSingleSignal, "signal_missing_album_single",
 impl_aggregate_signal!(DeployConflictSignal, "signal_deploy_conflict",
     "CREATE TABLE IF NOT EXISTS signal_deploy_conflict (
         key TEXT PRIMARY KEY,
-        deploy_path TEXT NOT NULL,
         data BLOB NOT NULL,
         data_hash INTEGER NOT NULL DEFAULT 0,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_deploy_conflict (key, deploy_path, data, data_hash) VALUES (?1, ?2, ?3, ?4)",
-    fields: [key, deploy_path],
+    insert_sql: "INSERT OR REPLACE INTO signal_deploy_conflict (key, data, data_hash) VALUES (?1, ?2, ?3)",
+    fields: [key],
     blob: inodes,
 );
 

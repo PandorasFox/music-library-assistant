@@ -1,8 +1,7 @@
 //! Scoring functions for release packing candidates.
 
-use std::collections::HashMap;
-
 use crate::config::PackingWeights;
+use crate::corpus::tags::TagSet;
 use crate::external::musicbrainz;
 use crate::meta::signals::data::PackingScoreBreakdown;
 
@@ -35,11 +34,10 @@ pub(super) fn compute_duration_match(
 /// Compares against both `track.title` and `track.recording.title`, returning
 /// the maximum. Returns 0.0 if no corpus title tag is available.
 pub(super) fn compute_title_similarity(
-    tags: &HashMap<String, Vec<String>>,
+    tags: &TagSet,
     track: &musicbrainz::MbTrack,
 ) -> f64 {
     tags.get("TITLE")
-        .and_then(|v| v.first())
         .map(|t| {
             let track_sim = strsim::normalized_levenshtein(t, &track.title);
             let rec_sim = strsim::normalized_levenshtein(t, &track.recording.title);
@@ -53,7 +51,7 @@ pub(super) fn compute_title_similarity(
 /// Used when filling remaining release slots via elimination matching — files
 /// that weren't matched via AcoustID but reside in the target directory.
 pub(super) fn compute_elimination_breakdown(
-    tags: &HashMap<String, Vec<String>>,
+    tags: &TagSet,
     track: &musicbrainz::MbTrack,
     release_artist: &str,
     release_title: &str,
@@ -66,19 +64,16 @@ pub(super) fn compute_elimination_breakdown(
 
     let artist_match = tags
         .get("ARTIST")
-        .and_then(|v| v.first())
         .map(|a| strsim::normalized_levenshtein(a, release_artist))
         .unwrap_or(0.0);
 
     let album_match = tags
         .get("ALBUM")
-        .and_then(|v| v.first())
         .map(|a| strsim::normalized_levenshtein(a, release_title))
         .unwrap_or(0.0);
 
     let track_number_match = tags
         .get("TRACKNUMBER")
-        .and_then(|v| v.first())
         .and_then(|tn| tn.parse::<u32>().ok())
         .map(|tn| if tn == track.position { 1.0 } else { 0.0 })
         .unwrap_or(0.0);
@@ -112,26 +107,23 @@ pub(super) fn compute_score(
         duration_tolerance_pct,
     );
 
-    let empty_tags = HashMap::new();
+    let empty_tags = TagSet::empty();
     let tags = corpus.map(|c| &c.tags).unwrap_or(&empty_tags);
 
     let title_match = compute_title_similarity(tags, track);
 
     let artist_match = tags
         .get("ARTIST")
-        .and_then(|v| v.first())
         .map(|corpus_artist| strsim::normalized_levenshtein(corpus_artist, release_artist))
         .unwrap_or(0.0);
 
     let album_match = tags
         .get("ALBUM")
-        .and_then(|v| v.first())
         .map(|corpus_album| strsim::normalized_levenshtein(corpus_album, release_title))
         .unwrap_or(0.0);
 
     let track_number_match = tags
         .get("TRACKNUMBER")
-        .and_then(|v| v.first())
         .and_then(|tn| tn.parse::<u32>().ok())
         .map(|tn| if tn == track.position { 1.0 } else { 0.0 })
         .unwrap_or(0.0);
@@ -161,8 +153,6 @@ pub(super) fn weighted_composite(b: &PackingScoreBreakdown, w: &PackingWeights) 
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
 
     fn uniform_weights() -> PackingWeights {
@@ -223,14 +213,12 @@ mod tests {
         let track = make_track("Test Track", 1, Some(240000));
         let corpus = CorpusFileInfo {
             parent_dir: "/music/album".to_string(),
-            tags: {
-                let mut t = HashMap::new();
-                t.insert("TITLE".to_string(), vec!["Test Track".to_string()]);
-                t.insert("ARTIST".to_string(), vec!["Test Artist".to_string()]);
-                t.insert("ALBUM".to_string(), vec!["Test Album".to_string()]);
-                t.insert("TRACKNUMBER".to_string(), vec!["1".to_string()]);
-                t
-            },
+            tags: TagSet::new(vec![
+                ("TITLE".to_string(), "Test Track".to_string()),
+                ("ARTIST".to_string(), "Test Artist".to_string()),
+                ("ALBUM".to_string(), "Test Album".to_string()),
+                ("TRACKNUMBER".to_string(), "1".to_string()),
+            ]),
             duration_ms: Some(240000),
         };
 
@@ -260,7 +248,7 @@ mod tests {
         let track = make_track("Track", 1, Some(200000));
         let corpus = CorpusFileInfo {
             parent_dir: "/music".to_string(),
-            tags: HashMap::new(),
+            tags: TagSet::empty(),
             duration_ms: Some(210000), // 5% off
         };
         let (_, breakdown) = compute_score(
@@ -296,11 +284,12 @@ mod tests {
 
     #[test]
     fn test_elimination_breakdown_perfect_match() {
-        let mut tags = HashMap::new();
-        tags.insert("TITLE".to_string(), vec!["Test Track".to_string()]);
-        tags.insert("ARTIST".to_string(), vec!["Test Artist".to_string()]);
-        tags.insert("ALBUM".to_string(), vec!["Test Album".to_string()]);
-        tags.insert("TRACKNUMBER".to_string(), vec!["3".to_string()]);
+        let tags = TagSet::new(vec![
+            ("TITLE".to_string(), "Test Track".to_string()),
+            ("ARTIST".to_string(), "Test Artist".to_string()),
+            ("ALBUM".to_string(), "Test Album".to_string()),
+            ("TRACKNUMBER".to_string(), "3".to_string()),
+        ]);
 
         let track = make_track("Test Track", 3, Some(240000));
         let breakdown = compute_elimination_breakdown(
@@ -317,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_elimination_breakdown_no_tags() {
-        let tags = HashMap::new();
+        let tags = TagSet::empty();
         let track = make_track("Track", 1, Some(200000));
         let breakdown = compute_elimination_breakdown(
             &tags, &track, "Artist", "Album", Some(200000), 0.10,
@@ -333,8 +322,9 @@ mod tests {
 
     #[test]
     fn test_elimination_breakdown_partial_tags() {
-        let mut tags = HashMap::new();
-        tags.insert("TITLE".to_string(), vec!["Test Track".to_string()]);
+        let tags = TagSet::new(vec![
+            ("TITLE".to_string(), "Test Track".to_string()),
+        ]);
         // No ARTIST, ALBUM, TRACKNUMBER
 
         let track = make_track("Test Track", 1, Some(200000));
@@ -350,8 +340,9 @@ mod tests {
 
     #[test]
     fn test_elimination_breakdown_uses_best_title() {
-        let mut tags = HashMap::new();
-        tags.insert("TITLE".to_string(), vec!["Recording Title".to_string()]);
+        let tags = TagSet::new(vec![
+            ("TITLE".to_string(), "Recording Title".to_string()),
+        ]);
 
         // Track title differs, but recording title matches
         let track = musicbrainz::MbTrack {
@@ -383,7 +374,7 @@ mod tests {
         let track = make_track("Track", 1, Some(200000));
         let corpus = CorpusFileInfo {
             parent_dir: "/music".to_string(),
-            tags: HashMap::new(),
+            tags: TagSet::empty(),
             duration_ms: Some(230000), // 15% off
         };
         let (_, breakdown) = compute_score(

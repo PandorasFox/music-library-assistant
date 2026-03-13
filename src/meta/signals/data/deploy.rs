@@ -82,7 +82,6 @@ impl_library_keyed!(LibraryStaleSignal, "library_stale");
 #[derive(Debug, Clone)]
 pub struct DeployConflictSignal {
     pub key: String,
-    pub deploy_path: String,
     pub inodes: Vec<i64>,
 }
 

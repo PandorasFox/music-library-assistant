@@ -152,13 +152,13 @@ impl Database {
 
     /// Get all deploy conflict groups (multiple corpus files → same library path).
     ///
-    /// Sorted by deploy_path for consistent display.
+    /// Sorted by key for consistent display.
     pub fn get_deploy_conflict_groups(&self) -> Result<Vec<crate::meta::views::ConflictGroup>> {
         use crate::meta::views::ConflictGroup;
 
         let mut stmt = self
             .conn
-            .prepare("SELECT deploy_path, data FROM signal_deploy_conflict ORDER BY deploy_path")?;
+            .prepare("SELECT key, data FROM signal_deploy_conflict ORDER BY key")?;
 
         let mut results = Vec::new();
         let rows = stmt.query_map(params![], |row| {

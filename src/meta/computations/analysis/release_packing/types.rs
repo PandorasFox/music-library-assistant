@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::corpus::tags::TagSet;
 use crate::db::queries::external::{ExternalMatchRow, OptimalPackingScoreRow, PackingManifestRow};
 use crate::meta::signals::data::PackingScoreBreakdown;
 
@@ -13,7 +14,7 @@ use crate::meta::signals::data::PackingScoreBreakdown;
 /// Corpus file metadata needed for scoring.
 pub(super) struct CorpusFileInfo {
     pub parent_dir: String,
-    pub tags: HashMap<String, Vec<String>>,
+    pub tags: TagSet,
     pub duration_ms: Option<i64>,
 }
 

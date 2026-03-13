@@ -56,6 +56,10 @@ pub fn socket_path() -> Option<PathBuf> {
 
 /// Spawn the socket listener thread.
 ///
+/// Binds the socket synchronously on the calling thread so it is ready for
+/// `WitchHandle::connect()` immediately on return. The accept loop runs in
+/// the spawned thread.
+///
 /// Returns a handle for shutdown coordination, or `None` if XDG_RUNTIME_DIR
 /// is not set (no socket in that case — in-process only).
 pub(super) fn spawn_listener(
@@ -68,13 +72,30 @@ pub(super) fn spawn_listener(
         let _ = std::fs::remove_file(&path);
     }
 
+    // Bind synchronously so the socket is ready before we return.
+    let listener = match UnixListener::bind(&path) {
+        Ok(l) => {
+            crate::logging::log_general(format!(
+                "[SOCKET] Listening on {}",
+                path.display()
+            ));
+            l
+        }
+        Err(e) => {
+            crate::logging::log_general(format!(
+                "[SOCKET] Failed to bind {}: {e}",
+                path.display()
+            ));
+            return None;
+        }
+    };
+
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
-    let path_clone = path.clone();
 
     let thread = std::thread::Builder::new()
         .name("socket-listener".into())
-        .spawn(move || run_listener(&path_clone, cmd_tx, shutdown_clone))
+        .spawn(move || run_listener(listener, cmd_tx, shutdown_clone))
         .expect("Failed to spawn socket listener thread");
 
     Some(SocketListenerHandle {
@@ -86,26 +107,10 @@ pub(super) fn spawn_listener(
 
 /// Listener loop: accept connections, spawn handler per connection.
 fn run_listener(
-    path: &Path,
+    listener: UnixListener,
     cmd_tx: mpsc::Sender<HandleCommand>,
     shutdown: Arc<AtomicBool>,
 ) {
-    let listener = match UnixListener::bind(path) {
-        Ok(l) => l,
-        Err(e) => {
-            crate::logging::log_general(format!(
-                "[SOCKET] Failed to bind {}: {e}",
-                path.display()
-            ));
-            return;
-        }
-    };
-
-    crate::logging::log_general(format!(
-        "[SOCKET] Listening on {}",
-        path.display()
-    ));
-
     for stream in listener.incoming() {
         if shutdown.load(Ordering::Relaxed) {
             break;

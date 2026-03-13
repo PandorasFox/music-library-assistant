@@ -39,7 +39,6 @@ mod transaction;
 pub(crate) mod types;
 // Re-export public types
 pub use handle::WitchHandle;
-pub use socket::socket_path;
 pub use types::{
     MaintenanceWitness, MutationExecutionWitness, PendingTransaction, ReasoningLevel,
     SpawnedMutation, Task, TaskLabel, TransactionSnapshot, WatcherState, WitchStartupState,
@@ -427,17 +426,44 @@ impl Witch {
         // Command channel: handle sends, Witch receives
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
-        // Spawn the Unix domain socket listener for out-of-process clients.
-        // Socket connections share the same cmd_tx channel as the in-process TUI.
+        // Spawn the Unix domain socket listener. Binds synchronously — the
+        // socket is ready for connections when this returns.
         she.socket_listener_handle = socket::spawn_listener(cmd_tx.clone());
 
-        let handle = WitchHandle::new(cmd_tx);
-
-        // Spawn the UI as a client thread
-        let ui_thread = std::thread::Builder::new()
-            .name("tui".into())
-            .spawn(move || ui_factory(handle))
-            .expect("Failed to spawn UI thread");
+        // Route the TUI through the socket when available, falling back to
+        // in-process mpsc if the socket couldn't be created.
+        let ui_thread = if let Some(ref path) = socket::socket_path() {
+            if she.socket_listener_handle.is_some() {
+                // TUI connects over the socket. Keep cmd_tx as a shutdown
+                // sender — when ui_factory returns, we signal the Witch.
+                let shutdown_tx = cmd_tx;
+                let socket_path = path.clone();
+                std::thread::Builder::new()
+                    .name("tui".into())
+                    .spawn(move || {
+                        let handle = WitchHandle::connect(&socket_path)
+                            .expect("Failed to connect to Witch socket");
+                        ui_factory(handle);
+                        // TUI exited — signal the Witch to shut down.
+                        let _ = shutdown_tx.send(handle::HandleCommand::Shutdown);
+                    })
+                    .expect("Failed to spawn UI thread")
+            } else {
+                // Socket bind failed — fall back to in-process channel.
+                let handle = WitchHandle::new(cmd_tx);
+                std::thread::Builder::new()
+                    .name("tui".into())
+                    .spawn(move || ui_factory(handle))
+                    .expect("Failed to spawn UI thread")
+            }
+        } else {
+            // No XDG_RUNTIME_DIR — in-process channel only.
+            let handle = WitchHandle::new(cmd_tx);
+            std::thread::Builder::new()
+                .name("tui".into())
+                .spawn(move || ui_factory(handle))
+                .expect("Failed to spawn UI thread")
+        };
 
         // Witch owns the main thread
         she.run_loop(cmd_rx);

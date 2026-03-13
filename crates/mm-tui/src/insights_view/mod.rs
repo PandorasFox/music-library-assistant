@@ -860,10 +860,11 @@ mod tests {
     }
 
     #[test]
-    fn test_insights_action_exit() {
+    fn test_cancel_returns_none() {
         let mut state = InsightsViewState::new();
+        // Cancel/quit is handled centrally, not by the view
         let action = state.handle_input(&InputAction::Cancel);
-        assert_eq!(action, InsightsAction::RequestQuit);
+        assert_eq!(action, None);
     }
 
     #[test]
@@ -873,12 +874,12 @@ mod tests {
         // Not busy - Enter should launch modal
         state.witch_busy = false;
         let action = state.handle_input(&InputAction::Confirm);
-        assert_eq!(action, InsightsAction::Launch);
+        assert_eq!(action, Some(InsightsAction::Launch));
 
         // Busy - Enter should be blocked
         state.witch_busy = true;
         let action = state.handle_input(&InputAction::Confirm);
-        assert_eq!(action, InsightsAction::None);
+        assert_eq!(action, None);
     }
 
     #[test]
@@ -1014,12 +1015,12 @@ mod tests {
         let mut state = InsightsViewState::new();
         state.witch_busy = true;
 
-        // Tab should still work even when the Witch is busy
+        // Tab is handled centrally — view returns None (unhandled)
         let action = state.handle_input(&InputAction::CycleNext);
-        assert_eq!(action, InsightsAction::CycleNext);
+        assert_eq!(action, None);
 
         let action = state.handle_input(&InputAction::CyclePrev);
-        assert_eq!(action, InsightsAction::CyclePrev);
+        assert_eq!(action, None);
     }
 
     #[test]

@@ -118,9 +118,11 @@ mod tests {
         let mut state = WaitState::new();
         state.start();
         state.seen_working = true;
+        assert!(state.waiting);
+        assert!(state.seen_working);
         // Reset by creating new state
-        state = WaitState::new();
-        assert!(!state.waiting);
-        assert!(!state.seen_working);
+        let fresh = WaitState::new();
+        assert!(!fresh.waiting);
+        assert!(!fresh.seen_working);
     }
 }

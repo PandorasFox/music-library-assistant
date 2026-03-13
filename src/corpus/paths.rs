@@ -37,17 +37,11 @@ static GLOBAL_RESOLVER: OnceLock<PathResolver> = OnceLock::new();
 /// any path crosses a mount boundary (nested mount point).
 static EXPECTED_DEVICE_ID: OnceLock<u64> = OnceLock::new();
 
-/// Set the expected device ID for filesystem boundary checks.
-///
-/// Called from config validation after confirming all directories share the same device.
-/// Should only be called once at startup.
-pub fn set_expected_device_id(dev: u64) {
-    let _ = EXPECTED_DEVICE_ID.set(dev);
-}
-
 /// Get the expected device ID for filesystem boundary checks.
 ///
-/// Returns None if not yet set (config validation hasn't run).
+/// Returns None if not yet set. Currently always None — filesystem validation
+/// needs reimplementation as a mutation-triggered check that populates
+/// EXPECTED_DEVICE_ID via OnceLock::set().
 pub fn get_expected_device_id() -> Option<u64> {
     EXPECTED_DEVICE_ID.get().copied()
 }

@@ -24,3 +24,14 @@ impl PartialEq for ApplyConfigEditsMutation {
         self.original_kdl == other.original_kdl
     }
 }
+
+impl ApplyConfigEditsMutation {
+    pub fn diff_entries(&self) -> Vec<super::types::DiffEntry> {
+        use super::diffable::Diffable;
+        let mut entries = Vec::new();
+        self.old_config
+            .opinions
+            .diff_against(&self.new_config.opinions, "opinions", &mut entries);
+        entries
+    }
+}

@@ -51,3 +51,30 @@ impl PartialEq for ApplyBatchDirConfigEditsMutation {
                 .all(|(a, b)| a.source_path == b.source_path)
     }
 }
+
+// ============================================================================
+// diff_entries implementations
+// ============================================================================
+
+use super::diffable::Diffable;
+use super::types::DiffEntry;
+
+impl ApplyDirConfigEditMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        let mut entries = Vec::new();
+        let prefix = self.source_path.display().to_string();
+        self.old_dir.diff_against(&self.new_dir, &prefix, &mut entries);
+        entries
+    }
+}
+
+impl ApplyBatchDirConfigEditsMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        let mut entries = Vec::new();
+        for edit in &self.edits {
+            let prefix = edit.source_path.display().to_string();
+            edit.old_dir.diff_against(&edit.new_dir, &prefix, &mut entries);
+        }
+        entries
+    }
+}

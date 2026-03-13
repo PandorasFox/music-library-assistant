@@ -5,6 +5,7 @@
 //! trait and impls live in the `mm` crate.
 
 pub mod config_edit;
+pub mod diffable;
 pub mod dir_config_edit;
 pub mod file_ops;
 pub mod indexing;

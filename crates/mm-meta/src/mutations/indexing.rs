@@ -105,3 +105,143 @@ pub struct EmitExpectedMissingTagMutation {
 pub struct DropExternalMatchMutation {
     pub inode: i64,
 }
+
+// ============================================================================
+// diff_entries implementations
+// ============================================================================
+
+use super::types::DiffEntry;
+
+impl IndexFileFromPathMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "index",
+            "",
+            format!("{} ({})", self.path.display(), self.zone),
+        )]
+    }
+}
+
+impl UpdateFilePathMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        let mut entries = vec![DiffEntry::new(
+            format!("[{}] path", self.inode),
+            "",
+            self.new_path.display(),
+        )];
+        if let Some(ref new_zone) = self.new_zone {
+            entries.push(DiffEntry::new(
+                format!("[{}] zone", self.inode),
+                &self.zone,
+                new_zone,
+            ));
+        }
+        entries
+    }
+}
+
+impl DropFromIndexMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new("drop", self.path.display(), "(removed)")]
+    }
+}
+
+impl DropDirectoryFromIndexMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "drop dir",
+            self.directory_path.display(),
+            "(removed)",
+        )]
+    }
+}
+
+impl AcknowledgeMtimeOnlyMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "acknowledge mtime",
+            "",
+            format!("{} tracks", self.tracks.len()),
+        )]
+    }
+}
+
+impl ApplyDbTagsToDiskMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "DB→disk",
+            "",
+            self.path.display(),
+        )]
+    }
+}
+
+impl AssimilateDiskTagsToDbMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "disk→DB",
+            "",
+            self.path.display(),
+        )]
+    }
+}
+
+impl FlushTagsToDiskMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "flush tags",
+            "",
+            self.path.display(),
+        )]
+    }
+}
+
+impl EmitCanonicalTagMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            &self.tag_name,
+            "",
+            &self.canonical_value,
+        )]
+    }
+}
+
+impl EmitExpectedOverlapMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "expect overlap",
+            &self.source_a,
+            &self.source_b,
+        )]
+    }
+}
+
+impl EmitExpectedDuplicateMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "expect duplicate",
+            "",
+            &self.fingerprint_key,
+        )]
+    }
+}
+
+impl EmitExpectedMissingTagMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "expect missing tag",
+            "",
+            format!("{} inodes", self.inodes.len()),
+        )]
+    }
+}
+
+impl DropExternalMatchMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "drop external match",
+            format!("inode {}", self.inode),
+            "(removed)",
+        )]
+    }
+}

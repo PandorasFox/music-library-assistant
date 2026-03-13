@@ -59,3 +59,71 @@ pub struct InboxDirToCorpusMutation {
     pub corpus_dir_path: PathBuf,
     pub tracked_files: Vec<InboxDirTrackedFile>,
 }
+
+// ============================================================================
+// diff_entries implementations
+// ============================================================================
+
+use super::types::DiffEntry;
+
+impl MoveMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new("path", self.source.display(), self.destination.display())]
+    }
+}
+
+impl StashFromZoneMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "stash",
+            self.path.display(),
+            &self.stash_name,
+        )]
+    }
+}
+
+impl StashLeftoversMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new("stash", self.path.display(), "(stashed)")]
+    }
+}
+
+impl HardLinkMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new("link", self.source.display(), self.destination.display())]
+    }
+}
+
+impl LibraryMoveMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new("path", self.source.display(), self.destination.display())]
+    }
+}
+
+impl InboxToCorpusMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        vec![DiffEntry::new(
+            "path",
+            self.inbox_path.display(),
+            self.corpus_path.display(),
+        )]
+    }
+}
+
+impl InboxDirToCorpusMutation {
+    pub fn diff_entries(&self) -> Vec<DiffEntry> {
+        let mut entries = vec![DiffEntry::new(
+            "directory",
+            self.inbox_dir_path.display(),
+            self.corpus_dir_path.display(),
+        )];
+        for f in &self.tracked_files {
+            entries.push(DiffEntry::new(
+                format!("[{}]", f.inode),
+                "",
+                f.corpus_path.display(),
+            ));
+        }
+        entries
+    }
+}

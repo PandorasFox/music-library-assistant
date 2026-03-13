@@ -18,3 +18,13 @@ pub struct JettisonEditHistoryMutation {
     /// mutation's own record-keeping.
     pub timestamp: String,
 }
+
+impl JettisonEditHistoryMutation {
+    pub fn diff_entries(&self) -> Vec<super::types::DiffEntry> {
+        let scope = match &self.session_id {
+            Some(id) => format!("session {}", id),
+            None => "all sessions".to_string(),
+        };
+        vec![super::types::DiffEntry::new("jettison", "", &scope)]
+    }
+}

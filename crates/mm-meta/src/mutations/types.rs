@@ -394,10 +394,34 @@ impl Mutation {
     ///
     /// Returns field-level diffs (label, old_value, new_value) for rendering
     /// red→green change visualization in the TUI.
-    ///
-    /// TODO: move per-struct diff_entries implementations from MutationExecutor
-    /// impls in mm to inherent methods here.
     pub fn diff_entries(&self) -> Vec<DiffEntry> {
-        Vec::new()
+        match self {
+            Mutation::ApplyTagOps(m) => m.diff_entries(),
+            Mutation::IndexFileFromPath(m) => m.diff_entries(),
+            Mutation::Move(m) => m.diff_entries(),
+            Mutation::StashFromZone(m) => m.diff_entries(),
+            Mutation::StashLeftovers(m) => m.diff_entries(),
+            Mutation::Transcode(m) => m.diff_entries(),
+            Mutation::HardLink(m) => m.diff_entries(),
+            Mutation::LibraryMove(m) => m.diff_entries(),
+            Mutation::InboxToCorpus(m) => m.diff_entries(),
+            Mutation::InboxDirToCorpus(m) => m.diff_entries(),
+            Mutation::UpdateFilePath(m) => m.diff_entries(),
+            Mutation::DropFromIndex(m) => m.diff_entries(),
+            Mutation::DropDirectoryFromIndex(m) => m.diff_entries(),
+            Mutation::AcknowledgeMtimeOnly(m) => m.diff_entries(),
+            Mutation::ApplyDbTagsToDisk(m) => m.diff_entries(),
+            Mutation::FlushTagsToDisk(m) => m.diff_entries(),
+            Mutation::AssimilateDiskTagsToDb(m) => m.diff_entries(),
+            Mutation::EmitCanonicalTag(m) => m.diff_entries(),
+            Mutation::EmitExpectedOverlap(m) => m.diff_entries(),
+            Mutation::EmitExpectedDuplicate(m) => m.diff_entries(),
+            Mutation::EmitExpectedMissingTag(m) => m.diff_entries(),
+            Mutation::DropExternalMatch(m) => m.diff_entries(),
+            Mutation::ApplyConfigEdits(m) => m.diff_entries(),
+            Mutation::ApplyDirConfigEdit(m) => m.diff_entries(),
+            Mutation::ApplyBatchDirConfigEdits(m) => m.diff_entries(),
+            Mutation::JettisonEditHistory(m) => m.diff_entries(),
+        }
     }
 }

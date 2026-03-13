@@ -14,9 +14,9 @@ pub use mm_meta::external::musicbrainz::*;
 // Client + Outcome Types (server-only)
 // ============================================================================
 
-/// MusicBrainz API client.
+/// MusicBrainz API client (blocking reqwest).
 pub struct MusicBrainzClient {
-    agent: ureq::Agent,
+    client: reqwest::blocking::Client,
     /// Base URL for the MusicBrainz WS/2 API (e.g. "https://musicbrainz.org/ws/2").
     base_url: String,
 }
@@ -35,12 +35,13 @@ pub enum MbLookupOutcome {
 
 impl MusicBrainzClient {
     pub fn new(base_url: &str) -> Self {
-        let agent = ureq::AgentBuilder::new()
+        let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .user_agent("MusicMagic/0.1 (https://github.com/example/musicmagic)")
-            .build();
+            .build()
+            .expect("failed to build reqwest client");
         Self {
-            agent,
+            client,
             base_url: base_url.trim_end_matches('/').to_string(),
         }
     }
@@ -76,21 +77,28 @@ impl MusicBrainzClient {
 
     /// Generic entity fetch — GET + return raw JSON bytes.
     fn fetch_entity(&self, url: &str) -> Result<MbLookupOutcome> {
-        let response = self.agent.get(url).call();
+        let response = self.client.get(url).send();
 
         match response {
             Ok(resp) => {
+                let status = resp.status();
+                if status == reqwest::StatusCode::NOT_FOUND {
+                    return Ok(MbLookupOutcome::NotFound);
+                }
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    return Ok(MbLookupOutcome::RateLimited);
+                }
+                if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+                    return Ok(MbLookupOutcome::ServiceUnavailable);
+                }
+                if !status.is_success() {
+                    let body = resp.text().unwrap_or_default();
+                    anyhow::bail!("MusicBrainz API returned HTTP {}: {}", status, body);
+                }
                 let body = resp
-                    .into_string()
+                    .bytes()
                     .context("Failed to read MusicBrainz response body")?;
-                Ok(MbLookupOutcome::Found(body.into_bytes()))
-            }
-            Err(ureq::Error::Status(404, _)) => Ok(MbLookupOutcome::NotFound),
-            Err(ureq::Error::Status(429, _)) => Ok(MbLookupOutcome::RateLimited),
-            Err(ureq::Error::Status(503, _)) => Ok(MbLookupOutcome::ServiceUnavailable),
-            Err(ureq::Error::Status(code, resp)) => {
-                let body = resp.into_string().unwrap_or_default();
-                anyhow::bail!("MusicBrainz API returned HTTP {}: {}", code, body);
+                Ok(MbLookupOutcome::Found(body.to_vec()))
             }
             Err(e) => Err(anyhow::anyhow!("MusicBrainz network error: {}", e)),
         }

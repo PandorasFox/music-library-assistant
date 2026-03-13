@@ -996,22 +996,11 @@ impl Witch {
         // Drain completed results and collect spawned computations and mutations
         let mut spawned_computations: Vec<Computation> = Vec::new();
         let mut spawned_mutations: Vec<types::SpawnedMutation> = Vec::new();
-        // Collect fetch outcomes to send to scheduler after we're done borrowing self
-        let mut fetch_outcomes: Vec<external_fetch::FetchOutcome> = Vec::new();
         // Collect config updates to apply after the drain loop (can't call
         // update_performance_impl while self.hades is borrowed by drain_results)
         let mut pending_config_update: Option<Config> = None;
 
         for result in self.hades.drain_results() {
-            // ExternalFetch results bypass work_state — they're independent of the
-            // Witch's task lifecycle. Process them separately.
-            if result.kind == types::TaskKind::ExternalFetch {
-                if let Some(fetch_data) = result.fetch_result {
-                    fetch_outcomes.push(fetch_data);
-                }
-                continue;
-            }
-
             // Task has completed - no longer in flight
             self.work_state.dec_in_flight();
             self.work_state.inc_processed();
@@ -1077,13 +1066,6 @@ impl Witch {
         // These are pre-authorized by the parent mutation's witness chain.
         for mutation in spawned_mutations {
             self.queue_spawned_mutation(mutation);
-        }
-
-        // Send fetch outcomes to scheduler for chain-emit decisions
-        if let Some(ref handle) = self.external_fetch {
-            for outcome in fetch_outcomes {
-                handle.send_outcome(outcome);
-            }
         }
 
         // Cache thread handles its own periodic refreshes — no action needed here.
@@ -1438,8 +1420,8 @@ impl Witch {
 
     /// Drain messages from the external fetch scheduler and act on them.
     ///
-    /// Task requests are spawned on rayon. Status updates (progress, source
-    /// completion) are tracked locally. Called each tick().
+    /// The scheduler does HTTP directly; only progress/completion messages
+    /// flow back to the Witch. Called each tick().
     fn drain_scheduler_messages(&mut self) {
         let messages = match self.external_fetch {
             Some(ref mut handle) => handle.drain_messages(),
@@ -1448,11 +1430,6 @@ impl Witch {
 
         for msg in messages {
             match msg {
-                external_fetch::SchedulerMessage::TaskRequest { task, label } => {
-                    // Spawn on rayon — bypasses work_state tracking entirely
-                    let t = Task::ExternalFetch(task);
-                    self.spawn_task(t, label);
-                }
                 external_fetch::SchedulerMessage::Progress(p) => {
                     self.fetch_progress = Some(p);
                 }

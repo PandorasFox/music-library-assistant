@@ -10,7 +10,7 @@
 //! - **Maintenance**: Both variants route through db_thread's write connection:
 //!   - Migration: Uses `write_thread::execute_migration()` (schema changes on write connection).
 //!   - Vacuum: Uses `write_thread::execute_vacuum()` (needs exclusive write connection).
-//! - **ExternalFetch**: Thread-local HTTP clients. Writes immediately via `signal_sender()`.
+//! - **ExternalFetch**: Handled by scheduler thread directly (not via rayon).
 //!
 //! ## Post-Execution Pipeline
 //!
@@ -26,7 +26,6 @@
 //! 4. **Additional computations** - Spawn extra computations (from `additional_computations()`)
 //! 5. **Specific signal clearing** - Clear signals by type+key (from `specific_signals_to_clear()`)
 
-use std::cell::RefCell;
 use std::os::unix::fs::MetadataExt;
 use crate::corpus::paths;
 use crate::db::write_thread;
@@ -37,15 +36,14 @@ use crate::meta::signals::registry::TypedSignalWrite;
 
 use crate::meta::maintenance::DbMaintenanceTask;
 
-use super::external_fetch::{ExternalFetchTask, FetchOutcome, MbEntityKind};
 use super::types::{HadesSnapshot, MutationExecutionWitness, Task, TaskKind, TaskResult};
 
 // ============================================================================
 // Task Execution
 // ============================================================================
 
-/// Execute a single task (mutation, computation, maintenance, or external fetch).
-/// Opens DB/HTTP connections as needed via thread-local caches.
+/// Execute a single task (mutation, computation, or maintenance).
+/// Opens DB connections as needed via thread-local caches.
 pub(super) fn execute_task(task: Task, label: String, snapshot: &HadesSnapshot) -> TaskResult {
     let kind = TaskKind::from_task(&task);
 
@@ -53,7 +51,6 @@ pub(super) fn execute_task(task: Task, label: String, snapshot: &HadesSnapshot) 
         Task::Mutation(mutation) => execute_mutation(*mutation, label, snapshot),
         Task::Computation(computation) => execute_computation(computation, label, snapshot),
         Task::Maintenance(task) => execute_maintenance(task, label),
-        Task::ExternalFetch(fetch_task) => execute_external_fetch(fetch_task, label),
     };
     result.kind = kind;
     result
@@ -116,7 +113,7 @@ pub(super) fn execute_mutation(
                 config_update: None,
                 recomputation_scope: RecomputationScope::EMPTY,
 
-                fetch_result: None,
+
                 deferred_phases: std::collections::VecDeque::new(),
             };
         }
@@ -204,7 +201,7 @@ pub(super) fn execute_mutation(
         spawn_mutations,
         config_update,
         recomputation_scope,
-        fetch_result: None,
+
         deferred_phases: std::collections::VecDeque::new(),
     }
 }
@@ -231,7 +228,7 @@ pub(super) fn execute_computation(
         spawn_mutations: Vec::new(), // Computations don't spawn mutations
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
-        fetch_result: None,
+
         deferred_phases: result.deferred_phases,
     }
 }
@@ -282,7 +279,7 @@ pub(super) fn execute_maintenance(
         spawn_mutations: Vec::new(),
         config_update: None,
         recomputation_scope: RecomputationScope::EMPTY,
-        fetch_result: None,
+
         deferred_phases: std::collections::VecDeque::new(),
     }
 }
@@ -484,240 +481,3 @@ fn emit_file_inherent_signals(
     }
 }
 
-// ============================================================================
-// External Fetch Execution
-// ============================================================================
-
-// Thread-local HTTP clients, lazily initialized (mirrors with_read_only_db pattern).
-thread_local! {
-    static ACOUSTID_CLIENT: RefCell<Option<crate::external::acoustid::AcoustIDClient>> = const { RefCell::new(None) };
-    static MB_CLIENT: RefCell<Option<crate::external::musicbrainz::MusicBrainzClient>> = const { RefCell::new(None) };
-}
-
-/// Execute an external fetch task (AcoustID lookup or MB entity fetch).
-///
-/// Makes a blocking HTTP call using a thread-local client, writes results
-/// immediately to DB via signal_sender, and returns fetch-specific result
-/// data for the scheduler's chain-emit decisions.
-pub(super) fn execute_external_fetch(
-    task: ExternalFetchTask,
-    label: String,
-) -> TaskResult {
-
-    let fetch_result = match task {
-        ExternalFetchTask::AcoustId(ref t) => execute_acoustid_lookup(
-            t.inode,
-            &t.fingerprint_raw,
-            t.fingerprint_blob.clone(),
-            t.duration_secs,
-            &t.api_key,
-        ),
-        ExternalFetchTask::MusicBrainz(ref t) => execute_mb_fetch(t.kind, &t.mbid, &t.base_url),
-    };
-
-    let success = !matches!(
-        fetch_result,
-        FetchOutcome::AcoustIdError | FetchOutcome::MbError
-    );
-
-    TaskResult {
-        success,
-        error: None,
-        label,
-        kind: TaskKind::ExternalFetch,
-        spawn: Vec::new(),
-        spawn_mutations: Vec::new(),
-        config_update: None,
-        recomputation_scope: RecomputationScope::EMPTY,
-        fetch_result: Some(fetch_result),
-        deferred_phases: std::collections::VecDeque::new(),
-    }
-}
-
-/// Execute an AcoustID fingerprint lookup. Writes results to DB immediately.
-fn execute_acoustid_lookup(
-    inode: i64,
-    fingerprint_raw: &[u32],
-    fingerprint_blob: Vec<u8>,
-    duration_secs: u32,
-    api_key: &str,
-) -> FetchOutcome {
-    use super::external_fetch::MatchRow;
-    use crate::external::acoustid::{AcoustIDClient, LookupOutcome};
-
-    let result = ACOUSTID_CLIENT.with(|cell| {
-        let mut opt = cell.borrow_mut();
-        if opt.is_none() {
-            *opt = Some(AcoustIDClient::new(api_key.to_string()));
-        }
-        let client = opt.as_ref().unwrap();
-        client.lookup_with_raw(fingerprint_raw, duration_secs)
-    });
-
-    let acoustid_source_key = crate::meta::external::ExternalSource::AcoustID.to_key();
-
-    match result {
-        Ok((LookupOutcome::Matches(recordings), _raw)) => {
-            let rows: Vec<MatchRow> = recordings
-                .into_iter()
-                .map(|r| MatchRow {
-                    recording_id: r.recording_id,
-                    confidence: r.confidence,
-                })
-                .collect();
-
-            // Write to DB immediately
-            if let Some(sender) = write_thread::signal_sender() {
-                let now = now_unix();
-                for row in &rows {
-                    sender.insert_external_match(
-                        inode,
-                        fingerprint_blob.clone(),
-                        acoustid_source_key,
-                        &row.recording_id,
-                        row.confidence,
-                        None,
-                        now,
-                    );
-                    sender.insert_mb_known_entity(&row.recording_id, "recording", None, now);
-                }
-                sender.delete_external_retry(inode, acoustid_source_key);
-            }
-
-            FetchOutcome::AcoustIdMatch { recordings: rows }
-        }
-        Ok((LookupOutcome::NoMatch, _)) => {
-            if let Some(sender) = write_thread::signal_sender() {
-                let now = now_unix();
-                sender.insert_external_no_match(fingerprint_blob, acoustid_source_key, now);
-                sender.delete_external_retry(inode, acoustid_source_key);
-            }
-            FetchOutcome::AcoustIdNoMatch
-        }
-        Ok((LookupOutcome::RateLimited, _)) => {
-            // Return the task data so the scheduler can re-queue
-            FetchOutcome::AcoustIdRateLimited {
-                task: ExternalFetchTask::AcoustId(super::external_fetch::AcoustIdFetchTask {
-                    inode,
-                    fingerprint_raw: fingerprint_raw.to_vec(),
-                    fingerprint_blob,
-                    duration_secs,
-                    api_key: api_key.to_string(),
-                }),
-            }
-        }
-        Err(e) => {
-            let error = format!("{:#}", e);
-            crate::logging::log_error(format!(
-                "[FETCH] AcoustID lookup failed for inode {}: {}",
-                inode, error
-            ));
-            if let Some(sender) = write_thread::signal_sender() {
-                sender.upsert_external_retry(inode, fingerprint_blob, acoustid_source_key, &error);
-            }
-            FetchOutcome::AcoustIdError
-        }
-    }
-}
-
-/// Execute a MusicBrainz entity fetch. Writes cache + discovered entities to DB immediately.
-fn execute_mb_fetch(kind: MbEntityKind, mbid: &str, base_url: &str) -> FetchOutcome {
-    use crate::external::musicbrainz::{MbLookupOutcome, MusicBrainzClient};
-
-    let fetch_result = MB_CLIENT.with(|cell| {
-        let mut opt = cell.borrow_mut();
-        // Re-create client if base URL changed (e.g. switched to local mirror).
-        let needs_init = match opt.as_ref() {
-            None => true,
-            Some(c) => c.base_url() != base_url,
-        };
-        if needs_init {
-            *opt = Some(MusicBrainzClient::new(base_url));
-        }
-        let client = opt.as_ref().unwrap();
-        match kind {
-            MbEntityKind::Recording => client.fetch_recording(mbid),
-            MbEntityKind::Artist => client.fetch_artist(mbid),
-            MbEntityKind::Release => client.fetch_release(mbid),
-        }
-    });
-
-    match fetch_result {
-        Ok(MbLookupOutcome::Found(raw_json)) => {
-            // Write cache entry immediately
-            if let Some(sender) = write_thread::signal_sender() {
-                let now = now_unix();
-                match kind {
-                    MbEntityKind::Recording => {
-                        sender.upsert_mb_recording_cache(mbid, raw_json.clone(), now);
-                    }
-                    MbEntityKind::Artist => {
-                        sender.upsert_mb_artist_cache(mbid, raw_json.clone(), now);
-                    }
-                    MbEntityKind::Release => {
-                        sender.upsert_mb_release_cache(mbid, raw_json.clone(), now);
-                    }
-                }
-            }
-
-            // Extract and persist discovered entities (recordings only)
-            let discovered_entities = if kind == MbEntityKind::Recording {
-                let entities =
-                    super::external_fetch::extract_entities_from_recording(&raw_json, mbid)
-                        .unwrap_or_default();
-
-                // Write discovered entities to DB immediately for crash-safety
-                if !entities.is_empty() {
-                    if let Some(sender) = write_thread::signal_sender() {
-                        let now = now_unix();
-                        for (ek, ref eid) in &entities {
-                            sender.insert_mb_known_entity(eid, ek.as_str(), Some(mbid), now);
-                        }
-                    }
-                }
-
-                entities
-            } else {
-                Vec::new()
-            };
-
-            FetchOutcome::MbFound {
-                discovered_entities,
-            }
-        }
-        Ok(MbLookupOutcome::NotFound) => {
-            crate::logging::log_general(format!(
-                "[FETCH] MB {} {} not found (404)",
-                kind.as_str(),
-                mbid
-            ));
-            FetchOutcome::MbNotFound
-        }
-        Ok(MbLookupOutcome::RateLimited) | Ok(MbLookupOutcome::ServiceUnavailable) => {
-            FetchOutcome::MbRateLimited {
-                task: ExternalFetchTask::MusicBrainz(super::external_fetch::MbFetchTask {
-                    kind,
-                    mbid: mbid.to_string(),
-                    base_url: base_url.to_string(),
-                }),
-            }
-        }
-        Err(e) => {
-            let error = format!("{:#}", e);
-            crate::logging::log_error(format!(
-                "[FETCH] MB fetch failed for {} {}: {}",
-                kind.as_str(),
-                mbid,
-                error
-            ));
-            FetchOutcome::MbError
-        }
-    }
-}
-
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}

@@ -86,10 +86,10 @@ pub struct AcoustIdReleaseGroup {
 // Client + Outcome Types
 // ============================================================================
 
-/// AcoustID API client.
+/// AcoustID API client (blocking reqwest).
 pub struct AcoustIDClient {
     api_key: String,
-    agent: ureq::Agent,
+    client: reqwest::blocking::Client,
 }
 
 /// A single match row to be written to external_matches.
@@ -110,10 +110,11 @@ pub enum LookupOutcome {
 
 impl AcoustIDClient {
     pub fn new(api_key: String) -> Self {
-        let agent = ureq::AgentBuilder::new()
+        let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
-            .build();
-        Self { api_key, agent }
+            .build()
+            .expect("failed to build reqwest client");
+        Self { api_key, client }
     }
 
     /// Encode a chromaprint fingerprint as the compressed text format expected
@@ -130,35 +131,41 @@ impl AcoustIDClient {
     ) -> Result<(LookupOutcome, Option<Vec<u8>>)> {
         let fp_encoded = Self::encode_fingerprint(fingerprint);
 
+        let form_body = format!(
+            "client={}&fingerprint={}&duration={}&meta=recordings+releases+releasegroups",
+            urlencoded(&self.api_key),
+            urlencoded(&fp_encoded),
+            duration_secs,
+        );
+
         let response = self
-            .agent
+            .client
             .post("https://api.acoustid.org/v2/lookup")
-            .set("Content-Type", "application/x-www-form-urlencoded")
-            .send_string(&format!(
-                "client={}&fingerprint={}&duration={}&meta=recordings+releases+releasegroups",
-                urlencoded(&self.api_key),
-                urlencoded(&fp_encoded),
-                duration_secs,
-            ));
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(form_body)
+            .send();
 
         let response = match response {
-            Ok(resp) => resp,
-            Err(ureq::Error::Status(429, _)) => {
-                return Ok((LookupOutcome::RateLimited, None));
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                let body = resp.into_string().unwrap_or_default();
-                anyhow::bail!("AcoustID API returned HTTP {}: {}", code, body);
+            Ok(resp) => {
+                let status = resp.status();
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    return Ok((LookupOutcome::RateLimited, None));
+                }
+                if !status.is_success() {
+                    let body = resp.text().unwrap_or_default();
+                    anyhow::bail!("AcoustID API returned HTTP {}: {}", status, body);
+                }
+                resp
             }
             Err(e) => {
                 return Err(anyhow::anyhow!("AcoustID network error: {}", e));
             }
         };
 
-        let body = response
-            .into_string()
-            .context("Failed to read AcoustID response body")?;
-        let raw = body.as_bytes().to_vec();
+        let raw = response
+            .bytes()
+            .context("Failed to read AcoustID response body")?
+            .to_vec();
 
         let outcome = parse_acoustid_response(&raw)?;
         Ok((outcome, Some(raw)))

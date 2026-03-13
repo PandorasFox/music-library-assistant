@@ -1,21 +1,21 @@
 //! ExternalFetchHandle -- Witch-side API for the scheduler thread.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 
 use crate::config::SharedConfig;
 
-use super::types::{FetchCommand, FetchOutcome, SchedulerMessage};
+use super::types::{FetchCommand, SchedulerMessage};
 
 /// Handle held by the Witch for communicating with the scheduler thread.
 pub struct ExternalFetchHandle {
     /// Send commands to scheduler (start, shutdown).
     command_tx: Sender<FetchCommand>,
-    /// Receive messages from scheduler (task requests + status).
-    message_rx: Receiver<SchedulerMessage>,
-    /// Send outcomes back to scheduler (for chain-emit).
-    outcome_tx: Sender<FetchOutcome>,
+    /// Receive messages from scheduler (progress + status).
+    /// The scheduler does HTTP directly and writes to DB via signal_sender;
+    /// only progress/completion messages flow back to the Witch.
+    message_rx: std::sync::mpsc::Receiver<SchedulerMessage>,
     /// Join handle for the scheduler thread.
     handle: Option<JoinHandle<()>>,
     /// Whether the scheduler is currently active.
@@ -26,23 +26,20 @@ impl ExternalFetchHandle {
     /// Spawn the scheduler thread.
     ///
     /// The scheduler sleeps until it receives a Start command, then
-    /// dispatches tasks to the Witch via the message channel.
+    /// executes HTTP calls directly and reports progress via the message channel.
     pub fn spawn(shared_config: SharedConfig) -> Self {
         // Witch -> Scheduler: commands
         let (command_tx, command_rx) = mpsc::channel();
-        // Scheduler -> Witch: task requests + status
+        // Scheduler -> Witch: progress + status
         let (message_tx, message_rx) = mpsc::channel();
-        // Witch -> Scheduler: outcomes for chain-emit
-        let (outcome_tx, outcome_rx) = mpsc::channel();
 
         let handle = thread::spawn(move || {
-            super::run_scheduler(command_rx, message_tx, outcome_rx, shared_config);
+            super::run_scheduler(command_rx, message_tx, shared_config);
         });
 
         Self {
             command_tx,
             message_rx,
-            outcome_tx,
             handle: Some(handle),
             batch_active: false,
         }
@@ -73,11 +70,6 @@ impl ExternalFetchHandle {
             msgs.push(msg);
         }
         msgs
-    }
-
-    /// Send an outcome back to the scheduler for chain-emit decisions.
-    pub(in crate::witch) fn send_outcome(&self, outcome: FetchOutcome) {
-        let _ = self.outcome_tx.send(outcome);
     }
 
     /// Whether the scheduler is currently active.

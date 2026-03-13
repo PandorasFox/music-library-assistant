@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::external_fetch::ExternalFetchTask;
 use crate::config::Config;
 use crate::meta::computations::Computation;
 use crate::meta::maintenance::DbMaintenanceTask;
@@ -214,10 +213,12 @@ impl From<&WorkState> for WorkStateSnapshot {
 
 /// A task that can be queued for execution.
 ///
-/// Four kinds: Mutations (operator-confirmed corpus changes), Computations
-/// (read-only signal derivation), Maintenance (operator-approved DB
-/// infrastructure tasks that run before observing), and ExternalFetch
-/// (HTTP API calls for external metadata, dispatched by the scheduler thread).
+/// Three kinds: Mutations (operator-confirmed corpus changes), Computations
+/// (read-only signal derivation), and Maintenance (operator-approved DB
+/// infrastructure tasks that run before observing).
+///
+/// External metadata fetching (AcoustID/MusicBrainz) is handled by the
+/// scheduler thread directly — it does not flow through the rayon pool.
 #[derive(Debug, Clone)]
 pub enum Task {
     /// A state-altering mutation (requires ConfirmationGesture to stage).
@@ -226,9 +227,6 @@ pub enum Task {
     Computation(Computation),
     /// A database maintenance task (requires operator approval, bypasses accepting_mutations).
     Maintenance(DbMaintenanceTask),
-    /// An external API fetch (AcoustID lookup or MusicBrainz entity fetch).
-    /// Dispatched by the scheduler thread, executed on rayon, does NOT affect work_state.
-    ExternalFetch(ExternalFetchTask),
 }
 
 /// Fieldless discriminant for completed task type.
@@ -238,7 +236,6 @@ pub enum TaskKind {
     Mutation,
     Computation,
     Maintenance,
-    ExternalFetch,
 }
 
 impl TaskKind {
@@ -247,7 +244,6 @@ impl TaskKind {
             Task::Mutation(_) => TaskKind::Mutation,
             Task::Computation(_) => TaskKind::Computation,
             Task::Maintenance(_) => TaskKind::Maintenance,
-            Task::ExternalFetch(_) => TaskKind::ExternalFetch,
         }
     }
 }
@@ -379,18 +375,12 @@ impl TaskLabel {
         Self(task.label())
     }
 
-    /// Create label from an external fetch task.
-    pub fn from_external_fetch(task: &ExternalFetchTask) -> Self {
-        Self(task.label().to_string())
-    }
-
-    /// Create label from a task (mutation, computation, maintenance, or external fetch).
+    /// Create label from a task (mutation, computation, or maintenance).
     pub fn from_task(task: &Task) -> Self {
         match task {
             Task::Mutation(m) => Self::from_mutation(m),
             Task::Computation(c) => Self::from_computation(c),
             Task::Maintenance(t) => Self::from_maintenance(t),
-            Task::ExternalFetch(f) => Self::from_external_fetch(f),
         }
     }
 }
@@ -421,8 +411,6 @@ pub(super) struct TaskResult {
     /// Recomputation scope from this mutation (which domains it dirtied).
     /// EMPTY for computations, migrations, and failed mutations.
     pub recomputation_scope: RecomputationScope,
-    /// External fetch result data (only populated for ExternalFetch tasks).
-    pub fetch_result: Option<super::external_fetch::FetchOutcome>,
     /// Barrier-separated follow-up computation phases (pipeline orchestrators only).
     pub deferred_phases:
         std::collections::VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,

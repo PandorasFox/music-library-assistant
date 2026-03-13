@@ -386,12 +386,6 @@ impl WitchHandle {
         Ok(())
     }
 
-    /// Send a config operation (validate, inject, or update performance).
-    pub fn config_op(&self, op: crate::protocol::ConfigOp) -> Result<(), ProtocolError> {
-        self.send_command(CommandPayload::ConfigOp(op))?;
-        Ok(())
-    }
-
     /// Delete edit history. `None` = all sessions; `Some(id)` = single session.
     pub fn jettison_edit_history(&self, session_id: Option<&str>) -> Result<(), ProtocolError> {
         self.send_command(CommandPayload::JettisonEditHistory {

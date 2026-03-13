@@ -505,14 +505,9 @@ impl App {
     // Startup Flow
     // =========================================================================
 
-    /// Complete startup: inject config to Witch, open persistent txn,
-    /// and transition to the appropriate view based on Witch state.
+    /// Complete startup: open persistent txn and transition to the
+    /// appropriate view based on Witch state.
     pub(crate) fn complete_startup(&mut self) {
-        let config = self.config();
-        let _ = self
-            .witch
-            .config_op(mm_meta::protocol::ConfigOp::SetShared((*config).clone()));
-
         // If leave_transactions_open is enabled, open a persistent transaction at startup
         if self.open_txn_mode() {
             let _ = self.witch.start_transaction("Open");

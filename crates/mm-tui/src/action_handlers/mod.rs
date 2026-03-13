@@ -428,12 +428,6 @@ impl HandleAction for super::config_editor::ConfigEditorAction {
                 if let Some((original_kdl, old_config, new_config)) = mutation_data {
                     let Some(g) = gesture else { return };
 
-                    // Validate config through the Witch before staging
-                    if let Err(e) = app.witch.config_op(mm_meta::protocol::ConfigOp::Validate(new_config.clone())) {
-                        app.status_message = Some(format!("Config rejected: {}", e));
-                        return;
-                    }
-
                     let mutation = Mutation::ApplyConfigEdits(Box::new(ApplyConfigEditsMutation {
                         original_kdl,
                         old_config,

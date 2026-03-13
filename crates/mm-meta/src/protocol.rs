@@ -253,24 +253,11 @@ pub enum BackgroundTask {
     Vacuum,
 }
 
-/// Config operation types for `CommandPayload::ConfigOp`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ConfigOp {
-    /// Validate a config blob (returns Ok or error).
-    Validate(crate::config::Config),
-    /// Inject shared config (called during startup, in-process only).
-    SetShared(crate::config::Config),
-    /// Update performance config at runtime.
-    UpdatePerformance(crate::config::PerformanceOpinions),
-}
-
 /// Operational commands with no transaction semantics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CommandPayload {
     /// Queue a background task.
     QueueTask(BackgroundTask),
-    /// Config validation, injection, or runtime update.
-    ConfigOp(ConfigOp),
     /// Delete edit history. `None` = all sessions; `Some(id)` = single session.
     JettisonEditHistory { session_id: Option<String> },
     /// Initiate server shutdown.

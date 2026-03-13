@@ -634,7 +634,7 @@ impl Witch {
 
                         // -- Command area --
                         AuthenticatedBody::Command(payload) => {
-                            use crate::meta::protocol::{BackgroundTask, ConfigOp};
+                            use crate::meta::protocol::BackgroundTask;
                             let response = match *payload {
                                 CommandPayload::QueueTask(task) => {
                                     match task {
@@ -642,22 +642,6 @@ impl Witch {
                                         BackgroundTask::ReleasePacking => w.request_release_packing(),
                                         BackgroundTask::SchemaReconciliation => w.queue_schema_reconciliation(),
                                         BackgroundTask::Vacuum => w.queue_vacuum(),
-                                    }
-                                    CommandResponse::Ok
-                                }
-                                CommandPayload::ConfigOp(op) => {
-                                    match op {
-                                        ConfigOp::Validate(config) => {
-                                            crate::config::validate_config(&config).map_err(|e| {
-                                                ProtocolError::Internal(format!("{:#}", e))
-                                            })?;
-                                        }
-                                        ConfigOp::SetShared(config) => {
-                                            w.set_shared_config(config.into_shared());
-                                        }
-                                        ConfigOp::UpdatePerformance(opinions) => {
-                                            w.update_performance_impl(opinions);
-                                        }
                                     }
                                     CommandResponse::Ok
                                 }
@@ -1014,6 +998,9 @@ impl Witch {
         let mut spawned_mutations: Vec<types::SpawnedMutation> = Vec::new();
         // Collect fetch outcomes to send to scheduler after we're done borrowing self
         let mut fetch_outcomes: Vec<external_fetch::FetchOutcome> = Vec::new();
+        // Collect config updates to apply after the drain loop (can't call
+        // update_performance_impl while self.hades is borrowed by drain_results)
+        let mut pending_config_update: Option<Config> = None;
 
         for result in self.hades.drain_results() {
             // ExternalFetch results bypass work_state — they're independent of the
@@ -1046,16 +1033,9 @@ impl Witch {
                 }
             }
 
-            // Apply config update if present (from ApplyConfigEdits mutation)
-            if let Some(new_config) = result.config_update {
-                // If in polling mode, send updated interval to the watcher thread
-                if self.watcher_state == WatcherState::Polling {
-                    let new_interval = new_config.opinions.watcher_poll_interval_secs;
-                    let db_cache = self.build_watcher_db_cache();
-                    self.fs_watcher.poll(db_cache, new_interval);
-                }
-                self.update_shared_config(new_config);
-                self.config_generation += 1;
+            // Defer config update until after drain loop (needs &mut self.hades)
+            if result.config_update.is_some() {
+                pending_config_update = result.config_update;
             }
 
             // Accumulate recomputation scope from mutation results
@@ -1072,6 +1052,18 @@ impl Witch {
                 self.pending_computation_phases
                     .extend(result.deferred_phases);
             }
+        }
+
+        // Apply deferred config update (from ApplyConfigEdits mutation)
+        if let Some(new_config) = pending_config_update {
+            if self.watcher_state == WatcherState::Polling {
+                let new_interval = new_config.opinions.watcher_poll_interval_secs;
+                let db_cache = self.build_watcher_db_cache();
+                self.fs_watcher.poll(db_cache, new_interval);
+            }
+            self.update_performance_impl(new_config.opinions.performance.clone());
+            self.update_shared_config(new_config);
+            self.config_generation += 1;
         }
 
         // Queue spawned follow-up computations (chaining)

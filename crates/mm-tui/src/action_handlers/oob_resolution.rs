@@ -239,7 +239,7 @@ impl App {
                     .filter_map(|&idx| bucket_state.files.get(idx))
                     .map(|f| (f.inode, f.path.clone()))
                     .collect();
-                (files, state.buttons.selected)
+                (files, state.frame.buttons.selected)
             }
             _ => return,
         };

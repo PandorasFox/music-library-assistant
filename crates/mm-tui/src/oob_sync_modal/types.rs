@@ -10,7 +10,8 @@ use crate::input::InputAction;
 use mm_meta::views::{OobSyncDirection, OobSyncFile};
 use crate::bulk_selection::BulkSelectionState;
 use crate::widgets::modal_buttons::ModalButtons;
-use crate::widgets::{ButtonRowState, FocusPane, TextInputState};
+use crate::widgets::{FocusPane, FrameInputResult, ModalFrame, TextInputState};
+use crate::widgets::modal_frame::FrameState;
 
 // ============================================================================
 // Button Selection
@@ -98,10 +99,8 @@ pub struct OobSyncState {
     pub current_file: usize,
     /// Scroll offset for file list
     pub scroll: usize,
-    /// Button row state
-    pub buttons: ButtonRowState<OobSyncButton>,
-    /// Current focus pane (List or Buttons)
-    pub focus_pane: FocusPane,
+    /// Shared frame state (focus, buttons, click targets).
+    pub frame: FrameState<OobSyncButton>,
     /// Bulk selection state for multi-file operations
     pub selection: BulkSelectionState,
     /// Inline text filter input
@@ -125,11 +124,11 @@ impl OobSyncState {
         let has_disk_to_index = files
             .iter()
             .any(|f| f.direction == OobSyncDirection::DiskToIndex);
-        let mut buttons = ButtonRowState::new();
+        let mut frame = FrameState::new();
         if has_disk_to_index {
-            buttons.selected = OobSyncButton::AcceptDisk;
+            frame.buttons.selected = OobSyncButton::AcceptDisk;
         } else {
-            buttons.selected = OobSyncButton::AcceptDb;
+            frame.buttons.selected = OobSyncButton::AcceptDb;
         }
 
         let file_count = files.len();
@@ -140,8 +139,7 @@ impl OobSyncState {
             files,
             current_file: 0,
             scroll: 0,
-            buttons,
-            focus_pane: FocusPane::List,
+            frame,
             selection,
             filter_input: TextInputState::new(),
             filter_active: false,
@@ -212,15 +210,15 @@ impl OobSyncState {
     }
 
     /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
-    pub fn handle_click(
+    pub(crate) fn handle_click(
         &mut self,
         x: u16,
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<OobSyncAction> {
         let ctx = self.button_ctx();
-        if let Some(action) = self.buttons.handle_click(x, y, &ctx) {
-            self.focus_pane = FocusPane::Buttons;
+        if let Some(action) = self.frame.buttons.handle_click(x, y, &ctx) {
+            self.frame.focus_pane = FocusPane::Buttons;
             Some(action)
         } else {
             None
@@ -231,97 +229,43 @@ impl OobSyncState {
         // Inline filter bar captures all input when active
         if self.filter_active {
             match action {
-                InputAction::Confirm => {
-                    self.apply_filter();
-                    return OobSyncAction::None;
-                }
-                InputAction::Cancel => {
-                    self.clear_filter();
-                    return OobSyncAction::None;
-                }
-                other => {
-                    self.filter_input.handle_input(other);
-                    return OobSyncAction::None;
-                }
+                InputAction::Confirm => { self.apply_filter(); return OobSyncAction::None; }
+                InputAction::Cancel => { self.clear_filter(); return OobSyncAction::None; }
+                other => { self.filter_input.handle_input(other); return OobSyncAction::None; }
             }
         }
 
+        // Modal-specific keys (ungated nav, selection, filter)
         match action {
-            // Shift+Up / Shift+Down: cycle focus pane
-            InputAction::FocusUp => {
-                self.focus_pane = self.focus_pane.prev();
-                OobSyncAction::None
-            }
-            InputAction::FocusDown => {
-                self.focus_pane = self.focus_pane.next();
-                OobSyncAction::None
-            }
-
-            // Ctrl+A: toggle all selection (respects active filter)
             InputAction::TextHome => {
                 let indices = self.get_filtered_indices();
                 self.selection.toggle_all_filtered(&indices);
-                OobSyncAction::None
+                return OobSyncAction::None;
             }
-
-            // Ctrl+/: activate inline filter
             InputAction::OpenFilter => {
                 self.filter_active = true;
                 self.filter_input.focused = true;
-                OobSyncAction::None
+                return OobSyncAction::None;
             }
-
-            // Space: toggle selection on current file
             InputAction::Toggle => {
-                if !self.files.is_empty() {
-                    self.selection.toggle(self.current_file);
-                }
-                OobSyncAction::None
+                if !self.files.is_empty() { self.selection.toggle(self.current_file); }
+                return OobSyncAction::None;
             }
-
-            // Up/Down: navigate file list (regardless of focus)
+            // Nav always works regardless of focus pane
             InputAction::NavUp => {
-                if self.current_file > 0 {
-                    self.current_file -= 1;
-                }
-                OobSyncAction::None
+                if self.current_file > 0 { self.current_file -= 1; }
+                return OobSyncAction::None;
             }
             InputAction::NavDown => {
-                if self.current_file + 1 < self.files.len() {
-                    self.current_file += 1;
-                }
-                OobSyncAction::None
+                if self.current_file + 1 < self.files.len() { self.current_file += 1; }
+                return OobSyncAction::None;
             }
+            _ => {}
+        }
 
-            // Left/Right: navigate buttons when focused on buttons pane
-            InputAction::NavLeft => {
-                if self.focus_pane == FocusPane::Buttons {
-                    let ctx = self.button_ctx();
-                    self.buttons.nav_left(&ctx);
-                }
-                OobSyncAction::None
-            }
-            InputAction::NavRight => {
-                if self.focus_pane == FocusPane::Buttons {
-                    let ctx = self.button_ctx();
-                    self.buttons.nav_right(&ctx);
-                }
-                OobSyncAction::None
-            }
-
-            // Confirm selected button (when focused on buttons)
-            InputAction::Confirm => {
-                if self.focus_pane == FocusPane::Buttons {
-                    let ctx = self.button_ctx();
-                    self.buttons.confirm(&ctx)
-                        .unwrap_or(OobSyncAction::None)
-                } else {
-                    OobSyncAction::None
-                }
-            }
-
-            InputAction::Cancel => OobSyncAction::Cancel,
-
+        // Common keys: FocusUp/Down, NavLeft/Right (buttons), Confirm (buttons), Cancel, PageUp/Down
+        match self.handle_frame_input(action) {
+            FrameInputResult::Action(a) => a,
             _ => OobSyncAction::None,
         }
     }

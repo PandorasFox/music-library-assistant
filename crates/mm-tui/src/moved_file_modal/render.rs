@@ -1,164 +1,142 @@
 //! Rendering for moved file acknowledgement modal.
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, ListItem, Paragraph},
     Frame,
 };
 
 use super::types::MovedFileState;
 use crate::helpers::render_pane;
-use crate::widgets::{FocusPane, PathField, CURSOR_STYLE, LIST_ITEM_STYLE};
+use crate::widgets::{ModalFrame, PathField, CURSOR_STYLE, LIST_ITEM_STYLE};
+use crate::widgets::modal_frame::{ContentLayout, FrameState};
 
 /// Render the moved file acknowledgement modal.
 pub fn render(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
-    // Main layout: header, list, details, buttons
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // Header
-            Constraint::Min(5),    // File list
-            Constraint::Length(6), // Details for selected file (extra line for zone)
-            Constraint::Length(3), // Buttons
-        ])
-        .split(area);
-
-    render_header(state, f, chunks[0]);
-    render_file_list(state, f, chunks[1]);
-    render_details(state, f, chunks[2]);
-    render_buttons(state, f, chunks[3]);
+    state.render_frame(f, area);
 }
 
-fn render_header(state: &MovedFileState, f: &mut Frame, area: Rect) {
-    let count = state.files.len();
-    let text = format!(
-        "Moved Files: {} file{} detected with path changes",
-        count,
-        if count == 1 { "" } else { "s" }
-    );
+impl ModalFrame for MovedFileState {
+    type Button = super::types::MovedFileButton;
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("Acknowledge Moved Files")
-        .border_style(Style::default().fg(Color::Yellow));
-
-    let paragraph = Paragraph::new(text).block(block);
-    f.render_widget(paragraph, area);
-}
-
-fn render_file_list(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
-    let is_focused = state.focus_pane == FocusPane::List;
-    let border_style = if is_focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("Files")
-        .border_style(border_style);
-
-    let inner = render_pane(f, area, block);
-
-    state.click_targets.populate(inner, 0, state.files.len());
-
-    if state.files.is_empty() {
-        let empty = Paragraph::new("No moved files to acknowledge");
-        f.render_widget(empty, inner);
-        return;
+    fn frame_title(&self) -> Line<'static> {
+        // Not used — FourSection uses render_header instead
+        Line::default()
     }
 
-    let items: Vec<ListItem> = state
-        .files
-        .iter()
-        .enumerate()
-        .map(|(idx, file)| {
-            let is_selected = idx == state.current_file;
-            let indicator = if is_selected { "▶ " } else { "  " };
-            let style = if is_selected {
-                CURSOR_STYLE
-            } else {
-                LIST_ITEM_STYLE
-            };
-
-            // Show the new path (current location)
-            ListItem::new(Line::styled(
-                format!("{}{}", indicator, file.new_path),
-                style,
-            ))
-        })
-        .collect();
-
-    let list = List::new(items);
-    f.render_widget(list, inner);
-}
-
-fn render_details(state: &MovedFileState, f: &mut Frame, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("Details")
-        .border_style(Style::default().fg(Color::DarkGray));
-
-    let inner = render_pane(f, area, block);
-
-    if state.files.is_empty() {
-        return;
+    fn content_layout(&self) -> ContentLayout {
+        ContentLayout::FourSection {
+            header_height: 3,
+            detail_height: 6,
+        }
     }
 
-    let file = &state.files[state.current_file];
-
-    let mut lines = Vec::new();
-    lines.extend(
-        PathField::new(
-            Span::styled("Old path: ", Style::default().fg(Color::DarkGray)),
-            &file.old_path,
-        )
-        .style(Style::default().fg(Color::Red))
-        .render_lines(inner.width),
-    );
-    lines.extend(
-        PathField::new(
-            Span::styled("New path: ", Style::default().fg(Color::DarkGray)),
-            &file.new_path,
-        )
-        .style(Style::default().fg(Color::Green))
-        .render_lines(inner.width),
-    );
-    lines.push(Line::from(vec![
-        Span::styled("Inode: ", Style::default().fg(Color::DarkGray)),
-        Span::raw(file.inode.to_string()),
-    ]));
-
-    // Show zone transition for cross-zone moves
-    if file.old_zone != file.new_zone {
-        lines.push(Line::from(vec![
-            Span::styled("Zone:  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&file.old_zone, Style::default().fg(Color::Red)),
-            Span::styled(" → ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&file.new_zone, Style::default().fg(Color::Green)),
-        ]));
+    fn list_title(&self) -> String {
+        "Files".to_string()
     }
 
-    let paragraph = Paragraph::new(lines);
-    f.render_widget(paragraph, inner);
-}
+    fn empty_message(&self) -> &'static str {
+        "No moved files to acknowledge"
+    }
 
-fn render_buttons(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
-    let is_focused = state.focus_pane == FocusPane::Buttons;
+    fn accent_color(&self) -> Color {
+        Color::Cyan
+    }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(if is_focused {
-            Style::default().fg(Color::Cyan)
+    fn frame_state(&self) -> &FrameState<super::types::MovedFileButton> { &self.frame }
+    fn frame_state_mut(&mut self) -> &mut FrameState<super::types::MovedFileButton> { &mut self.frame }
+    fn cursor(&self) -> usize { self.current_file }
+    fn cursor_mut(&mut self) -> &mut usize { &mut self.current_file }
+    fn list_len(&self) -> usize { self.files.len() }
+    fn button_ctx(&self) -> super::types::MovedFileButtonCtx { MovedFileState::button_ctx(self) }
+    fn escape_action(&self) -> super::types::MovedFileAction { super::types::MovedFileAction::Cancel }
+
+    fn render_header(&self, f: &mut Frame, area: Rect) {
+        let count = self.files.len();
+        let text = format!(
+            "Moved Files: {} file{} detected with path changes",
+            count,
+            if count == 1 { "" } else { "s" }
+        );
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Acknowledge Moved Files")
+            .border_style(Style::default().fg(Color::Yellow));
+
+        let paragraph = Paragraph::new(text).block(block);
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_list_item(
+        &self,
+        idx: usize,
+        _width: u16,
+        is_cursor: bool,
+        _is_focused: bool,
+    ) -> ListItem<'static> {
+        let file = &self.files[idx];
+        let indicator = if is_cursor { "\u{25b6} " } else { "  " };
+        let style = if is_cursor {
+            CURSOR_STYLE
         } else {
-            Style::default().fg(Color::DarkGray)
-        });
+            LIST_ITEM_STYLE
+        };
 
-    let inner = render_pane(f, area, block);
+        ListItem::new(Line::styled(
+            format!("{}{}", indicator, file.new_path),
+            style,
+        ))
+    }
 
-    let ctx = state.button_ctx();
-    state.buttons.render(f, inner, &ctx, is_focused);
+    fn render_detail(&self, f: &mut Frame, area: Rect) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Details")
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let inner = render_pane(f, area, block);
+
+        if self.files.is_empty() {
+            return;
+        }
+
+        let file = &self.files[self.current_file];
+
+        let mut lines = Vec::new();
+        lines.extend(
+            PathField::new(
+                Span::styled("Old path: ", Style::default().fg(Color::DarkGray)),
+                &file.old_path,
+            )
+            .style(Style::default().fg(Color::Red))
+            .render_lines(inner.width),
+        );
+        lines.extend(
+            PathField::new(
+                Span::styled("New path: ", Style::default().fg(Color::DarkGray)),
+                &file.new_path,
+            )
+            .style(Style::default().fg(Color::Green))
+            .render_lines(inner.width),
+        );
+        lines.push(Line::from(vec![
+            Span::styled("Inode: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(file.inode.to_string()),
+        ]));
+
+        if file.old_zone != file.new_zone {
+            lines.push(Line::from(vec![
+                Span::styled("Zone:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&file.old_zone, Style::default().fg(Color::Red)),
+                Span::styled(" \u{2192} ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&file.new_zone, Style::default().fg(Color::Green)),
+            ]));
+        }
+
+        let paragraph = Paragraph::new(lines);
+        f.render_widget(paragraph, inner);
+    }
 }

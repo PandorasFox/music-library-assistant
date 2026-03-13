@@ -13,17 +13,18 @@
 use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, ListItem, Paragraph},
     Frame,
 };
 
 use mm_meta::views::MatchClassification;
 use crate::helpers::{render_pane, truncate_left};
 use crate::widgets::{
-    ButtonRowState, FocusPane, ListClickTargets, PathField, CURSOR_STYLE,
+    FocusPane, FrameInputResult, ModalFrame, PathField, CURSOR_STYLE,
+    modal_frame::{ContentLayout, FrameState},
 };
 
 use super::types::{InboxCorpusMatchModalData, InboxMatchButton};
@@ -44,10 +45,8 @@ pub enum InboxCorpusMatchPreviewAction {
 pub struct InboxCorpusMatchPreviewState {
     pub cached_data: InboxCorpusMatchModalData,
     pub scroll: usize,
-    pub buttons: ButtonRowState<InboxMatchButton>,
-    pub focus_pane: FocusPane,
-    /// Click targets for list items (set during render)
-    pub click_targets: ListClickTargets,
+    /// Shared frame state (focus, buttons, click targets).
+    pub frame: FrameState<InboxMatchButton>,
 }
 
 impl InboxCorpusMatchPreviewState {
@@ -62,23 +61,21 @@ impl InboxCorpusMatchPreviewState {
         Self {
             cached_data,
             scroll: 0,
-            buttons: ButtonRowState::new(),
-            focus_pane: FocusPane::List,
-            click_targets: ListClickTargets::new(),
+            frame: FrameState::new(),
         }
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(
+    pub(crate) fn handle_click(
         &mut self,
         x: u16,
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<InboxCorpusMatchPreviewAction> {
-        if let Some(id) = self.click_targets.hit_test(x, y) {
+        if let Some(id) = self.frame.click_targets.hit_test(x, y) {
             if let Ok(idx) = id.parse::<usize>() {
                 if idx < self.cached_data.entries.len() {
-                    self.focus_pane = FocusPane::List;
+                    self.frame.focus_pane = FocusPane::List;
                     self.scroll = idx;
                 }
             }
@@ -87,79 +84,25 @@ impl InboxCorpusMatchPreviewState {
     }
 
     pub fn handle_input(&mut self, action: &InputAction) -> InboxCorpusMatchPreviewAction {
-        match action {
-            // Shift+Up/Down: move focus between panes
-            InputAction::FocusUp => {
-                self.focus_pane = self.focus_pane.prev();
+        match self.handle_frame_input(action) {
+            FrameInputResult::Action(a) => a,
+            FrameInputResult::Consumed | FrameInputResult::Unhandled => {
                 InboxCorpusMatchPreviewAction::None
             }
-            InputAction::FocusDown => {
-                self.focus_pane = self.focus_pane.next();
-                InboxCorpusMatchPreviewAction::None
-            }
-
-            InputAction::NavUp if self.focus_pane == FocusPane::List => {
-                self.scroll = self.scroll.saturating_sub(1);
-                InboxCorpusMatchPreviewAction::None
-            }
-            InputAction::NavDown if self.focus_pane == FocusPane::List => {
-                let max = self.cached_data.entries.len().saturating_sub(1);
-                if self.scroll < max {
-                    self.scroll += 1;
-                }
-                InboxCorpusMatchPreviewAction::None
-            }
-            InputAction::PageUp => {
-                self.scroll = self.scroll.saturating_sub(10);
-                InboxCorpusMatchPreviewAction::None
-            }
-            InputAction::PageDown => {
-                let max = self.cached_data.entries.len().saturating_sub(1);
-                self.scroll = (self.scroll + 10).min(max);
-                InboxCorpusMatchPreviewAction::None
-            }
-
-            InputAction::NavLeft if self.focus_pane == FocusPane::Buttons => {
-                self.buttons.nav_left(&self.cached_data);
-                InboxCorpusMatchPreviewAction::None
-            }
-            InputAction::NavRight if self.focus_pane == FocusPane::Buttons => {
-                self.buttons.nav_right(&self.cached_data);
-                InboxCorpusMatchPreviewAction::None
-            }
-
-            InputAction::Confirm if self.focus_pane == FocusPane::Buttons => {
-                self.buttons.confirm(&self.cached_data)
-                    .unwrap_or(InboxCorpusMatchPreviewAction::None)
-            }
-
-            InputAction::Cancel => InboxCorpusMatchPreviewAction::Cancel,
-
-            _ => InboxCorpusMatchPreviewAction::None,
         }
     }
 
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        f.render_widget(Clear, area);
-
-        let main_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(10),   // Content
-                Constraint::Length(3), // Controls
-            ])
-            .split(area);
-
-        self.render_title(f, main_chunks[0]);
-        self.render_content(f, main_chunks[1]);
-        self.render_controls(f, main_chunks[2]);
+        self.render_frame(f, area);
     }
+}
 
-    fn render_title(&self, f: &mut Frame, area: Rect) {
+impl ModalFrame for InboxCorpusMatchPreviewState {
+    type Button = InboxMatchButton;
+
+    fn frame_title(&self) -> Line<'static> {
         let (better, equivalent, subpar) = self.cached_data.count_by_class();
-
-        let title = Paragraph::new(Line::from(vec![
+        Line::from(vec![
             Span::styled(
                 " Inbox Corpus Match Resolution ",
                 Style::default()
@@ -173,115 +116,84 @@ impl InboxCorpusMatchPreviewState {
                 ),
                 Style::default().fg(Color::DarkGray),
             ),
-        ]))
-        .block(Block::default().borders(Borders::ALL));
-
-        f.render_widget(title, area);
+        ])
     }
 
-    fn render_content(&mut self, f: &mut Frame, area: Rect) {
-        let count = self.cached_data.entries.len();
-        let list_focused = self.focus_pane == FocusPane::List;
+    fn content_layout(&self) -> ContentLayout {
+        ContentLayout::DetailAboveList { detail_height: 6 }
+    }
 
-        // Split into detail pane (top) and list pane (bottom)
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(6), // Detail pane: corpus matches
-                Constraint::Min(6),    // List pane
-            ])
-            .split(area);
+    fn list_title(&self) -> String {
+        format!(" Inbox Files ({}) ", self.cached_data.entries.len())
+    }
 
-        self.render_detail_pane(f, chunks[0]);
+    fn empty_message(&self) -> &'static str {
+        "No inbox corpus matches found"
+    }
 
-        let block = Block::default()
-            .title(format!(" Inbox Files ({}) ", count))
-            .title_style(Style::default().fg(if count > 0 {
-                Color::Cyan
-            } else {
-                Color::DarkGray
-            }))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(if list_focused {
-                Color::Cyan
-            } else {
-                Color::DarkGray
-            }));
+    fn frame_state(&self) -> &FrameState<InboxMatchButton> { &self.frame }
+    fn frame_state_mut(&mut self) -> &mut FrameState<InboxMatchButton> { &mut self.frame }
+    fn cursor(&self) -> usize { self.scroll }
+    fn cursor_mut(&mut self) -> &mut usize { &mut self.scroll }
+    fn list_len(&self) -> usize { self.cached_data.entries.len() }
+    fn button_ctx(&self) -> InboxCorpusMatchModalData { self.cached_data.clone() }
+    fn escape_action(&self) -> InboxCorpusMatchPreviewAction { InboxCorpusMatchPreviewAction::Cancel }
 
-        let inner = render_pane(f, chunks[1], block);
+    fn render_list_item(
+        &self,
+        idx: usize,
+        width: u16,
+        is_cursor: bool,
+        is_focused: bool,
+    ) -> ListItem<'static> {
+        let entry = &self.cached_data.entries[idx];
 
-        self.click_targets.populate(inner, self.scroll, self.cached_data.entries.len());
-
-        if self.cached_data.entries.is_empty() {
-            let empty = Paragraph::new("No inbox corpus matches found")
-                .style(Style::default().fg(Color::DarkGray));
-            f.render_widget(empty, inner);
-            return;
-        }
-
-        let visible_lines = inner.height as usize;
-        let scroll = self.scroll;
-
-        let total_width = inner.width as usize;
+        let total_width = width as usize;
         let icon_width = 3;
         let quality_width = 22;
         let path_width = total_width.saturating_sub(icon_width + quality_width);
 
-        let items: Vec<ListItem> = self
-            .cached_data
-            .entries
-            .iter()
-            .skip(scroll)
-            .take(visible_lines)
-            .enumerate()
-            .map(|(visible_idx, entry)| {
-                let is_selected = visible_idx == 0;
-                let style = if is_selected && list_focused {
-                    CURSOR_STYLE
-                } else {
-                    Style::default().fg(Color::White)
-                };
+        let style = if is_cursor && is_focused {
+            CURSOR_STYLE
+        } else {
+            Style::default().fg(Color::White)
+        };
 
-                let (icon, icon_color) = match entry.classification {
-                    MatchClassification::Better => ("B", Color::Cyan),
-                    MatchClassification::Equivalent => ("=", Color::Green),
-                    MatchClassification::Subpar => ("v", Color::Yellow),
-                };
+        let (icon, icon_color) = match entry.classification {
+            MatchClassification::Better => ("B", Color::Cyan),
+            MatchClassification::Equivalent => ("=", Color::Green),
+            MatchClassification::Subpar => ("v", Color::Yellow),
+        };
 
-                let icon_style = if is_selected && list_focused {
-                    CURSOR_STYLE
-                } else {
-                    Style::default().fg(icon_color)
-                };
+        let icon_style = if is_cursor && is_focused {
+            CURSOR_STYLE
+        } else {
+            Style::default().fg(icon_color)
+        };
 
-                let quality_style = if is_selected && list_focused {
-                    CURSOR_STYLE
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
+        let quality_style = if is_cursor && is_focused {
+            CURSOR_STYLE
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
 
-                let path_display = truncate_left(&entry.inbox_path, path_width.saturating_sub(1));
+        let path_display = truncate_left(&entry.inbox_path, path_width.saturating_sub(1));
 
-                let line = Line::from(vec![
-                    Span::styled(format!(" {} ", icon), icon_style),
-                    Span::styled(
-                        format!("{:<width$}", path_display, width = path_width),
-                        style,
-                    ),
-                    Span::styled(
-                        format!("{:>width$}", entry.inbox_quality, width = quality_width),
-                        quality_style,
-                    ),
-                ]);
-                ListItem::new(line)
-            })
-            .collect();
-
-        let list = List::new(items);
-        f.render_widget(list, inner);
+        let line = Line::from(vec![
+            Span::styled(format!(" {} ", icon), icon_style),
+            Span::styled(
+                format!("{:<width$}", path_display, width = path_width),
+                style,
+            ),
+            Span::styled(
+                format!("{:>width$}", entry.inbox_quality, width = quality_width),
+                quality_style,
+            ),
+        ]);
+        ListItem::new(line)
     }
 
-    fn render_detail_pane(&self, f: &mut Frame, area: Rect) {
+    fn render_detail(&self, f: &mut Frame, area: Rect) {
         let block = Block::default()
             .title(" Corpus Match Details ")
             .title_style(Style::default().fg(Color::DarkGray))
@@ -334,37 +246,5 @@ impl InboxCorpusMatchPreviewState {
 
         let para = Paragraph::new(lines);
         f.render_widget(para, inner);
-    }
-
-    fn render_controls(&mut self, f: &mut Frame, area: Rect) {
-        let buttons_focused = self.focus_pane == FocusPane::Buttons;
-
-        let block = Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(if buttons_focused {
-                Color::Cyan
-            } else {
-                Color::DarkGray
-            }));
-        let inner = block.inner(area);
-        f.render_widget(block, area);
-
-        let inner_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1), // Buttons
-                Constraint::Length(1), // Hint
-            ])
-            .split(inner);
-
-        self.buttons.render(f, inner_chunks[0], &self.cached_data, buttons_focused);
-
-        // Hint
-        let hint = Paragraph::new(Line::from(Span::styled(
-            "Shift+\u{2191}\u{2193} focus  \u{2190}\u{2192} select  Enter confirm",
-            Style::default().fg(Color::DarkGray),
-        )))
-        .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(hint, inner_chunks[1]);
     }
 }

@@ -10,7 +10,8 @@ use crate::input::InputAction;
 use mm_meta::views::{BucketedOobFile, ConflictBucket};
 use crate::bulk_selection::BulkSelectionState;
 use crate::widgets::modal_buttons::ModalButtons;
-use crate::widgets::{ButtonRowState, FocusPane, TextInputState};
+use crate::widgets::{FocusPane, FrameInputResult, ModalFrame, TextInputState};
+use crate::widgets::modal_frame::FrameState;
 
 // ============================================================================
 // Resolution Button
@@ -221,10 +222,8 @@ pub struct OobConflictState {
     pub buckets: [BucketFileState; 4],
     /// Counts per bucket (for tab labels)
     pub bucket_counts: [usize; 4],
-    /// Button row state
-    pub buttons: ButtonRowState<OobConflictButton>,
-    /// Current focus pane (List or Buttons)
-    pub focus_pane: FocusPane,
+    /// Shared frame state (focus, buttons, click targets).
+    pub frame: FrameState<OobConflictButton>,
 }
 
 impl OobConflictState {
@@ -268,9 +267,9 @@ impl OobConflictState {
         ];
 
         // Default button depends on initial bucket type
-        let mut buttons = ButtonRowState::new();
+        let mut frame = FrameState::new();
         if initial_bucket.is_acknowledgeable() {
-            buttons.selected = OobConflictButton::Acknowledge;
+            frame.buttons.selected = OobConflictButton::Acknowledge;
         }
         // else stays on ApplyDb (the Default), which is fine for resolvable buckets
 
@@ -278,8 +277,7 @@ impl OobConflictState {
             active_bucket: initial_bucket,
             buckets,
             bucket_counts,
-            buttons,
-            focus_pane: FocusPane::List,
+            frame,
         }
     }
 
@@ -287,7 +285,7 @@ impl OobConflictState {
         &self.buckets[self.active_bucket.index()]
     }
 
-    fn active_bucket_state_mut(&mut self) -> &mut BucketFileState {
+    pub(super) fn active_bucket_state_mut(&mut self) -> &mut BucketFileState {
         &mut self.buckets[self.active_bucket.index()]
     }
 
@@ -313,15 +311,15 @@ impl OobConflictState {
     }
 
     /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
-    pub fn handle_click(
+    pub(crate) fn handle_click(
         &mut self,
         x: u16,
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<OobConflictAction> {
         let ctx = self.button_ctx();
-        if let Some(action) = self.buttons.handle_click(x, y, &ctx) {
-            self.focus_pane = FocusPane::Buttons;
+        if let Some(action) = self.frame.buttons.handle_click(x, y, &ctx) {
+            self.frame.focus_pane = FocusPane::Buttons;
             Some(action)
         } else {
             None
@@ -333,131 +331,73 @@ impl OobConflictState {
         let bucket = self.active_bucket_state_mut();
         if bucket.filter_active {
             match action {
-                InputAction::Confirm => {
-                    bucket.apply_filter();
-                    return OobConflictAction::None;
-                }
-                InputAction::Cancel => {
-                    bucket.clear_filter();
-                    return OobConflictAction::None;
-                }
-                other => {
-                    bucket.filter_input.handle_input(other);
-                    return OobConflictAction::None;
-                }
+                InputAction::Confirm => { bucket.apply_filter(); return OobConflictAction::None; }
+                InputAction::Cancel => { bucket.clear_filter(); return OobConflictAction::None; }
+                other => { bucket.filter_input.handle_input(other); return OobConflictAction::None; }
             }
         }
 
+        // Modal-specific keys (selection, filter, bucket tabs, per-bucket nav)
         match action {
-            // Shift+Up / Shift+Down: cycle focus pane
-            InputAction::FocusUp => {
-                self.focus_pane = self.focus_pane.prev();
-                OobConflictAction::None
-            }
-            InputAction::FocusDown => {
-                self.focus_pane = self.focus_pane.next();
-                OobConflictAction::None
-            }
-
-            // Ctrl+A: toggle all selection in active bucket (respects filter)
             InputAction::TextHome => {
                 let bucket = self.active_bucket_state_mut();
                 let indices = bucket.get_filtered_indices();
                 bucket.selection.toggle_all_filtered(&indices);
-                OobConflictAction::None
+                return OobConflictAction::None;
             }
-
-            // Ctrl+/: activate inline filter on active bucket
             InputAction::OpenFilter => {
                 let bucket = self.active_bucket_state_mut();
                 bucket.filter_active = true;
                 bucket.filter_input.focused = true;
-                OobConflictAction::None
+                return OobConflictAction::None;
             }
-
-            // Space: toggle selection on current file in active bucket
             InputAction::Toggle => {
                 let bucket = self.active_bucket_state_mut();
                 if !bucket.files.is_empty() {
                     let cursor = bucket.cursor;
                     bucket.selection.toggle(cursor);
                 }
-                OobConflictAction::None
+                return OobConflictAction::None;
             }
-
-            // Bucket tab navigation
             InputAction::CycleNext => {
                 self.active_bucket = self.active_bucket.next();
                 let ctx = self.button_ctx();
-                self.buttons.clamp(&ctx);
-                OobConflictAction::Navigate
+                self.frame.buttons.clamp(&ctx);
+                return OobConflictAction::Navigate;
             }
             InputAction::CyclePrev => {
                 self.active_bucket = self.active_bucket.prev();
                 let ctx = self.button_ctx();
-                self.buttons.clamp(&ctx);
-                OobConflictAction::Navigate
+                self.frame.buttons.clamp(&ctx);
+                return OobConflictAction::Navigate;
             }
-
-            // File navigation within active bucket
+            // Per-bucket navigation (ungated, returns Navigate)
             InputAction::NavUp => {
-                if self.active_bucket_state_mut().navigate_up() {
+                return if self.active_bucket_state_mut().navigate_up() {
                     OobConflictAction::Navigate
-                } else {
-                    OobConflictAction::None
-                }
+                } else { OobConflictAction::None };
             }
             InputAction::NavDown => {
-                if self.active_bucket_state_mut().navigate_down() {
+                return if self.active_bucket_state_mut().navigate_down() {
                     OobConflictAction::Navigate
-                } else {
-                    OobConflictAction::None
-                }
+                } else { OobConflictAction::None };
             }
             InputAction::PageUp => {
-                if self.active_bucket_state_mut().page_up() {
+                return if self.active_bucket_state_mut().page_up() {
                     OobConflictAction::Navigate
-                } else {
-                    OobConflictAction::None
-                }
+                } else { OobConflictAction::None };
             }
             InputAction::PageDown => {
-                if self.active_bucket_state_mut().page_down() {
+                return if self.active_bucket_state_mut().page_down() {
                     OobConflictAction::Navigate
-                } else {
-                    OobConflictAction::None
-                }
+                } else { OobConflictAction::None };
             }
+            _ => {}
+        }
 
-            // Button navigation (when focused on buttons)
-            InputAction::NavLeft => {
-                if self.focus_pane == FocusPane::Buttons {
-                    let ctx = self.button_ctx();
-                    self.buttons.nav_left(&ctx);
-                }
-                OobConflictAction::None
-            }
-            InputAction::NavRight => {
-                if self.focus_pane == FocusPane::Buttons {
-                    let ctx = self.button_ctx();
-                    self.buttons.nav_right(&ctx);
-                }
-                OobConflictAction::None
-            }
-
-            // Confirm resolution (when focused on buttons)
-            InputAction::Confirm => {
-                if self.focus_pane == FocusPane::Buttons {
-                    let ctx = self.button_ctx();
-                    self.buttons.confirm(&ctx)
-                        .unwrap_or(OobConflictAction::None)
-                } else {
-                    OobConflictAction::None
-                }
-            }
-
-            InputAction::Cancel => OobConflictAction::Cancel,
-
+        // Common keys: FocusUp/Down, NavLeft/Right (buttons), Confirm (buttons), Cancel
+        match self.handle_frame_input(action) {
+            FrameInputResult::Action(a) => a,
             _ => OobConflictAction::None,
         }
     }

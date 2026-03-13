@@ -19,6 +19,7 @@ mod layout;
 mod list_click_targets;
 mod modal;
 pub mod modal_buttons;
+pub mod modal_frame;
 pub mod path_display;
 mod resolution_layout;
 pub mod selection_styles;
@@ -75,3 +76,6 @@ pub use wizard::{WizardItem, WizardOffer, WizardState};
 
 // Modal buttons
 pub use modal_buttons::{ButtonRowState, ModalButtons};
+
+// Modal frame
+pub use modal_frame::{FrameInputResult, ModalFrame};

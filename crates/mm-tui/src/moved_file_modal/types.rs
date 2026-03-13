@@ -8,7 +8,8 @@ use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 
 use mm_meta::views::MovedFileInfo;
-use crate::widgets::{ButtonRowState, FocusPane, ListClickTargets, ModalButtons};
+use crate::widgets::{FocusPane, ModalButtons};
+use crate::widgets::modal_frame::FrameState;
 
 // ============================================================================
 // Button Definition
@@ -85,12 +86,8 @@ pub struct MovedFileState {
     pub files: Vec<MovedFileInfo>,
     /// Currently selected file in the list
     pub current_file: usize,
-    /// Button row state
-    pub buttons: ButtonRowState<MovedFileButton>,
-    /// Current focus pane (List or Buttons)
-    pub focus_pane: FocusPane,
-    /// Click targets for file list items (set during render)
-    pub click_targets: ListClickTargets,
+    /// Shared frame state (focus, buttons, click targets).
+    pub frame: FrameState<MovedFileButton>,
 }
 
 impl MovedFileState {
@@ -105,9 +102,7 @@ impl MovedFileState {
         Self {
             files,
             current_file: 0,
-            buttons: ButtonRowState::new(),
-            focus_pane: FocusPane::List,
-            click_targets: ListClickTargets::new(),
+            frame: FrameState::new(),
         }
     }
 
@@ -135,21 +130,21 @@ impl MovedFileState {
     }
 
     /// Handle a mouse click at (x, y). Returns an action if a button was clicked.
-    pub fn handle_click(
+    pub(crate) fn handle_click(
         &mut self,
         x: u16,
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<MovedFileAction> {
         let ctx = self.button_ctx();
-        if let Some(action) = self.buttons.handle_click(x, y, &ctx) {
-            self.focus_pane = FocusPane::Buttons;
+        if let Some(action) = self.frame.buttons.handle_click(x, y, &ctx) {
+            self.frame.focus_pane = FocusPane::Buttons;
             return Some(action);
         }
-        if let Some(id) = self.click_targets.hit_test(x, y) {
+        if let Some(id) = self.frame.click_targets.hit_test(x, y) {
             if let Ok(idx) = id.parse::<usize>() {
                 if idx < self.files.len() {
-                    self.focus_pane = FocusPane::List;
+                    self.frame.focus_pane = FocusPane::List;
                     self.current_file = idx;
                 }
             }
@@ -158,63 +153,10 @@ impl MovedFileState {
     }
 
     pub fn handle_input(&mut self, action: &InputAction) -> MovedFileAction {
-        let ctx = self.button_ctx();
-
-        // FocusUp / FocusDown: cycle focus pane
-        match action {
-            InputAction::FocusUp => {
-                self.focus_pane = self.focus_pane.prev();
-                return MovedFileAction::None;
-            }
-            InputAction::FocusDown => {
-                self.focus_pane = self.focus_pane.next();
-                return MovedFileAction::None;
-            }
-            _ => {}
-        }
-
-        match action {
-            // Up/Down: navigate file list
-            InputAction::NavUp => {
-                if self.current_file > 0 {
-                    self.current_file -= 1;
-                }
-                MovedFileAction::None
-            }
-            InputAction::NavDown => {
-                if self.current_file + 1 < self.files.len() {
-                    self.current_file += 1;
-                }
-                MovedFileAction::None
-            }
-
-            // Left/Right: navigate buttons when focused on buttons pane
-            InputAction::NavLeft => {
-                if self.focus_pane == FocusPane::Buttons {
-                    self.buttons.nav_left(&ctx);
-                }
-                MovedFileAction::None
-            }
-            InputAction::NavRight => {
-                if self.focus_pane == FocusPane::Buttons {
-                    self.buttons.nav_right(&ctx);
-                }
-                MovedFileAction::None
-            }
-
-            // Confirm selected button (when focused on buttons)
-            InputAction::Confirm => {
-                if self.focus_pane == FocusPane::Buttons {
-                    self.buttons.confirm(&ctx)
-                        .unwrap_or(MovedFileAction::None)
-                } else {
-                    MovedFileAction::None
-                }
-            }
-
-            InputAction::Cancel => MovedFileAction::Cancel,
-
-            _ => MovedFileAction::None,
+        use crate::widgets::modal_frame::{FrameInputResult, ModalFrame};
+        match self.handle_frame_input(action) {
+            FrameInputResult::Action(a) => a,
+            FrameInputResult::Consumed | FrameInputResult::Unhandled => MovedFileAction::None,
         }
     }
 }

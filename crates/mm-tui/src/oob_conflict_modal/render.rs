@@ -8,31 +8,65 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use mm_meta::views::ConflictBucket;
 use crate::helpers::render_pane;
 use crate::widgets::{
-    render_file_path_list, FocusPane, PathEntry, PathField, ResolutionLayout, StyledCell,
-    ThreeColTable,
+    render_file_path_list, FocusPane, ModalFrame, PathEntry, PathField,
+    StyledCell, ThreeColTable,
 };
+use crate::widgets::modal_frame::{ContentLayout, FrameState};
 
-use super::types::OobConflictState;
+use super::types::{OobConflictButton, OobConflictButtonCtx, OobConflictAction, OobConflictState};
 
 pub fn render(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
-    // Use full area with 1-cell padding
-    let padded = ResolutionLayout::padded(area);
-    f.render_widget(Clear, padded);
+    state.render_frame(f, area);
+}
 
-    // Custom layout for conflict modal: tab bar takes more space, 3-line buttons for hints
-    let layout = ResolutionLayout::new(padded, 4, 3, 33);
+impl ModalFrame for OobConflictState {
+    type Button = OobConflictButton;
 
-    // Render each section
-    render_info_bar(f, layout.info_bar, state);
-    render_file_list(f, layout.list_pane, state);
-    render_diff_details(f, layout.details_pane, state);
-    render_buttons(f, layout.buttons, state);
+    fn content_layout(&self) -> ContentLayout {
+        ContentLayout::HorizontalSplit { list_percent: 33, info_height: 4 }
+    }
+
+    fn list_title(&self) -> String { "Files".into() }
+    fn accent_color(&self) -> Color { Color::Red }
+
+    fn controls_hints(&self) -> Vec<Span<'static>> {
+        let s = Style::default().fg(Color::DarkGray);
+        vec![
+            Span::styled("Shift+\u{2191}\u{2193}", s), Span::styled(" focus", s),
+            Span::styled("  \u{00b7}  ", s),
+            Span::styled("^A", s), Span::styled(" select all", s),
+            Span::styled("  \u{00b7}  ", s),
+            Span::styled("Space", s), Span::styled(" toggle", s),
+            Span::styled("  \u{00b7}  ", s),
+            Span::styled("Enter", s), Span::styled(" confirm", s),
+        ]
+    }
+
+    fn frame_state(&self) -> &FrameState<OobConflictButton> { &self.frame }
+    fn frame_state_mut(&mut self) -> &mut FrameState<OobConflictButton> { &mut self.frame }
+    fn cursor(&self) -> usize { self.active_bucket_state().cursor }
+    fn cursor_mut(&mut self) -> &mut usize { &mut self.active_bucket_state_mut().cursor }
+    fn list_len(&self) -> usize { self.active_bucket_state().files.len() }
+    fn button_ctx(&self) -> OobConflictButtonCtx { OobConflictState::button_ctx(self) }
+    fn escape_action(&self) -> OobConflictAction { OobConflictAction::Cancel }
+
+    fn render_info_bar(&self, f: &mut Frame, area: Rect) {
+        render_info_bar(f, area, self);
+    }
+
+    fn render_frame_list(&mut self, f: &mut Frame, area: Rect) {
+        render_file_list(f, area, self);
+    }
+
+    fn render_detail(&self, f: &mut Frame, area: Rect) {
+        render_diff_details(f, area, self);
+    }
 }
 
 fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
@@ -111,7 +145,7 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
 }
 
 fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
-    let is_focused = state.focus_pane == FocusPane::List;
+    let is_focused = state.frame.focus_pane == FocusPane::List;
 
     let bucket_state = state.active_bucket_state();
 
@@ -232,47 +266,4 @@ fn render_diff_details(f: &mut Frame, area: Rect, state: &OobConflictState) {
         alternate_rows: true,
     };
     table.render(f, inner);
-}
-
-fn render_buttons(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
-    let is_focused = state.focus_pane == FocusPane::Buttons;
-    let border_color = if is_focused {
-        Color::Yellow
-    } else {
-        Color::DarkGray
-    };
-
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(border_color));
-    let inner = render_pane(f, area, block);
-
-    // Split inner into button row + hint line
-    let button_area = Rect { height: 1, ..inner };
-    let hint_area = Rect {
-        y: inner.y + 1,
-        height: inner.height.saturating_sub(1),
-        ..inner
-    };
-
-    let ctx = state.button_ctx();
-    state.buttons.render(f, button_area, &ctx, is_focused);
-
-    let hint_style = Style::default().fg(Color::DarkGray);
-    let hint_line = Line::from(vec![
-        Span::styled("Shift+\u{2191}\u{2193}", hint_style),
-        Span::styled(" focus", hint_style),
-        Span::styled("  \u{00b7}  ", hint_style),
-        Span::styled("^A", hint_style),
-        Span::styled(" select all", hint_style),
-        Span::styled("  \u{00b7}  ", hint_style),
-        Span::styled("Space", hint_style),
-        Span::styled(" toggle", hint_style),
-        Span::styled("  \u{00b7}  ", hint_style),
-        Span::styled("Enter", hint_style),
-        Span::styled(" confirm", hint_style),
-    ]);
-
-    let hint_para = Paragraph::new(hint_line).alignment(Alignment::Center);
-    f.render_widget(hint_para, hint_area);
 }

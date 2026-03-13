@@ -13,17 +13,18 @@
 use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::Rect,
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, ListItem, Paragraph},
     Frame,
 };
 
 use super::types::{SubparButton, SubparDuplicateModalData};
 use crate::helpers::{render_pane, truncate_left};
 use crate::widgets::{
-    ButtonRowState, FocusPane, ListClickTargets, PathField, CURSOR_STYLE,
+    FocusPane, FrameInputResult, ModalFrame, PathField, CURSOR_STYLE,
+    modal_frame::{ContentLayout, FrameState},
 };
 
 /// Actions returned from the subpar duplicate preview.
@@ -44,12 +45,8 @@ pub struct SubparDuplicatePreviewState {
     pub cached_data: SubparDuplicateModalData,
     /// Scroll position for the file list.
     pub scroll: usize,
-    /// Button row state.
-    pub buttons: ButtonRowState<SubparButton>,
-    /// Which pane has focus
-    pub focus_pane: FocusPane,
-    /// Click targets for file list items (set during render)
-    pub click_targets: ListClickTargets,
+    /// Shared frame state (focus, buttons, click targets).
+    pub frame: FrameState<SubparButton>,
 }
 
 impl SubparDuplicatePreviewState {
@@ -66,23 +63,21 @@ impl SubparDuplicatePreviewState {
         Self {
             cached_data,
             scroll: 0,
-            buttons: ButtonRowState::new(),
-            focus_pane: FocusPane::List,
-            click_targets: ListClickTargets::new(),
+            frame: FrameState::new(),
         }
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(
+    pub(crate) fn handle_click(
         &mut self,
         x: u16,
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<SubparDuplicatePreviewAction> {
-        if let Some(id) = self.click_targets.hit_test(x, y) {
+        if let Some(id) = self.frame.click_targets.hit_test(x, y) {
             if let Ok(idx) = id.parse::<usize>() {
                 if idx < self.cached_data.files.len() {
-                    self.focus_pane = FocusPane::List;
+                    self.frame.focus_pane = FocusPane::List;
                     self.scroll = idx;
                 }
             }
@@ -92,235 +87,20 @@ impl SubparDuplicatePreviewState {
 
     /// Handle input action.
     pub fn handle_input(&mut self, action: &InputAction) -> SubparDuplicatePreviewAction {
-        // FocusUp/FocusDown: move focus between panes
-        match action {
-            InputAction::FocusUp => {
-                self.focus_pane = self.focus_pane.prev();
-                return SubparDuplicatePreviewAction::None;
-            }
-            InputAction::FocusDown => {
-                self.focus_pane = self.focus_pane.next();
-                return SubparDuplicatePreviewAction::None;
-            }
-            _ => {}
-        }
-
-        match action {
-            // Scroll file list (only when list focused)
-            InputAction::NavUp if self.focus_pane == FocusPane::List => {
-                self.scroll = self.scroll.saturating_sub(1);
+        match self.handle_frame_input(action) {
+            FrameInputResult::Action(a) => a,
+            FrameInputResult::Consumed | FrameInputResult::Unhandled => {
                 SubparDuplicatePreviewAction::None
             }
-            InputAction::NavDown if self.focus_pane == FocusPane::List => {
-                let max = self.cached_data.files.len().saturating_sub(1);
-                if self.scroll < max {
-                    self.scroll += 1;
-                }
-                SubparDuplicatePreviewAction::None
-            }
-            InputAction::PageUp => {
-                self.scroll = self.scroll.saturating_sub(10);
-                SubparDuplicatePreviewAction::None
-            }
-            InputAction::PageDown => {
-                let max = self.cached_data.files.len().saturating_sub(1);
-                self.scroll = (self.scroll + 10).min(max);
-                SubparDuplicatePreviewAction::None
-            }
-
-            // Button navigation (when buttons focused)
-            InputAction::NavLeft if self.focus_pane == FocusPane::Buttons => {
-                self.buttons.nav_left(&self.cached_data);
-                SubparDuplicatePreviewAction::None
-            }
-            InputAction::NavRight if self.focus_pane == FocusPane::Buttons => {
-                self.buttons.nav_right(&self.cached_data);
-                SubparDuplicatePreviewAction::None
-            }
-
-            // Execute selected button (only when buttons focused)
-            InputAction::Confirm if self.focus_pane == FocusPane::Buttons => {
-                self.buttons.confirm(&self.cached_data)
-                    .unwrap_or(SubparDuplicatePreviewAction::None)
-            }
-
-            // Cancel
-            InputAction::Cancel => SubparDuplicatePreviewAction::Cancel,
-
-            _ => SubparDuplicatePreviewAction::None,
         }
     }
 
     /// Render the subpar duplicate resolution modal.
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        // Clear background
-        f.render_widget(Clear, area);
-
-        // Layout: title + content + controls
-        let main_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(10),   // Content
-                Constraint::Length(3), // Controls
-            ])
-            .split(area);
-
-        self.render_title(f, main_chunks[0]);
-        self.render_content(f, main_chunks[1]);
-        self.render_controls(f, main_chunks[2]);
-    }
-
-    fn render_title(&self, f: &mut Frame, area: Rect) {
-        let total = self.cached_data.total_count();
-
-        let title = Paragraph::new(Line::from(vec![
-            Span::styled(
-                " Subpar Duplicate Resolution ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" ({} files)", total),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]))
-        .block(Block::default().borders(Borders::ALL));
-
-        f.render_widget(title, area);
-    }
-
-    fn render_content(&mut self, f: &mut Frame, area: Rect) {
-        let count = self.cached_data.files.len();
-        let list_focused = self.focus_pane == FocusPane::List;
-
-        // Pre-compute detail lines to determine dynamic height.
-        // Use area width minus 2 (borders) as the inner width for wrapping.
-        let detail_inner_width = area.width.saturating_sub(2);
-        let detail_lines = self.build_detail_lines(detail_inner_width);
-        let detail_height = (detail_lines.len() as u16) + 2; // +2 for borders
-
-        // Split into list pane (top) and detail pane (bottom, dynamic)
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(6),                // List pane (top)
-                Constraint::Length(detail_height), // Detail pane (bottom, dynamic)
-            ])
-            .split(area);
-
-        // Render list pane (top)
-        let block = Block::default()
-            .title(format!(" Subpar Files ({}) ", count))
-            .title_style(Style::default().fg(if count > 0 {
-                Color::Cyan
-            } else {
-                Color::DarkGray
-            }))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(if list_focused {
-                Color::Cyan
-            } else {
-                Color::DarkGray
-            }));
-
-        let inner = render_pane(f, chunks[0], block);
-
-        self.click_targets.populate(inner, self.scroll, self.cached_data.files.len());
-
-        if !self.cached_data.files.is_empty() {
-            let visible_lines = inner.height as usize;
-            let scroll = self.scroll;
-
-            // Four columns: 40% subpar path | 10% reason | 8% score | 42% superior path
-            let total_width = inner.width as usize;
-            let left_width = (total_width * 40) / 100;
-            let mid_width = (total_width * 10) / 100;
-            let score_width = (total_width * 8) / 100;
-            let right_width = total_width.saturating_sub(left_width + mid_width + score_width);
-
-            let items: Vec<ListItem> = self
-                .cached_data
-                .files
-                .iter()
-                .skip(scroll)
-                .take(visible_lines)
-                .enumerate()
-                .map(|(visible_idx, file)| {
-                    // First visible item (visible_idx 0) is the selected one
-                    let is_selected = visible_idx == 0;
-                    let style = if is_selected && list_focused {
-                        CURSOR_STYLE
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    let reason_style = if is_selected && list_focused {
-                        CURSOR_STYLE
-                    } else {
-                        Style::default().fg(Color::Yellow)
-                    };
-
-                    let subpar_path =
-                        truncate_left(&file.corpus_path, left_width.saturating_sub(1));
-                    let superior_path =
-                        truncate_left(&file.superior_path, right_width.saturating_sub(1));
-                    let score_str = format!("{:.1}%", file.similarity_score);
-
-                    let score_style = if is_selected && list_focused {
-                        CURSOR_STYLE
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    };
-
-                    let line = Line::from(vec![
-                        Span::styled(
-                            format!("{:<width$}", subpar_path, width = left_width),
-                            style,
-                        ),
-                        Span::styled(
-                            format!("{:^width$}", file.reason, width = mid_width),
-                            reason_style,
-                        ),
-                        Span::styled(
-                            format!("{:>width$}", score_str, width = score_width),
-                            score_style,
-                        ),
-                        Span::styled(
-                            format!(
-                                " {:<width$}",
-                                superior_path,
-                                width = right_width.saturating_sub(1)
-                            ),
-                            style,
-                        ),
-                    ]);
-                    ListItem::new(line)
-                })
-                .collect();
-
-            let list = List::new(items);
-            f.render_widget(list, inner);
-        } else {
-            let empty = Paragraph::new("No subpar duplicates found")
-                .style(Style::default().fg(Color::DarkGray));
-            f.render_widget(empty, inner);
-        }
-
-        // Render detail pane (bottom, dynamically sized)
-        let detail_block = Block::default()
-            .title(" Selected Pair ")
-            .title_style(Style::default().fg(Color::DarkGray))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
-
-        let detail_inner = render_pane(f, chunks[1], detail_block);
-        let para = Paragraph::new(detail_lines);
-        f.render_widget(para, detail_inner);
+        self.render_frame(f, area);
     }
 
     /// Build the detail lines for the currently selected pair.
-    /// Returns owned lines so they can be used both for height measurement and rendering.
     fn build_detail_lines(&self, width: u16) -> Vec<Line<'static>> {
         match self.cached_data.files.get(self.scroll) {
             Some(file) => {
@@ -352,32 +132,123 @@ impl SubparDuplicatePreviewState {
             ))],
         }
     }
+}
 
-    fn render_controls(&mut self, f: &mut Frame, area: Rect) {
-        let buttons_focused = self.focus_pane == FocusPane::Buttons;
+impl ModalFrame for SubparDuplicatePreviewState {
+    type Button = SubparButton;
 
-        let block = Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(if buttons_focused {
-                Color::Cyan
-            } else {
-                Color::DarkGray
-            }));
-        let inner = block.inner(area);
-        f.render_widget(block, area);
+    fn frame_title(&self) -> Line<'static> {
+        let total = self.cached_data.total_count();
+        Line::from(vec![
+            Span::styled(
+                " Subpar Duplicate Resolution ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" ({} files)", total),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    }
 
-        let inner_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
-            .split(inner);
+    fn content_layout(&self) -> ContentLayout {
+        // Compute dynamic detail height from path lengths
+        let detail_inner_width = 80u16; // approximate; actual width comes from render area
+        let detail_lines = self.build_detail_lines(detail_inner_width);
+        let detail_height = (detail_lines.len() as u16) + 2; // +2 for borders
+        ContentLayout::ListAboveDetail { detail_height }
+    }
 
-        self.buttons.render(f, inner_chunks[0], &self.cached_data, buttons_focused);
+    fn list_title(&self) -> String {
+        format!(" Subpar Files ({}) ", self.cached_data.files.len())
+    }
 
-        let hint = Paragraph::new(Line::from(Span::styled(
-            "Shift+\u{2191}\u{2193} focus  \u{2190}\u{2192} select  Enter confirm",
-            Style::default().fg(Color::DarkGray),
-        )))
-        .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(hint, inner_chunks[1]);
+    fn empty_message(&self) -> &'static str {
+        "No subpar duplicates found"
+    }
+
+    fn frame_state(&self) -> &FrameState<SubparButton> { &self.frame }
+    fn frame_state_mut(&mut self) -> &mut FrameState<SubparButton> { &mut self.frame }
+    fn cursor(&self) -> usize { self.scroll }
+    fn cursor_mut(&mut self) -> &mut usize { &mut self.scroll }
+    fn list_len(&self) -> usize { self.cached_data.files.len() }
+    fn button_ctx(&self) -> SubparDuplicateModalData { self.cached_data.clone() }
+    fn escape_action(&self) -> SubparDuplicatePreviewAction { SubparDuplicatePreviewAction::Cancel }
+
+    fn render_list_item(
+        &self,
+        idx: usize,
+        width: u16,
+        is_cursor: bool,
+        is_focused: bool,
+    ) -> ListItem<'static> {
+        let file = &self.cached_data.files[idx];
+
+        let total_width = width as usize;
+        let left_width = (total_width * 40) / 100;
+        let mid_width = (total_width * 10) / 100;
+        let score_width = (total_width * 8) / 100;
+        let right_width = total_width.saturating_sub(left_width + mid_width + score_width);
+
+        let style = if is_cursor && is_focused {
+            CURSOR_STYLE
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let reason_style = if is_cursor && is_focused {
+            CURSOR_STYLE
+        } else {
+            Style::default().fg(Color::Yellow)
+        };
+        let score_style = if is_cursor && is_focused {
+            CURSOR_STYLE
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let subpar_path = truncate_left(&file.corpus_path, left_width.saturating_sub(1));
+        let superior_path = truncate_left(&file.superior_path, right_width.saturating_sub(1));
+        let score_str = format!("{:.1}%", file.similarity_score);
+
+        let line = Line::from(vec![
+            Span::styled(
+                format!("{:<width$}", subpar_path, width = left_width),
+                style,
+            ),
+            Span::styled(
+                format!("{:^width$}", file.reason, width = mid_width),
+                reason_style,
+            ),
+            Span::styled(
+                format!("{:>width$}", score_str, width = score_width),
+                score_style,
+            ),
+            Span::styled(
+                format!(
+                    " {:<width$}",
+                    superior_path,
+                    width = right_width.saturating_sub(1)
+                ),
+                style,
+            ),
+        ]);
+        ListItem::new(line)
+    }
+
+    fn render_detail(&self, f: &mut Frame, area: Rect) {
+        let detail_inner_width = area.width.saturating_sub(2);
+        let detail_lines = self.build_detail_lines(detail_inner_width);
+
+        let detail_block = Block::default()
+            .title(" Selected Pair ")
+            .title_style(Style::default().fg(Color::DarkGray))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let detail_inner = render_pane(f, area, detail_block);
+        let para = Paragraph::new(detail_lines);
+        f.render_widget(para, detail_inner);
     }
 }

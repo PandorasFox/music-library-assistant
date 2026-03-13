@@ -147,7 +147,7 @@ impl App {
     ) -> Self {
         let cached_status = witch.witch_status();
         let config = witch.config();
-        let resolver = PathResolver::new(&config);
+        let resolver = PathResolver::from_config(&config);
         Self {
             should_quit: false,
             status_message: None,
@@ -672,7 +672,7 @@ fn run_app<B: ratatui::backend::Backend>(
                 app.witch.invalidate_config_cache();
                 // Rebuild path resolver with new root
                 let new_config = app.witch.config();
-                app.resolver = PathResolver::new(&new_config);
+                app.resolver = PathResolver::from_config(&new_config);
             }
         }
 

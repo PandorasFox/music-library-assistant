@@ -13,10 +13,18 @@
 //! This self-classifying path scheme means no external routing is needed —
 //! the path's first component IS the type tag.
 
-use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use crate::config::{self, Config};
+use crate::config;
+
+// Re-export PathResolver and free functions from mm-meta
+pub use mm_meta::paths::{
+    is_corpus_path, is_library_path, is_stash_path, read_mtime, PathResolver,
+};
+
+// ============================================================================
+// mm-specific globals (not in mm-meta)
+// ============================================================================
 
 /// Global PathResolver for use throughout the codebase.
 /// Initialized lazily on first use from config.
@@ -51,85 +59,8 @@ pub fn get_expected_device_id() -> Option<u64> {
 pub fn get_resolver() -> &'static PathResolver {
     GLOBAL_RESOLVER.get_or_init(|| {
         let cfg = config::load_config().expect("Failed to load config for path resolution");
-        PathResolver::new(&cfg)
+        PathResolver::from_config(&cfg)
     })
-}
-
-/// Resolves paths between absolute filesystem paths and root-relative database paths.
-///
-/// Created from Config at startup, stored in Witch for access throughout the app.
-/// With the single-root model, there's one root and two operations:
-/// - `to_relative`: strip root prefix (absolute → root-relative)
-/// - `resolve`: join to root (root-relative → absolute)
-#[derive(Debug, Clone)]
-pub struct PathResolver {
-    root: PathBuf,
-}
-
-impl PathResolver {
-    /// Create a new PathResolver from configuration.
-    pub fn new(config: &Config) -> Self {
-        Self {
-            root: config.root.clone(),
-        }
-    }
-
-    /// Convert an absolute filesystem path to a root-relative path for database storage.
-    ///
-    /// Returns None if the path doesn't start with the archive root.
-    pub fn to_relative(&self, abs: &Path) -> Option<PathBuf> {
-        abs.strip_prefix(&self.root).ok().map(PathBuf::from)
-    }
-
-    /// Resolve a root-relative path to an absolute filesystem path.
-    pub fn resolve(&self, rel: &Path) -> PathBuf {
-        self.root.join(rel)
-    }
-
-    /// Get the archive root path.
-    #[cfg(test)]
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    /// Get the corpus directory path.
-    pub fn corpus_dir(&self) -> PathBuf {
-        self.root.join("corpus")
-    }
-
-    /// Get the libraries directory path.
-    pub fn libraries_dir(&self) -> PathBuf {
-        self.root.join("libraries")
-    }
-
-    /// Get the stash directory path.
-    #[cfg(test)]
-    pub fn stash_dir(&self) -> PathBuf {
-        self.root.join("stash")
-    }
-
-    /// Get the inbox directory path.
-    pub fn inbox_dir(&self) -> PathBuf {
-        self.root.join("inbox")
-    }
-}
-
-// =============================================================================
-// Filesystem Metadata Helpers
-// =============================================================================
-
-/// Extract modification time from metadata as (seconds, nanoseconds) tuple.
-///
-/// Returns (0, 0) if mtime extraction fails. Uses the portable `modified()` API
-/// for consistency across all callsites (indexing, observation, tag writes).
-pub fn read_mtime(metadata: &std::fs::Metadata) -> (i64, i64) {
-    use std::time::UNIX_EPOCH;
-    metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
-        .unwrap_or((0, 0))
 }
 
 /// Convert an absolute path to a root-relative path, returning an error if
@@ -147,29 +78,11 @@ pub fn resolve_relative(path: &std::path::Path) -> anyhow::Result<std::path::Pat
     })
 }
 
-// =============================================================================
-// Path Classification (free functions — no resolver needed)
-// =============================================================================
-
-/// Check if a root-relative path is a corpus path.
-pub fn is_corpus_path(rel: &Path) -> bool {
-    rel.starts_with("corpus")
-}
-
-/// Check if a root-relative path is a library path.
-pub fn is_library_path(rel: &Path) -> bool {
-    rel.starts_with("libraries")
-}
-
-/// Check if a root-relative path is a stash path.
-#[cfg(test)]
-pub fn is_stash_path(rel: &Path) -> bool {
-    rel.starts_with("stash")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use std::path::{Path, PathBuf};
 
     fn test_config() -> Config {
         Config {
@@ -182,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_to_relative() {
-        let resolver = PathResolver::new(&test_config());
+        let resolver = PathResolver::from_config(&test_config());
 
         let abs = Path::new("/archive/corpus/Artist/Album/track.mp3");
         let rel = resolver.to_relative(abs).unwrap();
@@ -191,7 +104,7 @@ mod tests {
 
     #[test]
     fn test_to_relative_mismatch() {
-        let resolver = PathResolver::new(&test_config());
+        let resolver = PathResolver::from_config(&test_config());
 
         let abs = Path::new("/other/path/track.mp3");
         assert!(resolver.to_relative(abs).is_none());
@@ -199,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_resolve() {
-        let resolver = PathResolver::new(&test_config());
+        let resolver = PathResolver::from_config(&test_config());
 
         let rel = Path::new("corpus/Artist/Album/track.mp3");
         let abs = resolver.resolve(rel);
@@ -208,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_resolve_library() {
-        let resolver = PathResolver::new(&test_config());
+        let resolver = PathResolver::from_config(&test_config());
 
         let rel = Path::new("libraries/music/Artist/Album/track.mp3");
         let abs = resolver.resolve(rel);
@@ -220,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip() {
-        let resolver = PathResolver::new(&test_config());
+        let resolver = PathResolver::from_config(&test_config());
 
         let original = PathBuf::from("/archive/corpus/Artist/Album/track.flac");
         let rel = resolver.to_relative(&original).unwrap();
@@ -243,7 +156,7 @@ mod tests {
 
     #[test]
     fn test_derived_dirs() {
-        let resolver = PathResolver::new(&test_config());
+        let resolver = PathResolver::from_config(&test_config());
 
         assert_eq!(resolver.root(), Path::new("/archive"));
         assert_eq!(resolver.corpus_dir(), PathBuf::from("/archive/corpus"));

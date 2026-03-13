@@ -23,12 +23,12 @@ pub use edit::write_config_to_disk;
 pub use path_schema::parse_path_schema;
 pub use performance::{get_db_cache_kb, get_worker_thread_count, init_performance_config, set_db_cache_kb};
 pub use types::{
-    read_shared_config, AlbumArtOpinions, CanonicalizationOpinions, Config,
+    read_shared_config, validate_config, AlbumArtOpinions, CanonicalizationOpinions, Config,
     CreditRoutingConfig, DiscExtractionOpinions, DuplicateAnalysisOpinions,
     ExternalMatchingConfig, HealthDetectionOpinions, InboxOrganizeGranularity,
     InboxOrganizeOpinions, Opinions, PackingWeights, PerformanceOpinions,
-    QualityResolutionOpinions, ReleasePackingOpinions, SharedConfig,
-    SidecarDeployMode, SourceDir, StartupOpinions, StartupView, TagSplittingOpinions,
+    QualityResolutionOpinions, ReleasePackingOpinions, SharedConfig, SidecarDeployMode,
+    SourceDir, StartupOpinions, StartupView, TagSplittingOpinions,
 };
 
 use parse::parse_kdl_config;

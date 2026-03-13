@@ -1,43 +1,20 @@
 //! Authentication primitives: password hashing, session tokens.
 //!
 //! Transport-independent — no DB, no threads. Pure functions for auth ops.
+//! SessionToken is defined in mm-meta; password hashing stays here.
 
 use anyhow::Result;
 use std::time::Duration;
 
-// ============================================================================
-// Session Token
-// ============================================================================
-
-/// Opaque session token (32 random bytes). Client stores this.
-/// Becomes the backing data for the protocol's SessionId.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct SessionToken(Vec<u8>);
-
-impl SessionToken {
-    /// The raw token bytes.
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    /// Create a SessionToken from raw bytes.
-    pub fn from_bytes(bytes: Vec<u8>) -> Self {
-        Self(bytes)
-    }
-}
-
-impl std::fmt::Debug for SessionToken {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("SessionToken(***)")
-    }
-}
+// Re-export SessionToken from mm-meta
+pub use mm_meta::auth::SessionToken;
 
 /// Generate a cryptographically random 32-byte session token.
 pub fn generate_session_token() -> SessionToken {
     use rand::RngCore;
     let mut bytes = vec![0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
-    SessionToken(bytes)
+    SessionToken::from_bytes(bytes)
 }
 
 /// SHA-256 hash of a session token for use as a lookup key.
@@ -45,12 +22,8 @@ pub fn generate_session_token() -> SessionToken {
 /// We store hashed tokens in the session map so that a memory dump
 /// doesn't reveal usable session tokens.
 pub fn hash_token(token: &SessionToken) -> [u8; 32] {
-    // Simple hash for in-memory lookup — not cryptographic strength needed
-    // since these are ephemeral in-memory keys, not persisted.
-    // Use a deterministic hash of all 32 bytes.
     let mut result = [0u8; 32];
-    // XOR-fold through the token bytes with position mixing
-    for (i, &byte) in token.0.iter().enumerate() {
+    for (i, &byte) in token.as_bytes().iter().enumerate() {
         result[i % 32] ^= byte;
         result[(i + 7) % 32] = result[(i + 7) % 32].wrapping_add(byte);
         result[(i + 13) % 32] = result[(i + 13) % 32].wrapping_mul(byte.wrapping_add(1));
@@ -123,9 +96,7 @@ mod tests {
         let password = "same-password";
         let hash1 = hash_password(password).unwrap();
         let hash2 = hash_password(password).unwrap();
-        // Different salts → different hashes
         assert_ne!(hash1, hash2);
-        // But both verify
         assert!(verify_password(password, &hash1).unwrap());
         assert!(verify_password(password, &hash2).unwrap());
     }
@@ -144,11 +115,11 @@ mod tests {
         let token = generate_session_token();
         let h1 = hash_token(&token);
         let h2 = hash_token(&token);
-        assert_eq!(h1, h2); // Deterministic
+        assert_eq!(h1, h2);
 
         let other = generate_session_token();
         let h3 = hash_token(&other);
-        assert_ne!(h1, h3); // Different tokens → different hashes
+        assert_ne!(h1, h3);
     }
 
     #[test]

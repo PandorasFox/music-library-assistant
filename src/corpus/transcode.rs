@@ -5,50 +5,15 @@
 
 use anyhow::{Context, Result};
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::witch::MutationExecutionWitness;
 
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::audio::Signal;
 
-/// Target format for transcoding operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum TranscodeTarget {
-    /// Opus in OGG container at specified bitrate (VBR).
-    Opus { bitrate_kbps: u32 },
-    /// FLAC (lossless).
-    Flac,
-    /// Losslessly capture a lossy source's waveform into FLAC.
-    FlacLossyCapture,
-}
-
-impl TranscodeTarget {
-    /// File extension for the target format (container type).
-    pub fn extension(&self) -> &'static str {
-        match self {
-            TranscodeTarget::Opus { .. } => "opus",
-            TranscodeTarget::Flac | TranscodeTarget::FlacLossyCapture => "flac",
-        }
-    }
-
-    /// Compute the destination path for a transcode of the given source.
-    ///
-    /// - `Opus`/`Flac`: replace extension (e.g. `song.wav` -> `song.flac`)
-    /// - `FlacLossyCapture`: append `.LOSSY.flac` (e.g. `song.mp3` -> `song.mp3.LOSSY.flac`)
-    pub fn dest_path(&self, source: &Path) -> PathBuf {
-        match self {
-            TranscodeTarget::Opus { .. } | TranscodeTarget::Flac => {
-                source.with_extension(self.extension())
-            }
-            TranscodeTarget::FlacLossyCapture => {
-                let orig_ext = source.extension().and_then(|e| e.to_str()).unwrap_or("");
-                let new_ext = format!("{}.LOSSY.flac", orig_ext);
-                source.with_extension(new_ext)
-            }
-        }
-    }
-}
+// TranscodeTarget is defined in mm-meta; re-exported here for compatibility.
+pub use mm_meta::transcode::TranscodeTarget;
 
 /// Transcode a source audio file to the target format using native decode/encode.
 ///

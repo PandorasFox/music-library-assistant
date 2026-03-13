@@ -17,108 +17,17 @@
 //! - `mutations.log` - Mutation execution lifecycle, transaction details
 //! - `errors.log` - All errors and warnings (also mirrored to general.log)
 
+// Re-export public logging API from mm-meta
+pub use mm_meta::logging::{
+    init_log_channel, log_error, log_general, log_mutation, request_shutdown, LogCategory, LogOp,
+};
+
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{mpsc, OnceLock};
+use std::sync::mpsc::Receiver;
 use std::thread::JoinHandle;
 
 use mm_utils::paths::get_logs_dir;
-
-// ============================================================================
-// Types
-// ============================================================================
-
-/// Log category determines which file a message routes to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogCategory {
-    /// Mutation execution START/END, transaction lifecycle.
-    /// Routes to: mutations.log
-    Mutation,
-
-    /// All errors, warnings, failures.
-    /// Routes to: errors.log (also mirrored to general.log)
-    Error,
-
-    /// Everything else: state transitions, compute progress, UI actions, startup.
-    /// Routes to: general.log
-    General,
-}
-
-/// A structured log entry sent through the channel.
-pub(crate) struct LogEntry {
-    category: LogCategory,
-    message: String,
-    timestamp: chrono::DateTime<chrono::Local>,
-}
-
-/// Channel message type with shutdown sentinel.
-pub(crate) enum LogOp {
-    Entry(LogEntry),
-    Shutdown,
-}
-
-// ============================================================================
-// Global Channel
-// ============================================================================
-
-static LOG_SENDER: OnceLock<Sender<LogOp>> = OnceLock::new();
-
-/// Initialize the global log channel. Called once from main(), before anything else.
-///
-/// Returns the receiver end, which will be given to the Witch to spawn the logging thread.
-/// Messages sent before the logging thread starts queue in the unbounded channel buffer.
-pub fn init_log_channel() -> Receiver<LogOp> {
-    let (tx, rx) = mpsc::channel();
-    let _ = LOG_SENDER.set(tx);
-    rx
-}
-
-// ============================================================================
-// Public Logging API
-// ============================================================================
-
-/// Send a log entry with the given category.
-fn log(category: LogCategory, message: impl Into<String>) {
-    if let Some(sender) = LOG_SENDER.get() {
-        let _ = sender.send(LogOp::Entry(LogEntry {
-            category,
-            message: message.into(),
-            timestamp: chrono::Local::now(),
-        }));
-    }
-    // If channel isn't initialized (shouldn't happen — init is first step in main),
-    // the message is silently dropped.
-}
-
-/// Log to general.log — startup, state transitions, compute, UI, db_thread.
-pub fn log_general(message: impl Into<String>) {
-    log(LogCategory::General, message);
-}
-
-/// Log to mutations.log — execution START/END, transaction lifecycle.
-pub fn log_mutation(message: impl Into<String>) {
-    log(LogCategory::Mutation, message);
-}
-
-/// Log to errors.log (and mirrored to general.log) — all errors and warnings.
-pub fn log_error(message: impl Into<String>) {
-    log(LogCategory::Error, message);
-}
-
-// ============================================================================
-// Shutdown
-// ============================================================================
-
-/// Signal the logging thread to flush and exit.
-///
-/// Called by `Witch::drop()`. After this, further log() calls will still send
-/// but the thread will have exited so messages queue until process exit.
-pub fn request_shutdown() {
-    if let Some(sender) = LOG_SENDER.get() {
-        let _ = sender.send(LogOp::Shutdown);
-    }
-}
 
 // ============================================================================
 // Logging Thread

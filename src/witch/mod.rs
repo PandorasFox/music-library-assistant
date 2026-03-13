@@ -678,7 +678,7 @@ impl Witch {
                                     CommandResponse::Ok
                                 }
                                 CommandPayload::ValidateConfig { config } => {
-                                    config.validate().map_err(|e| {
+                                    crate::config::validate_config(&config).map_err(|e| {
                                         ProtocolError::Internal(format!("{:#}", e))
                                     })?;
                                     CommandResponse::Ok

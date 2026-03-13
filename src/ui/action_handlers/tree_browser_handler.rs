@@ -193,12 +193,11 @@ impl App {
         if !open_txn {
             let _ = self.witch.start_transaction(&label);
         }
+        let decision = gesture.decide(&label, vec![mutation]);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             key,
-            &label,
-            vec![mutation],
-            gesture,
+            decision,
         );
 
         // Close panel and stay in browser for batch editing

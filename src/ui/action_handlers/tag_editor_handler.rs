@@ -131,12 +131,11 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
             } => {
                 let Some(g) = witness else { return };
                 // Stage collected mutations at parent's decision key
+                let decision = g.decide(&decision_label, mutations);
                 let _ = super::super::operator_decisions::stage_decision(
                     &mut app.witch,
                     decision_key,
-                    &decision_label,
-                    mutations,
-                    g,
+                    decision,
                 );
                 // Return to parent health modal
                 if !app.pop_and_restore() {

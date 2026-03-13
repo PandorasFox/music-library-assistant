@@ -108,14 +108,13 @@ impl App {
 
         // Stage the decision
         let label = format!("Stash {}", corpus_path);
+        let decision = gesture.decide(&label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             DecisionKey::ManualReview {
                 group_index: group_idx,
             },
-            &label,
-            mutations,
-            gesture,
+            decision,
         );
 
         // Mark file as stashed in the UI state
@@ -152,14 +151,13 @@ impl App {
         );
 
         let label = format!("Mark expected duplicate: {}", group_label);
+        let decision = gesture.decide(&label, vec![mutation]);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             DecisionKey::ManualReview {
                 group_index: group_idx,
             },
-            &label,
-            vec![mutation],
-            gesture,
+            decision,
         );
 
         // Advance to next group or show review if at the end

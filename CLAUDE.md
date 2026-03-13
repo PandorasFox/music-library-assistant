@@ -154,22 +154,23 @@ Never use `s.len()` for display width or `&s[..n]` for truncation on user-facing
 
 Decision authority uses two concrete types:
 
-- **`ConfirmationGesture`** (`ui/action_handlers/witness.rs`) — zero-sized proof of operator confirmation (Enter keypress). Constructor is `pub(in crate::ui::action_handlers)`, so only action handler code can mint gestures.
-- **`WitnessedDecision`** (`meta/decisions/mod.rs`) — carries mutations + a private `_gesture` field, ensuring decisions can only be constructed by code possessing a gesture.
+- **`ConfirmationGesture`** (`ui/action_handlers/witness.rs`) — zero-sized proof of operator confirmation (Enter keypress). Constructor is `pub(in crate::ui::action_handlers)`, so only action handler code can mint gestures. The gesture is exchanged for a `Decision` via `gesture.decide(label, mutations)`.
+- **`Decision`** (`meta/decisions/mod.rs`) — serializable struct (`label` + `mutations`) that crosses the protocol boundary. Created by exchanging a `ConfirmationGesture` in TUI code. The server never sees gesture tokens.
 
 **If you need to queue mutations from UI code:**
 
-1. Call a function from `ui/operator_decisions.rs`:
+1. Exchange a `ConfirmationGesture` for a `Decision` via `gesture.decide(label, mutations)`.
+2. Call a function from `ui/operator_decisions.rs`:
    - `operator_decisions::stage_decision()` - add decision to active transaction
    - `operator_decisions::commit_transaction()` - commit all staged decisions
    - `operator_decisions::discard_transaction()` - discard all staged decisions
    - `operator_decisions::remove_decision()` - remove a decision from the active transaction
 
-2. These functions are called ONLY from action handlers that receive a `&ConfirmationGesture`.
+3. These functions are called ONLY from action handlers that receive a `&ConfirmationGesture`.
 
 **DO NOT:**
 - Construct `ConfirmationGesture` outside of `ui/action_handlers/` (compile error)
-- Construct `WitnessedDecision` without a gesture reference (private field)
+- Construct `Decision` directly outside of `gesture.decide()` in client code
 - Add new functions to `operator_decisions.rs` without explicit human approval
 
 **Exception:** Database creation in `first_time_setup.rs` doesn't need a gesture - it's infrastructure setup, not a corpus mutation.

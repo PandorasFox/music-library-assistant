@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use super::decisions::{DecisionKey, TransactionError};
 use crate::auth::SessionToken;
-use crate::meta::decisions::{DiscardSummary, WitnessedDecision};
+use crate::meta::decisions::{Decision, DiscardSummary};
 use crate::witch::WitchStatus;
 
 // ============================================================================
@@ -165,18 +165,16 @@ impl ProtocolQuery for StatusQuery {
 /// Transaction lifecycle operations.
 ///
 /// Transactions are their own authenticated sub-area with typed responses.
-/// `AddDecision` carries non-serializable `WitnessedDecision` data — this
-/// is a known gap deferred to mutation serialization work.
+/// All variants are serializable — `Decision` is the protocol-level unit
+/// of operator intent (label + mutations).
 #[derive(Debug, Clone)]
 pub enum TransactionPayload {
     /// Open a new transaction.
     Start { label: String },
     /// Stage a decision in the active transaction.
-    /// NOTE: WitnessedDecision is not serializable. This variant is
-    /// enriched in-process only. Deferred to mutation serialization work.
     AddDecision {
         key: DecisionKey,
-        decision: WitnessedDecision,
+        decision: Decision,
     },
     /// Remove a staged decision.
     RemoveDecision { key: DecisionKey },

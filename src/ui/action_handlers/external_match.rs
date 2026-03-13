@@ -378,12 +378,11 @@ impl App {
                 source_path: source_path.clone(),
             };
             let dir_label = format!("Pin release: {}", source_path.display());
+            let decision = gesture.decide(&dir_label, vec![mutation]);
             let _ = crate::ui::operator_decisions::stage_decision(
                 &mut self.witch,
                 key,
-                &dir_label,
-                vec![mutation],
-                gesture,
+                decision,
             );
         }
 
@@ -526,15 +525,14 @@ impl App {
                 "Approve MB release: {}",
                 &rd.release_id[..8.min(rd.release_id.len())]
             );
+            let decision = gesture.decide(&label, vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                ops,
+                zone: crate::db::types::Zone::Corpus,
+            })]);
             let _ = crate::ui::operator_decisions::stage_decision(
                 &mut self.witch,
                 key,
-                &label,
-                vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
-                    ops,
-                    zone: crate::db::types::Zone::Corpus,
-                })],
-                gesture,
+                decision,
             );
             approved += 1;
         }

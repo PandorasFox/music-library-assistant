@@ -25,11 +25,9 @@
 //! 2. TransactionReview modal shows staged decisions
 //! 3. User confirms via `commit_transaction()` or discards via `discard_transaction()`
 
-use crate::meta::decisions::{
-    ConfirmationGesture, DecisionKey, DiscardSummary, WitnessedDecision,
-};
-use crate::meta::mutations::Mutation;
+use crate::meta::decisions::{Decision, DecisionKey, DiscardSummary};
 use crate::meta::protocol::ProtocolError;
+use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::witch::WitchHandle;
 
 // =============================================================================
@@ -39,15 +37,12 @@ use crate::witch::WitchHandle;
 /// Stage a decision to the active transaction.
 ///
 /// Called from Enter keypress when user confirms a single item (tag save, etc.).
-/// The decision is added to the transaction but not yet committed.
+/// The gesture is exchanged for a Decision; the decision crosses the protocol boundary.
 pub fn stage_decision(
     witch: &mut WitchHandle,
     key: DecisionKey,
-    label: &str,
-    mutations: Vec<Mutation>,
-    gesture: &ConfirmationGesture,
+    decision: Decision,
 ) -> Result<(), ProtocolError> {
-    let decision = WitnessedDecision::new(label, mutations, gesture);
     witch.add_decision(key, decision)
 }
 

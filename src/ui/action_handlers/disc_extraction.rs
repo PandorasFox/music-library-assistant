@@ -62,14 +62,13 @@ impl HandleAction for crate::ui::disc_extraction_modal::DiscExtractionAction {
                                 ops,
                                 zone: Zone::Corpus,
                             });
+                            let decision = g.decide("Extract disc value", vec![mutation]);
                             let _ = super::super::operator_decisions::stage_decision(
                                 &mut app.witch,
                                 DecisionKey::DiscExtraction {
                                     group_index: group_idx,
                                 },
-                                "Extract disc value",
-                                vec![mutation],
-                                g,
+                                decision,
                             );
                         }
                     }

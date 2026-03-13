@@ -6,8 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::db::types::Zone;
 use crate::meta::decisions::{
-    DecisionKey, DiscardSummary, PendingTransaction, TransactionError,
-    WitnessedDecision,
+    Decision, DecisionKey, DiscardSummary, PendingTransaction, TransactionError,
 };
 use crate::meta::mutations::dir_config_edit::{
     ApplyBatchDirConfigEditsMutation, DirConfigEditEntry,
@@ -189,17 +188,17 @@ impl super::Witch {
         Ok(())
     }
 
-    /// Add a witnessed decision to the transaction.
+    /// Add a decision to the transaction.
     ///
     /// - `key`: Semantic key identifying the decision source and item
-    /// - `decision`: A `WitnessedDecision` (already carries gesture proof)
+    /// - `decision`: A `Decision` (label + mutations, serializable)
     ///
     /// Overwrites any existing decision at the same key.
     /// Returns Err if no transaction is active.
     pub fn add_decision(
         &mut self,
         key: DecisionKey,
-        decision: WitnessedDecision,
+        decision: Decision,
     ) -> Result<(), TransactionError> {
         let mutation_count = decision.mutations.len();
 

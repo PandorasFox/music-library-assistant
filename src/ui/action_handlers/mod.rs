@@ -112,12 +112,11 @@ impl App {
         } else {
             "Tag edit".to_string()
         };
+        let decision = gesture.decide(&label, mutations.clone());
         let _ = super::operator_decisions::stage_decision(
             &mut self.witch,
             key,
-            &label,
-            mutations.clone(),
-            gesture,
+            decision,
         );
         if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
             editor.set_staged_mutations(mutations);
@@ -145,12 +144,11 @@ impl App {
         if !open_txn {
             let _ = self.witch.start_transaction(label);
         }
+        let decision = gesture.decide(label, mutations);
         let _ = super::operator_decisions::stage_decision(
             &mut self.witch,
             key,
-            label,
-            mutations,
-            gesture,
+            decision,
         );
     }
 
@@ -443,12 +441,11 @@ impl HandleAction for super::config_editor::ConfigEditorAction {
                     if !open_txn {
                         let _ = app.witch.start_transaction("Config update");
                     }
+                    let decision = g.decide("Apply config changes", vec![mutation]);
                     let _ = super::operator_decisions::stage_decision(
                         &mut app.witch,
                         DecisionKey::ConfigEdit,
-                        "Apply config changes",
-                        vec![mutation],
-                        g,
+                        decision,
                     );
 
                     app.after_staging_decisions();

@@ -65,12 +65,11 @@ impl HandleAction for crate::ui::startup::IntakeConfirmationAction {
                     if !open_txn {
                         let _ = app.witch.start_transaction("Intake indexing");
                     }
+                    let decision = g.decide("Index unindexed files", mutations);
                     let _ = operator_decisions::stage_decision(
                         &mut app.witch,
                         crate::meta::decisions::DecisionKey::IntakeIndex,
-                        "Index unindexed files",
-                        mutations,
-                        g,
+                        decision,
                     );
 
                     if open_txn {

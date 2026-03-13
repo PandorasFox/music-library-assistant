@@ -61,14 +61,13 @@ impl HandleAction for crate::ui::missing_album_modal::MissingAlbumAction {
                                 ops,
                                 zone: Zone::Corpus,
                             });
+                            let decision = g.decide(label, vec![mutation]);
                             let _ = super::super::operator_decisions::stage_decision(
                                 &mut app.witch,
                                 DecisionKey::MissingAlbum {
                                     group_index: group_idx,
                                 },
-                                label,
-                                vec![mutation],
-                                g,
+                                decision,
                             );
                         }
                     }
@@ -86,14 +85,13 @@ impl HandleAction for crate::ui::missing_album_modal::MissingAlbumAction {
                                 Mutation::EmitExpectedMissingTag(EmitExpectedMissingTagMutation {
                                     inodes,
                                 });
+                            let decision = g.decide("Suppress missing album", vec![mutation]);
                             let _ = super::super::operator_decisions::stage_decision(
                                 &mut app.witch,
                                 DecisionKey::MissingAlbum {
                                     group_index: group_idx,
                                 },
-                                "Suppress missing album",
-                                vec![mutation],
-                                g,
+                                decision,
                             );
                         }
                     }

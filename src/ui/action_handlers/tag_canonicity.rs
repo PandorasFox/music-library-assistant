@@ -245,15 +245,14 @@ impl App {
         let label = format!("Canonicalize {}", tag_name);
 
         // Add decision to existing transaction via sealed operator decision handler
+        let decision = gesture.decide(&label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             DecisionKey::TagCanonicity {
                 tag_name,
                 cluster_index: cluster_idx,
             },
-            &label,
-            mutations,
-            gesture,
+            decision,
         );
     }
 
@@ -294,15 +293,14 @@ impl App {
             _ => return,
         };
 
+        let decision = gesture.decide("Flag non-compilation", mutations);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             DecisionKey::TagCanonicity {
                 tag_name,
                 cluster_index: cluster_idx,
             },
-            "Flag non-compilation",
-            mutations,
-            gesture,
+            decision,
         );
     }
 
@@ -344,15 +342,14 @@ impl App {
             _ => return,
         };
 
+        let decision = gesture.decide("Flag canonical", mutations);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             DecisionKey::TagCanonicity {
                 tag_name,
                 cluster_index: cluster_idx,
             },
-            "Flag canonical",
-            mutations,
-            gesture,
+            decision,
         );
     }
 

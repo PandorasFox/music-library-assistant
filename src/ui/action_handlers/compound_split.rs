@@ -315,12 +315,11 @@ impl App {
             _ => return,
         };
 
+        let decision = gesture.decide(&description, mutations);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             key,
-            &description,
-            mutations,
-            gesture,
+            decision,
         );
     }
 
@@ -346,12 +345,11 @@ impl App {
             _ => return,
         };
 
+        let decision = gesture.decide(&description, mutations);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             key,
-            &description,
-            mutations,
-            gesture,
+            decision,
         );
     }
 

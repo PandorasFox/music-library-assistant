@@ -43,8 +43,9 @@ pub use types::{
     SpawnedMutation, Task, TaskLabel, TransactionSnapshot, WatcherState, WitchStartupState,
     WitchStatus, WorkState, WorkStateSnapshot, WorkStatus,
 };
-// Decision authority flows through ConfirmationGesture (ui/action_handlers/witness.rs)
-// and WitnessedDecision (meta/decisions/mod.rs). See operator_decisions.rs for call sites.
+// Decision authority: TUI gates decisions via ConfirmationGesture (ui/action_handlers/witness.rs),
+// producing Decision objects (meta/decisions/mod.rs) that cross the protocol boundary.
+// See operator_decisions.rs for call sites.
 
 // Internal imports
 use types::ContentAnalysisWitness;

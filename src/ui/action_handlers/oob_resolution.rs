@@ -185,12 +185,11 @@ impl App {
             ),
         };
 
+        let decision = gesture.decide(label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             DecisionKey::OobSync,
-            label,
-            mutations,
-            gesture,
+            decision,
         );
     }
 
@@ -292,12 +291,11 @@ impl App {
             ),
         };
 
+        let decision = gesture.decide(label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             DecisionKey::OobConflict,
-            label,
-            mutations,
-            gesture,
+            decision,
         );
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
@@ -348,12 +346,11 @@ impl App {
             AcknowledgeMtimeOnlyMutation { tracks },
         )];
 
+        let decision = gesture.decide("Acknowledge mtime changes", mutations);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             DecisionKey::MtimeAck,
-            "Acknowledge mtime changes",
-            mutations,
-            gesture,
+            decision,
         );
 
         // Note: view is NOT reset here - preserved for Cancel return via TransactionReview
@@ -416,12 +413,11 @@ impl App {
         };
 
         // Stage the UpdateFilePath mutations
+        let decision = gesture.decide(&label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             DecisionKey::MovedFile,
-            &label,
-            mutations,
-            gesture,
+            decision,
         );
     }
 }

@@ -399,12 +399,11 @@ impl App {
         if self.witch_status().transaction.is_none() {
             let _ = self.witch.start_transaction("Directory overlap resolution");
         }
+        let decision = gesture.decide(label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
             &mut self.witch,
             DecisionKey::DirectoryCluster { cluster_index },
-            label,
-            mutations,
-            gesture,
+            decision,
         );
     }
 }

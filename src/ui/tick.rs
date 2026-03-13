@@ -248,12 +248,11 @@ impl App {
                 cluster_index: idx,
             }
         };
+        let decision = worker.gesture.decide(&description, mutations);
         let _ = super::operator_decisions::stage_decision(
             &mut self.witch,
             key,
-            &description,
-            mutations,
-            &worker.gesture,
+            decision,
         );
         worker.mutations_generated += 1;
     }

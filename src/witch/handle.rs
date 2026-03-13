@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use crate::auth::SessionToken;
 use crate::config::SharedConfig;
-use crate::meta::decisions::{DecisionKey, DiscardSummary, WitnessedDecision};
+use crate::meta::decisions::{Decision, DecisionKey, DiscardSummary};
 use crate::meta::protocol::{
     AuthResponse, AuthenticatedBody, AuthenticatedResponse, CommandPayload, CommandResponse,
     DecisionDetail, ProtocolError, ProtocolQuery, StatusQuery,
@@ -233,7 +233,7 @@ impl WitchHandle {
     pub fn add_decision(
         &mut self,
         key: DecisionKey,
-        decision: WitnessedDecision,
+        decision: Decision,
     ) -> Result<(), ProtocolError> {
         match self.send_transaction(TransactionPayload::AddDecision { key, decision }) {
             TransactionResponse::Ok => Ok(()),

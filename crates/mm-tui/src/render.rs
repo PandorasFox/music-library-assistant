@@ -136,7 +136,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::Progress { .. } => {
             // Never reached - handled separately in render_app() before this function
         }
-        ActiveView::ConfigEditor(ref state) => {
+        ActiveView::ConfigEditor(ref mut state) => {
             config_editor::render::render(f, area, state);
         }
         ActiveView::ProgressiveWork(ref worker) => {

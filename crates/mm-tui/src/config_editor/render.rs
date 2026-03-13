@@ -12,13 +12,13 @@ use ratatui::{
     Frame,
 };
 
-use super::state::{CollectionPosition, ConfigEditorState, EditorButton, EditorFocus};
+use super::state::{CollectionPosition, ConfigEditorState, EditorButtonCtx, EditorFocus};
 use super::types::{ConfigField, ConfigValue, FieldSource};
 use crate::widgets::control_colors;
 use crate::widgets::wizard_popup::WizardPopup;
 
 /// Render the config editor view into the given content area.
-pub fn render(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
+pub fn render(f: &mut Frame, area: Rect, state: &mut ConfigEditorState) {
     // Layout: field list (fills) + button row (1 line) + hints (1 line)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -459,38 +459,10 @@ fn render_collection_items<'a>(
 }
 
 /// Render the Save / Discard button row.
-fn render_buttons(f: &mut Frame, area: Rect, state: &ConfigEditorState) {
+fn render_buttons(f: &mut Frame, area: Rect, state: &mut ConfigEditorState) {
     let in_buttons = state.focus == EditorFocus::Buttons;
-
-    let save_style = if in_buttons && state.selected_button == EditorButton::Save {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Green)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Green)
-    };
-
-    let discard_style = if in_buttons && state.selected_button == EditorButton::Discard {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Gray)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-
-    let save_label = " [ Save ] ";
-
-    let line = Line::from(vec![
-        Span::raw("                                       "),
-        Span::styled(save_label, save_style),
-        Span::raw("   "),
-        Span::styled(" [ Discard ] ", discard_style),
-    ]);
-
-    let paragraph = Paragraph::new(line);
-    f.render_widget(paragraph, area);
+    let ctx = EditorButtonCtx;
+    state.buttons.render(f, area, &ctx, in_buttons);
 }
 
 /// Render the control hints line.

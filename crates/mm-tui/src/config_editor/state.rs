@@ -2,12 +2,17 @@
 //!
 //! Manages cursor navigation, field editing, and the Save/Discard flow.
 
+use std::borrow::Cow;
+
+use ratatui::style::Color;
+
 use super::build;
 use super::types::*;
 use mm_meta::config::Config;
 use crate::input::InputAction;
+use crate::widgets::modal_buttons::ModalButtons;
 use crate::widgets::wizard::{WizardOffer, WizardState};
-use crate::widgets::TextInputState;
+use crate::widgets::{ButtonRowState, TextInputState};
 
 /// Focus region within the config editor.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -17,10 +22,49 @@ pub enum EditorFocus {
 }
 
 /// Which button is highlighted when focus is on buttons.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum EditorButton {
+    #[default]
     Save,
     Discard,
+}
+
+/// Empty context — config editor buttons are always enabled.
+#[derive(Debug, Clone, Copy)]
+pub struct EditorButtonCtx;
+
+impl ModalButtons for EditorButton {
+    type Context = EditorButtonCtx;
+    type Action = ConfigEditorAction;
+
+    fn all() -> &'static [Self] {
+        &[Self::Save, Self::Discard]
+    }
+
+    fn label(&self, _ctx: &Self::Context) -> Cow<'static, str> {
+        match self {
+            Self::Save => "Save".into(),
+            Self::Discard => "Discard".into(),
+        }
+    }
+
+    fn color(&self, _ctx: &Self::Context) -> Color {
+        match self {
+            Self::Save => Color::Green,
+            Self::Discard => Color::DarkGray,
+        }
+    }
+
+    fn enabled(&self, _ctx: &Self::Context) -> bool {
+        true
+    }
+
+    fn action(&self, _ctx: &Self::Context) -> ConfigEditorAction {
+        match self {
+            Self::Save => ConfigEditorAction::Save,
+            Self::Discard => ConfigEditorAction::Discard,
+        }
+    }
 }
 
 /// Action produced by `handle_input`, consumed by the action handler.
@@ -121,7 +165,7 @@ pub struct ConfigEditorState {
     pub sub_collection_pos: Option<CollectionPosition>,
     /// Focus: Fields vs Buttons.
     pub focus: EditorFocus,
-    pub selected_button: EditorButton,
+    pub buttons: ButtonRowState<EditorButton>,
     /// When set, Discard navigates laterally instead of returning to Insights.
     /// Set by Tab/Shift-Tab when there are unsaved edits.
     pub pending_cycle: Option<CycleDirection>,
@@ -143,7 +187,7 @@ impl ConfigEditorState {
             collection_pos: None,
             sub_collection_pos: None,
             focus: EditorFocus::Fields,
-            selected_button: EditorButton::Save,
+            buttons: ButtonRowState::new(), // defaults to Save
             pending_cycle: None,
             wizard_state: WizardState::default(),
         }
@@ -542,18 +586,19 @@ impl ConfigEditorState {
 
     /// Input handling while focused on buttons.
     fn handle_buttons_input(&mut self, action: &InputAction) -> ConfigEditorAction {
+        let ctx = EditorButtonCtx;
         match action {
-            InputAction::NavLeft | InputAction::NavRight | InputAction::CycleNext => {
-                self.selected_button = match self.selected_button {
-                    EditorButton::Save => EditorButton::Discard,
-                    EditorButton::Discard => EditorButton::Save,
-                };
+            InputAction::NavLeft => {
+                self.buttons.nav_left(&ctx);
+                ConfigEditorAction::None
+            }
+            InputAction::NavRight | InputAction::CycleNext => {
+                self.buttons.nav_right(&ctx);
                 ConfigEditorAction::None
             }
             InputAction::Confirm | InputAction::Toggle => {
-                match self.selected_button {
-                    EditorButton::Save => ConfigEditorAction::Save,
-                    EditorButton::Discard => {
+                match self.buttons.confirm(&ctx) {
+                    Some(ConfigEditorAction::Discard) => {
                         // If we got here via Tab with unsaved edits, navigate
                         // to the requested view instead of returning to Insights.
                         match self.pending_cycle.take() {
@@ -562,6 +607,8 @@ impl ConfigEditorState {
                             None => ConfigEditorAction::Discard,
                         }
                     }
+                    Some(action) => action,
+                    None => ConfigEditorAction::None,
                 }
             }
             InputAction::Cancel | InputAction::NavUp | InputAction::NavDown => {
@@ -578,7 +625,7 @@ impl ConfigEditorState {
     fn try_cycle(&mut self, direction: CycleDirection) -> ConfigEditorAction {
         if self.has_edits() {
             self.focus = EditorFocus::Buttons;
-            self.selected_button = EditorButton::Save;
+            self.buttons.selected = EditorButton::Save;
             self.pending_cycle = Some(direction);
             ConfigEditorAction::None
         } else {

@@ -20,8 +20,11 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
     fn label(&self) -> &'static str {
         "Dir config update"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::Config)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::Config
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
@@ -162,8 +165,11 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
         "Batch dir config update"
     }
 
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::Config)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::Config
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {

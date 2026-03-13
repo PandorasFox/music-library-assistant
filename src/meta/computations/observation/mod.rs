@@ -16,55 +16,18 @@
 
 mod executors;
 
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-
 pub use executors::*;
 
-// ============================================================================
-// Observation Computation Enum
-// ============================================================================
+// Re-export Computation enum from mm-meta
+pub use mm_meta::computations::observation::Computation;
 
-/// A computation that runs during the Observation phase.
-///
-/// These computations verify individual files against indexed state.
-/// They can only spawn other Observation computations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Computation {
-    /// Verify tags on disk match database.
-    ///
-    /// Compares the actual file tags to what's stored in the index.
-    /// Pending-write aware: distinguishes MM-initiated writes from external changes.
-    VerifyTags {
-        inode: i64,
-        path: PathBuf,
-        /// Watcher-provided disk mtime (avoids stat round-trip).
-        mtime_secs: i64,
-        mtime_nanos: i64,
-        /// Watcher-provided file size.
-        file_size: i64,
-        /// Watcher-provided disk tags (avoids re-reading file).
-        disk_tags: crate::corpus::tags::TagSet,
-    },
-
-    /// Verify audio stream integrity by decoding the entire file.
-    ///
-    /// Catches truncated files, corrupt streams, and other audio-level issues
-    /// that tag verification wouldn't detect. Emits CorruptFile if decode fails.
-    VerifyAudio { inode: i64, path: PathBuf },
+/// Extension trait for server-side execution dispatch on observation computations.
+pub trait ObservationExecute {
+    fn execute(&self, ctx: &super::traits::ComputationContext) -> Result;
 }
 
-impl Computation {
-    /// Get a human-readable label for this computation.
-    pub fn label(&self) -> &'static str {
-        match self {
-            Computation::VerifyTags { .. } => "Tag verification",
-            Computation::VerifyAudio { .. } => "Audio verification",
-        }
-    }
-
-    /// Execute this computation.
-    pub fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
+impl ObservationExecute for Computation {
+    fn execute(&self, ctx: &super::traits::ComputationContext) -> Result {
         match self {
             Computation::VerifyTags { inode, path, mtime_secs, mtime_nanos, file_size: _, disk_tags } => {
                 execute_verify_tags(ctx.read_db, *inode, path, *mtime_secs, *mtime_nanos, disk_tags, ctx.witness)

@@ -168,11 +168,27 @@ pub enum MutationExecutionStage {
 }
 
 /// How a mutation is scheduled for execution.
+///
+/// DEPRECATED: Use `MutationOrigin` + `MutationExecutionStage` separately.
+/// Kept temporarily for re-export compatibility during transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MutationStaging {
     /// Directly queueable in a transaction phase.
     Staged(MutationExecutionStage),
     /// Only spawned by parent mutations during execution (never in transactions).
+    ChainEmitted,
+}
+
+/// Can this mutation appear in operator-staged transactions?
+///
+/// Orthogonal to `MutationExecutionStage` — every mutation has an execution
+/// stage regardless of origin. Origin determines whether it can be directly
+/// queued in a transaction or is only spawned during execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MutationOrigin {
+    /// Directly queueable in a transaction.
+    Staged,
+    /// Only spawned during execution of another mutation.
     ChainEmitted,
 }
 
@@ -270,7 +286,73 @@ pub enum Mutation {
     ApplyBatchDirConfigEdits(Box<ApplyBatchDirConfigEditsMutation>),
 }
 
+/// Fieldless mirror of `Mutation` for compile-time-enforced mapping tables.
+///
+/// Used by `DecisionKey::allowed_mutation_kinds()` to declare which mutation
+/// types are valid for each decision type. The exhaustive match in
+/// `Mutation::kind()` ensures the compiler forces an update when variants
+/// are added to either enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MutationKind {
+    ApplyTagOps,
+    IndexFileFromPath,
+    Move,
+    StashFromZone,
+    StashLeftovers,
+    Transcode,
+    HardLink,
+    LibraryMove,
+    InboxToCorpus,
+    InboxDirToCorpus,
+    UpdateFilePath,
+    DropFromIndex,
+    DropDirectoryFromIndex,
+    AcknowledgeMtimeOnly,
+    ApplyDbTagsToDisk,
+    FlushTagsToDisk,
+    AssimilateDiskTagsToDb,
+    EmitCanonicalTag,
+    EmitExpectedOverlap,
+    EmitExpectedDuplicate,
+    EmitExpectedMissingTag,
+    DropExternalMatch,
+    ApplyConfigEdits,
+    ApplyDirConfigEdit,
+    ApplyBatchDirConfigEdits,
+}
+
 impl Mutation {
+    /// Fieldless discriminant for this mutation.
+    pub fn kind(&self) -> MutationKind {
+        match self {
+            Mutation::ApplyTagOps(_) => MutationKind::ApplyTagOps,
+            Mutation::IndexFileFromPath(_) => MutationKind::IndexFileFromPath,
+            Mutation::Move(_) => MutationKind::Move,
+            Mutation::StashFromZone(_) => MutationKind::StashFromZone,
+            Mutation::StashLeftovers(_) => MutationKind::StashLeftovers,
+            Mutation::Transcode(_) => MutationKind::Transcode,
+            Mutation::HardLink(_) => MutationKind::HardLink,
+            Mutation::LibraryMove(_) => MutationKind::LibraryMove,
+            Mutation::InboxToCorpus(_) => MutationKind::InboxToCorpus,
+            Mutation::InboxDirToCorpus(_) => MutationKind::InboxDirToCorpus,
+            Mutation::UpdateFilePath(_) => MutationKind::UpdateFilePath,
+            Mutation::DropFromIndex(_) => MutationKind::DropFromIndex,
+            Mutation::DropDirectoryFromIndex(_) => MutationKind::DropDirectoryFromIndex,
+            Mutation::AcknowledgeMtimeOnly(_) => MutationKind::AcknowledgeMtimeOnly,
+            Mutation::ApplyDbTagsToDisk(_) => MutationKind::ApplyDbTagsToDisk,
+            Mutation::FlushTagsToDisk(_) => MutationKind::FlushTagsToDisk,
+            Mutation::AssimilateDiskTagsToDb(_) => MutationKind::AssimilateDiskTagsToDb,
+            Mutation::EmitCanonicalTag(_) => MutationKind::EmitCanonicalTag,
+            Mutation::EmitExpectedOverlap(_) => MutationKind::EmitExpectedOverlap,
+            Mutation::EmitExpectedDuplicate(_) => MutationKind::EmitExpectedDuplicate,
+            Mutation::EmitExpectedMissingTag(_) => MutationKind::EmitExpectedMissingTag,
+            Mutation::DropExternalMatch(_) => MutationKind::DropExternalMatch,
+            Mutation::ApplyConfigEdits(_) => MutationKind::ApplyConfigEdits,
+            Mutation::ApplyDirConfigEdit(_) => MutationKind::ApplyDirConfigEdit,
+            Mutation::ApplyBatchDirConfigEdits(_) => MutationKind::ApplyBatchDirConfigEdits,
+        }
+    }
+
     /// Human-readable label for this mutation (for logging/display).
     pub fn label(&self) -> &'static str {
         match self {

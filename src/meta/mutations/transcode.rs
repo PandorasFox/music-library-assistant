@@ -35,8 +35,11 @@ impl MutationExecutor for TranscodeMutation {
     fn label(&self) -> &'static str {
         "Transcode"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::DiskFlush
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {

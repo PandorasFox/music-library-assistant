@@ -12,7 +12,9 @@ use crate::meta::computations::Computation;
 use crate::meta::recomputation::RecomputationScope;
 use crate::witch::MutationExecutionWitness;
 
-use super::types::{MutationResult, MutationStaging, SignalClearScope, SignalToClear};
+use mm_meta::mutations::{MutationExecutionStage, MutationOrigin};
+
+use super::types::{MutationResult, SignalClearScope, SignalToClear};
 
 /// Context provided to mutation executors at execution time.
 ///
@@ -37,11 +39,15 @@ pub trait MutationExecutor: std::fmt::Debug + Send + Sync {
     /// Human-readable label for logging/display.
     fn label(&self) -> &'static str;
 
-    /// Which execution stage this mutation belongs to.
+    /// Whether this mutation can appear in operator-staged transactions.
+    fn origin(&self) -> MutationOrigin;
+
+    /// Which execution phase this mutation belongs to.
     ///
-    /// Determines ordering within a confirmed transaction. Mutations are
+    /// Every mutation has an execution stage regardless of origin.
+    /// Determines ordering within a confirmed transaction: mutations are
     /// bucketed by stage and executed phase-by-phase with drain barriers.
-    fn staging(&self) -> MutationStaging;
+    fn execution_stage(&self) -> MutationExecutionStage;
 
     /// Execute this mutation.
     fn execute(&self, ctx: &MutationContext) -> MutationResult;

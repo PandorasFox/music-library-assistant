@@ -16,8 +16,11 @@ impl MutationExecutor for ApplyConfigEditsMutation {
     fn label(&self) -> &'static str {
         "Config update"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::Config)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::Config
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {

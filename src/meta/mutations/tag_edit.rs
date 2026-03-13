@@ -34,8 +34,11 @@ impl MutationExecutor for ApplyTagOpsMutation {
     fn label(&self) -> &'static str {
         "Tag edit"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::DB)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::DB
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {

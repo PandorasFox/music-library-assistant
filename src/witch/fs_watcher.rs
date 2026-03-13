@@ -47,20 +47,8 @@ pub struct ObservedFile {
     pub tags: Option<crate::corpus::tags::TagSet>,
 }
 
-/// Image file observed on disk by the watcher thread.
-///
-/// Contains only FS-level data (no file content reads). Format, dimensions,
-/// and role are extracted later by `IndexObservedImages` on a rayon worker,
-/// keeping the watcher thread lightweight (stat-only).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObservedImage {
-    pub zone: Zone,
-    pub inode: i64,
-    pub path: String, // relative to zone root
-    pub mtime_secs: i64,
-    pub mtime_nanos: i64,
-    pub file_size: i64,
-}
+// Re-export from mm-meta
+pub use mm_meta::computations::types::ObservedImage;
 
 /// DB-cached state for one inode, seeded by the Witch at startup.
 ///

@@ -13,7 +13,7 @@ use crate::meta::mutations::dir_config_edit::{
 };
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::meta::mutations::{
-    Mutation, MutationDispatch, MutationExecutionStage, MutationStaging, TagOp,
+    Mutation, MutationDispatch, MutationExecutionStage, MutationOrigin, TagOp,
 };
 
 /// Coalesce ApplyTagOps mutations into per-zone mutations.
@@ -279,12 +279,26 @@ impl super::Witch {
             .collect();
         decision_labels.sort();
 
-        // Collect all mutations from all decisions
+        // Collect all mutations from all decisions, validating mutation kinds
         let raw_mutations: Vec<Mutation> = txn
             .decisions
-            .into_values()
-            .flat_map(|d| {
+            .into_iter()
+            .flat_map(|(key, d)| {
                 mutation_count += d.mutations.len();
+                // Validate that each mutation's kind is allowed for this decision key
+                #[cfg(debug_assertions)]
+                {
+                    let allowed = key.allowed_mutation_kinds();
+                    for m in &d.mutations {
+                        debug_assert!(
+                            allowed.contains(&m.kind()),
+                            "Decision {:?} contains disallowed mutation kind {:?} (mutation: {:?}). \
+                             Allowed kinds: {:?}",
+                            key, m.kind(), m, allowed
+                        );
+                    }
+                }
+                let _ = key; // suppress unused in release
                 d.mutations
             })
             .collect();
@@ -309,16 +323,15 @@ impl super::Witch {
         // Bucket mutations by execution stage (BTreeMap gives ordered iteration via Ord)
         let mut by_stage: BTreeMap<MutationExecutionStage, Vec<Mutation>> = BTreeMap::new();
         for mutation in all_mutations {
-            let stage = match mutation.as_executor().staging() {
-                MutationStaging::Staged(stage) => stage,
-                MutationStaging::ChainEmitted => {
-                    panic!(
-                        "ChainEmitted mutation {:?} found in transaction — \
-                         these are only spawned during execution, never directly staged",
-                        mutation
-                    );
-                }
-            };
+            let executor = mutation.as_executor();
+            debug_assert_eq!(
+                executor.origin(),
+                MutationOrigin::Staged,
+                "ChainEmitted mutation {:?} found in transaction — \
+                 these are only spawned during execution, never directly staged",
+                mutation
+            );
+            let stage = executor.execution_stage();
             by_stage.entry(stage).or_default().push(mutation);
         }
 

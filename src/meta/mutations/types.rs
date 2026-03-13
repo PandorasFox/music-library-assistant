@@ -10,7 +10,7 @@ use crate::meta::signals::registry::TypedSignalWrite;
 
 // Re-export data types from mm-meta (struct re-exports come from sub-modules)
 pub use mm_meta::mutations::{
-    DiffEntry, ExtractedMetadata, Mutation, MutationExecutionStage, MutationStaging,
+    DiffEntry, ExtractedMetadata, Mutation, MutationExecutionStage, MutationOrigin,
     SignalClearScope, TagOp, path_filename,
 };
 

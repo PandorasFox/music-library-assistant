@@ -51,7 +51,8 @@ macro_rules! impl_mutation_executor {
     (
         $struct_name:ident, $variant:ident,
         label: $label:expr,
-        staging: $staging:expr,
+        origin: $origin:expr,
+        execution_stage: $stage:expr,
         signal_clear_scope: $scope:expr,
         recomputation_scope: $recomp:expr,
         execute: |$self_:ident, $ctx:ident| $execute_expr:expr,
@@ -62,7 +63,8 @@ macro_rules! impl_mutation_executor {
     ) => {
         impl MutationExecutor for $struct_name {
             fn label(&self) -> &'static str { $label }
-            fn staging(&self) -> super::MutationStaging { $staging }
+            fn origin(&self) -> super::MutationOrigin { $origin }
+            fn execution_stage(&self) -> super::MutationExecutionStage { $stage }
 
             fn execute(&self, ctx: &MutationContext) -> MutationResult {
                 let $self_ = self;
@@ -119,8 +121,11 @@ impl MutationExecutor for IndexFileFromPathMutation {
     fn label(&self) -> &'static str {
         "Indexing"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::DB)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::DB
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
@@ -179,7 +184,8 @@ impl MutationExecutor for IndexFileFromPathMutation {
 impl_mutation_executor!(
     UpdateFilePathMutation, UpdateFilePath,
     label: "Path update",
-    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
+    origin: super::MutationOrigin::Staged,
+    execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::MutableOnly,
     recomputation_scope: RecomputationScope::FILES | RecomputationScope::TAGS,
     execute: |s, ctx| execute_update_file_path(
@@ -197,7 +203,8 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     DropFromIndexMutation, DropFromIndex,
     label: "Drop from index",
-    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush),
+    origin: super::MutationOrigin::Staged,
+    execution_stage: super::MutationExecutionStage::DiskFlush,
     signal_clear_scope: SignalClearScope::All,
     recomputation_scope: RecomputationScope::FILES | RecomputationScope::DEPLOY,
     execute: |s, ctx| execute_drop_from_index(
@@ -214,7 +221,8 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     DropDirectoryFromIndexMutation, DropDirectoryFromIndex,
     label: "Drop directory from index",
-    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush),
+    origin: super::MutationOrigin::Staged,
+    execution_stage: super::MutationExecutionStage::DiskFlush,
     signal_clear_scope: SignalClearScope::All,
     recomputation_scope: RecomputationScope::FILES | RecomputationScope::DEPLOY,
     execute: |s, ctx| execute_drop_directory_from_index(ctx.read_db, &s.directory_path, ctx.witness),
@@ -229,7 +237,8 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     AcknowledgeMtimeOnlyMutation, AcknowledgeMtimeOnly,
     label: "Acknowledge mtime",
-    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
+    origin: super::MutationOrigin::Staged,
+    execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::MutableOnly,
     recomputation_scope: RecomputationScope::EMPTY,
     execute: |s, ctx| execute_acknowledge_mtime_only(ctx.read_db, &s.tracks, ctx.witness).map(|_| ()),
@@ -246,7 +255,8 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     ApplyDbTagsToDiskMutation, ApplyDbTagsToDisk,
     label: "Tag sync (DB→disk)",
-    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
+    origin: super::MutationOrigin::Staged,
+    execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::MutableOnly,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_apply_db_tags_to_disk(
@@ -264,7 +274,8 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     FlushTagsToDiskMutation, FlushTagsToDisk,
     label: "Tag flush",
-    staging: super::MutationStaging::ChainEmitted,
+    origin: super::MutationOrigin::ChainEmitted,
+    execution_stage: super::MutationExecutionStage::DiskFlush,
     signal_clear_scope: SignalClearScope::MutableOnly,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_flush_tags_to_disk(
@@ -277,7 +288,8 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     AssimilateDiskTagsToDbMutation, AssimilateDiskTagsToDb,
     label: "Tag sync (disk→DB)",
-    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
+    origin: super::MutationOrigin::Staged,
+    execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::MutableOnly,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_assimilate_disk_tags_to_db(
@@ -295,7 +307,8 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     EmitCanonicalTagMutation, EmitCanonicalTag,
     label: "Mark canonical",
-    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
+    origin: super::MutationOrigin::Staged,
+    execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_emit_canonical_tag(
@@ -312,7 +325,8 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     EmitExpectedOverlapMutation, EmitExpectedOverlap,
     label: "Mark expected overlap",
-    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
+    origin: super::MutationOrigin::Staged,
+    execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::FILES,
     execute: |s, ctx| execute_emit_expected_overlap(&s.source_a, &s.source_b, ctx.witness),
@@ -327,7 +341,8 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     EmitExpectedDuplicateMutation, EmitExpectedDuplicate,
     label: "Mark expected duplicate",
-    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
+    origin: super::MutationOrigin::Staged,
+    execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::FILES,
     execute: |s, ctx| execute_emit_expected_duplicate(&s.fingerprint_key, ctx.witness),
@@ -342,7 +357,8 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     DropExternalMatchMutation, DropExternalMatch,
     label: "Drop external match",
-    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
+    origin: super::MutationOrigin::Staged,
+    execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::EMPTY,
     execute: |s, ctx| execute_drop_external_match(s.inode, ctx.witness),
@@ -357,7 +373,8 @@ impl_mutation_executor!(
 impl_mutation_executor!(
     EmitExpectedMissingTagMutation, EmitExpectedMissingTag,
     label: "Mark expected missing tag",
-    staging: super::MutationStaging::Staged(super::MutationExecutionStage::DB),
+    origin: super::MutationOrigin::Staged,
+    execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_emit_expected_missing_tag(&s.inodes, ctx.witness),

@@ -56,15 +56,8 @@ use types::ContentAnalysisWitness;
 // Zone-Keyed Observation State
 // ============================================================================
 
-/// Enriched metadata for an observed inode (from watcher).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObservedInodeMeta {
-    /// Archive-root-relative path (e.g. "corpus/digital/releases/...")
-    pub path: String,
-    pub mtime_secs: i64,
-    pub mtime_nanos: i64,
-    pub file_size: i64,
-}
+// Re-export from mm-meta
+pub use mm_meta::computations::types::ObservedInodeMeta;
 
 /// Authoritative inode→metadata maps for all watched zones.
 ///

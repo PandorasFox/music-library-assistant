@@ -33,8 +33,11 @@ impl MutationExecutor for MoveMutation {
     fn label(&self) -> &'static str {
         "File move"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::DiskFlush
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
@@ -71,8 +74,11 @@ impl MutationExecutor for StashFromZoneMutation {
     fn label(&self) -> &'static str {
         "File stash"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::DiskFlush
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
@@ -131,8 +137,11 @@ impl MutationExecutor for StashLeftoversMutation {
     fn label(&self) -> &'static str {
         "Library leftover stash"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::DiskFlush)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::DiskFlush
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
@@ -206,8 +215,11 @@ impl MutationExecutor for HardLinkMutation {
     fn label(&self) -> &'static str {
         "Hard link"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::DiskDeploy)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::DiskDeploy
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
@@ -253,8 +265,11 @@ impl MutationExecutor for LibraryMoveMutation {
     fn label(&self) -> &'static str {
         "Library move"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::DiskDeploy)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::DiskDeploy
     }
 
     fn execute(&self, _ctx: &MutationContext) -> MutationResult {
@@ -306,8 +321,11 @@ impl MutationExecutor for InboxToCorpusMutation {
     fn label(&self) -> &'static str {
         "Inbox → Corpus"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::DB)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::DB
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {
@@ -357,8 +375,11 @@ impl MutationExecutor for InboxDirToCorpusMutation {
     fn label(&self) -> &'static str {
         "Inbox dir → Corpus"
     }
-    fn staging(&self) -> super::MutationStaging {
-        super::MutationStaging::Staged(super::MutationExecutionStage::DB)
+    fn origin(&self) -> super::MutationOrigin {
+        super::MutationOrigin::Staged
+    }
+    fn execution_stage(&self) -> super::MutationExecutionStage {
+        super::MutationExecutionStage::DB
     }
 
     fn execute(&self, ctx: &MutationContext) -> MutationResult {

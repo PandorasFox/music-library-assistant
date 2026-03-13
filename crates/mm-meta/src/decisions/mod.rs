@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::mutations::Mutation;
+use crate::mutations::{Mutation, MutationKind};
 
 // ============================================================================
 // Decision Key Types
@@ -75,6 +75,69 @@ impl DecisionKey {
             DecisionKey::InboxCorpusMatch => Some(DecisionKeyKind::InboxCorpusMatch),
             DecisionKey::IntakeIndex => Some(DecisionKeyKind::IntakeIndex),
             _ => None,
+        }
+    }
+
+    /// Which mutation kinds are valid for this decision type.
+    ///
+    /// Exhaustive match forces update when DecisionKey variants are added.
+    /// Server-side validation uses this to debug_assert that staged decisions
+    /// contain only allowed mutation kinds.
+    pub fn allowed_mutation_kinds(&self) -> &'static [MutationKind] {
+        use MutationKind::*;
+        match self {
+            // Tag canonicity → emit whitelist signals + tag ops
+            DecisionKey::TagCanonicity { .. } => &[EmitCanonicalTag, ApplyTagOps],
+            // Compound splits → tag ops (splitting compound tag values)
+            DecisionKey::CompoundSplitSafe { .. }
+            | DecisionKey::CompoundSplitReview { .. }
+            | DecisionKey::CompoundSplitInbox { .. } => &[ApplyTagOps],
+            // Deploy → hard links + library moves + stash leftovers
+            DecisionKey::Deploy => &[HardLink, LibraryMove, StashLeftovers],
+            // Deploy sidecars → hard links
+            DecisionKey::DeploySidecars => &[HardLink],
+            // Tag edit → tag ops + DB→disk sync
+            DecisionKey::TagEdit { .. } => &[ApplyTagOps, ApplyDbTagsToDisk],
+            // OOB sync → DB→disk sync (overwrite disk with DB) or disk→DB assimilation
+            DecisionKey::OobSync => &[ApplyDbTagsToDisk, AssimilateDiskTagsToDb],
+            // OOB conflict → same as OobSync (operator picks direction)
+            DecisionKey::OobConflict => &[ApplyDbTagsToDisk, AssimilateDiskTagsToDb],
+            // Mtime ack → acknowledge mtime-only changes
+            DecisionKey::MtimeAck => &[AcknowledgeMtimeOnly],
+            // Moved file → update path in index
+            DecisionKey::MovedFile => &[UpdateFilePath],
+            // Missing file → drop from index or stash
+            DecisionKey::MissingFile => &[DropFromIndex, IndexFileFromPath],
+            // Missing directory → drop directory from index
+            DecisionKey::MissingDirectory => &[DropDirectoryFromIndex],
+            // Corrupt file → stash from zone + drop from index
+            DecisionKey::CorruptFile => &[StashFromZone, DropFromIndex],
+            // Shit format → transcode
+            DecisionKey::ShitFormat => &[Transcode],
+            // Subpar duplicate → stash from zone + drop from index
+            DecisionKey::SubparDuplicate => &[StashFromZone, DropFromIndex],
+            // Directory cluster → tag ops (organize directory structure)
+            DecisionKey::DirectoryCluster { .. } => &[ApplyTagOps],
+            // Inbox corpus match → move inbox files to corpus
+            DecisionKey::InboxCorpusMatch => &[Move],
+            // Inbox organize → move inbox files into corpus structure
+            DecisionKey::InboxOrganize => &[InboxToCorpus, InboxDirToCorpus],
+            // Missing album → tag ops (fill missing album/artist tags)
+            DecisionKey::MissingAlbum { .. } => &[ApplyTagOps],
+            // Manual review → tag ops
+            DecisionKey::ManualReview { .. } => &[ApplyTagOps],
+            // Intake index → index files from path
+            DecisionKey::IntakeIndex => &[IndexFileFromPath],
+            // Disc extraction → tag ops (disc number assignments)
+            DecisionKey::DiscExtraction { .. } => &[ApplyTagOps],
+            // Edit reversal → tag ops (undo previous tag edits)
+            DecisionKey::EditReversal { .. } => &[ApplyTagOps],
+            // Config edit → apply config edits
+            DecisionKey::ConfigEdit => &[ApplyConfigEdits],
+            // Dir config edit → apply dir config edits or batch edits
+            DecisionKey::DirConfigEdit { .. } => &[ApplyDirConfigEdit, ApplyBatchDirConfigEdits],
+            // MB release approval → tag ops + dir config edit
+            DecisionKey::MbReleaseApproval { .. } => &[ApplyTagOps, ApplyDirConfigEdit],
         }
     }
 }

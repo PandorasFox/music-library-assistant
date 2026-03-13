@@ -18,6 +18,7 @@ pub const MM_VERSION: &str = "beta 9";
 pub const MM_TITLE: &str = "Music Magic (mm beta 9)";
 
 pub mod auth;
+pub mod computations;
 pub mod config;
 pub mod db_types;
 pub mod decisions;

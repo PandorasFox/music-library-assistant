@@ -224,15 +224,31 @@ impl App {
             ActiveView::TabbedTransactionReview(ref mut s) => dispatch_input!(TabbedTransactionReview, s),
             ActiveView::ExitConfirm(state) => {
                 let a = match action {
-                    InputAction::NavLeft | InputAction::NavRight | InputAction::FocusLeft | InputAction::FocusRight => {
-                        state.selected_no = !state.selected_no;
+                    InputAction::NavLeft | InputAction::FocusLeft => {
+                        state.selected = state.selected.saturating_sub(1);
+                        ExitConfirmAction::None
+                    }
+                    InputAction::NavRight | InputAction::FocusRight => {
+                        state.selected = (state.selected + 1).min(2);
+                        ExitConfirmAction::None
+                    }
+                    InputAction::NavDown => {
+                        // Jump to shutdown option
+                        state.selected = 2;
+                        ExitConfirmAction::None
+                    }
+                    InputAction::NavUp => {
+                        // Jump back to top row, preserving left/right
+                        if state.selected == 2 {
+                            state.selected = 0;
+                        }
                         ExitConfirmAction::None
                     }
                     InputAction::Confirm | InputAction::Toggle => {
-                        if state.selected_no {
-                            ExitConfirmAction::Cancel
-                        } else {
-                            ExitConfirmAction::Quit
+                        match state.selected {
+                            0 => ExitConfirmAction::Quit,
+                            2 => ExitConfirmAction::QuitAndShutdown,
+                            _ => ExitConfirmAction::Cancel,
                         }
                     }
                     InputAction::Cancel => ExitConfirmAction::Cancel,

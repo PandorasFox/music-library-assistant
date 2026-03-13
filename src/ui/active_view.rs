@@ -255,6 +255,7 @@ pub(crate) enum ViewAction {
 pub(crate) enum ExitConfirmAction {
     None,
     Quit,
+    QuitAndShutdown,
     Cancel,
 }
 
@@ -263,15 +264,24 @@ pub(crate) enum ExitConfirmAction {
 // ============================================================================
 
 /// State for the exit confirmation modal.
-/// Default selection is "No" (stay in application).
-#[derive(Default)]
+/// Default selection is Cancel (stay in application).
 pub(crate) struct ExitConfirmModalState {
-    /// True = "No" selected (default), False = "Yes" selected
-    pub selected_no: bool,
+    /// 0 = Yes/Confirm, 1 = Cancel/No, 2 = Quit + shutdown server
+    pub selected: u8,
     /// True if operations are in progress (shows warning)
     pub has_operations: bool,
     /// Click target rects for buttons, populated during render.
     pub button_rects: crate::ui::widgets::ButtonRects,
+}
+
+impl Default for ExitConfirmModalState {
+    fn default() -> Self {
+        Self {
+            selected: 1, // Cancel by default
+            has_operations: false,
+            button_rects: Default::default(),
+        }
+    }
 }
 
 // ============================================================================

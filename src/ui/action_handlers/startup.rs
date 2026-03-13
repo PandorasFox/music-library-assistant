@@ -15,6 +15,10 @@ impl HandleAction for super::super::ExitConfirmAction {
             ExitConfirmAction::Quit => {
                 app.should_quit = true;
             }
+            ExitConfirmAction::QuitAndShutdown => {
+                let _ = app.witch.shutdown();
+                app.should_quit = true;
+            }
             ExitConfirmAction::Cancel => {
                 app.start_health_view();
             }

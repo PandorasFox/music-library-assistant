@@ -425,6 +425,17 @@ impl WitchHandle {
     pub fn query<Q: ProtocolQuery>(&self, q: Q) -> Q::Response {
         self.send_query(q)
     }
+
+    /// Request server shutdown. Returns `Ok(())` after the server acknowledges
+    /// with `Goodbye`. The server will stop after sending the response.
+    pub fn shutdown(&self) -> Result<(), ProtocolError> {
+        match self.send_command(CommandPayload::Shutdown)? {
+            CommandResponse::Goodbye => Ok(()),
+            CommandResponse::Ok => Err(ProtocolError::Internal(
+                "expected Goodbye, got Ok".to_string(),
+            )),
+        }
+    }
 }
 
 impl Drop for WitchHandle {

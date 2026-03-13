@@ -351,12 +351,16 @@ impl App {
                 if let Some(button) = state.button_rects.hit_test(x, y) {
                     match button {
                         "yes" => {
-                            state.selected_no = false;
+                            state.selected = 0;
                             Some(ViewAction::ExitConfirm(super::ExitConfirmAction::Quit))
                         }
                         "no" => {
-                            state.selected_no = true;
+                            state.selected = 1;
                             Some(ViewAction::ExitConfirm(super::ExitConfirmAction::Cancel))
+                        }
+                        "shutdown" => {
+                            state.selected = 2;
+                            Some(ViewAction::ExitConfirm(super::ExitConfirmAction::QuitAndShutdown))
                         }
                         _ => None,
                     }

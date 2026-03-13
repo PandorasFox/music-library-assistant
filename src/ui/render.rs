@@ -244,58 +244,63 @@ fn render_exit_confirm_modal(
     area: ratatui::layout::Rect,
     state: &mut ExitConfirmModalState,
 ) {
-    let selected_no = state.selected_no;
+    let selected = state.selected;
     let has_operations = state.has_operations;
 
-    // Build buttons with appropriate styles
+    // Build top-row buttons with appropriate styles
     let (yes_btn, no_btn) = if has_operations {
         // Warning modal: Yes is red (dangerous), No is green (safe)
-        let yes_btn = ModalButton::new("Yes", "").with_indicator().styles(
+        let mut yes_btn = ModalButton::new("Yes", "").with_indicator().styles(
             Style::default().fg(Color::Black).bg(Color::Red),
             Style::default().fg(Color::White),
         );
-        let no_btn = ModalButton::new("No", "").with_indicator().styles(
+        let mut no_btn = ModalButton::new("No", "").with_indicator().styles(
             Style::default().fg(Color::Black).bg(Color::Green),
             Style::default().fg(Color::White),
         );
-        if selected_no {
-            (yes_btn, no_btn.selected())
-        } else {
-            (yes_btn.selected(), no_btn)
-        }
+        if selected == 0 { yes_btn = yes_btn.selected(); }
+        if selected == 1 { no_btn = no_btn.selected(); }
+        (yes_btn, no_btn)
     } else {
         // Simple exit: neutral styles
-        let confirm_btn = ModalButton::new("Confirm", "").with_indicator().styles(
+        let mut confirm_btn = ModalButton::new("Confirm", "").with_indicator().styles(
             Style::default().fg(Color::Black).bg(Color::Cyan),
             Style::default().fg(Color::White),
         );
-        let cancel_btn = ModalButton::new("Cancel", "").with_indicator().styles(
+        let mut cancel_btn = ModalButton::new("Cancel", "").with_indicator().styles(
             Style::default().fg(Color::Black).bg(Color::Gray),
             Style::default().fg(Color::White),
         );
-        if selected_no {
-            (confirm_btn, cancel_btn.selected())
-        } else {
-            (confirm_btn.selected(), cancel_btn)
-        }
+        if selected == 0 { confirm_btn = confirm_btn.selected(); }
+        if selected == 1 { cancel_btn = cancel_btn.selected(); }
+        (confirm_btn, cancel_btn)
     };
 
-    // Build button line
+    // Shutdown button (always present)
+    let mut shutdown_btn = ModalButton::new("Yes, and send server shutdown", "").with_indicator().styles(
+        Style::default().fg(Color::Black).bg(Color::Red),
+        Style::default().fg(Color::DarkGray),
+    );
+    if selected == 2 { shutdown_btn = shutdown_btn.selected(); }
+
+    // Build button lines
     let mut button_spans = yes_btn.render_with_indicator();
     button_spans.push(Span::raw("     "));
     button_spans.extend(no_btn.render_with_indicator());
     let button_line = Line::from(button_spans);
+    let shutdown_line = Line::from(shutdown_btn.render_with_indicator());
 
     // Compute button click targets
     let (modal_w, modal_h, button_line_idx) = if has_operations {
-        (50u16, 16u16, 12u16) // button_line is content[12]
+        (50u16, 18u16, 12u16)
     } else {
-        (40u16, 9u16, 4u16) // button_line is content[4]
+        (40u16, 11u16, 4u16)
     };
     let modal_rect = super::widgets::centered_rect_fixed(modal_w, modal_h, area);
     let inner_x = modal_rect.x + 1; // inside Borders::ALL
     let inner_y = modal_rect.y + 1;
     let button_row = inner_y + button_line_idx;
+    let shutdown_row = button_row + 2; // blank line between
 
     state.button_rects.clear();
     let mut bx = inner_x;
@@ -307,12 +312,18 @@ fn render_exit_confirm_modal(
         ratatui::layout::Rect::new(bx, button_row, first_width, 1),
     );
     bx += first_width + 5; // 5-char gap
-                           // Second button: " > " (3 chars) + label
+    // Second button: " > " (3 chars) + label
     let second_label_len = if has_operations { 2u16 } else { 6u16 }; // "No" / "Cancel"
     let second_width = 3 + second_label_len;
     state.button_rects.set(
         "no",
         ratatui::layout::Rect::new(bx, button_row, second_width, 1),
+    );
+    // Shutdown button: " > " (3 chars) + label
+    let shutdown_width = 3 + 30u16; // "Yes, and send server shutdown"
+    state.button_rects.set(
+        "shutdown",
+        ratatui::layout::Rect::new(inner_x, shutdown_row, shutdown_width, 1),
     );
 
     if has_operations {
@@ -339,12 +350,14 @@ fn render_exit_confirm_modal(
             Line::from("Exit anyway?"),
             Line::from(""),
             button_line,
+            Line::from(""),
+            shutdown_line,
         ];
 
         Modal::new()
             .title(" Warning ")
             .content(content)
-            .fixed_size(50, 16)
+            .fixed_size(50, 18)
             .style(ModalStyle::warning())
             .centered()
             .render(f, area);
@@ -356,12 +369,14 @@ fn render_exit_confirm_modal(
             Line::from(""),
             Line::from(""),
             button_line,
+            Line::from(""),
+            shutdown_line,
         ];
 
         Modal::new()
             .title(" Exit ")
             .content(content)
-            .fixed_size(40, 9)
+            .fixed_size(40, 11)
             .style(ModalStyle::info())
             .centered()
             .render(f, area);

@@ -484,16 +484,12 @@ impl Witch {
         &mut self,
         cmd_rx: mpsc::Receiver<handle::HandleCommand>,
     ) {
-        use handle::HandleCommand;
-
         loop {
             // Drain all pending commands (non-blocking)
             loop {
                 match cmd_rx.try_recv() {
                     Ok(cmd) => {
-                        let should_stop = matches!(cmd, HandleCommand::Shutdown);
-                        self.dispatch_command(cmd);
-                        if should_stop {
+                        if self.dispatch_command(cmd) {
                             return;
                         }
                     }
@@ -569,7 +565,8 @@ impl Witch {
     // -------------------------------------------------------------------------
 
     /// Dispatch a single command from the handle.
-    fn dispatch_command(&mut self, cmd: handle::HandleCommand) {
+    /// Returns `true` if the Witch should shut down.
+    fn dispatch_command(&mut self, cmd: handle::HandleCommand) -> bool {
         use crate::meta::protocol::{
             AuthResponse, AuthenticatedBody, AuthenticatedResponse, AuthorizationLevel,
             CommandPayload, CommandResponse, DecisionDetail, ProtocolError, QueryPayload,
@@ -594,7 +591,7 @@ impl Witch {
                             let _ = reply.send(Err(ProtocolError::Unauthorized));
                         }
                     }
-                    return;
+                    return false;
                 }
 
                 let result = self.gate(Some(&token), AuthorizationLevel::Authenticated, |w| {
@@ -702,12 +699,22 @@ impl Witch {
                                     w.queue_vacuum();
                                     CommandResponse::Ok
                                 }
+                                CommandPayload::Shutdown => {
+                                    CommandResponse::Goodbye
+                                }
                             };
                             Ok(AuthenticatedResponse::Command(response))
                         }
                     }
                 });
+                let is_shutdown = matches!(
+                    result,
+                    Ok(AuthenticatedResponse::Command(CommandResponse::Goodbye))
+                );
                 let _ = reply.send(result);
+                if is_shutdown {
+                    return true;
+                }
             }
 
             HandleCommand::Unauthenticated { body, reply } => {
@@ -754,9 +761,11 @@ impl Witch {
             }
 
             HandleCommand::Shutdown => {
-                // Handled by caller (run_loop checks for this)
+                return true;
             }
         }
+
+        false
     }
 
     // -------------------------------------------------------------------------

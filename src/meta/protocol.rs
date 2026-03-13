@@ -260,6 +260,8 @@ pub enum CommandPayload {
     QueueSchemaReconciliation,
     /// Queue a VACUUM operation.
     QueueVacuum,
+    /// Initiate server shutdown.
+    Shutdown,
 }
 
 /// Command response variants.
@@ -267,6 +269,8 @@ pub enum CommandPayload {
 pub enum CommandResponse {
     /// Command executed successfully.
     Ok,
+    /// Server is shutting down. This is the last response the client will receive.
+    Goodbye,
 }
 
 /// Trait for protocol commands. Each implementor declares its response type.

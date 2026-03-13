@@ -634,61 +634,46 @@ impl Witch {
 
                         // -- Command area --
                         AuthenticatedBody::Command(payload) => {
+                            use crate::meta::protocol::{BackgroundTask, ConfigOp};
                             let response = match *payload {
-                                CommandPayload::RequestExternalFetch => {
-                                    w.request_external_fetch();
+                                CommandPayload::QueueTask(task) => {
+                                    match task {
+                                        BackgroundTask::ExternalFetch => w.request_external_fetch(),
+                                        BackgroundTask::ReleasePacking => w.request_release_packing(),
+                                        BackgroundTask::SchemaReconciliation => w.queue_schema_reconciliation(),
+                                        BackgroundTask::Vacuum => w.queue_vacuum(),
+                                    }
                                     CommandResponse::Ok
                                 }
-                                CommandPayload::RequestReleasePacking => {
-                                    w.request_release_packing();
+                                CommandPayload::ConfigOp(op) => {
+                                    match op {
+                                        ConfigOp::Validate(config) => {
+                                            crate::config::validate_config(&config).map_err(|e| {
+                                                ProtocolError::Internal(format!("{:#}", e))
+                                            })?;
+                                        }
+                                        ConfigOp::SetShared(config) => {
+                                            w.set_shared_config(config.into_shared());
+                                        }
+                                        ConfigOp::UpdatePerformance(opinions) => {
+                                            w.update_performance_impl(opinions);
+                                        }
+                                    }
                                     CommandResponse::Ok
                                 }
-                                CommandPayload::ValidateConfig { config } => {
-                                    crate::config::validate_config(&config).map_err(|e| {
-                                        ProtocolError::Internal(format!("{:#}", e))
-                                    })?;
-                                    CommandResponse::Ok
-                                }
-                                CommandPayload::SetSharedConfig { config } => {
-                                    w.set_shared_config(config.into_shared());
-                                    CommandResponse::Ok
-                                }
-                                CommandPayload::UpdatePerformance { opinions } => {
-                                    w.update_performance_impl(opinions);
-                                    CommandResponse::Ok
-                                }
-                                CommandPayload::QueueSchemaReconciliation => {
-                                    w.queue_schema_reconciliation();
-                                    CommandResponse::Ok
-                                }
-                                CommandPayload::QueueVacuum => {
-                                    w.queue_vacuum();
-                                    CommandResponse::Ok
-                                }
-                                CommandPayload::JettisonEditHistorySession { session_id } => {
+                                CommandPayload::JettisonEditHistory { session_id } => {
                                     let now = chrono::Local::now().to_rfc3339();
+                                    let label = match &session_id {
+                                        Some(sid) => format!("Jettison edit history: session {}", sid),
+                                        None => "Jettison edit history: all sessions".to_string(),
+                                    };
                                     let mutation = Mutation::JettisonEditHistory(
                                         mm_meta::mutations::jettison::JettisonEditHistoryMutation {
-                                            session_id: Some(session_id.clone()),
+                                            session_id,
                                             timestamp: now,
                                         },
                                     );
-                                    let label = format!("Jettison edit history: session {}", session_id);
                                     w.queue_mutations_internal(vec![mutation], Some(label));
-                                    CommandResponse::Ok
-                                }
-                                CommandPayload::JettisonEditHistoryAll => {
-                                    let now = chrono::Local::now().to_rfc3339();
-                                    let mutation = Mutation::JettisonEditHistory(
-                                        mm_meta::mutations::jettison::JettisonEditHistoryMutation {
-                                            session_id: None,
-                                            timestamp: now,
-                                        },
-                                    );
-                                    w.queue_mutations_internal(
-                                        vec![mutation],
-                                        Some("Jettison edit history: all sessions".to_string()),
-                                    );
                                     CommandResponse::Ok
                                 }
                                 CommandPayload::Shutdown => {

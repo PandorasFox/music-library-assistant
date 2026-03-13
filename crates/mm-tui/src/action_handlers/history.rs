@@ -292,13 +292,13 @@ impl App {
 
         let rows = self
             .witch
-            .query(mm_meta::domain_queries::GetSessionEditHistory {
-                session_id: session_id.clone(),
+            .query(mm_meta::domain_queries::GetEditHistoryExport {
+                session_id: Some(session_id.clone()),
             });
 
         let sid = session_id.clone();
         self.finalize_jettison(rows, "Jettisoned", move |witch| {
-            let _ = witch.jettison_edit_history_session(&sid);
+            let _ = witch.jettison_edit_history(Some(&sid));
         }, |state| {
             state.sessions.retain(|e| e.summary.session_id != session_id);
             state.session_list.clamp_cursor(&state.sessions);
@@ -309,10 +309,12 @@ impl App {
     fn execute_jettison_all(&mut self) {
         let rows = self
             .witch
-            .query(mm_meta::domain_queries::GetAllEditHistory);
+            .query(mm_meta::domain_queries::GetEditHistoryExport {
+                session_id: None,
+            });
 
         self.finalize_jettison(rows, "Jettisoned all", |witch| {
-            let _ = witch.jettison_edit_history_all();
+            let _ = witch.jettison_edit_history(None);
         }, |state| {
             state.sessions.clear();
             state.session_list.reset();

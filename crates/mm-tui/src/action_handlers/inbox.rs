@@ -118,7 +118,10 @@ impl App {
     fn start_inbox_tag_canonicity_resolution(&mut self) {
         let signal_keys = self
             .witch
-            .query(mm_meta::domain_queries::GetInboxTagCanonicityKeys);
+            .query(mm_meta::domain_queries::GetTagCanonicityKeys {
+                zone: mm_meta::db_types::Zone::Inbox,
+                tag_filter: None,
+            });
 
         if signal_keys.is_empty() {
             self.status_message = Some("No inbox tag canonicity signals to resolve".to_string());

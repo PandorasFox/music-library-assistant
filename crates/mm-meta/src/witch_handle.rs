@@ -379,52 +379,23 @@ impl WitchHandle {
         }
     }
 
-    /// Kick off external fetch.
-    pub fn request_external_fetch(&mut self) -> Result<(), ProtocolError> {
-        self.send_command(CommandPayload::RequestExternalFetch)?;
+    /// Queue a background task.
+    pub fn queue_task(&mut self, task: crate::protocol::BackgroundTask) -> Result<(), ProtocolError> {
+        self.send_command(CommandPayload::QueueTask(task))?;
         Ok(())
     }
 
-    /// Kick off release bin-packing.
-    pub fn request_release_packing(&mut self) -> Result<(), ProtocolError> {
-        self.send_command(CommandPayload::RequestReleasePacking)?;
+    /// Send a config operation (validate, inject, or update performance).
+    pub fn config_op(&self, op: crate::protocol::ConfigOp) -> Result<(), ProtocolError> {
+        self.send_command(CommandPayload::ConfigOp(op))?;
         Ok(())
     }
 
-    /// Validate a config blob.
-    pub fn validate_config(&self, config: &crate::config::Config) -> Result<(), ProtocolError> {
-        self.send_command(CommandPayload::ValidateConfig {
-            config: config.clone(),
+    /// Delete edit history. `None` = all sessions; `Some(id)` = single session.
+    pub fn jettison_edit_history(&self, session_id: Option<&str>) -> Result<(), ProtocolError> {
+        self.send_command(CommandPayload::JettisonEditHistory {
+            session_id: session_id.map(|s| s.to_owned()),
         })?;
-        Ok(())
-    }
-
-    /// Inject shared config (in-process startup only).
-    pub fn set_shared_config(&mut self, config: crate::config::Config) -> Result<(), ProtocolError> {
-        self.send_command(CommandPayload::SetSharedConfig { config })?;
-        Ok(())
-    }
-
-    /// Update performance config at runtime.
-    pub fn update_performance(
-        &mut self,
-        opinions: crate::config::PerformanceOpinions,
-    ) -> Result<(), ProtocolError> {
-        self.send_command(CommandPayload::UpdatePerformance { opinions })?;
-        Ok(())
-    }
-
-    /// Delete edit history for a specific session.
-    pub fn jettison_edit_history_session(&self, session_id: &str) -> Result<(), ProtocolError> {
-        self.send_command(CommandPayload::JettisonEditHistorySession {
-            session_id: session_id.to_owned(),
-        })?;
-        Ok(())
-    }
-
-    /// Delete all edit history.
-    pub fn jettison_edit_history_all(&self) -> Result<(), ProtocolError> {
-        self.send_command(CommandPayload::JettisonEditHistoryAll)?;
         Ok(())
     }
 

@@ -202,25 +202,23 @@ impl_domain_query! {
 }
 
 impl_domain_query! {
-    GetSessionEditHistory => Vec<EditHistoryExportRow>, |s, db| {
-        db.get_session_edit_history(&s.session_id)
-            .unwrap_or_default()
+    GetEditHistoryExport => Vec<EditHistoryExportRow>, |s, db| {
+        match s.session_id {
+            Some(ref sid) => db.get_session_edit_history(sid).unwrap_or_default(),
+            None => db.get_all_edit_history().unwrap_or_default(),
+        }
     }
-}
-
-impl_domain_query! {
-    GetAllEditHistory => Vec<EditHistoryExportRow>, db.get_all_edit_history()
 }
 
 impl_domain_query! {
     GetCompoundSignalGroups => Vec<CompoundGroup>, |s, db| {
-        db.get_compound_signal_groups_by_safety(s.safe_only, s.tag_filter.as_deref())
-            .unwrap_or_default()
+        use mm_meta::db_types::Zone;
+        match s.zone {
+            Zone::Inbox => db.get_inbox_compound_signal_groups().unwrap_or_default(),
+            _ => db.get_compound_signal_groups_by_safety(s.safe_only, s.tag_filter.as_deref())
+                .unwrap_or_default(),
+        }
     }
-}
-
-impl_domain_query! {
-    GetInboxCompoundSignalGroups => Vec<CompoundGroup>, db.get_inbox_compound_signal_groups()
 }
 
 impl_domain_query! {
@@ -244,10 +242,12 @@ impl_domain_query! {
 
 impl_domain_query! {
     GetTagCanonicityKeys => Vec<String>, |s, db| {
-        use crate::meta::signals::data::TagCanonicitySignal;
-        let all_keys = db
-            .aggregate_signal_keys::<TagCanonicitySignal>()
-            .unwrap_or_default();
+        use mm_meta::db_types::Zone;
+        use crate::meta::signals::data::{TagCanonicitySignal, InboxTagCanonicitySignal};
+        let all_keys = match s.zone {
+            Zone::Inbox => db.aggregate_signal_keys::<InboxTagCanonicitySignal>().unwrap_or_default(),
+            _ => db.aggregate_signal_keys::<TagCanonicitySignal>().unwrap_or_default(),
+        };
         match &s.tag_filter {
             Some(tag_name) => {
                 let prefix = format!("{}:", tag_name);
@@ -258,13 +258,6 @@ impl_domain_query! {
             }
             None => all_keys,
         }
-    }
-}
-
-impl_domain_query! {
-    GetInboxTagCanonicityKeys => Vec<String>, |db| {
-        use crate::meta::signals::data::InboxTagCanonicitySignal;
-        db.aggregate_signal_keys::<InboxTagCanonicitySignal>().unwrap_or_default()
     }
 }
 
@@ -839,15 +832,12 @@ dispatch_domain_query_impl! {
     GetOobFilesBucketed,
     GetMovedFiles,
     GetMissingAlbumSingleSignals,
-    GetSessionEditHistory,
-    GetAllEditHistory,
+    GetEditHistoryExport,
     GetCompoundSignalGroups,
-    GetInboxCompoundSignalGroups,
     GetPackingKnots,
     GetPackingInodePaths,
     GetInconsistentAlbumArtistKeys,
     GetTagCanonicityKeys,
-    GetInboxTagCanonicityKeys,
     GetDiscExtractionData,
     GetMissingFileData,
     GetMissingDirectoryData,
@@ -980,29 +970,30 @@ mod tests {
     }
 
     #[test]
-    fn get_session_edit_history_empty_db() {
+    fn get_edit_history_export_session_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
-        let result = GetSessionEditHistory {
-            session_id: "nonexistent".to_string(),
+        let result = GetEditHistoryExport {
+            session_id: Some("nonexistent".to_string()),
         }
         .execute(&read_db);
         assert!(result.is_empty());
     }
 
     #[test]
-    fn get_all_edit_history_empty_db() {
+    fn get_edit_history_export_all_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
-        let result = GetAllEditHistory.execute(&read_db);
+        let result = GetEditHistoryExport { session_id: None }.execute(&read_db);
         assert!(result.is_empty());
     }
 
     #[test]
-    fn get_compound_signal_groups_empty_db() {
+    fn get_compound_signal_groups_corpus_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
         let result = GetCompoundSignalGroups {
+            zone: mm_meta::db_types::Zone::Corpus,
             safe_only: false,
             tag_filter: None,
         }
@@ -1011,10 +1002,15 @@ mod tests {
     }
 
     #[test]
-    fn get_inbox_compound_signal_groups_empty_db() {
+    fn get_compound_signal_groups_inbox_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
-        let result = GetInboxCompoundSignalGroups.execute(&read_db);
+        let result = GetCompoundSignalGroups {
+            zone: mm_meta::db_types::Zone::Inbox,
+            safe_only: false,
+            tag_filter: None,
+        }
+        .execute(&read_db);
         assert!(result.is_empty());
     }
 
@@ -1043,18 +1039,24 @@ mod tests {
     }
 
     #[test]
-    fn get_tag_canonicity_keys_empty_db() {
+    fn get_tag_canonicity_keys_corpus_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
-        let result = GetTagCanonicityKeys { tag_filter: None }.execute(&read_db);
+        let result = GetTagCanonicityKeys {
+            zone: mm_meta::db_types::Zone::Corpus,
+            tag_filter: None,
+        }.execute(&read_db);
         assert!(result.is_empty());
     }
 
     #[test]
-    fn get_inbox_tag_canonicity_keys_empty_db() {
+    fn get_tag_canonicity_keys_inbox_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
-        let result = GetInboxTagCanonicityKeys.execute(&read_db);
+        let result = GetTagCanonicityKeys {
+            zone: mm_meta::db_types::Zone::Inbox,
+            tag_filter: None,
+        }.execute(&read_db);
         assert!(result.is_empty());
     }
 
@@ -1241,17 +1243,19 @@ mod tests {
         t!(serde_json::to_string(&GetOobFilesBucketed.execute(&read_db)));
         t!(serde_json::to_string(&GetMovedFiles.execute(&read_db)));
         t!(serde_json::to_string(&GetMissingAlbumSingleSignals.execute(&read_db)));
-        t!(serde_json::to_string(&GetAllEditHistory.execute(&read_db)));
+        t!(serde_json::to_string(&GetEditHistoryExport { session_id: None }.execute(&read_db)));
         t!(serde_json::to_string(&GetCompoundSignalGroups {
+            zone: mm_meta::db_types::Zone::Corpus,
             safe_only: false,
             tag_filter: None,
         }.execute(&read_db)));
-        t!(serde_json::to_string(&GetInboxCompoundSignalGroups.execute(&read_db)));
         t!(serde_json::to_string(&GetPackingKnots.execute(&read_db)));
         t!(serde_json::to_string(&GetPackingInodePaths.execute(&read_db)));
         t!(serde_json::to_string(&GetInconsistentAlbumArtistKeys.execute(&read_db)));
-        t!(serde_json::to_string(&GetTagCanonicityKeys { tag_filter: None }.execute(&read_db)));
-        t!(serde_json::to_string(&GetInboxTagCanonicityKeys.execute(&read_db)));
+        t!(serde_json::to_string(&GetTagCanonicityKeys {
+            zone: mm_meta::db_types::Zone::Corpus,
+            tag_filter: None,
+        }.execute(&read_db)));
         t!(serde_json::to_string(&GetDiscExtractionData { map_letters_to_numbers: false }.execute(&read_db)));
 
         // Modal init loaders

@@ -240,31 +240,41 @@ pub struct DecisionDetail {
 // Command Area
 // ============================================================================
 
+/// Background task types for `CommandPayload::QueueTask`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BackgroundTask {
+    /// AcoustID + MusicBrainz external metadata fetch.
+    ExternalFetch,
+    /// Release bin-packing computation.
+    ReleasePacking,
+    /// Schema reconciliation pass.
+    SchemaReconciliation,
+    /// SQLite VACUUM.
+    Vacuum,
+}
+
+/// Config operation types for `CommandPayload::ConfigOp`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ConfigOp {
+    /// Validate a config blob (returns Ok or error).
+    Validate(crate::config::Config),
+    /// Inject shared config (called during startup, in-process only).
+    SetShared(crate::config::Config),
+    /// Update performance config at runtime.
+    UpdatePerformance(crate::config::PerformanceOpinions),
+}
+
 /// Operational commands with no transaction semantics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CommandPayload {
-    /// Kick off external fetch (AcoustID + MusicBrainz lookups).
-    RequestExternalFetch,
-    /// Kick off release bin-packing computation.
-    RequestReleasePacking,
-    /// Validate a config blob (returns Ok or error).
-    ValidateConfig { config: crate::config::Config },
-    /// Inject shared config (called during startup, in-process only).
-    SetSharedConfig { config: crate::config::Config },
-    /// Update performance config at runtime.
-    UpdatePerformance {
-        opinions: crate::config::PerformanceOpinions,
-    },
-    /// Queue schema reconciliation.
-    QueueSchemaReconciliation,
-    /// Queue a VACUUM operation.
-    QueueVacuum,
+    /// Queue a background task.
+    QueueTask(BackgroundTask),
+    /// Config validation, injection, or runtime update.
+    ConfigOp(ConfigOp),
+    /// Delete edit history. `None` = all sessions; `Some(id)` = single session.
+    JettisonEditHistory { session_id: Option<String> },
     /// Initiate server shutdown.
     Shutdown,
-    /// Delete edit history for a specific session (by session_id).
-    JettisonEditHistorySession { session_id: String },
-    /// Delete all edit history.
-    JettisonEditHistoryAll,
 }
 
 /// Command response variants.

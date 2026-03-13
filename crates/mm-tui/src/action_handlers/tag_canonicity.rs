@@ -47,6 +47,7 @@ impl App {
                 let keys = self
                     .witch
                     .query(mm_meta::domain_queries::GetTagCanonicityKeys {
+                        zone: Zone::Corpus,
                         tag_filter: Some(tag_name.clone()),
                     });
                 (keys, CanonicitySignalKind::TagCanonicity)

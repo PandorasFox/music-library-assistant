@@ -509,7 +509,7 @@ impl App {
     /// and transition to the appropriate view based on Witch state.
     pub(crate) fn complete_startup(&mut self) {
         let config = self.config();
-        let _ = self.witch.set_shared_config(config);
+        let _ = self.witch.config_op(mm_meta::protocol::ConfigOp::SetShared(config));
 
         // If leave_transactions_open is enabled, open a persistent transaction at startup
         if self.open_txn_mode() {

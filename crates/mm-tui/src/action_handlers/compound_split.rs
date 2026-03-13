@@ -76,17 +76,13 @@ impl App {
         zone: Zone,
     ) {
         // Load compound signal groups filtered by safety classification and tag
-        let groups = if zone == Zone::Inbox {
-            self.witch
-                .query(mm_meta::domain_queries::GetInboxCompoundSignalGroups)
-        } else {
-            let tag_filter_owned = tag_filter.map(|s| s.to_string());
-            self.witch
-                .query(mm_meta::domain_queries::GetCompoundSignalGroups {
-                    safe_only,
-                    tag_filter: tag_filter_owned,
-                })
-        };
+        let groups = self
+            .witch
+            .query(mm_meta::domain_queries::GetCompoundSignalGroups {
+                zone,
+                safe_only,
+                tag_filter: tag_filter.map(|s| s.to_string()),
+            });
 
         if groups.is_empty() {
             self.status_message = Some("No compound tag signals to resolve".to_string());

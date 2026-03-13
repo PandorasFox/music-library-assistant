@@ -429,7 +429,7 @@ impl HandleAction for super::config_editor::ConfigEditorAction {
                     let Some(g) = gesture else { return };
 
                     // Validate config through the Witch before staging
-                    if let Err(e) = app.witch.validate_config(&new_config) {
+                    if let Err(e) = app.witch.config_op(mm_meta::protocol::ConfigOp::Validate(new_config.clone())) {
                         app.status_message = Some(format!("Config rejected: {}", e));
                         return;
                     }

@@ -114,26 +114,20 @@ pub struct GetMovedFiles;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMissingAlbumSingleSignals;
 
-/// Full edit history for a specific session (for export).
+/// Edit history rows for export. `None` = all sessions; `Some(id)` = single session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetSessionEditHistory {
-    pub session_id: String,
+pub struct GetEditHistoryExport {
+    pub session_id: Option<String>,
 }
 
-/// Full edit history across all sessions (for export).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetAllEditHistory;
-
 /// Compound tag signal groups (for compound split resolution).
+/// `Zone::Corpus` uses safety/tag filtering; `Zone::Inbox` returns all inbox groups.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetCompoundSignalGroups {
+    pub zone: crate::db_types::Zone,
     pub safe_only: bool,
     pub tag_filter: Option<String>,
 }
-
-/// Inbox compound tag signal groups.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetInboxCompoundSignalGroups;
 
 /// Packing knot data (conflict tangles requiring review).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,15 +145,13 @@ pub struct GetPackingInodePaths;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetInconsistentAlbumArtistKeys;
 
-/// Aggregate signal keys for TagCanonicity signals, optionally filtered by tag prefix.
+/// Aggregate signal keys for tag canonicity signals, optionally filtered by tag prefix.
+/// `Zone::Corpus` queries `TagCanonicitySignal`; `Zone::Inbox` queries `InboxTagCanonicitySignal`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetTagCanonicityKeys {
+    pub zone: crate::db_types::Zone,
     pub tag_filter: Option<String>,
 }
-
-/// Aggregate signal keys for InboxTagCanonicity signals.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetInboxTagCanonicityKeys;
 
 /// Disc extraction signals resolved into modal-ready data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -400,17 +392,14 @@ domain_query_protocol! {
     GetOobFilesBucketed => Vec<crate::views::BucketedOobFile>,
     GetMovedFiles => Vec<crate::views::MovedFileInfo>,
     GetMissingAlbumSingleSignals => Vec<MissingAlbumSingleSignalWire>,
-    GetSessionEditHistory => Vec<crate::views::EditHistoryExportRow>,
-    GetAllEditHistory => Vec<crate::views::EditHistoryExportRow>,
+    GetEditHistoryExport => Vec<crate::views::EditHistoryExportRow>,
     GetCompoundSignalGroups => Vec<crate::signals::data::CompoundGroup>,
-    GetInboxCompoundSignalGroups => Vec<crate::signals::data::CompoundGroup>,
     GetPackingKnots => Vec<crate::signals::data::PackingKnotData>,
     GetPackingInodePaths => Vec<(i64, String)>,
 
     // Detail queries (Wave 2)
     GetInconsistentAlbumArtistKeys => Vec<String>,
     GetTagCanonicityKeys => Vec<String>,
-    GetInboxTagCanonicityKeys => Vec<String>,
     GetDiscExtractionData => DiscExtractionModalData,
 
     // Detail queries (Wave 3: modal init loaders)

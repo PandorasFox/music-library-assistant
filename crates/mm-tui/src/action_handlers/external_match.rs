@@ -18,14 +18,14 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
     fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
         match self {
             external_match_view::ExternalMatchesAction::RequestFetch => {
-                let _ = app.witch.request_external_fetch();
+                let _ = app.witch.queue_task(mm_meta::protocol::BackgroundTask::ExternalFetch);
                 app.status_message = Some("External fetch requested".to_string());
                 if let ActiveView::ExternalMatches(ref mut state) = app.view {
                     state.fetch_active = app.witch.witch_status().is_external_fetch_active;
                 }
             }
             external_match_view::ExternalMatchesAction::RequestReleasePacking => {
-                let _ = app.witch.request_release_packing();
+                let _ = app.witch.queue_task(mm_meta::protocol::BackgroundTask::ReleasePacking);
                 app.transition_to_progress_after_mutations(
                     super::super::progress_screen::ProgressPhase::ContentAnalysis,
                 );

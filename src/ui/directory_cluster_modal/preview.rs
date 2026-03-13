@@ -13,6 +13,7 @@
 //! - Ctrl+R: Jump to transaction review
 //! - Escape: Cancel
 
+use super::types::DirectoryClusterModalDataExt;
 use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::input::InputAction;
 use ratatui::{

@@ -13,61 +13,32 @@
 //! - Response types are `Serialize` (web-ready from day one)
 //! - Errors are handled internally (return usable defaults, never `Result`)
 //!
-//! ## Macro
+//! ## Layout
 //!
-//! The `define_domain_query!` macro generates the query struct and `DomainQuery`
-//! impl from a compact declaration. The `cached(...)` annotation is retained for
-//! documentation but no longer generates caching machinery. Forms:
-//!
-//! ```ignore
-//! // Simple: unit struct, single db method call, unwrap_or_default
-//! define_domain_query! {
-//!     /// Doc comment
-//!     GetFoo => FooData, cached(15, TAGS | FILES), db.get_foo_data()
-//! }
-//!
-//! // Body: unit struct, custom execute logic with `db` in scope
-//! define_domain_query! {
-//!     /// Doc comment
-//!     GetBar => BarData, cached(30, TAGS), |db| {
-//!         let x = db.get_x().unwrap_or_default();
-//!         let y = db.get_y().unwrap_or_default();
-//!         BarData { x, y }
-//!     }
-//! }
-//!
-//! // Uncached (detail query):
-//! define_domain_query! {
-//!     /// Doc comment
-//!     GetBaz => BazData, uncached, db.get_baz_data()
-//! }
-//!
-//! // Modal load shorthand: unit struct, Response::load(db).ok().unwrap_or_default()
-//! define_domain_query! {
-//!     /// Doc comment
-//!     GetQux => QuxModalData, uncached, modal_load
-//! }
-//!
-//! // Parameterized: struct with fields, custom execute body (s = &self, db = &ReadOnlyDb)
-//! define_domain_query! {
-//!     /// Doc comment
-//!     GetQuux { field1: Type1, field2: Type2 } => QuuxData, uncached, |s, db| {
-//!         db.some_query(&s.field1, s.field2).unwrap_or_default()
-//!     }
-//! }
-//! ```
-//!
-//! See `docs/DOMAIN_QUERY_STRATEGY.md` for the full design rationale.
+//! Query struct definitions, `DomainQueryPayload`, `DomainQueryResult`, and
+//! `ProtocolQuery` impls all live in **mm-meta** and are re-exported here.
+//! This file provides only:
+//! - The `DomainQuery` trait (requires `ReadOnlyDb`, which lives in mm)
+//! - `impl DomainQuery for ...` for every query (via `impl_domain_query!`)
+//! - `dispatch_domain_query()` (server-side exhaustive dispatch)
+//! - Helper functions used by execute bodies
+
+// Re-export query structs and protocol bridge types from mm-meta.
+pub use mm_meta::domain_queries::*;
+
+// Re-export domain query response types from mm-meta.
+pub use mm_meta::domain_query_types::*;
 
 use serde::Serialize;
 
 use crate::db::ReadOnlyDb;
+
 // ============================================================================
-// Core Traits
+// Core Trait
 // ============================================================================
 
 /// Every domain query implements this. The trait is the contract
-/// that the `define_domain_query!` macro generates against.
+/// that `impl_domain_query!` generates against.
 ///
 /// Implementors must follow the uniformity rules:
 /// 1. All inputs are fields on `self`
@@ -82,26 +53,28 @@ pub trait DomainQuery: Send + 'static {
     fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response;
 }
 
-
 // ============================================================================
-// Macro
+// Macro: impl_domain_query!
 // ============================================================================
 
-/// Generates a domain query struct with `DomainQuery` impl.
+/// Generates a `DomainQuery` impl for an existing query struct (defined in mm-meta).
 ///
-/// See module docs for usage examples.
-macro_rules! define_domain_query {
-    // Simple form: unit struct, single db method, unwrap_or_default
-    // The `cached(...)` annotation is retained for documentation but no longer
-    // generates any caching impl — all queries go through the protocol.
+/// Forms:
+/// ```ignore
+/// // Simple: unit struct, single db method call, unwrap_or_default
+/// impl_domain_query! { GetFoo => FooData, db.get_foo_data() }
+///
+/// // Body: unit struct, custom execute logic with `db` in scope
+/// impl_domain_query! { GetBar => BarData, |db| { ... } }
+///
+/// // Parameterized body: struct with fields, `s` = &self, `db` = &ReadOnlyDb
+/// impl_domain_query! { GetBaz => BazData, |s, db| { ... } }
+/// ```
+macro_rules! impl_domain_query {
+    // Simple form: single db method, unwrap_or_default
     (
-        $( #[doc = $doc:expr] )*
-        $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+), db.$method:ident()
+        $name:ident => $response:ty, db.$method:ident()
     ) => {
-        $( #[doc = $doc] )*
-        #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-        pub struct $name;
-
         impl DomainQuery for $name {
             type Response = $response;
 
@@ -111,33 +84,10 @@ macro_rules! define_domain_query {
         }
     };
 
-    // Simple form with urgent throttle annotation (ignored)
+    // Body form: custom execute expression with db closure
     (
-        $( #[doc = $doc:expr] )*
-        $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+, urgent($urgent_secs:expr)), db.$method:ident()
+        $name:ident => $response:ty, |$db:ident| $body:block
     ) => {
-        $( #[doc = $doc] )*
-        #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-        pub struct $name;
-
-        impl DomainQuery for $name {
-            type Response = $response;
-
-            fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
-                db.$method().unwrap_or_default()
-            }
-        }
-    };
-
-    // Body form: unit struct, custom execute expression with db closure
-    (
-        $( #[doc = $doc:expr] )*
-        $name:ident => $response:ty, cached($secs:expr, $($scope:ident)|+), |$db:ident| $body:block
-    ) => {
-        $( #[doc = $doc] )*
-        #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-        pub struct $name;
-
         impl DomainQuery for $name {
             type Response = $response;
 
@@ -147,71 +97,10 @@ macro_rules! define_domain_query {
         }
     };
 
-    // Simple form, uncached (detail query)
+    // Parameterized body form: struct with fields + custom execute body
     (
-        $( #[doc = $doc:expr] )*
-        $name:ident => $response:ty, uncached, db.$method:ident()
+        $name:ident => $response:ty, |$s:ident, $db:ident| $body:block
     ) => {
-        $( #[doc = $doc] )*
-        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-        pub struct $name;
-
-        impl DomainQuery for $name {
-            type Response = $response;
-
-            fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
-                db.$method().unwrap_or_default()
-            }
-        }
-    };
-
-    // Body form, uncached (detail query)
-    (
-        $( #[doc = $doc:expr] )*
-        $name:ident => $response:ty, uncached, |$db:ident| $body:block
-    ) => {
-        $( #[doc = $doc] )*
-        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-        pub struct $name;
-
-        impl DomainQuery for $name {
-            type Response = $response;
-
-            fn execute(self, $db: &ReadOnlyDb<'_>) -> Self::Response {
-                $body
-            }
-        }
-    };
-
-    // Modal load shorthand: unit struct, ModalType::load(db).ok().unwrap_or_default()
-    (
-        $( #[doc = $doc:expr] )*
-        $name:ident => $response:ty, uncached, modal_load
-    ) => {
-        $( #[doc = $doc] )*
-        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-        pub struct $name;
-
-        impl DomainQuery for $name {
-            type Response = $response;
-
-            fn execute(self, db: &ReadOnlyDb<'_>) -> Self::Response {
-                <$response>::load(db).ok().unwrap_or_default()
-            }
-        }
-    };
-
-    // Parameterized body form, uncached: struct with fields + custom execute body
-    (
-        $( #[doc = $doc:expr] )*
-        $name:ident { $( $field:ident : $ftype:ty ),+ $(,)? } => $response:ty, uncached, |$s:ident, $db:ident| $body:block
-    ) => {
-        $( #[doc = $doc] )*
-        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-        pub struct $name {
-            $( pub $field: $ftype ),+
-        }
-
         impl DomainQuery for $name {
             type Response = $response;
 
@@ -220,87 +109,59 @@ macro_rules! define_domain_query {
                 $body
             }
         }
-    };
-
-    // Parameterized body form, cached: struct with fields + custom execute body
-    (
-        $( #[doc = $doc:expr] )*
-        $name:ident { $( $field:ident : $ftype:ty ),+ $(,)? } => $response:ty, cached($secs:expr, $($scope:ident)|+), |$s:ident, $db:ident| $body:block
-    ) => {
-        $( #[doc = $doc] )*
-        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-        pub struct $name {
-            $( pub $field: $ftype ),+
-        }
-
-        impl DomainQuery for $name {
-            type Response = $response;
-
-            fn execute(self, $db: &ReadOnlyDb<'_>) -> Self::Response {
-                let $s = &self;
-                $body
-            }
-        }
-    };
-
-    // Internal helper: expand scope union from `TAGS | FILES` syntax
-    (@scope $first:ident $(| $rest:ident)*) => {
-        crate::meta::recomputation::RecomputationScope::$first
-        $( .union(crate::meta::recomputation::RecomputationScope::$rest) )*
     };
 }
 
 // ============================================================================
-// Summary Queries
+// Imports for execute bodies
 // ============================================================================
 
-use crate::meta::signals::data::{CompoundGroup, MissingAlbumSingleSignal};
+use crate::meta::signals::data::CompoundGroup;
 use crate::meta::views::{
     BucketedOobFile, DeployStatus, EditHistoryData, EditHistoryExportRow, ExternalMatchesData,
     InboxOverviewData, InsightsData, MovedFileInfo, OobSyncFile,
 };
 
-/// Cached packing directory data for tree browser markers.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct PackingDirsData {
-    /// Paths of files with release packing assignments.
-    pub file_paths: std::collections::HashSet<std::path::PathBuf>,
-    /// Parent directories mapped to their best packing category.
-    pub dir_categories:
-        std::collections::HashMap<std::path::PathBuf, crate::meta::signals::packing_category::PackingCategory>,
+use crate::db::modal_loaders;
+use crate::ui::corrupt_file_modal;
+use crate::ui::deploy_modal;
+use crate::ui::directory_cluster_modal;
+use crate::ui::inbox_corpus_match_modal;
+use crate::ui::manual_review_modal;
+use crate::ui::missing_directory_modal;
+use crate::ui::missing_file_modal;
+use crate::ui::shit_format_modal;
+use crate::ui::subpar_duplicate_modal;
+
+// ============================================================================
+// Summary Queries
+// ============================================================================
+
+impl_domain_query! {
+    GetInsights => InsightsData, db.get_insights_data()
 }
 
-define_domain_query! {
-    /// Corpus health insights: file state, tag squash, and other signal counts.
-    GetInsights => InsightsData, cached(30, TAGS | FILES), db.get_insights_data()
+impl_domain_query! {
+    GetInboxOverview => InboxOverviewData, db.get_inbox_overview_data()
 }
 
-define_domain_query! {
-    /// Inbox file counts by category (unindexed, corpus match, organizable, etc.).
-    GetInboxOverview => InboxOverviewData, cached(15, FILES | INBOX), db.get_inbox_overview_data()
+impl_domain_query! {
+    GetDeployStatus => DeployStatus, db.get_deploy_status()
 }
 
-define_domain_query! {
-    /// Current deploy status: library health and per-library file counts.
-    GetDeployStatus => DeployStatus, cached(15, DEPLOY | FILES), db.get_deploy_status()
-}
-
-define_domain_query! {
-    /// Edit session list with timestamps and edit counts.
-    GetEditHistory => EditHistoryData, cached(30, TAGS), |db| {
+impl_domain_query! {
+    GetEditHistory => EditHistoryData, |db| {
         let sessions = db.get_edit_sessions().unwrap_or_default();
         EditHistoryData { sessions }
     }
 }
 
-define_domain_query! {
-    /// External match data: confidence buckets, packing counts, untagged entries.
-    GetExternalMatches => ExternalMatchesData, cached(15, EXTERNAL, urgent(5)), db.get_external_matches_data()
+impl_domain_query! {
+    GetExternalMatches => ExternalMatchesData, db.get_external_matches_data()
 }
 
-define_domain_query! {
-    /// Packing directory data: assigned file paths and directory categories.
-    GetPackingDirs => PackingDirsData, cached(30, EXTERNAL | FILES), |db| {
+impl_domain_query! {
+    GetPackingDirs => PackingDirsData, |db| {
         let file_paths = db.get_packing_assigned_paths().unwrap_or_default();
         let dir_categories = db.get_packing_directory_categories().unwrap_or_default();
         PackingDirsData { file_paths, dir_categories }
@@ -311,77 +172,74 @@ define_domain_query! {
 // Detail Queries (Wave 1: simple return types, no inode resolution)
 // ============================================================================
 
-define_domain_query! {
-    /// OOB sync files (purely one-direction tag mismatches).
-    GetOobSyncFiles => Vec<OobSyncFile>, uncached, db.get_oob_sync_files()
+impl_domain_query! {
+    GetOobSyncFiles => Vec<OobSyncFile>, db.get_oob_sync_files()
 }
 
-define_domain_query! {
-    /// OOB files classified into conflict buckets.
-    GetOobFilesBucketed => Vec<BucketedOobFile>, uncached, db.get_oob_files_bucketed()
+impl_domain_query! {
+    GetOobFilesBucketed => Vec<BucketedOobFile>, db.get_oob_files_bucketed()
 }
 
-define_domain_query! {
-    /// Files with moved-file signals (same inode, different path).
-    GetMovedFiles => Vec<MovedFileInfo>, uncached, db.get_moved_files()
+impl_domain_query! {
+    GetMovedFiles => Vec<MovedFileInfo>, db.get_moved_files()
 }
 
-define_domain_query! {
-    /// Missing album single signals (tracks without ALBUM but with ARTIST+TITLE).
-    GetMissingAlbumSingleSignals => Vec<MissingAlbumSingleSignal>, uncached, db.get_missing_album_single_signals()
+impl_domain_query! {
+    GetMissingAlbumSingleSignals => Vec<MissingAlbumSingleSignalWire>, |db| {
+        db.get_missing_album_single_signals()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| MissingAlbumSingleSignalWire {
+                key: s.key,
+                data: s.data,
+            })
+            .collect()
+    }
 }
 
-define_domain_query! {
-    /// Full edit history for a specific session (for export).
-    GetSessionEditHistory { session_id: String } => Vec<EditHistoryExportRow>, uncached, |s, db| {
+impl_domain_query! {
+    GetSessionEditHistory => Vec<EditHistoryExportRow>, |s, db| {
         db.get_session_edit_history(&s.session_id)
             .unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Full edit history across all sessions (for export).
-    GetAllEditHistory => Vec<EditHistoryExportRow>, uncached, db.get_all_edit_history()
+impl_domain_query! {
+    GetAllEditHistory => Vec<EditHistoryExportRow>, db.get_all_edit_history()
 }
 
-define_domain_query! {
-    /// Compound tag signal groups (for compound split resolution).
-    GetCompoundSignalGroups { safe_only: bool, tag_filter: Option<String> } => Vec<CompoundGroup>, uncached, |s, db| {
+impl_domain_query! {
+    GetCompoundSignalGroups => Vec<CompoundGroup>, |s, db| {
         db.get_compound_signal_groups_by_safety(s.safe_only, s.tag_filter.as_deref())
             .unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Inbox compound tag signal groups.
-    GetInboxCompoundSignalGroups => Vec<CompoundGroup>, uncached, db.get_inbox_compound_signal_groups()
+impl_domain_query! {
+    GetInboxCompoundSignalGroups => Vec<CompoundGroup>, db.get_inbox_compound_signal_groups()
 }
 
-define_domain_query! {
-    /// Packing knot data (conflict tangles requiring review).
-    GetPackingKnots => Vec<crate::meta::signals::data::PackingKnotData>, uncached, db.get_packing_knots()
+impl_domain_query! {
+    GetPackingKnots => Vec<crate::meta::signals::data::PackingKnotData>, db.get_packing_knots()
 }
 
-define_domain_query! {
-    /// Packing inode-to-path mapping for knot browser display.
-    GetPackingInodePaths => Vec<(i64, String)>, uncached, db.get_packing_inode_paths()
+impl_domain_query! {
+    GetPackingInodePaths => Vec<(i64, String)>, db.get_packing_inode_paths()
 }
 
 // ============================================================================
 // Detail Queries (Wave 2: signal key queries for canonicity resolution)
 // ============================================================================
 
-define_domain_query! {
-    /// Aggregate signal keys for InconsistentAlbumArtist signals.
-    GetInconsistentAlbumArtistKeys => Vec<String>, uncached, |db| {
+impl_domain_query! {
+    GetInconsistentAlbumArtistKeys => Vec<String>, |db| {
         use crate::meta::signals::data::InconsistentAlbumArtistSignal;
         db.aggregate_signal_keys::<InconsistentAlbumArtistSignal>().unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Aggregate signal keys for TagCanonicity signals, optionally filtered by tag prefix.
-    GetTagCanonicityKeys { tag_filter: Option<String> } => Vec<String>, uncached, |s, db| {
+impl_domain_query! {
+    GetTagCanonicityKeys => Vec<String>, |s, db| {
         use crate::meta::signals::data::TagCanonicitySignal;
         let all_keys = db
             .aggregate_signal_keys::<TagCanonicitySignal>()
@@ -399,26 +257,20 @@ define_domain_query! {
     }
 }
 
-define_domain_query! {
-    /// Aggregate signal keys for InboxTagCanonicity signals.
-    GetInboxTagCanonicityKeys => Vec<String>, uncached, |db| {
+impl_domain_query! {
+    GetInboxTagCanonicityKeys => Vec<String>, |db| {
         use crate::meta::signals::data::InboxTagCanonicitySignal;
         db.aggregate_signal_keys::<InboxTagCanonicitySignal>().unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Disc extraction signals resolved into modal-ready data.
-    ///
-    /// Loads signals, resolves file paths, and applies config (letter→number mapping)
-    /// to produce the full DiscExtractionData the modal needs.
-    GetDiscExtractionData { map_letters_to_numbers: bool } =>
-        crate::ui::disc_extraction_modal::DiscExtractionData, uncached, |s, db| {
-        use crate::ui::disc_extraction_modal::DiscExtractionData;
+impl_domain_query! {
+    GetDiscExtractionData => DiscExtractionModalData, |s, db| {
+        use crate::meta::signals::data::DiscExtractionSource;
 
         let signals = db.get_disc_extraction_signals().unwrap_or_default();
         if signals.is_empty() {
-            return DiscExtractionData { groups: Vec::new() };
+            return DiscExtractionModalData { groups: Vec::new() };
         }
 
         let all_inodes: Vec<i64> = signals
@@ -428,12 +280,75 @@ define_domain_query! {
         let path_map = db
             .get_file_paths_batch(crate::db::types::Zone::Corpus, &all_inodes)
             .unwrap_or_default();
+        let path_lookup = |inode: i64| {
+            path_map.get(&inode).cloned().unwrap_or_else(|| format!("<inode {}>", inode))
+        };
 
-        DiscExtractionData::from_signals(
-            signals,
-            |inode| path_map.get(&inode).cloned().unwrap_or_else(|| format!("<inode {}>", inode)),
-            s.map_letters_to_numbers,
-        )
+        let groups = signals
+            .into_iter()
+            .map(|sig| match &sig.data.source {
+                DiscExtractionSource::Album {
+                    original_album,
+                    cleaned_album,
+                    disc_number,
+                } => {
+                    let files: Vec<DiscFileEntry> = sig
+                        .data
+                        .inodes
+                        .iter()
+                        .map(|&inode| DiscFileEntry {
+                            inode,
+                            path: path_lookup(inode),
+                            original_value: original_album.clone(),
+                            cleaned_value: cleaned_album.clone(),
+                            source_tag: "ALBUM".to_string(),
+                        })
+                        .collect();
+                    DiscExtractionGroup {
+                        description: format!("Album \"{}\" → Disc {}", original_album, disc_number),
+                        disc_value: disc_number.clone(),
+                        files,
+                    }
+                }
+                DiscExtractionSource::TrackNumber {
+                    disc_prefix,
+                    album,
+                    album_artist,
+                    per_file,
+                } => {
+                    let disc_value = if s.map_letters_to_numbers {
+                        crate::ui::disc_extraction_modal::letter_to_number(disc_prefix)
+                    } else {
+                        disc_prefix.clone()
+                    };
+                    let files: Vec<DiscFileEntry> = per_file
+                        .iter()
+                        .map(|tf| DiscFileEntry {
+                            inode: tf.inode,
+                            path: path_lookup(tf.inode),
+                            original_value: tf.original_value.clone(),
+                            cleaned_value: tf.cleaned_digits.clone(),
+                            source_tag: "TRACKNUMBER".to_string(),
+                        })
+                        .collect();
+                    let context = if album_artist.is_empty() {
+                        album.clone()
+                    } else {
+                        format!("{} — {}", album_artist, album)
+                    };
+                    DiscExtractionGroup {
+                        description: format!(
+                            "TrackNumber prefix \"{}\" in {}",
+                            disc_prefix, context
+                        ),
+                        disc_value,
+                        files,
+                    }
+                }
+            })
+            .collect();
+
+        DiscExtractionModalData { groups }
     }
 }
 
@@ -441,95 +356,73 @@ define_domain_query! {
 // Detail Queries (Wave 3: modal init loaders)
 // ============================================================================
 
-use crate::db::modal_loaders;
-use crate::ui::corrupt_file_modal;
-use crate::ui::deploy_modal;
-use crate::ui::directory_cluster_modal;
-use crate::ui::inbox_corpus_match_modal;
-use crate::ui::manual_review_modal;
-use crate::ui::missing_directory_modal;
-use crate::ui::missing_file_modal;
-use crate::ui::shit_format_modal;
-use crate::ui::subpar_duplicate_modal;
-
-define_domain_query! {
-    /// Missing file data: restorable and non-restorable missing corpus files.
-    GetMissingFileData => missing_file_modal::MissingFileModalData, uncached, |db| {
+impl_domain_query! {
+    GetMissingFileData => missing_file_modal::MissingFileModalData, |db| {
         modal_loaders::load_missing_file_data(db).ok().unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Missing directory data: directories no longer present on disk.
-    GetMissingDirectoryData => missing_directory_modal::MissingDirectoryModalData, uncached, |db| {
+impl_domain_query! {
+    GetMissingDirectoryData => missing_directory_modal::MissingDirectoryModalData, |db| {
         modal_loaders::load_missing_directory_data(db).ok().unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Corrupt file data: files that failed indexing.
-    GetCorruptFileData => corrupt_file_modal::CorruptFileModalData, uncached, |db| {
+impl_domain_query! {
+    GetCorruptFileData => corrupt_file_modal::CorruptFileModalData, |db| {
         modal_loaders::load_corrupt_file_data(db).ok().unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Subpar duplicate data: lower-quality versions of existing files.
-    GetSubparDuplicateData => subpar_duplicate_modal::SubparDuplicateModalData, uncached, |db| {
+impl_domain_query! {
+    GetSubparDuplicateData => subpar_duplicate_modal::SubparDuplicateModalData, |db| {
         modal_loaders::load_subpar_duplicate_data(db).ok().unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Cross-source directory overlap clusters.
-    GetDirectoryClusterData => directory_cluster_modal::DirectoryClusterModalData, uncached, |db| {
+impl_domain_query! {
+    GetDirectoryClusterData => directory_cluster_modal::DirectoryClusterModalData, |db| {
         modal_loaders::load_directory_cluster_data(db).ok().unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Release overlap clusters (reuses directory cluster modal data).
-    GetReleaseOverlapData => directory_cluster_modal::DirectoryClusterModalData, uncached, |db| {
+impl_domain_query! {
+    GetReleaseOverlapData => directory_cluster_modal::DirectoryClusterModalData, |db| {
         modal_loaders::load_release_overlap_data(db).ok().unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Shit format file data: non-Vorbis containers needing remux/transcode.
-    GetShitFormatData => shit_format_modal::ShitFormatModalData, uncached, |db| {
+impl_domain_query! {
+    GetShitFormatData => shit_format_modal::ShitFormatModalData, |db| {
         modal_loaders::load_shit_format_data(db).ok().unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Inbox corpus match data with configurable bitrate fuzz tolerance.
-    GetInboxCorpusMatchData { bitrate_fuzz_percent: f64 } => inbox_corpus_match_modal::InboxCorpusMatchModalData, uncached, |s, db| {
+impl_domain_query! {
+    GetInboxCorpusMatchData => inbox_corpus_match_modal::InboxCorpusMatchModalData, |s, db| {
         modal_loaders::load_inbox_corpus_match_data(db, s.bitrate_fuzz_percent)
             .ok()
             .unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Deploy modal data with optional config for library assignment.
-    GetDeployData { config: Option<crate::config::Config> } => deploy_modal::DeployModalData, uncached, |s, db| {
+impl_domain_query! {
+    GetDeployData => deploy_modal::DeployModalData, |s, db| {
         modal_loaders::load_deploy_data(db, s.config.as_ref())
             .unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Manual review data for a specific review kind.
-    GetManualReviewData { kind: manual_review_modal::types::ReviewKind } => manual_review_modal::types::ManualReviewData, uncached, |s, db| {
+impl_domain_query! {
+    GetManualReviewData => manual_review_modal::types::ManualReviewData, |s, db| {
         modal_loaders::load_manual_review_data(db, s.kind)
             .ok()
             .unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Corpus tags for a single inode (for tag editor fill-from-DB).
-    GetCorpusTags { inode: i64 } => Vec<(String, String)>, uncached, |s, db| {
+impl_domain_query! {
+    GetCorpusTags => Vec<(String, String)>, |s, db| {
         db.get_tags::<crate::zones::CorpusZone>(s.inode)
             .unwrap_or_default()
             .into_iter()
@@ -538,19 +431,8 @@ define_domain_query! {
     }
 }
 
-/// All data needed to build a release packing browser view.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PackingBrowserData {
-    pub packed: Vec<crate::meta::signals::data::PackedReleaseData>,
-    pub packing: Vec<(i64, String, crate::meta::signals::data::ReleasePackingData)>,
-    pub unfilled: Vec<crate::meta::signals::data::UnfilledReleaseSlotData>,
-    pub alternatives: Vec<crate::meta::signals::data::AlternativeReleasePackingData>,
-    pub va_overrides: Vec<crate::meta::signals::data::VariousArtistsOverrideData>,
-}
-
-define_domain_query! {
-    /// Packed releases by category with all packing signal data for the browser.
-    GetPackingBrowserData { category_prefix: String } => PackingBrowserData, uncached, |s, db| {
+impl_domain_query! {
+    GetPackingBrowserData => PackingBrowserData, |s, db| {
         PackingBrowserData {
             packed: db.get_packed_releases_by_category(&s.category_prefix).unwrap_or_default(),
             packing: db.get_release_packing_signal_data().unwrap_or_default(),
@@ -561,9 +443,8 @@ define_domain_query! {
     }
 }
 
-define_domain_query! {
-    /// Unmatched corpus tracks filtered by unsolved category.
-    GetUnsolvedPackingData { category: String } => Vec<(i64, String, crate::meta::signals::data::UnmatchedCorpusTrackData)>, uncached, |s, db| {
+impl_domain_query! {
+    GetUnsolvedPackingData => Vec<(i64, String, crate::meta::signals::data::UnmatchedCorpusTrackData)>, |s, db| {
         db.get_unmatched_corpus_track_signal_data_by_category(&s.category)
             .unwrap_or_default()
     }
@@ -573,17 +454,15 @@ define_domain_query! {
 // Detail Queries (Wave 4: composite queries collapsed into single execute)
 // ============================================================================
 
-define_domain_query! {
-    /// Audio files by inodes for a specific zone (for tag editor launch).
-    GetAudioFilesByInodes { inodes: Vec<i64>, zone: crate::db::types::Zone } => Vec<crate::db::types::AudioFile>, uncached, |s, db| {
+impl_domain_query! {
+    GetAudioFilesByInodes => Vec<crate::db::types::AudioFile>, |s, db| {
         db.get_audio_files_by_inodes(&s.inodes, s.zone)
             .unwrap_or_default()
     }
 }
 
-define_domain_query! {
-    /// Missing tag resolution: collect unique inodes from MissingTag signals, return audio files.
-    GetMissingTagAudioFiles => Vec<crate::db::types::AudioFile>, uncached, |db| {
+impl_domain_query! {
+    GetMissingTagAudioFiles => Vec<crate::db::types::AudioFile>, |db| {
         use std::collections::BTreeSet;
         let signals = db.get_missing_tag_signals().unwrap_or_default();
         let all_inodes: Vec<i64> = signals
@@ -597,24 +476,15 @@ define_domain_query! {
     }
 }
 
-define_domain_query! {
-    /// All audio files with tags for a zone (for tag search).
-    GetAllAudioFilesWithTags { zone: crate::db::types::Zone, include_library: bool } => Vec<crate::db::queries::files::AudioFileWithTags>, uncached, |s, db| {
+impl_domain_query! {
+    GetAllAudioFilesWithTags => Vec<AudioFileWithTags>, |s, db| {
         db.get_all_audio_files_with_tags(s.zone, s.include_library)
             .unwrap_or_default()
     }
 }
 
-/// Response for session edit detail.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SessionEditDetail {
-    pub edits: Vec<crate::meta::views::EditRecord>,
-    pub inode_paths: std::collections::HashMap<i64, String>,
-}
-
-define_domain_query! {
-    /// Session edit detail: edits + resolved inode paths (for history expansion).
-    GetSessionEditDetail { session_id: String } => SessionEditDetail, uncached, |s, db| {
+impl_domain_query! {
+    GetSessionEditDetail => SessionEditDetail, |s, db| {
         let edits = db.get_session_edits(&s.session_id).unwrap_or_default();
         let inodes: Vec<i64> = edits.iter().map(|e| e.inode).collect();
         let inode_paths = db
@@ -624,9 +494,8 @@ define_domain_query! {
     }
 }
 
-define_domain_query! {
-    /// Resolve current tag values for a list of (inode, field_name) pairs.
-    GetCurrentTagValues { queries: Vec<(i64, String)> } => Vec<Option<String>>, uncached, |s, db| {
+impl_domain_query! {
+    GetCurrentTagValues => Vec<Option<String>>, |s, db| {
         s.queries
             .iter()
             .map(|(inode, field_name)| {
@@ -643,15 +512,8 @@ define_domain_query! {
 // Wave 5: Remaining closure conversions
 // ============================================================================
 
-define_domain_query! {
-    /// Gather unindexed files for intake confirmation.
-    ///
-    /// `zone: None` checks both corpus and inbox (startup mode).
-    /// `zone: Some(Zone::Corpus)` or `Some(Zone::Inbox)` checks one zone.
-    GetIntakeConfirmation {
-        source: crate::ui::startup::IntakeSource,
-        zone: Option<crate::db::types::Zone>,
-    } => Option<crate::ui::startup::IntakeConfirmationState>, uncached, |s, db| {
+impl_domain_query! {
+    GetIntakeConfirmation => Option<crate::ui::startup::IntakeConfirmationState>, |s, db| {
         match s.zone {
             Some(crate::db::types::Zone::Corpus) => {
                 modal_loaders::gather_intake_zone::<crate::zones::CorpusZone>(db, s.source)
@@ -665,22 +527,14 @@ define_domain_query! {
     }
 }
 
-define_domain_query! {
-    /// Load compound split modal data for a specific compound group.
-    GetCompoundSplitGroupData {
-        group: crate::meta::signals::data::CompoundGroup,
-        zone: crate::db::types::Zone,
-    } => Option<crate::ui::compound_split_v2::CompoundSplitDataV2>, uncached, |s, db| {
+impl_domain_query! {
+    GetCompoundSplitGroupData => Option<crate::ui::compound_split_v2::CompoundSplitDataV2>, |s, db| {
         modal_loaders::load_compound_split_data(&s.group, db, s.zone)
     }
 }
 
-define_domain_query! {
-    /// Load tag canonicity signal data for a specific signal key.
-    GetTagCanonicitySignalData {
-        signal_key: String,
-        kind: crate::ui::CanonicitySignalKind,
-    } => Option<crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2>, uncached, |s, db| {
+impl_domain_query! {
+    GetTagCanonicitySignalData => Option<crate::ui::tag_canonicity_v2::TagCanonicalityModalDataV2>, |s, db| {
         load_tag_canonicity_signal_data(&s.signal_key, s.kind, db)
     }
 }
@@ -711,19 +565,8 @@ fn load_tag_canonicity_signal_data(
     }
 }
 
-/// Response type for batch recording data loading.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct RecordingBatchResult {
-    pub summaries: Vec<(String, crate::ui::external_match_modal::types::RecordingSummary)>,
-    pub details: Vec<(String, crate::ui::external_match_modal::types::RecordingDetail)>,
-}
-
-define_domain_query! {
-    /// Batch-load MB recording summaries and detail data from cache.
-    GetRecordingBatchData {
-        recording_ids: Vec<String>,
-        preferred_locales: Vec<String>,
-    } => RecordingBatchResult, uncached, |s, db| {
+impl_domain_query! {
+    GetRecordingBatchData => RecordingBatchResult, |s, db| {
         load_recording_batch_data(&s.recording_ids, &s.preferred_locales, db)
     }
 }
@@ -825,20 +668,8 @@ fn load_recording_batch_data(
     RecordingBatchResult { summaries, details }
 }
 
-/// Response type for release staging data loading.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ReleaseStagingData {
-    pub bundle: crate::external::musicbrainz::MbCacheBundle,
-    pub inode_tags: std::collections::HashMap<i64, Vec<(String, String)>>,
-}
-
-define_domain_query! {
-    /// Load MB cache bundle and current tags for release approval staging.
-    GetReleaseStagingData {
-        release_ids: Vec<String>,
-        recording_ids: Vec<String>,
-        inodes: Vec<i64>,
-    } => ReleaseStagingData, uncached, |s, db| {
+impl_domain_query! {
+    GetReleaseStagingData => ReleaseStagingData, |s, db| {
         use crate::external::musicbrainz::load_mb_cache_bundle;
         let bundle = load_mb_cache_bundle(db, &s.release_ids, &s.recording_ids);
         let mut tags = std::collections::HashMap::new();
@@ -856,25 +687,8 @@ define_domain_query! {
     }
 }
 
-/// Tag editor file loading mode.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum TagEditorLoadMode {
-    /// Load all files in directory tree (recursive).
-    Directory,
-    /// Load siblings in parent directory, select the target file.
-    SingleFile,
-}
-
-define_domain_query! {
-    /// Load audio files for the tag editor.
-    ///
-    /// In `Directory` mode, loads all files recursively under `rel_path`.
-    /// In `SingleFile` mode, loads direct siblings in the parent dir and
-    /// returns the index of the target file.
-    GetTagEditorFiles {
-        rel_path: std::path::PathBuf,
-        mode: TagEditorLoadMode,
-    } => (Vec<crate::db::types::AudioFile>, usize), uncached, |s, db| {
+impl_domain_query! {
+    GetTagEditorFiles => (Vec<crate::db::types::AudioFile>, usize), |s, db| {
         load_tag_editor_files(&s.rel_path, &s.mode, db)
     }
 }
@@ -938,14 +752,8 @@ fn load_tag_editor_files(
     }
 }
 
-define_domain_query! {
-    /// Load organizable inbox directories for the organize workflow.
-    ///
-    /// Returns the grouped directories (data only). The caller constructs
-    /// the full `InboxOrganizeState` with navigator and UI state.
-    GetInboxOrganizeData {
-        config: crate::config::Config,
-    } => Vec<crate::ui::inbox_organize::InboxDirectory>, uncached, |s, db| {
+impl_domain_query! {
+    GetInboxOrganizeData => Vec<crate::ui::inbox_organize::InboxDirectory>, |s, db| {
         let files = db.get_organizable_inbox_files().unwrap_or_default();
         if files.is_empty() {
             return Vec::new();
@@ -956,16 +764,8 @@ define_domain_query! {
     }
 }
 
-define_domain_query! {
-    /// Read tags from disk for a batch of audio files (by inode).
-    ///
-    /// Resolves each inode's path from the DB, reads tags via TagSet::from_file,
-    /// and returns (inode, tag_pairs) for each. Used by the tag editor to avoid
-    /// client-side TagSet::from_file / get_resolver() coupling.
-    GetFileTagValues {
-        inodes: Vec<i64>,
-        zone: crate::db::types::Zone,
-    } => Vec<(i64, Vec<(String, String)>)>, uncached, |s, db| {
+impl_domain_query! {
+    GetFileTagValues => Vec<(i64, Vec<(String, String)>)>, |s, db| {
         load_file_tag_values(&s.inodes, s.zone, db)
     }
 }
@@ -1006,34 +806,13 @@ fn load_file_tag_values(
 }
 
 // ============================================================================
-// Protocol Bridge — Domain Query Registry
+// Protocol Bridge — dispatch_domain_query
 // ============================================================================
 
-/// Generates protocol-level types for all domain queries:
-/// - `DomainQueryPayload` enum (one variant per query, carrying the query struct)
-/// - `DomainQueryResult` enum (one variant per query, carrying the response)
-/// - `impl ProtocolQuery for Q` for each query (typed send/receive)
-/// - `dispatch_domain_query()` function (server-side exhaustive dispatch)
-///
-/// Adding a new domain query to the protocol = adding one line here.
-macro_rules! domain_query_protocol {
+macro_rules! dispatch_domain_query_impl {
     ( $( $query:ident ),+ $(,)? ) => {
-        /// Wire enum carrying a domain query payload.
-        /// One variant per registered domain query type.
-        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-        pub enum DomainQueryPayload {
-            $( $query($query), )+
-        }
-
-        /// Wire enum carrying a domain query result.
-        /// One variant per registered domain query type.
-        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-        pub enum DomainQueryResult {
-            $( $query(<$query as DomainQuery>::Response), )+
-        }
-
         /// Server-side dispatch: execute a domain query payload against a read-only DB.
-        /// Exhaustive match ensures compile-time coupling.
+        /// Exhaustive match ensures compile-time coupling with mm-meta's enum variants.
         pub fn dispatch_domain_query(
             payload: DomainQueryPayload,
             db: &ReadOnlyDb<'_>,
@@ -1042,31 +821,10 @@ macro_rules! domain_query_protocol {
                 $( DomainQueryPayload::$query(q) => DomainQueryResult::$query(q.execute(db)), )+
             }
         }
-
-        $(
-            impl crate::meta::protocol::ProtocolQuery for $query {
-                type Response = <$query as DomainQuery>::Response;
-
-                fn into_payload(self) -> crate::meta::protocol::QueryPayload {
-                    crate::meta::protocol::QueryPayload::Domain(DomainQueryPayload::$query(self))
-                }
-
-                fn extract_response(
-                    resp: crate::meta::protocol::QueryResponse,
-                ) -> Self::Response {
-                    match resp {
-                        crate::meta::protocol::QueryResponse::Domain(
-                            DomainQueryResult::$query(r),
-                        ) => r,
-                        _ => unreachable!("protocol bug: expected {} response", stringify!($query)),
-                    }
-                }
-            }
-        )+
     };
 }
 
-domain_query_protocol! {
+dispatch_domain_query_impl! {
     GetInsights,
     GetInboxOverview,
     GetDeployStatus,

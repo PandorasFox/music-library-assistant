@@ -8,4 +8,4 @@ pub mod preview;
 pub mod types;
 
 pub use preview::{CorruptFilePreviewAction, CorruptFilePreviewState};
-pub use types::CorruptFileModalData;
+pub use types::{CorruptFileModalData, stash_and_drop_mutations};

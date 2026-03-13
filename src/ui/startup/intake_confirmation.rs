@@ -7,8 +7,6 @@
 //! After confirmation, transitions immediately to the progress screen
 //! which handles showing indexing + content analysis progress.
 
-use std::path::PathBuf;
-
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -18,63 +16,11 @@ use ratatui::Frame;
 use crate::ui::input::InputAction;
 use crate::ui::widgets::centered_rect_fixed;
 
+pub use mm_meta::views::startup_organize::{
+    DirectoryGroup, IntakeConfirmationState, IntakeSource, UnindexedFileEntry,
+};
+
 use crate::db::types::Zone;
-use crate::logging::log_general;
-use crate::meta::mutations::indexing::IndexFileFromPathMutation;
-use crate::meta::mutations::Mutation;
-/// Where the intake confirmation was triggered from.
-///
-/// Replaces the old `zone: String` for post-action routing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum IntakeSource {
-    /// Triggered at startup after eyeballing completes
-    Startup,
-    /// Triggered from Health Insights "Index unindexed" action
-    Health,
-    /// Triggered from Inbox view or inbox lateral navigation
-    Inbox,
-}
-
-/// A directory group for display purposes
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct DirectoryGroup {
-    /// Display path (relative to corpus root)
-    pub display_path: String,
-    /// Filenames within this directory
-    pub filenames: Vec<String>,
-    /// Zone this directory belongs to
-    pub zone: Zone,
-}
-
-/// File entry with path for indexing.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct UnindexedFileEntry {
-    /// Absolute path for indexing
-    pub abs_path: PathBuf,
-    /// Zone this file belongs to (for mutation creation)
-    pub zone: Zone,
-}
-
-/// State for the intake confirmation modal.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct IntakeConfirmationState {
-    /// Number of unindexed files detected
-    pub file_count: usize,
-    /// Total bytes to read (sum of file sizes)
-    pub total_bytes: u64,
-    /// Files to index, keyed by inode
-    pub files: Vec<UnindexedFileEntry>,
-    /// Where this intake was triggered from (for post-action routing)
-    pub source: IntakeSource,
-    /// Whether this state contains files from multiple zones (corpus + inbox)
-    pub multi_zone: bool,
-    /// Number of directories containing unindexed files
-    pub _directory_count: usize,
-    /// Files grouped by directory for display
-    pub grouped_files: Vec<DirectoryGroup>,
-    /// Scroll offset for file list
-    pub scroll_offset: usize,
-}
 
 /// Action returned from handling input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,79 +33,52 @@ pub enum IntakeConfirmationAction {
     Skipped,
 }
 
-impl IntakeConfirmationState {
-    /// Compute total number of lines in the file list display
-    fn total_list_lines(&self) -> usize {
-        let group_lines: usize = self
-            .grouped_files
-            .iter()
-            .map(|g| 1 + g.filenames.len()) // 1 for directory header + files
-            .sum();
-        if self.multi_zone {
-            // Add 2 lines per zone section header (label + blank separator)
-            let zone_count = {
-                let mut zones = Vec::new();
-                for g in &self.grouped_files {
-                    if zones.last() != Some(&g.zone) {
-                        zones.push(g.zone);
-                    }
+/// Compute total number of lines in the file list display.
+fn total_list_lines(state: &IntakeConfirmationState) -> usize {
+    let group_lines: usize = state
+        .grouped_files
+        .iter()
+        .map(|g| 1 + g.filenames.len()) // 1 for directory header + files
+        .sum();
+    if state.multi_zone {
+        // Add 2 lines per zone section header (label + blank separator)
+        let zone_count = {
+            let mut zones = Vec::new();
+            for g in &state.grouped_files {
+                if zones.last() != Some(&g.zone) {
+                    zones.push(g.zone);
                 }
-                zones.len()
-            };
-            group_lines + zone_count * 2
-        } else {
-            group_lines
-        }
-    }
-
-    /// Handle semantic input action.
-    pub fn handle_input(
-        &mut self,
-        action: &InputAction,
-        visible_height: usize,
-    ) -> IntakeConfirmationAction {
-        match action {
-            InputAction::Confirm => IntakeConfirmationAction::Confirmed,
-            InputAction::Cancel => IntakeConfirmationAction::Skipped,
-            InputAction::NavUp => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(1);
-                IntakeConfirmationAction::None
             }
-            InputAction::NavDown => {
-                let max_scroll = self.total_list_lines().saturating_sub(visible_height);
-                if self.scroll_offset < max_scroll {
-                    self.scroll_offset += 1;
-                }
-                IntakeConfirmationAction::None
-            }
-            _ => IntakeConfirmationAction::None,
+            zones.len()
+        };
+        group_lines + zone_count * 2
+    } else {
+        group_lines
+    }
+}
+
+/// Handle semantic input action for intake confirmation.
+pub fn handle_input(
+    state: &mut IntakeConfirmationState,
+    action: &InputAction,
+    visible_height: usize,
+) -> IntakeConfirmationAction {
+    match action {
+        InputAction::Confirm => IntakeConfirmationAction::Confirmed,
+        InputAction::Cancel => IntakeConfirmationAction::Skipped,
+        InputAction::NavUp => {
+            state.scroll_offset = state.scroll_offset.saturating_sub(1);
+            IntakeConfirmationAction::None
         }
+        InputAction::NavDown => {
+            let max_scroll = total_list_lines(state).saturating_sub(visible_height);
+            if state.scroll_offset < max_scroll {
+                state.scroll_offset += 1;
+            }
+            IntakeConfirmationAction::None
+        }
+        _ => IntakeConfirmationAction::None,
     }
-
-    /// Create IndexFileFromPath mutations for all unindexed files.
-    ///
-    /// These mutations contain the absolute path - metadata extraction happens
-    /// on the worker thread, not the UI thread.
-    pub fn create_index_mutations(&self) -> Vec<Mutation> {
-        let mutations: Vec<Mutation> = self
-            .files
-            .iter()
-            .map(|entry| {
-                Mutation::IndexFileFromPath(IndexFileFromPathMutation {
-                    path: entry.abs_path.clone(),
-                    zone: entry.zone.as_str().to_string(),
-                })
-            })
-            .collect();
-
-        log_general(format!(
-            "IntakeConfirmation: created {} IndexFileFromPath mutations",
-            mutations.len()
-        ));
-
-        mutations
-    }
-
 }
 
 /// Compute the visible height for the file list given an area.

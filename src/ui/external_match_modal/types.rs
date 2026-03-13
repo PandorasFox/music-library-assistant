@@ -9,7 +9,6 @@ use std::collections::BTreeSet;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::external::musicbrainz::{MbArtist, MbRecording, MbRelease};
 use crate::meta::views::ExternalMatchReviewEntry;
 use crate::ui::input::InputAction;
 use crate::ui::widgets::rich_text::{RichBlock, RichSpan};
@@ -18,6 +17,8 @@ use crate::ui::widgets::standard_list::{
 };
 use crate::ui::widgets::wizard::{WizardItem, WizardOffer};
 
+pub use mm_meta::views::review_match::{RecordingDetail, RecordingSummary};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExternalMatchReviewAction {
     None,
@@ -25,23 +26,6 @@ pub enum ExternalMatchReviewAction {
     Cancel,
     /// Open MusicBrainz recording URL in browser.
     OpenRecordingUrl(String),
-}
-
-/// Pre-loaded MB recording summary for inline display.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct RecordingSummary {
-    pub title: String,
-    pub artist_credit: String,
-    pub length_ms: Option<u64>,
-    pub release_count: usize,
-}
-
-/// Full recording detail data for building wizard pane lines.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct RecordingDetail {
-    pub recording: MbRecording,
-    pub artists: Vec<(String, Option<MbArtist>)>,
-    pub releases: Vec<(String, Option<MbRelease>)>,
 }
 
 /// A single item in the external match review list.

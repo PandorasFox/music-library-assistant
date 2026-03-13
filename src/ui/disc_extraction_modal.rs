@@ -16,7 +16,6 @@
 //! - Ctrl+R: Show transaction review
 //! - Escape: Cancel
 
-use crate::meta::signals::data::{DiscExtractionSignal, DiscExtractionSource};
 use crate::ui::action_handlers::witness::ConfirmationGesture;
 use crate::ui::helpers::render_pane;
 use crate::ui::input::InputAction;
@@ -82,115 +81,16 @@ pub enum DiscExtractionAction {
 }
 
 // ============================================================================
-// Data Types
+// Data Types (re-exported from mm-meta)
 // ============================================================================
 
-/// A single group for disc extraction resolution.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct DiscExtractionGroup {
-    /// Description of what's being extracted (for info bar).
-    pub description: String,
-    /// Disc value to write.
-    pub disc_value: String,
-    /// Per-file entries.
-    pub files: Vec<DiscFileEntry>,
-}
+pub use mm_meta::domain_queries::{DiscExtractionGroup, DiscExtractionModalData};
 
-/// Per-file entry within a group.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct DiscFileEntry {
-    pub inode: i64,
-    pub path: String,
-    /// What the source tag currently says (e.g., "Some Album, Disc 2" or "A01").
-    pub original_value: String,
-    /// What the source tag will become after extraction (e.g., "Some Album" or "01").
-    pub cleaned_value: String,
-    /// Source tag name ("ALBUM" or "TRACKNUMBER").
-    pub source_tag: String,
-}
-
-/// Loaded data for the modal.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct DiscExtractionData {
-    pub groups: Vec<DiscExtractionGroup>,
-}
-
-impl DiscExtractionData {
-    /// Build from loaded signals + file paths.
-    pub fn from_signals(
-        signals: Vec<DiscExtractionSignal>,
-        path_lookup: impl Fn(i64) -> String,
-        map_letters_to_numbers: bool,
-    ) -> Self {
-        let groups = signals
-            .into_iter()
-            .map(|s| match &s.data.source {
-                DiscExtractionSource::Album {
-                    original_album,
-                    cleaned_album,
-                    disc_number,
-                } => {
-                    let files: Vec<DiscFileEntry> = s
-                        .data
-                        .inodes
-                        .iter()
-                        .map(|&inode| DiscFileEntry {
-                            inode,
-                            path: path_lookup(inode),
-                            original_value: original_album.clone(),
-                            cleaned_value: cleaned_album.clone(),
-                            source_tag: "ALBUM".to_string(),
-                        })
-                        .collect();
-                    DiscExtractionGroup {
-                        description: format!("Album \"{}\" → Disc {}", original_album, disc_number),
-                        disc_value: disc_number.clone(),
-                        files,
-                    }
-                }
-                DiscExtractionSource::TrackNumber {
-                    disc_prefix,
-                    album,
-                    album_artist,
-                    per_file,
-                } => {
-                    let disc_value = if map_letters_to_numbers {
-                        letter_to_number(disc_prefix)
-                    } else {
-                        disc_prefix.clone()
-                    };
-                    let files: Vec<DiscFileEntry> = per_file
-                        .iter()
-                        .map(|tf| DiscFileEntry {
-                            inode: tf.inode,
-                            path: path_lookup(tf.inode),
-                            original_value: tf.original_value.clone(),
-                            cleaned_value: tf.cleaned_digits.clone(),
-                            source_tag: "TRACKNUMBER".to_string(),
-                        })
-                        .collect();
-                    let context = if album_artist.is_empty() {
-                        album.clone()
-                    } else {
-                        format!("{} — {}", album_artist, album)
-                    };
-                    DiscExtractionGroup {
-                        description: format!(
-                            "TrackNumber prefix \"{}\" in {}",
-                            disc_prefix, context
-                        ),
-                        disc_value,
-                        files,
-                    }
-                }
-            })
-            .collect();
-        Self { groups }
-    }
-}
+/// Loaded data for the modal — alias for the wire type from mm-meta.
+pub type DiscExtractionData = DiscExtractionModalData;
 
 /// Convert letter prefix to number: A→1, B→2, etc.
-fn letter_to_number(prefix: &str) -> String {
+pub(crate) fn letter_to_number(prefix: &str) -> String {
     if prefix.len() == 1 {
         let ch = prefix.chars().next().unwrap().to_ascii_uppercase();
         if ch.is_ascii_uppercase() {

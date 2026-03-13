@@ -12,6 +12,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+pub use mm_meta::views::canonicity_compound::{CompoundEntry, CompoundSplitDataV2, FileTagInfo};
+
 /// Pending tag edits from an embedded tag editor decision.
 /// Maps inode → list of (tag_name, old_value, new_value) triples.
 pub type PendingTagEdits = HashMap<i64, Vec<(String, String, String)>>;
@@ -25,60 +27,12 @@ use crate::meta::mutations::{Mutation, TagOp};
 use crate::meta::signals::data::CompoundGroup;
 use crate::ui::widgets::TextInputState;
 
-// ============================================================================
-// Data Types (loaded from signal)
-// ============================================================================
-
-/// File info with cached tag values for display.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FileTagInfo {
-    /// Inode of the file
-    pub inode: i64,
-    /// Display name (basename)
-    pub filename: String,
-    /// Full corpus-relative path
-    pub path: String,
-    /// All tags for this file (tag_name, tag_value)
-    pub tag_values: Vec<(String, String)>,
-}
-
-/// A single compound value from the signal's compounds array.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CompoundEntry {
-    /// Tag name (e.g., "artist", "genre")
-    pub tag_name: String,
-    /// Original compound value (e.g., "Rock; Metal")
-    pub compound_value: String,
-    /// Split parts (e.g., ["Rock", "Metal"])
-    pub split_parts: Vec<String>,
-    /// Which parts exist in corpus
-    pub matching_parts: Vec<String>,
-}
-
-impl CompoundEntry {
-    /// Check if a specific part exists in corpus.
-    pub fn part_exists(&self, part: &str) -> bool {
-        self.matching_parts.iter().any(|m| m == part)
-    }
-}
-
-/// Modal data loaded from a compound tag signal.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CompoundSplitDataV2 {
-    /// The first compound entry (we process one at a time)
-    pub compound: CompoundEntry,
-    /// Per-file tag info with cached tag values
-    pub files: Vec<FileTagInfo>,
-}
-
-impl CompoundSplitDataV2 {
-    /// Create a CanonicalTag signal emission mutation.
-    pub fn create_canonical_signal(&self) -> Mutation {
-        Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
-            tag_name: self.compound.tag_name.clone(),
-            canonical_value: self.compound.compound_value.clone(),
-        })
-    }
+/// Create a CanonicalTag signal emission mutation from compound split data.
+pub fn create_canonical_signal(data: &CompoundSplitDataV2) -> Mutation {
+    Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
+        tag_name: data.compound.tag_name.clone(),
+        canonical_value: data.compound.compound_value.clone(),
+    })
 }
 
 // ============================================================================

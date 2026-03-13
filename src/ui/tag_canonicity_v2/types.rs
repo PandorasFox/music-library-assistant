@@ -13,6 +13,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+pub use mm_meta::views::canonicity_compound::{
+    FileTagInfo, TagCanonicalityModalDataV2, TagVariantEntry,
+};
+
 /// Pending tag edits from an embedded tag editor decision.
 /// Maps inode → list of (tag_name, old_value, new_value) triples.
 pub type PendingTagEdits = HashMap<i64, Vec<(String, String, String)>>;
@@ -23,61 +27,6 @@ use crate::db::types::Zone;
 use crate::meta::mutations::tag_edit::ApplyTagOpsMutation;
 use crate::meta::mutations::{Mutation, TagOp};
 use crate::ui::widgets::TextInputState;
-
-/// A tag variant with its occurrence count.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TagVariantEntry {
-    /// The tag value
-    pub value: String,
-    /// Number of tracks with this value
-    pub count: usize,
-}
-
-/// File info with cached tag values for display.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FileTagInfo {
-    /// Inode of the file
-    pub inode: i64,
-    /// Display name (basename)
-    pub filename: String,
-    /// Full corpus-relative path
-    pub path: String,
-    /// All tags for this file (tag_name, tag_value)
-    pub tag_values: Vec<(String, String)>,
-}
-
-/// Extended modal data with per-file tag info.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TagCanonicalityModalDataV2 {
-    /// The tag name being canonicalized (e.g., "artist", "album_artist")
-    pub tag_name: String,
-    /// Optional context label (e.g., "Album: Clockwork Hearts")
-    pub context_label: Option<String>,
-    /// Variants sorted by count DESC, then alphabetically for ties
-    pub variants: Vec<TagVariantEntry>,
-    /// Inodes affected by this canonicalization
-    pub inodes: Vec<i64>,
-    /// Per-file tag info with cached tag values
-    pub files: Vec<FileTagInfo>,
-    /// Override for the default canonical suggestion (e.g. top corpus variant for inbox canonicity)
-    pub default_canonical_override: Option<String>,
-}
-
-impl TagCanonicalityModalDataV2 {
-    /// Get the default canonical value for pre-filling.
-    ///
-    /// Returns the most common value. For ties, uses alphabetical order.
-    /// Returns empty string if no variants.
-    pub fn default_canonical(&self) -> String {
-        if let Some(ref override_val) = self.default_canonical_override {
-            return override_val.clone();
-        }
-        self.variants
-            .first()
-            .map(|v| v.value.clone())
-            .unwrap_or_default()
-    }
-}
 
 /// Which pane has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

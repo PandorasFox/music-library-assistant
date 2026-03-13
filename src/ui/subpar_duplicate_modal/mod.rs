@@ -8,4 +8,4 @@ pub mod preview;
 pub mod types;
 
 pub use preview::{SubparDuplicatePreviewAction, SubparDuplicatePreviewState};
-pub use types::SubparDuplicateModalData;
+pub use types::{SubparDuplicateModalData, stash_and_drop_mutations};

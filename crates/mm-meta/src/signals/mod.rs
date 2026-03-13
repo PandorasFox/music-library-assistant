@@ -5,4 +5,6 @@
 //! BLOBs within signal tables, plus pure enums used across the protocol boundary.
 
 pub mod data;
+pub mod packing_category;
 pub use data::*;
+pub use packing_category::PackingCategory;

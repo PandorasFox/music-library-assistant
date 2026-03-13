@@ -25,7 +25,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::meta::signals::data::MissingAlbumSingleSignal;
+use crate::db::domain::MissingAlbumSingleSignalWire;
 use crate::ui::helpers::render_pane;
 use crate::ui::widgets::{
     control_colors as cc, render_file_path_list, ConfirmationButton, FocusPane, ListClickTargets,
@@ -115,7 +115,7 @@ pub struct MissingAlbumData {
 
 impl MissingAlbumData {
     /// Build from loaded signals.
-    pub fn from_signals(signals: Vec<MissingAlbumSingleSignal>) -> Self {
+    pub fn from_signals(signals: Vec<MissingAlbumSingleSignalWire>) -> Self {
         let groups = signals
             .into_iter()
             .map(|s| ArtistGroup {

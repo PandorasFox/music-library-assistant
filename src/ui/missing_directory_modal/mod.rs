@@ -6,34 +6,5 @@
 
 pub mod preview;
 
+pub use mm_meta::views::health_modals::MissingDirectoryModalData;
 pub use preview::{MissingDirectoryPreviewAction, MissingDirectoryPreviewState};
-
-use crate::meta::mutations::indexing::DropDirectoryFromIndexMutation;
-use crate::meta::mutations::Mutation;
-use std::path::PathBuf;
-
-/// Data for the missing directory resolution modal.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct MissingDirectoryModalData {
-    /// Missing directory paths
-    pub directories: Vec<String>,
-}
-
-impl MissingDirectoryModalData {
-    /// Count of missing directories.
-    pub fn count(&self) -> usize {
-        self.directories.len()
-    }
-
-    /// Generate mutations to drop all missing directories from the index.
-    pub fn drop_mutations(&self) -> Vec<Mutation> {
-        self.directories
-            .iter()
-            .map(|dir| {
-                Mutation::DropDirectoryFromIndex(DropDirectoryFromIndexMutation {
-                    directory_path: PathBuf::from(dir),
-                })
-            })
-            .collect()
-    }
-}

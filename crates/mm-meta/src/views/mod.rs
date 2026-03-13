@@ -4,6 +4,12 @@
 //! but consumed by UI code and computations. They represent derived views of
 //! corpus state, not raw database row types.
 
+pub mod canonicity_compound;
+pub mod cluster_deploy;
+pub mod health_modals;
+pub mod review_match;
+pub mod startup_organize;
+
 use serde::{Deserialize, Serialize};
 
 use crate::mutations;

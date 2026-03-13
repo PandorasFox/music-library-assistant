@@ -33,30 +33,7 @@ use crate::meta::mutations::{
 use crate::ui::tree_browser::{EntryFilter, TreeNavigator};
 use crate::ui::widgets::TextInputState;
 
-// ============================================================================
-// Types
-// ============================================================================
-
-/// A directory of inbox files to organize.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct InboxDirectory {
-    /// Display name for this directory group
-    pub dir_name: String,
-    /// Absolute path to the inbox directory
-    pub dir_path: PathBuf,
-    /// Files within this directory
-    pub files: Vec<InboxOrganizeFile>,
-}
-
-/// A single organizable inbox file.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct InboxOrganizeFile {
-    pub inode: i64,
-    /// Absolute path to the file
-    pub path: PathBuf,
-    /// Just the filename (for display)
-    pub filename: String,
-}
+pub use mm_meta::views::startup_organize::{InboxDirectory, InboxOrganizeFile};
 
 /// Current phase within the organize workflow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

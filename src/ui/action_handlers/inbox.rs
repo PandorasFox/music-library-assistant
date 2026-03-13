@@ -11,6 +11,7 @@ use super::App;
 use crate::meta::decisions::DecisionKey;
 use crate::ui::active_view::ActiveView;
 use crate::ui::inbox_corpus_match_modal;
+use crate::ui::inbox_corpus_match_modal::types::InboxCorpusMatchModalDataExt;
 use crate::ui::inbox_organize;
 use crate::ui::startup;
 use crate::ui::{CanonicitySignalKind, TagCanonicityClusters};

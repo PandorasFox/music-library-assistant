@@ -264,7 +264,7 @@ impl App {
                         )
                     })
                     .unwrap_or(10);
-                ViewAction::IntakeConfirmation(state.handle_input(&action, visible_height))
+                ViewAction::IntakeConfirmation(startup::intake_confirmation::handle_input(state, &action, visible_height))
             }
             ActiveView::UnifiedTagEditor(s) => dispatch_input!(UnifiedTagEditor, s),
             ActiveView::Deploy(s) => dispatch_input!(Deploy, s),

@@ -62,26 +62,8 @@ impl std::fmt::Debug for MatchRow {
     }
 }
 
-/// Per-source progress snapshot.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct SourceProgress {
-    pub total: usize,
-    pub processed: usize,
-    pub matched: usize,
-    pub no_match: usize,
-    pub retries: usize,
-}
-
-/// Combined progress for both sources.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct FetchProgress {
-    pub acoustid: SourceProgress,
-    pub mb: SourceProgress,
-    /// Current effective AcoustID requests/sec (from rate limiter).
-    pub acoustid_rps: f32,
-    /// Current effective MB requests/sec (from adaptive rate limiter).
-    pub mb_rps: f32,
-}
+// Protocol-visible progress types — re-exported from mm-meta.
+pub use mm_meta::witch_types::{FetchProgress, SourceProgress};
 
 /// What kind of MusicBrainz entity to fetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

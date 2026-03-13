@@ -8,6 +8,7 @@ use super::super::App;
 use super::witness;
 use super::HandleAction;
 use crate::meta::decisions::DecisionKey;
+use crate::ui::directory_cluster_modal::types::DirectoryClusterModalDataExt;
 use crate::ui::{
     corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal,
     subpar_duplicate_modal, ActiveView,
@@ -50,7 +51,10 @@ impl HandleAction for missing_file_modal::MissingFilePreviewAction {
             missing_file_modal::MissingFilePreviewAction::None => {}
             missing_file_modal::MissingFilePreviewAction::ConfirmRestore => {
                 let Some(w) = witness else { return };
-                let mutations = extract_mutations!(app, MissingFileResolution, restore_mutations);
+                let mutations = match &app.view {
+                    ActiveView::MissingFileResolution(ref p) => missing_file_modal::restore_mutations(&p.cached_data),
+                    _ => Vec::new(),
+                };
                 app.stage_resolution(mutations, "Restore missing files", DecisionKey::MissingFile, "No files to restore", w);
             }
             missing_file_modal::MissingFilePreviewAction::ConfirmDrop => {
@@ -95,7 +99,10 @@ impl HandleAction for corrupt_file_modal::CorruptFilePreviewAction {
             corrupt_file_modal::CorruptFilePreviewAction::None => {}
             corrupt_file_modal::CorruptFilePreviewAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
-                let mutations = extract_mutations!(app, CorruptFileResolution, stash_and_drop_mutations, &app.resolver);
+                let mutations = match &app.view {
+                    ActiveView::CorruptFileResolution(ref p) => corrupt_file_modal::stash_and_drop_mutations(&p.cached_data, &app.resolver),
+                    _ => Vec::new(),
+                };
                 app.stage_resolution(mutations, "Stash corrupt files", DecisionKey::CorruptFile, "No files to stash", w);
             }
             corrupt_file_modal::CorruptFilePreviewAction::Cancel => {
@@ -115,14 +122,14 @@ impl HandleAction for shit_format_modal::ShitFormatPreviewAction {
             shit_format_modal::ShitFormatPreviewAction::None => {}
             shit_format_modal::ShitFormatPreviewAction::ConfirmRemuxLossless => {
                 let Some(w) = witness else { return };
-                let mutations = extract_mutations!(app, ShitFormatResolution, lossless_mutations);
+                let mutations = extract_mutations!(app, ShitFormatResolution, lossless_mutations, &app.resolver);
                 app.stage_resolution(mutations, "Remux to FLAC", DecisionKey::ShitFormat, "No lossless files to remux", w);
             }
             shit_format_modal::ShitFormatPreviewAction::ConfirmTranscodeLossy => {
                 let Some(w) = witness else { return };
                 let (mutations, lossy_to_flac) = match &app.view {
                     ActiveView::ShitFormatResolution(ref preview) => (
-                        preview.cached_data.lossy_mutations(),
+                        preview.cached_data.lossy_mutations(&app.resolver),
                         preview.cached_data.lossy_to_flac,
                     ),
                     _ => (Vec::new(), false),
@@ -134,7 +141,7 @@ impl HandleAction for shit_format_modal::ShitFormatPreviewAction {
                 let Some(w) = witness else { return };
                 let (mutations, lossy_to_flac) = match &app.view {
                     ActiveView::ShitFormatResolution(ref preview) => (
-                        preview.cached_data.all_mutations(),
+                        preview.cached_data.all_mutations(&app.resolver),
                         preview.cached_data.lossy_to_flac,
                     ),
                     _ => (Vec::new(), false),
@@ -159,7 +166,10 @@ impl HandleAction for subpar_duplicate_modal::SubparDuplicatePreviewAction {
             subpar_duplicate_modal::SubparDuplicatePreviewAction::None => {}
             subpar_duplicate_modal::SubparDuplicatePreviewAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
-                let mutations = extract_mutations!(app, SubparDuplicateResolution, stash_and_drop_mutations, &app.resolver);
+                let mutations = match &app.view {
+                    ActiveView::SubparDuplicateResolution(ref p) => subpar_duplicate_modal::stash_and_drop_mutations(&p.cached_data, &app.resolver),
+                    _ => Vec::new(),
+                };
                 app.stage_resolution(mutations, "Stash subpar duplicates", DecisionKey::SubparDuplicate, "No files to stash", w);
             }
             subpar_duplicate_modal::SubparDuplicatePreviewAction::Cancel => {

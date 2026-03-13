@@ -13,6 +13,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use super::entry::PackingMarker;
+use crate::meta::signals::packing_category::PackingCategoryColor;
 use crate::ui::widgets::control_colors;
 use crate::ui::widgets::CURSOR_STYLE;
 use crate::ui::widgets::{

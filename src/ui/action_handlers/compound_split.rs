@@ -333,7 +333,7 @@ impl App {
                 zone,
                 ..
             } => {
-                let mutation = state.data.create_canonical_signal();
+                let mutation = crate::ui::compound_split_v2::types::create_canonical_signal(&state.data);
                 let desc = format!(
                     "Keep \"{}\" in {} as canonical",
                     state.data.compound.compound_value, state.data.compound.tag_name,

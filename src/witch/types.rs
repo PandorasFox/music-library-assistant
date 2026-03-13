@@ -1,5 +1,9 @@
 //! Core types, enums, and witness system for the Witch.
 //!
+//! Protocol-visible snapshot types (WitchStatus, WorkStatus, etc.) are defined
+//! in mm-meta and re-exported here. Server-only types (WorkState, Task,
+//! sealed witnesses, TaskLabel, TaskResult) remain local.
+//!
 //! This module is part of the Witch subsystem. See `witch/mod.rs` for overview.
 
 use std::collections::HashMap;
@@ -10,6 +14,9 @@ use crate::meta::computations::Computation;
 use crate::meta::maintenance::DbMaintenanceTask;
 use crate::meta::mutations::Mutation;
 use crate::meta::recomputation::RecomputationScope;
+
+// Re-export protocol-visible types from mm-meta.
+pub use mm_meta::witch_types::*;
 
 // ============================================================================
 // ManagedThread Trait
@@ -37,31 +44,7 @@ pub trait ManagedThread {
 }
 
 // ============================================================================
-// Startup State
-// ============================================================================
-
-/// Witch startup state — lifecycle from boot to fully operational.
-///
-/// When no database exists, the Witch boots into `AwaitingSetup` and idles
-/// until a client delivers the setup payload (root path). After setup
-/// completes (or on normal startup with existing DB), She auto-detects
-/// maintenance needs (schema reconciliation, vacuum) and transitions
-/// through `Reconciling` / `Vacuuming` before reaching `Ready`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum WitchStartupState {
-    /// No database — waiting for client to provide setup payload.
-    AwaitingSetup,
-    /// Schema reconciliation auto-running.
-    Reconciling,
-    /// Database vacuum auto-running.
-    Vacuuming,
-    /// Fully operational.
-    #[default]
-    Ready,
-}
-
-// ============================================================================
-// State Machine
+// State Machine (server-only — contains Instant, not serializable)
 // ============================================================================
 
 /// High-level Witch work state with session data carried inline.
@@ -196,41 +179,14 @@ impl WorkState {
     }
 }
 
-// ============================================================================
-// Eye and Observation State
-// ============================================================================
-
-/// Reasoning level - how much signal derivation the Witch has completed.
-///
-/// Gates the overall UI mode:
-/// - None/Inodes → Splash screen
-/// - Full → Normal UI with blinking eye
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum ReasoningLevel {
-    /// Startup — no reasoning yet.
-    #[default]
-    None,
-    /// Inode-level signal derivation in progress.
-    Inodes,
-    /// Full reasoning available, mutations accepted.
-    Full,
-}
-
-/// Watcher state — tracks filesystem watcher thread progress.
-///
-/// The watcher thread owns filesystem
-/// monitoring; this enum tracks its lifecycle from the Witch's perspective.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum WatcherState {
-    /// Watcher spawned but not yet started.
-    #[default]
-    NotStarted,
-    /// Initial directory walk in progress (watcher scanning zone roots).
-    InitialScan,
-    /// Watcher active and monitoring. Initial scan complete.
-    Watching,
-    /// inotify unavailable — watcher periodically re-walks zones.
-    Polling,
+impl From<&WorkState> for WorkStateSnapshot {
+    fn from(state: &WorkState) -> Self {
+        match state {
+            WorkState::Idle => WorkStateSnapshot::Idle,
+            WorkState::Working { .. } => WorkStateSnapshot::Working,
+            WorkState::Done { .. } => WorkStateSnapshot::Done,
+        }
+    }
 }
 
 // ============================================================================
@@ -381,7 +337,7 @@ pub use sealed::MutationExecutionWitness;
 pub use sealed::SpawnedMutation;
 
 // ============================================================================
-// Labels and Status Types
+// Labels
 // ============================================================================
 
 /// Human-readable task label for status display.
@@ -420,120 +376,6 @@ impl TaskLabel {
     }
 }
 
-/// Status information returned from tick() and status().
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct WorkStatus {
-    /// Current high-level state snapshot.
-    pub state: WorkStateSnapshot,
-    /// Tasks waiting to be processed (in queue or in-flight).
-    pub pending: usize,
-    /// Total tasks processed in current session.
-    pub total_processed: usize,
-    /// Total tasks queued in current session (for progress: processed/queued).
-    pub session_queued: usize,
-    /// Breakdown of pending tasks by type label.
-    pub pending_by_label: HashMap<String, usize>,
-}
-
-/// Snapshot of Witch work state for status reporting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum WorkStateSnapshot {
-    #[default]
-    Idle,
-    Working,
-    Done,
-}
-
-impl From<&WorkState> for WorkStateSnapshot {
-    fn from(state: &WorkState) -> Self {
-        match state {
-            WorkState::Idle => WorkStateSnapshot::Idle,
-            WorkState::Working { .. } => WorkStateSnapshot::Working,
-            WorkState::Done { .. } => WorkStateSnapshot::Done,
-        }
-    }
-}
-
-// ============================================================================
-// WitchStatus — Comprehensive State Machine Snapshot
-// ============================================================================
-
-/// The Witch's complete observable state, published as a protocol response.
-///
-/// This is the single source of truth for clients reading the Witch's state.
-/// Returned synchronously by the Witch when a client sends `StatusQuery`.
-///
-/// Generation counters allow event detection by diffing between frames:
-/// - `mutations_generation`: increments when a mutation batch completes
-/// - `error_generation`: increments when a task error occurs
-/// - `config_generation`: increments when config is mutated
-///
-/// See `docs/CLIENT_SERVER_ARCHITECTURE.md` for the full design.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct WitchStatus {
-    // -- Startup state --
-    /// Whether the Witch is operational or awaiting first-time setup.
-    pub startup_state: WitchStartupState,
-
-    // -- Work state --
-    /// Task processing state (idle/working/done + counts).
-    pub work: WorkStatus,
-    /// Current reasoning level (None → Inodes → Full).
-    pub reasoning_level: ReasoningLevel,
-    /// Whether any tasks are in-flight or queued.
-    pub has_pending: bool,
-    /// Whether initial corpus scanning is still in progress.
-    pub is_initial_scanning: bool,
-    /// Number of tasks queued in the db_thread write queue.
-    pub db_queue_depth: u64,
-
-    // -- Transaction state --
-    /// Active transaction snapshot, if any.
-    pub transaction: Option<TransactionSnapshot>,
-    /// Decision key kinds with staged decisions (for insight view filtering).
-    pub handled_decision_kinds: std::collections::HashSet<crate::meta::decisions::DecisionKeyKind>,
-
-    // -- External fetch state --
-    /// Whether the external fetch scheduler is currently running.
-    pub is_external_fetch_active: bool,
-    /// Progress snapshot from external fetch (AcoustID + MusicBrainz).
-    pub external_fetch_progress: Option<super::external_fetch::FetchProgress>,
-    /// Whether an AcoustID API key is configured.
-    pub has_acoustid_api_key: bool,
-
-    // -- Generation counters (for event detection via frame diffing) --
-    /// Increments each time a mutation batch completes. UI diffs this to
-    /// detect cache invalidation events (replaces WitchNotice::MutationsCompleted).
-    pub mutations_generation: u64,
-    /// Most recent task error message, if any.
-    pub last_error: Option<String>,
-    /// Increments each time a new task error occurs. UI diffs this to
-    /// detect errors (replaces WitchNotice::Error).
-    pub error_generation: u64,
-    /// Increments each time config is mutated. UI diffs this to
-    /// detect config changes (replaces WitchNotice::ConfigUpdated).
-    pub config_generation: u64,
-}
-
-/// Lightweight snapshot of the active transaction for status reads.
-///
-/// Contains enough data for render code (titlebar, insights view) without
-/// the heavy mutation/diff data. For full decision details (transaction
-/// review view), use a dedicated command query.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TransactionSnapshot {
-    /// Human-readable label for the transaction.
-    pub label: String,
-    /// Number of decisions staged.
-    pub decision_count: usize,
-    /// Total mutations across all staged decisions.
-    pub mutation_count: usize,
-    /// All decision keys in the transaction.
-    pub decision_keys: Vec<crate::meta::decisions::DecisionKey>,
-    /// Per-decision labels, keyed by decision key.
-    pub decision_labels: Vec<(crate::meta::decisions::DecisionKey, String)>,
-}
-
 // ============================================================================
 // Transaction Types (re-exported from meta::decisions)
 // ============================================================================
@@ -566,4 +408,3 @@ pub(super) struct TaskResult {
     pub deferred_phases:
         std::collections::VecDeque<(crate::meta::computations::PipelineStage, Vec<Computation>)>,
 }
-

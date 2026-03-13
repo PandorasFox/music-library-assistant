@@ -3,41 +3,16 @@
 //! Data structures for the cross-source overlap resolution modal, including
 //! cluster entries, resolution options, and stash file preview.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::corpus::paths;
 use crate::meta::mutations::file_ops::StashFromZoneMutation;
 use crate::meta::mutations::indexing::DropFromIndexMutation;
 use crate::meta::mutations::Mutation;
-use crate::ui::manual_review_modal::types::FileMetaSummary;
 
-/// A source directory within an overlap cluster.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct DirectoryGroupEntry {
-    /// Source directory path (e.g., "web/releases/bandcamp" or "web/releases/indie")
-    pub path_suffix: String,
-    /// Inodes for files in this source
-    pub inodes: Vec<i64>,
-    /// Corpus paths for the tracks
-    pub paths: Vec<String>,
-    /// Format summary (e.g., "FLAC (3)" or "MP3 (2)")
-    pub format_summary: String,
-    /// Whether this source can have duplicates stashed (from config, default: true).
-    pub can_stash_dupes: bool,
-}
-
-/// A single cross-source overlap cluster ready for resolution.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct DirectoryClusterEntry {
-    /// Cluster key (sorted source paths joined by |)
-    pub cluster_key: String,
-    /// Source directories in this cluster (usually 2)
-    pub directories: Vec<DirectoryGroupEntry>,
-    /// Number of overlapping track pairs
-    pub overlap_count: usize,
-}
-
+pub use mm_meta::views::cluster_deploy::{
+    DirectoryClusterEntry, DirectoryClusterModalData, DirectoryGroupEntry,
+};
 /// Resolution option for a directory cluster.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClusterResolutionOption {
@@ -61,27 +36,28 @@ pub struct StashFileEntry {
     pub inode: i64,
 }
 
-/// Cached data for the cross-source overlap resolution modal.
-///
-/// Loaded once when the modal opens. All renders use this cached data.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct DirectoryClusterModalData {
-    /// Cross-source overlap clusters
-    pub clusters: Vec<DirectoryClusterEntry>,
-    /// Audio metadata cache keyed by inode (loaded at init time).
-    pub file_meta_cache: HashMap<i64, FileMetaSummary>,
+/// Extension methods for DirectoryClusterModalData that depend on server-only types.
+pub trait DirectoryClusterModalDataExt {
+    /// Generate mutations for a resolution option on a specific cluster.
+    fn mutations_for_resolution(
+        &self,
+        cluster_index: usize,
+        option: &ClusterResolutionOption,
+    ) -> Vec<Mutation>;
+
+    /// Collect files that would be stashed by a resolution option on a specific cluster.
+    fn stash_files_for_option(
+        &self,
+        cluster_index: usize,
+        option: &ClusterResolutionOption,
+    ) -> Vec<StashFileEntry>;
 }
 
-impl DirectoryClusterModalData {
-    /// Total number of clusters.
-    pub fn total_count(&self) -> usize {
-        self.clusters.len()
-    }
-
+impl DirectoryClusterModalDataExt for DirectoryClusterModalData {
     /// Generate mutations for a resolution option on a specific cluster.
     ///
     /// Stashes the directory identified by the option (respecting `can_stash_dupes`).
-    pub fn mutations_for_resolution(
+    fn mutations_for_resolution(
         &self,
         cluster_index: usize,
         option: &ClusterResolutionOption,
@@ -143,7 +119,7 @@ impl DirectoryClusterModalData {
     ///
     /// Mirrors the stash logic from `mutations_for_resolution()` but returns
     /// `StashFileEntry` values instead of mutations.
-    pub fn stash_files_for_option(
+    fn stash_files_for_option(
         &self,
         cluster_index: usize,
         option: &ClusterResolutionOption,

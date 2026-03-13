@@ -288,16 +288,7 @@ impl Default for ExitConfirmModalState {
 // TagCanonicityClusters - signal navigation
 // ============================================================================
 
-/// Which typed signal table this cluster modal targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) enum CanonicitySignalKind {
-    /// `signal_tag_canonicity` table (pre-fill enabled)
-    TagCanonicity,
-    /// `signal_inconsistent_album_artist` table (no pre-fill)
-    InconsistentAlbumArtist,
-    /// `signal_inbox_tag_canonicity` table (pre-fill enabled, inbox zone)
-    InboxTagCanonicity,
-}
+pub(crate) use mm_meta::views::canonicity_compound::CanonicitySignalKind;
 
 /// Tracks the list of signals for Tab/Shift-Tab navigation in tag canonicity modal.
 #[derive(Debug, Clone)]

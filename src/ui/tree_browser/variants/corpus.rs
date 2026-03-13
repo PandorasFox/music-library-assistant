@@ -12,6 +12,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+use crate::meta::signals::packing_category::PackingCategoryColor;
 use crate::ui::helpers::truncate_left;
 use crate::ui::input::InputAction;
 use crate::ui::widgets::detail_panel::{

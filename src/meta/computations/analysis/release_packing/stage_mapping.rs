@@ -339,10 +339,10 @@ pub fn execute_compute_release_mappings(
     ));
 
     // Load config for MIS parameters
-    let rp = match ctx.snapshot.config.as_deref() {
-        Some(c) => c.opinions.release_packing.clone(),
-        None => ReleasePackingOpinions::default(),
-    };
+    let rp_default = ReleasePackingOpinions::default();
+    let rp = ctx.snapshot.config.as_deref()
+        .map(|c| &c.opinions.release_packing)
+        .unwrap_or(&rp_default);
 
     // Package state and defer Round 1
     let state = SharedMappingState::new(ReleaseMappingState {

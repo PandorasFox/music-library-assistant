@@ -869,19 +869,22 @@ pub fn execute_derive_corpus_deploy_status(
         let expected_relative = compute_deployment_path_with_tags(corpus_path, &tag_map);
         let deploy_path = expected_relative.to_string_lossy().to_string();
 
-        // Count ALL corpus files for conflict detection.
-        *deploy_path_counts.entry(deploy_path.clone()).or_insert(0) += 1;
-
         // Only build precomputed entries for healthy, source-configured files.
-        if healthy_inodes.contains(&inode) {
-            let in_source = config.is_path_in_source(Path::new(corpus_path));
-            if in_source {
-                precomputed.push(PrecomputedFile {
-                    inode,
-                    corpus_path: corpus_path.clone(),
-                    deploy_path,
-                });
-            } else {
+        let keep = healthy_inodes.contains(&inode)
+            && config.is_path_in_source(Path::new(corpus_path));
+
+        if keep {
+            // Clone into counts map, move into PrecomputedFile.
+            *deploy_path_counts.entry(deploy_path.clone()).or_insert(0) += 1;
+            precomputed.push(PrecomputedFile {
+                inode,
+                corpus_path: corpus_path.clone(),
+                deploy_path,
+            });
+        } else {
+            // Move directly into counts map — no clone needed.
+            *deploy_path_counts.entry(deploy_path).or_insert(0) += 1;
+            if healthy_inodes.contains(&inode) {
                 skipped_not_configured += 1;
             }
         }

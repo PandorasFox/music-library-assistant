@@ -239,7 +239,7 @@ pub fn execute_pack_releases(
 
     let config = require_config!(ctx, computation);
     let min_confidence = config.opinions.release_packing.min_confidence;
-    let preferred_locales = config.opinions.external_matching.preferred_locales.clone();
+    let preferred_locales = &config.opinions.external_matching.preferred_locales;
 
     let source_key = ExternalSource::AcoustID.to_key();
 
@@ -503,7 +503,7 @@ pub fn execute_pack_releases(
                 &release.artist_credit,
                 &release_artist_data,
                 release_id,
-                &preferred_locales,
+                preferred_locales,
             );
             (release_id.clone(), total, release.title.clone(), artist, media_count)
         })
@@ -1100,14 +1100,14 @@ pub fn execute_score_release_candidates(
 
     let config = require_config!(ctx, computation);
     let duration_tolerance_pct = config.opinions.release_packing.duration_tolerance_pct;
-    let candidate_weights = config.opinions.release_packing.candidate_weights.clone();
-    let elimination_weights = config.opinions.release_packing.elimination_weights.clone();
+    let candidate_weights = &config.opinions.release_packing.candidate_weights;
+    let elimination_weights = &config.opinions.release_packing.elimination_weights;
     let title_preassign_threshold = config.opinions.release_packing.title_preassign_threshold;
-    let preferred_locales = config.opinions.external_matching.preferred_locales.clone();
+    let preferred_locales = &config.opinions.external_matching.preferred_locales;
 
     // Load release tracklist and resolve locale-aware artist name
     let (release, resolved_artist) = match load_release_with_artist(
-        read_only_db, release_id, &preferred_locales,
+        read_only_db, release_id, preferred_locales,
     ) {
         Some(pair) => pair,
         None => {
@@ -1143,7 +1143,7 @@ pub fn execute_score_release_candidates(
         release_id,
         &resolved_artist,
         duration_tolerance_pct,
-        &candidate_weights,
+        candidate_weights,
     );
 
     // Compute pinned directory constraint
@@ -1174,7 +1174,7 @@ pub fn execute_score_release_candidates(
         &optimal_pairs,
         duration_tolerance_pct,
         title_preassign_threshold,
-        &elimination_weights,
+        elimination_weights,
     );
     score_rows.extend(elimination_rows);
 

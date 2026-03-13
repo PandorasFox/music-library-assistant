@@ -310,7 +310,7 @@ dir "web/releases/indie" {
             root: PathBuf::from("/test"),
             legacy_enabled: false,
             source_dirs: dirs,
-            opinions: crate::config::Opinions::default(),
+            opinions: mm_meta::config::Opinions::default(),
         }
     }
 

@@ -31,7 +31,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 /// Render the non-interactive startup maintenance view.
 ///
 /// Shown while the Witch auto-runs schema reconciliation or vacuum.
-pub fn render_startup_maintenance(
+pub(crate) fn render_startup_maintenance(
     f: &mut ratatui::Frame,
     area: Rect,
     app: &super::App,

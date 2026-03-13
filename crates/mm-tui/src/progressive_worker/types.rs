@@ -53,7 +53,7 @@ pub struct ProgressiveWorkerState {
     /// Whether we're in safe mode (for compound splits)
     pub is_safe_mode: bool,
     /// The confirmation gesture that authorized this progressive work.
-    pub gesture: ConfirmationGesture,
+    pub(crate) gesture: ConfirmationGesture,
 }
 
 impl ProgressiveWorkerState {
@@ -63,7 +63,7 @@ impl ProgressiveWorkerState {
     /// * `label` - Title shown in the progress modal
     /// * `items` - Work items to process
     /// * `on_complete` - Callback identifier for completion handling
-    pub fn new(
+    pub(crate) fn new(
         label: String,
         items: Vec<WorkItem>,
         on_complete: OnComplete,
@@ -85,7 +85,7 @@ impl ProgressiveWorkerState {
     }
 
     /// Create a new progressive worker for compound splits.
-    pub fn for_compound_splits(
+    pub(crate) fn for_compound_splits(
         groups: Vec<CompoundGroup>,
         is_safe_mode: bool,
         gesture: ConfirmationGesture,

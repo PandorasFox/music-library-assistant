@@ -15,13 +15,11 @@ use crate::meta::recomputation::RecomputationScope;
 use crate::meta::signals::data::*;
 
 use super::traits::{MutationContext, MutationExecutor};
-use super::types::{
-    path_filename, DiffEntry, Mutation, MutationResult, SignalClearScope, SignalToClear,
-};
+use super::types::{Mutation, MutationResult, SignalClearScope, SignalToClear};
 
 // Re-export struct definitions from mm-meta
 pub use mm_meta::mutations::file_ops::{
-    HardLinkMutation, InboxDirToCorpusMutation, InboxDirTrackedFile, InboxToCorpusMutation,
+    HardLinkMutation, InboxDirToCorpusMutation, InboxToCorpusMutation,
     LibraryMoveMutation, MoveMutation, StashFromZoneMutation, StashLeftoversMutation,
 };
 
@@ -30,9 +28,6 @@ pub use mm_meta::mutations::file_ops::{
 // ============================================================================
 
 impl MutationExecutor for MoveMutation {
-    fn label(&self) -> &'static str {
-        "File move"
-    }
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -60,20 +55,9 @@ impl MutationExecutor for MoveMutation {
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.source.clone(), self.destination.clone()]
     }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.source),
-            self.source.display(),
-            self.destination.display(),
-        )]
-    }
 }
 
 impl MutationExecutor for StashFromZoneMutation {
-    fn label(&self) -> &'static str {
-        "File stash"
-    }
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -124,20 +108,9 @@ impl MutationExecutor for StashFromZoneMutation {
     fn recomputation_scope(&self) -> RecomputationScope {
         RecomputationScope::FILES | RecomputationScope::DEPLOY
     }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.path),
-            self.path.display(),
-            format!("\u{2192} {}", self.stash_name),
-        )]
-    }
 }
 
 impl MutationExecutor for StashLeftoversMutation {
-    fn label(&self) -> &'static str {
-        "Library leftover stash"
-    }
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -203,20 +176,9 @@ impl MutationExecutor for StashLeftoversMutation {
         }
         Vec::new()
     }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.path),
-            self.path.display(),
-            "\u{2192} library_leftovers",
-        )]
-    }
 }
 
 impl MutationExecutor for HardLinkMutation {
-    fn label(&self) -> &'static str {
-        "Hard link"
-    }
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -253,20 +215,9 @@ impl MutationExecutor for HardLinkMutation {
             },
         )]
     }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.source),
-            self.source.display(),
-            self.destination.display(),
-        )]
-    }
 }
 
 impl MutationExecutor for LibraryMoveMutation {
-    fn label(&self) -> &'static str {
-        "Library move"
-    }
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -309,20 +260,9 @@ impl MutationExecutor for LibraryMoveMutation {
         }
         Vec::new()
     }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.source),
-            self.source.display(),
-            self.destination.display(),
-        )]
-    }
 }
 
 impl MutationExecutor for InboxToCorpusMutation {
-    fn label(&self) -> &'static str {
-        "Inbox → Corpus"
-    }
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -363,20 +303,9 @@ impl MutationExecutor for InboxToCorpusMutation {
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.inbox_path.clone(), self.corpus_path.clone()]
     }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.inbox_path),
-            self.inbox_path.display(),
-            self.corpus_path.display(),
-        )]
-    }
 }
 
 impl MutationExecutor for InboxDirToCorpusMutation {
-    fn label(&self) -> &'static str {
-        "Inbox dir → Corpus"
-    }
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -420,15 +349,6 @@ impl MutationExecutor for InboxDirToCorpusMutation {
 
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.inbox_dir_path.clone(), self.corpus_dir_path.clone()]
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        let dir_name = path_filename(&self.inbox_dir_path);
-        vec![DiffEntry::new(
-            format!("{}/", dir_name),
-            self.inbox_dir_path.display(),
-            self.corpus_dir_path.display(),
-        )]
     }
 }
 

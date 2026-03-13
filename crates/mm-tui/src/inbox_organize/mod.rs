@@ -25,7 +25,7 @@ use std::path::PathBuf;
 
 use crate::input::InputAction;
 
-use mm_meta::config::{Config, InboxOrganizeGranularity};
+use mm_meta::config::Config;
 use mm_meta::mutations::{
     file_ops::{InboxDirToCorpusMutation, InboxDirTrackedFile, InboxToCorpusMutation},
     Mutation,
@@ -383,4 +383,3 @@ impl InboxOrganizeState {
 }
 
 // Re-export group_into_directories from mm-meta where the canonical implementation lives.
-pub(crate) use mm_meta::views::startup_organize::group_into_directories;

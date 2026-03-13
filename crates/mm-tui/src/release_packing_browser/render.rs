@@ -26,7 +26,7 @@ use crate::widgets::rich_text::{RichBlock, RichSpan};
 // Top-Level Render
 // ============================================================================
 
-pub fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
+pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowserState) {
     // Outer: title (1) + content (min) + controls (1)
     let outer = Layout::default()
         .direction(Direction::Vertical)

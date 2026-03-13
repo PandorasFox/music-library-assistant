@@ -1,15 +1,13 @@
 //! Release packing signal types.
 
-use super::PackingScoreBreakdown;
 
 // Re-export pure data types from mm-meta
 pub use mm_meta::signals::data::{
-    MatchMethod, ReleasePackingData, UnsolvedCategory,
-    UnmatchedCorpusTrackData, UnfilledReleaseSlotData,
-    PackedReleaseCategory, PackedReleaseData,
-    PackingKnotData, KnotClassification, KnotProposalEntry, KnotAssignment,
+    ReleasePackingData, UnsolvedCategory,
+    UnmatchedCorpusTrackData, UnfilledReleaseSlotData, PackedReleaseData,
+    PackingKnotData,
     AlternativeReleasePackingData,
-    VariousArtistsOverrideData, VariousArtistsOverrideSource,
+    VariousArtistsOverrideData,
     PinnedReleaseConflictData,
 };
 

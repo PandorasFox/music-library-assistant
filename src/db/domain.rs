@@ -134,7 +134,7 @@ use mm_meta::views::health_modals::{
 use mm_meta::views::review_match::{
     InboxCorpusMatchModalData, ManualReviewData, RecordingDetail, RecordingSummary,
 };
-use mm_meta::views::startup_organize::{IntakeConfirmationState, IntakeSource, InboxDirectory};
+use mm_meta::views::startup_organize::{IntakeConfirmationState, InboxDirectory};
 use mm_meta::views::canonicity_compound::{CompoundSplitDataV2, TagCanonicalityModalDataV2};
 
 // ============================================================================

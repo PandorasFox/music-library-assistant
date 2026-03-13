@@ -34,7 +34,7 @@ use crate::meta::mutations::MutationToken;
 use crate::witch::MutationExecutionWitness;
 
 // Re-export data types from mm-meta
-pub use mm_meta::tags::{DiffClassification, PictureInfo, TagSet, TagSetDiff};
+pub use mm_meta::tags::{PictureInfo, TagSet};
 
 /// Extract lowercase file extension from a path.
 fn path_ext(path: &Path) -> String {
@@ -440,6 +440,7 @@ fn populate_vorbis_comments(vc: &mut lofty::ogg::VorbisComments, tags: &TagSet) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mm_meta::tags::DiffClassification;
 
     // =========================================================================
     // Test fixture helpers

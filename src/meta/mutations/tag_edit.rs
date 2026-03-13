@@ -25,15 +25,12 @@ use crate::corpus::tags::TagSet;
 
 use super::indexing::FlushTagsToDiskMutation;
 use super::traits::{MutationContext, MutationExecutor};
-use super::types::{DiffEntry, Mutation, MutationResult, SignalClearScope, TagOp};
+use super::types::{Mutation, MutationResult, SignalClearScope, TagOp};
 
 // Re-export struct definition from mm-meta
 pub use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
 
 impl MutationExecutor for ApplyTagOpsMutation {
-    fn label(&self) -> &'static str {
-        "Tag edit"
-    }
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -95,40 +92,6 @@ impl MutationExecutor for ApplyTagOpsMutation {
             Zone::Inbox => RecomputationScope::INBOX,
             _ => RecomputationScope::TAGS,
         }
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        use std::collections::BTreeMap;
-
-        // Group by (tag_name, old_display, new_display) → count of inodes
-        let mut groups: BTreeMap<(String, String, String), usize> = BTreeMap::new();
-
-        for op in &self.ops {
-            if op.is_nop() {
-                continue;
-            }
-
-            let (old, new) = match (&op.old_value, &op.new_value) {
-                (Some(old), Some(new)) => (old.clone(), new.clone()),
-                (Some(old), None) => (old.clone(), "[removed]".to_string()),
-                (None, Some(new)) => ("[new]".to_string(), new.clone()),
-                (None, None) => continue,
-            };
-
-            *groups.entry((op.tag_name.clone(), old, new)).or_insert(0) += 1;
-        }
-
-        groups
-            .into_iter()
-            .map(|((tag_name, old, new), count)| {
-                let display_new = if count > 1 {
-                    format!("{} (\u{00d7}{})", new, count)
-                } else {
-                    new
-                };
-                DiffEntry::new(tag_name, old, display_new)
-            })
-            .collect()
     }
 }
 

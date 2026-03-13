@@ -136,7 +136,7 @@ impl DirectoryClusterPreviewState {
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(
+    pub(crate) fn handle_click(
         &mut self,
         x: u16,
         y: u16,

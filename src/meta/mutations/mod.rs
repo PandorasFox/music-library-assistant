@@ -80,7 +80,7 @@ pub use sealed::MutationToken;
 
 #[cfg(test)]
 mod tests {
-    use super::{types::MutationDispatch, *};
+    use super::*;
 
     #[test]
     fn test_create_bulk_tag_mutations() {
@@ -99,6 +99,5 @@ mod tests {
 
         // Verify ApplyTagOps mutation
         assert_eq!(mutation.label(), "Tag edit");
-        assert!(mutation.is_db_only());
     }
 }

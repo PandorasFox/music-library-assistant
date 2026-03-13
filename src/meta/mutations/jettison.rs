@@ -15,10 +15,6 @@ use super::types::{Mutation, MutationResult, SignalClearScope};
 pub use mm_meta::mutations::jettison::JettisonEditHistoryMutation;
 
 impl MutationExecutor for JettisonEditHistoryMutation {
-    fn label(&self) -> &'static str {
-        "Jettison edit history"
-    }
-
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }

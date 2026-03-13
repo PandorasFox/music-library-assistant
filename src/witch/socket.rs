@@ -12,7 +12,7 @@
 
 use std::io;
 use std::os::unix::net::UnixListener;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;

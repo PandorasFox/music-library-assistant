@@ -7,7 +7,7 @@ use crate::meta::signals::registry::SignalContentHash;
 
 // Re-export pure data types from mm-meta
 pub use mm_meta::signals::data::{
-    CorpusMatchQuality, InboxCorpusMatchData, InboxCorpusMatch, InboxTagCanonicityData,
+    CorpusMatchQuality, InboxCorpusMatchData, InboxTagCanonicityData,
 };
 
 // ============================================================================

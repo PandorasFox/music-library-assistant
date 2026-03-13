@@ -49,7 +49,7 @@ pub fn stage_decision(
 /// Commit the active transaction - queue all staged mutations for execution.
 ///
 /// Called from Enter keypress on transaction commit confirmation.
-pub fn commit_transaction(
+pub(crate) fn commit_transaction(
     witch: &mut WitchHandle,
     _gesture: &ConfirmationGesture,
 ) -> Result<(), ProtocolError> {
@@ -69,7 +69,7 @@ pub fn discard_transaction(
 /// Remove an entire decision from the active transaction.
 ///
 /// Called when user removes a decision from transaction review.
-pub fn remove_decision(
+pub(crate) fn remove_decision(
     witch: &mut WitchHandle,
     key: &DecisionKey,
     _gesture: &ConfirmationGesture,

@@ -18,7 +18,7 @@ use super::KnotBrowserState;
 use crate::widgets::control_colors;
 use crate::widgets::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 
-pub fn render(f: &mut Frame, area: Rect, state: &mut KnotBrowserState) {
+pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut KnotBrowserState) {
     if state.knots.is_empty() {
         let msg = Paragraph::new("No knots to display.")
             .style(Style::default().fg(Color::DarkGray));

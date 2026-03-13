@@ -5,8 +5,8 @@
 //!
 //! ## Architecture
 //!
-//! - `AuthHandle` (client-facing): send login/logout/status requests via channel,
-//!   validate tokens directly via shared `ArcSwap<SessionMap>` (no round-trip).
+//! - `AuthHandle` (client-facing): send login requests via channel, validate
+//!   tokens directly via shared `ArcSwap<SessionMap>` (no round-trip).
 //! - `AuthThreadHandle` (Witch-facing): lifecycle management via `ManagedThread`.
 //!
 //! ## Session Storage
@@ -29,19 +29,6 @@ use crate::db::Database;
 use super::types::ManagedThread;
 
 // ============================================================================
-// Auth State
-// ============================================================================
-
-/// System-level auth state, determined by user count in the database.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SystemAuthState {
-    /// No users exist — first-time setup authorization level.
-    NeedsSetup,
-    /// Users exist — unauthenticated until login.
-    NeedsAuth,
-}
-
-// ============================================================================
 // Session Storage
 // ============================================================================
 
@@ -59,17 +46,11 @@ struct SessionEntry {
 // ============================================================================
 
 enum AuthRequest {
-    GetStatus {
-        reply: Sender<SystemAuthState>,
-    },
     Login {
         username: String,
         password: String,
         lifetime: SessionLifetime,
         reply: Sender<Result<SessionToken, String>>,
-    },
-    Logout {
-        token_hash: [u8; 32],
     },
     /// Notify the auth thread that the DB is now available (after first-time setup).
     DbReady,
@@ -82,8 +63,8 @@ enum AuthRequest {
 
 /// Client-facing auth handle. Cloneable, Send + Sync.
 ///
-/// Login/logout/status use the channel. Token validation reads the shared
-/// session map directly — no channel round-trip, no contention.
+/// Login uses the channel. Token validation reads the shared session map
+/// directly — no channel round-trip, no contention.
 #[derive(Clone)]
 pub struct AuthHandle {
     request_tx: Sender<AuthRequest>,
@@ -91,13 +72,6 @@ pub struct AuthHandle {
 }
 
 impl AuthHandle {
-    /// Query the system auth state (requires DB round-trip via auth thread).
-    pub fn status(&self) -> SystemAuthState {
-        let (tx, rx) = mpsc::channel();
-        let _ = self.request_tx.send(AuthRequest::GetStatus { reply: tx });
-        rx.recv().unwrap_or(SystemAuthState::NeedsSetup)
-    }
-
     /// Attempt login. Returns a session token on success.
     pub fn login(
         &self,
@@ -127,17 +101,6 @@ impl AuthHandle {
         }
     }
 
-    /// Logout: invalidate a session token (fire-and-forget).
-    pub fn logout(&self, token: &SessionToken) {
-        let hash = auth::hash_token(token);
-        let _ = self.request_tx.send(AuthRequest::Logout { token_hash: hash });
-    }
-
-    /// Notify the auth thread that the database is now available.
-    /// Called by the Witch after first-time setup creates the DB.
-    pub fn notify_db_ready(&self) {
-        let _ = self.request_tx.send(AuthRequest::DbReady);
-    }
 }
 
 // ============================================================================
@@ -236,21 +199,6 @@ fn auth_thread_main(
 
     loop {
         match rx.recv() {
-            Ok(AuthRequest::GetStatus { reply }) => {
-                let state = match &db {
-                    Some(db) => {
-                        let count = db.user_count().unwrap_or(0);
-                        if count > 0 {
-                            SystemAuthState::NeedsAuth
-                        } else {
-                            SystemAuthState::NeedsSetup
-                        }
-                    }
-                    None => SystemAuthState::NeedsSetup,
-                };
-                let _ = reply.send(state);
-            }
-
             Ok(AuthRequest::Login {
                 username,
                 password,
@@ -262,15 +210,6 @@ fn auth_thread_main(
                     None => Err("Database not available".to_string()),
                 };
                 let _ = reply.send(result);
-            }
-
-            Ok(AuthRequest::Logout { token_hash }) => {
-                let current = sessions.load();
-                if current.contains_key(&token_hash) {
-                    let mut new_map = (**current).clone();
-                    new_map.remove(&token_hash);
-                    sessions.store(Arc::new(new_map));
-                }
             }
 
             Ok(AuthRequest::DbReady) => {
@@ -331,7 +270,6 @@ fn attempt_login(
 
     let expires_at = match lifetime {
         SessionLifetime::CloseOnExit => None,
-        SessionLifetime::Duration(d) => Some(Instant::now() + d),
     };
 
     let entry = SessionEntry {

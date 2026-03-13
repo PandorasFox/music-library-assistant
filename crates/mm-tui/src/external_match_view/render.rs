@@ -15,7 +15,7 @@ use super::{ExternalMatchListItem, ExternalMatchesViewState, NavigableEntry};
 use mm_meta::views::ConfidenceTier;
 use crate::release_packing_browser::types::PackingCategory;
 
-pub fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewState) {
+pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewState) {
     // Snapshot fields for the render closure (avoids borrowing all of `state`
     // while `state.list` is mutably borrowed by render()).
     let snap = RenderSnapshot {

@@ -16,7 +16,7 @@ use crate::widgets::control_colors as cc;
 use crate::widgets::standard_list::ListEntry;
 use crate::widgets::{ConfirmationButton, ConfirmationModal};
 
-pub fn render(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
+pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
     match state.phase {
         HistoryPhase::SessionList
         | HistoryPhase::ConfirmJettisonSession(_)

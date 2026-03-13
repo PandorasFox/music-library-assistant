@@ -4,7 +4,6 @@
 //! SessionToken is defined in mm-meta; password hashing stays here.
 
 use anyhow::Result;
-use std::time::Duration;
 
 // Re-export SessionToken from mm-meta
 pub use mm_meta::auth::SessionToken;
@@ -70,8 +69,6 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
 pub enum SessionLifetime {
     /// TUI: session dies when the process exits (all in-memory sessions cleared).
     CloseOnExit,
-    /// Web/remote: session expires after this duration.
-    Duration(Duration),
 }
 
 // ============================================================================
@@ -126,6 +123,5 @@ mod tests {
     #[test]
     fn test_session_lifetime_variants() {
         let _close = SessionLifetime::CloseOnExit;
-        let _dur = SessionLifetime::Duration(Duration::from_secs(86400));
     }
 }

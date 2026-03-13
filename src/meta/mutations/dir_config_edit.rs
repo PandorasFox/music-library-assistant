@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use super::traits::{MutationContext, MutationExecutor};
 use crate::config::SourceDir;
 use crate::meta::computations::Computation;
-use crate::meta::mutations::types::{DiffEntry, MutationResult, SignalClearScope, SignalToClear};
+use crate::meta::mutations::types::{MutationResult, SignalClearScope, SignalToClear};
 use crate::meta::recomputation::RecomputationScope;
 
 // Re-export struct definitions from mm-meta
@@ -17,9 +17,6 @@ pub use mm_meta::mutations::dir_config_edit::{
 };
 
 impl MutationExecutor for ApplyDirConfigEditMutation {
-    fn label(&self) -> &'static str {
-        "Dir config update"
-    }
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -88,72 +85,6 @@ impl MutationExecutor for ApplyDirConfigEditMutation {
     fn recomputation_scope(&self) -> RecomputationScope {
         dir_config_recomputation_scope(&self.old_dir, &self.new_dir)
     }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        let mut diffs = Vec::new();
-        let old = &self.old_dir;
-        let new = &self.new_dir;
-
-        if old.libraries != new.libraries {
-            diffs.push(DiffEntry::new(
-                "Libraries",
-                old.libraries.join(", "),
-                new.libraries.join(", "),
-            ));
-        }
-        if old.can_stash_dupes != new.can_stash_dupes {
-            diffs.push(DiffEntry::new(
-                "Can stash dupes",
-                format_opt_bool(old.can_stash_dupes),
-                format_opt_bool(new.can_stash_dupes),
-            ));
-        }
-        if old.interior_dupes != new.interior_dupes {
-            diffs.push(DiffEntry::new(
-                "Interior dupes",
-                format_opt_bool(old.interior_dupes),
-                format_opt_bool(new.interior_dupes),
-            ));
-        }
-        let old_schema = old
-            .path_schema
-            .as_ref()
-            .map(|s| s.template.as_str())
-            .unwrap_or("(none)");
-        let new_schema = new
-            .path_schema
-            .as_ref()
-            .map(|s| s.template.as_str())
-            .unwrap_or("(none)");
-        if old_schema != new_schema {
-            diffs.push(DiffEntry::new("Path schema", old_schema, new_schema));
-        }
-        if old.enable_acoustid != new.enable_acoustid {
-            diffs.push(DiffEntry::new(
-                "Enable AcoustID",
-                format_opt_bool(old.enable_acoustid),
-                format_opt_bool(new.enable_acoustid),
-            ));
-        }
-        if old.pinned_release != new.pinned_release {
-            diffs.push(DiffEntry::new(
-                "Pinned release",
-                old.pinned_release.as_deref().unwrap_or("(none)"),
-                new.pinned_release.as_deref().unwrap_or("(none)"),
-            ));
-        }
-
-        diffs
-    }
-}
-
-/// Format an Option<bool> for diff display.
-fn format_opt_bool(v: Option<bool>) -> &'static str {
-    match v {
-        Some(true) => "true",
-        Some(false) => "false",
-        None => "(inherit)",
-    }
 }
 
 // ============================================================================
@@ -161,10 +92,6 @@ fn format_opt_bool(v: Option<bool>) -> &'static str {
 // ============================================================================
 
 impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
-    fn label(&self) -> &'static str {
-        "Batch dir config update"
-    }
-
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -237,69 +164,6 @@ impl MutationExecutor for ApplyBatchDirConfigEditsMutation {
             scope |= dir_config_recomputation_scope(&entry.old_dir, &entry.new_dir);
         }
         scope
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        let mut diffs = Vec::new();
-        for entry in &self.edits {
-            let old = &entry.old_dir;
-            let new = &entry.new_dir;
-            let prefix = entry.source_path.display().to_string();
-
-            if old.libraries != new.libraries {
-                diffs.push(DiffEntry::new(
-                    format!("{}: Libraries", prefix),
-                    old.libraries.join(", "),
-                    new.libraries.join(", "),
-                ));
-            }
-            if old.can_stash_dupes != new.can_stash_dupes {
-                diffs.push(DiffEntry::new(
-                    format!("{}: Can stash dupes", prefix),
-                    format_opt_bool(old.can_stash_dupes),
-                    format_opt_bool(new.can_stash_dupes),
-                ));
-            }
-            if old.interior_dupes != new.interior_dupes {
-                diffs.push(DiffEntry::new(
-                    format!("{}: Interior dupes", prefix),
-                    format_opt_bool(old.interior_dupes),
-                    format_opt_bool(new.interior_dupes),
-                ));
-            }
-            let old_schema = old
-                .path_schema
-                .as_ref()
-                .map(|s| s.template.as_str())
-                .unwrap_or("(none)");
-            let new_schema = new
-                .path_schema
-                .as_ref()
-                .map(|s| s.template.as_str())
-                .unwrap_or("(none)");
-            if old_schema != new_schema {
-                diffs.push(DiffEntry::new(
-                    format!("{}: Path schema", prefix),
-                    old_schema,
-                    new_schema,
-                ));
-            }
-            if old.enable_acoustid != new.enable_acoustid {
-                diffs.push(DiffEntry::new(
-                    format!("{}: Enable AcoustID", prefix),
-                    format_opt_bool(old.enable_acoustid),
-                    format_opt_bool(new.enable_acoustid),
-                ));
-            }
-            if old.pinned_release != new.pinned_release {
-                diffs.push(DiffEntry::new(
-                    format!("{}: Pinned release", prefix),
-                    old.pinned_release.as_deref().unwrap_or("(none)"),
-                    new.pinned_release.as_deref().unwrap_or("(none)"),
-                ));
-            }
-        }
-        diffs
     }
 }
 

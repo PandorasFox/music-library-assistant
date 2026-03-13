@@ -19,7 +19,7 @@ use crate::config;
 
 // Re-export PathResolver and free functions from mm-meta
 pub use mm_meta::paths::{
-    is_corpus_path, is_library_path, is_stash_path, read_mtime, PathResolver,
+    is_corpus_path, is_library_path, read_mtime, PathResolver,
 };
 
 // ============================================================================
@@ -82,6 +82,7 @@ pub fn resolve_relative(path: &std::path::Path) -> anyhow::Result<std::path::Pat
 mod tests {
     use super::*;
     use crate::config::Config;
+    use mm_meta::paths::is_stash_path;
     use mm_utils::t;
     use std::path::{Path, PathBuf};
 

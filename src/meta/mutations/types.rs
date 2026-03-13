@@ -10,8 +10,8 @@ use crate::meta::signals::registry::TypedSignalWrite;
 
 // Re-export data types from mm-meta (struct re-exports come from sub-modules)
 pub use mm_meta::mutations::{
-    DiffEntry, ExtractedMetadata, Mutation, MutationExecutionStage, MutationOrigin,
-    SignalClearScope, TagOp, path_filename,
+    ExtractedMetadata, Mutation, MutationExecutionStage, MutationOrigin,
+    SignalClearScope, TagOp,
 };
 
 // ============================================================================
@@ -99,9 +99,6 @@ pub trait MutationDispatch {
     /// Get the inner struct as a trait object.
     fn as_executor(&self) -> &dyn super::traits::MutationExecutor;
 
-    /// Check if this mutation is database-only (no file system operations).
-    fn is_db_only(&self) -> bool;
-
     /// Paths to spawn signal update computations for.
     fn paths_for_signal_updates(&self) -> Vec<PathBuf>;
 
@@ -144,23 +141,6 @@ impl MutationDispatch for Mutation {
         }
     }
 
-    fn is_db_only(&self) -> bool {
-        matches!(
-            self,
-            Mutation::ApplyTagOps(_)
-                | Mutation::UpdateFilePath(_)
-                | Mutation::DropFromIndex(_)
-                | Mutation::AcknowledgeMtimeOnly(_)
-                | Mutation::AssimilateDiskTagsToDb(_)
-                | Mutation::EmitCanonicalTag(_)
-                | Mutation::EmitExpectedOverlap(_)
-                | Mutation::EmitExpectedDuplicate(_)
-                | Mutation::EmitExpectedMissingTag(_)
-                | Mutation::DropExternalMatch(_)
-                | Mutation::JettisonEditHistory(_)
-        )
-    }
-
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         self.as_executor().paths_for_signal_updates()
     }
@@ -189,7 +169,6 @@ mod tests {
             zone: crate::db::types::Zone::Corpus,
         });
         assert_eq!(apply_tag_ops.label(), "Tag edit");
-        assert!(apply_tag_ops.is_db_only());
 
         let apply_tags = Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation {
             inode: 1,
@@ -197,7 +176,6 @@ mod tests {
             zone: crate::db::types::Zone::Corpus,
         });
         assert_eq!(apply_tags.label(), "Tag sync (DB→disk)");
-        assert!(!apply_tags.is_db_only());
 
         let file_move = Mutation::Move(MoveMutation {
             source: PathBuf::from("/a"),

@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 use crate::tree_browser::{EntryFilter, TreeEntry, TreeNavigator};
 
 // Re-export from mm-meta where the canonical definition lives.
-pub(crate) use mm_meta::auth::FirstTimeSetupToken;
 
 use crate::input;
 use crate::widgets::selection_styles::CURSOR_STYLE;

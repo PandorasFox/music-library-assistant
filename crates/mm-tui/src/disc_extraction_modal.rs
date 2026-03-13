@@ -90,7 +90,6 @@ pub use mm_meta::domain_queries::{DiscExtractionGroup, DiscExtractionModalData};
 pub type DiscExtractionData = DiscExtractionModalData;
 
 // Re-export from mm-meta where the canonical implementation lives.
-pub(crate) use mm_meta::domain_queries::letter_to_number;
 
 // ============================================================================
 // State
@@ -151,7 +150,7 @@ impl DiscExtractionState {
     }
 
     /// Handle a mouse click at (x, y).
-    pub fn handle_click(
+    pub(crate) fn handle_click(
         &mut self,
         x: u16,
         y: u16,

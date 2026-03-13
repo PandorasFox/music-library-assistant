@@ -418,3 +418,19 @@ pub fn schema_fingerprint() -> u64 {
 
 /// Key used to store the schema fingerprint in `app_metadata`.
 pub const FINGERPRINT_KEY: &str = "schema_fingerprint";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify all TableKind variants are used in the schema inventory.
+    /// (Decision is constructed via the signal_tables! macro, which the
+    /// compiler can't trace — this test makes the usage visible.)
+    #[test]
+    fn all_table_kinds_present_in_inventory() {
+        let tables = schema_inventory();
+        assert!(tables.iter().any(|t| t.kind == TableKind::Core));
+        assert!(tables.iter().any(|t| t.kind == TableKind::Decision));
+        assert!(tables.iter().any(|t| t.kind == TableKind::Computed));
+    }
+}

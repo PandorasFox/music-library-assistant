@@ -32,9 +32,6 @@ pub struct MutationContext<'a> {
 /// Defines execution logic and all post-execution behavior for a mutation.
 /// Adding a new mutation = create struct + impl this trait (one file).
 pub trait MutationExecutor: std::fmt::Debug + Send + Sync {
-    /// Human-readable label for logging/display.
-    fn label(&self) -> &'static str;
-
     /// Whether this mutation can appear in operator-staged transactions.
     fn origin(&self) -> MutationOrigin;
 
@@ -81,14 +78,6 @@ pub trait MutationExecutor: std::fmt::Debug + Send + Sync {
     /// Returns paths that need UpdateCorpusFileSignals or UpdateLibraryFileSignals
     /// computations spawned in the post-execution pipeline (Phase 3).
     fn paths_for_signal_updates(&self) -> Vec<std::path::PathBuf> {
-        Vec::new()
-    }
-
-    /// Diff entries for transaction review display.
-    ///
-    /// Returns field-level diffs (label, old_value, new_value) for rendering
-    /// red→green change visualization. Default empty — mutations opt in.
-    fn diff_entries(&self) -> Vec<super::types::DiffEntry> {
         Vec::new()
     }
 

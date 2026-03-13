@@ -24,8 +24,7 @@ use crate::witch::MutationExecutionWitness;
 
 use super::traits::{MutationContext, MutationExecutor};
 use super::types::{
-    path_filename, DiffEntry, ExtractedMetadata, Mutation, MutationResult, PendingSignal,
-    SignalClearScope,
+    ExtractedMetadata, Mutation, MutationResult, PendingSignal, SignalClearScope,
 };
 
 // Re-export struct definitions from mm-meta
@@ -41,16 +40,15 @@ pub use mm_meta::mutations::indexing::{
 /// `execute` delegates to a helper function and wraps the result via
 /// `MutationResult::from_unit_result`.
 ///
-/// All 6 required trait methods are specified positionally. The two optional
-/// methods (`paths_for_signal_updates` and `diff_entries`) are provided via
-/// trailing `key => expr` arms — omit them to keep the trait defaults.
+/// All required trait methods are specified positionally. The optional
+/// `paths_for_signal_updates` method is provided via a trailing `key => expr`
+/// arm — omit it to keep the trait default.
 ///
 /// Expressions in the body can use `self` (the mutation struct) and `ctx`
 /// (the `MutationContext` passed to `execute`).
 macro_rules! impl_mutation_executor {
     (
         $struct_name:ident, $variant:ident,
-        label: $label:expr,
         origin: $origin:expr,
         execution_stage: $stage:expr,
         signal_clear_scope: $scope:expr,
@@ -58,11 +56,9 @@ macro_rules! impl_mutation_executor {
         execute: |$self_:ident, $ctx:ident| $execute_expr:expr,
         affected_inodes: |$self_i:ident| $inodes:expr
         $(, paths_for_signal_updates: |$self_p:ident| $paths:expr)?
-        $(, diff_entries: |$self_d:ident| $diff:expr)?
         $(,)?
     ) => {
         impl MutationExecutor for $struct_name {
-            fn label(&self) -> &'static str { $label }
             fn origin(&self) -> super::MutationOrigin { $origin }
             fn execution_stage(&self) -> super::MutationExecutionStage { $stage }
 
@@ -89,13 +85,6 @@ macro_rules! impl_mutation_executor {
                     $paths
                 }
             )?
-
-            $(
-                fn diff_entries(&self) -> Vec<DiffEntry> {
-                    let $self_d = self;
-                    $diff
-                }
-            )?
         }
     };
 }
@@ -118,9 +107,6 @@ fn is_shit_format(file_type: &str) -> bool {
 // ============================================================================
 
 impl MutationExecutor for IndexFileFromPathMutation {
-    fn label(&self) -> &'static str {
-        "Indexing"
-    }
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -171,19 +157,10 @@ impl MutationExecutor for IndexFileFromPathMutation {
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         vec![self.path.clone()]
     }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        vec![DiffEntry::new(
-            path_filename(&self.path),
-            "[unindexed]",
-            self.path.display(),
-        )]
-    }
 }
 
 impl_mutation_executor!(
     UpdateFilePathMutation, UpdateFilePath,
-    label: "Path update",
     origin: super::MutationOrigin::Staged,
     execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::MutableOnly,
@@ -193,16 +170,10 @@ impl_mutation_executor!(
         s.new_zone.as_deref(), ctx.witness,
     ),
     affected_inodes: |s| vec![s.inode],
-    diff_entries: |s| vec![DiffEntry::new(
-        path_filename(&s.new_path),
-        &s.zone,
-        s.new_path.display(),
-    )],
 );
 
 impl_mutation_executor!(
     DropFromIndexMutation, DropFromIndex,
-    label: "Drop from index",
     origin: super::MutationOrigin::Staged,
     execution_stage: super::MutationExecutionStage::DiskFlush,
     signal_clear_scope: SignalClearScope::All,
@@ -211,32 +182,20 @@ impl_mutation_executor!(
         ctx.read_db, &s.path, s.inode, s.zone.as_deref(), ctx.witness,
     ),
     affected_inodes: |s| s.inode.into_iter().collect(),
-    diff_entries: |s| vec![DiffEntry::new(
-        path_filename(&s.path),
-        s.path.display(),
-        "[removed]",
-    )],
 );
 
 impl_mutation_executor!(
     DropDirectoryFromIndexMutation, DropDirectoryFromIndex,
-    label: "Drop directory from index",
     origin: super::MutationOrigin::Staged,
     execution_stage: super::MutationExecutionStage::DiskFlush,
     signal_clear_scope: SignalClearScope::All,
     recomputation_scope: RecomputationScope::FILES | RecomputationScope::DEPLOY,
     execute: |s, ctx| execute_drop_directory_from_index(ctx.read_db, &s.directory_path, ctx.witness),
     affected_inodes: |_s| Vec::new(),
-    diff_entries: |s| vec![DiffEntry::new(
-        path_filename(&s.directory_path),
-        "[indexed]",
-        "[removed]",
-    )],
 );
 
 impl_mutation_executor!(
     AcknowledgeMtimeOnlyMutation, AcknowledgeMtimeOnly,
-    label: "Acknowledge mtime",
     origin: super::MutationOrigin::Staged,
     execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::MutableOnly,
@@ -244,17 +203,10 @@ impl_mutation_executor!(
     execute: |s, ctx| execute_acknowledge_mtime_only(ctx.read_db, &s.tracks, ctx.witness).map(|_| ()),
     affected_inodes: |s| s.tracks.iter().map(|(inode, _)| *inode).collect(),
     paths_for_signal_updates: |s| s.tracks.iter().map(|(_, path)| path.clone()).collect(),
-    diff_entries: |s| s.tracks
-        .iter()
-        .map(|(_, path)| {
-            DiffEntry::new(path_filename(path), "[mtime mismatch]", "acknowledged")
-        })
-        .collect(),
 );
 
 impl_mutation_executor!(
     ApplyDbTagsToDiskMutation, ApplyDbTagsToDisk,
-    label: "Tag sync (DB→disk)",
     origin: super::MutationOrigin::Staged,
     execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::MutableOnly,
@@ -264,16 +216,10 @@ impl_mutation_executor!(
     ),
     affected_inodes: |s| vec![s.inode],
     paths_for_signal_updates: |s| vec![s.path.clone()],
-    diff_entries: |s| vec![DiffEntry::new(
-        path_filename(&s.path),
-        "disk tags",
-        "overwrite \u{2192} DB",
-    )],
 );
 
 impl_mutation_executor!(
     FlushTagsToDiskMutation, FlushTagsToDisk,
-    label: "Tag flush",
     origin: super::MutationOrigin::ChainEmitted,
     execution_stage: super::MutationExecutionStage::DiskFlush,
     signal_clear_scope: SignalClearScope::MutableOnly,
@@ -287,7 +233,6 @@ impl_mutation_executor!(
 
 impl_mutation_executor!(
     AssimilateDiskTagsToDbMutation, AssimilateDiskTagsToDb,
-    label: "Tag sync (disk→DB)",
     origin: super::MutationOrigin::Staged,
     execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::MutableOnly,
@@ -297,16 +242,10 @@ impl_mutation_executor!(
     ),
     affected_inodes: |s| vec![s.inode],
     paths_for_signal_updates: |s| vec![s.path.clone()],
-    diff_entries: |s| vec![DiffEntry::new(
-        path_filename(&s.path),
-        "DB tags",
-        "accept \u{2190} disk",
-    )],
 );
 
 impl_mutation_executor!(
     EmitCanonicalTagMutation, EmitCanonicalTag,
-    label: "Mark canonical",
     origin: super::MutationOrigin::Staged,
     execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::None,
@@ -315,75 +254,46 @@ impl_mutation_executor!(
         &s.tag_name, &s.canonical_value, ctx.read_db, ctx.witness,
     ),
     affected_inodes: |_s| Vec::new(),
-    diff_entries: |s| vec![DiffEntry::new(
-        &s.tag_name,
-        "[non-canonical]",
-        &s.canonical_value,
-    )],
 );
 
 impl_mutation_executor!(
     EmitExpectedOverlapMutation, EmitExpectedOverlap,
-    label: "Mark expected overlap",
     origin: super::MutationOrigin::Staged,
     execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::FILES,
     execute: |s, ctx| execute_emit_expected_overlap(&s.source_a, &s.source_b, ctx.witness),
     affected_inodes: |_s| Vec::new(),
-    diff_entries: |s| vec![DiffEntry::new(
-        "Expected overlap",
-        &s.source_a,
-        &s.source_b,
-    )],
 );
 
 impl_mutation_executor!(
     EmitExpectedDuplicateMutation, EmitExpectedDuplicate,
-    label: "Mark expected duplicate",
     origin: super::MutationOrigin::Staged,
     execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::FILES,
     execute: |s, ctx| execute_emit_expected_duplicate(&s.fingerprint_key, ctx.witness),
     affected_inodes: |_s| Vec::new(),
-    diff_entries: |s| vec![DiffEntry::new(
-        "Expected duplicate",
-        "[flagged]",
-        &s.fingerprint_key,
-    )],
 );
 
 impl_mutation_executor!(
     DropExternalMatchMutation, DropExternalMatch,
-    label: "Drop external match",
     origin: super::MutationOrigin::Staged,
     execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::EMPTY,
     execute: |s, ctx| execute_drop_external_match(s.inode, ctx.witness),
     affected_inodes: |s| vec![s.inode],
-    diff_entries: |s| vec![DiffEntry::new(
-        format!("inode {}", s.inode),
-        "[external match]",
-        "[dropped]",
-    )],
 );
 
 impl_mutation_executor!(
     EmitExpectedMissingTagMutation, EmitExpectedMissingTag,
-    label: "Mark expected missing tag",
     origin: super::MutationOrigin::Staged,
     execution_stage: super::MutationExecutionStage::DB,
     signal_clear_scope: SignalClearScope::None,
     recomputation_scope: RecomputationScope::TAGS,
     execute: |s, ctx| execute_emit_expected_missing_tag(&s.inodes, ctx.witness),
     affected_inodes: |_s| Vec::new(),
-    diff_entries: |s| vec![DiffEntry::new(
-        "Expected missing tag",
-        "[flagged]",
-        format!("{} inodes", s.inodes.len()),
-    )],
 );
 
 /// Index a track from extracted metadata (internal helper).

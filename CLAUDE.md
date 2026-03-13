@@ -231,16 +231,18 @@ These documents are the source of truth for understanding system behavior. The s
 
 ### Dead Code Policy
 
-**Never use `#[allow(dead_code)]`.** Dead code accumulates and rots. Instead:
+**Do not write dead code. Do not write "forward-looking" infrastructure that isn't immediately connected.** If you write it, it must be called. Period.
 
 1. **If code is vestigial** (was used, no longer is): Remove it entirely. Stub callers with `todo!("reconnect when X is implemented")`.
 
-2. **If code is forward-looking** (building systems to connect later): New code should largely always be connected at this point. Un-integrated new code should be reported back as explicitly needing to be integrated and have a todo!("call this") to be removed once integrated.
+2. **If removing would be expensive**: Prefer wholesale removal over surgical extraction. Rip out entire subsystems and leave `todo!()` stubs at the call sites.
 
-3. **If removing would be expensive**: Prefer wholesale removal over surgical extraction. Rip out entire subsystems and leave `todo!()` stubs at the call sites.
+3. **For unused imports**: Remove them. Don't annotate with `#[allow(unused_imports)]` "for future use" - imports are trivial to re-add.
 
-4. **For unused imports**: Remove them. Don't annotate with `#[allow(unused_imports)]` "for future use" - imports are trivial to re-add.
+4. **Never use `#[allow(dead_code)]`** — it silences the compiler's useful signal that code is disconnected. Over time, allowed dead code diverges from the live codebase making eventual reconnection harder than rewriting. The compiler warning is a feature, not noise.
 
-**Rationale**: `#[allow(dead_code)]` silences the compiler's useful signal that code is disconnected. Over time, allowed dead code diverges from the live codebase (API changes, pattern evolution) making eventual reconnection harder than rewriting. The compiler warning is a feature, not noise. Explicit `todo!()` stubs are preferable because they're searchable, intentional, and will panic loudly if accidentally reached.
+5. **The build must produce zero warnings.** Warnings are not acceptable background noise. If a refactor introduces warnings, fix them before considering the work done.
 
-**Exceptions**: Test utilities (`#[cfg(test)]` modules) may have helpers not used by all tests.
+**Exceptions**:
+- Test utilities (`#[cfg(test)]` modules) may have helpers not used by all tests.
+- Macro false positives: if a variant/function is genuinely constructed inside a macro but the compiler can't trace it, a targeted `#[allow(dead_code)]` on that specific item with a comment naming the macro is acceptable. Add a test that exercises the macro output to catch regressions.

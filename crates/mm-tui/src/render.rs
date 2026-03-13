@@ -22,7 +22,7 @@ use super::{
 };
 
 /// Main render entry point - dispatches to sub-renderers based on ActiveView.
-pub fn render_app(
+pub(crate) fn render_app(
     f: &mut Frame,
     app: &mut super::App,
     status_line_1: Option<String>,

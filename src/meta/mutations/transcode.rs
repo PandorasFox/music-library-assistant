@@ -26,15 +26,12 @@ use crate::meta::recomputation::RecomputationScope;
 use super::file_ops;
 use super::indexing::AssimilateDiskTagsToDbMutation;
 use super::traits::{MutationContext, MutationExecutor};
-use super::types::{path_filename, DiffEntry, Mutation, MutationResult, SignalClearScope};
+use super::types::{Mutation, MutationResult, SignalClearScope};
 
 // Re-export struct definition from mm-meta
 pub use mm_meta::mutations::transcode::TranscodeMutation;
 
 impl MutationExecutor for TranscodeMutation {
-    fn label(&self) -> &'static str {
-        "Transcode"
-    }
     fn origin(&self) -> super::MutationOrigin {
         super::MutationOrigin::Staged
     }
@@ -99,25 +96,6 @@ impl MutationExecutor for TranscodeMutation {
     fn paths_for_signal_updates(&self) -> Vec<PathBuf> {
         // Transcode: only spawn for NEW path (source is stashed, would race)
         vec![self.target_format.dest_path(&self.source_path)]
-    }
-
-    fn diff_entries(&self) -> Vec<DiffEntry> {
-        let source_ext = self
-            .source_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("?")
-            .to_uppercase();
-        let target_label = match self.target_format {
-            TranscodeTarget::Opus { bitrate_kbps } => format!("Opus ({}kbps)", bitrate_kbps),
-            TranscodeTarget::Flac => "FLAC".to_string(),
-            TranscodeTarget::FlacLossyCapture => "FLAC (lossy capture)".to_string(),
-        };
-        vec![DiffEntry::new(
-            path_filename(&self.source_path),
-            source_ext,
-            target_label,
-        )]
     }
 }
 

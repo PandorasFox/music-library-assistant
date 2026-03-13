@@ -120,12 +120,35 @@ macro_rules! signal_registry {
 
     // --- Internal helpers ---
 
-    // Decision tables: canonical_tag, expected_overlap, expected_duplicate, expected_missing_tag
-    (@table_kind "canonical_tag") => { TableKind::Decision };
-    (@table_kind "expected_overlap") => { TableKind::Decision };
-    (@table_kind "expected_duplicate") => { TableKind::Decision };
-    (@table_kind "expected_missing_tag") => { TableKind::Decision };
-    (@table_kind $slug:literal) => { TableKind::Computed };
+    (@table_kind $slug:literal) => {
+        // NOTE: macro metavariable literals don't re-match specific literal arms,
+        // so we use a const function instead of pattern arms.
+        table_kind_for_slug($slug)
+    };
+}
+
+/// Classify a signal table by slug. Decision signals represent operator
+/// choices (canonical_tag, expected_overlap, etc.) and are reconciled like
+/// Core tables (ADD COLUMN only, never DROP+CREATE).
+pub const fn table_kind_for_slug(slug: &str) -> TableKind {
+    const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+        if a.len() != b.len() { return false; }
+        let mut i = 0;
+        while i < a.len() {
+            if a[i] != b[i] { return false; }
+            i += 1;
+        }
+        true
+    }
+    if bytes_eq(slug.as_bytes(), b"canonical_tag")
+        || bytes_eq(slug.as_bytes(), b"expected_overlap")
+        || bytes_eq(slug.as_bytes(), b"expected_duplicate")
+        || bytes_eq(slug.as_bytes(), b"expected_missing_tag")
+    {
+        TableKind::Decision
+    } else {
+        TableKind::Computed
+    }
 }
 
 // ============================================================================

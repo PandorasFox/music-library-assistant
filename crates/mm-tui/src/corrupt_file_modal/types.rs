@@ -26,6 +26,11 @@ pub fn stash_and_drop_mutations(
         .collect()
 }
 
+/// Lightweight context for button enablement/labels.
+pub struct CorruptButtonCtx {
+    pub has_files: bool,
+}
+
 /// Button choices for the corrupt file resolution modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CorruptButton {
@@ -35,7 +40,7 @@ pub enum CorruptButton {
 }
 
 impl ModalButtons for CorruptButton {
-    type Context = CorruptFileModalData;
+    type Context = CorruptButtonCtx;
     type Action = CorruptFilePreviewAction;
 
     fn all() -> &'static [Self] {
@@ -51,7 +56,7 @@ impl ModalButtons for CorruptButton {
 
     fn color(&self, ctx: &Self::Context) -> Color {
         match self {
-            Self::StashAll if ctx.has_files() => Color::Red,
+            Self::StashAll if ctx.has_files => Color::Red,
             Self::StashAll => Color::DarkGray,
             Self::Cancel => Color::White,
         }
@@ -59,7 +64,7 @@ impl ModalButtons for CorruptButton {
 
     fn enabled(&self, ctx: &Self::Context) -> bool {
         match self {
-            Self::StashAll => ctx.has_files(),
+            Self::StashAll => ctx.has_files,
             Self::Cancel => true,
         }
     }

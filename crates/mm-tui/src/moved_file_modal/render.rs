@@ -91,7 +91,7 @@ impl ModalFrame for MovedFileState {
         ))
     }
 
-    fn render_detail(&self, f: &mut Frame, area: Rect) {
+    fn render_detail(&mut self, f: &mut Frame, area: Rect) {
         let block = Block::default()
             .borders(Borders::ALL)
             .title("Details")

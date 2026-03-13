@@ -13,6 +13,16 @@ use crate::widgets::modal_buttons::ModalButtons;
 
 use super::preview::ShitFormatPreviewAction;
 
+/// Lightweight context for button enablement/labels.
+pub struct ShitFormatButtonCtx {
+    pub lossless_count: usize,
+    pub lossy_count: usize,
+    pub has_lossless: bool,
+    pub has_lossy: bool,
+    pub lossy_to_flac: bool,
+    pub opus_bitrate_kbps: u32,
+}
+
 /// Button choices for the shit format resolution modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShitFormatButton {
@@ -27,7 +37,7 @@ pub enum ShitFormatButton {
 }
 
 impl ModalButtons for ShitFormatButton {
-    type Context = ShitFormatModalData;
+    type Context = ShitFormatButtonCtx;
     type Action = ShitFormatPreviewAction;
 
     fn all() -> &'static [Self] {
@@ -37,16 +47,15 @@ impl ModalButtons for ShitFormatButton {
     fn label(&self, ctx: &Self::Context) -> Cow<'static, str> {
         match self {
             Self::RemuxLossless => {
-                format!("Remux {} to FLAC", ctx.lossless_files.len()).into()
+                format!("Remux {} to FLAC", ctx.lossless_count).into()
             }
             Self::TranscodeLossy => {
                 if ctx.lossy_to_flac {
-                    format!("Capture {} to FLAC", ctx.lossy_files.len()).into()
+                    format!("Capture {} to FLAC", ctx.lossy_count).into()
                 } else {
                     format!(
                         "Transcode {} to Opus ({} kbps)",
-                        ctx.lossy_files.len(),
-                        ctx.opus_bitrate_kbps
+                        ctx.lossy_count, ctx.opus_bitrate_kbps
                     )
                     .into()
                 }
@@ -67,9 +76,9 @@ impl ModalButtons for ShitFormatButton {
 
     fn enabled(&self, ctx: &Self::Context) -> bool {
         match self {
-            Self::RemuxLossless => ctx.has_lossless(),
-            Self::TranscodeLossy => ctx.has_lossy(),
-            Self::ConvertAll => ctx.has_lossless() && ctx.has_lossy(),
+            Self::RemuxLossless => ctx.has_lossless,
+            Self::TranscodeLossy => ctx.has_lossy,
+            Self::ConvertAll => ctx.has_lossless && ctx.has_lossy,
             Self::Cancel => true,
         }
     }

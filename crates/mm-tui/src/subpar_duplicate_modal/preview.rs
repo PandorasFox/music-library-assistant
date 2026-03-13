@@ -237,7 +237,7 @@ impl ModalFrame for SubparDuplicatePreviewState {
         ListItem::new(line)
     }
 
-    fn render_detail(&self, f: &mut Frame, area: Rect) {
+    fn render_detail(&mut self, f: &mut Frame, area: Rect) {
         let detail_inner_width = area.width.saturating_sub(2);
         let detail_lines = self.build_detail_lines(detail_inner_width);
 

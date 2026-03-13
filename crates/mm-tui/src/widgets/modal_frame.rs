@@ -86,7 +86,7 @@ pub trait ModalFrame {
     fn render_list_item(&self, _idx: usize, _width: u16, _is_cursor: bool, _is_focused: bool) -> ListItem<'static> {
         unreachable!("modal overrides render_frame_list")
     }
-    fn render_detail(&self, f: &mut Frame, area: Rect);
+    fn render_detail(&mut self, f: &mut Frame, area: Rect);
     fn render_header(&self, _f: &mut Frame, _area: Rect) {}
     fn render_info_bar(&self, _f: &mut Frame, _area: Rect) {}
 

@@ -64,7 +64,7 @@ impl ModalFrame for OobConflictState {
         render_file_list(f, area, self);
     }
 
-    fn render_detail(&self, f: &mut Frame, area: Rect) {
+    fn render_detail(&mut self, f: &mut Frame, area: Rect) {
         render_diff_details(f, area, self);
     }
 }

@@ -38,6 +38,11 @@ pub fn restore_mutations(data: &MissingFileModalData, resolver: &PathResolver) -
         .collect()
 }
 
+/// Lightweight context for button enablement/labels.
+pub struct MissingFileButtonCtx {
+    pub has_restorable: bool,
+}
+
 /// Button choices for the missing file resolution modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MissingFileButton {
@@ -48,7 +53,7 @@ pub enum MissingFileButton {
 }
 
 impl ModalButtons for MissingFileButton {
-    type Context = MissingFileModalData;
+    type Context = MissingFileButtonCtx;
     type Action = MissingFilePreviewAction;
 
     fn all() -> &'static [Self] {
@@ -65,7 +70,7 @@ impl ModalButtons for MissingFileButton {
 
     fn color(&self, ctx: &Self::Context) -> Color {
         match self {
-            Self::RestoreAll if ctx.has_restorable() => Color::Green,
+            Self::RestoreAll if ctx.has_restorable => Color::Green,
             Self::RestoreAll => Color::DarkGray,
             Self::DropLost => Color::Red,
             Self::Cancel => Color::White,
@@ -74,7 +79,7 @@ impl ModalButtons for MissingFileButton {
 
     fn enabled(&self, ctx: &Self::Context) -> bool {
         match self {
-            Self::RestoreAll => ctx.has_restorable(),
+            Self::RestoreAll => ctx.has_restorable,
             Self::DropLost => true,
             Self::Cancel => true,
         }

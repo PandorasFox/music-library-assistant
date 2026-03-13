@@ -193,7 +193,7 @@ impl ModalFrame for InboxCorpusMatchPreviewState {
         ListItem::new(line)
     }
 
-    fn render_detail(&self, f: &mut Frame, area: Rect) {
+    fn render_detail(&mut self, f: &mut Frame, area: Rect) {
         let block = Block::default()
             .title(" Corpus Match Details ")
             .title_style(Style::default().fg(Color::DarkGray))

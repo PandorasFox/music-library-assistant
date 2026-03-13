@@ -3,26 +3,27 @@
 //! Shows corrupt files (tag parse errors or waveform decode failures) with
 //! action buttons for stash/drop operations.
 //!
-//! - Up/Down: Scroll file list
-//! - Left/Right: Move between action buttons
+//! - Shift+Up/Down: Switch focus between list and buttons
+//! - Up/Down: Scroll file list (when list focused)
+//! - Left/Right: Move between action buttons (when buttons focused)
 //! - Enter: Execute selected button action
 //! - Escape: Cancel
 
 use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, ListItem, Paragraph},
     Frame,
 };
 
-use super::types::{CorruptButton, CorruptFileModalData};
-use crate::helpers::render_pane;
-use crate::widgets::{
-    render_file_path_list, ButtonRowState, ListClickTargets, PathEntry,
-};
+use super::types::{CorruptButton, CorruptButtonCtx, CorruptFileModalData};
+use crate::helpers::truncate_right;
+use crate::widgets::FocusPane;
+use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame};
+use crate::widgets::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 
 /// Actions returned from the corrupt file preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,17 +36,19 @@ pub enum CorruptFilePreviewAction {
     Cancel,
 }
 
+// ============================================================================
+// State
+// ============================================================================
+
 /// State for the corrupt file resolution modal.
 #[derive(Debug)]
 pub struct CorruptFilePreviewState {
     /// Cached modal data (loaded once on init).
     pub cached_data: CorruptFileModalData,
-    /// Scroll position for the file list.
-    pub scroll: usize,
-    /// Button row state.
-    pub buttons: ButtonRowState<CorruptButton>,
-    /// Click targets for file list items (set during render).
-    pub click_targets: ListClickTargets,
+    /// Cursor position for the file list.
+    pub cursor: usize,
+    /// Shared frame state (focus, buttons, click targets).
+    pub frame: FrameState<CorruptButton>,
 }
 
 impl CorruptFilePreviewState {
@@ -53,7 +56,7 @@ impl CorruptFilePreviewState {
     pub fn selected_path(&self) -> Option<&str> {
         self.cached_data
             .files
-            .get(self.scroll)
+            .get(self.cursor)
             .map(|f| f.corpus_path.as_str())
     }
 
@@ -61,9 +64,14 @@ impl CorruptFilePreviewState {
     pub fn new(cached_data: CorruptFileModalData) -> Self {
         Self {
             cached_data,
-            scroll: 0,
-            buttons: ButtonRowState::new(),
-            click_targets: ListClickTargets::new(),
+            cursor: 0,
+            frame: FrameState::new(),
+        }
+    }
+
+    fn button_ctx(&self) -> CorruptButtonCtx {
+        CorruptButtonCtx {
+            has_files: self.cached_data.has_files(),
         }
     }
 
@@ -74,15 +82,16 @@ impl CorruptFilePreviewState {
         y: u16,
         _gesture: &ConfirmationGesture,
     ) -> Option<CorruptFilePreviewAction> {
-        // Check buttons first
-        if let Some(action) = self.buttons.handle_click(x, y, &self.cached_data) {
+        let ctx = self.button_ctx();
+        if let Some(action) = self.frame.buttons.handle_click(x, y, &ctx) {
+            self.frame.focus_pane = FocusPane::Buttons;
             return Some(action);
         }
-        // Check list items
-        if let Some(id) = self.click_targets.hit_test(x, y) {
+        if let Some(id) = self.frame.click_targets.hit_test(x, y) {
             if let Ok(idx) = id.parse::<usize>() {
                 if idx < self.cached_data.files.len() {
-                    self.scroll = idx;
+                    self.frame.focus_pane = FocusPane::List;
+                    self.cursor = idx;
                 }
             }
         }
@@ -91,61 +100,76 @@ impl CorruptFilePreviewState {
 
     /// Handle input action.
     pub fn handle_input(&mut self, action: &InputAction) -> CorruptFilePreviewAction {
-        if crate::helpers::handle_scroll_input(&mut self.scroll, action, self.cached_data.files.len()) {
-            return CorruptFilePreviewAction::None;
-        }
-
-        match action {
-            // Button navigation
-            InputAction::NavLeft => {
-                self.buttons.nav_left(&self.cached_data);
+        match self.handle_frame_input(action) {
+            FrameInputResult::Action(a) => a,
+            FrameInputResult::Consumed | FrameInputResult::Unhandled => {
                 CorruptFilePreviewAction::None
             }
-            InputAction::NavRight => {
-                self.buttons.nav_right(&self.cached_data);
-                CorruptFilePreviewAction::None
-            }
-
-            // Execute selected button
-            InputAction::Confirm => {
-                self.buttons.confirm(&self.cached_data)
-                    .unwrap_or(CorruptFilePreviewAction::None)
-            }
-
-            // Cancel
-            InputAction::Cancel => CorruptFilePreviewAction::Cancel,
-
-            _ => CorruptFilePreviewAction::None,
         }
     }
 
     /// Render the corrupt file resolution modal.
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        // Clear background
-        f.render_widget(Clear, area);
+        self.render_frame(f, area);
+    }
+}
 
-        // Layout: title + content + controls
-        let main_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(10),   // Content
-                Constraint::Length(2), // Controls
-            ])
-            .split(area);
+// ============================================================================
+// ModalFrame Implementation
+// ============================================================================
 
-        self.render_title(f, main_chunks[0]);
-        self.render_content(f, main_chunks[1]);
-        self.render_controls(f, main_chunks[2]);
+impl ModalFrame for CorruptFilePreviewState {
+    type Button = CorruptButton;
+
+    fn content_layout(&self) -> ContentLayout {
+        ContentLayout::FourSection {
+            header_height: 3,
+            detail_height: 3,
+        }
     }
 
-    fn render_title(&self, f: &mut Frame, area: Rect) {
-        let total = self.cached_data.total_count();
+    fn list_title(&self) -> String {
+        format!(" Corrupt Files ({}) ", self.cached_data.files.len())
+    }
 
+    fn accent_color(&self) -> Color {
+        Color::Red
+    }
+
+    fn empty_message(&self) -> &'static str {
+        "No corrupt files found"
+    }
+
+    fn frame_state(&self) -> &FrameState<CorruptButton> {
+        &self.frame
+    }
+    fn frame_state_mut(&mut self) -> &mut FrameState<CorruptButton> {
+        &mut self.frame
+    }
+    fn cursor(&self) -> usize {
+        self.cursor
+    }
+    fn cursor_mut(&mut self) -> &mut usize {
+        &mut self.cursor
+    }
+    fn list_len(&self) -> usize {
+        self.cached_data.files.len()
+    }
+    fn button_ctx(&self) -> CorruptButtonCtx {
+        CorruptFilePreviewState::button_ctx(self)
+    }
+    fn escape_action(&self) -> CorruptFilePreviewAction {
+        CorruptFilePreviewAction::Cancel
+    }
+
+    fn render_header(&self, f: &mut Frame, area: Rect) {
+        let total = self.cached_data.total_count();
         let title = Paragraph::new(Line::from(vec![
             Span::styled(
                 " Corrupt File Resolution ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!(" ({} files)", total),
@@ -153,71 +177,28 @@ impl CorruptFilePreviewState {
             ),
         ]))
         .block(Block::default().borders(Borders::ALL));
-
         f.render_widget(title, area);
     }
 
-    fn render_content(&mut self, f: &mut Frame, area: Rect) {
-        let count = self.cached_data.files.len();
+    fn render_list_item(
+        &self,
+        idx: usize,
+        width: u16,
+        is_cursor: bool,
+        _is_focused: bool,
+    ) -> ListItem<'static> {
+        let file = &self.cached_data.files[idx];
+        let path = truncate_right(&file.corpus_path, width as usize);
+        let style = if is_cursor { CURSOR_STYLE } else { LIST_ITEM_STYLE };
+        ListItem::new(path).style(style)
+    }
 
-        let block = Block::default()
-            .title(format!(" Corrupt Files ({}) ", count))
-            .title_style(Style::default().fg(if count > 0 {
-                Color::Red
-            } else {
-                Color::DarkGray
-            }))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Red));
-
-        let inner = render_pane(f, area, block);
-
-        if self.cached_data.files.is_empty() {
-            let empty = Paragraph::new("No corrupt files found")
-                .style(Style::default().fg(Color::DarkGray));
-            f.render_widget(empty, inner);
-            return;
-        }
-
-        // Render description
-        let desc_height = 3;
-        let desc_area = Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width,
-            height: desc_height,
-        };
-        let list_area = Rect {
-            x: inner.x,
-            y: inner.y + desc_height,
-            width: inner.width,
-            height: inner.height.saturating_sub(desc_height),
-        };
-
-        self.click_targets.populate(list_area, self.scroll, self.cached_data.files.len());
-
+    fn render_detail(&mut self, f: &mut Frame, area: Rect) {
         let description = Paragraph::new(vec![
             Line::from("These files have corrupt tags or unreadable audio data."),
             Line::from("Stashing will move them to stash/corrupt/ and drop from index."),
         ])
         .style(Style::default().fg(Color::DarkGray));
-        f.render_widget(description, desc_area);
-
-        let entries: Vec<PathEntry> = self
-            .cached_data
-            .files
-            .iter()
-            .map(|file| PathEntry::plain(&file.corpus_path))
-            .collect();
-
-        render_file_path_list(f, list_area, &entries, self.scroll, self.scroll);
-    }
-
-    fn render_controls(&mut self, f: &mut Frame, area: Rect) {
-        let block = Block::default().borders(Borders::TOP);
-        let inner = render_pane(f, area, block);
-
-        // Buttons render themselves and populate click rects.
-        self.buttons.render(f, inner, &self.cached_data, true);
+        f.render_widget(description, area);
     }
 }

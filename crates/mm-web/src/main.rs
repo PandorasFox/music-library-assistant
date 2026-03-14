@@ -10,6 +10,7 @@ async fn main() -> Result<()> {
 
     let mut socket_path = None;
     let mut listen_addr = "127.0.0.1:3313".to_string();
+    let mut static_dir = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -28,9 +29,17 @@ async fn main() -> Result<()> {
                     .expect("--listen requires an address")
                     .clone();
             }
+            "--static-dir" => {
+                i += 1;
+                static_dir = Some(
+                    args.get(i)
+                        .expect("--static-dir requires a path")
+                        .clone(),
+                );
+            }
             other => {
                 eprintln!("Unknown argument: {other}");
-                eprintln!("Usage: mm-web [--socket /path/to/mm.sock] [--listen 127.0.0.1:3313]");
+                eprintln!("Usage: mm-web [--socket /path/to/mm.sock] [--listen 127.0.0.1:3313] [--static-dir ./static]");
                 std::process::exit(1);
             }
         }
@@ -43,7 +52,13 @@ async fn main() -> Result<()> {
         format!("{runtime_dir}/mm.sock")
     }));
 
-    let state = AppState::new(socket_path.clone()).await?;
+    // Default static dir: adjacent to the binary's crate source.
+    let static_dir = PathBuf::from(static_dir.unwrap_or_else(|| {
+        // Try relative to CWD first.
+        "crates/mm-web/static".into()
+    }));
+
+    let state = AppState::new(socket_path.clone(), static_dir).await?;
     let app = router(state);
 
     let listener = tokio::net::TcpListener::bind(&listen_addr).await?;

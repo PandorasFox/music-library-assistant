@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/mm-utils", "crates/mm-derive", "crates/mm-meta", "crates/mm-ui", "crates/mm-tui", "crates/mm-web"]
+members = [".", "crates/mm-utils", "crates/mm-derive", "crates/mm-meta", "crates/mm-ui", "crates/mm-tui", "crates/mm-web", "crates/mm-web/client"]
 default-members = [".", "crates/mm-tui"]
 
 [package]

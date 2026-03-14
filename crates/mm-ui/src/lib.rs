@@ -5,6 +5,7 @@
 //! `mm-web` (HTML + WASM) consume this crate for shared logic.
 
 pub mod click_targets;
+pub mod html;
 pub mod geometry;
 pub mod helpers;
 pub mod input;

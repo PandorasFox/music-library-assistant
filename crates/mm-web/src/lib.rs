@@ -5,27 +5,30 @@ mod socket;
 
 use std::path::PathBuf;
 
+use axum::response::Html;
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 
-use socket::WitchPool;
+use socket::WitchConnection;
 
 pub use error::ApiError;
 
 #[derive(Clone)]
 pub struct AppState {
-    pool: WitchPool,
+    conn: WitchConnection,
+    static_dir: PathBuf,
 }
 
 impl AppState {
-    pub async fn new(socket_path: PathBuf) -> anyhow::Result<Self> {
-        let pool = WitchPool::new(socket_path);
+    pub async fn new(socket_path: PathBuf, static_dir: PathBuf) -> anyhow::Result<Self> {
+        let conn = WitchConnection::connect(&socket_path).await?;
 
         // Verify the Witch is reachable before accepting HTTP traffic.
-        pool.verify_connectivity().await?;
+        conn.verify_connectivity().await?;
 
-        Ok(Self { pool })
+        Ok(Self { conn, static_dir })
     }
 }
 
@@ -35,7 +38,11 @@ pub fn router(state: AppState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    let static_dir = state.static_dir.clone();
+
     Router::new()
+        // HTML shell
+        .route("/", get(serve_index))
         // Unauthenticated
         .route("/setup/check", post(api::unauth::setup_check))
         .route("/setup/complete", post(api::unauth::setup_complete))
@@ -55,6 +62,18 @@ pub fn router(state: AppState) -> Router {
         .route("/commands/queue-task", post(api::commands::queue_task))
         .route("/commands/jettison", post(api::commands::jettison))
         .route("/commands/shutdown", post(api::commands::shutdown))
+        // Static files (CSS, WASM, JS)
+        .nest_service("/static", ServeDir::new(static_dir))
         .layer(cors)
         .with_state(state)
+}
+
+async fn serve_index(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> Html<String> {
+    let index_path = state.static_dir.join("index.html");
+    match tokio::fs::read_to_string(&index_path).await {
+        Ok(contents) => Html(contents),
+        Err(_) => Html("<h1>index.html not found</h1>".into()),
+    }
 }

@@ -7,7 +7,7 @@
 //! - Signal data types
 //! - Protocol message enums and traits
 //! - Wire framing helpers
-//! - WitchHandle (client transport)
+//! - Wire protocol types and framing
 //! - Config types
 //! - View types (InsightsData, ExternalMatchesData, etc.)
 
@@ -35,4 +35,3 @@ pub mod views;
 pub mod witch_types;
 pub mod protocol;
 pub mod wire;
-pub mod witch_handle;

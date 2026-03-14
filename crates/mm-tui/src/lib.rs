@@ -91,6 +91,8 @@ use mm_meta::config::Config;
 use mm_meta::paths::PathResolver;
 use mm_meta::witch_types::WitchStatus;
 
+pub use startup_socket::StartupSocket;
+
 // ============================================================================
 // Application State
 // ============================================================================
@@ -103,9 +105,11 @@ pub(crate) struct App {
     /// The active view and its state. One variant is active at a time.
     pub(crate) view: ActiveView,
 
-    // Handle to the Witch — She owns the main thread, we command via channels.
-    // Also owns cache channels and locally cached periodic data.
-    pub(crate) witch: mm_meta::witch_handle::WitchHandle,
+    // Socket connection to the Witch server + protocol state.
+    socket: std::os::unix::net::UnixStream,
+    session_token: Option<mm_meta::auth::SessionToken>,
+    cached_config: Option<Arc<Config>>,
+    next_request_id: u64,
 
     /// Client-side path resolver for root-relative ↔ absolute path conversion.
     /// Constructed from config after login.
@@ -141,19 +145,75 @@ pub(crate) struct App {
 }
 
 impl App {
-    /// Create a new App with a Witch handle and config.
+    /// Create a new App with a socket connection and session token.
     fn new(
-        mut witch: mm_meta::witch_handle::WitchHandle,
+        mut socket: std::os::unix::net::UnixStream,
+        session_token: mm_meta::auth::SessionToken,
         art_picker: widgets::AlbumArtPicker,
     ) -> Self {
-        let cached_status = witch.witch_status();
-        let config = witch.config();
+        // Pre-fetch status and config before constructing App (avoids placeholder issues).
+        let token = session_token.clone();
+        let mut next_id = 1u64;
+
+        let cached_status: WitchStatus = {
+            let req = mm_meta::wire::WireRequest::Authenticated {
+                request_id: next_id,
+                token: token.clone(),
+                body: Box::new(mm_meta::protocol::AuthenticatedBody::Query(
+                    mm_meta::protocol::QueryPayload::Status,
+                )),
+            };
+            next_id += 1;
+            mm_meta::wire::write_frame(&mut socket, &req).expect("status query write");
+            let resp: mm_meta::wire::WireResponse =
+                mm_meta::wire::read_frame(&mut socket).expect("status query read");
+            match resp {
+                mm_meta::wire::WireResponse::Authenticated { result, .. } => match *result {
+                    Ok(mm_meta::protocol::AuthenticatedResponse::Query(qr)) => match *qr {
+                        mm_meta::protocol::QueryResponse::Status(s) => s,
+                        _ => panic!("unexpected query response"),
+                    },
+                    _ => panic!("status query failed"),
+                },
+                _ => panic!("unexpected wire response"),
+            }
+        };
+
+        let config: Config = {
+            let req = mm_meta::wire::WireRequest::Authenticated {
+                request_id: next_id,
+                token: token.clone(),
+                body: Box::new(mm_meta::protocol::AuthenticatedBody::Query(
+                    mm_meta::protocol::QueryPayload::Config,
+                )),
+            };
+            next_id += 1;
+            mm_meta::wire::write_frame(&mut socket, &req).expect("config query write");
+            let resp: mm_meta::wire::WireResponse =
+                mm_meta::wire::read_frame(&mut socket).expect("config query read");
+            match resp {
+                mm_meta::wire::WireResponse::Authenticated { result, .. } => match *result {
+                    Ok(mm_meta::protocol::AuthenticatedResponse::Query(qr)) => match *qr {
+                        mm_meta::protocol::QueryResponse::Config(c) => *c,
+                        _ => panic!("unexpected query response"),
+                    },
+                    _ => panic!("config query failed"),
+                },
+                _ => panic!("unexpected wire response"),
+            }
+        };
+
         let resolver = PathResolver::from_config(&config);
+        let cached_config = Some(Arc::new(config));
+
         Self {
             should_quit: false,
             status_message: None,
             view: ActiveView::Insights(insights_view::InsightsViewState::new()),
-            witch,
+            socket,
+            session_token: Some(session_token),
+            cached_config,
+            next_request_id: next_id,
             resolver,
             view_stack: Vec::new(),
             last_lateral_view: widgets::LateralView::Health,
@@ -171,9 +231,14 @@ impl App {
 
     const STATUS_TTL: Duration = Duration::from_secs(1);
 
-    /// Get a snapshot of the current config from the Witch (cached in handle).
+    /// Get a snapshot of the current config from the Witch (cached).
     pub(crate) fn config(&mut self) -> Arc<Config> {
-        self.witch.config()
+        if let Some(ref c) = self.cached_config {
+            return Arc::clone(c);
+        }
+        let arc = Arc::new(self.query(mm_meta::protocol::ConfigQuery));
+        self.cached_config = Some(Arc::clone(&arc));
+        arc
     }
 
     /// Return a reference to the cached WitchStatus (refreshed once per loop iteration).
@@ -184,7 +249,7 @@ impl App {
     /// Refresh the cached WitchStatus if the TTL has elapsed.
     fn refresh_status(&mut self) {
         if self.cached_status_at.elapsed() >= Self::STATUS_TTL {
-            self.cached_status = self.witch.witch_status();
+            self.cached_status = self.witch_status_fetch();
             self.cached_status_at = Instant::now();
         }
     }
@@ -381,7 +446,6 @@ impl App {
         self.last_lateral_view = widgets::LateralView::Inbox;
         // Check for inbox unindexed files — show intake popup if any
         let intake_state = self
-            .witch
             .query(mm_meta::domain_queries::GetIntakeConfirmation {
                 source: startup::IntakeSource::Inbox,
                 zone: Some(mm_meta::db_types::Zone::Inbox),
@@ -414,7 +478,7 @@ impl App {
             has_api_key,
             singles_before_incompletes,
         );
-        let data = self.witch.query(mm_meta::domain_queries::GetExternalMatches);
+        let data = self.query(mm_meta::domain_queries::GetExternalMatches);
         state.update(data);
         self.view = ActiveView::ExternalMatches(state);
     }
@@ -438,7 +502,8 @@ impl App {
     pub(crate) fn start_tabbed_transaction_review(&mut self) {
         self.last_lateral_view = widgets::LateralView::Transaction;
         let mut state = tabbed_transaction_review::TabbedTransactionReviewState::new();
-        state.review.refresh_decisions(&self.witch);
+        let details = self.transaction_decision_details().unwrap_or_default();
+        state.review.refresh_decisions_from_details(details);
         self.view = ActiveView::TabbedTransactionReview(state);
     }
 
@@ -461,12 +526,11 @@ impl App {
     /// per-library file counts.
     pub(crate) fn start_deploy_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::Deploy;
-        let deploy_status = self.witch.query(mm_meta::domain_queries::GetDeployStatus);
+        let deploy_status = self.query(mm_meta::domain_queries::GetDeployStatus);
 
         if deploy_status.needs_action {
             let config = self.config();
             let data = self
-                .witch
                 .query(mm_meta::domain_queries::GetDeployData {
                     config: Some((*config).clone()),
                 });
@@ -510,14 +574,14 @@ impl App {
     pub(crate) fn complete_startup(&mut self) {
         // If leave_transactions_open is enabled, open a persistent transaction at startup
         if self.open_txn_mode() {
-            let _ = self.witch.start_transaction("Open");
+            let _ = self.start_transaction("Open");
         }
 
         // Pick the right view based on current Witch state:
         // - Full reasoning + idle → go straight to the default view
         // - Full reasoning + busy → show content analysis progress
         // - Not yet Full → show eyeballing progress
-        let status = self.witch.witch_status();
+        let status = self.witch_status_fetch();
         match status.reasoning_level {
             mm_meta::witch_types::ReasoningLevel::Full if !status.has_pending => {
                 self.start_default_view();
@@ -537,6 +601,254 @@ impl App {
         }
     }
 
+}
+
+// ============================================================================
+// Wire Protocol Helpers
+// ============================================================================
+
+impl App {
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_request_id;
+        self.next_request_id += 1;
+        id
+    }
+
+    fn send_authenticated(
+        &mut self,
+        body: mm_meta::protocol::AuthenticatedBody,
+    ) -> Result<mm_meta::protocol::AuthenticatedResponse, mm_meta::protocol::ProtocolError> {
+        let token = self
+            .session_token
+            .clone()
+            .expect("send_authenticated called before login");
+        let id = self.next_id();
+        let req = mm_meta::wire::WireRequest::Authenticated {
+            request_id: id,
+            token,
+            body: Box::new(body),
+        };
+        mm_meta::wire::write_frame(&mut self.socket, &req)
+            .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket write: {e}")))?;
+        let resp: mm_meta::wire::WireResponse = mm_meta::wire::read_frame(&mut self.socket)
+            .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket read: {e}")))?;
+        match resp {
+            mm_meta::wire::WireResponse::Authenticated { result, .. } => *result,
+            _ => Err(mm_meta::protocol::ProtocolError::Internal(
+                "unexpected wire response type".to_string(),
+            )),
+        }
+    }
+
+    pub(crate) fn query<Q: mm_meta::protocol::ProtocolQuery>(&mut self, q: Q) -> Q::Response {
+        let body = mm_meta::protocol::AuthenticatedBody::Query(q.into_payload());
+        match self.send_authenticated(body) {
+            Ok(mm_meta::protocol::AuthenticatedResponse::Query(qr)) => Q::extract_response(*qr),
+            Ok(_) => unreachable!("protocol bug: wrong response area"),
+            Err(e) => panic!("protocol query failed: {e}"),
+        }
+    }
+
+    pub(crate) fn send_transaction(
+        &mut self,
+        payload: mm_meta::protocol::TransactionPayload,
+    ) -> mm_meta::protocol::TransactionResponse {
+        let body = mm_meta::protocol::AuthenticatedBody::Transaction(payload);
+        match self.send_authenticated(body) {
+            Ok(mm_meta::protocol::AuthenticatedResponse::Transaction(tr)) => tr,
+            Ok(_) => unreachable!("protocol bug: wrong response area"),
+            Err(_) => mm_meta::protocol::TransactionResponse::Error(
+                mm_meta::decisions::TransactionError::NotAcceptingMutations,
+            ),
+        }
+    }
+
+    pub(crate) fn send_command(
+        &mut self,
+        payload: mm_meta::protocol::CommandPayload,
+    ) -> Result<mm_meta::protocol::CommandResponse, mm_meta::protocol::ProtocolError> {
+        let body = mm_meta::protocol::AuthenticatedBody::Command(Box::new(payload));
+        match self.send_authenticated(body)? {
+            mm_meta::protocol::AuthenticatedResponse::Command(cr) => Ok(cr),
+            _ => unreachable!("protocol bug: wrong response area"),
+        }
+    }
+
+    pub(crate) fn witch_status_fetch(&mut self) -> WitchStatus {
+        self.query(mm_meta::protocol::StatusQuery)
+    }
+
+    pub(crate) fn invalidate_config_cache(&mut self) {
+        self.cached_config = None;
+    }
+
+    pub(crate) fn start_transaction(&mut self, label: &str) -> Result<(), mm_meta::protocol::ProtocolError> {
+        match self.send_transaction(mm_meta::protocol::TransactionPayload::Start {
+            label: label.to_owned(),
+        }) {
+            mm_meta::protocol::TransactionResponse::Ok => Ok(()),
+            mm_meta::protocol::TransactionResponse::Error(e) => Err(mm_meta::protocol::ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    pub(crate) fn add_decision(
+        &mut self,
+        key: mm_meta::decisions::DecisionKey,
+        decision: mm_meta::decisions::Decision,
+    ) -> Result<(), mm_meta::protocol::ProtocolError> {
+        match self.send_transaction(mm_meta::protocol::TransactionPayload::AddDecision { key, decision }) {
+            mm_meta::protocol::TransactionResponse::Ok => Ok(()),
+            mm_meta::protocol::TransactionResponse::Error(e) => Err(mm_meta::protocol::ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    pub(crate) fn remove_decision(&mut self, key: &mm_meta::decisions::DecisionKey) -> Result<(), mm_meta::protocol::ProtocolError> {
+        match self.send_transaction(mm_meta::protocol::TransactionPayload::RemoveDecision { key: key.clone() }) {
+            mm_meta::protocol::TransactionResponse::Ok => Ok(()),
+            mm_meta::protocol::TransactionResponse::Error(e) => Err(mm_meta::protocol::ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    pub(crate) fn confirm_transaction(&mut self) -> Result<(), mm_meta::protocol::ProtocolError> {
+        match self.send_transaction(mm_meta::protocol::TransactionPayload::Confirm) {
+            mm_meta::protocol::TransactionResponse::Ok => Ok(()),
+            mm_meta::protocol::TransactionResponse::Error(e) => Err(mm_meta::protocol::ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    pub(crate) fn discard_transaction(&mut self) -> Result<mm_meta::decisions::DiscardSummary, mm_meta::protocol::ProtocolError> {
+        match self.send_transaction(mm_meta::protocol::TransactionPayload::Discard) {
+            mm_meta::protocol::TransactionResponse::Discarded(s) => Ok(s),
+            mm_meta::protocol::TransactionResponse::Error(e) => Err(mm_meta::protocol::ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    pub(crate) fn transaction_decision_details(&mut self) -> Result<Vec<mm_meta::protocol::DecisionDetail>, mm_meta::protocol::ProtocolError> {
+        match self.send_transaction(mm_meta::protocol::TransactionPayload::GetDetails) {
+            mm_meta::protocol::TransactionResponse::Details(d) => Ok(d),
+            mm_meta::protocol::TransactionResponse::Error(e) => Err(mm_meta::protocol::ProtocolError::Transaction(e)),
+            _ => unreachable!("protocol bug: wrong transaction response"),
+        }
+    }
+
+    pub(crate) fn queue_task(&mut self, task: mm_meta::protocol::BackgroundTask) -> Result<(), mm_meta::protocol::ProtocolError> {
+        self.send_command(mm_meta::protocol::CommandPayload::QueueTask(task))?;
+        Ok(())
+    }
+
+    pub(crate) fn jettison_edit_history(&mut self, session_id: Option<&str>) -> Result<(), mm_meta::protocol::ProtocolError> {
+        self.send_command(mm_meta::protocol::CommandPayload::JettisonEditHistory {
+            session_id: session_id.map(|s| s.to_owned()),
+        })?;
+        Ok(())
+    }
+
+    pub(crate) fn shutdown(&mut self) -> Result<(), mm_meta::protocol::ProtocolError> {
+        match self.send_command(mm_meta::protocol::CommandPayload::Shutdown)? {
+            mm_meta::protocol::CommandResponse::Goodbye => Ok(()),
+            mm_meta::protocol::CommandResponse::Ok => Err(mm_meta::protocol::ProtocolError::Internal(
+                "expected Goodbye, got Ok".to_string(),
+            )),
+        }
+    }
+}
+
+// ============================================================================
+// Pre-Auth Socket Wrapper (used during startup before login)
+// ============================================================================
+
+pub(crate) mod startup_socket {
+    /// Pre-auth socket wrapper for startup operations (setup, login).
+    pub struct StartupSocket<'a> {
+        pub(crate) socket: &'a mut std::os::unix::net::UnixStream,
+        next_id: u64,
+    }
+
+    impl<'a> StartupSocket<'a> {
+        pub fn new(socket: &'a mut std::os::unix::net::UnixStream) -> Self {
+            Self { socket, next_id: 0 }
+        }
+
+        fn send_unauthenticated(
+            &mut self,
+            body: mm_meta::protocol::UnauthenticatedBody,
+        ) -> Result<mm_meta::protocol::UnauthenticatedResponse, mm_meta::protocol::ProtocolError> {
+            let id = self.next_id;
+            self.next_id += 1;
+            let req = mm_meta::wire::WireRequest::Unauthenticated {
+                request_id: id,
+                body,
+            };
+            mm_meta::wire::write_frame(self.socket, &req)
+                .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket write: {e}")))?;
+            let resp: mm_meta::wire::WireResponse = mm_meta::wire::read_frame(self.socket)
+                .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket read: {e}")))?;
+            match resp {
+                mm_meta::wire::WireResponse::Unauthenticated { result, .. } => result,
+                _ => Err(mm_meta::protocol::ProtocolError::Internal(
+                    "unexpected wire response type".to_string(),
+                )),
+            }
+        }
+
+        pub fn needs_setup(&mut self) -> bool {
+            match self.send_unauthenticated(mm_meta::protocol::UnauthenticatedBody::SetupQuery) {
+                Ok(mm_meta::protocol::UnauthenticatedResponse::SetupStatus { needs_setup }) => {
+                    needs_setup
+                }
+                _ => false,
+            }
+        }
+
+        pub fn complete_setup(
+            &mut self,
+            root: std::path::PathBuf,
+            first_user: Option<(String, String)>,
+        ) -> Result<(), mm_meta::protocol::ProtocolError> {
+            match self.send_unauthenticated(
+                mm_meta::protocol::UnauthenticatedBody::CompleteSetup { root, first_user },
+            )? {
+                mm_meta::protocol::UnauthenticatedResponse::SetupComplete => Ok(()),
+                _ => Err(mm_meta::protocol::ProtocolError::Internal(
+                    "unexpected response to setup".to_string(),
+                )),
+            }
+        }
+
+        pub fn notify_db_ready(&mut self) {
+            let id = self.next_id;
+            self.next_id += 1;
+            let _ = mm_meta::wire::write_frame(
+                self.socket,
+                &mm_meta::wire::WireRequest::NotifyDbReady { request_id: id },
+            );
+            let _: Result<mm_meta::wire::WireResponse, _> =
+                mm_meta::wire::read_frame(self.socket);
+        }
+
+        pub fn login(
+            &mut self,
+            username: &str,
+            password: &str,
+        ) -> Result<mm_meta::auth::SessionToken, String> {
+            use mm_meta::protocol::{AuthResponse, UnauthenticatedBody, UnauthenticatedResponse};
+            let response = self.send_unauthenticated(UnauthenticatedBody::Login {
+                username: username.to_string(),
+                password: password.to_string(),
+            });
+            match response {
+                Ok(UnauthenticatedResponse::Auth(AuthResponse::Token(token))) => Ok(token),
+                Ok(UnauthenticatedResponse::Auth(AuthResponse::Failed(msg))) => Err(msg),
+                Ok(_) => Err("unexpected response to login".to_string()),
+                Err(e) => Err(format!("{e}")),
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -569,7 +881,7 @@ fn render(f: &mut Frame, app: &mut App) {
 // ============================================================================
 
 pub fn run_tui(
-    mut witch: mm_meta::witch_handle::WitchHandle,
+    mut socket: std::os::unix::net::UnixStream,
 ) -> Result<()> {
     mm_meta::logging::log_general("=== MM TUI startup ===");
 
@@ -587,47 +899,68 @@ pub fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Check startup state from the Witch (unauthenticated — before login)
-    if witch.needs_setup() {
-        let has_config = mm_utils::get_config_dir()
-            .map(|dir| dir.join("config.kdl").exists())
-            .unwrap_or(false);
-
-        let root = if has_config {
-            // Config exists but DB was deleted — show DB setup dialog, use existing root
-            let db_path = mm_utils::get_db_path()?;
-            startup::handle_db_setup_dialog(&mut terminal, &db_path)?;
-            // Ask the Witch for the config root (she parsed it at startup)
-            let cfg = witch.config();
-            cfg.root.clone()
-        } else {
-            // Fresh install — directory picker
-            startup::run_directory_picker(&mut terminal)?
-        };
-
-        // Collect first-user credentials
-        let first_user = startup::first_time_setup::run_create_account(&mut terminal)?;
-
-        witch
-            .complete_setup(root, Some(first_user))
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-        // Notify auth thread that DB is now available
-        witch.notify_db_ready();
-    }
-
-    // Auth: login to obtain session token
+    // Pre-auth startup operations via socket
+    let session_token;
     {
-        startup::login::run_login_screen(&mut terminal, &mut witch)?;
+        let mut startup = StartupSocket::new(&mut socket);
+
+        // Check startup state from the Witch (unauthenticated — before login)
+        if startup.needs_setup() {
+            let has_config = mm_utils::get_config_dir()
+                .map(|dir| dir.join("config.kdl").exists())
+                .unwrap_or(false);
+
+            let root = if has_config {
+                // Config exists but DB was deleted — show DB setup dialog, use existing root
+                let db_path = mm_utils::get_db_path()?;
+                startup::handle_db_setup_dialog(&mut terminal, &db_path)?;
+                // The config root query requires auth which we don't have yet.
+                // Parse the root path directly from config.kdl on disk.
+                let root = mm_utils::get_config_dir()
+                    .ok()
+                    .map(|dir| dir.join("config.kdl"))
+                    .and_then(|path| std::fs::read_to_string(path).ok())
+                    .and_then(|text| {
+                        // Extract root "..." from KDL — it's always a top-level node.
+                        for line in text.lines() {
+                            let trimmed = line.trim();
+                            if trimmed.starts_with("root ") || trimmed.starts_with("root\t") {
+                                let rest = trimmed.strip_prefix("root")?.trim();
+                                let path = rest.trim_matches('"');
+                                return Some(std::path::PathBuf::from(path));
+                            }
+                        }
+                        None
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("could not read root from config.kdl"))?;
+                root
+            } else {
+                // Fresh install — directory picker
+                startup::run_directory_picker(&mut terminal)?
+            };
+
+            // Collect first-user credentials
+            let first_user = startup::first_time_setup::run_create_account(&mut terminal)?;
+
+            startup
+                .complete_setup(root, Some(first_user))
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            // Notify auth thread that DB is now available
+            startup.notify_db_ready();
+        }
+
+        // Auth: login to obtain session token
+        session_token = startup::login::run_login_screen(&mut terminal, &mut startup)?;
     }
 
     // Config + DB now guaranteed. App fetches config via protocol.
-    let mut app = App::new(witch, art_picker);
+    let mut app = App::new(socket, session_token, art_picker);
 
     // Check if the Witch is already Ready (no startup maintenance needed)
     // or if she's running maintenance (Reconciling/Vacuuming)
     {
-        let status = app.witch.witch_status();
+        let status = app.witch_status_fetch();
         if status.startup_state == mm_meta::witch_types::WitchStartupState::Ready {
             app.startup_complete = true;
             app.complete_startup();
@@ -687,74 +1020,88 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Detect events via generation counter diffing against WitchStatus
         {
-            let status = &app.cached_status;
-
             // Mutations completed
-            if status.mutations_generation != app.prev_mutations_generation {
-                app.prev_mutations_generation = status.mutations_generation;
+            if app.cached_status.mutations_generation != app.prev_mutations_generation {
+                app.prev_mutations_generation = app.cached_status.mutations_generation;
             }
 
             // New error → show status message
-            if status.error_generation != app.prev_error_generation {
-                app.prev_error_generation = status.error_generation;
-                if let Some(ref err) = status.last_error {
+            if app.cached_status.error_generation != app.prev_error_generation {
+                app.prev_error_generation = app.cached_status.error_generation;
+                if let Some(ref err) = app.cached_status.last_error {
                     app.status_message = Some(format!("Task failed: {}", err));
                 }
             }
 
-            // Config updated — invalidate handle cache so next config() re-fetches
-            if status.config_generation != app.prev_config_generation {
-                app.prev_config_generation = status.config_generation;
-                app.witch.invalidate_config_cache();
+            // Config updated — invalidate cache so next config() re-fetches
+            if app.cached_status.config_generation != app.prev_config_generation {
+                app.prev_config_generation = app.cached_status.config_generation;
+                app.invalidate_config_cache();
                 // Rebuild path resolver with new root
-                let new_config = app.witch.config();
+                let new_config = app.config();
                 app.resolver = PathResolver::from_config(&new_config);
             }
         }
 
-        // Update views with query data
-        if let ActiveView::Insights(ref mut view) = app.view {
-            let insights_data = app.witch.query(mm_meta::domain_queries::GetInsights);
-            view.update(
-                Some(&app.cached_status.work),
-                Some(insights_data),
-                &app.cached_status.handled_decision_kinds,
-            );
+        // Update views with query data.
+        // Queries need &mut app (socket), so we query first then borrow view.
+        if matches!(app.view, ActiveView::Insights(_)) {
+            let insights_data = app.query(mm_meta::domain_queries::GetInsights);
+            if let ActiveView::Insights(ref mut view) = app.view {
+                view.update(
+                    Some(&app.cached_status.work),
+                    Some(insights_data),
+                    &app.cached_status.handled_decision_kinds,
+                );
+            }
         }
-        if let ActiveView::Inbox(ref mut view) = app.view {
-            let inbox_data = app.witch.query(mm_meta::domain_queries::GetInboxOverview);
-            view.busy = app.cached_status.work.pending > 0;
-            view.update(Some(inbox_data));
+        if matches!(app.view, ActiveView::Inbox(_)) {
+            let inbox_data = app.query(mm_meta::domain_queries::GetInboxOverview);
+            let busy = app.cached_status.work.pending > 0;
+            if let ActiveView::Inbox(ref mut view) = app.view {
+                view.busy = busy;
+                view.update(Some(inbox_data));
+            }
         }
-        if let ActiveView::History(ref mut view) = app.view {
-            view.update(Some(app.witch.query(mm_meta::domain_queries::GetEditHistory)));
+        if matches!(app.view, ActiveView::History(_)) {
+            let history_data = app.query(mm_meta::domain_queries::GetEditHistory);
+            if let ActiveView::History(ref mut view) = app.view {
+                view.update(Some(history_data));
+            }
         }
-        if let ActiveView::ExternalMatches(ref mut view) = app.view {
-            let data = app.witch.query(mm_meta::domain_queries::GetExternalMatches);
-            view.update(data);
+        if matches!(app.view, ActiveView::ExternalMatches(_)) {
+            let data = app.query(mm_meta::domain_queries::GetExternalMatches);
             let new_fetch_active = app.cached_status.is_external_fetch_active;
-            let fetch_changed = view.fetch_active != new_fetch_active;
-            view.fetch_active = new_fetch_active;
-            view.fetch_progress = app.cached_status.external_fetch_progress.clone();
-            if view.fetch_active {
-                view.tick_count = view.tick_count.wrapping_add(1);
-            }
-            if fetch_changed {
-                view.rebuild_items();
+            let fetch_progress = app.cached_status.external_fetch_progress.clone();
+            if let ActiveView::ExternalMatches(ref mut view) = app.view {
+                view.update(data);
+                let fetch_changed = view.fetch_active != new_fetch_active;
+                view.fetch_active = new_fetch_active;
+                view.fetch_progress = fetch_progress;
+                if view.fetch_active {
+                    view.tick_count = view.tick_count.wrapping_add(1);
+                }
+                if fetch_changed {
+                    view.rebuild_items();
+                }
             }
         }
-        if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate {
-            ref mut library_file_counts,
-        }) = app.view
-        {
-            let status = app.witch.query(mm_meta::domain_queries::GetDeployStatus);
-            *library_file_counts = status.library_file_counts;
+        if matches!(app.view, ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate { .. })) {
+            let status = app.query(mm_meta::domain_queries::GetDeployStatus);
+            if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate {
+                ref mut library_file_counts,
+            }) = app.view
+            {
+                *library_file_counts = status.library_file_counts;
+            }
         }
-        if let ActiveView::CorpusBrowser(ref mut browser) = app.view {
-            let data = app.witch.query(mm_meta::domain_queries::GetPackingDirs);
-            browser
-                .navigator
-                .set_packing_data(&data.file_paths, &data.dir_categories);
+        if matches!(app.view, ActiveView::CorpusBrowser(_)) {
+            let data = app.query(mm_meta::domain_queries::GetPackingDirs);
+            if let ActiveView::CorpusBrowser(ref mut browser) = app.view {
+                browser
+                    .navigator
+                    .set_packing_data(&data.file_paths, &data.dir_categories);
+            }
         }
 
         // Tick view-specific state machines

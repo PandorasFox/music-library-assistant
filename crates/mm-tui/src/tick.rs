@@ -117,8 +117,7 @@ impl App {
             reasoning
         ));
 
-        self.witch
-            .query(mm_meta::domain_queries::GetIntakeConfirmation {
+        self.query(mm_meta::domain_queries::GetIntakeConfirmation {
                 source: startup::IntakeSource::Startup,
                 zone: None,
             })
@@ -194,7 +193,6 @@ impl App {
         // Load compound split data from the group via cache thread
         // Progressive worker only used for corpus compound splits (Ctrl+A in safe mode)
         let data = match self
-            .witch
             .query(mm_meta::domain_queries::GetCompoundSplitGroupData {
                 group: group.clone(),
                 zone: mm_meta::db_types::Zone::Corpus,
@@ -250,7 +248,7 @@ impl App {
         };
         let decision = worker.gesture.decide(&description, mutations);
         let _ = super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             key,
             decision,
         );
@@ -279,8 +277,9 @@ impl App {
                 // Stack already holds compound split from the earlier push_and_switch.
                 // Push this (now-completed) progressive worker position so the
                 // TransactionReview Cancel pops back through it.
+                let decisions = transaction_review::fetch_decision_summaries(self);
                 let mut review = transaction_review::TransactionReviewState::new();
-                review.refresh_decisions(&self.witch);
+                review.set_decisions(decisions);
                 self.view = ActiveView::TransactionReview(review);
             }
         }

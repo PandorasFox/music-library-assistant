@@ -24,7 +24,6 @@ use crate::widgets::standard_list::{
 };
 use crate::widgets::wizard::{WizardItem, WizardOffer};
 use crate::widgets::{centered_rect_fixed, ButtonRowState};
-use mm_meta::witch_handle::WitchHandle;
 
 // ============================================================================
 // Types
@@ -260,9 +259,15 @@ impl TransactionReviewState {
         self
     }
 
-    /// Refresh cached decisions from the Witch. Call after mutations or on tick.
-    pub fn refresh_decisions(&mut self, witch: &WitchHandle) {
-        self.decisions = fetch_decision_summaries(witch);
+    /// Refresh cached decisions from pre-fetched decision details.
+    pub fn refresh_decisions_from_details(&mut self, details: Vec<mm_meta::protocol::DecisionDetail>) {
+        self.decisions = decision_details_to_summaries(details);
+        self.list.clamp_cursor(&self.decisions);
+    }
+
+    /// Set decisions directly and clamp cursor.
+    pub fn set_decisions(&mut self, decisions: Vec<DecisionSummary>) {
+        self.decisions = decisions;
         self.list.clamp_cursor(&self.decisions);
     }
 
@@ -429,11 +434,15 @@ fn count_unique_files(mutations: &[Mutation]) -> usize {
     inodes.len()
 }
 
-/// Fetch decision summaries from the Witch's active transaction.
-pub fn fetch_decision_summaries(witch: &WitchHandle) -> Vec<DecisionSummary> {
-    witch
-        .transaction_decision_details()
-        .unwrap_or_default()
+/// Fetch decision summaries from the active transaction via the App.
+pub(crate) fn fetch_decision_summaries(app: &mut crate::App) -> Vec<DecisionSummary> {
+    let details = app.transaction_decision_details().unwrap_or_default();
+    decision_details_to_summaries(details)
+}
+
+/// Convert pre-fetched decision details into display summaries.
+fn decision_details_to_summaries(details: Vec<mm_meta::protocol::DecisionDetail>) -> Vec<DecisionSummary> {
+    details
         .into_iter()
         .map(|d| {
             let diff_entries = d

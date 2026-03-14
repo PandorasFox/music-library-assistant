@@ -64,7 +64,7 @@ impl HandleAction for crate::disc_extraction_modal::DiscExtractionAction {
                             });
                             let decision = g.decide("Extract disc value", vec![mutation]);
                             let _ = super::super::operator_decisions::stage_decision(
-                                &mut app.witch,
+                                app,
                                 DecisionKey::DiscExtraction {
                                     group_index: group_idx,
                                 },
@@ -146,7 +146,6 @@ impl App {
         let config = self.config().opinions.disc_extraction.clone();
 
         let data = self
-            .witch
             .query(GetDiscExtractionData {
                 map_letters_to_numbers: config.map_letters_to_numbers,
             });
@@ -156,7 +155,7 @@ impl App {
             return;
         }
 
-        let _ = self.witch.start_transaction("Disc extraction");
+        let _ = self.start_transaction("Disc extraction");
 
         let state = disc_extraction_modal::DiscExtractionState::new(data, config.disc_tag_name);
         self.view = ActiveView::DiscExtractionResolution(state);

@@ -1,11 +1,13 @@
 //! Unix domain socket listener for out-of-process Witch clients.
 //!
 //! Spawns a tokio task that accepts connections on a Unix socket.
-//! Each connection gets a dedicated async task that:
-//! 1. Reads `WireRequest` frames from the socket (async)
-//! 2. Translates them to `HandleCommand`s on the Witch's mpsc channel
-//! 3. Awaits the oneshot reply
-//! 4. Writes `WireResponse` frames back to the socket (async)
+//! Each connection gets a dedicated async task that runs a multiplexed
+//! reader/writer pair:
+//!
+//! - **Reader task**: reads `WireRequest` frames and spawns a dispatch task
+//!   per request, allowing multiple requests to be in-flight concurrently.
+//! - **Writer task**: drains completed `WireResponse` frames back to the
+//!   client as dispatch tasks finish.
 //!
 //! Connection close exits the handler task. No explicit cleanup needed —
 //! channels drop naturally.
@@ -13,11 +15,9 @@
 use std::io;
 use std::path::PathBuf;
 
-use tokio::sync::oneshot;
-
 use crate::meta::wire::{self, WireRequest, WireResponse};
 
-use super::handle::{HandleCommand, WitchHandle};
+use super::handle::HandleCommand;
 
 /// Handle to the socket listener task for lifecycle management.
 pub(super) struct SocketListenerHandle {
@@ -45,13 +45,13 @@ impl Drop for SocketListenerHandle {
 
 /// Resolve the socket path: `$XDG_RUNTIME_DIR/mm.sock`.
 pub fn socket_path() -> Option<PathBuf> {
-    WitchHandle::default_socket_path()
+    mm_meta::wire::default_socket_path()
 }
 
 /// Spawn the socket listener as a tokio task.
 ///
 /// Binds the socket synchronously on the calling thread so it is ready for
-/// `WitchHandle::connect()` immediately on return. The accept loop runs as
+/// client connections immediately on return. The accept loop runs as
 /// an async tokio task.
 ///
 /// Returns a handle for shutdown coordination, or `None` if XDG_RUNTIME_DIR
@@ -121,7 +121,7 @@ async fn run_listener(
     }
 }
 
-/// Per-connection handler: async request/response loop.
+/// Per-connection handler: multiplexed reader/writer with spawned dispatch.
 async fn handle_connection(
     stream: tokio::net::UnixStream,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
@@ -130,65 +130,109 @@ async fn handle_connection(
     let mut reader = tokio::io::BufReader::new(read_half);
     let mut writer = tokio::io::BufWriter::new(write_half);
 
-    loop {
-        // Read next request frame.
-        let request: WireRequest = match wire::read_frame_async(&mut reader).await {
-            Ok(req) => req,
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                // Clean disconnect.
-                return;
-            }
-            Err(e) => {
-                crate::logging::log_general(format!("[SOCKET] Read error: {e}"));
-                return;
-            }
-        };
+    // Response channel: dispatch tasks send completed responses here.
+    let (resp_tx, mut resp_rx) = tokio::sync::mpsc::unbounded_channel::<WireResponse>();
 
-        // Translate to HandleCommand and shuttle through the Witch's mpsc.
-        let response = match request {
-            WireRequest::Authenticated { token, body } => {
-                let (tx, rx) = oneshot::channel();
-                if cmd_tx
-                    .send(HandleCommand::Authenticated {
-                        token,
-                        body,
-                        reply: tx,
-                    })
-                    .is_err()
-                {
-                    // Witch shut down.
-                    return;
-                }
-                match rx.await {
-                    Ok(result) => WireResponse::Authenticated(Box::new(result)),
-                    Err(_) => return, // Witch dropped the reply channel.
-                }
-            }
-            WireRequest::Unauthenticated(body) => {
-                let (tx, rx) = oneshot::channel();
-                if cmd_tx
-                    .send(HandleCommand::Unauthenticated { body, reply: tx })
-                    .is_err()
-                {
-                    return;
-                }
-                match rx.await {
-                    Ok(result) => WireResponse::Unauthenticated(result),
-                    Err(_) => return,
-                }
-            }
-            WireRequest::NotifyDbReady => {
-                if cmd_tx.send(HandleCommand::NotifyDbReady).is_err() {
-                    return;
-                }
-                WireResponse::Ack
-            }
-        };
+    tokio::select! {
+        // Reader: read requests, spawn dispatch tasks.
+        _ = async {
+            loop {
+                let request: WireRequest = match wire::read_frame_async(&mut reader).await {
+                    Ok(req) => req,
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return,
+                    Err(e) => {
+                        crate::logging::log_general(format!("[SOCKET] Read error: {e}"));
+                        return;
+                    }
+                };
 
-        // Write response frame.
-        if let Err(e) = wire::write_frame_async(&mut writer, &response).await {
-            crate::logging::log_general(format!("[SOCKET] Write error: {e}"));
-            return;
+                let cmd_tx = cmd_tx.clone();
+                let resp_tx = resp_tx.clone();
+                tokio::spawn(async move {
+                    let response = dispatch_request(request, cmd_tx).await;
+                    let _ = resp_tx.send(response);
+                });
+            }
+        } => {}
+
+        // Writer: drain completed responses to the socket.
+        _ = async {
+            while let Some(response) = resp_rx.recv().await {
+                if wire::write_frame_async(&mut writer, &response).await.is_err() {
+                    return;
+                }
+            }
+        } => {}
+    }
+}
+
+/// Dispatch a single request: send to Witch, await reply, wrap with request_id.
+async fn dispatch_request(
+    request: WireRequest,
+    cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
+) -> WireResponse {
+    let request_id = request.request_id();
+
+    match request {
+        WireRequest::Authenticated { token, body, .. } => {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if cmd_tx
+                .send(HandleCommand::Authenticated {
+                    token,
+                    body,
+                    reply: tx,
+                })
+                .is_err()
+            {
+                return WireResponse::Authenticated {
+                    request_id,
+                    result: Box::new(Err(crate::meta::protocol::ProtocolError::Internal(
+                        "server shutting down".to_string(),
+                    ))),
+                };
+            }
+            match rx.await {
+                Ok(result) => WireResponse::Authenticated {
+                    request_id,
+                    result: Box::new(result),
+                },
+                Err(_) => WireResponse::Authenticated {
+                    request_id,
+                    result: Box::new(Err(crate::meta::protocol::ProtocolError::Internal(
+                        "server dropped reply".to_string(),
+                    ))),
+                },
+            }
+        }
+        WireRequest::Unauthenticated { body, .. } => {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if cmd_tx
+                .send(HandleCommand::Unauthenticated { body, reply: tx })
+                .is_err()
+            {
+                return WireResponse::Unauthenticated {
+                    request_id,
+                    result: Err(crate::meta::protocol::ProtocolError::Internal(
+                        "server shutting down".to_string(),
+                    )),
+                };
+            }
+            match rx.await {
+                Ok(result) => WireResponse::Unauthenticated {
+                    request_id,
+                    result,
+                },
+                Err(_) => WireResponse::Unauthenticated {
+                    request_id,
+                    result: Err(crate::meta::protocol::ProtocolError::Internal(
+                        "server dropped reply".to_string(),
+                    )),
+                },
+            }
+        }
+        WireRequest::NotifyDbReady { .. } => {
+            let _ = cmd_tx.send(HandleCommand::NotifyDbReady);
+            WireResponse::Ack { request_id }
         }
     }
 }

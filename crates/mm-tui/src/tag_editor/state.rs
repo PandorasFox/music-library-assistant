@@ -233,50 +233,50 @@ impl UnifiedTagEditorState {
     }
 
     /// Create a new unified state for single-file editing (convenience wrapper).
-    pub fn single_file(
+    pub(crate) fn single_file(
         audio_file: AudioFile,
         source: TagEditorSource,
         group_context: Option<GroupContext>,
-        witch: &mm_meta::witch_handle::WitchHandle,
+        app: &mut crate::App,
     ) -> Self {
         let files = vec![audio_file];
-        let tag_fields = load_tag_fields_batch(&files, witch);
+        let tag_fields = load_tag_fields_batch(&files, app);
         Self::new(TagEditorMode::Individual, files, source, group_context, tag_fields)
     }
 
     /// Create a new unified state for bulk editing from pre-loaded audio files (convenience wrapper).
     ///
     /// Uses Individual mode - each file is edited separately, Tab navigates between them.
-    pub fn bulk_from_audio_files(
+    pub(crate) fn bulk_from_audio_files(
         audio_files: Vec<AudioFile>,
         source: TagEditorSource,
         group_context: Option<GroupContext>,
-        witch: &mm_meta::witch_handle::WitchHandle,
+        app: &mut crate::App,
     ) -> Self {
-        let tag_fields = load_tag_fields_batch(&audio_files, witch);
+        let tag_fields = load_tag_fields_batch(&audio_files, app);
         Self::new(TagEditorMode::Individual, audio_files, source, group_context, tag_fields)
     }
 
     /// Create a new unified state for aggregated bulk editing (convenience wrapper).
     ///
     /// Uses Aggregated mode - shows unified view, changes apply to all files at once.
-    pub fn aggregated_bulk(
+    pub(crate) fn aggregated_bulk(
         audio_files: Vec<AudioFile>,
         source: TagEditorSource,
-        witch: &mm_meta::witch_handle::WitchHandle,
+        app: &mut crate::App,
     ) -> Self {
-        let tag_fields = load_tag_fields_batch(&audio_files, witch);
+        let tag_fields = load_tag_fields_batch(&audio_files, app);
         Self::new(TagEditorMode::Aggregated, audio_files, source, None, tag_fields)
     }
 
     /// Create a new unified state for directory editing with aggregated tags (convenience wrapper).
     ///
     /// Uses Aggregated mode - shows unified view, changes apply to all files.
-    pub fn directory_aggregated(
+    pub(crate) fn directory_aggregated(
         audio_files: Vec<AudioFile>,
-        witch: &mm_meta::witch_handle::WitchHandle,
+        app: &mut crate::App,
     ) -> Self {
-        let tag_fields = load_tag_fields_batch(&audio_files, witch);
+        let tag_fields = load_tag_fields_batch(&audio_files, app);
         Self::new(TagEditorMode::Aggregated, audio_files, TagEditorSource::DirectoryEdit, None, tag_fields)
     }
 
@@ -567,24 +567,24 @@ impl UnifiedTagEditorState {
         }
     }
 
-    /// Re-read tags from disk for the current audio file
-    pub fn fill_from_disk(&mut self, witch: &mm_meta::witch_handle::WitchHandle) {
+    /// Get the current audio file's inode and zone for a fill-from-disk query.
+    ///
+    /// Returns None if there's no current audio file.
+    pub fn current_file_for_disk_query(&self) -> Option<(i64, mm_meta::db_types::Zone)> {
         let audio_file = match &self.context {
-            TagEditContext::SingleFile { audio_file, .. } => audio_file.clone(),
+            TagEditContext::SingleFile { audio_file, .. } => audio_file,
             TagEditContext::BulkEdit { audio_files, .. } => {
-                match audio_files.get(self.current_item_idx) {
-                    Some(af) => af.clone(),
-                    None => return,
-                }
+                audio_files.get(self.current_item_idx)?
             }
         };
+        Some((audio_file.inode(), audio_file.entry.zone))
+    }
 
-        // Re-read tags from disk via domain query
-        let result = witch.query(mm_meta::domain_queries::GetFileTagValues {
-            inodes: vec![audio_file.inode()],
-            zone: audio_file.entry.zone,
-        });
-        let tags = result.into_iter().next().map(|(_, t)| t).unwrap_or_default();
+    /// Apply re-read tags from disk for the current audio file.
+    ///
+    /// The caller is responsible for fetching the tags via `GetFileTagValues`
+    /// and passing them here, to avoid borrow conflicts with App.
+    pub fn fill_from_disk_with_tags(&mut self, tags: Vec<(String, String)>) {
         let new_fields = tag_pairs_to_tag_fields(tags);
 
         // Update current item's tag fields

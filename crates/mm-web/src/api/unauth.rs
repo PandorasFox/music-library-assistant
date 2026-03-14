@@ -22,14 +22,17 @@ pub struct SetupCheckResponse {
 pub async fn setup_check(
     State(state): State<AppState>,
 ) -> Result<Json<SetupCheckResponse>, ApiError> {
-    let req = WireRequest::Unauthenticated(UnauthenticatedBody::SetupQuery);
-    let resp = state.pool.send(&req).await?;
+    let req = WireRequest::Unauthenticated {
+        request_id: 0,
+        body: UnauthenticatedBody::SetupQuery,
+    };
+    let resp = state.conn.send(req).await?;
 
     match resp {
-        WireResponse::Unauthenticated(Ok(UnauthenticatedResponse::SetupStatus {
+        WireResponse::Unauthenticated { result: Ok(UnauthenticatedResponse::SetupStatus {
             needs_setup,
-        })) => Ok(Json(SetupCheckResponse { needs_setup })),
-        WireResponse::Unauthenticated(Err(e)) => Err(ApiError::Protocol(e)),
+        }), .. } => Ok(Json(SetupCheckResponse { needs_setup })),
+        WireResponse::Unauthenticated { result: Err(e), .. } => Err(ApiError::Protocol(e)),
         _ => Err(ApiError::Internal("unexpected response type".into())),
     }
 }
@@ -59,17 +62,20 @@ pub async fn setup_complete(
         _ => None,
     };
 
-    let req = WireRequest::Unauthenticated(UnauthenticatedBody::CompleteSetup {
-        root: body.root,
-        first_user,
-    });
-    let resp = state.pool.send(&req).await?;
+    let req = WireRequest::Unauthenticated {
+        request_id: 0,
+        body: UnauthenticatedBody::CompleteSetup {
+            root: body.root,
+            first_user,
+        },
+    };
+    let resp = state.conn.send(req).await?;
 
     match resp {
-        WireResponse::Unauthenticated(Ok(UnauthenticatedResponse::SetupComplete)) => {
+        WireResponse::Unauthenticated { result: Ok(UnauthenticatedResponse::SetupComplete), .. } => {
             Ok(Json(OkResponse { ok: true }))
         }
-        WireResponse::Unauthenticated(Err(e)) => Err(ApiError::Protocol(e)),
+        WireResponse::Unauthenticated { result: Err(e), .. } => Err(ApiError::Protocol(e)),
         _ => Err(ApiError::Internal("unexpected response type".into())),
     }
 }
@@ -88,21 +94,24 @@ pub async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let req = WireRequest::Unauthenticated(UnauthenticatedBody::Login {
-        username: body.username,
-        password: body.password,
-    });
-    let resp = state.pool.send(&req).await?;
+    let req = WireRequest::Unauthenticated {
+        request_id: 0,
+        body: UnauthenticatedBody::Login {
+            username: body.username,
+            password: body.password,
+        },
+    };
+    let resp = state.conn.send(req).await?;
 
     match resp {
-        WireResponse::Unauthenticated(Ok(UnauthenticatedResponse::Auth(auth))) => match auth {
+        WireResponse::Unauthenticated { result: Ok(UnauthenticatedResponse::Auth(auth)), .. } => match auth {
             AuthResponse::Token(token) => {
                 let b64 = STANDARD.encode(token.as_bytes());
                 Ok(Json(serde_json::json!({ "token": b64 })))
             }
             AuthResponse::Failed(msg) => Err(ApiError::Unauthorized(msg)),
         },
-        WireResponse::Unauthenticated(Err(e)) => Err(ApiError::Protocol(e)),
+        WireResponse::Unauthenticated { result: Err(e), .. } => Err(ApiError::Protocol(e)),
         _ => Err(ApiError::Internal("unexpected response type".into())),
     }
 }

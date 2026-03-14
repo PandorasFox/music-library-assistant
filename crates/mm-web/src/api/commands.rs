@@ -18,13 +18,14 @@ async fn send_cmd(
     payload: CommandPayload,
 ) -> Result<CommandResponse, ApiError> {
     let req = WireRequest::Authenticated {
+        request_id: 0,
         token,
         body: Box::new(AuthenticatedBody::Command(Box::new(payload))),
     };
-    let resp = state.pool.send(&req).await?;
+    let resp = state.conn.send(req).await?;
 
     match resp {
-        WireResponse::Authenticated(result) => match *result {
+        WireResponse::Authenticated { result, .. } => match *result {
             Ok(AuthenticatedResponse::Command(cr)) => Ok(cr),
             Ok(_) => Err(ApiError::Internal(
                 "unexpected authenticated response variant".into(),

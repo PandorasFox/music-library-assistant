@@ -18,7 +18,6 @@ use crate::{
 macro_rules! start_resolution {
     ($self:ident, $query:expr, $preview:path, $view:ident) => {{
         let data = $self
-            .witch
             .query($query);
         let preview = <$preview>::new(data);
         $self.view = ActiveView::$view(preview);
@@ -221,7 +220,6 @@ impl HandleAction for super::super::directory_cluster_modal::DirectoryClusterPre
                 if let Some(inodes) = edit_tags_inodes {
                     if !inodes.is_empty() {
                         let audio_files = app
-                            .witch
                             .query(mm_meta::domain_queries::GetAudioFilesByInodes {
                                 inodes,
                                 zone: mm_meta::db_types::Zone::Corpus,
@@ -366,7 +364,6 @@ impl App {
 
     pub(crate) fn start_shit_format_resolution(&mut self) {
         let mut data = self
-            .witch
             .query(mm_meta::domain_queries::GetShitFormatData);
         data.lossy_to_flac = self.config().opinions.lossy_shit_formats_to_flac;
         let preview = shit_format_modal::ShitFormatPreviewState::new(data);
@@ -397,7 +394,6 @@ impl App {
     pub(crate) fn start_release_overlap_resolution(&mut self) {
         use super::super::directory_cluster_modal;
         let data = self
-            .witch
             .query(mm_meta::domain_queries::GetReleaseOverlapData);
         let preview = directory_cluster_modal::DirectoryClusterPreviewState::new(data);
         self.view = ActiveView::DirectoryClusterResolution(preview);
@@ -413,11 +409,11 @@ impl App {
     ) {
         // Start transaction if not already started
         if self.witch_status().transaction.is_none() {
-            let _ = self.witch.start_transaction("Directory overlap resolution");
+            let _ = self.start_transaction("Directory overlap resolution");
         }
         let decision = gesture.decide(label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             DecisionKey::DirectoryCluster { cluster_index },
             decision,
         );

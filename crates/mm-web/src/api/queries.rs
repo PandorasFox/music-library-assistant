@@ -21,13 +21,14 @@ async fn send_query(
     payload: QueryPayload,
 ) -> Result<QueryResponse, ApiError> {
     let req = WireRequest::Authenticated {
+        request_id: 0,
         token,
         body: Box::new(AuthenticatedBody::Query(payload)),
     };
-    let resp = state.pool.send(&req).await?;
+    let resp = state.conn.send(req).await?;
 
     match resp {
-        WireResponse::Authenticated(result) => match *result {
+        WireResponse::Authenticated { result, .. } => match *result {
             Ok(AuthenticatedResponse::Query(qr)) => Ok(*qr),
             Ok(_) => Err(ApiError::Internal(
                 "unexpected authenticated response variant".into(),

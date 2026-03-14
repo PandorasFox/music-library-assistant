@@ -114,7 +114,7 @@ impl App {
         };
         let decision = gesture.decide(&label, mutations.clone());
         let _ = super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             key,
             decision,
         );
@@ -142,11 +142,11 @@ impl App {
     ) {
         let open_txn = self.open_txn_mode();
         if !open_txn {
-            let _ = self.witch.start_transaction(label);
+            let _ = self.start_transaction(label);
         }
         let decision = gesture.decide(label, mutations);
         let _ = super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             key,
             decision,
         );
@@ -159,7 +159,7 @@ impl App {
     pub(crate) fn cancel_and_return_to_source(&mut self, log_message: &str) {
         mm_meta::logging::log_general(log_message);
         if !self.open_txn_mode() && self.witch_status().transaction.is_some() {
-            let _ = super::operator_decisions::discard_transaction(&mut self.witch);
+            let _ = super::operator_decisions::discard_transaction(self);
         }
         self.return_to_last_lateral_view();
     }
@@ -220,7 +220,6 @@ impl App {
             return;
         }
         let audio_files = self
-            .witch
             .query(mm_meta::domain_queries::GetAudioFilesByInodes { inodes, zone });
         if !audio_files.is_empty() {
             self.open_embedded_tag_editor(mode, audio_files, key, label);
@@ -296,7 +295,6 @@ impl App {
     /// the bulk tag editor so the operator can fill in missing tags.
     fn start_missing_tag_resolution(&mut self) {
         let audio_files = self
-            .witch
             .query(mm_meta::domain_queries::GetMissingTagAudioFiles);
 
         if audio_files.is_empty() {
@@ -436,11 +434,11 @@ impl HandleAction for super::config_editor::ConfigEditorAction {
 
                     let open_txn = app.open_txn_mode();
                     if !open_txn {
-                        let _ = app.witch.start_transaction("Config update");
+                        let _ = app.start_transaction("Config update");
                     }
                     let decision = g.decide("Apply config changes", vec![mutation]);
                     let _ = super::operator_decisions::stage_decision(
-                        &mut app.witch,
+                        app,
                         DecisionKey::ConfigEdit,
                         decision,
                     );
@@ -573,13 +571,12 @@ impl HandleAction for tag_search::TagSearchAction {
             }
             tag_search::TagSearchAction::ExecuteSearch => {
                 // Execute search via cache thread (blocking — fast single query)
+                let all_files = app
+                    .query(mm_meta::domain_queries::GetAllAudioFilesWithTags {
+                        zone: mm_meta::db_types::Zone::Corpus,
+                        include_library: false,
+                    });
                 if let ActiveView::TagSearch(ref mut search) = app.view {
-                    let all_files = app
-                        .witch
-                        .query(mm_meta::domain_queries::GetAllAudioFilesWithTags {
-                            zone: mm_meta::db_types::Zone::Corpus,
-                            include_library: false,
-                        });
                     search.execute_search(all_files);
                 }
             }

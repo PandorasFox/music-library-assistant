@@ -35,7 +35,7 @@ impl HandleAction for transaction_review::TransactionReviewAction {
             TransactionReviewAction::Discard => {
                 // Discard transaction, clear entire view stack, return to health
                 app.clear_view_stack();
-                let _ = super::super::operator_decisions::discard_transaction(&mut app.witch);
+                let _ = super::super::operator_decisions::discard_transaction(app);
                 app.start_health_view();
                 app.status_message = Some("Transaction discarded".to_string());
             }
@@ -56,7 +56,7 @@ impl HandleAction for transaction_review::TransactionReviewAction {
 
                 // Commit transaction
                 let commit_result =
-                    super::super::operator_decisions::commit_transaction(&mut app.witch, g);
+                    super::super::operator_decisions::commit_transaction(app, g);
 
                 match commit_result {
                     Ok(()) => {
@@ -93,7 +93,7 @@ impl HandleAction for transaction_review::TransactionReviewAction {
 
             TransactionReviewAction::ConfirmRemoval(key) => {
                 let Some(g) = gesture else { return };
-                let _ = super::super::operator_decisions::remove_decision(&mut app.witch, &key, g);
+                let _ = super::super::operator_decisions::remove_decision(app, &key, g);
 
                 // If transaction is now empty, auto-close review
                 if app.witch_status().transaction.as_ref().is_none_or(|t| t.decision_keys.is_empty()) {
@@ -104,8 +104,9 @@ impl HandleAction for transaction_review::TransactionReviewAction {
                     return;
                 }
                 // Refresh decisions and clamp cursor after removal
+                let decisions = transaction_review::fetch_decision_summaries(app);
                 if let ActiveView::TransactionReview(ref mut review) = app.view {
-                    review.refresh_decisions(&app.witch);
+                    review.set_decisions(decisions);
                 }
                 app.status_message = Some("Decision removed".to_string());
             }
@@ -124,17 +125,17 @@ impl HandleAction for super::super::tabbed_transaction_review::TabbedTransaction
                 TransactionReviewAction::Cancel => {} // No cancel in tabbed mode
                 TransactionReviewAction::Confirm => {
                     let Some(g) = gesture else { return };
-                    let _ = super::super::operator_decisions::commit_transaction(&mut app.witch, g);
+                    let _ = super::super::operator_decisions::commit_transaction(app, g);
                     // Re-open transaction immediately
-                    let _ = app.witch.start_transaction("Open");
+                    let _ = app.start_transaction("Open");
                     app.transition_to_progress_after_mutations(
                         progress_screen::ProgressPhase::SignalRefresh,
                     );
                 }
                 TransactionReviewAction::Discard => {
-                    let _ = super::super::operator_decisions::discard_transaction(&mut app.witch);
+                    let _ = super::super::operator_decisions::discard_transaction(app);
                     // Re-open transaction immediately
-                    let _ = app.witch.start_transaction("Open");
+                    let _ = app.start_transaction("Open");
                     app.sync_browser_pending_edits();
                     app.status_message = Some("Transaction discarded".into());
                 }
@@ -147,12 +148,13 @@ impl HandleAction for super::super::tabbed_transaction_review::TabbedTransaction
                 }
                 TransactionReviewAction::ConfirmRemoval(key) => {
                     let Some(g) = gesture else { return };
-                    let _ = super::super::operator_decisions::remove_decision(&mut app.witch, &key, g);
+                    let _ = super::super::operator_decisions::remove_decision(app, &key, g);
                     app.status_message = Some("Decision removed".into());
                     app.sync_browser_pending_edits();
                     // Refresh decisions and clamp cursor
+                    let decisions = transaction_review::fetch_decision_summaries(app);
                     if let ActiveView::TabbedTransactionReview(ref mut state) = app.view {
-                        state.review.refresh_decisions(&app.witch);
+                        state.review.set_decisions(decisions);
                     }
                 }
             },
@@ -166,8 +168,9 @@ impl App {
     /// Called after staging decisions to show the review before commit.
     /// Pushes the current view onto the view stack and switches to review.
     pub(crate) fn start_transaction_review(&mut self) {
+        let decisions = transaction_review::fetch_decision_summaries(self);
         let mut review = transaction_review::TransactionReviewState::new();
-        review.refresh_decisions(&self.witch);
+        review.set_decisions(decisions);
         self.push_and_switch(SuspendTarget::TransactionReview(review));
     }
 
@@ -178,9 +181,10 @@ impl App {
         &mut self,
         phase: transaction_review::PostCommitPhase,
     ) {
+        let decisions = transaction_review::fetch_decision_summaries(self);
         let mut review =
             transaction_review::TransactionReviewState::new().with_post_commit_phase(phase);
-        review.refresh_decisions(&self.witch);
+        review.set_decisions(decisions);
         self.push_and_switch(SuspendTarget::TransactionReview(review));
     }
 }

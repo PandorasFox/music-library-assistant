@@ -24,7 +24,6 @@ impl HandleAction for super::super::inbox_view::InboxAction {
             InboxAction::LaunchIntake => {
                 // Gather inbox unindexed files and show intake confirmation
                 let intake_state = app
-                    .witch
                     .query(mm_meta::domain_queries::GetIntakeConfirmation {
                         source: startup::IntakeSource::Inbox,
                         zone: Some(mm_meta::db_types::Zone::Inbox),
@@ -117,7 +116,6 @@ impl App {
     /// `InboxTagCanonicity` kind, and launches the standard canonicity modal.
     fn start_inbox_tag_canonicity_resolution(&mut self) {
         let signal_keys = self
-            .witch
             .query(mm_meta::domain_queries::GetTagCanonicityKeys {
                 zone: mm_meta::db_types::Zone::Inbox,
                 tag_filter: None,
@@ -132,12 +130,12 @@ impl App {
         let clusters = TagCanonicityClusters::new(signal_keys, kind);
 
         // Start transaction for the modal
-        let _ = self.witch.start_transaction("Inbox tag canonicalization");
+        let _ = self.start_transaction("Inbox tag canonicalization");
 
         // Fire async load for the first signal — tick handler will complete it
         if !self.start_async_cluster_load(clusters) {
             self.status_message = Some("Failed to load inbox tag canonicity data".to_string());
-            let _ = super::super::operator_decisions::discard_transaction(&mut self.witch);
+            let _ = super::super::operator_decisions::discard_transaction(self);
         }
     }
 
@@ -149,7 +147,6 @@ impl App {
             .quality_resolution
             .inbox_bitrate_fuzz_percent;
         let data = self
-            .witch
             .query(mm_meta::domain_queries::GetInboxCorpusMatchData {
                 bitrate_fuzz_percent: fuzz,
             });
@@ -162,7 +159,6 @@ impl App {
     fn start_inbox_organize(&mut self) {
         let config = self.config();
         let directories = self
-            .witch
             .query(mm_meta::domain_queries::GetInboxOrganizeData {
                 config: (*config).clone(),
             });

@@ -2,16 +2,16 @@
 //!
 //! Connects to a running mm server over its Unix domain socket.
 
-use mm_meta::witch_handle::WitchHandle;
+use mm_meta::wire::default_socket_path;
 
 fn main() {
-    let socket_path = WitchHandle::default_socket_path().unwrap_or_else(|| {
+    let socket_path = default_socket_path().unwrap_or_else(|| {
         eprintln!("error: XDG_RUNTIME_DIR not set");
         std::process::exit(1);
     });
 
-    let handle = match WitchHandle::connect(&socket_path) {
-        Ok(h) => h,
+    let stream = match std::os::unix::net::UnixStream::connect(&socket_path) {
+        Ok(s) => s,
         Err(e) => {
             eprintln!("error: failed to connect to mm server at {}: {}", socket_path.display(), e);
             eprintln!("is the mm server running?");
@@ -22,7 +22,7 @@ fn main() {
     // Clear terminal
     print!("\x1B[2J\x1B[1;1H");
 
-    if let Err(e) = mm_tui::run_tui(handle) {
+    if let Err(e) = mm_tui::run_tui(stream) {
         eprintln!("TUI error: {:?}", e);
         std::process::exit(1);
     }

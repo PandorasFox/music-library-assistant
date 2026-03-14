@@ -77,7 +77,6 @@ impl App {
     ) {
         // Load compound signal groups filtered by safety classification and tag
         let groups = self
-            .witch
             .query(mm_meta::domain_queries::GetCompoundSignalGroups {
                 zone,
                 safe_only,
@@ -101,12 +100,10 @@ impl App {
             "review"
         };
         let _ = self
-            .witch
             .start_transaction(&format!("Compound tag split ({})", mode_str));
 
         // Load the first group into modal data
         let data = self
-            .witch
             .query(mm_meta::domain_queries::GetCompoundSplitGroupData {
                 group: clusters.all_groups()[0].clone(),
                 zone,
@@ -117,7 +114,7 @@ impl App {
             None => {
                 self.status_message = Some("Failed to parse signal data".to_string());
                 // Discard the transaction we just started
-                let _ = super::super::operator_decisions::discard_transaction(&mut self.witch);
+                let _ = super::super::operator_decisions::discard_transaction(self);
                 return;
             }
         };
@@ -268,8 +265,8 @@ impl App {
     }
 
     /// Collect (tag_name, canonical_value) pairs from staged EmitCanonicalTag decisions.
-    fn staged_canonical_values(&self) -> Vec<(String, String)> {
-        let details = self.witch.transaction_decision_details().unwrap_or_default();
+    fn staged_canonical_values(&mut self) -> Vec<(String, String)> {
+        let details = self.transaction_decision_details().unwrap_or_default();
         details
             .iter()
             .filter_map(|detail| {
@@ -313,7 +310,7 @@ impl App {
 
         let decision = gesture.decide(&description, mutations);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             key,
             decision,
         );
@@ -343,7 +340,7 @@ impl App {
 
         let decision = gesture.decide(&description, mutations);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             key,
             decision,
         );
@@ -407,7 +404,6 @@ impl App {
         };
 
         let data = self
-            .witch
             .query(mm_meta::domain_queries::GetCompoundSplitGroupData {
                 group,
                 zone,
@@ -429,7 +425,7 @@ impl App {
             state.data.compound.tag_name.clone(),
             group_index,
         );
-        if let Some(detail) = self.witch.transaction_decision_details().unwrap_or_default().into_iter().find(|d| d.key == backfill_key) {
+        if let Some(detail) = self.transaction_decision_details().unwrap_or_default().into_iter().find(|d| d.key == backfill_key) {
             state.restore_from_mutations(&detail.mutations);
             state.pending_tag_edits =
                 Some(helpers::pending_edits_from_mutations(&detail.mutations));
@@ -463,7 +459,6 @@ impl App {
         let (group_index, total) = (clusters.current_index(), clusters.total());
 
         let data = self
-            .witch
             .query(mm_meta::domain_queries::GetCompoundSplitGroupData {
                 group,
                 zone,
@@ -485,7 +480,7 @@ impl App {
             state.data.compound.tag_name.clone(),
             group_index,
         );
-        if let Some(detail) = self.witch.transaction_decision_details().unwrap_or_default().into_iter().find(|d| d.key == backfill_key) {
+        if let Some(detail) = self.transaction_decision_details().unwrap_or_default().into_iter().find(|d| d.key == backfill_key) {
             state.restore_from_mutations(&detail.mutations);
             state.pending_tag_edits =
                 Some(helpers::pending_edits_from_mutations(&detail.mutations));

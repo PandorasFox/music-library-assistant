@@ -28,7 +28,6 @@
 use mm_meta::decisions::{Decision, DecisionKey, DiscardSummary};
 use mm_meta::protocol::ProtocolError;
 use crate::action_handlers::witness::ConfirmationGesture;
-use mm_meta::witch_handle::WitchHandle;
 
 // =============================================================================
 // SEALED DECISION HANDLERS
@@ -38,41 +37,41 @@ use mm_meta::witch_handle::WitchHandle;
 ///
 /// Called from Enter keypress when user confirms a single item (tag save, etc.).
 /// The gesture is exchanged for a Decision; the decision crosses the protocol boundary.
-pub fn stage_decision(
-    witch: &mut WitchHandle,
+pub(crate) fn stage_decision(
+    app: &mut crate::App,
     key: DecisionKey,
     decision: Decision,
 ) -> Result<(), ProtocolError> {
-    witch.add_decision(key, decision)
+    app.add_decision(key, decision)
 }
 
 /// Commit the active transaction - queue all staged mutations for execution.
 ///
 /// Called from Enter keypress on transaction commit confirmation.
 pub(crate) fn commit_transaction(
-    witch: &mut WitchHandle,
+    app: &mut crate::App,
     _gesture: &ConfirmationGesture,
 ) -> Result<(), ProtocolError> {
-    witch.confirm_transaction()
+    app.confirm_transaction()
 }
 
 /// Discard the active transaction - drop all staged decisions.
 ///
 /// Called from Escape/cancel keypress on transaction modal.
 /// Does not require a gesture — discarding is always safe.
-pub fn discard_transaction(
-    witch: &mut WitchHandle,
+pub(crate) fn discard_transaction(
+    app: &mut crate::App,
 ) -> Result<DiscardSummary, ProtocolError> {
-    witch.discard_transaction()
+    app.discard_transaction()
 }
 
 /// Remove an entire decision from the active transaction.
 ///
 /// Called when user removes a decision from transaction review.
 pub(crate) fn remove_decision(
-    witch: &mut WitchHandle,
+    app: &mut crate::App,
     key: &DecisionKey,
     _gesture: &ConfirmationGesture,
 ) -> Result<(), ProtocolError> {
-    witch.remove_decision(key)
+    app.remove_decision(key)
 }

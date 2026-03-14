@@ -45,7 +45,6 @@ impl App {
             mm_meta::domain_query_types::TagEditorLoadMode::SingleFile
         };
         let (audio_files, selected_idx) = self
-            .witch
             .query(mm_meta::domain_queries::GetTagEditorFiles {
                 rel_path: rel_path.to_path_buf(),
                 mode,
@@ -94,11 +93,11 @@ impl App {
             tag_editor::TagEditorSource::TagSearch => "Tag search edits",
             tag_editor::TagEditorSource::HealthModal => "Health tag edits",
         };
-        let _ = self.witch.start_transaction(label);
+        let _ = self.start_transaction(label);
 
         // NOTE: single_file reads tags from disk
         let editor =
-            tag_editor::UnifiedTagEditorState::single_file(audio_file, source, group_context, &self.witch);
+            tag_editor::UnifiedTagEditorState::single_file(audio_file, source, group_context, self);
 
         // Drain any keypresses that accumulated during loading
         drain_input_buffer();
@@ -120,14 +119,14 @@ impl App {
             tag_editor::TagEditorSource::TagSearch => "Tag search edits",
             tag_editor::TagEditorSource::HealthModal => "Health tag edits",
         };
-        let _ = self.witch.start_transaction(label);
+        let _ = self.start_transaction(label);
 
         // NOTE: bulk_from_audio_files reads tags from disk for all files
         let editor = tag_editor::UnifiedTagEditorState::bulk_from_audio_files(
             audio_files,
             source,
             group_context,
-            &self.witch,
+            self,
         );
 
         // Drain any keypresses that accumulated during loading
@@ -151,7 +150,6 @@ impl App {
         };
 
         let (audio_files, _) = self
-            .witch
             .query(mm_meta::domain_queries::GetTagEditorFiles {
                 rel_path: rel_dir,
                 mode: mm_meta::domain_query_types::TagEditorLoadMode::Directory,
@@ -164,11 +162,11 @@ impl App {
         }
 
         // Start transaction for directory edits
-        let _ = self.witch.start_transaction("Directory tag edits");
+        let _ = self.start_transaction("Directory tag edits");
 
         // Use directory_aggregated for aggregated tag view across all files
         // NOTE: This is slow - reads tags from disk for all files
-        let editor = tag_editor::UnifiedTagEditorState::directory_aggregated(audio_files, &self.witch);
+        let editor = tag_editor::UnifiedTagEditorState::directory_aggregated(audio_files, self);
 
         // Drain any keypresses that accumulated during the slow loading
         drain_input_buffer();
@@ -197,7 +195,7 @@ impl App {
         decision_key: mm_meta::decisions::DecisionKey,
         decision_label: String,
     ) {
-        let tag_fields = tag_editor::mutations::load_tag_fields_batch(&audio_files, &self.witch);
+        let tag_fields = tag_editor::mutations::load_tag_fields_batch(&audio_files, self);
         let editor = tag_editor::UnifiedTagEditorState::new(
             mode,
             audio_files,
@@ -215,14 +213,14 @@ impl App {
     /// Start unified tag editor for aggregated bulk editing from tag search results
     pub(super) fn start_unified_tag_editor_for_audio_files(&mut self, audio_files: Vec<AudioFile>) {
         // Start transaction
-        let _ = self.witch.start_transaction("Tag search bulk edit");
+        let _ = self.start_transaction("Tag search bulk edit");
 
         // Use aggregated mode - all files edited as one unit
         // NOTE: aggregated_bulk reads tags from disk for all files
         let editor = tag_editor::UnifiedTagEditorState::aggregated_bulk(
             audio_files,
             tag_editor::TagEditorSource::TagSearch,
-            &self.witch,
+            self,
         );
 
         // Drain any keypresses that accumulated during loading

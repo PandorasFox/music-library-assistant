@@ -3,6 +3,8 @@
 //! Provides:
 //! - `WireRequest` / `WireResponse` — envelope types mapping 1:1 to `HandleCommand`
 //!   minus lifecycle variants (Shutdown) and minus in-process reply channels.
+//! - `HandleCommand` — server-internal command type with reply channels.
+//! - `default_socket_path()` — XDG-based socket path helper.
 //! - Length-prefixed bincode framing in both sync (`std::io`) and async (`tokio::io`) variants.
 //!
 //! Sync framing is used by the TUI client (blocking socket I/O).
@@ -12,6 +14,7 @@ use std::io::{self, Read, Write};
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::oneshot;
 
 use crate::auth::SessionToken;
 use crate::protocol::{
@@ -31,24 +34,100 @@ use crate::protocol::{
 pub enum WireRequest {
     /// Authenticated protocol request (queries, transactions, commands).
     Authenticated {
+        request_id: u64,
         token: SessionToken,
         body: Box<AuthenticatedBody>,
     },
     /// Unauthenticated protocol request (login, setup query).
-    Unauthenticated(UnauthenticatedBody),
+    Unauthenticated {
+        request_id: u64,
+        body: UnauthenticatedBody,
+    },
     /// Notify server that DB is ready (post-setup lifecycle signal).
-    NotifyDbReady,
+    NotifyDbReady {
+        request_id: u64,
+    },
+}
+
+impl WireRequest {
+    pub fn request_id(&self) -> u64 {
+        match self {
+            Self::Authenticated { request_id, .. } => *request_id,
+            Self::Unauthenticated { request_id, .. } => *request_id,
+            Self::NotifyDbReady { request_id } => *request_id,
+        }
+    }
 }
 
 /// Server → Client response envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WireResponse {
     /// Response to an authenticated request.
-    Authenticated(Box<Result<AuthenticatedResponse, ProtocolError>>),
+    Authenticated {
+        request_id: u64,
+        result: Box<Result<AuthenticatedResponse, ProtocolError>>,
+    },
     /// Response to an unauthenticated request.
-    Unauthenticated(Result<UnauthenticatedResponse, ProtocolError>),
+    Unauthenticated {
+        request_id: u64,
+        result: Result<UnauthenticatedResponse, ProtocolError>,
+    },
     /// Acknowledgement for lifecycle signals (NotifyDbReady).
-    Ack,
+    Ack {
+        request_id: u64,
+    },
+}
+
+impl WireResponse {
+    pub fn request_id(&self) -> u64 {
+        match self {
+            Self::Authenticated { request_id, .. } => *request_id,
+            Self::Unauthenticated { request_id, .. } => *request_id,
+            Self::Ack { request_id } => *request_id,
+        }
+    }
+}
+
+// ============================================================================
+// Server-Internal Command Type
+// ============================================================================
+
+/// A command sent from connection handlers to the Witch's event loop.
+///
+/// Three variants: authenticated protocol request, unauthenticated protocol
+/// request, and lifecycle (shutdown/notify). The reply channel carries the
+/// area-matching response type.
+pub enum HandleCommand {
+    /// Authenticated protocol request (queries, transactions, commands).
+    Authenticated {
+        token: SessionToken,
+        body: Box<AuthenticatedBody>,
+        reply: oneshot::Sender<Result<AuthenticatedResponse, ProtocolError>>,
+    },
+
+    /// Unauthenticated protocol request (login, setup).
+    Unauthenticated {
+        body: UnauthenticatedBody,
+        reply: oneshot::Sender<Result<UnauthenticatedResponse, ProtocolError>>,
+    },
+
+    /// Notify auth thread that DB is now available (after first-time setup).
+    NotifyDbReady,
+
+    /// Shutdown the Witch.
+    Shutdown,
+}
+
+// ============================================================================
+// Socket Path
+// ============================================================================
+
+/// Default socket path: `$XDG_RUNTIME_DIR/mm.sock`.
+///
+/// Returns `None` if `XDG_RUNTIME_DIR` is not set.
+pub fn default_socket_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|dir| std::path::Path::new(&dir).join("mm.sock"))
 }
 
 // ============================================================================
@@ -134,23 +213,32 @@ mod tests {
 
     #[test]
     fn roundtrip_wire_request() {
-        let req = WireRequest::Unauthenticated(UnauthenticatedBody::SetupQuery);
+        let req = WireRequest::Unauthenticated {
+            request_id: 42,
+            body: UnauthenticatedBody::SetupQuery,
+        };
         let mut buf = Vec::new();
         write_frame(&mut buf, &req).unwrap();
         let decoded: WireRequest = read_frame(&mut Cursor::new(&buf)).unwrap();
-        assert!(matches!(
-            decoded,
-            WireRequest::Unauthenticated(UnauthenticatedBody::SetupQuery)
-        ));
+        match decoded {
+            WireRequest::Unauthenticated { request_id, body } => {
+                assert_eq!(request_id, 42);
+                assert!(matches!(body, UnauthenticatedBody::SetupQuery));
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]
     fn roundtrip_wire_response() {
-        let resp = WireResponse::Ack;
+        let resp = WireResponse::Ack { request_id: 7 };
         let mut buf = Vec::new();
         write_frame(&mut buf, &resp).unwrap();
         let decoded: WireResponse = read_frame(&mut Cursor::new(&buf)).unwrap();
-        assert!(matches!(decoded, WireResponse::Ack));
+        match decoded {
+            WireResponse::Ack { request_id } => assert_eq!(request_id, 7),
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]

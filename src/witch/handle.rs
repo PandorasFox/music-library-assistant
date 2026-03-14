@@ -1,3 +1,3 @@
-//! WitchHandle — re-exported from mm-meta.
+//! HandleCommand — re-exported from mm-meta wire module.
 
-pub use mm_meta::witch_handle::*;
+pub use mm_meta::wire::HandleCommand;

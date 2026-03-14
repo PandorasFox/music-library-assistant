@@ -64,7 +64,7 @@ pub(crate) fn render_app(
             .split(f.area());
 
         // Read deploy_needs_action from locally cached deploy status
-        let deploy_needs_action = app.witch.query(mm_meta::domain_queries::GetDeployStatus).needs_action;
+        let deploy_needs_action = app.query(mm_meta::domain_queries::GetDeployStatus).needs_action;
 
         let transactions_open = app.config().opinions.leave_transactions_open;
         let transaction_has_decisions = {

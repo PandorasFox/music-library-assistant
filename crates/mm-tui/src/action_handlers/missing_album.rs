@@ -63,7 +63,7 @@ impl HandleAction for crate::missing_album_modal::MissingAlbumAction {
                             });
                             let decision = g.decide(label, vec![mutation]);
                             let _ = super::super::operator_decisions::stage_decision(
-                                &mut app.witch,
+                                app,
                                 DecisionKey::MissingAlbum {
                                     group_index: group_idx,
                                 },
@@ -87,7 +87,7 @@ impl HandleAction for crate::missing_album_modal::MissingAlbumAction {
                                 });
                             let decision = g.decide("Suppress missing album", vec![mutation]);
                             let _ = super::super::operator_decisions::stage_decision(
-                                &mut app.witch,
+                                app,
                                 DecisionKey::MissingAlbum {
                                     group_index: group_idx,
                                 },
@@ -164,7 +164,6 @@ impl App {
         use crate::missing_album_modal;
 
         let signals = self
-            .witch
             .query(mm_meta::domain_queries::GetMissingAlbumSingleSignals);
 
         let data = missing_album_modal::MissingAlbumData::from_signals(signals);
@@ -176,7 +175,7 @@ impl App {
             .clone();
 
         // Start transaction for the resolution session
-        let _ = self.witch.start_transaction("Missing album singles");
+        let _ = self.start_transaction("Missing album singles");
 
         let state = missing_album_modal::MissingAlbumState::new(data, suffix);
         self.view = ActiveView::MissingAlbumSingleResolution(state);

@@ -90,10 +90,10 @@ impl HandleAction for moved_file_modal::MovedFileAction {
 impl App {
     /// Start OOB tag sync resolution from Insights view.
     pub(crate) fn start_oob_sync_resolution(&mut self) {
-        let files = self.witch.query(domain_queries::GetOobSyncFiles);
+        let files = self.query(domain_queries::GetOobSyncFiles);
 
         // Start transaction for the sync resolution
-        let _ = self.witch.start_transaction("OOB tag sync");
+        let _ = self.start_transaction("OOB tag sync");
 
         let state = oob_sync_modal::OobSyncState::new(files);
         self.view = ActiveView::OobSyncResolution(state);
@@ -186,7 +186,7 @@ impl App {
 
         let decision = gesture.decide(label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             DecisionKey::OobSync,
             decision,
         );
@@ -197,10 +197,10 @@ impl App {
     /// Loads all OOB signal files classified into four buckets (with mismatch
     /// data from signals) and starts a transaction for potential resolution.
     pub(crate) fn start_oob_conflict_inspection(&mut self) {
-        let files = self.witch.query(domain_queries::GetOobFilesBucketed);
+        let files = self.query(domain_queries::GetOobFilesBucketed);
 
         // Start transaction for potential resolution
-        let _ = self.witch.start_transaction("OOB tag resolution");
+        let _ = self.start_transaction("OOB tag resolution");
 
         let state = oob_conflict_modal::OobConflictState::new(files);
         self.view = ActiveView::OobConflictInspection(state);
@@ -294,7 +294,7 @@ impl App {
 
         let decision = gesture.decide(label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             DecisionKey::OobConflict,
             decision,
         );
@@ -349,7 +349,7 @@ impl App {
 
         let decision = gesture.decide("Acknowledge mtime changes", mutations);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             DecisionKey::MtimeAck,
             decision,
         );
@@ -361,7 +361,7 @@ impl App {
     /// Start moved file acknowledgement modal.
     pub(crate) fn start_moved_file_acknowledge(&mut self) {
         // Query files with moved_file signals
-        let files = self.witch.query(domain_queries::GetMovedFiles);
+        let files = self.query(domain_queries::GetMovedFiles);
 
         mm_meta::logging::log_general(format!(
             "Starting moved file acknowledgement: {} files",
@@ -369,7 +369,7 @@ impl App {
         ));
 
         // Start transaction for the acknowledgement
-        let _ = self.witch.start_transaction("Moved file acknowledgement");
+        let _ = self.start_transaction("Moved file acknowledgement");
 
         let state = moved_file_modal::MovedFileState::new(files);
         self.view = ActiveView::MovedFileAcknowledge(state);
@@ -416,7 +416,7 @@ impl App {
         // Stage the UpdateFilePath mutations
         let decision = gesture.decide(&label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             DecisionKey::MovedFile,
             decision,
         );

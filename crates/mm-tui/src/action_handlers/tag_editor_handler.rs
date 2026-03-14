@@ -69,7 +69,7 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
                 // In closed-txn mode, discard the transaction.
                 // In open-txn mode, leave the persistent transaction intact.
                 if !app.open_txn_mode() {
-                    let _ = super::super::operator_decisions::discard_transaction(&mut app.witch);
+                    let _ = super::super::operator_decisions::discard_transaction(app);
                 }
                 // Return to the view that launched the tag editor (e.g., corpus browser)
                 if !app.pop_and_restore() {
@@ -103,7 +103,6 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
             UnifiedTagEditorAction::RequestFillFromDb { inode } => match inode {
                 Some(inode) => {
                     let tag_pairs = app
-                        .witch
                         .query(mm_meta::domain_queries::GetCorpusTags { inode });
 
                     if let ActiveView::UnifiedTagEditor(ref mut editor) = app.view {
@@ -118,8 +117,22 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
             },
 
             UnifiedTagEditorAction::RequestFillFromDisk => {
-                if let ActiveView::UnifiedTagEditor(ref mut editor) = app.view {
-                    editor.fill_from_disk(&app.witch);
+                // Extract query params from editor state, then query, then apply.
+                // Two-phase to avoid borrow conflict (editor borrows app.view).
+                let query_params = if let ActiveView::UnifiedTagEditor(ref editor) = app.view {
+                    editor.current_file_for_disk_query()
+                } else {
+                    None
+                };
+                if let Some((inode, zone)) = query_params {
+                    let result = app.query(mm_meta::domain_queries::GetFileTagValues {
+                        inodes: vec![inode],
+                        zone,
+                    });
+                    let tags = result.into_iter().next().map(|(_, t)| t).unwrap_or_default();
+                    if let ActiveView::UnifiedTagEditor(ref mut editor) = app.view {
+                        editor.fill_from_disk_with_tags(tags);
+                    }
                 }
                 app.status_message = Some("Tags refreshed from disk".to_string());
             }
@@ -140,7 +153,7 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
                 // Stage collected mutations at parent's decision key
                 let decision = g.decide(&decision_label, mutations);
                 let _ = super::super::operator_decisions::stage_decision(
-                    &mut app.witch,
+                    app,
                     decision_key,
                     decision,
                 );

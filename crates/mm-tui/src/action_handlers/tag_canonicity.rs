@@ -39,13 +39,11 @@ impl App {
         let (signal_keys, kind) = match &insight_type {
             insights_view::InsightType::InconsistentAlbumArtist => {
                 let keys = self
-                    .witch
                     .query(mm_meta::domain_queries::GetInconsistentAlbumArtistKeys);
                 (keys, CanonicitySignalKind::InconsistentAlbumArtist)
             }
             insights_view::InsightType::TagCanonicity { tag_name } => {
                 let keys = self
-                    .witch
                     .query(mm_meta::domain_queries::GetTagCanonicityKeys {
                         zone: Zone::Corpus,
                         tag_filter: Some(tag_name.clone()),
@@ -66,12 +64,12 @@ impl App {
         let clusters = TagCanonicityClusters::new(signal_keys, kind);
 
         // Start transaction ONCE for entire modal
-        let _ = self.witch.start_transaction("Tag canonicalization");
+        let _ = self.start_transaction("Tag canonicalization");
 
         // Fire async load for the first signal — tick handler will complete it
         if !self.start_async_cluster_load(clusters) {
             self.status_message = Some("Failed to load signal data".to_string());
-            let _ = super::super::operator_decisions::discard_transaction(&mut self.witch);
+            let _ = super::super::operator_decisions::discard_transaction(self);
         }
     }
 
@@ -248,7 +246,7 @@ impl App {
         // Add decision to existing transaction via sealed operator decision handler
         let decision = gesture.decide(&label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             DecisionKey::TagCanonicity {
                 tag_name,
                 cluster_index: cluster_idx,
@@ -296,7 +294,7 @@ impl App {
 
         let decision = gesture.decide("Flag non-compilation", mutations);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             DecisionKey::TagCanonicity {
                 tag_name,
                 cluster_index: cluster_idx,
@@ -345,7 +343,7 @@ impl App {
 
         let decision = gesture.decide("Flag canonical", mutations);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             DecisionKey::TagCanonicity {
                 tag_name,
                 cluster_index: cluster_idx,
@@ -397,7 +395,6 @@ impl App {
 
         let kind = clusters.kind;
         let result = self
-            .witch
             .query(mm_meta::domain_queries::GetTagCanonicitySignalData {
                 signal_key,
                 kind,
@@ -429,7 +426,7 @@ impl App {
                     tag_name: tag_name_for_key,
                     cluster_index: current_index,
                 };
-                if let Some(detail) = self.witch.transaction_decision_details().unwrap_or_default().into_iter().find(|d| d.key == backfill_key) {
+                if let Some(detail) = self.transaction_decision_details().unwrap_or_default().into_iter().find(|d| d.key == backfill_key) {
                     state.restore_from_mutations(&detail.mutations);
                     state.pending_tag_edits =
                         Some(helpers::pending_edits_from_mutations(&detail.mutations));

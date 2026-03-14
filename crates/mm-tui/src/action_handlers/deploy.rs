@@ -60,12 +60,12 @@ impl App {
 
         // Start transaction and stage decisions
         if !open_txn {
-            let _ = self.witch.start_transaction("Deploy");
+            let _ = self.start_transaction("Deploy");
         }
         if !mutation_set.deploy.is_empty() {
             let decision = gesture.decide("Deploy operations", mutation_set.deploy);
             let _ = super::super::operator_decisions::stage_decision(
-                &mut self.witch,
+                self,
                 DecisionKey::Deploy,
                 decision,
             );
@@ -74,7 +74,7 @@ impl App {
             let sidecar_label = format!("Deploy cover art ({} images)", mutation_set.sidecars.len());
             let decision = gesture.decide(&sidecar_label, mutation_set.sidecars);
             let _ = super::super::operator_decisions::stage_decision(
-                &mut self.witch,
+                self,
                 DecisionKey::DeploySidecars,
                 decision,
             );

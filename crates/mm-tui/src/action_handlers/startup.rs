@@ -16,7 +16,7 @@ impl HandleAction for super::super::ExitConfirmAction {
                 app.should_quit = true;
             }
             ExitConfirmAction::QuitAndShutdown => {
-                let _ = app.witch.shutdown();
+                let _ = app.shutdown();
                 app.should_quit = true;
             }
             ExitConfirmAction::Cancel => {
@@ -67,11 +67,11 @@ impl HandleAction for crate::startup::IntakeConfirmationAction {
                     // Start transaction and stage the decision
                     let open_txn = app.open_txn_mode();
                     if !open_txn {
-                        let _ = app.witch.start_transaction("Intake indexing");
+                        let _ = app.start_transaction("Intake indexing");
                     }
                     let decision = g.decide("Index unindexed files", mutations);
                     let _ = operator_decisions::stage_decision(
-                        &mut app.witch,
+                        app,
                         mm_meta::decisions::DecisionKey::IntakeIndex,
                         decision,
                     );
@@ -95,7 +95,7 @@ impl HandleAction for crate::startup::IntakeConfirmationAction {
 
                 // Discard any active transaction from review modal (not in open-txn mode)
                 if !app.open_txn_mode() && app.witch_status().transaction.is_some() {
-                    let _ = operator_decisions::discard_transaction(&mut app.witch);
+                    let _ = operator_decisions::discard_transaction(app);
                 }
 
                 if is_inbox_source {
@@ -114,7 +114,6 @@ impl App {
     /// Gathers unindexed files and opens the intake confirmation modal.
     pub(super) fn start_intake_confirmation_from_health(&mut self) {
         let intake_state = self
-            .witch
             .query(mm_meta::domain_queries::GetIntakeConfirmation {
                 source: crate::startup::IntakeSource::Health,
                 zone: Some(mm_meta::db_types::Zone::Corpus),

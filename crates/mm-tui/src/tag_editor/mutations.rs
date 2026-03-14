@@ -44,9 +44,9 @@ pub fn tag_pairs_to_tag_fields(tags: Vec<(String, String)>) -> Vec<TagField> {
 /// Load tag fields for a batch of audio files via domain query.
 ///
 /// Returns per-file tag fields in the same order as the input audio files.
-pub fn load_tag_fields_batch(
+pub(crate) fn load_tag_fields_batch(
     audio_files: &[AudioFile],
-    witch: &mm_meta::witch_handle::WitchHandle,
+    app: &mut crate::App,
 ) -> Vec<Vec<TagField>> {
     if audio_files.is_empty() {
         return Vec::new();
@@ -54,7 +54,7 @@ pub fn load_tag_fields_batch(
     let zone = audio_files[0].entry.zone;
     let inodes: Vec<i64> = audio_files.iter().map(|af| af.inode()).collect();
 
-    let result = witch.query(mm_meta::domain_queries::GetFileTagValues { inodes: inodes.clone(), zone });
+    let result = app.query(mm_meta::domain_queries::GetFileTagValues { inodes: inodes.clone(), zone });
 
     // Build a map from inode -> tags for fast lookup
     let tag_map: HashMap<i64, Vec<(String, String)>> = result.into_iter().collect();

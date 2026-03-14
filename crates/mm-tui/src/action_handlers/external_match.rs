@@ -18,14 +18,15 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
     fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
         match self {
             external_match_view::ExternalMatchesAction::RequestFetch => {
-                let _ = app.witch.queue_task(mm_meta::protocol::BackgroundTask::ExternalFetch);
+                let _ = app.queue_task(mm_meta::protocol::BackgroundTask::ExternalFetch);
                 app.status_message = Some("External fetch requested".to_string());
+                let fetch_active = app.witch_status().is_external_fetch_active;
                 if let ActiveView::ExternalMatches(ref mut state) = app.view {
-                    state.fetch_active = app.witch.witch_status().is_external_fetch_active;
+                    state.fetch_active = fetch_active;
                 }
             }
             external_match_view::ExternalMatchesAction::RequestReleasePacking => {
-                let _ = app.witch.queue_task(mm_meta::protocol::BackgroundTask::ReleasePacking);
+                let _ = app.queue_task(mm_meta::protocol::BackgroundTask::ReleasePacking);
                 app.transition_to_progress_after_mutations(
                     super::super::progress_screen::ProgressPhase::ContentAnalysis,
                 );
@@ -161,7 +162,6 @@ impl App {
 
         // Batch query: load summaries + full detail for all recordings at once
         let batch = self
-            .witch
             .query(mm_meta::domain_queries::GetRecordingBatchData {
                 recording_ids,
                 preferred_locales,
@@ -201,7 +201,6 @@ impl App {
                     | PackingCategory::UnsolvedNoMatch => unreachable!(),
                 };
                 let result = self
-                    .witch
                     .query(mm_meta::domain_queries::GetPackingBrowserData {
                         category_prefix: prefix.to_string(),
                     });
@@ -239,7 +238,6 @@ impl App {
                     _ => unreachable!(),
                 };
                 let filtered = self
-                    .witch
                     .query(mm_meta::domain_queries::GetUnsolvedPackingData {
                         category: cat_str.to_string(),
                     });
@@ -263,7 +261,6 @@ impl App {
     /// Load knot signal data and launch the knot browser.
     fn launch_knot_browser(&mut self) {
         let knots = self
-            .witch
             .query(mm_meta::domain_queries::GetPackingKnots);
 
         if knots.is_empty() {
@@ -272,7 +269,6 @@ impl App {
         }
 
         let corpus_paths: std::collections::HashMap<i64, String> = self
-            .witch
             .query(mm_meta::domain_queries::GetPackingInodePaths)
             .into_iter()
             .collect();
@@ -311,7 +307,7 @@ impl App {
         let label = format!("Pin release {} ({} dirs)", &release_id[..8], source_dirs.len());
         let open_txn = self.open_txn_mode();
         if !open_txn {
-            let _ = self.witch.start_transaction(&label);
+            let _ = self.start_transaction(&label);
         }
 
         for source_path in &source_dirs {
@@ -364,7 +360,7 @@ impl App {
             let dir_label = format!("Pin release: {}", source_path.display());
             let decision = gesture.decide(&dir_label, vec![mutation]);
             let _ = crate::operator_decisions::stage_decision(
-                &mut self.witch,
+                self,
                 key,
                 decision,
             );
@@ -436,7 +432,6 @@ impl App {
 
         // Batch query: load MB cache + current tags
         let staging = self
-            .witch
             .query(mm_meta::domain_queries::GetReleaseStagingData {
                 release_ids,
                 recording_ids,
@@ -449,7 +444,7 @@ impl App {
         let open_txn = self.open_txn_mode();
         if !open_txn {
             let n = release_data.len();
-            let _ = self.witch.start_transaction(&format!(
+            let _ = self.start_transaction(&format!(
                 "Approve {} release{}",
                 n,
                 if n == 1 { "" } else { "s" }
@@ -508,7 +503,7 @@ impl App {
                 zone: mm_meta::db_types::Zone::Corpus,
             })]);
             let _ = crate::operator_decisions::stage_decision(
-                &mut self.witch,
+                self,
                 key,
                 decision,
             );

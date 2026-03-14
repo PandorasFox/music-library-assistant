@@ -15,7 +15,6 @@ use ratatui::Terminal;
 use mm_meta::auth::SessionToken;
 use crate::input;
 use crate::widgets::TextInputState;
-use mm_meta::witch_handle::WitchHandle;
 
 /// Focus state for the login form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +67,7 @@ impl LoginState {
 /// Returns the session token on success.
 pub fn run_login_screen<B: Backend>(
     terminal: &mut Terminal<B>,
-    witch: &mut WitchHandle,
+    startup: &mut crate::StartupSocket<'_>,
 ) -> Result<SessionToken> {
     let mut state = LoginState::new();
 
@@ -95,7 +94,7 @@ pub fn run_login_screen<B: Backend>(
                         continue;
                     }
 
-                    match witch.login(&username, &password) {
+                    match startup.login(&username, &password) {
                         Ok(token) => return Ok(token),
                         Err(e) => {
                             state.error_message = Some(e);

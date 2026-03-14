@@ -188,11 +188,11 @@ impl App {
 
         let open_txn = self.open_txn_mode();
         if !open_txn {
-            let _ = self.witch.start_transaction(&label);
+            let _ = self.start_transaction(&label);
         }
         let decision = gesture.decide(&label, vec![mutation]);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             key,
             decision,
         );

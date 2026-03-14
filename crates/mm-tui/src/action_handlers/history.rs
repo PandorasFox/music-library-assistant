@@ -94,7 +94,6 @@ impl App {
     /// Expand a session: one-shot query for edits + inode paths.
     fn expand_history_session(&mut self, session_id: String) {
         let result = self
-            .witch
             .query(mm_meta::domain_queries::GetSessionEditDetail {
                 session_id: session_id.clone(),
             });
@@ -137,7 +136,6 @@ impl App {
             .map(|e| (e.inode, e.field_name.clone()))
             .collect();
         let current_values = self
-            .witch
             .query(mm_meta::domain_queries::GetCurrentTagValues { queries });
 
         // Classify edits as clean reversals or conflicts
@@ -291,14 +289,13 @@ impl App {
         };
 
         let rows = self
-            .witch
             .query(mm_meta::domain_queries::GetEditHistoryExport {
                 session_id: Some(session_id.clone()),
             });
 
         let sid = session_id.clone();
-        self.finalize_jettison(rows, "Jettisoned", move |witch| {
-            let _ = witch.jettison_edit_history(Some(&sid));
+        self.finalize_jettison(rows, "Jettisoned", move |app| {
+            let _ = app.jettison_edit_history(Some(&sid));
         }, |state| {
             state.sessions.retain(|e| e.summary.session_id != session_id);
             state.session_list.clamp_cursor(&state.sessions);
@@ -308,13 +305,12 @@ impl App {
     /// Execute jettison-all: export everything to log, delete all from DB.
     fn execute_jettison_all(&mut self) {
         let rows = self
-            .witch
             .query(mm_meta::domain_queries::GetEditHistoryExport {
                 session_id: None,
             });
 
-        self.finalize_jettison(rows, "Jettisoned all", |witch| {
-            let _ = witch.jettison_edit_history(None);
+        self.finalize_jettison(rows, "Jettisoned all", |app| {
+            let _ = app.jettison_edit_history(None);
         }, |state| {
             state.sessions.clear();
             state.session_list.reset();
@@ -327,7 +323,7 @@ impl App {
         &mut self,
         rows: Vec<EditHistoryExportRow>,
         prefix: &str,
-        delete_fn: impl FnOnce(&mm_meta::witch_handle::WitchHandle),
+        delete_fn: impl FnOnce(&mut App),
         reset_fn: impl FnOnce(&mut crate::history_view::HistoryViewState),
     ) {
         if rows.is_empty() {
@@ -340,7 +336,7 @@ impl App {
 
         match export_to_log(&rows) {
             Ok(path) => {
-                delete_fn(&self.witch);
+                delete_fn(self);
                 let count = rows.len();
                 self.status_message = Some(format!(
                     "{} {} record{} → {}",

@@ -73,11 +73,10 @@ impl App {
     /// and switches to the ManualReview view.
     pub(crate) fn start_manual_review(&mut self, kind: types::ReviewKind) {
         let data = self
-            .witch
             .query(mm_meta::domain_queries::GetManualReviewData { kind });
 
         // Start transaction for the review session
-        let _ = self.witch.start_transaction(kind.transaction_label());
+        let _ = self.start_transaction(kind.transaction_label());
 
         let state = manual_review_modal::ManualReviewState::new(kind, data);
         self.view = ActiveView::ManualReview(state);
@@ -110,7 +109,7 @@ impl App {
         let label = format!("Stash {}", corpus_path);
         let decision = gesture.decide(&label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             DecisionKey::ManualReview {
                 group_index: group_idx,
             },
@@ -153,7 +152,7 @@ impl App {
         let label = format!("Mark expected duplicate: {}", group_label);
         let decision = gesture.decide(&label, vec![mutation]);
         let _ = super::super::operator_decisions::stage_decision(
-            &mut self.witch,
+            self,
             DecisionKey::ManualReview {
                 group_index: group_idx,
             },

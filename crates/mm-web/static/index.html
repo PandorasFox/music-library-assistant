@@ -12,7 +12,8 @@
         import init, {
             mm_login, mm_navigate, mm_logout,
             mm_tx_confirm, mm_tx_discard, mm_expand_session,
-            mm_packing_browse, mm_setup
+            mm_packing_browse, mm_setup,
+            mm_queue_task, mm_search, mm_toggle_dir
         } from '/static/pkg/mm_web_client.js';
         await init();
         window.__mm_login = mm_login;
@@ -23,6 +24,9 @@
         window.__mm_expand_session = mm_expand_session;
         window.__mm_packing_browse = mm_packing_browse;
         window.__mm_setup = mm_setup;
+        window.__mm_queue_task = mm_queue_task;
+        window.__mm_search = mm_search;
+        window.__mm_toggle_dir = mm_toggle_dir;
     </script>
 </body>
 </html>

@@ -678,3 +678,121 @@ html, body {
     outline: none;
     border-color: var(--c-yellow);
 }
+
+/* ============================================================
+ * Alert Banner (intake surfacing)
+ * ============================================================ */
+
+.mm-alert {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    padding: 0.5rem 0.8rem;
+    margin-bottom: 0.8rem;
+    border: 1px solid var(--c-yellow);
+    border-radius: 2px;
+    background: var(--c-bg-alt);
+}
+
+.mm-alert--warning {
+    border-color: var(--c-red);
+}
+
+.mm-alert--info {
+    border-color: var(--c-blue);
+}
+
+.mm-alert__text {
+    flex: 1;
+    color: var(--c-fg);
+}
+
+.mm-alert__action {
+    border-color: var(--c-yellow);
+    color: var(--c-yellow);
+    white-space: nowrap;
+}
+
+/* ============================================================
+ * Search View
+ * ============================================================ */
+
+.mm-search-bar {
+    margin-bottom: 0.8rem;
+}
+
+.mm-search-input {
+    width: 100%;
+    background: var(--c-bg);
+    color: var(--c-fg);
+    border: 1px solid var(--c-fg-muted);
+    border-radius: 2px;
+    padding: 0.5rem 0.6rem;
+    font-family: inherit;
+    font-size: 1rem;
+}
+
+.mm-search-input:focus {
+    outline: none;
+    border-color: var(--c-yellow);
+}
+
+/* ============================================================
+ * File Row (shared by Search + Files views)
+ * ============================================================ */
+
+.mm-file-row {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.15rem 0;
+    align-items: baseline;
+}
+
+.mm-file-row__path {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mm-file-row__tags {
+    color: var(--c-fg-dim);
+    font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 40ch;
+}
+
+.mm-file-row__meta {
+    color: var(--c-fg-dim);
+    font-size: 0.9rem;
+    white-space: nowrap;
+    min-width: 10ch;
+    text-align: right;
+}
+
+/* ============================================================
+ * Files View (directory browser)
+ * ============================================================ */
+
+.mm-dir-group {
+    margin-bottom: 0.3rem;
+}
+
+.mm-dir-header {
+    padding: 0.3rem 0.4rem;
+    color: var(--c-cyan);
+    cursor: pointer;
+    user-select: none;
+}
+
+.mm-dir-header:hover {
+    background: var(--c-bg-hl);
+}
+
+.mm-dir-files {
+    padding-left: 1rem;
+    border-left: 1px solid var(--c-fg-muted);
+    margin-left: 0.4rem;
+}

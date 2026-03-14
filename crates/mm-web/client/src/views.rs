@@ -82,6 +82,61 @@ pub fn render_status_content(status: &serde_json::Value) -> Node {
 pub fn render_insights_content(insights: &serde_json::Value) -> Node {
     let mut sections = Vec::new();
 
+    // Intake alert banner — surface actionable file issues prominently.
+    if let Some(corpus) = insights.get("corpus_files") {
+        let unindexed = corpus.get("files_unindexed").and_then(|v| v.as_u64()).unwrap_or(0);
+        let missing = corpus.get("files_missing").and_then(|v| v.as_u64()).unwrap_or(0);
+        let corrupt = corpus.get("corrupt_files").and_then(|v| v.as_u64()).unwrap_or(0);
+        let relocated = corpus.get("files_relocated").and_then(|v| v.as_u64()).unwrap_or(0);
+
+        if unindexed > 0 {
+            sections.push(
+                div()
+                    .class("mm-alert")
+                    .child(span().class("mm-alert__text").text(
+                        format!("{unindexed} unindexed files"),
+                    ))
+                    .child(
+                        html::button()
+                            .class("mm-btn mm-alert__action")
+                            .attr("onclick", "window.__mm_queue_task('SchemaReconciliation')")
+                            .text("Index Now"),
+                    )
+                    .into(),
+            );
+        }
+        if missing > 0 {
+            sections.push(
+                div()
+                    .class("mm-alert mm-alert--warning")
+                    .child(span().class("mm-alert__text").text(
+                        format!("{missing} missing files"),
+                    ))
+                    .into(),
+            );
+        }
+        if corrupt > 0 {
+            sections.push(
+                div()
+                    .class("mm-alert mm-alert--warning")
+                    .child(span().class("mm-alert__text").text(
+                        format!("{corrupt} corrupt files"),
+                    ))
+                    .into(),
+            );
+        }
+        if relocated > 0 {
+            sections.push(
+                div()
+                    .class("mm-alert mm-alert--info")
+                    .child(span().class("mm-alert__text").text(
+                        format!("{relocated} relocated files"),
+                    ))
+                    .into(),
+            );
+        }
+    }
+
     if let Some(corpus) = insights.get("corpus_files") {
         sections.push(render_kv_section("Corpus Files", corpus));
     }
@@ -459,6 +514,16 @@ pub fn render_config_editor(config: &serde_json::Value) -> Node {
         }
     }
 
+    // Config editing note — mutation shape is too complex for web client v1.
+    sections.push(
+        div()
+            .class("mm-alert mm-alert--info")
+            .child(span().class("mm-alert__text").text(
+                "Config editing is read-only in the web UI. Use the TUI to modify settings.",
+            ))
+            .into(),
+    );
+
     div().class("mm-config-editor").children(sections).into()
 }
 
@@ -710,6 +775,282 @@ pub fn render_packing_browser_data(category: &str, data: &serde_json::Value) -> 
     }
 
     div().children(sections).into()
+}
+
+// ============================================================================
+// Tag editor view (form-based)
+// ============================================================================
+
+// ============================================================================
+// Search view
+// ============================================================================
+
+/// Render search view with input and results container.
+/// `data` is Vec<[AudioFile, HashMap<String, Vec<String>>]> from the API.
+pub fn render_search_view(data: &serde_json::Value) -> Node {
+    let total = data.as_array().map_or(0, |a| a.len());
+
+    div()
+        .child(
+            div()
+                .class("mm-search-bar")
+                .child(
+                    html::input()
+                        .attr("type", "text")
+                        .attr("id", "mm-search-input")
+                        .attr("placeholder", format!("Search {total} files..."))
+                        .attr("oninput", "window.__mm_search(this.value)")
+                        .attr("autocomplete", "off")
+                        .class("mm-search-input"),
+                ),
+        )
+        .child(
+            div()
+                .attr("id", "mm-search-results")
+                .child(render_search_results(data, "")),
+        )
+        .into()
+}
+
+/// Render filtered search results. Called both at init and on each keystroke.
+pub fn render_search_results(data: &serde_json::Value, query: &str) -> Node {
+    let files = match data.as_array() {
+        Some(a) => a,
+        None => return span().class("mm-kv__val").text("No files loaded").into(),
+    };
+
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+    let limit = 200;
+
+    for entry in files {
+        let arr = match entry.as_array() {
+            Some(a) if a.len() >= 2 => a,
+            _ => continue,
+        };
+        let audio_file = &arr[0];
+        let tags_map = &arr[1];
+
+        let path = audio_file
+            .get("entry")
+            .and_then(|e| e.get("path"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if !query_lower.is_empty() {
+            let path_match = path.to_lowercase().contains(&query_lower);
+            let tag_match = tags_map.as_object().map_or(false, |obj| {
+                obj.values().any(|vals| {
+                    vals.as_array().map_or(false, |arr| {
+                        arr.iter().any(|v| {
+                            v.as_str()
+                                .map_or(false, |s| s.to_lowercase().contains(&query_lower))
+                        })
+                    })
+                })
+            });
+            if !path_match && !tag_match {
+                continue;
+            }
+        }
+
+        let inode = audio_file
+            .get("entry")
+            .and_then(|e| e.get("inode"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let artist = tag_first(tags_map, "ARTIST");
+        let album = tag_first(tags_map, "ALBUM");
+        let title = tag_first(tags_map, "TITLE");
+
+        let tag_line = [artist, album, title]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" / ");
+
+        results.push(
+            div()
+                .class("mm-file-row")
+                .child(
+                    html::a()
+                        .class("mm-link mm-file-row__path")
+                        .attr("href", format!("#tags/{inode}"))
+                        .text(path),
+                )
+                .child(span().class("mm-file-row__tags").text(&tag_line))
+                .into(),
+        );
+
+        if results.len() >= limit {
+            break;
+        }
+    }
+
+    let shown = results.len();
+    let mut container = div();
+    container = container.child(
+        span()
+            .class("mm-kv__val")
+            .text(if query_lower.is_empty() {
+                format!("{shown} files (showing first {limit})")
+            } else {
+                format!("{shown} results")
+            }),
+    );
+    container = container.children(results);
+    container.into()
+}
+
+/// Extract the first value for a tag key from a tags map.
+fn tag_first(tags_map: &serde_json::Value, key: &str) -> String {
+    tags_map
+        .get(key)
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+// ============================================================================
+// Files view (directory-grouped corpus browser)
+// ============================================================================
+
+/// Render files view grouped by parent directory.
+/// `data` is same Vec<[AudioFile, HashMap<String, Vec<String>>]> as search.
+pub fn render_files_view(data: &serde_json::Value) -> Node {
+    let files = match data.as_array() {
+        Some(a) => a,
+        None => return span().class("mm-kv__val").text("No files loaded").into(),
+    };
+
+    // Group by parent directory.
+    let mut dirs: std::collections::BTreeMap<String, Vec<(&serde_json::Value, &serde_json::Value)>> =
+        std::collections::BTreeMap::new();
+
+    for entry in files {
+        let arr = match entry.as_array() {
+            Some(a) if a.len() >= 2 => a,
+            _ => continue,
+        };
+        let audio_file = &arr[0];
+        let tags_map = &arr[1];
+
+        let path = audio_file
+            .get("entry")
+            .and_then(|e| e.get("path"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let dir = match path.rfind('/') {
+            Some(pos) => &path[..pos],
+            None => "",
+        };
+
+        dirs.entry(dir.to_string())
+            .or_default()
+            .push((audio_file, tags_map));
+    }
+
+    let mut sections = Vec::new();
+
+    for (dir, entries) in &dirs {
+        let count = entries.len();
+        let display_dir = if dir.is_empty() { "/" } else { dir.as_str() };
+
+        // Directory header (clickable to toggle).
+        let dir_id = format!("mm-dir-{}", simple_hash(dir));
+        let header = div()
+            .class("mm-dir-header")
+            .attr(
+                "onclick",
+                format!("window.__mm_toggle_dir('{dir_id}')"),
+            )
+            .child(span().text(format!("{display_dir} ({count} files)")));
+
+        // File rows inside this directory (initially collapsed via CSS).
+        let mut file_rows = Vec::new();
+        for (audio_file, tags_map) in entries {
+            let inode = audio_file
+                .get("entry")
+                .and_then(|e| e.get("inode"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let path = audio_file
+                .get("entry")
+                .and_then(|e| e.get("path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let filename = path.rsplit('/').next().unwrap_or(path);
+
+            let title = tag_first(tags_map, "TITLE");
+            let display = if title.is_empty() {
+                filename.to_string()
+            } else {
+                title
+            };
+
+            let duration_ms = audio_file
+                .get("audio")
+                .and_then(|a| a.get("duration_ms"))
+                .and_then(|v| v.as_i64());
+            let bitrate = audio_file
+                .get("audio")
+                .and_then(|a| a.get("bitrate_kbps"))
+                .and_then(|v| v.as_i64());
+
+            let mut meta_parts = Vec::new();
+            if let Some(ms) = duration_ms {
+                let secs = ms / 1000;
+                meta_parts.push(format!("{}:{:02}", secs / 60, secs % 60));
+            }
+            if let Some(kbps) = bitrate {
+                meta_parts.push(format!("{kbps}k"));
+            }
+            let meta = meta_parts.join(" ");
+
+            file_rows.push(
+                div()
+                    .class("mm-file-row")
+                    .child(
+                        html::a()
+                            .class("mm-link mm-file-row__path")
+                            .attr("href", format!("#tags/{inode}"))
+                            .text(&display),
+                    )
+                    .child(span().class("mm-file-row__meta").text(&meta))
+                    .into(),
+            );
+        }
+
+        let files_container = div()
+            .class("mm-dir-files")
+            .attr("id", &dir_id)
+            .attr("style", "display:none")
+            .children(file_rows);
+
+        sections.push(
+            div()
+                .class("mm-dir-group")
+                .child(header)
+                .child(files_container)
+                .into(),
+        );
+    }
+
+    div().children(sections).into()
+}
+
+/// Simple string hash for generating stable DOM IDs.
+fn simple_hash(s: &str) -> u64 {
+    let mut h: u64 = 5381;
+    for b in s.bytes() {
+        h = h.wrapping_mul(33).wrapping_add(b as u64);
+    }
+    h
 }
 
 // ============================================================================

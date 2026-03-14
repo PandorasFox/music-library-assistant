@@ -7,12 +7,20 @@
 mod api;
 mod views;
 
+use std::cell::RefCell;
+
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use mm_ui::html::widgets::{render_status_bar, render_titlebar};
 use mm_ui::html::{self, div, Node};
 use mm_ui::lateral_view::LateralView;
+
+// Search/Files views cache the full file list in a thread_local so that
+// filtering on keystroke doesn't require a re-fetch.
+thread_local! {
+    static SEARCH_DATA: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
+}
 
 // ============================================================================
 // Entry Point
@@ -252,15 +260,6 @@ fn render_app_shell(
         .into()
 }
 
-fn render_placeholder(view: LateralView) -> Node {
-    views::titled_section(
-        view.label(),
-        vec![mm_ui::html::span()
-            .class("mm-kv__val")
-            .text("View not yet implemented in web UI")
-            .into()],
-    )
-}
 
 // ============================================================================
 // View Loading
@@ -317,7 +316,15 @@ async fn load_view(hash: &str) -> Result<Node, JsValue> {
             let details = api::tx_details().await.ok();
             Ok(views::render_transaction_content(&status, details.as_ref()))
         }
-        other => Ok(render_placeholder(other)),
+        LateralView::Search => {
+            let data = api::get_corpus_files_with_tags().await?;
+            SEARCH_DATA.with(|cell| *cell.borrow_mut() = Some(data.clone()));
+            Ok(views::render_search_view(&data))
+        }
+        LateralView::Files => {
+            let data = api::get_corpus_files_with_tags().await?;
+            Ok(views::render_files_view(&data))
+        }
     }
 }
 
@@ -518,4 +525,47 @@ pub fn mm_packing_browse(category: &str) {
             web_sys::console::error_1(&format!("packing browse error: {e:?}").into());
         }
     });
+}
+
+/// Queue a background task (e.g. "SchemaReconciliation") and refresh the view.
+#[wasm_bindgen]
+pub fn mm_queue_task(task: &str) {
+    let task = task.to_string();
+    spawn_local(async move {
+        match api::queue_task(&task).await {
+            Ok(_) => {
+                // Refresh current view to update counts.
+                load_view_from_hash().await.ok();
+            }
+            Err(e) => web_sys::console::error_1(&format!("queue-task error: {e:?}").into()),
+        }
+    });
+}
+
+/// Filter search results without full page re-render.
+/// Reads cached data from SEARCH_DATA and only replaces the results container.
+#[wasm_bindgen]
+pub fn mm_search(query: &str) {
+    let q = query.to_string();
+    SEARCH_DATA.with(|cell| {
+        let data = cell.borrow();
+        if let Some(ref d) = *data {
+            let node = views::render_search_results(d, &q);
+            let doc = web_sys::window().unwrap().document().unwrap();
+            if let Some(container) = doc.get_element_by_id("mm-search-results") {
+                container.set_inner_html(&node.to_html());
+            }
+        }
+    });
+}
+
+/// Toggle expand/collapse of a directory in the Files view.
+#[wasm_bindgen]
+pub fn mm_toggle_dir(dir_id: &str) {
+    let doc = web_sys::window().unwrap().document().unwrap();
+    if let Some(el) = doc.get_element_by_id(dir_id) {
+        let current = el.get_attribute("style").unwrap_or_default();
+        let hidden = current.contains("display:none") || current.contains("display: none");
+        el.set_attribute("style", if hidden { "" } else { "display:none" }).ok();
+    }
 }

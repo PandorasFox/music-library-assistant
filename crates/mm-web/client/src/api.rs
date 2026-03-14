@@ -172,3 +172,13 @@ pub async fn tx_confirm() -> Result<serde_json::Value, JsValue> {
 pub async fn tx_discard() -> Result<serde_json::Value, JsValue> {
     post("/tx/discard", &serde_json::json!({})).await
 }
+
+/// POST /commands/queue-task → queue a background task
+pub async fn queue_task(task: &str) -> Result<serde_json::Value, JsValue> {
+    post("/commands/queue-task", &serde_json::json!({ "task": task })).await
+}
+
+/// GET /queries/all-audio-files-with-tags?zone=Corpus&include_library=false
+pub async fn get_corpus_files_with_tags() -> Result<serde_json::Value, JsValue> {
+    get("/queries/all-audio-files-with-tags?zone=Corpus&include_library=false").await
+}

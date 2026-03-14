@@ -27,7 +27,7 @@ RUN cargo build --release -p mm -p mm-web
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates tini \
+    bash ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/target/release/mm /usr/local/bin/mm
@@ -40,7 +40,7 @@ RUN chmod +x /entrypoint.sh
 # XDG directories inside the container
 ENV XDG_CONFIG_HOME=/config
 ENV XDG_DATA_HOME=/data
-ENV XDG_RUNTIME_DIR=/run
+ENV XDG_RUNTIME_DIR=/tmp
 ENV MM_ROOT=/music
 ENV MM_WEB_LISTEN=0.0.0.0:3313
 ENV MM_WEB_STATIC_DIR=/srv/mm-web/static

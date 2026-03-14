@@ -17,6 +17,8 @@ use crate::AppState;
 #[derive(Serialize)]
 pub struct SetupCheckResponse {
     needs_setup: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggested_root: Option<String>,
 }
 
 pub async fn setup_check(
@@ -30,8 +32,11 @@ pub async fn setup_check(
 
     match resp {
         WireResponse::Unauthenticated { result: Ok(UnauthenticatedResponse::SetupStatus {
+            needs_setup, suggested_root,
+        }), .. } => Ok(Json(SetupCheckResponse {
             needs_setup,
-        }), .. } => Ok(Json(SetupCheckResponse { needs_setup })),
+            suggested_root: suggested_root.map(|p| p.to_string_lossy().into_owned()),
+        })),
         WireResponse::Unauthenticated { result: Err(e), .. } => Err(ApiError::Protocol(e)),
         _ => Err(ApiError::Internal("unexpected response type".into())),
     }

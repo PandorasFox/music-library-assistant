@@ -68,7 +68,11 @@ pub enum UnauthenticatedResponse {
     /// Setup completed successfully.
     SetupComplete,
     /// Setup status response.
-    SetupStatus { needs_setup: bool },
+    SetupStatus {
+        needs_setup: bool,
+        /// Suggested default root from MM_ROOT env var, if set.
+        suggested_root: Option<PathBuf>,
+    },
 }
 
 /// Auth response (login result).

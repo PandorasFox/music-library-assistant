@@ -107,13 +107,19 @@ pub async fn setup_complete(root: &str, username: &str, password: &str) -> Resul
     Ok(())
 }
 
-/// POST /setup/check → bool (needs_setup)
-pub async fn setup_check() -> Result<bool, JsValue> {
+/// Setup status: whether first-time setup is needed, and optional suggested root.
+pub struct SetupStatus {
+    pub needs_setup: bool,
+    pub suggested_root: Option<String>,
+}
+
+/// POST /setup/check → SetupStatus
+pub async fn setup_check() -> Result<SetupStatus, JsValue> {
     let resp = post("/setup/check", &serde_json::json!({})).await?;
-    Ok(resp
-        .get("needs_setup")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false))
+    Ok(SetupStatus {
+        needs_setup: resp.get("needs_setup").and_then(|v| v.as_bool()).unwrap_or(false),
+        suggested_root: resp.get("suggested_root").and_then(|v| v.as_str()).map(String::from),
+    })
 }
 
 /// POST /auth/login → token string (saved to localStorage)

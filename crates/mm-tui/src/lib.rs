@@ -798,7 +798,7 @@ pub(crate) mod startup_socket {
 
         pub fn needs_setup(&mut self) -> bool {
             match self.send_unauthenticated(mm_meta::protocol::UnauthenticatedBody::SetupQuery) {
-                Ok(mm_meta::protocol::UnauthenticatedResponse::SetupStatus { needs_setup }) => {
+                Ok(mm_meta::protocol::UnauthenticatedResponse::SetupStatus { needs_setup, .. }) => {
                     needs_setup
                 }
                 _ => false,

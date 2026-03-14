@@ -33,9 +33,9 @@ pub fn main() {
 }
 
 async fn init() -> Result<(), JsValue> {
-    let needs_setup = api::setup_check().await?;
-    if needs_setup {
-        mount(&render_setup_form(None));
+    let status = api::setup_check().await?;
+    if status.needs_setup {
+        mount(&render_setup_form(None, status.suggested_root.as_deref()));
         return Ok(());
     }
 
@@ -135,10 +135,18 @@ fn mount_error(msg: &str) {
 // View Renderers (login / shell)
 // ============================================================================
 
-fn render_setup_form(error: Option<&str>) -> Node {
+fn render_setup_form(error: Option<&str>, suggested_root: Option<&str>) -> Node {
     let mut form = div().class("mm-login");
     form = form.child(div().class("mm-login__title").text("Music Magic"));
     form = form.child(div().class("mm-login__subtitle").text("First-Time Setup"));
+
+    let mut root_input = html::input()
+        .attr("type", "text")
+        .attr("id", "setup-root")
+        .attr("placeholder", "/path/to/music");
+    if let Some(root) = suggested_root {
+        root_input = root_input.attr("value", root);
+    }
 
     let fields = div()
         .class("mm-login__form")
@@ -146,12 +154,7 @@ fn render_setup_form(error: Option<&str>) -> Node {
             div()
                 .class("mm-login__field")
                 .child(html::label().text("Archive Root"))
-                .child(
-                    html::input()
-                        .attr("type", "text")
-                        .attr("id", "setup-root")
-                        .attr("placeholder", "/mnt/pool/archive/music"),
-                ),
+                .child(root_input),
         )
         .child(
             div()
@@ -478,7 +481,7 @@ async fn do_setup() -> Result<(), JsValue> {
         .value();
 
     if root.is_empty() {
-        mount(&render_setup_form(Some("Archive root is required")));
+        mount(&render_setup_form(Some("Archive root is required"), None));
         return Ok(());
     }
 
@@ -499,7 +502,7 @@ async fn do_setup() -> Result<(), JsValue> {
             Ok(())
         }
         Err(e) => {
-            mount(&render_setup_form(Some(&format!("{e:?}"))));
+            mount(&render_setup_form(Some(&format!("{e:?}")), None));
             Ok(())
         }
     }

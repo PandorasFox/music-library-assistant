@@ -747,9 +747,10 @@ impl Witch {
                         if self.startup_state != types::WitchStartupState::AwaitingSetup {
                             Err(ProtocolError::Unauthorized)
                         } else {
-                            self.complete_setup_impl(root, first_user)
-                                .map_err(ProtocolError::Internal)?;
-                            Ok(UnauthenticatedResponse::SetupComplete)
+                            match self.complete_setup_impl(root, first_user) {
+                                Ok(()) => Ok(UnauthenticatedResponse::SetupComplete),
+                                Err(e) => Err(ProtocolError::Internal(e)),
+                            }
                         }
                     }
                 };

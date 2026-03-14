@@ -1,8 +1,17 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
 # Ensure XDG dirs exist
 mkdir -p "$XDG_CONFIG_HOME/mm" "$XDG_DATA_HOME/mm"
+
+# Seed config.kdl from MM_ROOT if no config exists yet.
+# The Witch still needs first-time setup via the web UI (user creation, etc.)
+# but having config.kdl avoids a crash when a stale DB exists without config.
+if [ ! -f "$XDG_CONFIG_HOME/mm/config.kdl" ] && [ -n "$MM_ROOT" ]; then
+    echo "Seeding config.kdl with root=$MM_ROOT"
+    printf '// Music Magic configuration (seeded by Docker)\nroot "%s"\n' "$MM_ROOT" \
+        > "$XDG_CONFIG_HOME/mm/config.kdl"
+fi
 
 # Start the Witch in the background
 mm &

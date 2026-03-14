@@ -40,6 +40,12 @@
 }
 
 /* ============================================================
+ * Font
+ * ============================================================ */
+
+@import url('https://fonts.cdnfonts.com/css/monofur');
+
+/* ============================================================
  * Base
  * ============================================================ */
 
@@ -53,8 +59,7 @@ html, body {
     height: 100%;
     background: var(--c-bg);
     color: var(--c-fg);
-    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code',
-                 'Source Code Pro', 'Consolas', monospace;
+    font-family: 'monofur', 'monofur for Powerline', monospace;
     font-size: 14px;
     line-height: 1.5;
 }

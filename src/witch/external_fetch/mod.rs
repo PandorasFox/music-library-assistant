@@ -1,9 +1,9 @@
 //! Scheduler thread for external metadata fetching.
 //!
-//! The Witch spawns one scheduler thread that manages queues, rate limiting,
-//! dedup, and chain-emit. HTTP calls are made directly by the scheduler using
-//! blocking reqwest clients. DB writes go through `write_thread::signal_sender()`
-//! (fire-and-forget, sync-safe).
+//! The Witch spawns one scheduler thread that runs a single-threaded tokio
+//! runtime with an event-driven `select!` loop. Commands arrive via tokio
+//! channel, a periodic tick evaluates rate limiters and dispatches ready work
+//! as async HTTP calls into a `JoinSet`, and results flow back naturally.
 //!
 //! ## Channel Topology
 //!
@@ -30,9 +30,10 @@ pub(super) use types::SchedulerMessage;
 
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
-use std::thread;
 use std::time::Duration;
+
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::task::JoinSet;
 
 use crate::config::SharedConfig;
 use crate::db::write_thread;
@@ -48,11 +49,24 @@ use types::FetchCommand;
 // Scheduler Thread
 // ============================================================================
 
-/// Scheduler main loop. Manages queues, rate limiting, dedup, and chain-emit.
-/// HTTP calls are made directly using blocking reqwest clients.
+/// Scheduler entry point. Creates a single-threaded tokio runtime and
+/// runs the async event loop on the existing std::thread.
 fn run_scheduler(
-    command_rx: Receiver<FetchCommand>,
-    message_tx: tokio::sync::mpsc::UnboundedSender<SchedulerMessage>,
+    command_rx: UnboundedReceiver<FetchCommand>,
+    message_tx: UnboundedSender<SchedulerMessage>,
+    shared_config: SharedConfig,
+) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build scheduler tokio runtime");
+    rt.block_on(scheduler_loop(command_rx, message_tx, shared_config));
+}
+
+/// Async event loop: select! over commands, tick, and in-flight HTTP results.
+async fn scheduler_loop(
+    mut command_rx: UnboundedReceiver<FetchCommand>,
+    message_tx: UnboundedSender<SchedulerMessage>,
     shared_config: SharedConfig,
 ) {
     crate::logging::log_general("[FETCH] Scheduler started");
@@ -66,19 +80,245 @@ fn run_scheduler(
         }
     };
 
-    while let Ok(command) = command_rx.recv() {
-        match command {
-            FetchCommand::Shutdown => break,
-            FetchCommand::Start { eligible_dirs } => {
-                let shutdown = run_scheduling_loop(
-                    &db,
-                    &command_rx,
-                    &message_tx,
-                    &shared_config,
-                    eligible_dirs,
-                );
-                if shutdown {
-                    break;
+    let mut tick = tokio::time::interval(Duration::from_millis(250));
+    let mut in_flight: JoinSet<FetchResult> = JoinSet::new();
+    let mut batch: Option<BatchState> = None;
+
+    loop {
+        tokio::select! {
+            cmd = command_rx.recv() => {
+                match cmd {
+                    Some(FetchCommand::Start { eligible_dirs }) => {
+                        match batch.as_mut() {
+                            Some(b) => {
+                                // Extend existing batch with new AcoustID work
+                                extend_acoustid_queue(&db, &shared_config, &eligible_dirs, b);
+                            }
+                            None => {
+                                // Initialize new batch
+                                batch = Some(init_batch(&db, &shared_config, eligible_dirs));
+                                let b = batch.as_ref().unwrap();
+
+                                if b.acoustid_queue.is_empty() && b.mb_queue.is_empty() {
+                                    crate::logging::log_general("[FETCH] No work needed for any source");
+                                    let _ = message_tx.send(SchedulerMessage::AllDone);
+                                    batch = None;
+                                    continue;
+                                }
+
+                                crate::logging::log_general(format!(
+                                    "[FETCH] Scheduling: {} AcoustID items, {} MB items, auto_enrich={}, \
+                                     MB rate={:.1}rps (ceiling {}rps)",
+                                    b.acoustid_queue.len(),
+                                    b.mb_queue.len(),
+                                    b.auto_enrich,
+                                    b.mb_limiter.current_rps(),
+                                    b.mb_rps_ceiling,
+                                ));
+
+                                send_progress(&message_tx, b);
+                            }
+                        }
+                    }
+                    Some(FetchCommand::Shutdown) | None => break,
+                }
+            }
+
+            _ = tick.tick(), if batch.is_some() => {
+                let b = batch.as_mut().unwrap();
+
+                // Dispatch AcoustID if limiter ready and queue non-empty
+                if !b.acoustid_queue.is_empty()
+                    && b.acoustid_limiter.time_until_ready() == Duration::ZERO
+                {
+                    let item = b.acoustid_queue.pop_front().unwrap();
+                    b.acoustid_limiter.mark_request();
+                    b.acoustid_in_flight += 1;
+                    let client = b.acoustid_client.clone();
+                    in_flight.spawn(async move {
+                        let outcome = execute_acoustid_lookup(
+                            &client,
+                            &item.fingerprint_raw,
+                            item.duration_secs,
+                        ).await;
+                        FetchResult::AcoustId { outcome, item }
+                    });
+                }
+
+                // Dispatch MB if limiter ready and queue non-empty
+                if !b.mb_queue.is_empty()
+                    && b.mb_limiter.time_until_ready() == Duration::ZERO
+                {
+                    let item = b.mb_queue.pop_front().unwrap();
+
+                    // Check DB cache first — skip if already fresh
+                    let cache_result = match item.kind {
+                        MbEntityKind::Recording => db.get_mb_recording_cache(&item.mbid),
+                        MbEntityKind::Artist => db.get_mb_artist_cache(&item.mbid),
+                        MbEntityKind::Release => db.get_mb_release_cache(&item.mbid),
+                    };
+                    let already_cached = cache_result
+                        .ok()
+                        .flatten()
+                        .map(|(_json, fetched_at)| {
+                            let now = now_unix();
+                            now - fetched_at < b.ttl_secs
+                        })
+                        .unwrap_or(false);
+
+                    if already_cached {
+                        b.mb_stats.total = b.mb_stats.total.saturating_sub(1);
+                        b.mb_limiter.clear_last_request();
+                    } else {
+                        b.mb_limiter.mark_request();
+                        b.mb_in_flight += 1;
+                        let client = b.mb_client.clone();
+                        let kind = item.kind;
+                        let mbid = item.mbid.clone();
+                        in_flight.spawn(async move {
+                            let outcome = execute_mb_fetch(&client, kind, &mbid).await;
+                            FetchResult::Mb { outcome, item }
+                        });
+                    }
+                }
+            }
+
+            Some(result) = in_flight.join_next(), if !in_flight.is_empty() => {
+                let Ok(result) = result else { continue };
+                let b = batch.as_mut().unwrap();
+
+                match result {
+                    FetchResult::AcoustId { outcome, item } => {
+                        b.acoustid_in_flight -= 1;
+                        match outcome {
+                            AcoustIdOutcome::Match(recordings) => {
+                                // Write matches to DB
+                                write_acoustid_matches(item.inode, &item.fingerprint_blob, &recordings);
+
+                                // Chain-emit: push matched recording IDs into MB queue
+                                if b.auto_enrich {
+                                    for row in &recordings {
+                                        if b.mb_queued_ids.insert(row.recording_id.clone()) {
+                                            b.mb_queue.push_back(MbQueueItem {
+                                                kind: MbEntityKind::Recording,
+                                                mbid: row.recording_id.clone(),
+                                            });
+                                            b.mb_stats.total += 1;
+                                            b.mb_done = false;
+                                        }
+                                    }
+                                }
+                                b.acoustid_stats.matched += 1;
+                                b.acoustid_stats.processed += 1;
+                                b.acoustid_limiter.reset_backoff();
+                            }
+                            AcoustIdOutcome::NoMatch => {
+                                write_acoustid_no_match(item.inode, &item.fingerprint_blob);
+                                b.acoustid_stats.no_match += 1;
+                                b.acoustid_stats.processed += 1;
+                                b.acoustid_limiter.reset_backoff();
+                            }
+                            AcoustIdOutcome::RateLimited => {
+                                crate::logging::log_general("[FETCH] AcoustID rate limited, backing off");
+                                b.acoustid_stats.retries += 1;
+                                b.acoustid_queue.push_front(item);
+                                b.acoustid_limiter.apply_backoff();
+                                b.acoustid_limiter.mark_request();
+                            }
+                            AcoustIdOutcome::Error => {
+                                write_acoustid_error(item.inode, &item.fingerprint_blob);
+                                b.acoustid_stats.retries += 1;
+                                b.acoustid_stats.processed += 1;
+                            }
+                        }
+                        send_progress(&message_tx, b);
+                    }
+
+                    FetchResult::Mb { outcome, item } => {
+                        b.mb_in_flight -= 1;
+                        match outcome {
+                            MbOutcome::Found { discovered_entities } => {
+                                b.mb_stats.matched += 1;
+                                b.mb_stats.processed += 1;
+
+                                // Chain-emit: queue discovered artist/release entities
+                                for (ek, eid) in discovered_entities {
+                                    if b.mb_queued_ids.insert(eid.clone()) {
+                                        b.mb_queue.push_back(MbQueueItem {
+                                            kind: ek,
+                                            mbid: eid,
+                                        });
+                                        b.mb_stats.total += 1;
+                                        b.mb_done = false;
+                                    }
+                                }
+
+                                b.mb_limiter.record_success();
+                            }
+                            MbOutcome::NotFound => {
+                                b.mb_stats.no_match += 1;
+                                b.mb_stats.processed += 1;
+                                b.mb_limiter.record_success();
+                            }
+                            MbOutcome::RateLimited => {
+                                crate::logging::log_general(format!(
+                                    "[FETCH] MB rate limited for {} {}",
+                                    item.kind.as_str(),
+                                    item.mbid,
+                                ));
+                                b.mb_stats.retries += 1;
+                                b.mb_queue.push_front(item);
+                                b.mb_limiter.apply_backoff();
+                                b.mb_limiter.mark_request();
+                            }
+                            MbOutcome::Error => {
+                                b.mb_stats.retries += 1;
+                                b.mb_stats.processed += 1;
+                            }
+                        }
+                        send_progress(&message_tx, b);
+                    }
+                }
+
+                // Check source completion
+                let b = batch.as_mut().unwrap();
+
+                if !b.acoustid_done && b.acoustid_queue.is_empty() && b.acoustid_in_flight == 0 {
+                    b.acoustid_done = true;
+                    crate::logging::log_general(format!(
+                        "[FETCH] AcoustID done: {} processed, {} matched, {} no-match, {} retries",
+                        b.acoustid_stats.processed,
+                        b.acoustid_stats.matched,
+                        b.acoustid_stats.no_match,
+                        b.acoustid_stats.retries
+                    ));
+                    let _ = message_tx.send(SchedulerMessage::SourceDone {
+                        source: ExternalSource::AcoustID,
+                        stats: b.acoustid_stats.clone(),
+                    });
+                }
+
+                if !b.mb_done && b.mb_queue.is_empty() && b.mb_in_flight == 0 {
+                    b.mb_done = true;
+                    crate::logging::log_general(format!(
+                        "[FETCH] MusicBrainz done: {} processed, {} cached, {} not-found, {} retries, \
+                         final rate={:.1}rps, failure-at-rps={:?}",
+                        b.mb_stats.processed,
+                        b.mb_stats.matched,
+                        b.mb_stats.no_match,
+                        b.mb_stats.retries,
+                        b.mb_limiter.current_rps(),
+                        b.mb_limiter.failure_rps_history,
+                    ));
+                    let _ = message_tx.send(SchedulerMessage::SourceDone {
+                        source: ExternalSource::MusicBrainz,
+                        stats: b.mb_stats.clone(),
+                    });
+                }
+
+                if b.acoustid_done && b.mb_done && in_flight.is_empty() {
+                    let _ = message_tx.send(SchedulerMessage::AllDone);
+                    batch = None;
                 }
             }
         }
@@ -87,16 +327,38 @@ fn run_scheduler(
     crate::logging::log_general("[FETCH] Scheduler exiting");
 }
 
-/// Active scheduling loop. Executes HTTP calls directly and writes results
-/// to DB via signal_sender. Returns `true` if shutdown requested.
-fn run_scheduling_loop(
+// ============================================================================
+// Batch State
+// ============================================================================
+
+/// Groups all per-batch state: queues, rate limiters, stats, clients, config.
+struct BatchState {
+    acoustid_queue: VecDeque<AcoustIdQueueItem>,
+    mb_queue: VecDeque<MbQueueItem>,
+    acoustid_limiter: RateLimiter,
+    mb_limiter: AdaptiveRateLimiter,
+    acoustid_stats: SourceProgress,
+    mb_stats: SourceProgress,
+    acoustid_done: bool,
+    mb_done: bool,
+    mb_queued_ids: HashSet<String>,
+    /// Number of AcoustID items currently in-flight (dispatched, not yet returned).
+    acoustid_in_flight: usize,
+    /// Number of MB items currently in-flight.
+    mb_in_flight: usize,
+    acoustid_client: AcoustIDClient,
+    mb_client: MusicBrainzClient,
+    auto_enrich: bool,
+    ttl_secs: i64,
+    mb_rps_ceiling: u32,
+}
+
+/// Initialize a new batch from config + DB state.
+fn init_batch(
     db: &Database,
-    command_rx: &Receiver<FetchCommand>,
-    message_tx: &tokio::sync::mpsc::UnboundedSender<SchedulerMessage>,
     shared_config: &SharedConfig,
     eligible_dirs: Vec<PathBuf>,
-) -> bool {
-    // Read config
+) -> BatchState {
     let (api_key, rps, mb_rps, mb_base_url, auto_enrich, ttl_secs) = {
         let config = shared_config.read().expect("SharedConfig lock poisoned");
         let em = &config.opinions.external_matching;
@@ -110,43 +372,33 @@ fn run_scheduling_loop(
         )
     };
 
-    // Work queues (internal to scheduler -- items here haven't been dispatched yet)
     let mut acoustid_queue: VecDeque<AcoustIdQueueItem> = VecDeque::new();
     let mut mb_queue: VecDeque<MbQueueItem> = VecDeque::new();
 
-    // Rate limiters
-    let mut acoustid_limiter = RateLimiter::new_acoustid(rps);
+    let acoustid_limiter = RateLimiter::new_acoustid(rps);
     let is_local_mirror = mb_base_url != crate::config::ExternalMatchingConfig::DEFAULT_MB_BASE_URL;
-    let mut mb_limiter = if is_local_mirror {
+    let mb_limiter = if is_local_mirror {
         AdaptiveRateLimiter::new_unthrottled(mb_rps)
     } else {
         AdaptiveRateLimiter::new(mb_rps)
     };
 
-    // Per-source stats
     let mut acoustid_stats = SourceProgress::default();
     let mut mb_stats = SourceProgress::default();
-
-    // Tracking flags
     let mut acoustid_done = false;
     let mut mb_done = false;
-
-    // All MB recording IDs already queued (for chain-emit dedup)
     let mut mb_queued_ids: HashSet<String> = HashSet::new();
 
-    // HTTP clients (created lazily)
-    let mut acoustid_client: Option<AcoustIDClient> = None;
-    let mut mb_client: Option<MusicBrainzClient> = None;
-
-    // Populate queues
+    // Populate AcoustID queue
     if api_key.is_empty() {
         crate::logging::log_general("[FETCH] No AcoustID API key configured, skipping");
         acoustid_done = true;
     } else {
-        populate_acoustid_queue(db, &eligible_dirs, &api_key, &mut acoustid_queue);
+        populate_acoustid_queue(db, &eligible_dirs, &mut acoustid_queue);
         acoustid_stats.total = acoustid_queue.len();
     }
 
+    // Populate MB queue
     if auto_enrich {
         populate_mb_queue(db, ttl_secs, &mut mb_queue);
         mb_stats.total = mb_queue.len();
@@ -157,265 +409,63 @@ fn run_scheduling_loop(
         mb_done = true;
     }
 
-    // Nothing to do at all
-    if acoustid_queue.is_empty() && mb_queue.is_empty() {
-        crate::logging::log_general("[FETCH] No work needed for any source");
-        let _ = message_tx.send(SchedulerMessage::AllDone);
-        return false;
-    }
+    // Build async clients
+    let acoustid_client = AcoustIDClient::new(api_key);
+    let mb_client = MusicBrainzClient::new(&mb_base_url);
 
-    crate::logging::log_general(format!(
-        "[FETCH] Scheduling: {} AcoustID items, {} MB items, auto_enrich={}, \
-         MB rate={:.1}rps (ceiling {}rps)",
-        acoustid_queue.len(),
-        mb_queue.len(),
+    BatchState {
+        acoustid_queue,
+        mb_queue,
+        acoustid_limiter,
+        mb_limiter,
+        acoustid_stats,
+        mb_stats,
+        acoustid_done,
+        mb_done,
+        mb_queued_ids,
+        acoustid_in_flight: 0,
+        mb_in_flight: 0,
+        acoustid_client,
+        mb_client,
         auto_enrich,
-        mb_limiter.current_rps(),
-        mb_rps,
-    ));
+        ttl_secs,
+        mb_rps_ceiling: mb_rps,
+    }
+}
 
-    // Send initial progress
-    send_progress(
-        message_tx,
-        &acoustid_stats,
-        &mb_stats,
-        &acoustid_limiter,
-        &mb_limiter,
-    );
-
-    loop {
-        // ---- 1. Check for new commands / shutdown (non-blocking) ----
-        match command_rx.try_recv() {
-            Ok(FetchCommand::Shutdown) => {
-                crate::logging::log_general("[FETCH] Shutdown received mid-scheduling");
-                return true;
-            }
-            Ok(FetchCommand::Start { eligible_dirs }) => {
-                populate_acoustid_queue(db, &eligible_dirs, &api_key, &mut acoustid_queue);
-                acoustid_stats.total += acoustid_queue.len();
-                acoustid_done = false;
-            }
-            Err(_) => {} // Empty or Disconnected -- both fine
-        }
-
-        // ---- 2. Execute AcoustID task if rate limiter ready ----
-        if !acoustid_queue.is_empty() && acoustid_limiter.time_until_ready() == Duration::ZERO {
-            let item = acoustid_queue.pop_front().unwrap();
-            acoustid_limiter.mark_request();
-
-            // Ensure client exists
-            let client = acoustid_client.get_or_insert_with(|| {
-                AcoustIDClient::new(item.api_key.clone())
-            });
-
-            let outcome = execute_acoustid_lookup(
-                client,
-                item.inode,
-                &item.fingerprint_raw,
-                &item.fingerprint_blob,
-                item.duration_secs,
-            );
-
-            match outcome {
-                AcoustIdOutcome::Match(recordings) => {
-                    // Chain-emit: push matched recording IDs into MB queue
-                    if auto_enrich {
-                        for row in &recordings {
-                            if mb_queued_ids.insert(row.recording_id.clone()) {
-                                mb_queue.push_back(MbQueueItem {
-                                    kind: MbEntityKind::Recording,
-                                    mbid: row.recording_id.clone(),
-                                });
-                                mb_stats.total += 1;
-                                mb_done = false;
-                            }
-                        }
-                    }
-                    acoustid_stats.matched += 1;
-                    acoustid_stats.processed += 1;
-                    acoustid_limiter.reset_backoff();
-                }
-                AcoustIdOutcome::NoMatch => {
-                    acoustid_stats.no_match += 1;
-                    acoustid_stats.processed += 1;
-                    acoustid_limiter.reset_backoff();
-                }
-                AcoustIdOutcome::RateLimited => {
-                    crate::logging::log_general("[FETCH] AcoustID rate limited, backing off");
-                    acoustid_stats.retries += 1;
-                    // Re-queue at front for retry
-                    acoustid_queue.push_front(item);
-                    acoustid_limiter.apply_backoff();
-                    acoustid_limiter.mark_request();
-                }
-                AcoustIdOutcome::Error => {
-                    acoustid_stats.retries += 1;
-                    acoustid_stats.processed += 1;
-                }
-            }
-
-            send_progress(
-                message_tx,
-                &acoustid_stats,
-                &mb_stats,
-                &acoustid_limiter,
-                &mb_limiter,
-            );
-        }
-
-        // ---- 3. Execute MB task if rate limiter ready ----
-        if !mb_queue.is_empty() && mb_limiter.time_until_ready() == Duration::ZERO {
-            let item = mb_queue.pop_front().unwrap();
-
-            // Check DB cache first -- skip if already fresh
-            let cache_result = match item.kind {
-                MbEntityKind::Recording => db.get_mb_recording_cache(&item.mbid),
-                MbEntityKind::Artist => db.get_mb_artist_cache(&item.mbid),
-                MbEntityKind::Release => db.get_mb_release_cache(&item.mbid),
-            };
-            let already_cached = cache_result
-                .ok()
-                .flatten()
-                .map(|(_json, fetched_at)| {
-                    let now = now_unix();
-                    now - fetched_at < ttl_secs
-                })
-                .unwrap_or(false);
-
-            if already_cached {
-                // Already fresh in cache -- skip without HTTP call
-                mb_stats.total = mb_stats.total.saturating_sub(1);
-                // Don't consume rate limiter slot
-                mb_limiter.clear_last_request();
-            } else {
-                mb_limiter.mark_request();
-
-                // Ensure client exists (re-create if base URL changed)
-                let needs_init = match mb_client.as_ref() {
-                    None => true,
-                    Some(c) => c.base_url() != mb_base_url,
-                };
-                if needs_init {
-                    mb_client = Some(MusicBrainzClient::new(&mb_base_url));
-                }
-                let client = mb_client.as_ref().unwrap();
-
-                let outcome = execute_mb_fetch(client, item.kind, &item.mbid);
-
-                match outcome {
-                    MbOutcome::Found { discovered_entities } => {
-                        mb_stats.matched += 1;
-                        mb_stats.processed += 1;
-
-                        // Chain-emit: queue discovered artist/release entities
-                        for (ek, eid) in discovered_entities {
-                            if mb_queued_ids.insert(eid.clone()) {
-                                mb_queue.push_back(MbQueueItem {
-                                    kind: ek,
-                                    mbid: eid,
-                                });
-                                mb_stats.total += 1;
-                                mb_done = false;
-                            }
-                        }
-
-                        mb_limiter.record_success();
-                    }
-                    MbOutcome::NotFound => {
-                        mb_stats.no_match += 1;
-                        mb_stats.processed += 1;
-                        mb_limiter.record_success();
-                    }
-                    MbOutcome::RateLimited => {
-                        crate::logging::log_general(format!(
-                            "[FETCH] MB rate limited for {} {}",
-                            item.kind.as_str(),
-                            item.mbid,
-                        ));
-                        mb_stats.retries += 1;
-                        // Re-queue at front for retry
-                        mb_queue.push_front(item);
-                        mb_limiter.apply_backoff();
-                        mb_limiter.mark_request();
-                    }
-                    MbOutcome::Error => {
-                        mb_stats.retries += 1;
-                        mb_stats.processed += 1;
-                    }
-                }
-
-                send_progress(
-                    message_tx,
-                    &acoustid_stats,
-                    &mb_stats,
-                    &acoustid_limiter,
-                    &mb_limiter,
-                );
-            }
-        }
-
-        // ---- 4. Check source completion ----
-        if !acoustid_done && acoustid_queue.is_empty() {
-            acoustid_done = true;
-            crate::logging::log_general(format!(
-                "[FETCH] AcoustID done: {} processed, {} matched, {} no-match, {} retries",
-                acoustid_stats.processed,
-                acoustid_stats.matched,
-                acoustid_stats.no_match,
-                acoustid_stats.retries
-            ));
-            let _ = message_tx.send(SchedulerMessage::SourceDone {
-                source: ExternalSource::AcoustID,
-                stats: acoustid_stats.clone(),
-            });
-        }
-
-        if !mb_done && mb_queue.is_empty() {
-            mb_done = true;
-            crate::logging::log_general(format!(
-                "[FETCH] MusicBrainz done: {} processed, {} cached, {} not-found, {} retries, \
-                 final rate={:.1}rps, failure-at-rps={:?}",
-                mb_stats.processed,
-                mb_stats.matched,
-                mb_stats.no_match,
-                mb_stats.retries,
-                mb_limiter.current_rps(),
-                mb_limiter.failure_rps_history,
-            ));
-            let _ = message_tx.send(SchedulerMessage::SourceDone {
-                source: ExternalSource::MusicBrainz,
-                stats: mb_stats.clone(),
-            });
-        }
-
-        // ---- 5. Both done? Signal AllDone and return to outer idle loop ----
-        if acoustid_done && mb_done {
-            let _ = message_tx.send(SchedulerMessage::AllDone);
-            return false;
-        }
-
-        // ---- 6. Sleep for the shortest relevant interval ----
-        let acoustid_wait = if acoustid_queue.is_empty() {
-            Duration::from_secs(60)
-        } else {
-            acoustid_limiter.time_until_ready()
-        };
-        let mb_wait = if mb_queue.is_empty() {
-            Duration::from_secs(60)
-        } else {
-            mb_limiter.time_until_ready()
-        };
-        // Cap at 100ms for shutdown responsiveness
-        let sleep_time = acoustid_wait.min(mb_wait).min(Duration::from_millis(100));
-        if sleep_time > Duration::ZERO {
-            thread::sleep(sleep_time);
-        }
+/// Extend an existing batch with new AcoustID work from additional directories.
+fn extend_acoustid_queue(
+    db: &Database,
+    shared_config: &SharedConfig,
+    eligible_dirs: &[PathBuf],
+    batch: &mut BatchState,
+) {
+    let api_key = {
+        let config = shared_config.read().expect("SharedConfig lock poisoned");
+        config.opinions.external_matching.acoustid_api_key.clone()
+    };
+    if !api_key.is_empty() {
+        populate_acoustid_queue(db, eligible_dirs, &mut batch.acoustid_queue);
+        batch.acoustid_stats.total += batch.acoustid_queue.len();
+        batch.acoustid_done = false;
     }
 }
 
 // ============================================================================
-// HTTP Execution (inline in scheduler thread)
+// Fetch Result Types
 // ============================================================================
+
+/// Result returned from JoinSet tasks.
+enum FetchResult {
+    AcoustId {
+        outcome: AcoustIdOutcome,
+        item: AcoustIdQueueItem,
+    },
+    Mb {
+        outcome: MbOutcome,
+        item: MbQueueItem,
+    },
+}
 
 /// Scheduler-internal outcome from an AcoustID lookup.
 enum AcoustIdOutcome {
@@ -433,18 +483,18 @@ enum MbOutcome {
     Error,
 }
 
-/// Execute an AcoustID fingerprint lookup. Writes results to DB via signal_sender.
-fn execute_acoustid_lookup(
+// ============================================================================
+// Async HTTP Execution
+// ============================================================================
+
+/// Execute an AcoustID fingerprint lookup. Returns outcome only —
+/// DB writes happen in the select! result handler (sync, on scheduler thread).
+async fn execute_acoustid_lookup(
     client: &AcoustIDClient,
-    inode: i64,
     fingerprint_raw: &[u32],
-    fingerprint_blob: &[u8],
     duration_secs: u32,
 ) -> AcoustIdOutcome {
-    let result = client.lookup_with_raw(fingerprint_raw, duration_secs);
-    let acoustid_source_key = ExternalSource::AcoustID.to_key();
-
-    match result {
+    match client.lookup_with_raw(fingerprint_raw, duration_secs).await {
         Ok((LookupOutcome::Matches(recordings), _raw)) => {
             let rows: Vec<MatchRow> = recordings
                 .into_iter()
@@ -453,62 +503,27 @@ fn execute_acoustid_lookup(
                     confidence: r.confidence,
                 })
                 .collect();
-
-            // Write to DB immediately
-            if let Some(sender) = write_thread::signal_sender() {
-                let now = now_unix();
-                for row in &rows {
-                    sender.insert_external_match(
-                        inode,
-                        fingerprint_blob.to_vec(),
-                        acoustid_source_key,
-                        &row.recording_id,
-                        row.confidence,
-                        None,
-                        now,
-                    );
-                    sender.insert_mb_known_entity(&row.recording_id, "recording", None, now);
-                }
-                sender.delete_external_retry(inode, acoustid_source_key);
-            }
-
             AcoustIdOutcome::Match(rows)
         }
-        Ok((LookupOutcome::NoMatch, _)) => {
-            if let Some(sender) = write_thread::signal_sender() {
-                let now = now_unix();
-                sender.insert_external_no_match(fingerprint_blob.to_vec(), acoustid_source_key, now);
-                sender.delete_external_retry(inode, acoustid_source_key);
-            }
-            AcoustIdOutcome::NoMatch
-        }
-        Ok((LookupOutcome::RateLimited, _)) => {
-            AcoustIdOutcome::RateLimited
-        }
+        Ok((LookupOutcome::NoMatch, _)) => AcoustIdOutcome::NoMatch,
+        Ok((LookupOutcome::RateLimited, _)) => AcoustIdOutcome::RateLimited,
         Err(e) => {
-            let error = format!("{:#}", e);
-            crate::logging::log_error(format!(
-                "[FETCH] AcoustID lookup failed for inode {}: {}",
-                inode, error
-            ));
-            if let Some(sender) = write_thread::signal_sender() {
-                sender.upsert_external_retry(inode, fingerprint_blob.to_vec(), acoustid_source_key, &error);
-            }
+            crate::logging::log_error(format!("[FETCH] AcoustID lookup failed: {:#}", e));
             AcoustIdOutcome::Error
         }
     }
 }
 
 /// Execute a MusicBrainz entity fetch. Writes cache + discovered entities to DB.
-fn execute_mb_fetch(
+async fn execute_mb_fetch(
     client: &MusicBrainzClient,
     kind: MbEntityKind,
     mbid: &str,
 ) -> MbOutcome {
     let fetch_result = match kind {
-        MbEntityKind::Recording => client.fetch_recording(mbid),
-        MbEntityKind::Artist => client.fetch_artist(mbid),
-        MbEntityKind::Release => client.fetch_release(mbid),
+        MbEntityKind::Recording => client.fetch_recording(mbid).await,
+        MbEntityKind::Artist => client.fetch_artist(mbid).await,
+        MbEntityKind::Release => client.fetch_release(mbid).await,
     };
 
     match fetch_result {
@@ -535,7 +550,6 @@ fn execute_mb_fetch(
                     extract_entities_from_recording(&raw_json, mbid)
                         .unwrap_or_default();
 
-                // Write discovered entities to DB immediately for crash-safety
                 if !entities.is_empty() {
                     if let Some(sender) = write_thread::signal_sender() {
                         let now = now_unix();
@@ -564,15 +578,57 @@ fn execute_mb_fetch(
             MbOutcome::RateLimited
         }
         Err(e) => {
-            let error = format!("{:#}", e);
             crate::logging::log_error(format!(
-                "[FETCH] MB fetch failed for {} {}: {}",
+                "[FETCH] MB fetch failed for {} {}: {:#}",
                 kind.as_str(),
                 mbid,
-                error
+                e
             ));
             MbOutcome::Error
         }
+    }
+}
+
+// ============================================================================
+// DB Write Helpers (sync, called from select! result handler)
+// ============================================================================
+
+/// Write AcoustID match results to DB via signal_sender.
+fn write_acoustid_matches(inode: i64, fingerprint_blob: &[u8], rows: &[MatchRow]) {
+    let acoustid_source_key = ExternalSource::AcoustID.to_key();
+    if let Some(sender) = write_thread::signal_sender() {
+        let now = now_unix();
+        for row in rows {
+            sender.insert_external_match(
+                inode,
+                fingerprint_blob.to_vec(),
+                acoustid_source_key,
+                &row.recording_id,
+                row.confidence,
+                None,
+                now,
+            );
+            sender.insert_mb_known_entity(&row.recording_id, "recording", None, now);
+        }
+        sender.delete_external_retry(inode, acoustid_source_key);
+    }
+}
+
+/// Write AcoustID no-match result to DB.
+fn write_acoustid_no_match(inode: i64, fingerprint_blob: &[u8]) {
+    let acoustid_source_key = ExternalSource::AcoustID.to_key();
+    if let Some(sender) = write_thread::signal_sender() {
+        let now = now_unix();
+        sender.insert_external_no_match(fingerprint_blob.to_vec(), acoustid_source_key, now);
+        sender.delete_external_retry(inode, acoustid_source_key);
+    }
+}
+
+/// Write AcoustID error/retry to DB.
+fn write_acoustid_error(inode: i64, fingerprint_blob: &[u8]) {
+    let acoustid_source_key = ExternalSource::AcoustID.to_key();
+    if let Some(sender) = write_thread::signal_sender() {
+        sender.upsert_external_retry(inode, fingerprint_blob.to_vec(), acoustid_source_key, "lookup failed");
     }
 }
 
@@ -593,7 +649,6 @@ struct AcoustIdQueueItem {
     fingerprint_raw: Vec<u32>,
     fingerprint_blob: Vec<u8>,
     duration_secs: u32,
-    api_key: String,
 }
 
 /// MB queue item (scheduler-internal).
@@ -610,7 +665,6 @@ struct MbQueueItem {
 fn populate_acoustid_queue(
     db: &Database,
     eligible_dirs: &[PathBuf],
-    api_key: &str,
     queue: &mut VecDeque<AcoustIdQueueItem>,
 ) {
     let source_key = ExternalSource::AcoustID.to_key();
@@ -626,7 +680,6 @@ fn populate_acoustid_queue(
                     fingerprint_raw: c.fingerprint,
                     fingerprint_blob: blob,
                     duration_secs: c.duration_secs,
-                    api_key: api_key.to_string(),
                 });
             }
         }
@@ -648,7 +701,6 @@ fn populate_acoustid_queue(
                     fingerprint_raw: c.fingerprint,
                     fingerprint_blob: blob,
                     duration_secs: c.duration_secs,
-                    api_key: api_key.to_string(),
                 });
             }
         }
@@ -713,17 +765,14 @@ fn populate_mb_queue(db: &Database, ttl_secs: i64, queue: &mut VecDeque<MbQueueI
 
 /// Send a combined progress snapshot for both sources.
 fn send_progress(
-    message_tx: &tokio::sync::mpsc::UnboundedSender<SchedulerMessage>,
-    acoustid: &SourceProgress,
-    mb: &SourceProgress,
-    acoustid_limiter: &RateLimiter,
-    mb_limiter: &AdaptiveRateLimiter,
+    message_tx: &UnboundedSender<SchedulerMessage>,
+    batch: &BatchState,
 ) {
     let _ = message_tx.send(SchedulerMessage::Progress(FetchProgress {
-        acoustid: acoustid.clone(),
-        mb: mb.clone(),
-        acoustid_rps: acoustid_limiter.effective_rps() as f32,
-        mb_rps: mb_limiter.current_rps() as f32,
+        acoustid: batch.acoustid_stats.clone(),
+        mb: batch.mb_stats.clone(),
+        acoustid_rps: batch.acoustid_limiter.effective_rps() as f32,
+        mb_rps: batch.mb_limiter.current_rps() as f32,
     }));
 }
 

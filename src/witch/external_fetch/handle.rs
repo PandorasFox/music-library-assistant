@@ -1,8 +1,9 @@
 //! ExternalFetchHandle -- Witch-side API for the scheduler thread.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
+
+use tokio::sync::mpsc::{self, UnboundedSender};
 
 use crate::config::SharedConfig;
 
@@ -11,7 +12,7 @@ use super::types::{FetchCommand, SchedulerMessage};
 /// Handle held by the Witch for communicating with the scheduler thread.
 pub struct ExternalFetchHandle {
     /// Send commands to scheduler (start, shutdown).
-    command_tx: Sender<FetchCommand>,
+    command_tx: UnboundedSender<FetchCommand>,
     /// Join handle for the scheduler thread.
     handle: Option<JoinHandle<()>>,
     /// Whether the scheduler is currently active.
@@ -21,13 +22,13 @@ pub struct ExternalFetchHandle {
 impl ExternalFetchHandle {
     /// Spawn the scheduler thread.
     ///
-    /// The scheduler sleeps until it receives a Start command, then
-    /// executes HTTP calls directly and reports progress via the message channel.
+    /// The scheduler runs a single-threaded tokio runtime with an event-driven
+    /// select! loop. HTTP calls are async, dispatched via JoinSet.
     pub(in crate::witch) fn spawn(shared_config: SharedConfig) -> (Self, tokio::sync::mpsc::UnboundedReceiver<SchedulerMessage>) {
-        // Witch -> Scheduler: commands
-        let (command_tx, command_rx) = mpsc::channel();
+        // Witch -> Scheduler: commands (tokio unbounded — send is sync)
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
         // Scheduler -> Witch: progress + status
-        let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (message_tx, message_rx) = mpsc::unbounded_channel();
 
         let handle = thread::spawn(move || {
             super::run_scheduler(command_rx, message_tx, shared_config);

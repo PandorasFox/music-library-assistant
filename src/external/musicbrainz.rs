@@ -14,9 +14,10 @@ pub use mm_meta::external::musicbrainz::*;
 // Client + Outcome Types (server-only)
 // ============================================================================
 
-/// MusicBrainz API client (blocking reqwest).
+/// MusicBrainz API client (async reqwest). Clone is cheap (reqwest::Client is Arc internally).
+#[derive(Clone)]
 pub struct MusicBrainzClient {
-    client: reqwest::blocking::Client,
+    client: reqwest::Client,
     /// Base URL for the MusicBrainz WS/2 API (e.g. "https://musicbrainz.org/ws/2").
     base_url: String,
 }
@@ -35,7 +36,7 @@ pub enum MbLookupOutcome {
 
 impl MusicBrainzClient {
     pub fn new(base_url: &str) -> Self {
-        let client = reqwest::blocking::Client::builder()
+        let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .user_agent("MusicMagic/0.1 (https://github.com/example/musicmagic)")
             .build()
@@ -46,38 +47,33 @@ impl MusicBrainzClient {
         }
     }
 
-    /// Returns the configured base URL.
-    pub fn base_url(&self) -> &str {
-        &self.base_url
-    }
-
     /// Fetch a recording by MBID with artist credits, artist relations, and work relations.
-    pub fn fetch_recording(&self, mbid: &str) -> Result<MbLookupOutcome> {
+    pub async fn fetch_recording(&self, mbid: &str) -> Result<MbLookupOutcome> {
         let url = format!(
             "{}/recording/{}?inc=artist-credits+artist-rels+work-rels+releases&fmt=json",
             self.base_url, mbid
         );
-        self.fetch_entity(&url)
+        self.fetch_entity(&url).await
     }
 
     /// Fetch an artist by MBID with aliases.
-    pub fn fetch_artist(&self, mbid: &str) -> Result<MbLookupOutcome> {
+    pub async fn fetch_artist(&self, mbid: &str) -> Result<MbLookupOutcome> {
         let url = format!("{}/artist/{}?inc=aliases&fmt=json", self.base_url, mbid);
-        self.fetch_entity(&url)
+        self.fetch_entity(&url).await
     }
 
     /// Fetch a release by MBID with artist credits, recordings, and media (tracklist).
-    pub fn fetch_release(&self, mbid: &str) -> Result<MbLookupOutcome> {
+    pub async fn fetch_release(&self, mbid: &str) -> Result<MbLookupOutcome> {
         let url = format!(
             "{}/release/{}?inc=recordings+media+artist-credits&fmt=json",
             self.base_url, mbid
         );
-        self.fetch_entity(&url)
+        self.fetch_entity(&url).await
     }
 
     /// Generic entity fetch — GET + return raw JSON bytes.
-    fn fetch_entity(&self, url: &str) -> Result<MbLookupOutcome> {
-        let response = self.client.get(url).send();
+    async fn fetch_entity(&self, url: &str) -> Result<MbLookupOutcome> {
+        let response = self.client.get(url).send().await;
 
         match response {
             Ok(resp) => {
@@ -92,11 +88,12 @@ impl MusicBrainzClient {
                     return Ok(MbLookupOutcome::ServiceUnavailable);
                 }
                 if !status.is_success() {
-                    let body = resp.text().unwrap_or_default();
+                    let body = resp.text().await.unwrap_or_default();
                     anyhow::bail!("MusicBrainz API returned HTTP {}: {}", status, body);
                 }
                 let body = resp
                     .bytes()
+                    .await
                     .context("Failed to read MusicBrainz response body")?;
                 Ok(MbLookupOutcome::Found(body.to_vec()))
             }

@@ -86,10 +86,11 @@ pub struct AcoustIdReleaseGroup {
 // Client + Outcome Types
 // ============================================================================
 
-/// AcoustID API client (blocking reqwest).
+/// AcoustID API client (async reqwest). Clone is cheap (reqwest::Client is Arc internally).
+#[derive(Clone)]
 pub struct AcoustIDClient {
     api_key: String,
-    client: reqwest::blocking::Client,
+    client: reqwest::Client,
 }
 
 /// A single match row to be written to external_matches.
@@ -110,7 +111,7 @@ pub enum LookupOutcome {
 
 impl AcoustIDClient {
     pub fn new(api_key: String) -> Self {
-        let client = reqwest::blocking::Client::builder()
+        let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("failed to build reqwest client");
@@ -124,7 +125,7 @@ impl AcoustIDClient {
     }
 
     /// Look up a fingerprint against AcoustID and return both parsed results and raw JSON.
-    pub fn lookup_with_raw(
+    pub async fn lookup_with_raw(
         &self,
         fingerprint: &[u32],
         duration_secs: u32,
@@ -143,7 +144,8 @@ impl AcoustIDClient {
             .post("https://api.acoustid.org/v2/lookup")
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(form_body)
-            .send();
+            .send()
+            .await;
 
         let response = match response {
             Ok(resp) => {
@@ -152,7 +154,7 @@ impl AcoustIDClient {
                     return Ok((LookupOutcome::RateLimited, None));
                 }
                 if !status.is_success() {
-                    let body = resp.text().unwrap_or_default();
+                    let body = resp.text().await.unwrap_or_default();
                     anyhow::bail!("AcoustID API returned HTTP {}: {}", status, body);
                 }
                 resp
@@ -164,6 +166,7 @@ impl AcoustIDClient {
 
         let raw = response
             .bytes()
+            .await
             .context("Failed to read AcoustID response body")?
             .to_vec();
 

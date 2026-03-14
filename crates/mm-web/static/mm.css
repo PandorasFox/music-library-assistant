@@ -460,3 +460,73 @@ html, body {
 .mm-kv__val {
     color: var(--c-fg);
 }
+
+/* ============================================================
+ * Links
+ * ============================================================ */
+
+.mm-link {
+    color: var(--c-blue);
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.mm-link:hover {
+    text-decoration: underline;
+}
+
+/* ============================================================
+ * Edit History
+ * ============================================================ */
+
+.mm-history-session {
+    margin-bottom: 0.5rem;
+}
+
+.mm-session-detail {
+    margin-left: 1rem;
+    padding-left: 0.5rem;
+    border-left: 1px solid var(--c-fg-muted);
+}
+
+.mm-session-edits {
+    padding: 0.3rem 0;
+}
+
+.mm-edit-row {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.1rem 0;
+    font-size: 0.9rem;
+}
+
+.mm-edit-path {
+    color: var(--c-fg-dim);
+    max-width: 30ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+}
+
+.mm-edit-field {
+    color: var(--c-cyan);
+    min-width: 10ch;
+}
+
+.mm-edit-diff {
+    flex: 1;
+}
+
+.mm-edit-old {
+    color: var(--c-red);
+}
+
+.mm-edit-arrow {
+    color: var(--c-fg-muted);
+}
+
+.mm-edit-new {
+    color: var(--c-green);
+}

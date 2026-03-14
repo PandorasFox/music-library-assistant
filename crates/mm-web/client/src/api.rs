@@ -130,3 +130,23 @@ pub async fn get_status() -> Result<serde_json::Value, JsValue> {
 pub async fn get_query(name: &str) -> Result<serde_json::Value, JsValue> {
     get(&format!("/queries/{name}")).await
 }
+
+/// GET /queries/{name}?key=value → raw JSON value
+pub async fn get_query_with(name: &str, params: &str) -> Result<serde_json::Value, JsValue> {
+    get(&format!("/queries/{name}?{params}")).await
+}
+
+/// GET /tx/details → transaction decision details
+pub async fn tx_details() -> Result<serde_json::Value, JsValue> {
+    get("/tx/details").await
+}
+
+/// POST /tx/confirm → commit transaction
+pub async fn tx_confirm() -> Result<serde_json::Value, JsValue> {
+    post("/tx/confirm", &serde_json::json!({})).await
+}
+
+/// POST /tx/discard → discard transaction
+pub async fn tx_discard() -> Result<serde_json::Value, JsValue> {
+    post("/tx/discard", &serde_json::json!({})).await
+}

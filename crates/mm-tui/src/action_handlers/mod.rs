@@ -88,6 +88,7 @@ impl App {
             ViewAction::KnotBrowser(a) => a.handle(self, witness.as_ref()),
             ViewAction::History(a) => a.handle(self, witness.as_ref()),
             ViewAction::TagCanonicityResolution(a) => a.handle(self, witness.as_ref()),
+            ViewAction::TagCanonicityResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::CompoundTagSplit(a) => a.handle(self, witness.as_ref()),
             ViewAction::MissingAlbumSingleResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::DiscExtractionResolution(a) => a.handle(self, witness.as_ref()),
@@ -490,7 +491,7 @@ impl HandleAction for insights_view::HealthAction {
                         app.start_missing_file_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchTagCanonicityResolution) => {
-                        app.start_tag_canonicity_resolution();
+                        app.start_tag_canonicity_resolution_v3();
                     }
                     Some(insights_view::InsightAction::LaunchCompoundTagSplitSafe) => {
                         let tag_name = insight_type.and_then(|t| match t {

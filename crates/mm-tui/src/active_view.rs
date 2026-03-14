@@ -89,6 +89,13 @@ pub(crate) enum ActiveView {
         state: tag_canonicity_v2::TagCanonicalityStateV2,
         clusters: TagCanonicityClusters,
     },
+
+    // V3: single-load canonicity with packed data + DecisionField
+    TagCanonicityResolutionV3 {
+        state: mm_ui::resolutions::tag_canonicity::TagCanonicityState,
+        field: mm_ui::decision_field::DecisionField,
+        zone: mm_meta::db_types::Zone,
+    },
     CompoundTagSplit {
         state: compound_split_v2::CompoundSplitStateV2,
         clusters: compound_split_v2::CompoundSplitClustersV2,
@@ -143,6 +150,7 @@ impl ActiveView {
             Self::ReleasePackingBrowser(_) => Some("Release Packing Browser"),
             Self::KnotBrowser(_) => Some("Knot Browser"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
+            Self::TagCanonicityResolutionV3 { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
             Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),
             Self::DiscExtractionResolution(_) => Some("Disc Extraction"),
@@ -160,6 +168,7 @@ impl ActiveView {
             Self::StartupMaintenance => None,
             Self::CorpusBrowser(browser) => browser.selected_path(),
             Self::TagCanonicityResolution { state, .. } => state.selected_path(),
+            Self::TagCanonicityResolutionV3 { state, .. } => state.selected_path(),
             Self::CompoundTagSplit { state, .. } => state.selected_path(),
             Self::MissingFileResolution(s) => s.selected_path(),
             Self::MissingDirectoryResolution(s) => s.selected_path(),
@@ -264,6 +273,7 @@ pub(crate) enum ViewAction {
     KnotBrowser(super::knot_browser::KnotBrowserAction),
     History(history_view::HistoryAction),
     TagCanonicityResolution(tag_canonicity_v2::TagCanonicalityActionV2),
+    TagCanonicityResolutionV3(mm_ui::resolutions::tag_canonicity::CanonicityAction),
     CompoundTagSplit(compound_split_v2::CompoundSplitActionV2),
     MissingAlbumSingleResolution(missing_album_modal::MissingAlbumAction),
     DiscExtractionResolution(disc_extraction_modal::DiscExtractionAction),

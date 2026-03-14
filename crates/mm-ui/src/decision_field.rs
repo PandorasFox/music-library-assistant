@@ -75,6 +75,89 @@ impl std::fmt::Debug for DecisionField {
     }
 }
 
+// ============================================================================
+// WithDecisionField — generic render wrapper
+// ============================================================================
+
+use crate::modal_buttons::ModalButtons;
+use crate::modal_frame::{FrameState, ModalFrameCore};
+
+/// Composes a `ModalFrameCore` state with a `DecisionField` for rendering.
+///
+/// Created transiently during render/input calls when both the modal state
+/// and the decision field need to act as one unit. Delegates all
+/// `ModalFrameCore` methods to the inner state, and provides the field
+/// via `decision_field()` / `decision_field_mut()`.
+///
+/// Both TUI (ratatui) and web (HTML) clients implement their render traits
+/// on this wrapper to get DecisionField rendering for free.
+pub struct WithDecisionField<'a, S: ModalFrameCore> {
+    pub state: &'a mut S,
+    pub field: &'a mut DecisionField,
+}
+
+impl<'a, S: ModalFrameCore> WithDecisionField<'a, S> {
+    pub fn new(state: &'a mut S, field: &'a mut DecisionField) -> Self {
+        Self { state, field }
+    }
+}
+
+impl<S: ModalFrameCore> ModalFrameCore for WithDecisionField<'_, S> {
+    type Button = S::Button;
+
+    fn content_layout(&self) -> crate::modal_frame::ContentLayout {
+        self.state.content_layout()
+    }
+
+    fn list_title(&self) -> String {
+        self.state.list_title()
+    }
+
+    fn empty_message(&self) -> &'static str {
+        self.state.empty_message()
+    }
+
+    fn controls_height(&self) -> u16 {
+        self.state.controls_height()
+    }
+
+    fn frame_state(&self) -> &FrameState<S::Button> {
+        self.state.frame_state()
+    }
+
+    fn frame_state_mut(&mut self) -> &mut FrameState<S::Button> {
+        self.state.frame_state_mut()
+    }
+
+    fn cursor(&self) -> usize {
+        self.state.cursor()
+    }
+
+    fn cursor_mut(&mut self) -> &mut usize {
+        self.state.cursor_mut()
+    }
+
+    fn list_len(&self) -> usize {
+        self.state.list_len()
+    }
+
+    fn button_ctx(&self) -> <S::Button as ModalButtons>::Context {
+        self.state.button_ctx()
+    }
+
+    fn escape_action(&self) -> <S::Button as ModalButtons>::Action {
+        self.state.escape_action()
+    }
+
+    fn decision_field(&self) -> Option<&DecisionField> {
+        Some(self.field)
+    }
+
+    fn decision_field_mut(&mut self) -> Option<&mut DecisionField> {
+        Some(self.field)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -422,6 +422,38 @@ impl App {
                 }
             }
             ActiveView::TagCanonicityResolution { state, .. } => dispatch_input_raw!(TagCanonicityResolution, state),
+            ActiveView::TagCanonicityResolutionV3 { ref mut state, ref mut field, .. } => {
+                use mm_ui::group_navigation::{try_group_navigate, GroupInputResult};
+                use mm_ui::modal_frame::FrameInputResult;
+                // Group navigation first (Tab/Shift+Tab)
+                if let Some(result) = try_group_navigate(&state.data, &action) {
+                    match result {
+                        GroupInputResult::NavigateNext => {
+                            state.data.current_cluster += 1;
+                            // Pre-fill decision field with new cluster's canonical candidate
+                            if let Some(cluster) = state.data.inner.clusters.get(state.data.current_cluster) {
+                                field.set_value(&cluster.canonical_candidate);
+                            }
+                            ViewAction::None
+                        }
+                        GroupInputResult::NavigatePrev => {
+                            state.data.current_cluster = state.data.current_cluster.saturating_sub(1);
+                            if let Some(cluster) = state.data.inner.clusters.get(state.data.current_cluster) {
+                                field.set_value(&cluster.canonical_candidate);
+                            }
+                            ViewAction::None
+                        }
+                        GroupInputResult::Consumed => ViewAction::None,
+                        _ => ViewAction::None,
+                    }
+                } else {
+                    // Normal modal input (DecisionField handles text when focused)
+                    match state.handle_input(&action) {
+                        Some(a) => ViewAction::TagCanonicityResolutionV3(a),
+                        None => ViewAction::None,
+                    }
+                }
+            }
             ActiveView::CompoundTagSplit { state, .. } => dispatch_input_raw!(CompoundTagSplit, state),
             ActiveView::MissingAlbumSingleResolution(s) => dispatch_input_raw!(MissingAlbumSingleResolution, s),
             ActiveView::DiscExtractionResolution(s) => dispatch_input_raw!(DiscExtractionResolution, s),

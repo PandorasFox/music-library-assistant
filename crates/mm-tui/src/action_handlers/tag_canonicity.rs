@@ -8,6 +8,7 @@ use super::witness;
 use super::HandleAction;
 use mm_meta::db_types::Zone;
 use mm_meta::decisions::DecisionKey;
+use mm_ui::resolutions::tag_canonicity::CanonicityAction;
 use crate::{
     helpers, insights_view, tag_canonicity_v2, tag_editor, ActiveView, CanonicitySignalKind,
     TagCanonicityClusters,
@@ -449,5 +450,212 @@ impl App {
             }
             CanonicitySignalKind::InboxTagCanonicity => Zone::Inbox,
         }
+    }
+}
+
+// =========================================================================
+// V3: Single-load canonicity with packed data
+// =========================================================================
+
+impl HandleAction for CanonicityAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
+            CanonicityAction::Confirm => {
+                let Some(w) = witness else { return };
+                app.stage_canonicity_decision_v3(w);
+                app.advance_canonicity_v3();
+            }
+            CanonicityAction::FlagCanonical => {
+                let Some(w) = witness else { return };
+                app.stage_flag_canonical_v3(w);
+                app.advance_canonicity_v3();
+            }
+            CanonicityAction::Cancel => {
+                app.cancel_and_return_to_source("Tag canonicity resolution cancelled");
+            }
+        }
+    }
+}
+
+impl App {
+    /// Start tag canonicity resolution using the new packed query (V3).
+    pub(crate) fn start_tag_canonicity_resolution_v3(&mut self) {
+        let insight_type = match &self.view {
+            ActiveView::Insights { ref data, ref interaction } => data.insight_type_at(interaction.list.cursor),
+            _ => None,
+        };
+        let insight_type = match insight_type {
+            Some(t) => t,
+            None => {
+                self.status_message = Some("No insight selected".to_string());
+                return;
+            }
+        };
+
+        // Determine tag_name and zone from insight type
+        let (tag_name, zone) = match &insight_type {
+            insights_view::InsightType::InconsistentAlbumArtist => {
+                ("ALBUMARTIST".to_string(), Zone::Corpus)
+            }
+            insights_view::InsightType::TagCanonicity { tag_name } => {
+                (tag_name.clone(), Zone::Corpus)
+            }
+            _ => {
+                self.status_message = Some("Invalid insight type for tag resolution".to_string());
+                return;
+            }
+        };
+
+        // Single packed query — all clusters at once
+        let data = self.query(mm_meta::domain_queries::GetTagCanonicityResolution {
+            tag_name: tag_name.clone(),
+            zone,
+        });
+
+        if data.clusters.is_empty() {
+            self.status_message = Some("No signals to resolve".to_string());
+            return;
+        }
+
+        // Start transaction
+        let _ = self.start_transaction("Tag canonicalization");
+
+        // Pre-fill DecisionField with first cluster's canonical candidate
+        let prefill = data.clusters.first()
+            .map(|c| c.canonical_candidate.as_str())
+            .unwrap_or("");
+        let field = mm_ui::decision_field::DecisionField::new("Squash to:")
+            .with_value(prefill);
+
+        let state = mm_ui::resolutions::tag_canonicity::TagCanonicityState::new(
+            mm_ui::resolutions::tag_canonicity::TagCanonicityData::new(data),
+        );
+
+        self.view = ActiveView::TagCanonicityResolutionV3 { state, field, zone };
+    }
+
+    /// Advance to next cluster or go to review (V3).
+    fn advance_canonicity_v3(&mut self) {
+        if let ActiveView::TagCanonicityResolutionV3 { ref mut state, ref mut field, .. } = self.view {
+            use mm_ui::group_navigation::GroupNavigation;
+            if state.data.has_next() {
+                state.data.current_cluster += 1;
+                state.cursor = 0;
+                // Pre-fill field with new cluster's canonical candidate
+                if let Some(cluster) = state.data.inner.clusters.get(state.data.current_cluster) {
+                    field.set_value(&cluster.canonical_candidate);
+                }
+            } else {
+                // Last cluster — go to review
+                self.after_staging_decisions();
+            }
+        } else {
+            self.after_staging_decisions();
+        }
+    }
+
+    /// Stage canonicity squash decision for current cluster (V3).
+    fn stage_canonicity_decision_v3(&mut self, gesture: &witness::ConfirmationGesture) {
+        let (mutations, cluster_idx, tag_name) = match &self.view {
+            ActiveView::TagCanonicityResolutionV3 { ref state, ref field, ref zone, .. } => {
+                use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
+                use mm_meta::mutations::{Mutation, TagOp};
+
+                let canonical_value = field.value().trim().to_string();
+                if canonical_value.is_empty() {
+                    return;
+                }
+
+                let cluster = match state.data.inner.clusters.get(state.data.current_cluster) {
+                    Some(c) => c,
+                    None => return,
+                };
+
+                // Build tag ops: for each outlier file, replace its tag value with canonical
+                let mut ops = Vec::new();
+                for variant in &cluster.outlier_variants {
+                    for file in &variant.files {
+                        ops.push(TagOp::replace_tag(
+                            file.inode,
+                            &state.data.inner.tag_name,
+                            &variant.value,
+                            &canonical_value,
+                        ));
+                    }
+                }
+
+                if ops.is_empty() {
+                    return;
+                }
+
+                let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                    ops,
+                    zone: *zone,
+                })];
+
+                (mutations, state.data.current_cluster, state.data.inner.tag_name.clone())
+            }
+            _ => return,
+        };
+
+        let label = format!("Canonicalize {}", tag_name);
+        let decision = gesture.decide(&label, mutations);
+        let _ = super::super::operator_decisions::stage_decision(
+            self,
+            DecisionKey::TagCanonicity {
+                tag_name,
+                cluster_index: cluster_idx,
+            },
+            decision,
+        );
+    }
+
+    /// Stage flag-canonical decision for current cluster (V3).
+    fn stage_flag_canonical_v3(&mut self, gesture: &witness::ConfirmationGesture) {
+        let (mutations, cluster_idx, tag_name) = match &self.view {
+            ActiveView::TagCanonicityResolutionV3 { ref state, .. } => {
+                use mm_meta::mutations::indexing::EmitCanonicalTagMutation;
+                use mm_meta::mutations::Mutation;
+
+                let cluster = match state.data.inner.clusters.get(state.data.current_cluster) {
+                    Some(c) => c,
+                    None => return,
+                };
+
+                // Emit canonical tag for each outlier variant + the canonical candidate
+                let mut mutations: Vec<Mutation> = cluster.outlier_variants
+                    .iter()
+                    .map(|v| {
+                        Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
+                            tag_name: state.data.inner.tag_name.clone(),
+                            canonical_value: v.value.clone(),
+                        })
+                    })
+                    .collect();
+
+                // Also flag the canonical candidate itself
+                mutations.push(Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
+                    tag_name: state.data.inner.tag_name.clone(),
+                    canonical_value: cluster.canonical_candidate.clone(),
+                }));
+
+                if mutations.is_empty() {
+                    return;
+                }
+
+                (mutations, state.data.current_cluster, state.data.inner.tag_name.clone())
+            }
+            _ => return,
+        };
+
+        let decision = gesture.decide("Flag canonical", mutations);
+        let _ = super::super::operator_decisions::stage_decision(
+            self,
+            DecisionKey::TagCanonicity {
+                tag_name,
+                cluster_index: cluster_idx,
+            },
+            decision,
+        );
     }
 }

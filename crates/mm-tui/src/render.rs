@@ -184,6 +184,11 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::TagCanonicityResolution { ref mut state, .. } => {
             tag_canonicity_v2::render(f, area, state);
         }
+        ActiveView::TagCanonicityResolutionV3 { ref mut state, ref mut field, .. } => {
+            use mm_ui::decision_field::WithDecisionField;
+            let mut view = WithDecisionField::new(state, field);
+            view.render_frame(f, area);
+        }
         ActiveView::CompoundTagSplit { ref mut state, .. } => {
             compound_split_v2::render(f, area, state);
         }

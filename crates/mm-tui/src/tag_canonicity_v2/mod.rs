@@ -35,6 +35,7 @@
 //! - Esc: Cancel entire modal
 
 pub mod render;
+pub mod render_v3;
 pub mod types;
 
 pub use render::render;

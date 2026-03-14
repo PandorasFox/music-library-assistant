@@ -6,10 +6,13 @@
 pub use mm_ui::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrameCore};
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
+
+use mm_ui::decision_field::{DecisionField, WithDecisionField};
+use mm_ui::geometry::FocusPane as MmUiFocusPane;
 
 use crate::helpers::render_pane;
 use super::modal_buttons::render_buttons;
@@ -176,5 +179,85 @@ pub trait ModalFrame: ModalFrameCore {
         if !hints.is_empty() {
             f.render_widget(Paragraph::new(Line::from(hints)).alignment(Alignment::Center), rows[1]);
         }
+    }
+}
+
+// ============================================================================
+// WithDecisionField — blanket ModalFrame impl for decision-field modals
+// ============================================================================
+
+/// Blanket `ModalFrame` for any `WithDecisionField<S>` where the inner `S`
+/// implements `ModalFrame`. Delegates all render hooks to `S` and adds
+/// DecisionField rendering via `render_decision_field`.
+impl<S: ModalFrame> ModalFrame for WithDecisionField<'_, S> {
+    fn frame_title(&self) -> Line<'static> {
+        self.state.frame_title()
+    }
+
+    fn accent_color(&self) -> Color {
+        self.state.accent_color()
+    }
+
+    fn controls_hints(&self) -> Vec<Span<'static>> {
+        self.state.controls_hints()
+    }
+
+    fn render_list_item(&self, idx: usize, width: u16, is_cursor: bool, is_focused: bool) -> ListItem<'static> {
+        self.state.render_list_item(idx, width, is_cursor, is_focused)
+    }
+
+    fn render_detail(&mut self, f: &mut Frame, area: Rect) {
+        self.state.render_detail(f, area);
+    }
+
+    fn render_header(&self, f: &mut Frame, area: Rect) {
+        self.state.render_header(f, area);
+    }
+
+    fn render_info_bar(&self, f: &mut Frame, area: Rect) {
+        self.state.render_info_bar(f, area);
+    }
+
+    fn render_decision_field(&self, f: &mut Frame, area: Rect) {
+        render_decision_field_widget(f, area, self.field, self.frame_state().focus_pane);
+    }
+}
+
+/// Render a `DecisionField` as a ratatui bordered input with cursor.
+///
+/// Reusable for any modal that has a decision field — called by the
+/// blanket `ModalFrame for WithDecisionField` impl.
+pub fn render_decision_field_widget(
+    f: &mut Frame,
+    area: Rect,
+    field: &DecisionField,
+    focus_pane: MmUiFocusPane,
+) {
+    let is_focused = focus_pane == MmUiFocusPane::Field;
+    let border_color = if is_focused { Color::Cyan } else { Color::Magenta };
+
+    let block = Block::default()
+        .title(format!(" {} ", field.label))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    let inner = render_pane(f, area, block);
+
+    if is_focused {
+        let (before, cursor_char, after) = field.cursor_splits();
+        let spans = vec![
+            Span::styled(before.to_string(), Style::default().fg(Color::White)),
+            Span::styled(
+                cursor_char.to_string(),
+                Style::default().fg(Color::Black).bg(Color::White),
+            ),
+            Span::styled(after.to_string(), Style::default().fg(Color::White)),
+        ];
+        f.render_widget(Paragraph::new(Line::from(spans)), inner);
+    } else {
+        f.render_widget(
+            Paragraph::new(field.value()).style(Style::default().fg(Color::White)),
+            inner,
+        );
     }
 }

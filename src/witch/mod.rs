@@ -716,20 +716,24 @@ impl Witch {
             HandleCommand::Unauthenticated { body, reply } => {
                 let result = match body {
                     UnauthenticatedBody::Login { username, password } => {
-                        let response = match &self.auth_handle {
+                        match &self.auth_handle {
                             Some(auth) => {
-                                match auth.login(
-                                    &username,
-                                    &password,
+                                // Forward the reply channel to the auth thread —
+                                // it does the work and responds directly.
+                                auth.forward_login(
+                                    username,
+                                    password,
                                     crate::auth::SessionLifetime::CloseOnExit,
-                                ) {
-                                    Ok(token) => AuthResponse::Token(token),
-                                    Err(msg) => AuthResponse::Failed(msg),
-                                }
+                                    reply,
+                                );
+                                return false;
                             }
-                            None => AuthResponse::Failed("Auth not available".to_string()),
-                        };
-                        Ok(UnauthenticatedResponse::Auth(response))
+                            None => {
+                                Ok(UnauthenticatedResponse::Auth(
+                                    AuthResponse::Failed("Auth not available".to_string()),
+                                ))
+                            }
+                        }
                     }
                     UnauthenticatedBody::SetupQuery => {
                         let needs_setup = self.startup_state == types::WitchStartupState::AwaitingSetup;

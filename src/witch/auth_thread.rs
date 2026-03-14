@@ -1,13 +1,15 @@
 //! Dedicated auth thread: session management and user authentication.
 //!
-//! The auth thread owns a read-only DB connection for user table lookups and
-//! an in-memory session map shared via `ArcSwap` for lock-free token validation.
+//! The auth thread runs its own single-threaded tokio runtime, owning a
+//! read-only DB connection for user table lookups and an in-memory session
+//! map shared via `ArcSwap` for lock-free token validation.
 //!
 //! ## Architecture
 //!
-//! - `AuthHandle` (client-facing): send login requests via channel, validate
+//! - `AuthHandle` (client-facing): forward login requests via channel (the auth
+//!   thread replies directly through the forwarded reply channel), validate
 //!   tokens directly via shared `ArcSwap<SessionMap>` (no round-trip).
-//! - `AuthThreadHandle` (Witch-facing): lifecycle management via `ManagedThread`.
+//! - `AuthThreadHandle` (Witch-facing): lifecycle management.
 //!
 //! ## Session Storage
 //!
@@ -17,13 +19,15 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use arc_swap::ArcSwap;
-use tokio::sync::oneshot;
+use tokio::sync::mpsc;
 
 use crate::auth::{self, SessionLifetime, SessionToken};
 use crate::db::Database;
+use crate::meta::protocol::{AuthResponse, ProtocolError, UnauthenticatedResponse};
 
 // ============================================================================
 // Session Storage
@@ -42,12 +46,18 @@ struct SessionEntry {
 // Auth Request Protocol
 // ============================================================================
 
+/// The reply type for unauthenticated protocol requests (forwarded from Witch).
+type UnauthReply =
+    tokio::sync::oneshot::Sender<Result<UnauthenticatedResponse, ProtocolError>>;
+
 enum AuthRequest {
+    /// Login request with the client's original reply channel.
+    /// The auth thread executes the login and replies directly.
     Login {
         username: String,
         password: String,
         lifetime: SessionLifetime,
-        reply: oneshot::Sender<Result<SessionToken, String>>,
+        reply: UnauthReply,
     },
     /// Notify the auth thread that the DB is now available (after first-time setup).
     DbReady,
@@ -60,30 +70,32 @@ enum AuthRequest {
 
 /// Client-facing auth handle. Cloneable, Send + Sync.
 ///
-/// Login uses the channel. Token validation reads the shared session map
-/// directly — no channel round-trip, no contention.
+/// Login forwards the reply channel to the auth thread (which replies directly).
+/// Token validation reads the shared session map — no channel round-trip.
 #[derive(Clone)]
 pub struct AuthHandle {
-    request_tx: tokio::sync::mpsc::UnboundedSender<AuthRequest>,
+    request_tx: mpsc::UnboundedSender<AuthRequest>,
     sessions: Arc<ArcSwap<SessionMap>>,
 }
 
 impl AuthHandle {
-    /// Attempt login. Returns a session token on success.
-    pub fn login(
+    /// Forward a login request to the auth thread.
+    ///
+    /// The auth thread owns the reply channel and responds directly to the
+    /// client — the Witch never blocks on the result.
+    pub fn forward_login(
         &self,
-        username: &str,
-        password: &str,
+        username: String,
+        password: String,
         lifetime: SessionLifetime,
-    ) -> Result<SessionToken, String> {
-        let (tx, rx) = oneshot::channel();
+        reply: UnauthReply,
+    ) {
         let _ = self.request_tx.send(AuthRequest::Login {
-            username: username.to_string(),
-            password: password.to_string(),
+            username,
+            password,
             lifetime,
-            reply: tx,
+            reply,
         });
-        rx.blocking_recv().unwrap_or(Err("Auth thread disconnected".to_string()))
     }
 
     /// Validate a session token. Lock-free — reads directly from shared memory.
@@ -106,8 +118,8 @@ impl AuthHandle {
 
 /// Witch-facing auth thread handle for lifecycle management.
 pub(crate) struct AuthThreadHandle {
-    task: Option<tokio::task::JoinHandle<()>>,
-    request_tx: tokio::sync::mpsc::UnboundedSender<AuthRequest>,
+    handle: Option<JoinHandle<()>>,
+    request_tx: mpsc::UnboundedSender<AuthRequest>,
 }
 
 impl AuthThreadHandle {
@@ -119,11 +131,11 @@ impl AuthThreadHandle {
 }
 
 impl AuthThreadHandle {
-    /// Orderly shutdown: send shutdown signal and abort the task.
+    /// Orderly shutdown: send shutdown signal and join the thread.
     pub(crate) fn shutdown(&mut self) {
         let _ = self.request_tx.send(AuthRequest::Shutdown);
-        if let Some(task) = self.task.take() {
-            task.abort();
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
         }
     }
 }
@@ -138,21 +150,26 @@ impl Drop for AuthThreadHandle {
 // Spawn
 // ============================================================================
 
-/// Spawn the auth thread. Returns client handle + Witch-side handle.
+/// Spawn the auth thread with its own single-threaded tokio runtime.
+/// Returns client handle + Witch-side handle.
 ///
 /// If `db_path` is Some and exists, the thread opens a read-only connection
 /// immediately. If None (AwaitingSetup), the thread starts without a DB and
 /// opens one when it receives `DbReady`.
 pub(crate) fn spawn(db_path: Option<std::path::PathBuf>) -> (AuthHandle, AuthThreadHandle) {
-    let (request_tx, mut request_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (request_tx, request_rx) = mpsc::unbounded_channel();
 
     let sessions = Arc::new(ArcSwap::from_pointee(HashMap::new()));
-    let sessions_for_task = Arc::clone(&sessions);
+    let sessions_for_thread = Arc::clone(&sessions);
 
     let tx_clone = request_tx.clone();
 
-    let task = tokio::task::spawn_blocking(move || {
-        auth_thread_main(&mut request_rx, sessions_for_task, db_path);
+    let handle = thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("auth-thread: failed to create tokio runtime");
+        rt.block_on(auth_thread_main(request_rx, sessions_for_thread, db_path));
     });
 
     let client_handle = AuthHandle {
@@ -161,7 +178,7 @@ pub(crate) fn spawn(db_path: Option<std::path::PathBuf>) -> (AuthHandle, AuthThr
     };
 
     let witch_handle = AuthThreadHandle {
-        task: Some(task),
+        handle: Some(handle),
         request_tx,
     };
 
@@ -172,11 +189,13 @@ pub(crate) fn spawn(db_path: Option<std::path::PathBuf>) -> (AuthHandle, AuthThr
 // Thread Main Loop
 // ============================================================================
 
-fn auth_thread_main(
-    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AuthRequest>,
+async fn auth_thread_main(
+    mut rx: mpsc::UnboundedReceiver<AuthRequest>,
     sessions: Arc<ArcSwap<SessionMap>>,
     db_path: Option<std::path::PathBuf>,
 ) {
+    crate::logging::log_general("[AUTH] Thread started");
+
     // Open read-only DB connection if path provided and exists
     let mut db: Option<Database> = db_path.and_then(|p| {
         if p.exists() {
@@ -191,22 +210,25 @@ fn auth_thread_main(
         }
     });
 
-    loop {
-        match rx.blocking_recv() {
-            Some(AuthRequest::Login {
+    while let Some(request) = rx.recv().await {
+        match request {
+            AuthRequest::Login {
                 username,
                 password,
                 lifetime,
                 reply,
-            }) => {
-                let result = match &db {
-                    Some(db) => attempt_login(db, &username, &password, lifetime, &sessions),
-                    None => Err("Database not available".to_string()),
+            } => {
+                let auth_response = match &db {
+                    Some(db) => match attempt_login(db, &username, &password, lifetime, &sessions) {
+                        Ok(token) => AuthResponse::Token(token),
+                        Err(msg) => AuthResponse::Failed(msg),
+                    },
+                    None => AuthResponse::Failed("Database not available".to_string()),
                 };
-                let _ = reply.send(result);
+                let _ = reply.send(Ok(UnauthenticatedResponse::Auth(auth_response)));
             }
 
-            Some(AuthRequest::DbReady) => {
+            AuthRequest::DbReady => {
                 // First-time setup completed — open DB connection
                 if db.is_none() {
                     if let Ok(path) = crate::config::get_db_path() {
@@ -230,7 +252,7 @@ fn auth_thread_main(
                 }
             }
 
-            Some(AuthRequest::Shutdown) | None => {
+            AuthRequest::Shutdown => {
                 crate::logging::log_general("[AUTH] Shutting down");
                 break;
             }
@@ -317,7 +339,7 @@ mod tests {
 
         // Validate via the same sessions arc
         let handle = AuthHandle {
-            request_tx: tokio::sync::mpsc::unbounded_channel().0,
+            request_tx: mpsc::unbounded_channel().0,
             sessions: Arc::clone(&sessions),
         };
         assert!(handle.validate_token(&token));
@@ -327,7 +349,7 @@ mod tests {
     fn test_validate_token_garbage() {
         let sessions = Arc::new(ArcSwap::from_pointee(HashMap::new()));
         let handle = AuthHandle {
-            request_tx: tokio::sync::mpsc::unbounded_channel().0,
+            request_tx: mpsc::unbounded_channel().0,
             sessions,
         };
         let garbage = SessionToken::from_bytes(vec![0xDE; 32]);
@@ -391,7 +413,7 @@ mod tests {
         sessions.store(Arc::new(map));
 
         let handle = AuthHandle {
-            request_tx: tokio::sync::mpsc::unbounded_channel().0,
+            request_tx: mpsc::unbounded_channel().0,
             sessions: Arc::clone(&sessions),
         };
         assert!(!handle.validate_token(&token));
@@ -414,7 +436,7 @@ mod tests {
         ));
 
         let handle = AuthHandle {
-            request_tx: tokio::sync::mpsc::unbounded_channel().0,
+            request_tx: mpsc::unbounded_channel().0,
             sessions: Arc::clone(&sessions),
         };
         assert!(handle.validate_token(&token));
@@ -452,7 +474,7 @@ mod tests {
             let token_bytes = token.as_bytes().to_vec();
             handles.push(std::thread::spawn(move || {
                 let handle = AuthHandle {
-                    request_tx: tokio::sync::mpsc::unbounded_channel().0,
+                    request_tx: mpsc::unbounded_channel().0,
                     sessions: sessions_clone,
                 };
                 let t = SessionToken::from_bytes(token_bytes);

@@ -397,8 +397,8 @@ pub fn execute_index_file_from_path(
 
         // Note: fingerprint.is_none() does NOT mean corrupt. Fingerprinting
         // can fail for non-corruption reasons (short audio, codec quirks).
-        // VerifyAudio is the authoritative corruption check — it fully decodes
-        // the stream and emits/clears CorruptFile based on actual decode success.
+        // VerifyTags catches tag-level corruption; VerifyAudio catches stream-
+        // level corruption but only runs on force_check startup scans.
 
         // ShitFormat if non-Vorbis container
         if is_shit_format(&extracted.file_type) {

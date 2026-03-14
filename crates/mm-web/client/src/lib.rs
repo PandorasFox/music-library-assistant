@@ -1,7 +1,8 @@
 //! mm-web-client: WASM entry point for the Music Magic web UI.
 //!
 //! Builds mm-ui Node trees from API data and mounts them to the DOM.
-//! Session token persisted in localStorage. View state in URL hash.
+//! Session token persisted in localStorage. View state encoded in URL hash
+//! via the shared [`mm_ui::route::Route`] type.
 //! v1 uses full re-render via innerHTML — no diffing.
 
 mod api;
@@ -15,6 +16,7 @@ use wasm_bindgen_futures::spawn_local;
 use mm_ui::html::widgets::{render_status_bar, render_titlebar};
 use mm_ui::html::{self, div, Node};
 use mm_ui::lateral_view::LateralView;
+use mm_ui::route::{self, Route};
 
 thread_local! {
     static SEARCH_DATA: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
@@ -49,7 +51,7 @@ async fn init() -> Result<(), JsValue> {
     }
 
     if api::has_token() {
-        match load_view_from_hash().await {
+        match load_from_hash().await {
             Ok(()) => return Ok(()),
             Err(_) => api::clear_token(),
         }
@@ -60,58 +62,74 @@ async fn init() -> Result<(), JsValue> {
 }
 
 // ============================================================================
-// View State (URL hash)
+// View State (URL hash ↔ Route)
 // ============================================================================
 
-fn current_view_from_hash() -> &'static str {
+/// Parse the current URL hash into a Route.
+/// Falls back to Health on parse failure.
+fn current_route() -> Route {
     let hash = web_sys::window()
         .unwrap()
         .location()
         .hash()
         .unwrap_or_default();
-    let name = hash.trim_start_matches('#');
-    // Return the raw hash — load_view interprets it, supporting sub-views.
-    // Leak the string to get a &'static str (fine, small set of values).
-    Box::leak(name.to_string().into_boxed_str())
+    let raw = hash.trim_start_matches('#');
+
+    // Split path and query params.
+    let (path, query) = if let Some((p, q)) = raw.split_once('?') {
+        let pairs: Vec<(String, String)> = q
+            .split('&')
+            .filter(|s| !s.is_empty())
+            .filter_map(|pair| {
+                let (k, v) = pair.split_once('=')?;
+                Some((k.to_string(), v.to_string()))
+            })
+            .collect();
+        (p, pairs)
+    } else {
+        (raw, vec![])
+    };
+
+    Route::from_url(path, &query).unwrap_or(Route::Health(route::HealthRoute::default()))
 }
 
-fn view_for_hash(hash: &str) -> LateralView {
-    let base = hash.split('/').next().unwrap_or(hash);
-    match base {
-        "config" => LateralView::Config,
-        "search" => LateralView::Search,
-        "files" => LateralView::Files,
-        "health" => LateralView::Health,
-        "history" => LateralView::History,
-        "transaction" => LateralView::Transaction,
-        "inbox" => LateralView::Inbox,
-        "deploy" => LateralView::Deploy,
-        "external-matches" => LateralView::ExternalMatches,
-        _ if hash.starts_with("packing/") => LateralView::ExternalMatches,
+/// Determine the LateralView for titlebar highlighting.
+/// Overlay routes map to their parent lateral view.
+fn lateral_view_for_route(route: &Route) -> LateralView {
+    route.lateral_view().unwrap_or_else(|| match route {
+        Route::PackingBrowser(_) | Route::KnotBrowser(_) => LateralView::ExternalMatches,
+        Route::TagEditor(_) => LateralView::Search,
+        Route::Resolution(_) => LateralView::Health,
+        Route::TransactionReview(_) => LateralView::Transaction,
         _ => LateralView::Health,
-    }
+    })
 }
 
-fn view_to_hash(view: LateralView) -> &'static str {
-    match view {
-        LateralView::Config => "config",
-        LateralView::Search => "search",
-        LateralView::Files => "files",
-        LateralView::Health => "health",
-        LateralView::History => "history",
-        LateralView::Transaction => "transaction",
-        LateralView::Inbox => "inbox",
-        LateralView::Deploy => "deploy",
-        LateralView::ExternalMatches => "external-matches",
-    }
-}
-
-fn set_hash(hash: &str) {
+/// Navigate to a route by updating the URL hash.
+fn navigate_to(route: &Route) {
+    let url = route.to_url();
+    // Strip leading '/' for hash — browser prepends '#'.
+    let hash = url.strip_prefix('/').unwrap_or(&url);
     web_sys::window()
         .unwrap()
         .location()
         .set_hash(hash)
         .ok();
+}
+
+/// Convenience: build a default route for a lateral view.
+fn route_for_lateral(view: LateralView) -> Route {
+    match view {
+        LateralView::Config => Route::Config(Default::default()),
+        LateralView::Search => Route::Search(Default::default()),
+        LateralView::Files => Route::Files(Default::default()),
+        LateralView::Health => Route::Health(Default::default()),
+        LateralView::History => Route::History(Default::default()),
+        LateralView::Transaction => Route::Transaction(Default::default()),
+        LateralView::Inbox => Route::Inbox(Default::default()),
+        LateralView::Deploy => Route::Deploy(Default::default()),
+        LateralView::ExternalMatches => Route::ExternalMatches(Default::default()),
+    }
 }
 
 // ============================================================================
@@ -271,22 +289,11 @@ fn render_app_shell(
 // View Loading
 // ============================================================================
 
-async fn load_view(hash: &str) -> Result<Node, JsValue> {
-    // Sub-view routing.
-    if let Some(category) = hash.strip_prefix("packing/") {
-        let data = api::get_query_with("packing-browser-data", &format!("category_prefix={category}")).await?;
-        return Ok(views::render_packing_browser_data(category, &data));
-    }
-    if let Some(inode_str) = hash.strip_prefix("tags/") {
-        let inode: i64 = inode_str.parse().map_err(|_| JsValue::from_str("bad inode"))?;
-        let tags = api::get_query_with("corpus-tags", &format!("inode={inode}")).await?;
-        let path = inode_str; // TODO: resolve inode → path
-        return Ok(views::render_tag_editor(inode, path, &tags));
-    }
-
-    let view = view_for_hash(hash);
-    match view {
-        LateralView::Health => {
+/// Fetch data and render content for a route.
+async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
+    match route {
+        // -- Lateral views --
+        Route::Health(_) => {
             let status = api::get_status().await?;
             let insights = api::get_insights().await.ok();
             let mut children = vec![views::render_status_content(&status)];
@@ -296,62 +303,96 @@ async fn load_view(hash: &str) -> Result<Node, JsValue> {
             start_health_poll();
             Ok(div().children(children).into())
         }
-        LateralView::Config => {
+        Route::Config(_) => {
             let config_json = api::get_config_json().await?;
             CONFIG_DATA.with(|cell| *cell.borrow_mut() = Some(config_json.clone()));
             Ok(views::render_config_editor(&config_json))
         }
-        LateralView::Deploy => {
+        Route::Deploy(_) => {
             let data = api::get_deploy_status().await?;
             Ok(views::render_deploy_content(&data))
         }
-        LateralView::Inbox => {
+        Route::Inbox(_) => {
             let data = api::get_inbox_overview().await?;
             Ok(views::render_inbox_content(&data))
         }
-        LateralView::History => {
+        Route::History(_) => {
             let data = api::get_edit_history().await?;
             Ok(views::render_edit_history_content(&data))
         }
-        LateralView::ExternalMatches => {
+        Route::ExternalMatches(_) => {
             let data = api::get_external_matches().await?;
             let mut children = vec![views::render_external_matches_content(&data)];
             children.push(views::render_packing_overview(&data));
             Ok(div().children(children).into())
         }
-        LateralView::Transaction => {
+        Route::Transaction(_) => {
             let status = api::get_status().await?;
             let details = api::tx_details().await.ok();
             Ok(views::render_transaction_content(&status, details.as_ref()))
         }
-        LateralView::Search => {
+        Route::Search(_) => {
             let data = api::get_corpus_files_with_tags().await?;
             SEARCH_DATA.with(|cell| *cell.borrow_mut() = Some(data.clone()));
             Ok(views::render_search_view(&data))
         }
-        LateralView::Files => {
+        Route::Files(_) => {
             let data = api::get_corpus_files_with_tags().await?;
             Ok(views::render_files_view(&data))
+        }
+
+        // -- Overlay views --
+        Route::PackingBrowser(r) => {
+            let data = api::get_query_with(
+                "packing-browser-data",
+                &format!("category_prefix={}", r.category),
+            ).await?;
+            Ok(views::render_packing_browser_data(&r.category, &data))
+        }
+        Route::TagEditor(r) => {
+            let inode = r.inodes.first().copied().ok_or_else(|| {
+                JsValue::from_str("tag editor requires at least one inode")
+            })?;
+            let tags = api::get_query_with(
+                "corpus-tags",
+                &format!("inode={inode}"),
+            ).await?;
+            let path = inode.to_string();
+            Ok(views::render_tag_editor(inode, &path, &tags))
+        }
+
+        // Resolution, TransactionReview, KnotBrowser — not yet wired to web
+        // renderers. Fall back to health view for now.
+        _ => {
+            let status = api::get_status().await?;
+            let insights = api::get_insights().await.ok();
+            let mut children = vec![views::render_status_content(&status)];
+            if let Some(ref ins) = insights {
+                children.push(views::render_insights_content(ins));
+            }
+            start_health_poll();
+            Ok(div().children(children).into())
         }
     }
 }
 
-async fn load_view_from_hash() -> Result<(), JsValue> {
-    let hash = current_view_from_hash();
-    let view = view_for_hash(hash);
+/// Parse the current URL hash into a Route, load its content, and mount.
+async fn load_from_hash() -> Result<(), JsValue> {
+    let route = current_route();
+    let lateral = lateral_view_for_route(&route);
 
     // Check if a transaction is active to show the Transaction tab.
-    let status = if view == LateralView::Health || view == LateralView::Transaction {
-        api::get_status().await.ok()
+    let tx_open = if lateral == LateralView::Health || lateral == LateralView::Transaction {
+        api::get_status()
+            .await
+            .ok()
+            .map_or(false, |s| s.transaction.is_some())
     } else {
-        None
+        false
     };
-    let tx_open = status
-        .as_ref()
-        .map_or(false, |s| s.transaction.is_some());
 
-    let content = load_view(hash).await?;
-    mount(&render_app_shell(view, tx_open, content, Some("Connected")));
+    let content = load_view_for_route(&route).await?;
+    mount(&render_app_shell(lateral, tx_open, content, Some("Connected")));
     Ok(())
 }
 
@@ -381,8 +422,8 @@ async fn do_login() -> Result<(), JsValue> {
 
     match api::login(&user_el.value(), &pass_el.value()).await {
         Ok(_) => {
-            set_hash("health");
-            load_view_from_hash().await?;
+            navigate_to(&Route::Health(Default::default()));
+            load_from_hash().await?;
             Ok(())
         }
         Err(e) => {
@@ -407,9 +448,9 @@ pub fn mm_navigate(view_name: &str) {
         "Ext. Matches" => LateralView::ExternalMatches,
         _ => return,
     };
-    set_hash(view_to_hash(view));
+    navigate_to(&route_for_lateral(view));
     spawn_local(async move {
-        if let Err(e) = load_view_from_hash().await {
+        if let Err(e) = load_from_hash().await {
             web_sys::console::error_1(&format!("navigate error: {e:?}").into());
         }
     });
@@ -425,7 +466,7 @@ pub fn mm_logout() {
 pub fn mm_tx_confirm() {
     spawn_local(async {
         match api::tx_confirm().await {
-            Ok(_) => { load_view_from_hash().await.ok(); }
+            Ok(_) => { load_from_hash().await.ok(); }
             Err(e) => web_sys::console::error_1(&format!("tx confirm error: {e:?}").into()),
         }
     });
@@ -435,7 +476,7 @@ pub fn mm_tx_confirm() {
 pub fn mm_tx_discard() {
     spawn_local(async {
         match api::tx_discard().await {
-            Ok(_) => { load_view_from_hash().await.ok(); }
+            Ok(_) => { load_from_hash().await.ok(); }
             Err(e) => web_sys::console::error_1(&format!("tx discard error: {e:?}").into()),
         }
     });
@@ -506,8 +547,8 @@ async fn do_setup() -> Result<(), JsValue> {
             if !user.is_empty() && !pass.is_empty() {
                 match api::login(&user, &pass).await {
                     Ok(_) => {
-                        set_hash("health");
-                        load_view_from_hash().await?;
+                        navigate_to(&Route::Health(Default::default()));
+                        load_from_hash().await?;
                     }
                     Err(_) => mount(&render_login(None)),
                 }
@@ -526,10 +567,13 @@ async fn do_setup() -> Result<(), JsValue> {
 /// Navigate into a packing category browser.
 #[wasm_bindgen]
 pub fn mm_packing_browse(category: &str) {
-    let cat = category.to_string();
-    set_hash(&format!("packing/{cat}"));
+    let route = Route::PackingBrowser(route::PackingBrowserRoute {
+        category: category.to_string(),
+        cursor: None,
+    });
+    navigate_to(&route);
     spawn_local(async move {
-        if let Err(e) = load_view_from_hash().await {
+        if let Err(e) = load_from_hash().await {
             web_sys::console::error_1(&format!("packing browse error: {e:?}").into());
         }
     });
@@ -594,7 +638,7 @@ pub fn mm_queue_task(task: &str) {
         match api::queue_task(&task).await {
             Ok(_) => {
                 // Refresh current view to update counts.
-                load_view_from_hash().await.ok();
+                load_from_hash().await.ok();
             }
             Err(e) => web_sys::console::error_1(&format!("queue-task error: {e:?}").into()),
         }
@@ -615,7 +659,7 @@ pub fn mm_execute(binding_json: &str) {
         };
         match api::execute_action(&binding).await {
             Ok(_) => {
-                load_view_from_hash().await.ok();
+                load_from_hash().await.ok();
             }
             Err(e) => web_sys::console::error_1(&format!("mm_execute error: {e:?}").into()),
         }
@@ -740,7 +784,7 @@ async fn do_config_save() -> Result<(), JsValue> {
 
     api::save_config(&config).await?;
     // Reload config view to show saved state.
-    load_view_from_hash().await?;
+    load_from_hash().await?;
     Ok(())
 }
 

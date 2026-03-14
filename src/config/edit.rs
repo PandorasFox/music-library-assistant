@@ -350,6 +350,9 @@ pub fn apply_config_edits_to_kdl(
         || new_em.requests_per_second != old_em.requests_per_second
         || new_em.mb_requests_per_second != old_em.mb_requests_per_second
         || new_em.mb_base_url != old_em.mb_base_url
+        || new_em.auto_enrich_on_match != old_em.auto_enrich_on_match
+        || new_em.mb_cache_ttl_days != old_em.mb_cache_ttl_days
+        || new_em.preferred_locales != old_em.preferred_locales
     {
         let block = ensure_child_block(opinions_doc, Opinions::KDL_BLOCK_EXTERNAL_MATCHING);
         if new_em.acoustid_api_key != old_em.acoustid_api_key {
@@ -379,6 +382,31 @@ pub fn apply_config_edits_to_kdl(
                 ExternalMatchingConfig::KDL_MB_BASE_URL,
                 &new_em.mb_base_url,
             );
+        }
+        if new_em.auto_enrich_on_match != old_em.auto_enrich_on_match {
+            set_or_create_bool_node(
+                block,
+                ExternalMatchingConfig::KDL_AUTO_ENRICH,
+                new_em.auto_enrich_on_match,
+            );
+        }
+        if new_em.mb_cache_ttl_days != old_em.mb_cache_ttl_days {
+            set_or_create_int_node(
+                block,
+                ExternalMatchingConfig::KDL_MB_CACHE_TTL,
+                new_em.mb_cache_ttl_days as i64,
+            );
+        }
+        if new_em.preferred_locales != old_em.preferred_locales {
+            // Remove old node and create new one with all locale values
+            block
+                .nodes_mut()
+                .retain(|n| n.name().value() != ExternalMatchingConfig::KDL_PREFERRED_LOCALES);
+            let mut node = kdl::KdlNode::new(ExternalMatchingConfig::KDL_PREFERRED_LOCALES);
+            for locale in &new_em.preferred_locales {
+                node.push(kdl::KdlEntry::new(kdl::KdlValue::String(locale.clone())));
+            }
+            block.nodes_mut().push(node);
         }
     }
 

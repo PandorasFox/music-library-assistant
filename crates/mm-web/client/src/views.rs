@@ -651,33 +651,48 @@ fn config_field(key: &str, val: &serde_json::Value) -> Node {
                 .into()
         }
         serde_json::Value::Array(arr) => {
-            let vals = arr
-                .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let field_id = format!("cfg-{key}");
-            div()
-                .class("mm-config-field")
-                .child(html::label().attr("for", &field_id).text(&display_key))
-                .child(
-                    html::input()
-                        .attr("type", "text")
-                        .attr("id", &field_id)
-                        .attr("name", key)
-                        .attr("value", vals)
-                        .attr("placeholder", "comma-separated")
-                        .class("mm-config-input"),
-                )
-                .into()
+            // Only render as editable if all elements are strings (flat list).
+            // Arrays of tuples/objects can't round-trip through a text input.
+            let all_strings = arr.iter().all(|v| v.is_string());
+            if all_strings {
+                let vals = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let field_id = format!("cfg-{key}");
+                div()
+                    .class("mm-config-field")
+                    .child(html::label().attr("for", &field_id).text(&display_key))
+                    .child(
+                        html::input()
+                            .attr("type", "text")
+                            .attr("id", &field_id)
+                            .attr("name", key)
+                            .attr("value", vals)
+                            .attr("placeholder", "comma-separated")
+                            .class("mm-config-input"),
+                    )
+                    .into()
+            } else {
+                // Non-string array — show read-only summary
+                config_field_readonly(&display_key, &format!("[{} items]", arr.len()))
+            }
         }
         serde_json::Value::Object(obj) => {
-            let items: Vec<Node> = obj.iter().map(|(k, v)| config_field(k, v)).collect();
-            div()
-                .class("mm-config-nested")
-                .child(span().class("mm-config-nested-label").text(&display_key))
-                .children(items)
-                .into()
+            // Render nested objects read-only to avoid save clobbering
+            // complex structures (HashMaps, nested configs).
+            let summary: Vec<String> = obj
+                .iter()
+                .take(3)
+                .map(|(k, _)| k.clone())
+                .collect();
+            let label = if obj.len() > 3 {
+                format!("{{{}, ... +{}}}", summary.join(", "), obj.len() - 3)
+            } else {
+                format!("{{{}}}", summary.join(", "))
+            };
+            config_field_readonly(&display_key, &label)
         }
     }
 }

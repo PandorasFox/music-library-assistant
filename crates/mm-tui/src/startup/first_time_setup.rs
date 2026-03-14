@@ -4,7 +4,7 @@
 //! `run_tui()` when the Witch is in `AwaitingSetup` state:
 //!
 //! - `run_directory_picker()`: Interactive filesystem browser for selecting archive root.
-//! - `handle_db_setup_dialog()`: Confirmation dialog when config exists but DB was deleted.
+//! - `run_create_account()`: Form for creating the first administrator account.
 //!
 //! Infrastructure creation (config, dirs, DB) is handled by the Witch via `CompleteSetup`.
 
@@ -12,7 +12,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode};
 use ratatui::backend::Backend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Terminal;
@@ -71,9 +71,17 @@ impl DirectoryPickerState {
 
 /// Run the directory picker, returning the selected path.
 ///
-/// Called from `run_tui()` when no config exists. The caller (TUI) owns the terminal.
-pub fn run_directory_picker<B: Backend>(terminal: &mut Terminal<B>) -> Result<PathBuf> {
+/// Called from `run_tui()` during first-time setup. The caller (TUI) owns the terminal.
+/// If `suggested_root` is provided (e.g. from MM_ROOT env var), the picker
+/// navigates there initially.
+pub fn run_directory_picker<B: Backend>(
+    terminal: &mut Terminal<B>,
+    suggested_root: Option<PathBuf>,
+) -> Result<PathBuf> {
     let mut state = DirectoryPickerState::new();
+    if let Some(ref root) = suggested_root {
+        state.navigator.navigate_to_path(root);
+    }
 
     loop {
         terminal.draw(|f| render_directory_picker(f, &mut state))?;
@@ -334,83 +342,6 @@ fn render_picker_entry(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
         Span::styled(expand_indicator, Style::default().fg(Color::Yellow)),
         Span::styled(entry.name.clone(), name_style),
     ])
-}
-
-// ============================================================================
-// DB Setup Dialog (config exists, DB was deleted)
-// ============================================================================
-
-/// Show a confirmation dialog when config exists but database was deleted.
-///
-/// UI-only: shows the dialog, waits for Enter/Esc. Infrastructure creation
-/// (dirs, DB) is handled by the Witch via `CompleteSetup`.
-pub fn handle_db_setup_dialog<B: Backend>(
-    terminal: &mut Terminal<B>,
-    db_path: &Path,
-) -> Result<()> {
-    let db_display = db_path.to_string_lossy();
-
-    loop {
-        terminal.draw(|f| {
-            let area = f.area();
-
-            let dialog_width = 65.min(area.width.saturating_sub(4));
-            let dialog_height = 14.min(area.height.saturating_sub(4));
-
-            let dialog_area = Rect {
-                x: (area.width.saturating_sub(dialog_width)) / 2,
-                y: (area.height.saturating_sub(dialog_height)) / 2,
-                width: dialog_width,
-                height: dialog_height,
-            };
-
-            f.render_widget(Clear, dialog_area);
-
-            let lines = vec![
-                Line::from(""),
-                Line::from("Welcome back to MM!").style(
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Line::from(""),
-                Line::from("No database found. MM will create a new one at:")
-                    .style(Style::default().fg(Color::White)),
-                Line::from(""),
-                Line::from(format!("  {}", db_display)).style(Style::default().fg(Color::Yellow)),
-                Line::from(""),
-                Line::from("After setup, your corpus will be scanned.")
-                    .style(Style::default().fg(Color::DarkGray)),
-                Line::from(""),
-                Line::from("[Enter] Create Database    [Esc] Exit")
-                    .style(Style::default().fg(Color::Cyan)),
-            ];
-
-            let paragraph = Paragraph::new(lines)
-                .block(
-                    Block::default()
-                        .title(" Database Setup ")
-                        .title_alignment(Alignment::Center)
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan)),
-                )
-                .alignment(Alignment::Center);
-
-            f.render_widget(paragraph, dialog_area);
-        })?;
-
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Enter => break,
-                KeyCode::Esc => {
-                    return Err(anyhow::anyhow!("Setup cancelled by user"));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
 }
 
 // ============================================================================

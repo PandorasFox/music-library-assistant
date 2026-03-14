@@ -1,7 +1,7 @@
 //! Startup UI
 //!
 //! This module contains the UI components for startup flows:
-//! - First-time setup (directory picker, DB setup dialog) — runs pre-loop in `run_tui()`
+//! - First-time setup (directory picker, account creation) — runs pre-loop in `run_tui()`
 //! - Startup maintenance (non-interactive progress for schema reconciliation / vacuum)
 //! - Intake confirmation (index unindexed files)
 //!
@@ -20,7 +20,6 @@ pub mod login;
 pub mod migrations;
 pub mod vacuum;
 
-pub use first_time_setup::handle_db_setup_dialog;
 pub use first_time_setup::run_directory_picker;
 pub use intake_confirmation::{IntakeConfirmationAction, IntakeConfirmationState, IntakeSource};
 

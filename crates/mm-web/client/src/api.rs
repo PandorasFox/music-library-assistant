@@ -239,9 +239,27 @@ pub async fn search_corpus(query: &str, limit: usize) -> Result<serde_json::Valu
 // Transaction endpoints
 // ============================================================================
 
-/// GET /tx/details → transaction decision details (raw JSON)
-pub async fn tx_details() -> Result<serde_json::Value, JsValue> {
-    get("/tx/details").await
+/// GET /tx/details → typed decision details
+pub async fn tx_details() -> Result<Vec<mm_meta::protocol::DecisionDetail>, JsValue> {
+    from_json(get("/tx/details").await?)
+}
+
+/// POST /tx/start → start a new transaction
+pub async fn tx_start(label: &str) -> Result<serde_json::Value, JsValue> {
+    post("/tx/start", &serde_json::json!({ "label": label })).await
+}
+
+/// POST /tx/add → add a decision to the active transaction
+pub async fn tx_add(
+    key: &mm_meta::decisions::DecisionKey,
+    decision: &mm_meta::decisions::Decision,
+) -> Result<serde_json::Value, JsValue> {
+    post("/tx/add", &serde_json::json!({ "key": key, "decision": decision })).await
+}
+
+/// POST /tx/remove → remove a decision by key
+pub async fn tx_remove(key: &mm_meta::decisions::DecisionKey) -> Result<serde_json::Value, JsValue> {
+    post("/tx/remove", &serde_json::json!({ "key": key })).await
 }
 
 /// POST /tx/confirm → commit transaction

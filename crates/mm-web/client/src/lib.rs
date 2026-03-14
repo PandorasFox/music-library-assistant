@@ -329,8 +329,8 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
         }
         Route::Transaction(_) => {
             let status = api::get_status().await?;
-            let details = api::tx_details().await.ok();
-            Ok(views::render_transaction_content(&status, details.as_ref()))
+            let details = api::tx_details().await.unwrap_or_default();
+            Ok(views::render_transaction_content(&status, &details))
         }
         Route::Search(_) => {
             Ok(views::render_search_view())
@@ -360,8 +360,14 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
             Ok(views::render_tag_editor(inode, &path, &tags))
         }
 
-        // Resolution, TransactionReview, KnotBrowser — not yet wired to web
-        // renderers. Fall back to health view for now.
+        Route::TransactionReview(_) => {
+            let status = api::get_status().await?;
+            let details = api::tx_details().await.unwrap_or_default();
+            Ok(views::render_transaction_review(&status, &details))
+        }
+
+        // Resolution, KnotBrowser — not yet wired to web renderers.
+        // Fall back to health view for now.
         _ => {
             let status = api::get_status().await?;
             let insights = api::get_insights().await.ok();
@@ -473,6 +479,41 @@ pub fn mm_tx_discard() {
         match api::tx_discard().await {
             Ok(_) => { load_from_hash().await.ok(); }
             Err(e) => web_sys::console::error_1(&format!("tx discard error: {e:?}").into()),
+        }
+    });
+}
+
+#[wasm_bindgen]
+pub fn mm_tx_remove(key_json: &str) {
+    let json_str = key_json.to_string();
+    spawn_local(async move {
+        let key: mm_meta::decisions::DecisionKey = match serde_json::from_str(&json_str) {
+            Ok(k) => k,
+            Err(e) => {
+                web_sys::console::error_1(&format!("tx_remove parse error: {e}").into());
+                return;
+            }
+        };
+        match api::tx_remove(&key).await {
+            Ok(_) => { load_from_hash().await.ok(); }
+            Err(e) => web_sys::console::error_1(&format!("tx remove error: {e:?}").into()),
+        }
+    });
+}
+
+/// Navigate to an arbitrary hash route and reload the view.
+#[wasm_bindgen]
+pub fn mm_navigate_route(hash: &str) {
+    stop_poll();
+    let hash = hash.to_string();
+    web_sys::window()
+        .unwrap()
+        .location()
+        .set_hash(&hash)
+        .ok();
+    spawn_local(async move {
+        if let Err(e) = load_from_hash().await {
+            web_sys::console::error_1(&format!("navigate error: {e:?}").into());
         }
     });
 }
@@ -659,6 +700,52 @@ pub fn mm_execute(binding_json: &str) {
             Err(e) => web_sys::console::error_1(&format!("mm_execute error: {e:?}").into()),
         }
     });
+}
+
+/// Build intake index mutations client-side, submit via tx API, navigate to review.
+#[wasm_bindgen]
+pub fn mm_index_now() {
+    spawn_local(async {
+        if let Err(e) = do_index_now().await {
+            web_sys::console::error_1(&format!("index now error: {e:?}").into());
+        }
+    });
+}
+
+async fn do_index_now() -> Result<(), JsValue> {
+    use mm_meta::decisions::{Decision, DecisionKey};
+    use mm_meta::views::startup_organize::IntakeConfirmationState;
+
+    // Fetch intake confirmation data.
+    let data = api::get_query_with("intake-confirmation", "source=Health&zone=Corpus").await?;
+    let intake: Option<IntakeConfirmationState> = serde_json::from_value(data)
+        .map_err(|e| JsValue::from_str(&format!("deserialize intake: {e}")))?;
+
+    let Some(intake) = intake else {
+        // Nothing to index.
+        load_from_hash().await.ok();
+        return Ok(());
+    };
+
+    let mutations = intake.create_index_mutations();
+    if mutations.is_empty() {
+        load_from_hash().await.ok();
+        return Ok(());
+    }
+
+    let label = "Index unindexed files";
+    let decision = Decision {
+        label: label.to_string(),
+        mutations,
+    };
+
+    // Start transaction, add decision, navigate to review.
+    api::tx_start(label).await?;
+    api::tx_add(&DecisionKey::IntakeIndex, &decision).await?;
+
+    navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
+    load_from_hash().await?;
+    Ok(())
 }
 
 /// Debounced server-side search. Cancels any pending search timer, then

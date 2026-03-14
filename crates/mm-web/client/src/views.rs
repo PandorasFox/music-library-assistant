@@ -4,13 +4,12 @@
 //! mismatches. Functions that remain on `&serde_json::Value` are generic
 //! display utilities or use composite responses without a single mm-meta type.
 
-use mm_meta::decisions::DecisionKey;
+use mm_meta::protocol::DecisionDetail;
 use mm_meta::views::{
     DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
 };
 use mm_meta::witch_types::{WitchStatus, WorkStateSnapshot};
 use mm_ui::html::{self, div, h3, section, span, Node};
-use mm_ui::protocol_binding::ProtocolBinding;
 
 // ============================================================================
 // Shared helpers
@@ -140,11 +139,6 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
 
     // Intake alert banners.
     if corpus.files_unindexed > 0 {
-        let binding = ProtocolBinding::Transaction {
-            decision_key: DecisionKey::IntakeIndex,
-            label: "Index unindexed files".to_string(),
-        };
-        let binding_json = serde_json::to_string(&binding).unwrap();
         sections.push(
             div()
                 .class("mm-alert")
@@ -154,10 +148,7 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
                 .child(
                     html::button()
                         .class("mm-btn mm-alert__action")
-                        .attr("onclick", format!(
-                            "window.__mm_execute('{}')",
-                            binding_json,
-                        ))
+                        .attr("onclick", "window.__mm_index_now()")
                         .text("Index Now"),
                 )
                 .into(),
@@ -170,6 +161,12 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
                 .child(span().class("mm-alert__text").text(
                     format!("{} missing files", corpus.files_missing),
                 ))
+                .child(
+                    html::button()
+                        .class("mm-btn mm-alert__action")
+                        .attr("onclick", "window.__mm_navigate_route('resolve/missing-files')")
+                        .text("Resolve"),
+                )
                 .into(),
         );
     }
@@ -180,6 +177,12 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
                 .child(span().class("mm-alert__text").text(
                     format!("{} corrupt files", corpus.corrupt_files),
                 ))
+                .child(
+                    html::button()
+                        .class("mm-btn mm-alert__action")
+                        .attr("onclick", "window.__mm_navigate_route('resolve/corrupt-files')")
+                        .text("Resolve"),
+                )
                 .into(),
         );
     }
@@ -190,6 +193,12 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
                 .child(span().class("mm-alert__text").text(
                     format!("{} relocated files", corpus.files_relocated),
                 ))
+                .child(
+                    html::button()
+                        .class("mm-btn mm-alert__action")
+                        .attr("onclick", "window.__mm_navigate_route('resolve/moved-files')")
+                        .text("Resolve"),
+                )
                 .into(),
         );
     }
@@ -283,6 +292,25 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
 
 pub fn render_external_matches_content(data: &ExternalMatchesData) -> Node {
     let mut sections = Vec::new();
+
+    // Action buttons.
+    sections.push(
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("onclick", "window.__mm_queue_task('ExternalFetch')")
+                    .text("Fetch External Data"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("onclick", "window.__mm_queue_task('ReleasePacking')")
+                    .text("Run Packing"),
+            )
+            .into(),
+    );
 
     let packing_items = vec![
         kv("Perfect", &data.packing_perfect_count.to_string()),
@@ -449,7 +477,7 @@ pub fn render_deploy_content(data: &DeployStatus) -> Node {
 
 pub fn render_transaction_content(
     status: &WitchStatus,
-    details: Option<&serde_json::Value>,
+    details: &[DecisionDetail],
 ) -> Node {
     let tx = match status.transaction {
         Some(ref tx) => tx,
@@ -486,25 +514,152 @@ pub fn render_transaction_content(
                     .attr("onclick", "window.__mm_tx_discard()")
                     .text("Discard"),
             )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("onclick", "window.__mm_navigate_route('review')")
+                    .text("Review"),
+            )
             .into(),
     );
     sections.push(titled_section("Active Transaction", summary));
 
-    if let Some(detail_arr) = details.and_then(|d| d.as_array()) {
-        let decision_items: Vec<Node> = detail_arr
+    if !details.is_empty() {
+        let decision_items: Vec<Node> = details
             .iter()
-            .filter_map(|d| {
-                let label = d.get("label")?.as_str().unwrap_or("?");
-                let key = d.get("key")?;
-                let key_str = serde_json::to_string(key).unwrap_or_default();
-                let mutations = d.get("mutations").and_then(|m| m.as_array()).map_or(0, |a| a.len());
-                Some(kv(label, &format!("{mutations} mutations — {key_str}")))
+            .map(|d| {
+                let key_json = serde_json::to_string(&d.key).unwrap_or_default();
+                let escaped_key = key_json.replace('\'', "\\'");
+                div()
+                    .class("mm-kv")
+                    .child(span().class("mm-kv__key").text(&d.label))
+                    .child(span().class("mm-kv__val").text(
+                        format!("{} mutations", d.mutations.len()),
+                    ))
+                    .child(
+                        html::button()
+                            .class("mm-btn mm-btn--small")
+                            .attr("style", "border-color:var(--c-red)")
+                            .attr(
+                                "onclick",
+                                format!("window.__mm_tx_remove('{escaped_key}')"),
+                            )
+                            .text("Remove"),
+                    )
+                    .into()
             })
             .collect();
-        if !decision_items.is_empty() {
-            sections.push(titled_section("Decisions", decision_items));
-        }
+        sections.push(titled_section("Decisions", decision_items));
     }
+    div().children(sections).into()
+}
+
+/// Render the transaction review view — detailed diff display.
+pub fn render_transaction_review(
+    status: &WitchStatus,
+    details: &[DecisionDetail],
+) -> Node {
+    if status.transaction.is_none() {
+        return section()
+            .class("mm-section")
+            .child(h3().class("mm-section__title").text("Transaction Review"))
+            .child(span().class("mm-kv__val").text("No active transaction"))
+            .into();
+    }
+
+    let mut sections = Vec::new();
+
+    // Buttons at top.
+    sections.push(
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-green)")
+                    .attr("onclick", "window.__mm_tx_confirm()")
+                    .text("Confirm"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-red)")
+                    .attr("onclick", "window.__mm_tx_discard()")
+                    .text("Discard"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("onclick", "window.__mm_navigate_route('transaction')")
+                    .text("Back"),
+            )
+            .into(),
+    );
+
+    // Decision details with diffs.
+    for d in details {
+        let key_json = serde_json::to_string(&d.key).unwrap_or_default();
+        let escaped_key = key_json.replace('\'', "\\'");
+
+        let diff_entries: Vec<_> = d.mutations.iter().flat_map(|m| m.diff_entries()).collect();
+
+        let mut decision_items = vec![
+            div()
+                .class("mm-kv")
+                .child(span().class("mm-kv__val").text(
+                    format!("{} mutations", d.mutations.len()),
+                ))
+                .child(
+                    html::button()
+                        .class("mm-btn mm-btn--small")
+                        .attr("style", "border-color:var(--c-red)")
+                        .attr(
+                            "onclick",
+                            format!("window.__mm_tx_remove('{escaped_key}')"),
+                        )
+                        .text("Remove"),
+                )
+                .into(),
+        ];
+
+        // Render diff entries as a table-like layout.
+        for entry in &diff_entries {
+            decision_items.push(
+                div()
+                    .class("mm-edit-row")
+                    .child(span().class("mm-edit-field").text(&entry.label))
+                    .child(
+                        span()
+                            .class("mm-edit-diff")
+                            .child(span().class("mm-edit-old").text(&entry.old_value))
+                            .child(span().class("mm-edit-arrow").text(" \u{2192} "))
+                            .child(span().class("mm-edit-new").text(&entry.new_value)),
+                    )
+                    .into(),
+            );
+        }
+
+        if diff_entries.is_empty() {
+            decision_items.push(
+                span()
+                    .class("mm-kv__val")
+                    .text(format!("{} mutations (no diff preview)", d.mutations.len()))
+                    .into(),
+            );
+        }
+
+        sections.push(titled_section(&d.label, decision_items));
+    }
+
+    if details.is_empty() {
+        sections.push(
+            span()
+                .class("mm-kv__val")
+                .text("No decisions staged")
+                .into(),
+        );
+    }
+
     div().children(sections).into()
 }
 

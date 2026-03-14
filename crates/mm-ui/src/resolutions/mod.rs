@@ -8,15 +8,23 @@
 //!
 //! Rendering stays in the client crates (mm-tui, mm-web).
 
+pub mod compound_split;
 pub mod corrupt_file;
+pub mod deploy_conflicts;
 pub mod directory_cluster;
 pub mod disc_extraction;
 pub mod external_match;
 pub mod inbox_corpus_match;
+pub mod inconsistent_album_artist;
+pub mod manual_review;
+pub mod metadata_duplicates;
 pub mod missing_album;
 pub mod missing_directory;
 pub mod missing_file;
 pub mod moved_file;
 pub mod oob_sync;
+pub mod redundant_duplicates;
+pub mod same_recording;
 pub mod shit_format;
 pub mod subpar_duplicate;
+pub mod tag_canonicity;

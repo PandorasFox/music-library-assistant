@@ -95,11 +95,10 @@ impl HandleAction for missing_directory_modal::MissingDirectoryPreviewAction {
 impl HandleAction for corrupt_file_modal::CorruptFilePreviewAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            corrupt_file_modal::CorruptFilePreviewAction::None => {}
             corrupt_file_modal::CorruptFilePreviewAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
-                    ActiveView::CorruptFileResolution(ref p) => corrupt_file_modal::stash_and_drop_mutations(&p.cached_data, &app.resolver),
+                    ActiveView::CorruptFileResolution(ref p) => corrupt_file_modal::stash_and_drop_mutations(&p.data.0, &app.resolver),
                     _ => Vec::new(),
                 };
                 app.stage_resolution(mutations, "Stash corrupt files", DecisionKey::CorruptFile, "No files to stash", w);
@@ -355,11 +354,11 @@ impl App {
     }
 
     pub(crate) fn start_corrupt_file_resolution(&mut self) {
-        start_resolution!(self,
-            mm_meta::domain_queries::GetCorruptFileData,
-            corrupt_file_modal::CorruptFilePreviewState,
-            CorruptFileResolution
+        let data = self.query(mm_meta::domain_queries::GetCorruptFileData);
+        let preview = corrupt_file_modal::CorruptFilePreviewState::new(
+            corrupt_file_modal::CorruptFileData(data),
         );
+        self.view = ActiveView::CorruptFileResolution(preview);
     }
 
     pub(crate) fn start_shit_format_resolution(&mut self) {

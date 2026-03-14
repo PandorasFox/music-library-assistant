@@ -69,7 +69,6 @@ impl HandleAction for oob_conflict_modal::OobConflictAction {
 impl HandleAction for moved_file_modal::MovedFileAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            moved_file_modal::MovedFileAction::None => {}
             moved_file_modal::MovedFileAction::Acknowledge => {
                 let Some(w) = witness else { return };
                 app.stage_moved_file_acknowledge(w);
@@ -371,7 +370,7 @@ impl App {
         // Start transaction for the acknowledgement
         let _ = self.start_transaction("Moved file acknowledgement");
 
-        let state = moved_file_modal::MovedFileState::new(files);
+        let state = moved_file_modal::MovedFileState::new(moved_file_modal::MovedFileData { files });
         self.view = ActiveView::MovedFileAcknowledge(state);
     }
 
@@ -383,22 +382,22 @@ impl App {
 
         let (mutations, label) = match &self.view {
             ActiveView::MovedFileAcknowledge(ref state) => {
-                if state.files.is_empty() {
+                if state.data.files.is_empty() {
                     return;
                 }
 
                 // Create UpdateFilePath mutations for each moved file
                 let mut mutations = Vec::new();
-                for (inode, new_path, old_zone, new_zone) in state.files_for_mutation() {
-                    let cross_zone = if old_zone != new_zone {
-                        Some(new_zone)
+                for f in &state.data.files {
+                    let cross_zone = if f.old_zone != f.new_zone {
+                        Some(f.new_zone.clone())
                     } else {
                         None
                     };
                     mutations.push(Mutation::UpdateFilePath(UpdateFilePathMutation {
-                        zone: old_zone,
-                        inode,
-                        new_path: PathBuf::from(&new_path),
+                        zone: f.old_zone.clone(),
+                        inode: f.inode,
+                        new_path: PathBuf::from(&f.new_path),
                         new_zone: cross_zone,
                     }));
                 }

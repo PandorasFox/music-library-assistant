@@ -11,38 +11,10 @@ use ratatui::{
 use super::types::MovedFileState;
 use crate::helpers::render_pane;
 use crate::widgets::{ModalFrame, PathField, CURSOR_STYLE, LIST_ITEM_STYLE};
-use crate::widgets::modal_frame::{ContentLayout, FrameState, ModalFrameCore};
 
 /// Render the moved file acknowledgement modal.
 pub fn render(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
     state.render_frame(f, area);
-}
-
-impl ModalFrameCore for MovedFileState {
-    type Button = super::types::MovedFileButton;
-
-    fn content_layout(&self) -> ContentLayout {
-        ContentLayout::FourSection {
-            header_height: 3,
-            detail_height: 6,
-        }
-    }
-
-    fn list_title(&self) -> String {
-        "Files".to_string()
-    }
-
-    fn empty_message(&self) -> &'static str {
-        "No moved files to acknowledge"
-    }
-
-    fn frame_state(&self) -> &FrameState<super::types::MovedFileButton> { &self.frame }
-    fn frame_state_mut(&mut self) -> &mut FrameState<super::types::MovedFileButton> { &mut self.frame }
-    fn cursor(&self) -> usize { self.current_file }
-    fn cursor_mut(&mut self) -> &mut usize { &mut self.current_file }
-    fn list_len(&self) -> usize { self.files.len() }
-    fn button_ctx(&self) -> super::types::MovedFileButtonCtx { MovedFileState::button_ctx(self) }
-    fn escape_action(&self) -> super::types::MovedFileAction { super::types::MovedFileAction::Cancel }
 }
 
 impl ModalFrame for MovedFileState {
@@ -56,7 +28,7 @@ impl ModalFrame for MovedFileState {
     }
 
     fn render_header(&self, f: &mut Frame, area: Rect) {
-        let count = self.files.len();
+        let count = self.data.files.len();
         let text = format!(
             "Moved Files: {} file{} detected with path changes",
             count,
@@ -79,7 +51,7 @@ impl ModalFrame for MovedFileState {
         is_cursor: bool,
         _is_focused: bool,
     ) -> ListItem<'static> {
-        let file = &self.files[idx];
+        let file = &self.data.files[idx];
         let indicator = if is_cursor { "\u{25b6} " } else { "  " };
         let style = if is_cursor {
             CURSOR_STYLE
@@ -101,11 +73,11 @@ impl ModalFrame for MovedFileState {
 
         let inner = render_pane(f, area, block);
 
-        if self.files.is_empty() {
+        if self.data.files.is_empty() {
             return;
         }
 
-        let file = &self.files[self.current_file];
+        let file = &self.data.files[self.cursor];
 
         let mut lines = Vec::new();
         lines.extend(

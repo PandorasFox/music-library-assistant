@@ -14,7 +14,7 @@ use ratatui::{
 use super::active_view::{ActiveView, ExitConfirmModalState};
 use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::startup;
-use super::widgets::{status_bar, Modal, ModalButton, ModalStyle, UnifiedTitleBar};
+use super::widgets::{status_bar, Modal, ModalButton, ModalFrame, ModalStyle, UnifiedTitleBar};
 use super::{
     compound_split_v2, config_editor, external_match_modal, inbox_view,
     insights_view, manual_review_modal, oob_conflict_modal, oob_sync_modal, progressive_worker,
@@ -209,7 +209,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
             transaction_review::render(f, area, review);
         }
         ActiveView::CorruptFileResolution(ref mut preview) => {
-            preview.render(f, area);
+            preview.render_frame(f, area);
         }
         ActiveView::ShitFormatResolution(ref mut preview) => {
             preview.render(f, area);

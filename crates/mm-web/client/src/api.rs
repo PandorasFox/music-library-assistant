@@ -96,6 +96,17 @@ async fn post(path: &str, body: &serde_json::Value) -> Result<serde_json::Value,
 // Typed API helpers
 // ============================================================================
 
+/// POST /setup/complete → complete first-time setup
+pub async fn setup_complete(root: &str, username: &str, password: &str) -> Result<(), JsValue> {
+    let mut body = serde_json::json!({ "root": root });
+    if !username.is_empty() && !password.is_empty() {
+        body["username"] = serde_json::Value::String(username.to_string());
+        body["password"] = serde_json::Value::String(password.to_string());
+    }
+    post("/setup/complete", &body).await?;
+    Ok(())
+}
+
 /// POST /setup/check → bool (needs_setup)
 pub async fn setup_check() -> Result<bool, JsValue> {
     let resp = post("/setup/check", &serde_json::json!({})).await?;

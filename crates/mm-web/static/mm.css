@@ -372,6 +372,11 @@ html, body {
     font-weight: bold;
 }
 
+.mm-login__subtitle {
+    color: var(--c-fg-dim);
+    font-size: 1rem;
+}
+
 .mm-login__form {
     display: flex;
     flex-direction: column;

@@ -35,7 +35,7 @@ pub fn main() {
 async fn init() -> Result<(), JsValue> {
     let needs_setup = api::setup_check().await?;
     if needs_setup {
-        mount(&render_setup_needed());
+        mount(&render_setup_form(None));
         return Ok(());
     }
 
@@ -135,16 +135,60 @@ fn mount_error(msg: &str) {
 // View Renderers (login / shell)
 // ============================================================================
 
-fn render_setup_needed() -> Node {
-    div()
-        .class("mm-login")
-        .child(div().class("mm-login__title").text("Music Magic"))
+fn render_setup_form(error: Option<&str>) -> Node {
+    let mut form = div().class("mm-login");
+    form = form.child(div().class("mm-login__title").text("Music Magic"));
+    form = form.child(div().class("mm-login__subtitle").text("First-Time Setup"));
+
+    let fields = div()
+        .class("mm-login__form")
         .child(
             div()
-                .class("mm-login__error")
-                .text("First-time setup required. Use the TUI client to complete setup."),
+                .class("mm-login__field")
+                .child(html::label().text("Archive Root"))
+                .child(
+                    html::input()
+                        .attr("type", "text")
+                        .attr("id", "setup-root")
+                        .attr("placeholder", "/mnt/pool/archive/music"),
+                ),
         )
-        .into()
+        .child(
+            div()
+                .class("mm-login__field")
+                .child(html::label().text("Username"))
+                .child(
+                    html::input()
+                        .attr("type", "text")
+                        .attr("id", "setup-user")
+                        .attr("autocomplete", "username"),
+                ),
+        )
+        .child(
+            div()
+                .class("mm-login__field")
+                .child(html::label().text("Password"))
+                .child(
+                    html::input()
+                        .attr("type", "password")
+                        .attr("id", "setup-pass")
+                        .attr("autocomplete", "new-password"),
+                ),
+        )
+        .child(
+            html::button()
+                .class("mm-login__submit")
+                .attr("onclick", "window.__mm_setup()")
+                .text("Complete Setup"),
+        );
+
+    form = form.child(fields);
+
+    if let Some(err) = error {
+        form = form.child(div().class("mm-login__error").text(err));
+    }
+
+    form.into()
 }
 
 fn render_login(error: Option<&str>) -> Node {
@@ -403,6 +447,62 @@ pub fn mm_expand_session(session_id: &str) {
             }
         }
     });
+}
+
+/// Complete first-time setup.
+#[wasm_bindgen]
+pub fn mm_setup() {
+    spawn_local(async {
+        if let Err(e) = do_setup().await {
+            web_sys::console::error_1(&format!("setup error: {e:?}").into());
+        }
+    });
+}
+
+async fn do_setup() -> Result<(), JsValue> {
+    let doc = web_sys::window().unwrap().document().unwrap();
+    let root = doc
+        .get_element_by_id("setup-root")
+        .unwrap()
+        .dyn_into::<web_sys::HtmlInputElement>()?
+        .value();
+    let user = doc
+        .get_element_by_id("setup-user")
+        .unwrap()
+        .dyn_into::<web_sys::HtmlInputElement>()?
+        .value();
+    let pass = doc
+        .get_element_by_id("setup-pass")
+        .unwrap()
+        .dyn_into::<web_sys::HtmlInputElement>()?
+        .value();
+
+    if root.is_empty() {
+        mount(&render_setup_form(Some("Archive root is required")));
+        return Ok(());
+    }
+
+    match api::setup_complete(&root, &user, &pass).await {
+        Ok(()) => {
+            // Setup done. If credentials were provided, log in automatically.
+            if !user.is_empty() && !pass.is_empty() {
+                match api::login(&user, &pass).await {
+                    Ok(_) => {
+                        set_hash("health");
+                        load_view_from_hash().await?;
+                    }
+                    Err(_) => mount(&render_login(None)),
+                }
+            } else {
+                mount(&render_login(None));
+            }
+            Ok(())
+        }
+        Err(e) => {
+            mount(&render_setup_form(Some(&format!("{e:?}"))));
+            Ok(())
+        }
+    }
 }
 
 /// Navigate into a packing category browser.

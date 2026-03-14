@@ -123,7 +123,7 @@ pub fn render(
     let list_title = {
         let current = current_cluster + 1;
         let total = data.clusters.len();
-        format!("{} ({}/{})", data.tag_name, current, total)
+        format!("{} ({}/{}) \u{2014} [Z] file details", data.tag_name, current, total)
     };
 
     render_standard_list(

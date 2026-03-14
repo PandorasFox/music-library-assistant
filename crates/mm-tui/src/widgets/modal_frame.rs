@@ -234,7 +234,7 @@ pub fn render_decision_field_widget(
     focus_pane: MmUiFocusPane,
 ) {
     let is_focused = focus_pane == MmUiFocusPane::Field;
-    let border_color = if is_focused { Color::Cyan } else { Color::Magenta };
+    let border_color = if is_focused { Color::Magenta } else { Color::DarkGray };
 
     let block = Block::default()
         .title(format!(" {} ", field.label))

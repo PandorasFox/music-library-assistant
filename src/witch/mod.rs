@@ -737,18 +737,20 @@ impl Witch {
                     }
                     UnauthenticatedBody::SetupQuery => {
                         let needs_setup = self.startup_state == types::WitchStartupState::AwaitingSetup;
-                        Ok(UnauthenticatedResponse::SetupStatus { needs_setup })
+                        let suggested_root = std::env::var("MM_ROOT").ok().map(std::path::PathBuf::from);
+                        Ok(UnauthenticatedResponse::SetupStatus { needs_setup, suggested_root })
                     }
                     UnauthenticatedBody::CompleteSetup { root, first_user } => {
-                        self.gate(
-                            None,
-                            AuthorizationLevel::FirstTimeSetup,
-                            |w| {
-                                w.complete_setup_impl(root, first_user)
-                                    .map_err(ProtocolError::Internal)?;
-                                Ok(UnauthenticatedResponse::SetupComplete)
-                            },
-                        )
+                        // Gate on startup state, not auth level — the auth
+                        // thread may already exist (prior DB with users) while
+                        // the Witch still needs an archive root.
+                        if self.startup_state != types::WitchStartupState::AwaitingSetup {
+                            Err(ProtocolError::Unauthorized)
+                        } else {
+                            self.complete_setup_impl(root, first_user)
+                                .map_err(ProtocolError::Internal)?;
+                            Ok(UnauthenticatedResponse::SetupComplete)
+                        }
                     }
                 };
                 let _ = reply.send(result);

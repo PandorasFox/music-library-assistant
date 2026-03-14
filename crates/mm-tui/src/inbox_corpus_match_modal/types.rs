@@ -13,6 +13,8 @@ use mm_meta::mutations::indexing::DropFromIndexMutation;
 use mm_meta::mutations::Mutation;
 use mm_meta::views::MatchClassification;
 
+use mm_meta::decisions::DecisionKey;
+use mm_ui::protocol_binding::ProtocolBinding;
 use crate::widgets::modal_buttons::ModalButtons;
 
 use super::preview::InboxCorpusMatchPreviewAction;
@@ -144,6 +146,22 @@ impl ModalButtons for InboxMatchButton {
             Self::StashEquivalents => InboxCorpusMatchPreviewAction::ConfirmStash,
             Self::StashAll => InboxCorpusMatchPreviewAction::ConfirmStashAll,
             Self::Cancel => InboxCorpusMatchPreviewAction::Cancel,
+        }
+    }
+
+    fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
+        match self {
+            Self::StashEquivalents => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::InboxCorpusMatch,
+                label: "Stash inbox corpus matches".into(),
+                data_query: None,
+            },
+            Self::StashAll => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::InboxCorpusMatch,
+                label: "Stash all inbox duplicates".into(),
+                data_query: None,
+            },
+            Self::Cancel => ProtocolBinding::Navigation,
         }
     }
 }

@@ -9,6 +9,8 @@ use std::borrow::Cow;
 
 use ratatui::style::Color;
 
+use mm_meta::decisions::DecisionKey;
+use mm_ui::protocol_binding::ProtocolBinding;
 use crate::widgets::modal_buttons::ModalButtons;
 
 use super::preview::ShitFormatPreviewAction;
@@ -89,6 +91,35 @@ impl ModalButtons for ShitFormatButton {
             Self::TranscodeLossy => ShitFormatPreviewAction::ConfirmTranscodeLossy,
             Self::ConvertAll => ShitFormatPreviewAction::ConfirmConvertAll,
             Self::Cancel => ShitFormatPreviewAction::Cancel,
+        }
+    }
+
+    fn protocol_binding(&self, ctx: &Self::Context) -> ProtocolBinding {
+        match self {
+            Self::RemuxLossless => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::ShitFormat,
+                label: "Remux to FLAC".into(),
+                data_query: None,
+            },
+            Self::TranscodeLossy => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::ShitFormat,
+                label: if ctx.lossy_to_flac {
+                    "Capture lossy to FLAC".into()
+                } else {
+                    "Transcode to Opus".into()
+                },
+                data_query: None,
+            },
+            Self::ConvertAll => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::ShitFormat,
+                label: if ctx.lossy_to_flac {
+                    "Remux and capture all to FLAC".into()
+                } else {
+                    "Convert all formats".into()
+                },
+                data_query: None,
+            },
+            Self::Cancel => ProtocolBinding::Navigation,
         }
     }
 }

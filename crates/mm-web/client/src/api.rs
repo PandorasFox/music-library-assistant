@@ -246,6 +246,11 @@ pub async fn queue_task(task: &str) -> Result<serde_json::Value, JsValue> {
     post("/commands/queue-task", &serde_json::json!({ "task": task })).await
 }
 
+/// POST /actions/execute → execute a typed protocol binding
+pub async fn execute_action(binding: &serde_json::Value) -> Result<serde_json::Value, JsValue> {
+    post("/actions/execute", binding).await
+}
+
 /// POST /commands/save-config → save edited config
 pub async fn save_config(config: &serde_json::Value) -> Result<serde_json::Value, JsValue> {
     post("/commands/save-config", &serde_json::json!({ "new_config": config })).await

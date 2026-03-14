@@ -166,6 +166,10 @@ impl ModalButtons for ReviewButton {
             Self::Confirm => TransactionReviewAction::Confirm,
         }
     }
+
+    // protocol_binding: default (Navigation) — transaction lifecycle
+    // confirm/discard are handled by dedicated /tx/confirm and /tx/discard
+    // endpoints in the web UI, not via ProtocolBinding dispatch.
 }
 
 /// Action returned from handling input.

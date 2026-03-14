@@ -4,11 +4,13 @@
 //! mismatches. Functions that remain on `&serde_json::Value` are generic
 //! display utilities or use composite responses without a single mm-meta type.
 
+use mm_meta::decisions::DecisionKey;
 use mm_meta::views::{
     DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
 };
 use mm_meta::witch_types::{WitchStatus, WorkStateSnapshot};
 use mm_ui::html::{self, div, h3, section, span, Node};
+use mm_ui::protocol_binding::{DataQuery, ProtocolBinding};
 
 // ============================================================================
 // Shared helpers
@@ -138,6 +140,12 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
 
     // Intake alert banners.
     if corpus.files_unindexed > 0 {
+        let binding = ProtocolBinding::Transaction {
+            decision_key: DecisionKey::IntakeIndex,
+            label: "Index unindexed files".to_string(),
+            data_query: Some(DataQuery::IntakeConfirmation),
+        };
+        let binding_json = serde_json::to_string(&binding).unwrap();
         sections.push(
             div()
                 .class("mm-alert")
@@ -147,7 +155,10 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
                 .child(
                     html::button()
                         .class("mm-btn mm-alert__action")
-                        .attr("onclick", "window.__mm_queue_task('SchemaReconciliation')")
+                        .attr("onclick", format!(
+                            "window.__mm_execute('{}')",
+                            binding_json,
+                        ))
                         .text("Index Now"),
                 )
                 .into(),

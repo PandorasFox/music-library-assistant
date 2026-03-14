@@ -15,7 +15,7 @@ use crate::error::ApiError;
 use crate::AppState;
 
 /// Send an authenticated query and extract the `QueryResponse`.
-async fn send_query(
+pub(crate) async fn send_query(
     state: &AppState,
     token: mm_meta::auth::SessionToken,
     payload: QueryPayload,

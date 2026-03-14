@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 [dependencies]
 mm-meta = { path = "../mm-meta" }
+mm-ui = { path = "../mm-ui" }
 
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "signal", "fs"] }

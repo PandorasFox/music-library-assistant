@@ -12,7 +12,7 @@ use crate::error::ApiError;
 use crate::AppState;
 
 /// Send an authenticated command and extract the `CommandResponse`.
-async fn send_cmd(
+pub(crate) async fn send_cmd(
     state: &AppState,
     token: mm_meta::auth::SessionToken,
     payload: CommandPayload,
@@ -38,7 +38,7 @@ async fn send_cmd(
     }
 }
 
-fn cmd_to_json(cr: CommandResponse) -> Result<Json<serde_json::Value>, ApiError> {
+pub(crate) fn cmd_to_json(cr: CommandResponse) -> Result<Json<serde_json::Value>, ApiError> {
     match cr {
         CommandResponse::Ok => Ok(Json(serde_json::json!({"ok": true}))),
         CommandResponse::Goodbye => Ok(Json(serde_json::json!({"goodbye": true}))),

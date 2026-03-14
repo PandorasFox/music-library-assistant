@@ -58,6 +58,8 @@ pub fn router(state: AppState) -> Router {
         .route("/tx/details", get(api::transactions::details))
         .route("/tx/confirm", post(api::transactions::confirm))
         .route("/tx/discard", post(api::transactions::discard))
+        // Actions (typed protocol bindings)
+        .route("/actions/execute", post(api::actions::execute))
         // Commands
         .route("/commands/queue-task", post(api::commands::queue_task))
         .route("/commands/save-config", post(api::commands::save_config))

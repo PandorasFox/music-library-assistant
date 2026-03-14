@@ -12,6 +12,7 @@ pub mod input;
 pub mod lateral_view;
 pub mod modal_buttons;
 pub mod modal_frame;
+pub mod protocol_binding;
 pub mod rich_text;
 pub mod standard_list;
 pub mod text_input;

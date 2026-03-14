@@ -7,7 +7,9 @@ use ratatui::style::Color;
 use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 
+use mm_meta::decisions::DecisionKey;
 use mm_meta::views::MovedFileInfo;
+use mm_ui::protocol_binding::ProtocolBinding;
 use crate::widgets::{FocusPane, ModalButtons};
 use crate::widgets::modal_frame::FrameState;
 
@@ -60,6 +62,17 @@ impl ModalButtons for MovedFileButton {
         match self {
             Self::Acknowledge => MovedFileAction::Acknowledge,
             Self::Cancel => MovedFileAction::Cancel,
+        }
+    }
+
+    fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
+        match self {
+            Self::Acknowledge => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::MovedFile,
+                label: "Acknowledge moved files".into(),
+                data_query: None,
+            },
+            Self::Cancel => ProtocolBinding::Navigation,
         }
     }
 }

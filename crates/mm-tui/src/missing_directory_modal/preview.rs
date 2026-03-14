@@ -20,6 +20,9 @@ use ratatui::{
     Frame,
 };
 
+use mm_meta::decisions::DecisionKey;
+use mm_ui::protocol_binding::ProtocolBinding;
+
 use super::MissingDirectoryModalData;
 use crate::helpers::truncate_left;
 use crate::widgets::{FocusPane, ModalButtons};
@@ -87,6 +90,17 @@ impl ModalButtons for MissingDirectoryButton {
         match self {
             Self::Drop => MissingDirectoryPreviewAction::ConfirmDrop,
             Self::Cancel => MissingDirectoryPreviewAction::Cancel,
+        }
+    }
+
+    fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
+        match self {
+            Self::Drop => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::MissingDirectory,
+                label: "Drop missing directories".into(),
+                data_query: None,
+            },
+            Self::Cancel => ProtocolBinding::Navigation,
         }
     }
 }

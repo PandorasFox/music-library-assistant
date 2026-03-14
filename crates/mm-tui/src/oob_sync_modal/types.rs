@@ -7,7 +7,9 @@ use ratatui::style::Color;
 use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 
+use mm_meta::decisions::DecisionKey;
 use mm_meta::views::{OobSyncDirection, OobSyncFile};
+use mm_ui::protocol_binding::ProtocolBinding;
 use crate::bulk_selection::BulkSelectionState;
 use crate::widgets::modal_buttons::ModalButtons;
 use crate::widgets::{FocusPane, FrameInputResult, TextInputState};
@@ -70,6 +72,22 @@ impl ModalButtons for OobSyncButton {
             Self::AcceptDisk => OobSyncAction::AcceptDisk,
             Self::AcceptDb => OobSyncAction::AcceptDb,
             Self::Cancel => OobSyncAction::Cancel,
+        }
+    }
+
+    fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
+        match self {
+            Self::AcceptDisk => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::OobSync,
+                label: "Sync disk tags \u{2192} index".into(),
+                data_query: None,
+            },
+            Self::AcceptDb => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::OobSync,
+                label: "Sync index tags \u{2192} disk".into(),
+                data_query: None,
+            },
+            Self::Cancel => ProtocolBinding::Navigation,
         }
     }
 }

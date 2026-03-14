@@ -10,6 +10,7 @@ use std::borrow::Cow;
 use ratatui::style::Color;
 
 use crate::geometry::ButtonRects;
+use crate::protocol_binding::ProtocolBinding;
 
 /// Trait for modal button enums. Provides labels, colors, enablement,
 /// and action mapping — all parameterized by a `Context` type that carries
@@ -35,6 +36,13 @@ pub trait ModalButtons: Default + Copy + PartialEq + 'static {
 
     /// The action produced when this button is confirmed.
     fn action(&self, ctx: &Self::Context) -> Self::Action;
+
+    /// Protocol binding for this button. Defaults to Navigation (no-op).
+    /// Encode the button→Witch mapping so both TUI and web produce the
+    /// same protocol message.
+    fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
+        ProtocolBinding::Navigation
+    }
 }
 
 /// Persistent state for a modal button row.

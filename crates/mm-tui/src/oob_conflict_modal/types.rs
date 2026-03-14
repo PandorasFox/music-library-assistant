@@ -7,7 +7,9 @@ use ratatui::style::Color;
 use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 
+use mm_meta::decisions::DecisionKey;
 use mm_meta::views::{BucketedOobFile, ConflictBucket};
+use mm_ui::protocol_binding::ProtocolBinding;
 use crate::bulk_selection::BulkSelectionState;
 use crate::widgets::modal_buttons::ModalButtons;
 use crate::widgets::{FocusPane, FrameInputResult, TextInputState};
@@ -79,6 +81,27 @@ impl ModalButtons for OobConflictButton {
             Self::ApplyDb | Self::AssimilateDisk => OobConflictAction::Resolve,
             Self::Acknowledge => OobConflictAction::Acknowledge,
             Self::Cancel => OobConflictAction::Cancel,
+        }
+    }
+
+    fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
+        match self {
+            Self::ApplyDb => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::OobConflict,
+                label: "Apply DB tags \u{2192} files".into(),
+                data_query: None,
+            },
+            Self::AssimilateDisk => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::OobConflict,
+                label: "Assimilate file tags \u{2192} DB".into(),
+                data_query: None,
+            },
+            Self::Acknowledge => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::MtimeAck,
+                label: "Acknowledge mtime changes".into(),
+                data_query: None,
+            },
+            Self::Cancel => ProtocolBinding::Navigation,
         }
     }
 }

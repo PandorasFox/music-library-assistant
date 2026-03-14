@@ -14,7 +14,7 @@ use crate::error::ApiError;
 use crate::AppState;
 
 /// Send an authenticated transaction request and extract the `TransactionResponse`.
-async fn send_tx(
+pub(crate) async fn send_tx(
     state: &AppState,
     token: mm_meta::auth::SessionToken,
     payload: TransactionPayload,

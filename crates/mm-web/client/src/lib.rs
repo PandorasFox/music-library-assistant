@@ -601,6 +601,27 @@ pub fn mm_queue_task(task: &str) {
     });
 }
 
+/// Execute a typed protocol binding and refresh the view.
+#[wasm_bindgen]
+pub fn mm_execute(binding_json: &str) {
+    let json_str = binding_json.to_string();
+    spawn_local(async move {
+        let binding: serde_json::Value = match serde_json::from_str(&json_str) {
+            Ok(v) => v,
+            Err(e) => {
+                web_sys::console::error_1(&format!("mm_execute parse error: {e}").into());
+                return;
+            }
+        };
+        match api::execute_action(&binding).await {
+            Ok(_) => {
+                load_view_from_hash().await.ok();
+            }
+            Err(e) => web_sys::console::error_1(&format!("mm_execute error: {e:?}").into()),
+        }
+    });
+}
+
 /// Filter search results without full page re-render.
 /// Reads cached data from SEARCH_DATA and only replaces the results container.
 #[wasm_bindgen]
@@ -626,6 +647,34 @@ pub fn mm_config_save() {
             web_sys::console::error_1(&format!("config save error: {e:?}").into());
         }
     });
+}
+
+/// Find the mutable slot for a config field by name.
+/// Searches root-level keys, then opinions top-level, then opinions sub-blocks.
+fn find_config_slot<'a>(
+    config: &'a mut serde_json::Value,
+    name: &str,
+) -> Option<&'a mut serde_json::Value> {
+    // Root level.
+    if config.get(name).is_some() {
+        return config.get_mut(name);
+    }
+    // Opinions top-level and sub-blocks.
+    if let Some(opinions) = config.get_mut("opinions") {
+        if opinions.get(name).is_some() {
+            return opinions.get_mut(name);
+        }
+        if let Some(obj) = opinions.as_object_mut() {
+            for (_block_key, block_val) in obj.iter_mut() {
+                if let Some(block_obj) = block_val.as_object_mut() {
+                    if block_obj.contains_key(name) {
+                        return block_obj.get_mut(name);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 async fn do_config_save() -> Result<(), JsValue> {
@@ -665,34 +714,26 @@ async fn do_config_save() -> Result<(), JsValue> {
             serde_json::Value::String(input.value())
         };
 
-        // Try root level first.
-        if config.get(&name).is_some() {
-            config[&name] = new_val;
-            continue;
-        }
-
-        // Try opinions top-level.
-        if let Some(opinions) = config.get_mut("opinions") {
-            if opinions.get(&name).is_some() {
-                opinions[&name] = new_val;
-                continue;
-            }
-
-            // Try opinions sub-blocks.
-            if let Some(obj) = opinions.as_object_mut() {
-                let mut found = false;
-                for (_block_key, block_val) in obj.iter_mut() {
-                    if let Some(block_obj) = block_val.as_object_mut() {
-                        if block_obj.contains_key(&name) {
-                            block_obj.insert(name.clone(), new_val.clone());
-                            found = true;
-                            break;
-                        }
-                    }
+        // Patch the value into the config, preserving the original type.
+        // find_config_slot returns a mutable reference to the slot so we
+        // can check what JSON type it held before overwriting.
+        let slot = find_config_slot(&mut config, &name);
+        if let Some(slot) = slot {
+            // If the original value was an array but the form produced a
+            // string, split on commas back into an array of strings.
+            if slot.is_array() {
+                if let serde_json::Value::String(ref s) = new_val {
+                    let arr: Vec<serde_json::Value> = s
+                        .split(',')
+                        .map(|part| serde_json::Value::String(part.trim().to_string()))
+                        .filter(|v| v.as_str() != Some(""))
+                        .collect();
+                    *slot = serde_json::Value::Array(arr);
+                } else {
+                    *slot = new_val;
                 }
-                if found {
-                    continue;
-                }
+            } else {
+                *slot = new_val;
             }
         }
     }

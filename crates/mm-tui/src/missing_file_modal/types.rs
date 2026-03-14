@@ -9,7 +9,9 @@ use std::borrow::Cow;
 
 use ratatui::style::Color;
 
+use mm_meta::decisions::DecisionKey;
 use mm_meta::paths::PathResolver;
+use mm_ui::protocol_binding::ProtocolBinding;
 use crate::widgets::modal_buttons::ModalButtons;
 
 use super::preview::MissingFilePreviewAction;
@@ -90,6 +92,22 @@ impl ModalButtons for MissingFileButton {
             Self::RestoreAll => MissingFilePreviewAction::ConfirmRestore,
             Self::DropLost => MissingFilePreviewAction::ConfirmDrop,
             Self::Cancel => MissingFilePreviewAction::Cancel,
+        }
+    }
+
+    fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
+        match self {
+            Self::RestoreAll => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::MissingFile,
+                label: "Restore missing files".into(),
+                data_query: None,
+            },
+            Self::DropLost => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::MissingFile,
+                label: "Drop missing files".into(),
+                data_query: None,
+            },
+            Self::Cancel => ProtocolBinding::Navigation,
         }
     }
 }

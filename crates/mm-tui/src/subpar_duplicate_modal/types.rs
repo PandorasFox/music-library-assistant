@@ -9,7 +9,9 @@ use std::borrow::Cow;
 
 use ratatui::style::Color;
 
+use mm_meta::decisions::DecisionKey;
 use mm_meta::mutations::Mutation;
+use mm_ui::protocol_binding::ProtocolBinding;
 use crate::helpers::stash_file_mutations;
 use crate::widgets::modal_buttons::ModalButtons;
 
@@ -68,6 +70,17 @@ impl ModalButtons for SubparButton {
         match self {
             Self::StashAll => SubparDuplicatePreviewAction::ConfirmStashAll,
             Self::Cancel => SubparDuplicatePreviewAction::Cancel,
+        }
+    }
+
+    fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
+        match self {
+            Self::StashAll => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::SubparDuplicate,
+                label: "Stash subpar duplicates".into(),
+                data_query: None,
+            },
+            Self::Cancel => ProtocolBinding::Navigation,
         }
     }
 }

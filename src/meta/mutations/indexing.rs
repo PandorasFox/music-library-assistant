@@ -395,13 +395,10 @@ pub fn execute_index_file_from_path(
     if let Some(rel) = resolver.to_relative(path) {
         let rel_str = rel.to_string_lossy().to_string();
 
-        // CorruptFile if fingerprint extraction failed
-        if extracted.fingerprint.is_none() {
-            pending_signals.push(TypedSignalWrite::CorruptFile(CorruptFileSignal {
-                inode: extracted.inode,
-                path: rel_str.clone(),
-            }));
-        }
+        // Note: fingerprint.is_none() does NOT mean corrupt. Fingerprinting
+        // can fail for non-corruption reasons (short audio, codec quirks).
+        // VerifyAudio is the authoritative corruption check — it fully decodes
+        // the stream and emits/clears CorruptFile based on actual decode success.
 
         // ShitFormat if non-Vorbis container
         if is_shit_format(&extracted.file_type) {

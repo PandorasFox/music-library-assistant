@@ -9,6 +9,8 @@ use ratatui::style::Color;
 use super::build;
 use super::types::*;
 use mm_meta::config::Config;
+use mm_meta::decisions::DecisionKey;
+use mm_ui::protocol_binding::ProtocolBinding;
 use crate::input::InputAction;
 use crate::widgets::modal_buttons::ModalButtons;
 use crate::widgets::wizard::{WizardOffer, WizardState};
@@ -63,6 +65,17 @@ impl ModalButtons for EditorButton {
         match self {
             Self::Save => ConfigEditorAction::Save,
             Self::Discard => ConfigEditorAction::Discard,
+        }
+    }
+
+    fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
+        match self {
+            Self::Save => ProtocolBinding::Transaction {
+                decision_key: DecisionKey::ConfigEdit,
+                label: "Apply config changes".into(),
+                data_query: None,
+            },
+            Self::Discard => ProtocolBinding::Navigation,
         }
     }
 }

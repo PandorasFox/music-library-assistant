@@ -135,7 +135,10 @@ use mm_meta::views::review_match::{
     InboxCorpusMatchModalData, ManualReviewData, RecordingDetail, RecordingSummary,
 };
 use mm_meta::views::startup_organize::{IntakeConfirmationState, InboxDirectory};
-use mm_meta::views::canonicity_compound::{CompoundSplitDataV2, TagCanonicalityModalDataV2};
+use mm_meta::views::canonicity_compound::{
+    CompoundSplitDataV2, CompoundSplitResolutionData, TagCanonicalityModalDataV2,
+    TagCanonicityResolutionData,
+};
 
 // ============================================================================
 // Summary Queries
@@ -792,6 +795,22 @@ impl_domain_query! {
     }
 }
 
+// ============================================================================
+// Packed Resolution Queries (cluster-nav)
+// ============================================================================
+
+impl_domain_query! {
+    GetTagCanonicityResolution => TagCanonicityResolutionData, |s, db| {
+        modal_loaders::load_tag_canonicity_resolution(&s.tag_name, s.zone, db)
+    }
+}
+
+impl_domain_query! {
+    GetCompoundSplitResolution => CompoundSplitResolutionData, |s, db| {
+        modal_loaders::load_compound_split_resolution(&s.tag_name, s.zone, s.safe_only, db)
+    }
+}
+
 /// Read tags from disk for a batch of audio files.
 fn load_file_tag_values(
     inodes: &[i64],
@@ -893,6 +912,8 @@ dispatch_domain_query_impl! {
     GetDirectoryListing,
     SearchCorpusFiles,
     SearchWithConditions,
+    GetTagCanonicityResolution,
+    GetCompoundSplitResolution,
 }
 
 // ============================================================================
@@ -1306,6 +1327,67 @@ mod tests {
         t!(serde_json::to_string(&GetMissingTagAudioFiles.execute(&read_db)));
         t!(serde_json::to_string(&GetSessionEditDetail { session_id: "x".to_string() }.execute(&read_db)));
         t!(serde_json::to_string(&GetCurrentTagValues { queries: vec![] }.execute(&read_db)));
+
+        // Packed resolution queries
+        t!(serde_json::to_string(&GetTagCanonicityResolution {
+            tag_name: "ARTIST".to_string(),
+            zone: mm_meta::db_types::Zone::Corpus,
+        }.execute(&read_db)));
+        t!(serde_json::to_string(&GetCompoundSplitResolution {
+            tag_name: "ARTIST".to_string(),
+            zone: mm_meta::db_types::Zone::Corpus,
+            safe_only: false,
+        }.execute(&read_db)));
+    }
+
+    // -- Packed resolution queries: empty DB returns defaults --
+
+    #[test]
+    fn get_tag_canonicity_resolution_corpus_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetTagCanonicityResolution {
+            tag_name: "ARTIST".to_string(),
+            zone: mm_meta::db_types::Zone::Corpus,
+        }.execute(&read_db);
+        assert_eq!(result.tag_name, "ARTIST");
+        assert!(result.clusters.is_empty());
+    }
+
+    #[test]
+    fn get_tag_canonicity_resolution_inbox_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetTagCanonicityResolution {
+            tag_name: "ARTIST".to_string(),
+            zone: mm_meta::db_types::Zone::Inbox,
+        }.execute(&read_db);
+        assert_eq!(result.tag_name, "ARTIST");
+        assert!(result.clusters.is_empty());
+    }
+
+    #[test]
+    fn get_compound_split_resolution_corpus_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetCompoundSplitResolution {
+            tag_name: "ARTIST".to_string(),
+            zone: mm_meta::db_types::Zone::Corpus,
+            safe_only: false,
+        }.execute(&read_db);
+        assert!(result.groups.is_empty());
+    }
+
+    #[test]
+    fn get_compound_split_resolution_inbox_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetCompoundSplitResolution {
+            tag_name: "GENRE".to_string(),
+            zone: mm_meta::db_types::Zone::Inbox,
+            safe_only: false,
+        }.execute(&read_db);
+        assert!(result.groups.is_empty());
     }
 
 }

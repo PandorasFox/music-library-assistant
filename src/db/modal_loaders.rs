@@ -1169,6 +1169,321 @@ pub fn load_inbox_tag_canonicity_data(
 }
 
 // ============================================================================
+// Packed Tag Canonicity Resolution (single-load, all clusters)
+// ============================================================================
+
+/// Load all canonicity clusters for a tag+zone in one response.
+///
+/// Replaces the two-phase GetTagCanonicityKeys + GetTagCanonicitySignalData
+/// pattern with a single query that returns all clusters at once, using
+/// DB-cached tags instead of disk reads.
+pub fn load_tag_canonicity_resolution(
+    tag_name: &str,
+    zone: Zone,
+    db: &ReadOnlyDb,
+) -> mm_meta::views::canonicity_compound::TagCanonicityResolutionData {
+    use mm_meta::views::canonicity_compound::{
+        CanonicityCluster, OutlierVariant, ResolutionFileInfo, TagCanonicityResolutionData,
+    };
+
+    let tag_prefix = format!("{}:", tag_name);
+
+    // Step 1: Get all signal keys for this tag name, then load each signal
+    let all_keys = match zone {
+        Zone::Inbox => db
+            .aggregate_signal_keys::<crate::meta::signals::data::InboxTagCanonicitySignal>()
+            .unwrap_or_default(),
+        _ => db
+            .aggregate_signal_keys::<crate::meta::signals::data::TagCanonicitySignal>()
+            .unwrap_or_default(),
+    };
+
+    let filtered_keys: Vec<&String> = all_keys
+        .iter()
+        .filter(|k| k.starts_with(&tag_prefix))
+        .collect();
+
+    if filtered_keys.is_empty() {
+        return TagCanonicityResolutionData {
+            tag_name: tag_name.to_string(),
+            clusters: Vec::new(),
+        };
+    }
+
+    // Step 2: Load each signal and collect clusters + outlier inodes
+    let mut clusters: Vec<CanonicityCluster> = Vec::new();
+    let mut all_outlier_inodes: Vec<i64> = Vec::new();
+
+    for key in &filtered_keys {
+        match zone {
+            Zone::Inbox => {
+                let Some(signal) = db.get_inbox_tag_canonicity_signal(key).ok().flatten() else {
+                    continue;
+                };
+                // Inbox canonicity: canonical candidate is the top corpus variant
+                let canonical_candidate = signal
+                    .data
+                    .corpus_variants
+                    .first()
+                    .map(|(v, _)| v.clone())
+                    .unwrap_or_default();
+                let canonical_count = signal
+                    .data
+                    .corpus_variants
+                    .first()
+                    .map(|(_, c)| *c)
+                    .unwrap_or(0);
+
+                // Outliers are the inbox variants (they don't match corpus)
+                let outlier_inodes = signal.data.inbox_inodes.clone();
+                all_outlier_inodes.extend(&outlier_inodes);
+
+                // Build outlier variants from inbox_variants
+                // Each inbox variant maps to the full set of inbox inodes
+                // (signal doesn't break down which inode has which variant)
+                let outlier_variants: Vec<OutlierVariant> = signal
+                    .data
+                    .inbox_variants
+                    .iter()
+                    .map(|(value, _)| OutlierVariant {
+                        value: value.clone(),
+                        // Placeholder files, will be filled after batch lookup
+                        files: outlier_inodes
+                            .iter()
+                            .map(|&inode| ResolutionFileInfo {
+                                inode,
+                                display_name: String::new(),
+                            })
+                            .collect(),
+                    })
+                    .collect();
+
+                clusters.push(CanonicityCluster {
+                    signal_key: key.to_string(),
+                    canonical_candidate: canonical_candidate.clone(),
+                    canonical_count,
+                    outlier_variants,
+                    default_canonical: Some(canonical_candidate),
+                });
+            }
+            _ => {
+                let Some(signal) = db.get_tag_canonicity_signal(key).ok().flatten() else {
+                    continue;
+                };
+                // Corpus canonicity: canonical candidate is the most common variant
+                let canonical_candidate = signal
+                    .data
+                    .variants
+                    .first()
+                    .map(|(v, _)| v.clone())
+                    .unwrap_or_default();
+                let canonical_count = signal
+                    .data
+                    .variants
+                    .first()
+                    .map(|(_, c)| *c)
+                    .unwrap_or(0);
+
+                // Outlier inodes: files NOT matching the canonical candidate
+                // Query the tag values to find which inodes have non-canonical values
+                let tag_values_map = db
+                    .get_tag_values_batch(zone, tag_name, &signal.data.inodes)
+                    .unwrap_or_default();
+
+                // Group outlier inodes by their variant value
+                let mut variant_inodes: HashMap<String, Vec<i64>> = HashMap::new();
+                for &inode in &signal.data.inodes {
+                    if let Some(values) = tag_values_map.get(&inode) {
+                        for value in values {
+                            if value != &canonical_candidate {
+                                variant_inodes
+                                    .entry(value.clone())
+                                    .or_default()
+                                    .push(inode);
+                                all_outlier_inodes.push(inode);
+                            }
+                        }
+                    }
+                }
+
+                // If tag query didn't work, fall back to signal variants
+                if variant_inodes.is_empty() {
+                    for (value, _) in signal.data.variants.iter().skip(1) {
+                        for &inode in &signal.data.inodes {
+                            variant_inodes
+                                .entry(value.clone())
+                                .or_default()
+                                .push(inode);
+                            all_outlier_inodes.push(inode);
+                        }
+                    }
+                }
+
+                let outlier_variants: Vec<OutlierVariant> = signal
+                    .data
+                    .variants
+                    .iter()
+                    .skip(1) // Skip the canonical (most common) variant
+                    .filter_map(|(value, _)| {
+                        let inodes = variant_inodes.get(value)?;
+                        Some(OutlierVariant {
+                            value: value.clone(),
+                            files: inodes
+                                .iter()
+                                .map(|&inode| ResolutionFileInfo {
+                                    inode,
+                                    display_name: String::new(),
+                                })
+                                .collect(),
+                        })
+                    })
+                    .collect();
+
+                clusters.push(CanonicityCluster {
+                    signal_key: key.to_string(),
+                    canonical_candidate: canonical_candidate.clone(),
+                    canonical_count,
+                    outlier_variants,
+                    default_canonical: Some(canonical_candidate),
+                });
+            }
+        }
+    }
+
+    // Step 3: Batch-query display names for all outlier inodes
+    all_outlier_inodes.sort_unstable();
+    all_outlier_inodes.dedup();
+    let display_names = db
+        .get_display_names_batch(zone, &all_outlier_inodes)
+        .unwrap_or_default();
+
+    // Step 4: Fill in display names
+    for cluster in &mut clusters {
+        for variant in &mut cluster.outlier_variants {
+            for file in &mut variant.files {
+                if let Some(name) = display_names.get(&file.inode) {
+                    file.display_name = name.clone();
+                } else {
+                    file.display_name = format!("<inode {}>", file.inode);
+                }
+            }
+        }
+    }
+
+    TagCanonicityResolutionData {
+        tag_name: tag_name.to_string(),
+        clusters,
+    }
+}
+
+// ============================================================================
+// Packed Compound Split Resolution (single-load, all groups)
+// ============================================================================
+
+/// Load all compound split groups for a tag+zone in one response.
+///
+/// Replaces the two-phase GetCompoundSignalGroups + GetCompoundSplitGroupData
+/// pattern with a single query that returns all groups at once, using
+/// DB-cached tags instead of disk reads.
+pub fn load_compound_split_resolution(
+    tag_name: &str,
+    zone: Zone,
+    safe_only: bool,
+    db: &ReadOnlyDb,
+) -> mm_meta::views::canonicity_compound::CompoundSplitResolutionData {
+    use mm_meta::views::canonicity_compound::{
+        CompoundSplitCluster, CompoundSplitResolutionData, ResolutionFileInfo,
+    };
+
+    // Step 1: Get compound groups filtered by tag name and safety
+    let groups = match zone {
+        Zone::Inbox => {
+            let all_groups = db.get_inbox_compound_signal_groups().unwrap_or_default();
+            all_groups
+                .into_iter()
+                .filter(|g| g.tag_name == tag_name)
+                .collect::<Vec<_>>()
+        }
+        _ => db
+            .get_compound_signal_groups_by_safety(safe_only, Some(tag_name))
+            .unwrap_or_default(),
+    };
+
+    if groups.is_empty() {
+        return CompoundSplitResolutionData {
+            groups: Vec::new(),
+        };
+    }
+
+    // Step 2: Collect all inodes across all groups for batch display name lookup
+    let mut all_inodes: Vec<i64> = groups.iter().flat_map(|g| g.inodes.iter().copied()).collect();
+    all_inodes.sort_unstable();
+    all_inodes.dedup();
+
+    // Step 3: Batch-query display names
+    let display_names = db
+        .get_display_names_batch(zone, &all_inodes)
+        .unwrap_or_default();
+
+    // Step 4: For each group, get the compound entry data (split_parts, matching_parts)
+    // by reading the signal from the first inode in the group
+    let mut result_groups: Vec<CompoundSplitCluster> = Vec::with_capacity(groups.len());
+    for group in &groups {
+        // Get split_parts and matching_parts from the compound tag signal
+        let (split_parts, matching_parts) = if let Some(first_inode) = group.inodes.first() {
+            let compounds = match zone {
+                Zone::Inbox => db
+                    .get_inbox_compound_tag_signal(*first_inode)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.compounds),
+                _ => db
+                    .get_compound_tag_signal(*first_inode)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.compounds),
+            };
+            compounds
+                .and_then(|cs| {
+                    cs.iter()
+                        .find(|c| {
+                            c.tag_name == group.tag_name
+                                && c.compound_value == group.compound_value
+                        })
+                        .map(|c| (c.split_parts.clone(), c.matching_parts.clone()))
+                })
+                .unwrap_or_default()
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        let files: Vec<ResolutionFileInfo> = group
+            .inodes
+            .iter()
+            .map(|&inode| ResolutionFileInfo {
+                inode,
+                display_name: display_names
+                    .get(&inode)
+                    .cloned()
+                    .unwrap_or_else(|| format!("<inode {}>", inode)),
+            })
+            .collect();
+
+        result_groups.push(CompoundSplitCluster {
+            tag_name: group.tag_name.clone(),
+            compound_value: group.compound_value.clone(),
+            split_parts,
+            matching_parts,
+            files,
+        });
+    }
+
+    CompoundSplitResolutionData {
+        groups: result_groups,
+    }
+}
+
+// ============================================================================
 // Intake Confirmation
 // ============================================================================
 

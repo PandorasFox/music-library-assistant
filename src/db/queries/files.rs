@@ -1363,6 +1363,115 @@ impl Database {
 
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
+
+
+    // ========================================================================
+    // Batch Tag Queries (DB-cached tags, no disk reads)
+    // ========================================================================
+
+    /// Batch-query display names for inodes: TITLE tag value, or filename fallback.
+    ///
+    /// Returns HashMap<inode, display_name>. Uses the tag table appropriate
+    /// for the zone (`corpus_tags` for Corpus, `inbox_tags` for Inbox).
+    pub fn get_display_names_batch(
+        &self,
+        zone: Zone,
+        inodes: &[i64],
+    ) -> Result<HashMap<i64, String>> {
+        if inodes.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let tag_table = zone
+            .tag_table()
+            .ok_or_else(|| anyhow::anyhow!("zone {:?} has no tag table", zone))?;
+
+        // Step 1: Query TITLE tags for all inodes
+        let placeholders = (0..inodes.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        let title_sql = format!(
+            "SELECT inode, tag_value FROM {} WHERE UPPER(tag_name) = 'TITLE' AND inode IN ({})",
+            tag_table, placeholders
+        );
+        let mut stmt = self.conn.prepare(&title_sql)?;
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(inodes.len());
+        for inode in inodes {
+            params_vec.push(inode);
+        }
+
+        let mut title_map: HashMap<i64, String> = HashMap::new();
+        let rows = stmt.query_map(&params_vec[..], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (inode, title) = row?;
+            // First TITLE value wins
+            title_map.entry(inode).or_insert(title);
+        }
+
+        // Step 2: Get file paths for fallback
+        let path_map = self.get_file_paths_batch(zone, inodes)?;
+
+        // Step 3: Build result: use TITLE if present, else extract filename from path
+        let mut result = HashMap::with_capacity(inodes.len());
+        for &inode in inodes {
+            let display_name = if let Some(title) = title_map.get(&inode) {
+                title.clone()
+            } else if let Some(path) = path_map.get(&inode) {
+                std::path::Path::new(path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| format!("<inode {}>", inode))
+            } else {
+                format!("<inode {}>", inode)
+            };
+            result.insert(inode, display_name);
+        }
+
+        Ok(result)
+    }
+
+    /// Batch-query a specific tag's values for a set of inodes.
+    ///
+    /// Returns HashMap<inode, Vec<String>> (multiple values possible per tag).
+    /// Uses the tag table appropriate for the zone.
+    pub fn get_tag_values_batch(
+        &self,
+        zone: Zone,
+        tag_name: &str,
+        inodes: &[i64],
+    ) -> Result<HashMap<i64, Vec<String>>> {
+        if inodes.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let tag_table = zone
+            .tag_table()
+            .ok_or_else(|| anyhow::anyhow!("zone {:?} has no tag table", zone))?;
+
+        let placeholders = (0..inodes.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT inode, tag_value FROM {} WHERE UPPER(tag_name) = UPPER(?1) AND inode IN ({})",
+            tag_table, placeholders
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(1 + inodes.len());
+        params_vec.push(&tag_name);
+        for inode in inodes {
+            params_vec.push(inode);
+        }
+
+        let mut result: HashMap<i64, Vec<String>> = HashMap::new();
+        let rows = stmt.query_map(&params_vec[..], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (inode, value) = row?;
+            result.entry(inode).or_default().push(value);
+        }
+
+        Ok(result)
+    }
 }
 
 /// Build a BETWEEN / >= / <= predicate for numeric range conditions.

@@ -564,6 +564,8 @@ impl<'a> ReadOnlyDb<'a> {
         #[allow(clippy::type_complexity)]
         fn get_album_artist_data() -> Result<Vec<(i64, String, String, String, String, String, String, String)>>;
         fn directory_entry_fresh(zone: &str, inode: i64, mtime_secs: i64, mtime_nanos: i64) -> bool;
+        fn get_display_names_batch(zone: super::types::Zone, inodes: &[i64]) -> Result<std::collections::HashMap<i64, String>>;
+        fn get_tag_values_batch(zone: super::types::Zone, tag_name: &str, inodes: &[i64]) -> Result<std::collections::HashMap<i64, Vec<String>>>;
     }
 
     // =========================================================================

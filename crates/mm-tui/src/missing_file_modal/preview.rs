@@ -20,25 +20,12 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{MissingFileButton, MissingFileButtonCtx, MissingFileModalData};
+use super::types::{MissingFileAction, MissingFileButton, MissingFileButtonCtx, MissingFileModalData};
 use crate::helpers::{render_pane, truncate_right};
 use crate::widgets::{FocusPane, ListClickTargets};
 use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame, ModalFrameCore};
 use crate::widgets::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 use crate::widgets::file_path_list::{render_file_path_list, PathEntry};
-
-/// Actions returned from the missing file preview.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MissingFilePreviewAction {
-    /// No action needed.
-    None,
-    /// User confirmed restore action - generate HardLink mutations.
-    ConfirmRestore,
-    /// User confirmed drop action - generate DropFromIndex mutations.
-    ConfirmDrop,
-    /// Cancel and return to Insights view.
-    Cancel,
-}
 
 // ============================================================================
 // State
@@ -109,7 +96,7 @@ impl MissingFilePreviewState {
         x: u16,
         y: u16,
         _gesture: &ConfirmationGesture,
-    ) -> Option<MissingFilePreviewAction> {
+    ) -> Option<MissingFileAction> {
         let ctx = self.button_ctx();
         if let Some(action) = self.frame.buttons.handle_click(x, y, &ctx) {
             self.frame.focus_pane = FocusPane::Buttons;
@@ -140,7 +127,7 @@ impl MissingFilePreviewState {
     }
 
     /// Handle input action.
-    pub fn handle_input(&mut self, action: &InputAction) -> MissingFilePreviewAction {
+    pub fn handle_input(&mut self, action: &InputAction) -> MissingFileAction {
         // Tab toggles focused list when on List pane
         if self.frame.focus_pane == FocusPane::List {
             match action {
@@ -148,7 +135,7 @@ impl MissingFilePreviewState {
                     if self.cached_data.has_restorable() && self.cached_data.has_non_restorable() {
                         self.focused_list = 1 - self.focused_list;
                     }
-                    return MissingFilePreviewAction::None;
+                    return MissingFileAction::None;
                 }
                 _ => {}
             }
@@ -159,23 +146,23 @@ impl MissingFilePreviewState {
             match action {
                 InputAction::NavUp => {
                     self.right_scroll = self.right_scroll.saturating_sub(1);
-                    return MissingFilePreviewAction::None;
+                    return MissingFileAction::None;
                 }
                 InputAction::NavDown => {
                     let max = self.cached_data.non_restorable.len().saturating_sub(1);
                     if self.right_scroll < max {
                         self.right_scroll += 1;
                     }
-                    return MissingFilePreviewAction::None;
+                    return MissingFileAction::None;
                 }
                 InputAction::PageUp => {
                     self.right_scroll = self.right_scroll.saturating_sub(10);
-                    return MissingFilePreviewAction::None;
+                    return MissingFileAction::None;
                 }
                 InputAction::PageDown => {
                     let max = self.cached_data.non_restorable.len().saturating_sub(1);
                     self.right_scroll = (self.right_scroll + 10).min(max);
-                    return MissingFilePreviewAction::None;
+                    return MissingFileAction::None;
                 }
                 _ => {}
             }
@@ -184,7 +171,7 @@ impl MissingFilePreviewState {
         match self.handle_frame_input(action) {
             FrameInputResult::Action(a) => a,
             FrameInputResult::Consumed | FrameInputResult::Unhandled => {
-                MissingFilePreviewAction::None
+                MissingFileAction::None
             }
         }
     }
@@ -238,8 +225,8 @@ impl ModalFrameCore for MissingFilePreviewState {
     fn button_ctx(&self) -> MissingFileButtonCtx {
         MissingFilePreviewState::button_ctx(self)
     }
-    fn escape_action(&self) -> MissingFilePreviewAction {
-        MissingFilePreviewAction::Cancel
+    fn escape_action(&self) -> MissingFileAction {
+        MissingFileAction::Cancel
     }
 }
 

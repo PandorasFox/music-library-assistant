@@ -44,11 +44,11 @@ macro_rules! extract_mutations {
 // Missing File Resolution
 // =========================================================================
 
-impl HandleAction for missing_file_modal::MissingFilePreviewAction {
+impl HandleAction for missing_file_modal::MissingFileAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            missing_file_modal::MissingFilePreviewAction::None => {}
-            missing_file_modal::MissingFilePreviewAction::ConfirmRestore => {
+            missing_file_modal::MissingFileAction::None => {}
+            missing_file_modal::MissingFileAction::ConfirmRestore => {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
                     ActiveView::MissingFileResolution(ref p) => missing_file_modal::restore_mutations(&p.cached_data, &app.resolver),
@@ -56,12 +56,12 @@ impl HandleAction for missing_file_modal::MissingFilePreviewAction {
                 };
                 app.stage_resolution(mutations, "Restore missing files", DecisionKey::MissingFile, "No files to restore", w);
             }
-            missing_file_modal::MissingFilePreviewAction::ConfirmDrop => {
+            missing_file_modal::MissingFileAction::ConfirmDrop => {
                 let Some(w) = witness else { return };
                 let mutations = extract_mutations!(app, MissingFileResolution, drop_all_missing);
                 app.stage_resolution(mutations, "Drop missing files", DecisionKey::MissingFile, "No files to drop", w);
             }
-            missing_file_modal::MissingFilePreviewAction::Cancel => {
+            missing_file_modal::MissingFileAction::Cancel => {
                 app.cancel_and_return_to_source("Missing file resolution cancelled");
             }
         }
@@ -116,16 +116,16 @@ impl HandleAction for corrupt_file_modal::CorruptFileAction {
 // Shit Format Resolution
 // ========================================================================
 
-impl HandleAction for shit_format_modal::ShitFormatPreviewAction {
+impl HandleAction for shit_format_modal::ShitFormatAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            shit_format_modal::ShitFormatPreviewAction::None => {}
-            shit_format_modal::ShitFormatPreviewAction::ConfirmRemuxLossless => {
+            shit_format_modal::ShitFormatAction::None => {}
+            shit_format_modal::ShitFormatAction::ConfirmRemuxLossless => {
                 let Some(w) = witness else { return };
                 let mutations = extract_mutations!(app, ShitFormatResolution, lossless_mutations, &app.resolver);
                 app.stage_resolution(mutations, "Remux to FLAC", DecisionKey::ShitFormat, "No lossless files to remux", w);
             }
-            shit_format_modal::ShitFormatPreviewAction::ConfirmTranscodeLossy => {
+            shit_format_modal::ShitFormatAction::ConfirmTranscodeLossy => {
                 let Some(w) = witness else { return };
                 let (mutations, lossy_to_flac) = match &app.view {
                     ActiveView::ShitFormatResolution(ref preview) => (
@@ -137,7 +137,7 @@ impl HandleAction for shit_format_modal::ShitFormatPreviewAction {
                 let label = if lossy_to_flac { "Capture lossy to FLAC" } else { "Transcode to Opus" };
                 app.stage_resolution(mutations, label, DecisionKey::ShitFormat, "No lossy files to transcode", w);
             }
-            shit_format_modal::ShitFormatPreviewAction::ConfirmConvertAll => {
+            shit_format_modal::ShitFormatAction::ConfirmConvertAll => {
                 let Some(w) = witness else { return };
                 let (mutations, lossy_to_flac) = match &app.view {
                     ActiveView::ShitFormatResolution(ref preview) => (
@@ -149,7 +149,7 @@ impl HandleAction for shit_format_modal::ShitFormatPreviewAction {
                 let label = if lossy_to_flac { "Remux and capture all to FLAC" } else { "Convert all formats" };
                 app.stage_resolution(mutations, label, DecisionKey::ShitFormat, "No files to convert", w);
             }
-            shit_format_modal::ShitFormatPreviewAction::Cancel => {
+            shit_format_modal::ShitFormatAction::Cancel => {
                 app.cancel_and_return_to_source("Shit format resolution cancelled");
             }
         }

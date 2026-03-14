@@ -9,5 +9,5 @@
 pub mod preview;
 pub mod types;
 
-pub use preview::{ShitFormatPreviewAction, ShitFormatPreviewState};
-pub use types::ShitFormatModalData;
+pub use preview::ShitFormatPreviewState;
+pub use types::{ShitFormatAction, ShitFormatModalData};

@@ -21,26 +21,11 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{ShitFormatButton, ShitFormatButtonCtx, ShitFormatModalData};
+use super::types::{ShitFormatAction, ShitFormatButton, ShitFormatButtonCtx, ShitFormatModalData};
 use crate::helpers::{render_pane, truncate_right};
 use crate::widgets::FocusPane;
 use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame, ModalFrameCore};
 use crate::widgets::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
-
-/// Actions returned from the shit format preview.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ShitFormatPreviewAction {
-    /// No action needed.
-    None,
-    /// User confirmed remux lossless to FLAC.
-    ConfirmRemuxLossless,
-    /// User confirmed transcode lossy to Opus.
-    ConfirmTranscodeLossy,
-    /// User confirmed convert all.
-    ConfirmConvertAll,
-    /// Cancel and return to Insights view.
-    Cancel,
-}
 
 // ============================================================================
 // State
@@ -108,7 +93,7 @@ impl ShitFormatPreviewState {
         x: u16,
         y: u16,
         _gesture: &ConfirmationGesture,
-    ) -> Option<ShitFormatPreviewAction> {
+    ) -> Option<ShitFormatAction> {
         let ctx = self.button_ctx();
         if let Some(action) = self.frame.buttons.handle_click(x, y, &ctx) {
             self.frame.focus_pane = FocusPane::Buttons;
@@ -126,18 +111,18 @@ impl ShitFormatPreviewState {
     }
 
     /// Handle input action.
-    pub fn handle_input(&mut self, action: &InputAction) -> ShitFormatPreviewAction {
+    pub fn handle_input(&mut self, action: &InputAction) -> ShitFormatAction {
         // Tab cycles between buttons (works regardless of focus pane)
         match action {
             InputAction::CycleNext => {
                 let ctx = self.button_ctx();
                 self.frame.buttons.nav_right(&ctx);
-                return ShitFormatPreviewAction::None;
+                return ShitFormatAction::None;
             }
             InputAction::CyclePrev => {
                 let ctx = self.button_ctx();
                 self.frame.buttons.nav_left(&ctx);
-                return ShitFormatPreviewAction::None;
+                return ShitFormatAction::None;
             }
             _ => {}
         }
@@ -152,11 +137,11 @@ impl ShitFormatPreviewState {
                 match action {
                     InputAction::NavLeft => {
                         self.cached_data.decrease_bitrate();
-                        return ShitFormatPreviewAction::None;
+                        return ShitFormatAction::None;
                     }
                     InputAction::NavRight => {
                         self.cached_data.increase_bitrate();
-                        return ShitFormatPreviewAction::None;
+                        return ShitFormatAction::None;
                     }
                     _ => {}
                 }
@@ -166,7 +151,7 @@ impl ShitFormatPreviewState {
         match self.handle_frame_input(action) {
             FrameInputResult::Action(a) => a,
             FrameInputResult::Consumed | FrameInputResult::Unhandled => {
-                ShitFormatPreviewAction::None
+                ShitFormatAction::None
             }
         }
     }
@@ -339,8 +324,8 @@ impl ModalFrameCore for ShitFormatPreviewState {
     fn button_ctx(&self) -> ShitFormatButtonCtx {
         ShitFormatPreviewState::button_ctx(self)
     }
-    fn escape_action(&self) -> ShitFormatPreviewAction {
-        ShitFormatPreviewAction::Cancel
+    fn escape_action(&self) -> ShitFormatAction {
+        ShitFormatAction::Cancel
     }
 }
 

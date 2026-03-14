@@ -19,14 +19,7 @@ use crate::widgets::wizard::{WizardItem, WizardOffer};
 
 pub use mm_meta::views::review_match::{RecordingDetail, RecordingSummary};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExternalMatchReviewAction {
-    None,
-    /// Esc → close modal, return to lateral view.
-    Cancel,
-    /// Open MusicBrainz recording URL in browser.
-    OpenRecordingUrl(String),
-}
+pub use mm_ui::resolutions::external_match::ExternalMatchReviewAction;
 
 /// A single item in the external match review list.
 /// Wraps an entry with baked wizard content.

@@ -304,7 +304,7 @@ pub enum Computation {
     /// Carries pre-extracted metadata (format, dimensions, role) from the
     /// watcher thread. Writes to both `files` and `image_info` tables.
     IndexObservedImages {
-        images: Vec<crate::witch::fs_watcher::ObservedImage>,
+        images: Vec<crate::witch::fs_thread::ObservedImage>,
     },
 }
 

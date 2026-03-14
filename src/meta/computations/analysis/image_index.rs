@@ -7,7 +7,7 @@ use crate::corpus::paths;
 use crate::corpus::tags;
 use crate::logging::log_general;
 use crate::meta::computations::traits::ComputationContext;
-use crate::witch::fs_watcher::ObservedImage;
+use crate::witch::fs_thread::ObservedImage;
 
 pub(crate) use mm_meta::tags::{COVER_BACK_NAMES, COVER_FRONT_NAMES};
 

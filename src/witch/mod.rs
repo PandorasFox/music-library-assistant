@@ -27,7 +27,7 @@ pub(crate) mod auth_thread;
 pub(crate) mod cache_thread;
 mod execution;
 pub(crate) mod external_fetch;
-pub(crate) mod fs_watcher;
+pub(crate) mod fs_thread;
 mod hades;
 mod handle;
 pub(crate) mod socket;
@@ -233,11 +233,11 @@ pub struct Witch {
     /// Images observed by the watcher, pending indexing.
     /// Accumulated from ImageFileObserved messages, drained when a batch
     /// is queued as an IndexObservedImages computation.
-    pending_observed_images: Vec<fs_watcher::ObservedImage>,
+    pending_observed_images: Vec<fs_thread::ObservedImage>,
 
     /// Handle to the filesystem watcher thread.
     /// Spawned at construction time — always present.
-    fs_watcher: fs_watcher::FsWatcherHandle,
+    fs_watcher: fs_thread::FsThreadHandle,
 
     /// Handle to the auth thread for lifecycle management.
     /// Spawned in `run()`, before the UI thread.
@@ -308,7 +308,7 @@ impl Witch {
         let cache_witch_handle = cache_thread::spawn();
 
         // Spawn the filesystem watcher thread
-        let fs_watcher_handle = fs_watcher::FsWatcherHandle::spawn();
+        let fs_watcher_handle = fs_thread::FsThreadHandle::spawn();
 
         Self {
             startup_state,
@@ -962,7 +962,7 @@ impl Witch {
     ///
     /// Queries all corpus+inbox file mtimes and tags, producing a map
     /// the watcher can use to skip tag reads for files with matching mtimes.
-    fn build_watcher_db_cache(&self) -> HashMap<i64, fs_watcher::CachedInodeState> {
+    fn build_watcher_db_cache(&self) -> HashMap<i64, fs_thread::CachedInodeState> {
         let db_path = match config::get_db_path() {
             Ok(p) => p,
             Err(_) => return HashMap::new(),
@@ -992,7 +992,7 @@ impl Witch {
             let tags = tags_by_inode.remove(inode)
                 .map(crate::corpus::tags::TagSet::new)
                 .unwrap_or_else(crate::corpus::tags::TagSet::empty);
-            cache.insert(*inode, fs_watcher::CachedInodeState {
+            cache.insert(*inode, fs_thread::CachedInodeState {
                 mtime_secs: *mtime_secs,
                 mtime_nanos: *mtime_nanos,
                 tags,
@@ -1001,7 +1001,7 @@ impl Witch {
 
         // Build cache entries for inbox files (no tags — inbox tags are in inbox_tags table)
         for (inode, (mtime_secs, mtime_nanos)) in &inbox_mtimes {
-            cache.entry(*inode).or_insert(fs_watcher::CachedInodeState {
+            cache.entry(*inode).or_insert(fs_thread::CachedInodeState {
                 mtime_secs: *mtime_secs,
                 mtime_nanos: *mtime_nanos,
                 tags: crate::corpus::tags::TagSet::empty(),
@@ -1081,9 +1081,9 @@ impl Witch {
     }
 
     /// Process a single watcher message.
-    fn process_watcher_message(&mut self, msg: fs_watcher::WatcherMessage) {
+    fn process_watcher_message(&mut self, msg: fs_thread::WatcherMessage) {
         match msg {
-            fs_watcher::WatcherMessage::InitialScanComplete { zone, inodes } => {
+            fs_thread::WatcherMessage::InitialScanComplete { zone, inodes } => {
                 crate::logging::log_general(format!(
                     "[WITCH] Watcher initial scan complete for {}: {} inodes",
                     zone, inodes.len()
@@ -1106,7 +1106,7 @@ impl Witch {
                     }
                 }
             }
-            fs_watcher::WatcherMessage::AllInitialScansComplete => {
+            fs_thread::WatcherMessage::AllInitialScansComplete => {
                 crate::logging::log_general(format!(
                     "[WITCH] All watcher initial scans complete. \
                      Corpus: {} inodes, Inbox: {} inodes, Library: {} inodes",
@@ -1136,7 +1136,7 @@ impl Witch {
                     }
                 }
             }
-            fs_watcher::WatcherMessage::FileChanged {
+            fs_thread::WatcherMessage::FileChanged {
                 zone, inode, path,
                 mtime_secs, mtime_nanos, file_size, disk_tags,
             } => {
@@ -1168,7 +1168,7 @@ impl Witch {
                     );
                 }
             }
-            fs_watcher::WatcherMessage::FileCreated {
+            fs_thread::WatcherMessage::FileCreated {
                 zone, inode, path,
                 mtime_secs, mtime_nanos, file_size,
             } => {
@@ -1189,7 +1189,7 @@ impl Witch {
                 }
                 self.watcher_derivation_needed = true;
             }
-            fs_watcher::WatcherMessage::FileRemoved { zone, inode, path } => {
+            fs_thread::WatcherMessage::FileRemoved { zone, inode, path } => {
                 crate::logging::log_general(format!(
                     "[WITCH] Watcher: file removed — zone={} inode={} path={:?}",
                     zone, inode, path
@@ -1199,11 +1199,11 @@ impl Witch {
                 }
                 self.watcher_derivation_needed = true;
             }
-            fs_watcher::WatcherMessage::ImageFileObserved(mut img) => {
+            fs_thread::WatcherMessage::ImageFileObserved(mut img) => {
                 img.path = format!("{}/{}", img.zone.as_str(), img.path);
                 self.pending_observed_images.push(img);
             }
-            fs_watcher::WatcherMessage::MonitoringActive => {
+            fs_thread::WatcherMessage::MonitoringActive => {
                 if self.watcher_state != WatcherState::Polling {
                     self.watcher_state = WatcherState::Watching;
                 }
@@ -1211,7 +1211,7 @@ impl Witch {
                     "[WITCH] Watcher monitoring active (inotify established)"
                 );
             }
-            fs_watcher::WatcherMessage::InotifyFailed => {
+            fs_thread::WatcherMessage::InotifyFailed => {
                 crate::logging::log_error(
                     "[WITCH] Watcher fell back to polling mode (inotify unavailable). \
                      Filesystem changes will be detected periodically, not in real-time."

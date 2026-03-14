@@ -1,30 +1,32 @@
-//! FsWatcherHandle — Witch-side API for the filesystem watcher thread.
+//! FsThreadHandle — Witch-side API for the filesystem observer thread.
 //!
-//! The watcher thread owns filesystem monitoring and inode state tracking.
-//! It performs initial directory walks at startup and persistent inotify-based
-//! monitoring for steady-state change detection.
+//! The fs-thread owns filesystem monitoring and inode state tracking.
+//! It runs its own single-threaded tokio runtime, performing initial directory
+//! walks at startup and persistent inotify-based monitoring for steady-state
+//! change detection.
 //!
 //! ## Channel Topology
 //!
 //! ```text
 //!                    WatcherMessage
-//!   Watcher ─────────────────────► Witch (drains in tick())
+//!   fs-thread ─────────────────────► Witch (drains in select!)
 //!       ▲
 //!       │          WatcherCommand
 //!       └──────────────────────── Witch (start, shutdown)
 //! ```
 //!
-//! The watcher has NO database access. It reports raw filesystem state;
+//! The fs-thread has NO database access. It reports raw filesystem state;
 //! the Witch queues computations for semantic comparison against DB state.
 
 use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 use crate::db::types::Zone;
 
@@ -62,7 +64,7 @@ pub(crate) struct CachedInodeState {
     pub tags: crate::corpus::tags::TagSet,
 }
 
-/// Command from Witch to watcher thread.
+/// Command from Witch to fs-thread.
 pub(super) enum WatcherCommand {
     /// Begin watching zone roots. Triggers initial directory walk.
     Start {
@@ -77,11 +79,11 @@ pub(super) enum WatcherCommand {
         db_cache: HashMap<i64, CachedInodeState>,
         poll_interval_secs: u64,
     },
-    /// Shut down the watcher thread.
+    /// Shut down the fs-thread.
     Shutdown,
 }
 
-/// Message from watcher thread to Witch.
+/// Message from fs-thread to Witch.
 #[derive(Debug)]
 pub(super) enum WatcherMessage {
     /// Initial scan complete for one zone. Full inode→ObservedFile map.
@@ -130,30 +132,35 @@ pub(super) enum WatcherMessage {
 }
 
 // ============================================================================
-// FsWatcherHandle
+// FsThreadHandle
 // ============================================================================
 
-/// Handle held by the Witch for communicating with the watcher thread.
-pub struct FsWatcherHandle {
-    /// Send commands to watcher (start, shutdown).
-    command_tx: Sender<WatcherCommand>,
-    /// Receive messages from watcher (scan results + events).
-    pub(super) message_rx: tokio::sync::mpsc::UnboundedReceiver<WatcherMessage>,
-    /// Join handle for the watcher thread.
+/// Handle held by the Witch for communicating with the fs-thread.
+pub struct FsThreadHandle {
+    /// Send commands to fs-thread (start, shutdown).
+    command_tx: mpsc::UnboundedSender<WatcherCommand>,
+    /// Receive messages from fs-thread (scan results + events).
+    pub(super) message_rx: mpsc::UnboundedReceiver<WatcherMessage>,
+    /// Join handle for the fs-thread.
     handle: Option<JoinHandle<()>>,
 }
 
-impl FsWatcherHandle {
-    /// Spawn the watcher thread.
+impl FsThreadHandle {
+    /// Spawn the fs-thread with its own single-threaded tokio runtime.
     ///
-    /// The watcher sleeps until it receives a Start command, then walks
-    /// zone directories and sets up inotify watches for steady-state monitoring.
+    /// The thread blocks on its runtime until it receives a Start command,
+    /// then walks zone directories and sets up inotify watches for
+    /// steady-state monitoring.
     pub fn spawn() -> Self {
-        let (command_tx, command_rx) = mpsc::channel();
-        let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (message_tx, message_rx) = mpsc::unbounded_channel();
 
         let handle = thread::spawn(move || {
-            run_watcher(command_rx, message_tx);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("fs-thread: failed to create tokio runtime");
+            rt.block_on(run_fs_thread(command_rx, message_tx));
         });
 
         Self {
@@ -163,7 +170,7 @@ impl FsWatcherHandle {
         }
     }
 
-    /// Request the watcher to start scanning zone roots.
+    /// Request the fs-thread to start scanning zone roots.
     pub fn start(&self, zones: Vec<(Zone, PathBuf)>, db_cache: HashMap<i64, CachedInodeState>) {
         let _ = self
             .command_tx
@@ -180,7 +187,7 @@ impl FsWatcherHandle {
 
 }
 
-impl super::types::ManagedThread for FsWatcherHandle {
+impl super::types::ManagedThread for FsThreadHandle {
     fn send_shutdown(&self) {
         let _ = self.command_tx.send(WatcherCommand::Shutdown);
     }
@@ -190,7 +197,7 @@ impl super::types::ManagedThread for FsWatcherHandle {
     }
 }
 
-impl Drop for FsWatcherHandle {
+impl Drop for FsThreadHandle {
     fn drop(&mut self) {
         use super::types::ManagedThread;
         self.shutdown();
@@ -198,10 +205,10 @@ impl Drop for FsWatcherHandle {
 }
 
 // ============================================================================
-// Watcher Thread State
+// fs-thread Internal State
 // ============================================================================
 
-/// Per-file cached state held by the watcher.
+/// Per-file cached state held by the fs-thread.
 #[derive(Debug, Clone)]
 struct CachedFileState {
     mtime_secs: i64,
@@ -209,7 +216,7 @@ struct CachedFileState {
     file_size: i64,
 }
 
-/// Watcher's in-memory state for one zone.
+/// fs-thread's in-memory state for one zone.
 struct ZoneState {
     zone: Zone,
     root: PathBuf,
@@ -258,21 +265,24 @@ impl ZoneState {
 const DEBOUNCE_DURATION: Duration = Duration::from_millis(200);
 
 // ============================================================================
-// Watcher Thread Main Loop
+// fs-thread Main Loop
 // ============================================================================
 
-/// Watcher main loop. Waits for commands, performs directory walks,
-/// then enters steady-state inotify monitoring.
-fn run_watcher(command_rx: Receiver<WatcherCommand>, message_tx: tokio::sync::mpsc::UnboundedSender<WatcherMessage>) {
-    crate::logging::log_general("[FS_WATCHER] Watcher thread started");
+/// Async entry point for the fs-thread. Waits for commands, performs directory
+/// walks, then enters steady-state inotify monitoring.
+async fn run_fs_thread(
+    mut command_rx: mpsc::UnboundedReceiver<WatcherCommand>,
+    message_tx: mpsc::UnboundedSender<WatcherMessage>,
+) {
+    crate::logging::log_general("[FS_THREAD] Thread started");
 
-    while let Ok(command) = command_rx.recv() {
+    while let Some(command) = command_rx.recv().await {
         match command {
             WatcherCommand::Shutdown => break,
             WatcherCommand::Start { zones, db_cache } => {
                 // Run initial scan + steady-state monitoring.
                 // Returns true if shutdown was requested during monitoring.
-                if run_scan_and_monitor(&zones, &db_cache, &command_rx, &message_tx) {
+                if run_scan_and_monitor(&zones, &db_cache, &mut command_rx, &message_tx).await {
                     break;
                 }
             }
@@ -282,24 +292,24 @@ fn run_watcher(command_rx: Receiver<WatcherCommand>, message_tx: tokio::sync::mp
         }
     }
 
-    crate::logging::log_general("[FS_WATCHER] Watcher thread exiting");
+    crate::logging::log_general("[FS_THREAD] Thread exiting");
 }
 
-/// Perform initial scan, set up inotify, enter monitoring loop.
+/// Perform initial scan, set up inotify, enter async monitoring loop.
 /// Returns true if shutdown requested.
-fn run_scan_and_monitor(
+async fn run_scan_and_monitor(
     zones: &[(Zone, PathBuf)],
     db_cache: &HashMap<i64, CachedInodeState>,
-    command_rx: &Receiver<WatcherCommand>,
-    message_tx: &tokio::sync::mpsc::UnboundedSender<WatcherMessage>,
+    command_rx: &mut mpsc::UnboundedReceiver<WatcherCommand>,
+    message_tx: &mpsc::UnboundedSender<WatcherMessage>,
 ) -> bool {
-    // Phase 1: Initial scan — walk and report
+    // Phase 1: Initial scan — walk and report (blocking I/O, fine on dedicated thread)
     let mut zone_states = Vec::new();
 
     for (zone, root) in zones {
         if !root.exists() {
             crate::logging::log_general(format!(
-                "[FS_WATCHER] Zone {:?} root does not exist: {:?}, skipping",
+                "[FS_THREAD] Zone {:?} root does not exist: {:?}, skipping",
                 zone, root
             ));
             let _ = message_tx.send(WatcherMessage::InitialScanComplete {
@@ -310,7 +320,7 @@ fn run_scan_and_monitor(
         }
 
         crate::logging::log_general(format!(
-            "[FS_WATCHER] Starting initial scan for zone {:?} at {:?}",
+            "[FS_THREAD] Starting initial scan for zone {:?} at {:?}",
             zone, root
         ));
 
@@ -318,7 +328,7 @@ fn run_scan_and_monitor(
         let raw_inodes = walk_zone_root(root, db_cache);
 
         crate::logging::log_general(format!(
-            "[FS_WATCHER] Zone {:?} initial scan complete: {} tracked files found",
+            "[FS_THREAD] Zone {:?} initial scan complete: {} tracked files found",
             zone,
             raw_inodes.len()
         ));
@@ -352,7 +362,7 @@ fn run_scan_and_monitor(
 
         if image_count > 0 {
             crate::logging::log_general(format!(
-                "[FS_WATCHER] Zone {:?}: {} image files observed with metadata",
+                "[FS_THREAD] Zone {:?}: {} image files observed with metadata",
                 zone, image_count
             ));
         }
@@ -367,8 +377,8 @@ fn run_scan_and_monitor(
 
     let _ = message_tx.send(WatcherMessage::AllInitialScansComplete);
 
-    // Phase 2: Set up inotify watcher and enter monitoring loop
-    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+    // Phase 2: Set up inotify watcher, bridging events into a tokio channel
+    let (notify_tx, mut notify_rx) = mpsc::unbounded_channel();
 
     let mut watcher = match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
         match res {
@@ -379,7 +389,7 @@ fn run_scan_and_monitor(
         Ok(w) => w,
         Err(e) => {
             crate::logging::log_error(format!(
-                "[FS_WATCHER] Failed to create inotify watcher: {}. \
+                "[FS_THREAD] Failed to create inotify watcher: {}. \
                  Falling back to polling mode.",
                 e
             ));
@@ -388,7 +398,7 @@ fn run_scan_and_monitor(
                 zones, db_cache.clone(),
                 Duration::from_secs(900),
                 command_rx, message_tx,
-            );
+            ).await;
         }
     };
 
@@ -396,12 +406,12 @@ fn run_scan_and_monitor(
     for zs in &zone_states {
         if let Err(e) = notify::Watcher::watch(&mut watcher, &zs.root, notify::RecursiveMode::Recursive) {
             crate::logging::log_error(format!(
-                "[FS_WATCHER] Failed to watch {:?}: {}",
+                "[FS_THREAD] Failed to watch {:?}: {}",
                 zs.root, e
             ));
         } else {
             crate::logging::log_general(format!(
-                "[FS_WATCHER] Watching zone {:?} at {:?}",
+                "[FS_THREAD] Watching zone {:?} at {:?}",
                 zs.zone, zs.root
             ));
         }
@@ -410,121 +420,160 @@ fn run_scan_and_monitor(
     // All inotify watches established — signal the Witch
     let _ = message_tx.send(WatcherMessage::MonitoringActive);
 
-    // Monitoring loop: drain notify events + check for commands
+    // Monitoring loop: select! on commands, notify events, and debounce deadlines
     let mut debounce_map: HashMap<PathBuf, Instant> = HashMap::new();
     let mut pending_paths: Vec<PathBuf> = Vec::new();
 
     loop {
-        // Check for commands (non-blocking)
-        match command_rx.try_recv() {
-            Ok(WatcherCommand::Shutdown) => return true,
-            Ok(WatcherCommand::Start { zones, db_cache: rescan_cache }) => {
-                // Re-scan requested: drop current watcher, re-run
-                drop(watcher);
+        // Compute next debounce deadline (earliest pending path + DEBOUNCE_DURATION)
+        let deadline = next_debounce_deadline(&debounce_map);
 
-                // Re-scan zones
-                zone_states.clear();
-                for (zone, root) in &zones {
-                    if !root.exists() {
-                        let _ = message_tx.send(WatcherMessage::InitialScanComplete {
-                            zone: *zone,
-                            inodes: HashMap::new(),
-                        });
-                        continue;
-                    }
-
-                    let mut zone_state = ZoneState::new(*zone, root.clone());
-                    let raw_inodes = walk_zone_root(root, &rescan_cache);
-
-                    for (inode, observed) in &raw_inodes {
-                        zone_state.insert(
-                            *inode,
-                            observed.path.clone(),
-                            CachedFileState {
-                                mtime_secs: observed.mtime_secs,
-                                mtime_nanos: observed.mtime_nanos,
-                                file_size: observed.file_size,
-                            },
-                        );
-                    }
-
-                    let _ = message_tx.send(WatcherMessage::InitialScanComplete {
-                        zone: *zone,
-                        inodes: raw_inodes,
-                    });
-
-                    zone_states.push(zone_state);
-                }
-
-                let _ = message_tx.send(WatcherMessage::AllInitialScansComplete);
-
-                // Return false to re-enter command loop, which will re-run
-                // run_scan_and_monitor with fresh inotify watches
-                return false;
-            }
-            Ok(WatcherCommand::Poll { .. }) => {
-                // Poll is for polling mode only; ignored in inotify mode.
-            }
-            Err(_) => {} // No command
-        }
-
-        // Drain notify events (non-blocking)
-        let mut had_events = false;
-        loop {
-            match notify_rx.try_recv() {
-                Ok(NotifyEvent::Event(event)) => {
-                    had_events = true;
-                    process_notify_event(
-                        &event,
-                        &mut zone_states,
-                        &mut debounce_map,
-                        &mut pending_paths,
-                    );
-                }
-                Ok(NotifyEvent::Error(e)) => {
-                    if handle_notify_error(e) {
-                        let _ = message_tx.send(WatcherMessage::InotifyFailed);
+        tokio::select! {
+            cmd = command_rx.recv() => {
+                match cmd {
+                    Some(WatcherCommand::Shutdown) | None => return true,
+                    Some(WatcherCommand::Start { zones, db_cache: rescan_cache }) => {
+                        // Re-scan requested: drop current watcher, re-run
                         drop(watcher);
-                        // Default poll interval; Witch will send updated interval via Poll.
-                        return run_polling_loop(
-                            zones, db_cache.clone(),
-                            Duration::from_secs(900),
-                            command_rx, message_tx,
-                        );
+
+                        // Re-scan zones
+                        zone_states.clear();
+                        for (zone, root) in &zones {
+                            if !root.exists() {
+                                let _ = message_tx.send(WatcherMessage::InitialScanComplete {
+                                    zone: *zone,
+                                    inodes: HashMap::new(),
+                                });
+                                continue;
+                            }
+
+                            let mut zone_state = ZoneState::new(*zone, root.clone());
+                            let raw_inodes = walk_zone_root(root, &rescan_cache);
+
+                            for (inode, observed) in &raw_inodes {
+                                zone_state.insert(
+                                    *inode,
+                                    observed.path.clone(),
+                                    CachedFileState {
+                                        mtime_secs: observed.mtime_secs,
+                                        mtime_nanos: observed.mtime_nanos,
+                                        file_size: observed.file_size,
+                                    },
+                                );
+                            }
+
+                            let _ = message_tx.send(WatcherMessage::InitialScanComplete {
+                                zone: *zone,
+                                inodes: raw_inodes,
+                            });
+
+                            zone_states.push(zone_state);
+                        }
+
+                        let _ = message_tx.send(WatcherMessage::AllInitialScansComplete);
+
+                        // Return false to re-enter command loop, which will re-run
+                        // run_scan_and_monitor with fresh inotify watches
+                        return false;
+                    }
+                    Some(WatcherCommand::Poll { .. }) => {
+                        // Poll is for polling mode only; ignored in inotify mode.
                     }
                 }
-                Err(_) => break,
+            }
+
+            event = notify_rx.recv() => {
+                match event {
+                    Some(NotifyEvent::Event(e)) => {
+                        process_notify_event(
+                            &e, &mut zone_states, &mut debounce_map, &mut pending_paths,
+                        );
+                        // Drain any buffered events
+                        while let Ok(ev) = notify_rx.try_recv() {
+                            match ev {
+                                NotifyEvent::Event(e) => {
+                                    process_notify_event(
+                                        &e, &mut zone_states, &mut debounce_map, &mut pending_paths,
+                                    );
+                                }
+                                NotifyEvent::Error(e) => {
+                                    if handle_notify_error(e) {
+                                        let _ = message_tx.send(WatcherMessage::InotifyFailed);
+                                        drop(watcher);
+                                        return run_polling_loop(
+                                            zones, db_cache.clone(),
+                                            Duration::from_secs(900),
+                                            command_rx, message_tx,
+                                        ).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Some(NotifyEvent::Error(e)) => {
+                        if handle_notify_error(e) {
+                            let _ = message_tx.send(WatcherMessage::InotifyFailed);
+                            drop(watcher);
+                            return run_polling_loop(
+                                zones, db_cache.clone(),
+                                Duration::from_secs(900),
+                                command_rx, message_tx,
+                            ).await;
+                        }
+                    }
+                    None => {
+                        // Notify channel closed — watcher was dropped externally
+                        return true;
+                    }
+                }
+            }
+
+            _ = tokio::time::sleep_until(deadline), if !pending_paths.is_empty() => {
+                drain_settled_events(
+                    &mut debounce_map, &mut pending_paths, &mut zone_states, message_tx,
+                );
             }
         }
+    }
+}
 
-        // Process debounced events that have settled
-        let now = Instant::now();
-        let mut i = 0;
-        while i < pending_paths.len() {
-            let path = &pending_paths[i];
-            if let Some(last_event) = debounce_map.get(path) {
-                if now.duration_since(*last_event) >= DEBOUNCE_DURATION {
-                    let path = pending_paths.swap_remove(i);
-                    debounce_map.remove(&path);
-                    process_settled_event(&path, &mut zone_states, message_tx);
-                    // Don't increment i — swap_remove moved the last element here
-                    continue;
-                }
-            } else {
-                // No debounce entry — remove from pending
-                pending_paths.swap_remove(i);
+/// Compute the earliest debounce deadline from the pending set.
+///
+/// Returns a far-future instant if the map is empty (the caller guards
+/// the sleep arm with `if !pending_paths.is_empty()`).
+fn next_debounce_deadline(debounce_map: &HashMap<PathBuf, Instant>) -> Instant {
+    debounce_map
+        .values()
+        .map(|t| *t + DEBOUNCE_DURATION)
+        .min()
+        .unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))
+}
+
+/// Process all debounced events whose settle window has elapsed.
+fn drain_settled_events(
+    debounce_map: &mut HashMap<PathBuf, Instant>,
+    pending_paths: &mut Vec<PathBuf>,
+    zone_states: &mut [ZoneState],
+    message_tx: &mpsc::UnboundedSender<WatcherMessage>,
+) {
+    let now = Instant::now();
+    let mut i = 0;
+    while i < pending_paths.len() {
+        let path = &pending_paths[i];
+        if let Some(last_event) = debounce_map.get(path) {
+            if now.duration_since(*last_event) >= DEBOUNCE_DURATION {
+                let path = pending_paths.swap_remove(i);
+                debounce_map.remove(&path);
+                process_settled_event(&path, zone_states, message_tx);
+                // Don't increment i — swap_remove moved the last element here
                 continue;
             }
-            i += 1;
+        } else {
+            // No debounce entry — remove from pending
+            pending_paths.swap_remove(i);
+            continue;
         }
-
-        // Sleep briefly to avoid busy-spinning (50ms for responsive shutdown)
-        if !had_events && pending_paths.is_empty() {
-            thread::sleep(Duration::from_millis(50));
-        } else if !pending_paths.is_empty() {
-            // Events are pending debounce — sleep shorter
-            thread::sleep(Duration::from_millis(20));
-        }
+        i += 1;
     }
 }
 
@@ -532,48 +581,49 @@ fn run_scan_and_monitor(
 ///
 /// Periodically re-walks all zone roots and sends InitialScanComplete/
 /// AllInitialScansComplete messages, mimicking a fresh scan each cycle.
-/// No recursion, no stack growth.
 ///
 /// Returns true if shutdown requested, false if a Start command arrived
-/// (caller should retry inotify via the outer run_watcher loop).
-fn run_polling_loop(
+/// (caller should retry inotify via the outer run_fs_thread loop).
+async fn run_polling_loop(
     zones: &[(Zone, PathBuf)],
     mut db_cache: HashMap<i64, CachedInodeState>,
     mut poll_interval: Duration,
-    command_rx: &Receiver<WatcherCommand>,
-    message_tx: &tokio::sync::mpsc::UnboundedSender<WatcherMessage>,
+    command_rx: &mut mpsc::UnboundedReceiver<WatcherCommand>,
+    message_tx: &mpsc::UnboundedSender<WatcherMessage>,
 ) -> bool {
-    use std::sync::mpsc::RecvTimeoutError;
-
     crate::logging::log_general(format!(
-        "[FS_WATCHER] Entering polling mode (interval: {}s)",
+        "[FS_THREAD] Entering polling mode (interval: {}s)",
         poll_interval.as_secs()
     ));
 
     loop {
-        match command_rx.recv_timeout(poll_interval) {
-            Ok(WatcherCommand::Shutdown) => return true,
-            Ok(WatcherCommand::Start { .. }) => {
-                // Start = retry inotify. Return false to re-enter
-                // run_watcher's outer loop → run_scan_and_monitor.
-                // If inotify fails again, we'll re-enter polling.
-                crate::logging::log_general(
-                    "[FS_WATCHER] Start received in polling mode — retrying inotify"
-                );
-                return false;
+        tokio::select! {
+            cmd = command_rx.recv() => {
+                match cmd {
+                    Some(WatcherCommand::Shutdown) | None => return true,
+                    Some(WatcherCommand::Start { .. }) => {
+                        // Start = retry inotify. Return false to re-enter
+                        // run_fs_thread's outer loop → run_scan_and_monitor.
+                        crate::logging::log_general(
+                            "[FS_THREAD] Start received in polling mode — retrying inotify"
+                        );
+                        return false;
+                    }
+                    Some(WatcherCommand::Poll { db_cache: new_cache, poll_interval_secs }) => {
+                        // Operator-initiated rescan OR config change.
+                        // Update cache + interval, fall through to re-walk.
+                        db_cache = new_cache;
+                        poll_interval = Duration::from_secs(poll_interval_secs);
+                        crate::logging::log_general(format!(
+                            "[FS_THREAD] Poll command received — immediate re-walk (interval: {}s)",
+                            poll_interval_secs
+                        ));
+                    }
+                }
             }
-            Ok(WatcherCommand::Poll { db_cache: new_cache, poll_interval_secs }) => {
-                // Operator-initiated rescan OR config change.
-                // Update cache + interval, do immediate walk (fall through).
-                db_cache = new_cache;
-                poll_interval = Duration::from_secs(poll_interval_secs);
-                crate::logging::log_general(format!(
-                    "[FS_WATCHER] Poll command received — immediate re-walk (interval: {}s)",
-                    poll_interval_secs
-                ));
+            _ = tokio::time::sleep(poll_interval) => {
+                // Timer expired — fall through to re-walk
             }
-            Err(RecvTimeoutError::Timeout) => { /* time to poll */ }
-            Err(RecvTimeoutError::Disconnected) => return true,
         }
 
         // Re-walk all zones
@@ -592,7 +642,7 @@ fn run_polling_loop(
     }
 }
 
-/// Internal wrapper for notify events.
+/// Internal wrapper for notify events, bridged into the tokio channel.
 enum NotifyEvent {
     Event(notify::Event),
     Error(notify::Error),
@@ -647,7 +697,7 @@ fn process_notify_event(
 fn process_settled_event(
     path: &Path,
     zone_states: &mut [ZoneState],
-    message_tx: &tokio::sync::mpsc::UnboundedSender<WatcherMessage>,
+    message_tx: &mpsc::UnboundedSender<WatcherMessage>,
 ) {
     // Find which zone this path belongs to
     let zone_idx = match zone_states.iter().position(|zs| path.starts_with(&zs.root)) {
@@ -794,7 +844,7 @@ fn process_settled_event(
 /// (watch limit exhaustion — inotify is no longer viable).
 fn handle_notify_error(error: notify::Error) -> bool {
     crate::logging::log_error(format!(
-        "[FS_WATCHER] Notify error: {}",
+        "[FS_THREAD] Notify error: {}",
         error
     ));
 
@@ -803,7 +853,7 @@ fn handle_notify_error(error: notify::Error) -> bool {
     // worth a full re-walk (which could itself trigger more errors).
     if matches!(error.kind, notify::ErrorKind::MaxFilesWatch) {
         crate::logging::log_general(
-            "[FS_WATCHER] inotify overflow/limit — requesting rescan from Witch"
+            "[FS_THREAD] inotify overflow/limit — requesting rescan from Witch"
         );
         return true;
     }
@@ -811,13 +861,13 @@ fn handle_notify_error(error: notify::Error) -> bool {
     false
 }
 
-/// Read tags from an audio file. Returns empty vec on error.
+/// Read tags from an audio file. Returns empty TagSet on error.
 fn read_tags(path: &Path) -> crate::corpus::tags::TagSet {
     match crate::corpus::tags::from_file(path) {
         Ok(tagset) => tagset,
         Err(e) => {
             crate::logging::log_error(format!(
-                "[FS_WATCHER] Failed to read tags from {:?}: {}",
+                "[FS_THREAD] Failed to read tags from {:?}: {}",
                 path, e
             ));
             crate::corpus::tags::TagSet::new(std::iter::empty())
@@ -835,7 +885,7 @@ fn maybe_send_image_observed(
     mtime_nanos: i64,
     file_size: i64,
     zone_root: &Path,
-    message_tx: &tokio::sync::mpsc::UnboundedSender<WatcherMessage>,
+    message_tx: &mpsc::UnboundedSender<WatcherMessage>,
 ) {
     if !crate::meta::computations::helpers::is_image_file(path) {
         return;
@@ -874,7 +924,7 @@ fn walk_zone_root(root: &Path, db_cache: &HashMap<i64, CachedInodeState>) -> Has
 
     if symlink_count > 0 {
         crate::logging::log_general(format!(
-            "[FS_WATCHER] Skipped {} directory symlinks in {:?}",
+            "[FS_THREAD] Skipped {} directory symlinks in {:?}",
             symlink_count, root
         ));
     }
@@ -928,7 +978,7 @@ fn enumerate_directories_recursive(
                     let actual_dev = metadata.dev();
                     if actual_dev != expected {
                         crate::logging::log_error(format!(
-                            "[WATCHER] Nested mount point detected at {:?} \
+                            "[FS_THREAD] Nested mount point detected at {:?} \
                              (expected device {}, found {}). Skipping.",
                             path, expected, actual_dev
                         ));

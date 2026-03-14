@@ -86,7 +86,7 @@ impl HandleAction for transaction_review::TransactionReviewAction {
                 // Map cursor position to DecisionKey and set pending_removal
                 if let ActiveView::TransactionReview(ref mut review) = app.view {
                     if let Some(d) = review.decisions.get(review.cursor()) {
-                        review.pending_removal = Some(d.key.clone());
+                        review.interaction.pending_removal = Some(d.key.clone());
                     }
                 }
             }
@@ -142,7 +142,7 @@ impl HandleAction for super::super::tabbed_transaction_review::TabbedTransaction
                 TransactionReviewAction::RequestRemoval => {
                     if let ActiveView::TabbedTransactionReview(ref mut state) = app.view {
                         if let Some(d) = state.review.decisions.get(state.review.cursor()) {
-                            state.review.pending_removal = Some(d.key.clone());
+                            state.review.interaction.pending_removal = Some(d.key.clone());
                         }
                     }
                 }

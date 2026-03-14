@@ -99,7 +99,6 @@ impl ModalButtons for ShitFormatButton {
             Self::RemuxLossless => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::ShitFormat,
                 label: "Remux to FLAC".into(),
-                data_query: None,
             },
             Self::TranscodeLossy => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::ShitFormat,
@@ -108,7 +107,6 @@ impl ModalButtons for ShitFormatButton {
                 } else {
                     "Transcode to Opus".into()
                 },
-                data_query: None,
             },
             Self::ConvertAll => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::ShitFormat,
@@ -117,7 +115,6 @@ impl ModalButtons for ShitFormatButton {
                 } else {
                     "Convert all formats".into()
                 },
-                data_query: None,
             },
             Self::Cancel => ProtocolBinding::Navigation,
         }

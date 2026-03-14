@@ -14,28 +14,22 @@ use mm_meta::protocol::CommandPayload;
 /// Encodes the button→Witch mapping at the type level. Both TUI action
 /// handlers and web onclick generators consume this to ensure the right
 /// protocol message is sent.
+///
+/// `Transaction` is display metadata only — the client builds mutations
+/// locally and submits via `/tx/start` → `/tx/add` → `/tx/confirm`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProtocolBinding {
     /// Fire-and-forget command (no transaction).
     Command(CommandPayload),
 
-    /// Query for data, construct mutations, submit as transaction.
-    /// Mutation construction happens at runtime from query results.
+    /// Transaction display info. The client builds `Vec<Mutation>` locally
+    /// and submits via the transaction API. `decision_key` and `label`
+    /// identify the decision for review display.
     Transaction {
         decision_key: DecisionKey,
         label: String,
-        data_query: Option<DataQuery>,
     },
 
     /// Navigation only — no protocol message.
     Navigation,
-}
-
-/// Which domain query to run to get data for mutation construction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DataQuery {
-    /// GetIntakeConfirmation → IntakeConfirmationState
-    IntakeConfirmation,
-    /// GetDeployData → deploy plan
-    DeployData,
 }

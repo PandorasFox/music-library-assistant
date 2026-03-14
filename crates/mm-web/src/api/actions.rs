@@ -6,7 +6,7 @@ use mm_meta::decisions::{Decision, DecisionKey};
 use mm_meta::domain_queries::{DomainQueryPayload, DomainQueryResult, GetIntakeConfirmation};
 use mm_meta::protocol::{QueryPayload, QueryResponse, TransactionPayload, TransactionResponse};
 use mm_meta::views::startup_organize::IntakeSource;
-use mm_ui::protocol_binding::{DataQuery, ProtocolBinding};
+use mm_ui::protocol_binding::ProtocolBinding;
 
 use crate::auth::BearerToken;
 use crate::error::ApiError;
@@ -32,33 +32,30 @@ pub async fn execute(
         ProtocolBinding::Transaction {
             decision_key,
             label,
-            data_query,
-        } => execute_transaction(&state, token, decision_key, label, data_query).await,
+        } => execute_transaction(&state, token, decision_key, label).await,
 
         ProtocolBinding::Navigation => Ok(Json(serde_json::json!({"ok": true}))),
     }
 }
 
-/// Run a data query, build mutations, and submit as a confirmed transaction.
+/// Transitional shim: auto-confirm for IntakeIndex.
+///
+/// Once the web client has proper transaction review, this entire function
+/// goes away — the client will build mutations locally and submit via
+/// `/tx/start` → `/tx/add`, then navigate to `/transaction` for review.
 async fn execute_transaction(
     state: &AppState,
     token: mm_meta::auth::SessionToken,
     decision_key: DecisionKey,
     label: String,
-    data_query: Option<DataQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let mutations = match data_query {
-        Some(DataQuery::IntakeConfirmation) => {
-            query_intake_mutations(state, token.clone()).await?
-        }
-        Some(DataQuery::DeployData) => {
+    let mutations = match decision_key {
+        DecisionKey::IntakeIndex => query_intake_mutations(state, token.clone()).await?,
+        _ => {
             return Err(ApiError::BadRequest(
-                "DeployData transaction not yet implemented".into(),
-            ));
-        }
-        None => {
-            return Err(ApiError::BadRequest(
-                "transaction binding requires a data_query".into(),
+                "only IntakeIndex is supported via execute_transaction; \
+                 other actions should use the transaction API directly"
+                    .into(),
             ));
         }
     };

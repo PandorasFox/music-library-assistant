@@ -138,7 +138,6 @@ impl ModalButtons for MissingDirectoryButton {
             Self::Drop => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::MissingDirectory,
                 label: "Drop missing directories".into(),
-                data_query: None,
             },
             Self::Cancel => ProtocolBinding::Navigation,
         }

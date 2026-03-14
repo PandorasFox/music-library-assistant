@@ -149,7 +149,6 @@ impl ModalButtons for CorruptButton {
             Self::StashAll => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::CorruptFile,
                 label: "Stash corrupt files".into(),
-                data_query: None,
             },
             Self::Cancel => ProtocolBinding::Navigation,
         }

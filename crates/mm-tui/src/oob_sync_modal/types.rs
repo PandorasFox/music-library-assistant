@@ -80,12 +80,10 @@ impl ModalButtons for OobSyncButton {
             Self::AcceptDisk => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::OobSync,
                 label: "Sync disk tags \u{2192} index".into(),
-                data_query: None,
             },
             Self::AcceptDb => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::OobSync,
                 label: "Sync index tags \u{2192} disk".into(),
-                data_query: None,
             },
             Self::Cancel => ProtocolBinding::Navigation,
         }

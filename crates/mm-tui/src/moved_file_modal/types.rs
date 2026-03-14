@@ -117,7 +117,6 @@ impl ModalButtons for MovedFileButton {
             Self::Acknowledge => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::MovedFile,
                 label: "Acknowledge moved files".into(),
-                data_query: None,
             },
             Self::Cancel => ProtocolBinding::Navigation,
         }

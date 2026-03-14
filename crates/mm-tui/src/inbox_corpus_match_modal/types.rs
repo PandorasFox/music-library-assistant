@@ -195,12 +195,10 @@ impl ModalButtons for InboxMatchButton {
             Self::StashEquivalents => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::InboxCorpusMatch,
                 label: "Stash inbox corpus matches".into(),
-                data_query: None,
             },
             Self::StashAll => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::InboxCorpusMatch,
                 label: "Stash all inbox duplicates".into(),
-                data_query: None,
             },
             Self::Cancel => ProtocolBinding::Navigation,
         }

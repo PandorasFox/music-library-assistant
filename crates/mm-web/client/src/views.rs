@@ -10,7 +10,7 @@ use mm_meta::views::{
 };
 use mm_meta::witch_types::{WitchStatus, WorkStateSnapshot};
 use mm_ui::html::{self, div, h3, section, span, Node};
-use mm_ui::protocol_binding::{DataQuery, ProtocolBinding};
+use mm_ui::protocol_binding::ProtocolBinding;
 
 // ============================================================================
 // Shared helpers
@@ -143,7 +143,6 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
         let binding = ProtocolBinding::Transaction {
             decision_key: DecisionKey::IntakeIndex,
             label: "Index unindexed files".to_string(),
-            data_query: Some(DataQuery::IntakeConfirmation),
         };
         let binding_json = serde_json::to_string(&binding).unwrap();
         sections.push(

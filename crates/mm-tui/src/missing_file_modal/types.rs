@@ -100,12 +100,10 @@ impl ModalButtons for MissingFileButton {
             Self::RestoreAll => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::MissingFile,
                 label: "Restore missing files".into(),
-                data_query: None,
             },
             Self::DropLost => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::MissingFile,
                 label: "Drop missing files".into(),
-                data_query: None,
             },
             Self::Cancel => ProtocolBinding::Navigation,
         }

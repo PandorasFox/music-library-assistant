@@ -73,7 +73,6 @@ impl ModalButtons for EditorButton {
             Self::Save => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::ConfigEdit,
                 label: "Apply config changes".into(),
-                data_query: None,
             },
             Self::Discard => ProtocolBinding::Navigation,
         }

@@ -89,17 +89,14 @@ impl ModalButtons for OobConflictButton {
             Self::ApplyDb => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::OobConflict,
                 label: "Apply DB tags \u{2192} files".into(),
-                data_query: None,
             },
             Self::AssimilateDisk => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::OobConflict,
                 label: "Assimilate file tags \u{2192} DB".into(),
-                data_query: None,
             },
             Self::Acknowledge => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::MtimeAck,
                 label: "Acknowledge mtime changes".into(),
-                data_query: None,
             },
             Self::Cancel => ProtocolBinding::Navigation,
         }

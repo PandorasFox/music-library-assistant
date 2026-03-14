@@ -137,7 +137,6 @@ impl ModalButtons for SubparButton {
             Self::StashAll => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::SubparDuplicate,
                 label: "Stash subpar duplicates".into(),
-                data_query: None,
             },
             Self::Cancel => ProtocolBinding::Navigation,
         }

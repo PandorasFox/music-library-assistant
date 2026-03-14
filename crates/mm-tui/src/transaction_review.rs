@@ -17,13 +17,15 @@ use ratatui::Frame;
 
 use mm_meta::decisions::DecisionKey;
 use mm_meta::mutations::{DiffEntry, Mutation};
-use crate::widgets::modal_buttons::ModalButtons;
 use crate::widgets::rich_text::{RichBlock, RichSpan};
-use crate::widgets::standard_list::{
-    render_standard_list, ListEntry, ListInputResult, StandardListConfig, StandardListState,
-};
+use crate::widgets::standard_list::{render_standard_list, ListEntry};
 use crate::widgets::wizard::{WizardItem, WizardOffer};
-use crate::widgets::{centered_rect_fixed, ButtonRowState};
+use crate::widgets::centered_rect_fixed;
+
+// Re-export interaction types from mm-ui.
+pub use mm_ui::view_state::overlay::transaction_review::{
+    ReviewButton, ReviewButtonCtx, TransactionInteraction, TransactionReviewAction,
+};
 
 // ============================================================================
 // Types
@@ -109,85 +111,6 @@ impl ListEntry for DecisionSummary {
     }
 }
 
-/// Context for ReviewButton enablement (show_cancel flag).
-#[derive(Debug, Clone, Copy)]
-pub struct ReviewButtonCtx {
-    pub show_cancel: bool,
-}
-
-/// Button choices for the transaction review.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ReviewButton {
-    /// Cancel - return to source modal (safe default)
-    #[default]
-    Cancel,
-    /// Discard all decisions, return to Insights
-    Discard,
-    /// Confirm and execute all decisions
-    Confirm,
-}
-
-impl ModalButtons for ReviewButton {
-    type Context = ReviewButtonCtx;
-    type Action = TransactionReviewAction;
-
-    fn all() -> &'static [Self] {
-        &[Self::Cancel, Self::Discard, Self::Confirm]
-    }
-
-    fn label(&self, _ctx: &Self::Context) -> std::borrow::Cow<'static, str> {
-        match self {
-            Self::Cancel => "Cancel".into(),
-            Self::Discard => "Discard".into(),
-            Self::Confirm => "Confirm".into(),
-        }
-    }
-
-    fn color(&self, _ctx: &Self::Context) -> ratatui::style::Color {
-        match self {
-            Self::Cancel => Color::White,
-            Self::Discard => Color::Red,
-            Self::Confirm => Color::Green,
-        }
-    }
-
-    fn enabled(&self, ctx: &Self::Context) -> bool {
-        match self {
-            Self::Cancel => ctx.show_cancel,
-            Self::Discard => true,
-            Self::Confirm => true,
-        }
-    }
-
-    fn action(&self, _ctx: &Self::Context) -> TransactionReviewAction {
-        match self {
-            Self::Cancel => TransactionReviewAction::Cancel,
-            Self::Discard => TransactionReviewAction::Discard,
-            Self::Confirm => TransactionReviewAction::Confirm,
-        }
-    }
-
-    // protocol_binding: default (Navigation) — transaction lifecycle
-    // confirm/discard are handled by dedicated /tx/confirm and /tx/discard
-    // endpoints in the web UI, not via ProtocolBinding dispatch.
-}
-
-/// Action returned from handling input.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TransactionReviewAction {
-    None,
-    /// Return to source modal (transaction remains active)
-    Cancel,
-    /// Discard transaction and return to Insights
-    Discard,
-    /// Commit transaction and proceed to Progress
-    Confirm,
-    /// User pressed Backspace/Delete on a decision — handler should set pending_removal
-    RequestRemoval,
-    /// User confirmed removal in the popup — handler should execute removal
-    ConfirmRemoval(DecisionKey),
-}
-
 // ============================================================================
 // State
 // ============================================================================
@@ -203,19 +126,14 @@ pub enum PostCommitPhase {
 }
 
 /// Core state for transaction review, shared by both suspending and tabbed modes.
+///
+/// Composes data (decisions) with the backend-agnostic interaction state from mm-ui.
 pub struct TransactionReviewState {
     /// Cached decisions from the Witch's active transaction.
     pub decisions: Vec<DecisionSummary>,
-    /// StandardList state for decisions navigation + wizard.
-    pub list: StandardListState,
-    /// Whether button row is focused.
-    pub buttons_focused: bool,
-    pub buttons: ButtonRowState<ReviewButton>,
+    /// Backend-agnostic interaction (list, buttons, removal popup).
+    pub interaction: TransactionInteraction,
     pub post_commit_phase: PostCommitPhase,
-    /// When set, a confirmation popup is shown for removing this decision.
-    pub pending_removal: Option<DecisionKey>,
-    /// Context for button enablement (carries show_cancel flag).
-    button_ctx: ReviewButtonCtx,
 }
 
 impl Default for TransactionReviewState {
@@ -229,33 +147,18 @@ impl TransactionReviewState {
     pub fn new() -> Self {
         Self {
             decisions: Vec::new(),
-            list: StandardListState::new(StandardListConfig::default()),
-            buttons_focused: false,
-            buttons: ButtonRowState::new(), // defaults to Cancel
+            interaction: TransactionInteraction::new(),
             post_commit_phase: PostCommitPhase::SignalRefresh,
-            pending_removal: None,
-            button_ctx: ReviewButtonCtx { show_cancel: true },
         }
     }
 
     /// Create state for tabbed mode (no Cancel button).
     pub fn new_tabbed() -> Self {
-        let mut buttons = ButtonRowState::new();
-        buttons.selected = ReviewButton::Confirm;
         Self {
             decisions: Vec::new(),
-            list: StandardListState::new(StandardListConfig::default()),
-            buttons_focused: false,
-            buttons,
+            interaction: TransactionInteraction::new_tabbed(),
             post_commit_phase: PostCommitPhase::SignalRefresh,
-            pending_removal: None,
-            button_ctx: ReviewButtonCtx { show_cancel: false },
         }
-    }
-
-    /// Get the button context for rendering.
-    pub fn button_ctx(&self) -> &ReviewButtonCtx {
-        &self.button_ctx
     }
 
     pub fn with_post_commit_phase(mut self, phase: PostCommitPhase) -> Self {
@@ -264,103 +167,42 @@ impl TransactionReviewState {
     }
 
     /// Refresh cached decisions from pre-fetched decision details.
-    pub fn refresh_decisions_from_details(&mut self, details: Vec<mm_meta::protocol::DecisionDetail>) {
+    pub fn refresh_decisions_from_details(
+        &mut self,
+        details: Vec<mm_meta::protocol::DecisionDetail>,
+    ) {
         self.decisions = decision_details_to_summaries(details);
-        self.list.clamp_cursor(&self.decisions);
+        self.interaction.clamp_to_data(&self.decisions);
     }
 
     /// Set decisions directly and clamp cursor.
     pub fn set_decisions(&mut self, decisions: Vec<DecisionSummary>) {
         self.decisions = decisions;
-        self.list.clamp_cursor(&self.decisions);
+        self.interaction.clamp_to_data(&self.decisions);
     }
 
     /// Current cursor position (for action handler interop).
     pub fn cursor(&self) -> usize {
-        self.list.cursor
+        self.interaction.cursor()
     }
 
-    /// Handle input action.
+    /// Handle input action, delegating to the interaction state.
     pub fn handle_input(&mut self, action: &InputAction) -> TransactionReviewAction {
-        // Confirmation popup mode — intercept all actions
-        if let Some(ref key_to_remove) = self.pending_removal {
-            return match action {
-                InputAction::Confirm | InputAction::Toggle => {
-                    let k = key_to_remove.clone();
-                    self.pending_removal = None;
-                    TransactionReviewAction::ConfirmRemoval(k)
-                }
-                InputAction::Cancel | InputAction::Backspace | InputAction::Delete => {
-                    self.pending_removal = None;
-                    TransactionReviewAction::None
-                }
-                _ => TransactionReviewAction::None,
-            };
-        }
-
-        // Button focus mode
-        if self.buttons_focused {
-            return self.handle_buttons_input(action);
-        }
-
-        // Global shortcuts (work regardless of pane focus)
-        match action {
-            InputAction::Char('y') | InputAction::Char('Y') => {
-                return TransactionReviewAction::Confirm;
-            }
-            InputAction::Shortcut('d') => return TransactionReviewAction::Discard,
-            InputAction::Cancel => return TransactionReviewAction::Cancel,
-            _ => {}
-        }
-
-        // Delegate to StandardList
-        match self.list.handle_input(action, &self.decisions) {
-            ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
-                TransactionReviewAction::None
-            }
-            ListInputResult::Confirm(_) => {
-                // Enter on a decision — no action (read-only)
-                TransactionReviewAction::None
-            }
-            ListInputResult::Unhandled => {
-                // Handle remaining actions
-                match action {
-                    InputAction::Backspace | InputAction::Delete => {
-                        TransactionReviewAction::RequestRemoval
-                    }
-                    InputAction::FocusDown => {
-                        self.buttons_focused = true;
-                        TransactionReviewAction::None
-                    }
-                    _ => TransactionReviewAction::None,
-                }
-            }
-        }
+        self.interaction.handle_input_with(action, &self.decisions)
     }
 
-    fn handle_buttons_input(&mut self, action: &InputAction) -> TransactionReviewAction {
-        match action {
-            InputAction::NavLeft => {
-                self.buttons.nav_left(&self.button_ctx);
-                TransactionReviewAction::None
-            }
-            InputAction::NavRight => {
-                self.buttons.nav_right(&self.button_ctx);
-                TransactionReviewAction::None
-            }
-            InputAction::FocusUp => {
-                self.buttons_focused = false;
-                TransactionReviewAction::None
-            }
-            InputAction::Confirm | InputAction::Toggle => {
-                self.buttons.confirm(&self.button_ctx)
-                    .unwrap_or(TransactionReviewAction::None)
-            }
-            InputAction::Cancel => TransactionReviewAction::Cancel,
-            InputAction::Char('y') | InputAction::Char('Y') => TransactionReviewAction::Confirm,
-            InputAction::Shortcut('d') => TransactionReviewAction::Discard,
-            _ => TransactionReviewAction::None,
-        }
+    // Convenience accessors for rendering code.
+
+    pub fn button_ctx(&self) -> &ReviewButtonCtx {
+        self.interaction.button_ctx()
+    }
+
+    pub fn buttons_focused(&self) -> bool {
+        self.interaction.buttons_focused
+    }
+
+    pub fn pending_removal(&self) -> Option<&DecisionKey> {
+        self.interaction.pending_removal.as_ref()
     }
 }
 
@@ -445,7 +287,9 @@ pub(crate) fn fetch_decision_summaries(app: &mut crate::App) -> Vec<DecisionSumm
 }
 
 /// Convert pre-fetched decision details into display summaries.
-fn decision_details_to_summaries(details: Vec<mm_meta::protocol::DecisionDetail>) -> Vec<DecisionSummary> {
+fn decision_details_to_summaries(
+    details: Vec<mm_meta::protocol::DecisionDetail>,
+) -> Vec<DecisionSummary> {
     details
         .into_iter()
         .map(|d| {
@@ -484,16 +328,15 @@ pub(crate) fn render_content(f: &mut Frame, area: Rect, state: &mut TransactionR
         ])
         .split(area);
 
-    let list_focused = !state.buttons_focused;
-    let TransactionReviewState { ref mut list, ref decisions, .. } = *state;
+    let list_focused = !state.interaction.buttons_focused;
 
     render_standard_list(
-        list,
+        &mut state.interaction.list,
         f,
         chunks[0],
-        decisions,
+        &state.decisions,
         |idx, is_cursor, _is_selected, _width| {
-            render_decision_row(decisions, idx, is_cursor)
+            render_decision_row(&state.decisions, idx, is_cursor)
         },
         "Decisions",
         list_focused,
@@ -542,7 +385,7 @@ fn render_decision_row(
 
 /// Render the removal confirmation popup overlay.
 pub(crate) fn render_removal_popup(f: &mut Frame, area: Rect, state: &TransactionReviewState) {
-    let Some(ref key) = state.pending_removal else {
+    let Some(ref key) = state.interaction.pending_removal else {
         return;
     };
 
@@ -601,13 +444,19 @@ fn render_buttons_and_hints(
     hint_area: Rect,
     state: &mut TransactionReviewState,
 ) {
-    let ctx = state.button_ctx;
-    crate::widgets::modal_buttons::render_buttons(&mut state.buttons, f, button_area, &ctx, state.buttons_focused);
+    let ctx = *state.interaction.button_ctx();
+    crate::widgets::modal_buttons::render_buttons(
+        &mut state.interaction.buttons,
+        f,
+        button_area,
+        &ctx,
+        state.interaction.buttons_focused,
+    );
 
     use crate::widgets::control_colors as cc;
 
     let mut hint_spans = vec![
-        cc::nav("[Shift+↑↓]"),
+        cc::nav("[Shift+\u{2191}\u{2193}]"),
         cc::text(" pane  "),
         cc::nav("[↑↓/<>]"),
         cc::text(" navigate  "),

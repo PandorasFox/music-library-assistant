@@ -43,7 +43,7 @@ pub fn router(state: AppState) -> Router {
         // Queries
         .route("/status", get(api::queries::status))
         .route("/config", get(api::queries::config))
-        .route("/queries/{name}", get(api::queries::domain_query))
+        .route("/queries/{name}", get(api::queries::domain_query).post(api::queries::domain_query))
         // Transactions
         .route("/tx/start", post(api::transactions::start))
         .route("/tx/add", post(api::transactions::add_decision))

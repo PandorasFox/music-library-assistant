@@ -12,9 +12,9 @@ use mm_meta::views::MatchClassification;
 use crate::helpers::{render_pane, truncate_left};
 use crate::widgets::{ModalFrame, PathField, CURSOR_STYLE};
 
-use super::types::InboxCorpusMatchPreviewState;
+use super::types::InboxCorpusMatchState;
 
-impl ModalFrame for InboxCorpusMatchPreviewState {
+impl ModalFrame for InboxCorpusMatchState {
     fn frame_title(&self) -> Line<'static> {
         let (better, equivalent, subpar) = self.data.0.count_by_class();
         Line::from(vec![

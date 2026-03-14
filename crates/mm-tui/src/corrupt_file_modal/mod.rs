@@ -4,13 +4,13 @@
 //! Shows files with tag parse errors or waveform decode failures and allows
 //! the operator to stash + drop them from the index.
 //!
-//! Uses the generic `ResolutionState` — only the data wrapper, button enum,
-//! and rendering are modal-specific.
+//! Data wrapper, buttons, and actions live in `mm_ui::resolutions::corrupt_file`.
+//! This module provides the ratatui-specific `ModalFrame` impl.
 
 mod preview;
 pub mod types;
 
 pub use types::{
-    CorruptFileData, CorruptFileModalData, CorruptFilePreviewAction, CorruptFilePreviewState,
+    CorruptFileAction, CorruptFileData, CorruptFileModalData, CorruptFileState,
     stash_and_drop_mutations,
 };

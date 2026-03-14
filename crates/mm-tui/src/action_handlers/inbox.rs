@@ -54,10 +54,10 @@ impl HandleAction for InboxInsightAction {
     }
 }
 
-impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchPreviewAction {
+impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::ConfirmStash => {
+            inbox_corpus_match_modal::InboxCorpusMatchAction::ConfirmStash => {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
                     ActiveView::InboxCorpusMatchResolution(ref preview) => {
@@ -67,7 +67,7 @@ impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchPreviewAction {
                 };
                 app.stage_resolution(mutations, "Stash inbox corpus matches", DecisionKey::InboxCorpusMatch, "No files to stash", w);
             }
-            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::ConfirmStashAll => {
+            inbox_corpus_match_modal::InboxCorpusMatchAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
                     ActiveView::InboxCorpusMatchResolution(ref preview) => {
@@ -77,7 +77,7 @@ impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchPreviewAction {
                 };
                 app.stage_resolution(mutations, "Stash all inbox duplicates", DecisionKey::InboxCorpusMatch, "No files to stash", w);
             }
-            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::Cancel => {
+            inbox_corpus_match_modal::InboxCorpusMatchAction::Cancel => {
                 app.cancel_and_return_to_source("Inbox corpus match resolution cancelled");
             }
         }
@@ -146,7 +146,7 @@ impl App {
                 bitrate_fuzz_percent: fuzz,
             });
 
-        let preview = inbox_corpus_match_modal::InboxCorpusMatchPreviewState::new(
+        let preview = inbox_corpus_match_modal::InboxCorpusMatchState::new(
             inbox_corpus_match_modal::InboxCorpusMatchData(data),
         );
         self.view = ActiveView::InboxCorpusMatchResolution(preview);

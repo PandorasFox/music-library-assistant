@@ -94,10 +94,10 @@ impl HandleAction for missing_directory_modal::MissingDirectoryAction {
 // Corrupt File Resolution
 // ========================================================================
 
-impl HandleAction for corrupt_file_modal::CorruptFilePreviewAction {
+impl HandleAction for corrupt_file_modal::CorruptFileAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            corrupt_file_modal::CorruptFilePreviewAction::ConfirmStashAll => {
+            corrupt_file_modal::CorruptFileAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
                     ActiveView::CorruptFileResolution(ref p) => corrupt_file_modal::stash_and_drop_mutations(&p.data.0, &app.resolver),
@@ -105,7 +105,7 @@ impl HandleAction for corrupt_file_modal::CorruptFilePreviewAction {
                 };
                 app.stage_resolution(mutations, "Stash corrupt files", DecisionKey::CorruptFile, "No files to stash", w);
             }
-            corrupt_file_modal::CorruptFilePreviewAction::Cancel => {
+            corrupt_file_modal::CorruptFileAction::Cancel => {
                 app.cancel_and_return_to_source("Corrupt file resolution cancelled");
             }
         }
@@ -160,10 +160,10 @@ impl HandleAction for shit_format_modal::ShitFormatPreviewAction {
 // Subpar Duplicate Resolution
 // ========================================================================
 
-impl HandleAction for subpar_duplicate_modal::SubparDuplicatePreviewAction {
+impl HandleAction for subpar_duplicate_modal::SubparDuplicateAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            subpar_duplicate_modal::SubparDuplicatePreviewAction::ConfirmStashAll => {
+            subpar_duplicate_modal::SubparDuplicateAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
                     ActiveView::SubparDuplicateResolution(ref p) => subpar_duplicate_modal::stash_and_drop_mutations(&p.data.0, &app.resolver),
@@ -171,7 +171,7 @@ impl HandleAction for subpar_duplicate_modal::SubparDuplicatePreviewAction {
                 };
                 app.stage_resolution(mutations, "Stash subpar duplicates", DecisionKey::SubparDuplicate, "No files to stash", w);
             }
-            subpar_duplicate_modal::SubparDuplicatePreviewAction::Cancel => {
+            subpar_duplicate_modal::SubparDuplicateAction::Cancel => {
                 app.cancel_and_return_to_source("Subpar duplicate resolution cancelled");
             }
         }
@@ -356,7 +356,7 @@ impl App {
 
     pub(crate) fn start_corrupt_file_resolution(&mut self) {
         let data = self.query(mm_meta::domain_queries::GetCorruptFileData);
-        let preview = corrupt_file_modal::CorruptFilePreviewState::new(
+        let preview = corrupt_file_modal::CorruptFileState::new(
             corrupt_file_modal::CorruptFileData(data),
         );
         self.view = ActiveView::CorruptFileResolution(preview);
@@ -372,7 +372,7 @@ impl App {
 
     pub(crate) fn start_subpar_duplicate_resolution(&mut self) {
         let data = self.query(mm_meta::domain_queries::GetSubparDuplicateData);
-        let preview = subpar_duplicate_modal::SubparDuplicatePreviewState::new(
+        let preview = subpar_duplicate_modal::SubparDuplicateState::new(
             subpar_duplicate_modal::SubparDuplicateData(data),
         );
         self.view = ActiveView::SubparDuplicateResolution(preview);

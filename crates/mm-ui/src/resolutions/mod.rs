@@ -8,4 +8,9 @@
 //!
 //! Rendering stays in the client crates (mm-tui, mm-web).
 
+pub mod corrupt_file;
+pub mod inbox_corpus_match;
 pub mod missing_directory;
+pub mod moved_file;
+pub mod oob_sync;
+pub mod subpar_duplicate;

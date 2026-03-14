@@ -12,12 +12,12 @@ use ratatui::{
     Frame,
 };
 
-use super::types::CorruptFilePreviewState;
+use super::types::CorruptFileState;
 use crate::helpers::truncate_right;
 use crate::widgets::modal_frame::ModalFrame;
 use crate::widgets::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 
-impl ModalFrame for CorruptFilePreviewState {
+impl ModalFrame for CorruptFileState {
     fn accent_color(&self) -> Color {
         Color::Red
     }

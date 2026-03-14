@@ -1,109 +1,20 @@
 //! Types for OOB tag sync resolution modal.
-
-use std::borrow::Cow;
-
-use ratatui::style::Color;
+//!
+//! Button, action, and context types are defined in mm-ui. The complex
+//! `OobSyncState` stays here because it uses bulk selection and filtering
+//! that don't fit the `ResolutionState` pattern yet.
 
 use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 
-use mm_meta::decisions::DecisionKey;
 use mm_meta::views::{OobSyncDirection, OobSyncFile};
-use mm_ui::protocol_binding::ProtocolBinding;
 use crate::bulk_selection::BulkSelectionState;
-use crate::widgets::modal_buttons::ModalButtons;
 use crate::widgets::{FocusPane, FrameInputResult, TextInputState};
 use crate::widgets::modal_frame::ModalFrameCore;
 use crate::widgets::modal_frame::FrameState;
 
-// ============================================================================
-// Button Selection
-// ============================================================================
-
-/// Context for OobSyncButton enablement.
-#[derive(Debug, Clone, Copy)]
-pub struct OobSyncButtonCtx {
-    pub disk_to_index_count: usize,
-    pub index_to_disk_count: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OobSyncButton {
-    #[default]
-    AcceptDisk,
-    AcceptDb,
-    Cancel,
-}
-
-impl ModalButtons for OobSyncButton {
-    type Context = OobSyncButtonCtx;
-    type Action = OobSyncAction;
-
-    fn all() -> &'static [Self] {
-        &[Self::AcceptDisk, Self::AcceptDb, Self::Cancel]
-    }
-
-    fn label(&self, ctx: &Self::Context) -> Cow<'static, str> {
-        match self {
-            Self::AcceptDisk => format!("Accept Disk ({})", ctx.disk_to_index_count).into(),
-            Self::AcceptDb => format!("Accept DB ({})", ctx.index_to_disk_count).into(),
-            Self::Cancel => "Cancel".into(),
-        }
-    }
-
-    fn color(&self, _ctx: &Self::Context) -> Color {
-        match self {
-            Self::AcceptDisk => Color::Cyan,
-            Self::AcceptDb => Color::Magenta,
-            Self::Cancel => Color::White,
-        }
-    }
-
-    fn enabled(&self, ctx: &Self::Context) -> bool {
-        match self {
-            Self::AcceptDisk => ctx.disk_to_index_count > 0,
-            Self::AcceptDb => ctx.index_to_disk_count > 0,
-            Self::Cancel => true,
-        }
-    }
-
-    fn action(&self, _ctx: &Self::Context) -> OobSyncAction {
-        match self {
-            Self::AcceptDisk => OobSyncAction::AcceptDisk,
-            Self::AcceptDb => OobSyncAction::AcceptDb,
-            Self::Cancel => OobSyncAction::Cancel,
-        }
-    }
-
-    fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
-        match self {
-            Self::AcceptDisk => ProtocolBinding::Transaction {
-                decision_key: DecisionKey::OobSync,
-                label: "Sync disk tags \u{2192} index".into(),
-            },
-            Self::AcceptDb => ProtocolBinding::Transaction {
-                decision_key: DecisionKey::OobSync,
-                label: "Sync index tags \u{2192} disk".into(),
-            },
-            Self::Cancel => ProtocolBinding::Navigation,
-        }
-    }
-}
-
-// ============================================================================
-// Action Enum
-// ============================================================================
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OobSyncAction {
-    None,
-    /// Accept disk values — sync DiskToIndex files to DB
-    AcceptDisk,
-    /// Accept DB values — sync IndexToDisk files to disk
-    AcceptDb,
-    /// Cancel and return to Insights
-    Cancel,
-}
+// Re-export button/action/context types from mm-ui
+pub use mm_ui::resolutions::oob_sync::{OobSyncAction, OobSyncButton, OobSyncButtonCtx};
 
 // ============================================================================
 // State

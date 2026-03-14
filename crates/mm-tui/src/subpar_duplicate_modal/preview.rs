@@ -8,12 +8,12 @@ use ratatui::{
     Frame,
 };
 
-use super::types::SubparDuplicatePreviewState;
+use super::types::SubparDuplicateState;
 use crate::helpers::{render_pane, truncate_left};
 use crate::widgets::{ModalFrame, PathField, CURSOR_STYLE};
 
 /// Build the detail lines for the currently selected pair.
-fn build_detail_lines(state: &SubparDuplicatePreviewState, width: u16) -> Vec<Line<'static>> {
+fn build_detail_lines(state: &SubparDuplicateState, width: u16) -> Vec<Line<'static>> {
     match state.data.0.files.get(state.cursor) {
             Some(file) => {
                 let mut lines = PathField::new(
@@ -45,7 +45,7 @@ fn build_detail_lines(state: &SubparDuplicatePreviewState, width: u16) -> Vec<Li
         }
 }
 
-impl ModalFrame for SubparDuplicatePreviewState {
+impl ModalFrame for SubparDuplicateState {
     fn frame_title(&self) -> Line<'static> {
         let total = self.data.0.total_count();
         Line::from(vec![

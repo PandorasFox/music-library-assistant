@@ -382,14 +382,10 @@ async fn load_from_hash() -> Result<(), JsValue> {
     let lateral = lateral_view_for_route(&route);
 
     // Check if a transaction is active to show the Transaction tab.
-    let tx_open = if lateral == LateralView::Health || lateral == LateralView::Transaction {
-        api::get_status()
-            .await
-            .ok()
-            .map_or(false, |s| s.transaction.is_some())
-    } else {
-        false
-    };
+    let tx_open = api::get_status()
+        .await
+        .ok()
+        .map_or(false, |s| s.transaction.is_some());
 
     let content = load_view_for_route(&route).await?;
     mount(&render_app_shell(lateral, tx_open, content, Some("Connected")));

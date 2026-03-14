@@ -30,6 +30,7 @@ use crate::widgets::file_path_list::{render_file_path_list, PathEntry};
 use crate::widgets::{rect_contains, ListClickTargets, PathField, CURSOR_STYLE};
 
 /// Which pane has focus
+#[deprecated(note = "use mm_ui::resolutions::directory_cluster::DirectoryClusterState")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FocusPane {
     #[default]
@@ -54,6 +55,7 @@ impl FocusPane {
 }
 
 /// Actions returned from the directory cluster preview.
+#[deprecated(note = "use mm_ui::resolutions::directory_cluster::DirectoryClusterAction")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DirectoryClusterPreviewAction {
     /// No action needed.
@@ -73,6 +75,7 @@ pub enum DirectoryClusterPreviewAction {
 }
 
 /// State for the directory cluster resolution modal.
+#[deprecated(note = "use mm_ui::resolutions::directory_cluster::DirectoryClusterState")]
 #[derive(Debug)]
 pub struct DirectoryClusterPreviewState {
     /// Cached modal data (loaded once on init).

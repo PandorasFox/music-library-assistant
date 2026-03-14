@@ -122,6 +122,7 @@ pub struct GetEditHistoryExport {
 
 /// Compound tag signal groups (for compound split resolution).
 /// `Zone::Corpus` uses safety/tag filtering; `Zone::Inbox` returns all inbox groups.
+#[deprecated(note = "use GetCompoundSplitResolution")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetCompoundSignalGroups {
     pub zone: crate::db_types::Zone,
@@ -142,11 +143,13 @@ pub struct GetPackingInodePaths;
 // ============================================================================
 
 /// Aggregate signal keys for InconsistentAlbumArtist signals.
+#[deprecated(note = "use GetTagCanonicityResolution")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetInconsistentAlbumArtistKeys;
 
 /// Aggregate signal keys for tag canonicity signals, optionally filtered by tag prefix.
 /// `Zone::Corpus` queries `TagCanonicitySignal`; `Zone::Inbox` queries `InboxTagCanonicitySignal`.
+#[deprecated(note = "use GetTagCanonicityResolution")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetTagCanonicityKeys {
     pub zone: crate::db_types::Zone,
@@ -276,6 +279,7 @@ pub struct GetIntakeConfirmation {
 }
 
 /// Load compound split modal data for a specific compound group.
+#[deprecated(note = "use GetCompoundSplitResolution")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetCompoundSplitGroupData {
     pub group: crate::signals::data::CompoundGroup,
@@ -283,6 +287,7 @@ pub struct GetCompoundSplitGroupData {
 }
 
 /// Load tag canonicity signal data for a specific signal key.
+#[deprecated(note = "use GetTagCanonicityResolution")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetTagCanonicitySignalData {
     pub signal_key: String,

@@ -37,6 +37,7 @@ use crate::widgets::{
 // ============================================================================
 
 /// Resolution option for a group of tracks missing ALBUM tags.
+#[deprecated(note = "use mm_ui::resolutions::missing_album::MissingAlbumState")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlbumResolution {
     /// ALBUM = "{title}{suffix}" per track
@@ -70,6 +71,7 @@ impl AlbumResolution {
 // ============================================================================
 
 /// Actions returned from the missing album modal.
+#[deprecated(note = "use mm_ui::resolutions::missing_album::MissingAlbumAction")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MissingAlbumAction {
     /// No action needed.
@@ -108,6 +110,7 @@ pub struct TrackEntry {
 }
 
 /// Loaded data for the modal.
+#[deprecated(note = "use mm_ui::resolutions::missing_album::MissingAlbumState")]
 #[derive(Debug, Clone)]
 pub struct MissingAlbumData {
     pub groups: Vec<ArtistGroup>,
@@ -141,6 +144,7 @@ impl MissingAlbumData {
 // ============================================================================
 
 /// State for the missing album singles resolution modal.
+#[deprecated(note = "use mm_ui::resolutions::missing_album::MissingAlbumState")]
 #[derive(Debug)]
 pub struct MissingAlbumState {
     /// Loaded data (immutable — groups are never removed).

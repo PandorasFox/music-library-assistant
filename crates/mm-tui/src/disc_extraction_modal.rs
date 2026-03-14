@@ -36,6 +36,7 @@ use ratatui::{
 // ============================================================================
 
 /// Resolution option for a disc extraction group.
+#[deprecated(note = "use mm_ui::resolutions::disc_extraction::DiscExtractionState")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiscResolution {
     /// Extract disc value and clean source tag.
@@ -62,6 +63,7 @@ impl DiscResolution {
 // ============================================================================
 
 /// Actions returned from the disc extraction modal.
+#[deprecated(note = "use mm_ui::resolutions::disc_extraction::DiscExtractionAction")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiscExtractionAction {
     /// No action needed.
@@ -87,6 +89,7 @@ pub enum DiscExtractionAction {
 pub use mm_meta::domain_queries::{DiscExtractionGroup, DiscExtractionModalData};
 
 /// Loaded data for the modal — alias for the wire type from mm-meta.
+// DEPRECATED: use mm_ui::resolutions::disc_extraction types instead
 pub type DiscExtractionData = DiscExtractionModalData;
 
 // Re-export from mm-meta where the canonical implementation lives.
@@ -96,6 +99,7 @@ pub type DiscExtractionData = DiscExtractionModalData;
 // ============================================================================
 
 /// State for the disc extraction resolution modal.
+#[deprecated(note = "use mm_ui::resolutions::disc_extraction::DiscExtractionState")]
 #[derive(Debug)]
 pub struct DiscExtractionState {
     /// Loaded data (immutable — groups are never removed).

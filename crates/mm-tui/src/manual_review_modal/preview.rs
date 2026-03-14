@@ -26,6 +26,7 @@ use crate::helpers::{render_pane, truncate_left, truncate_right};
 use crate::widgets::{PathField, CURSOR_STYLE};
 
 /// Actions returned from the manual review modal.
+#[deprecated(note = "use mm_ui::resolutions::manual_review::ManualReviewAction")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManualReviewAction {
     /// No action needed.
@@ -53,6 +54,7 @@ pub enum ManualReviewAction {
 }
 
 /// Tracks which button is focused in the stash confirmation popup.
+#[deprecated(note = "use mm_ui::resolutions::manual_review::ManualReviewState")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StashConfirmButton {
     #[default]
@@ -80,6 +82,7 @@ impl StashConfirmButton {
 }
 
 /// State for the manual review modal.
+#[deprecated(note = "use mm_ui::resolutions::manual_review::ManualReviewState")]
 pub struct ManualReviewState {
     /// What kind of review.
     pub kind: ReviewKind,

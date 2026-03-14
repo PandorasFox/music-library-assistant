@@ -945,6 +945,7 @@ pub fn load_inbox_corpus_match_data(
 // ============================================================================
 
 /// Load compound split modal data for a specific compound group.
+#[deprecated(note = "use load_compound_split_resolution")]
 pub fn load_compound_split_data(
     group: &crate::meta::signals::data::CompoundGroup,
     read_db: &ReadOnlyDb,
@@ -1015,6 +1016,7 @@ pub fn load_compound_split_data(
 // ============================================================================
 
 /// Load file info (filename, path, tags) for a set of inodes from a specific zone.
+// DEPRECATED: reads from disk; use get_display_names_batch + get_tag_values_batch
 fn load_file_info_for_zone(
     inodes: &[i64],
     read_db: &ReadOnlyDb,
@@ -1055,6 +1057,7 @@ fn load_file_info_for_zone(
 }
 
 /// Create TagCanonicalityModalDataV2 from a typed `TagCanonicitySignal`.
+#[deprecated(note = "use load_tag_canonicity_resolution")]
 pub fn load_tag_canonicity_data(
     signal: &crate::meta::signals::data::TagCanonicitySignal,
     read_db: &ReadOnlyDb,

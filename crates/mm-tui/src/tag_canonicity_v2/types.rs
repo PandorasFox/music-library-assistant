@@ -27,6 +27,7 @@ use mm_meta::mutations::{Mutation, TagOp};
 use crate::widgets::TextInputState;
 
 /// Which pane has focus.
+#[deprecated(note = "use mm_ui::resolutions::tag_canonicity::TagCanonicityState")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FocusPaneV2 {
     /// Left pane: variant values
@@ -37,6 +38,7 @@ pub enum FocusPaneV2 {
 }
 
 /// State for the three-pane tag canonicity modal.
+#[deprecated(note = "use mm_ui::resolutions::tag_canonicity::TagCanonicityState")]
 #[derive(Debug, Clone)]
 pub struct TagCanonicalityStateV2 {
     /// Loaded data (immutable during interaction)
@@ -417,6 +419,7 @@ impl TagCanonicalityStateV2 {
 }
 
 /// Action returned from handling input in the modal.
+#[deprecated(note = "use mm_ui::resolutions::tag_canonicity::CanonicityAction")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TagCanonicalityActionV2 {
     /// No action, continue showing modal

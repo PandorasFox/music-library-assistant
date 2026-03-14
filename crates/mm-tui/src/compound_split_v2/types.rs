@@ -38,6 +38,7 @@ pub fn create_canonical_signal(data: &CompoundSplitDataV2) -> Mutation {
 // ============================================================================
 
 /// Which pane has focus.
+#[deprecated(note = "use mm_ui::resolutions::compound_split::CompoundSplitState")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FocusPaneV2 {
     /// Left pane: split parts
@@ -52,6 +53,7 @@ pub enum FocusPaneV2 {
 // ============================================================================
 
 /// State for the three-pane compound split modal.
+#[deprecated(note = "use mm_ui::resolutions::compound_split::CompoundSplitState")]
 #[derive(Debug, Clone)]
 pub struct CompoundSplitStateV2 {
     /// Loaded data (immutable during interaction)
@@ -403,6 +405,7 @@ impl CompoundSplitStateV2 {
 // ============================================================================
 
 /// Action returned from handling input in the modal.
+#[deprecated(note = "use mm_ui::resolutions::compound_split::CompoundSplitAction")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompoundSplitActionV2 {
     /// No action, continue showing modal
@@ -433,6 +436,7 @@ pub enum CompoundSplitActionV2 {
 // ============================================================================
 
 /// Tracks navigation through compound tag split groups (aggregated by value).
+#[deprecated(note = "use mm_ui::resolutions::compound_split::CompoundSplitState")]
 #[derive(Debug, Clone)]
 pub struct CompoundSplitClustersV2 {
     /// Groups in display order (one per unique compound value)

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// File info with cached tag values for display.
 ///
 /// Used by both compound split and tag canonicity modals.
+#[deprecated(note = "use ResolutionFileInfo — no full tag dump")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileTagInfo {
     /// Inode of the file
@@ -61,6 +62,7 @@ impl CompoundEntry {
 }
 
 /// Modal data loaded from a compound tag signal.
+#[deprecated(note = "use CompoundSplitResolutionData")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompoundSplitDataV2 {
     /// The first compound entry (we process one at a time)
@@ -83,6 +85,7 @@ pub struct TagVariantEntry {
 }
 
 /// Extended modal data with per-file tag info.
+#[deprecated(note = "use TagCanonicityResolutionData")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagCanonicalityModalDataV2 {
     /// The tag name being canonicalized (e.g., "artist", "album_artist")

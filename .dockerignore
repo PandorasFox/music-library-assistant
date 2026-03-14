@@ -1,0 +1,9 @@
+target/
+.cargo/
+*.db
+.git/
+.github/
+.claude/
+.vscode/
+.idea/
+analysis_reports/

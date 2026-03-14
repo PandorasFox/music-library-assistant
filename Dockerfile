@@ -45,6 +45,8 @@ ENV MM_ROOT=/music
 ENV MM_WEB_LISTEN=0.0.0.0:3313
 ENV MM_WEB_STATIC_DIR=/srv/mm-web/static
 
+RUN mkdir -p /config/mm /data/mm && chown -R 1000:1000 /config /data
+
 VOLUME ["/music", "/config", "/data"]
 EXPOSE 3313
 

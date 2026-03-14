@@ -16,17 +16,14 @@
 //! contention. Every process restart clears all sessions (re-login required).
 
 use std::collections::HashMap;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
-use std::thread::JoinHandle;
 use std::time::Instant;
 
 use arc_swap::ArcSwap;
+use tokio::sync::oneshot;
 
 use crate::auth::{self, SessionLifetime, SessionToken};
 use crate::db::Database;
-
-use super::types::ManagedThread;
 
 // ============================================================================
 // Session Storage
@@ -50,7 +47,7 @@ enum AuthRequest {
         username: String,
         password: String,
         lifetime: SessionLifetime,
-        reply: Sender<Result<SessionToken, String>>,
+        reply: oneshot::Sender<Result<SessionToken, String>>,
     },
     /// Notify the auth thread that the DB is now available (after first-time setup).
     DbReady,
@@ -67,7 +64,7 @@ enum AuthRequest {
 /// directly — no channel round-trip, no contention.
 #[derive(Clone)]
 pub struct AuthHandle {
-    request_tx: Sender<AuthRequest>,
+    request_tx: tokio::sync::mpsc::UnboundedSender<AuthRequest>,
     sessions: Arc<ArcSwap<SessionMap>>,
 }
 
@@ -79,14 +76,14 @@ impl AuthHandle {
         password: &str,
         lifetime: SessionLifetime,
     ) -> Result<SessionToken, String> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = oneshot::channel();
         let _ = self.request_tx.send(AuthRequest::Login {
             username: username.to_string(),
             password: password.to_string(),
             lifetime,
             reply: tx,
         });
-        rx.recv().unwrap_or(Err("Auth thread disconnected".to_string()))
+        rx.blocking_recv().unwrap_or(Err("Auth thread disconnected".to_string()))
     }
 
     /// Validate a session token. Lock-free — reads directly from shared memory.
@@ -109,8 +106,8 @@ impl AuthHandle {
 
 /// Witch-facing auth thread handle for lifecycle management.
 pub(crate) struct AuthThreadHandle {
-    join_handle: Option<JoinHandle<()>>,
-    request_tx: Sender<AuthRequest>,
+    task: Option<tokio::task::JoinHandle<()>>,
+    request_tx: tokio::sync::mpsc::UnboundedSender<AuthRequest>,
 }
 
 impl AuthThreadHandle {
@@ -121,13 +118,13 @@ impl AuthThreadHandle {
     }
 }
 
-impl ManagedThread for AuthThreadHandle {
-    fn send_shutdown(&self) {
+impl AuthThreadHandle {
+    /// Orderly shutdown: send shutdown signal and abort the task.
+    pub(crate) fn shutdown(&mut self) {
         let _ = self.request_tx.send(AuthRequest::Shutdown);
-    }
-
-    fn take_handle(&mut self) -> Option<JoinHandle<()>> {
-        self.join_handle.take()
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
     }
 }
 
@@ -147,19 +144,16 @@ impl Drop for AuthThreadHandle {
 /// immediately. If None (AwaitingSetup), the thread starts without a DB and
 /// opens one when it receives `DbReady`.
 pub(crate) fn spawn(db_path: Option<std::path::PathBuf>) -> (AuthHandle, AuthThreadHandle) {
-    let (request_tx, request_rx) = mpsc::channel();
+    let (request_tx, mut request_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let sessions = Arc::new(ArcSwap::from_pointee(HashMap::new()));
-    let sessions_for_thread = Arc::clone(&sessions);
+    let sessions_for_task = Arc::clone(&sessions);
 
     let tx_clone = request_tx.clone();
 
-    let join_handle = std::thread::Builder::new()
-        .name("auth".into())
-        .spawn(move || {
-            auth_thread_main(request_rx, sessions_for_thread, db_path);
-        })
-        .expect("Failed to spawn auth thread");
+    let task = tokio::task::spawn_blocking(move || {
+        auth_thread_main(&mut request_rx, sessions_for_task, db_path);
+    });
 
     let client_handle = AuthHandle {
         request_tx: tx_clone,
@@ -167,7 +161,7 @@ pub(crate) fn spawn(db_path: Option<std::path::PathBuf>) -> (AuthHandle, AuthThr
     };
 
     let witch_handle = AuthThreadHandle {
-        join_handle: Some(join_handle),
+        task: Some(task),
         request_tx,
     };
 
@@ -179,7 +173,7 @@ pub(crate) fn spawn(db_path: Option<std::path::PathBuf>) -> (AuthHandle, AuthThr
 // ============================================================================
 
 fn auth_thread_main(
-    rx: Receiver<AuthRequest>,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AuthRequest>,
     sessions: Arc<ArcSwap<SessionMap>>,
     db_path: Option<std::path::PathBuf>,
 ) {
@@ -198,8 +192,8 @@ fn auth_thread_main(
     });
 
     loop {
-        match rx.recv() {
-            Ok(AuthRequest::Login {
+        match rx.blocking_recv() {
+            Some(AuthRequest::Login {
                 username,
                 password,
                 lifetime,
@@ -212,7 +206,7 @@ fn auth_thread_main(
                 let _ = reply.send(result);
             }
 
-            Ok(AuthRequest::DbReady) => {
+            Some(AuthRequest::DbReady) => {
                 // First-time setup completed — open DB connection
                 if db.is_none() {
                     if let Ok(path) = crate::config::get_db_path() {
@@ -236,7 +230,7 @@ fn auth_thread_main(
                 }
             }
 
-            Ok(AuthRequest::Shutdown) | Err(_) => {
+            Some(AuthRequest::Shutdown) | None => {
                 crate::logging::log_general("[AUTH] Shutting down");
                 break;
             }
@@ -323,7 +317,7 @@ mod tests {
 
         // Validate via the same sessions arc
         let handle = AuthHandle {
-            request_tx: mpsc::channel().0,
+            request_tx: tokio::sync::mpsc::unbounded_channel().0,
             sessions: Arc::clone(&sessions),
         };
         assert!(handle.validate_token(&token));
@@ -333,7 +327,7 @@ mod tests {
     fn test_validate_token_garbage() {
         let sessions = Arc::new(ArcSwap::from_pointee(HashMap::new()));
         let handle = AuthHandle {
-            request_tx: mpsc::channel().0,
+            request_tx: tokio::sync::mpsc::unbounded_channel().0,
             sessions,
         };
         let garbage = SessionToken::from_bytes(vec![0xDE; 32]);
@@ -397,7 +391,7 @@ mod tests {
         sessions.store(Arc::new(map));
 
         let handle = AuthHandle {
-            request_tx: mpsc::channel().0,
+            request_tx: tokio::sync::mpsc::unbounded_channel().0,
             sessions: Arc::clone(&sessions),
         };
         assert!(!handle.validate_token(&token));
@@ -420,7 +414,7 @@ mod tests {
         ));
 
         let handle = AuthHandle {
-            request_tx: mpsc::channel().0,
+            request_tx: tokio::sync::mpsc::unbounded_channel().0,
             sessions: Arc::clone(&sessions),
         };
         assert!(handle.validate_token(&token));
@@ -458,7 +452,7 @@ mod tests {
             let token_bytes = token.as_bytes().to_vec();
             handles.push(std::thread::spawn(move || {
                 let handle = AuthHandle {
-                    request_tx: mpsc::channel().0,
+                    request_tx: tokio::sync::mpsc::unbounded_channel().0,
                     sessions: sessions_clone,
                 };
                 let t = SessionToken::from_bytes(token_bytes);

@@ -16,9 +16,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-
-use std::sync::mpsc;
-
 use crate::config::{self, Config, SharedConfig};
 use crate::db::write_thread::{self, DbThreadHandle};
 use crate::db::Database;
@@ -49,6 +46,16 @@ pub use types::{
 // Internal imports
 use types::ContentAnalysisWitness;
 
+/// Async recv on an `Option<UnboundedReceiver>`. Returns `None` (pending forever)
+/// if the option is `None`, avoiding borrow-checker issues in `select!`.
+async fn recv_optional<T>(
+    rx: &mut Option<tokio::sync::mpsc::UnboundedReceiver<T>>,
+) -> Option<T> {
+    match rx.as_mut() {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
 
 // ============================================================================
 // Zone-Keyed Observation State
@@ -240,6 +247,10 @@ pub struct Witch {
     /// Spawned in `run()` for out-of-process client connections.
     socket_listener_handle: Option<socket::SocketListenerHandle>,
 
+    /// Scheduler message receiver, stored separately from ExternalFetchHandle
+    /// so the select! loop can borrow it independently.
+    scheduler_message_rx: Option<tokio::sync::mpsc::UnboundedReceiver<external_fetch::SchedulerMessage>>,
+
     /// Client-facing auth handle for server-side token validation.
     /// Stored on the Witch so dispatch_command can gate protocol messages.
     auth_handle: Option<auth_thread::AuthHandle>,
@@ -331,6 +342,7 @@ impl Witch {
             auth_thread_handle: None, // Spawned in run(), not new()
             auth_handle: None,       // Set in run() alongside auth_thread_handle
             socket_listener_handle: None, // Spawned in run()
+            scheduler_message_rx: None,
             external_fetch: None,
             fetch_progress: None,
         }
@@ -363,7 +375,7 @@ impl Witch {
     /// Binds the Unix domain socket and enters the run loop on the calling
     /// thread. Clients (TUI, web, tooling) connect over the socket.
     /// Does not return until a client sends Shutdown or all senders disconnect.
-    pub fn run(
+    pub async fn run(
         log_rx: Option<std::sync::mpsc::Receiver<crate::logging::LogOp>>,
     ) {
         // Detect startup state
@@ -417,7 +429,7 @@ impl Witch {
         she.auth_handle = Some(auth_handle);
 
         // Command channel: socket handler threads send, Witch receives
-        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
 
         // Spawn the Unix domain socket listener. Binds synchronously — the
         // socket is ready for connections when this returns.
@@ -433,7 +445,7 @@ impl Witch {
         }
 
         // Witch owns the main thread — blocks here until shutdown
-        she.run_loop(cmd_rx);
+        she.run_loop(cmd_rx).await;
     }
 
     /// The Witch's self-owned run loop.
@@ -444,33 +456,56 @@ impl Witch {
     /// When `startup_state == AwaitingSetup`, skips `tick()` — only drains
     /// commands and publishes status. This lets the Witch idle safely until
     /// a client delivers the setup payload.
-    fn run_loop(
+    async fn run_loop(
         &mut self,
-        cmd_rx: mpsc::Receiver<handle::HandleCommand>,
+        mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<handle::HandleCommand>,
     ) {
+        let mut housekeeping = tokio::time::interval(Duration::from_millis(100));
+
         loop {
-            // Drain all pending commands (non-blocking)
-            loop {
-                match cmd_rx.try_recv() {
-                    Ok(cmd) => {
-                        if self.dispatch_command(cmd) {
-                            return;
+            tokio::select! {
+                Some(cmd) = cmd_rx.recv() => {
+                    if self.dispatch_command(cmd) { return; }
+                    while let Ok(cmd) = cmd_rx.try_recv() {
+                        if self.dispatch_command(cmd) { return; }
+                    }
+                }
+                Some(hades::HadesMessage::Result(result)) = self.hades.message_rx.recv() => {
+                    self.process_task_result(result);
+                    while let Ok(hades::HadesMessage::Result(r)) = self.hades.message_rx.try_recv() {
+                        self.process_task_result(r);
+                    }
+                    self.post_drain_bookkeeping();
+                }
+                Some(msg) = self.fs_watcher.message_rx.recv() => {
+                    self.process_watcher_message(msg);
+                    while let Ok(msg) = self.fs_watcher.message_rx.try_recv() {
+                        self.process_watcher_message(msg);
+                    }
+                }
+                msg = recv_optional(&mut self.scheduler_message_rx) => {
+                    let mut msgs = Vec::new();
+                    if let Some(msg) = msg {
+                        msgs.push(msg);
+                    }
+                    if let Some(ref mut rx) = self.scheduler_message_rx {
+                        while let Ok(msg) = rx.try_recv() {
+                            msgs.push(msg);
                         }
                     }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => return,
+                    for msg in msgs {
+                        self.process_scheduler_message(msg);
+                    }
                 }
+                _ = housekeeping.tick() => {}
             }
 
-            // Advance the work loop in any state except AwaitingSetup
-            // (Reconciling/Vacuuming need tick() to process maintenance tasks)
+            // After any event: run bookkeeping if not awaiting setup
             if self.startup_state != types::WitchStartupState::AwaitingSetup {
-                self.tick();
+                self.update_state();
+                self.check_startup_transitions();
+                self.maybe_trigger_derivation();
             }
-
-            // Brief sleep to avoid busy-spinning.
-            // The Witch processes at ~100Hz — faster than the TUI frame rate.
-            std::thread::sleep(Duration::from_millis(10));
         }
     }
 
@@ -992,59 +1027,26 @@ impl Witch {
     /// - Auto-queues any spawned follow-up computations
     /// - Updates state machine transitions
     /// - Aggregates worker performance stats (when timing enabled)
-    pub fn tick(&mut self) {
-        // Drain completed results and collect spawned computations and mutations
-        let mut spawned_computations: Vec<Computation> = Vec::new();
-        let mut spawned_mutations: Vec<types::SpawnedMutation> = Vec::new();
-        // Collect config updates to apply after the drain loop (can't call
-        // update_performance_impl while self.hades is borrowed by drain_results)
-        let mut pending_config_update: Option<Config> = None;
+    /// Process a single completed task result from Hades.
+    fn process_task_result(&mut self, result: types::TaskResult) {
+        self.work_state.dec_in_flight();
+        self.work_state.inc_processed();
 
-        for result in self.hades.drain_results() {
-            // Task has completed - no longer in flight
-            self.work_state.dec_in_flight();
-            self.work_state.inc_processed();
+        *self.task_counts.entry(result.label.clone()).or_insert(0) += 1;
+        *self.kind_counts.entry(result.kind).or_insert(0) += 1;
+        self.work_state.dec_label(&result.label);
 
-            // Track by task type
-            *self.task_counts.entry(result.label.clone()).or_insert(0) += 1;
-            *self.kind_counts.entry(result.kind).or_insert(0) += 1;
-
-            // Decrement pending count for this label
-            self.work_state.dec_label(&result.label);
-
-            if !result.success {
-                if let Some(err) = result.error {
-                    self.error_generation += 1;
-                    if self.recent_errors.len() >= 5 {
-                        self.recent_errors.pop_front();
-                    }
-                    self.recent_errors.push_back(err);
+        if !result.success {
+            if let Some(err) = result.error {
+                self.error_generation += 1;
+                if self.recent_errors.len() >= 5 {
+                    self.recent_errors.pop_front();
                 }
-            }
-
-            // Defer config update until after drain loop (needs &mut self.hades)
-            if result.config_update.is_some() {
-                pending_config_update = result.config_update;
-            }
-
-            // Accumulate recomputation scope from mutation results
-            if !result.recomputation_scope.is_empty() {
-                self.session_recomputation_scope |= result.recomputation_scope;
-            }
-
-            // Collect spawned follow-up computations and mutations
-            spawned_computations.extend(result.spawn);
-            spawned_mutations.extend(result.spawn_mutations);
-
-            // Collect deferred computation phases (pipeline orchestrators)
-            if !result.deferred_phases.is_empty() {
-                self.pending_computation_phases
-                    .extend(result.deferred_phases);
+                self.recent_errors.push_back(err);
             }
         }
 
-        // Apply deferred config update (from ApplyConfigEdits mutation)
-        if let Some(new_config) = pending_config_update {
+        if let Some(new_config) = result.config_update {
             if self.watcher_state == WatcherState::Polling {
                 let new_interval = new_config.opinions.watcher_poll_interval_secs;
                 let db_cache = self.build_watcher_db_cache();
@@ -1055,48 +1057,204 @@ impl Witch {
             self.config_generation += 1;
         }
 
-        // Queue spawned follow-up computations (chaining)
-        // IMPORTANT: This happens BEFORE we check in_flight for state transitions,
-        // ensuring spawned tasks are counted before we decide to transition.
-        for comp in spawned_computations {
+        if !result.recomputation_scope.is_empty() {
+            self.session_recomputation_scope |= result.recomputation_scope;
+        }
+
+        for comp in result.spawn {
             self.queue_computation_with_label(comp, None);
         }
-
-        // Queue spawned follow-up mutations (chaining from mutations like ApplyTagOps)
-        // These are pre-authorized by the parent mutation's witness chain.
-        for mutation in spawned_mutations {
+        for mutation in result.spawn_mutations {
             self.queue_spawned_mutation(mutation);
         }
-
-        // Cache thread handles its own periodic refreshes — no action needed here.
-
-        // State machine transitions
-        self.update_state();
-
-        // FS watcher: drain initial scan results and steady-state events
-        self.drain_watcher_messages();
-
-        // If watcher events changed the observed inode maps, queue derivation
-        // once current work drains. This batches rapid events naturally.
-        if self.watcher_derivation_needed
-            && self.work_state.is_idle()
-            && self.reasoning_level == ReasoningLevel::Full
-        {
-            self.watcher_derivation_needed = false;
-            crate::logging::log_general(
-                "[WITCH] Steady-state derivation triggered by watcher events"
-            );
-            self.queue_awakening_computations(false);
+        if !result.deferred_phases.is_empty() {
+            self.pending_computation_phases
+                .extend(result.deferred_phases);
         }
+    }
 
-        // External fetch: drain scheduler messages (task requests + status)
-        self.drain_scheduler_messages();
+    /// Post-drain bookkeeping: state transitions after processing task results.
+    fn post_drain_bookkeeping(&mut self) {
+        self.update_state();
+        self.check_startup_transitions();
+        self.maybe_trigger_derivation();
+    }
 
-        // Startup state transitions (Reconciling → Vacuuming → Ready)
+    /// Process a single watcher message.
+    fn process_watcher_message(&mut self, msg: fs_watcher::WatcherMessage) {
+        match msg {
+            fs_watcher::WatcherMessage::InitialScanComplete { zone, inodes } => {
+                crate::logging::log_general(format!(
+                    "[WITCH] Watcher initial scan complete for {}: {} inodes",
+                    zone, inodes.len()
+                ));
+                if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
+                    let use_zone_prefix = zone != crate::db::types::Zone::Library;
+                    let zone_prefix = zone.as_str();
+                    for (inode, observed) in inodes {
+                        let path = if use_zone_prefix {
+                            format!("{}/{}", zone_prefix, observed.path)
+                        } else {
+                            observed.path.clone()
+                        };
+                        map.insert(inode, ObservedInodeMeta {
+                            path,
+                            mtime_secs: observed.mtime_secs,
+                            mtime_nanos: observed.mtime_nanos,
+                            file_size: observed.file_size,
+                        });
+                    }
+                }
+            }
+            fs_watcher::WatcherMessage::AllInitialScansComplete => {
+                crate::logging::log_general(format!(
+                    "[WITCH] All watcher initial scans complete. \
+                     Corpus: {} inodes, Inbox: {} inodes, Library: {} inodes",
+                    self.observed_inodes.corpus.len(),
+                    self.observed_inodes.inbox.len(),
+                    self.observed_inodes.library.len(),
+                ));
+                match self.reasoning_level {
+                    ReasoningLevel::None => {
+                        crate::logging::log_general(
+                            "[STATE] Watcher scan complete. Transitioning None -> Inodes."
+                        );
+                        self.reasoning_level = ReasoningLevel::Inodes;
+                        self.queue_awakening_computations(true);
+                    }
+                    ReasoningLevel::Inodes => {
+                        crate::logging::log_general(
+                            "[STATE] Re-observation complete during Inodes. Queueing derivations."
+                        );
+                        self.queue_awakening_computations(true);
+                    }
+                    ReasoningLevel::Full => {
+                        crate::logging::log_general(
+                            "[STATE] Re-observing complete while Full. Queueing awakening to sync signals."
+                        );
+                        self.queue_awakening_computations(true);
+                    }
+                }
+            }
+            fs_watcher::WatcherMessage::FileChanged {
+                zone, inode, path,
+                mtime_secs, mtime_nanos, file_size, disk_tags,
+            } => {
+                crate::logging::log_general(format!(
+                    "[WITCH] Watcher: file changed — zone={} inode={} path={:?}",
+                    zone, inode, path
+                ));
+                if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
+                    let rel_path = crate::corpus::paths::get_resolver()
+                        .to_relative(&path)
+                        .unwrap_or_else(|| path.clone())
+                        .to_string_lossy()
+                        .to_string();
+                    map.insert(inode, ObservedInodeMeta {
+                        path: rel_path,
+                        mtime_secs, mtime_nanos, file_size,
+                    });
+                }
+                if zone == crate::db::types::Zone::Corpus {
+                    self.queue_computation_with_label(
+                        Computation::Observation(
+                            crate::meta::computations::observation::Computation::VerifyTags {
+                                inode, path,
+                                mtime_secs, mtime_nanos, file_size,
+                                disk_tags,
+                            }
+                        ),
+                        Some("Verify tags (watcher)".to_string()),
+                    );
+                }
+            }
+            fs_watcher::WatcherMessage::FileCreated {
+                zone, inode, path,
+                mtime_secs, mtime_nanos, file_size,
+            } => {
+                crate::logging::log_general(format!(
+                    "[WITCH] Watcher: file created — zone={} inode={} path={:?}",
+                    zone, inode, path
+                ));
+                if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
+                    let rel_path = crate::corpus::paths::get_resolver()
+                        .to_relative(&path)
+                        .unwrap_or_else(|| path.clone())
+                        .to_string_lossy()
+                        .to_string();
+                    map.insert(inode, ObservedInodeMeta {
+                        path: rel_path,
+                        mtime_secs, mtime_nanos, file_size,
+                    });
+                }
+                self.watcher_derivation_needed = true;
+            }
+            fs_watcher::WatcherMessage::FileRemoved { zone, inode, path } => {
+                crate::logging::log_general(format!(
+                    "[WITCH] Watcher: file removed — zone={} inode={} path={:?}",
+                    zone, inode, path
+                ));
+                if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
+                    map.remove(&inode);
+                }
+                self.watcher_derivation_needed = true;
+            }
+            fs_watcher::WatcherMessage::ImageFileObserved(mut img) => {
+                img.path = format!("{}/{}", img.zone.as_str(), img.path);
+                self.pending_observed_images.push(img);
+            }
+            fs_watcher::WatcherMessage::MonitoringActive => {
+                if self.watcher_state != WatcherState::Polling {
+                    self.watcher_state = WatcherState::Watching;
+                }
+                crate::logging::log_general(
+                    "[WITCH] Watcher monitoring active (inotify established)"
+                );
+            }
+            fs_watcher::WatcherMessage::InotifyFailed => {
+                crate::logging::log_error(
+                    "[WITCH] Watcher fell back to polling mode (inotify unavailable). \
+                     Filesystem changes will be detected periodically, not in real-time."
+                );
+                self.observed_inodes.clear();
+                self.watcher_state = WatcherState::Polling;
+            }
+        }
+    }
+
+    /// Process a single scheduler message from the external fetch thread.
+    fn process_scheduler_message(&mut self, msg: external_fetch::SchedulerMessage) {
+        match msg {
+            external_fetch::SchedulerMessage::Progress(p) => {
+                self.fetch_progress = Some(p);
+            }
+            external_fetch::SchedulerMessage::SourceDone { source, stats } => {
+                crate::logging::log_general(format!(
+                    "[FETCH] {} done: {} processed, {} matched, {} no-match, {} retries",
+                    source.name(),
+                    stats.processed,
+                    stats.matched,
+                    stats.no_match,
+                    stats.retries
+                ));
+                if stats.matched > 0 {
+                    self.session_recomputation_scope |=
+                        crate::meta::recomputation::RecomputationScope::EXTERNAL;
+                }
+            }
+            external_fetch::SchedulerMessage::AllDone => {
+                if let Some(ref mut handle) = self.external_fetch {
+                    handle.mark_batch_done();
+                }
+            }
+        }
+    }
+
+    /// Check startup state transitions (Reconciling → Vacuuming → Ready).
+    fn check_startup_transitions(&mut self) {
         match self.startup_state {
             types::WitchStartupState::Reconciling if !self.has_pending() => {
                 crate::logging::log_general("[WITCH] Schema reconciliation complete");
-                // Reconnect cache thread's DB so it picks up new schema
                 self.cache_thread_handle.reconnect_db();
                 self.startup_schema_descriptions.clear();
                 if self.check_vacuum_needed() {
@@ -1115,13 +1273,25 @@ impl Witch {
         }
 
         // Auto-start watcher when Ready and not yet scanning.
-        // Scanning is the Witch's own operational concern — not gated on client login.
         if self.startup_state == types::WitchStartupState::Ready
             && self.watcher_state == WatcherState::NotStarted
         {
             self.start_watching();
         }
+    }
 
+    /// If watcher events changed the observed inode maps, queue derivation.
+    fn maybe_trigger_derivation(&mut self) {
+        if self.watcher_derivation_needed
+            && self.work_state.is_idle()
+            && self.reasoning_level == ReasoningLevel::Full
+        {
+            self.watcher_derivation_needed = false;
+            crate::logging::log_general(
+                "[WITCH] Steady-state derivation triggered by watcher events"
+            );
+            self.queue_awakening_computations(false);
+        }
     }
 
     /// Update state machine based on in-flight tasks and timing.
@@ -1422,37 +1592,6 @@ impl Witch {
     ///
     /// The scheduler does HTTP directly; only progress/completion messages
     /// flow back to the Witch. Called each tick().
-    fn drain_scheduler_messages(&mut self) {
-        let messages = match self.external_fetch {
-            Some(ref mut handle) => handle.drain_messages(),
-            None => return,
-        };
-
-        for msg in messages {
-            match msg {
-                external_fetch::SchedulerMessage::Progress(p) => {
-                    self.fetch_progress = Some(p);
-                }
-                external_fetch::SchedulerMessage::SourceDone { source, stats } => {
-                    crate::logging::log_general(format!(
-                        "[FETCH] {} done: {} processed, {} matched, {} no-match, {} retries",
-                        source.name(),
-                        stats.processed,
-                        stats.matched,
-                        stats.no_match,
-                        stats.retries
-                    ));
-                    if stats.matched > 0 {
-                        self.session_recomputation_scope |=
-                            crate::meta::recomputation::RecomputationScope::EXTERNAL;
-                    }
-                }
-                external_fetch::SchedulerMessage::AllDone => {
-                    // batch_active already cleared by drain_messages()
-                }
-            }
-        }
-    }
 
     // =========================================================================
     // FS Watcher Integration
@@ -1465,184 +1604,6 @@ impl Witch {
     /// the old WalkCorpus + ScanCorpusDirectory flow).
     ///
     /// Called each tick().
-    fn drain_watcher_messages(&mut self) {
-        let messages = self.fs_watcher.drain_messages();
-
-        for msg in messages {
-            match msg {
-                fs_watcher::WatcherMessage::InitialScanComplete { zone, inodes } => {
-                    crate::logging::log_general(format!(
-                        "[WITCH] Watcher initial scan complete for {}: {} inodes",
-                        zone,
-                        inodes.len()
-                    ));
-
-                    // Accumulate inodes into observed maps.
-                    // Watcher paths are zone-relative.
-                    // For corpus/inbox: prepend zone name to match DB convention
-                    //   (e.g. "digital/releases/..." → "corpus/digital/releases/...")
-                    // For library: paths are already in stored_path format
-                    //   (e.g. "music/Artist/track.opus" = library_name/relative)
-                    if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
-                        let use_zone_prefix = zone != crate::db::types::Zone::Library;
-                        let zone_prefix = zone.as_str();
-                        for (inode, observed) in inodes {
-                            let path = if use_zone_prefix {
-                                format!("{}/{}", zone_prefix, observed.path)
-                            } else {
-                                observed.path.clone()
-                            };
-                            map.insert(inode, ObservedInodeMeta {
-                                path,
-                                mtime_secs: observed.mtime_secs,
-                                mtime_nanos: observed.mtime_nanos,
-                                file_size: observed.file_size,
-                            });
-                        }
-                    }
-                }
-                fs_watcher::WatcherMessage::AllInitialScansComplete => {
-                    crate::logging::log_general(format!(
-                        "[WITCH] All watcher initial scans complete. \
-                         Corpus: {} inodes, Inbox: {} inodes, Library: {} inodes",
-                        self.observed_inodes.corpus.len(),
-                        self.observed_inodes.inbox.len(),
-                        self.observed_inodes.library.len(),
-                    ));
-                    // Drive the state machine forward based on current reasoning level.
-                    // Note: watcher_state transitions to Watching only when
-                    // MonitoringActive arrives (after inotify watches are established).
-                    // This replaces the observation→awakening transition that previously
-                    // happened in transition_to_completed() when the old observation
-                    // computations drained.
-                    match self.reasoning_level {
-                        ReasoningLevel::None => {
-                            crate::logging::log_general(
-                                "[STATE] Watcher scan complete. Transitioning None -> Inodes."
-                            );
-                            self.reasoning_level = ReasoningLevel::Inodes;
-                            self.queue_awakening_computations(true);
-                        }
-                        ReasoningLevel::Inodes => {
-                            crate::logging::log_general(
-                                "[STATE] Re-observation complete during Inodes. Queueing derivations."
-                            );
-                            self.queue_awakening_computations(true);
-                        }
-                        ReasoningLevel::Full => {
-                            crate::logging::log_general(
-                                "[STATE] Re-observing complete while Full. Queueing awakening to sync signals."
-                            );
-                            self.queue_awakening_computations(true);
-                        }
-                    }
-                }
-                // Steady-state events: incremental inode map updates + computation queueing
-                fs_watcher::WatcherMessage::FileChanged {
-                    zone, inode, path,
-                    mtime_secs, mtime_nanos, file_size, disk_tags,
-                } => {
-                    crate::logging::log_general(format!(
-                        "[WITCH] Watcher: file changed — zone={} inode={} path={:?}",
-                        zone, inode, path
-                    ));
-
-                    // Update observed map with current path and metadata
-                    if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
-                        let rel_path = crate::corpus::paths::get_resolver()
-                            .to_relative(&path)
-                            .unwrap_or_else(|| path.clone())
-                            .to_string_lossy()
-                            .to_string();
-                        map.insert(inode, ObservedInodeMeta {
-                            path: rel_path,
-                            mtime_secs,
-                            mtime_nanos,
-                            file_size,
-                        });
-                    }
-
-                    // Queue per-inode tag verification (compares disk tags vs DB).
-                    // Only corpus files have tag verification — inbox files are
-                    // reconciled entirely through derivation.
-                    if zone == crate::db::types::Zone::Corpus {
-                        self.queue_computation_with_label(
-                            Computation::Observation(
-                                crate::meta::computations::observation::Computation::VerifyTags {
-                                    inode, path,
-                                    mtime_secs, mtime_nanos, file_size,
-                                    disk_tags,
-                                }
-                            ),
-                            Some("Verify tags (watcher)".to_string()),
-                        );
-                    }
-                }
-                fs_watcher::WatcherMessage::FileCreated {
-                    zone, inode, path,
-                    mtime_secs, mtime_nanos, file_size,
-                } => {
-                    crate::logging::log_general(format!(
-                        "[WITCH] Watcher: file created — zone={} inode={} path={:?}",
-                        zone, inode, path
-                    ));
-
-                    if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
-                        let rel_path = crate::corpus::paths::get_resolver()
-                            .to_relative(&path)
-                            .unwrap_or_else(|| path.clone())
-                            .to_string_lossy()
-                            .to_string();
-                        map.insert(inode, ObservedInodeMeta {
-                            path: rel_path,
-                            mtime_secs,
-                            mtime_nanos,
-                            file_size,
-                        });
-                    }
-
-                    // Derivation will detect this as disk-only and emit UnindexedFileSignal
-                    self.watcher_derivation_needed = true;
-                }
-                fs_watcher::WatcherMessage::FileRemoved { zone, inode, path } => {
-                    crate::logging::log_general(format!(
-                        "[WITCH] Watcher: file removed — zone={} inode={} path={:?}",
-                        zone, inode, path
-                    ));
-
-                    if let Some(map) = self.observed_inodes.for_zone_mut(zone) {
-                        map.remove(&inode);
-                    }
-
-                    // Derivation will detect this as index-only and emit MissingFileSignal
-                    // (or cascade-drop for inbox)
-                    self.watcher_derivation_needed = true;
-                }
-                fs_watcher::WatcherMessage::ImageFileObserved(mut img) => {
-                    // Watcher paths are zone-relative; DB expects archive-root-relative
-                    img.path = format!("{}/{}", img.zone.as_str(), img.path);
-                    self.pending_observed_images.push(img);
-                }
-                fs_watcher::WatcherMessage::MonitoringActive => {
-                    if self.watcher_state != WatcherState::Polling {
-                        self.watcher_state = WatcherState::Watching;
-                    }
-                    crate::logging::log_general(
-                        "[WITCH] Watcher monitoring active (inotify established)"
-                    );
-                }
-                fs_watcher::WatcherMessage::InotifyFailed => {
-                    crate::logging::log_error(
-                        "[WITCH] Watcher fell back to polling mode (inotify unavailable). \
-                         Filesystem changes will be detected periodically, not in real-time."
-                    );
-                    self.observed_inodes.clear();
-                    self.watcher_state = WatcherState::Polling;
-                }
-            }
-        }
-
-    }
 
     /// Trigger an external fetch (operator-initiated).
     ///
@@ -1679,7 +1640,9 @@ impl Witch {
 
         // Lazy-spawn the fetch thread if needed
         if self.external_fetch.is_none() {
-            self.external_fetch = Some(external_fetch::ExternalFetchHandle::spawn(shared_config));
+            let (handle, rx) = external_fetch::ExternalFetchHandle::spawn(shared_config);
+            self.scheduler_message_rx = Some(rx);
+            self.external_fetch = Some(handle);
             crate::logging::log_general("[WITCH] Spawned external fetch thread");
         }
 

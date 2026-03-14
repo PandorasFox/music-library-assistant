@@ -6,8 +6,7 @@
 //! client through the forwarded reply channel — the Witch never touches
 //! the response path for domain queries.
 
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread::JoinHandle;
+use tokio::sync::oneshot;
 
 use crate::config;
 use crate::db::domain::{dispatch_domain_query, DomainQueryPayload};
@@ -19,7 +18,7 @@ use crate::meta::recomputation::RecomputationScope;
 // ============================================================================
 
 /// The reply type that clients expect from authenticated protocol requests.
-pub(super) type AuthReply = Sender<Result<
+pub(super) type AuthReply = oneshot::Sender<Result<
     crate::meta::protocol::AuthenticatedResponse,
     crate::meta::protocol::ProtocolError,
 >>;
@@ -49,8 +48,8 @@ pub(super) enum CacheRequest {
 
 /// Handle for the Witch to manage the read thread's lifecycle and forward queries.
 pub(crate) struct CacheThreadHandle {
-    join_handle: Option<JoinHandle<()>>,
-    request_tx: Sender<CacheRequest>,
+    task: Option<tokio::task::JoinHandle<()>>,
+    request_tx: tokio::sync::mpsc::UnboundedSender<CacheRequest>,
 }
 
 impl CacheThreadHandle {
@@ -85,19 +84,18 @@ impl CacheThreadHandle {
     }
 }
 
-impl super::types::ManagedThread for CacheThreadHandle {
-    fn send_shutdown(&self) {
+impl CacheThreadHandle {
+    /// Orderly shutdown: send shutdown signal and abort the task.
+    pub(super) fn shutdown(&mut self) {
         let _ = self.request_tx.send(CacheRequest::Shutdown);
-    }
-
-    fn take_handle(&mut self) -> Option<std::thread::JoinHandle<()>> {
-        self.join_handle.take()
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
     }
 }
 
 impl Drop for CacheThreadHandle {
     fn drop(&mut self) {
-        use super::types::ManagedThread;
         self.shutdown();
     }
 }
@@ -106,19 +104,16 @@ impl Drop for CacheThreadHandle {
 // Read Thread Spawn
 // ============================================================================
 
-/// Spawn the read thread. Returns the Witch-side handle.
+/// Spawn the read thread as a tokio blocking task. Returns the Witch-side handle.
 pub(super) fn spawn() -> CacheThreadHandle {
-    let (request_tx, request_rx) = mpsc::channel();
+    let (request_tx, request_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let join_handle = std::thread::Builder::new()
-        .name("mm-read".to_string())
-        .spawn(move || {
-            read_thread_main(request_rx);
-        })
-        .expect("failed to spawn read thread");
+    let task = tokio::task::spawn_blocking(move || {
+        read_thread_main(request_rx);
+    });
 
     CacheThreadHandle {
-        join_handle: Some(join_handle),
+        task: Some(task),
         request_tx,
     }
 }
@@ -129,15 +124,15 @@ fn open_read_only_db() -> Option<Database> {
     Database::open_read_only(&db_path).ok()
 }
 
-/// Main loop for the read thread.
-fn read_thread_main(request_rx: Receiver<CacheRequest>) {
+/// Main loop for the read thread (runs inside spawn_blocking).
+fn read_thread_main(mut request_rx: tokio::sync::mpsc::UnboundedReceiver<CacheRequest>) {
     crate::logging::log_general("[READ_THREAD] Started");
 
     let mut db = open_read_only_db();
 
     loop {
-        match request_rx.recv() {
-            Ok(request) => {
+        match request_rx.blocking_recv() {
+            Some(request) => {
                 if process_request(request, &mut db) {
                     break;
                 }
@@ -149,7 +144,7 @@ fn read_thread_main(request_rx: Receiver<CacheRequest>) {
                     }
                 }
             }
-            Err(mpsc::RecvError) => {
+            None => {
                 crate::logging::log_general(
                     "[READ_THREAD] Channel disconnected, shutting down",
                 );

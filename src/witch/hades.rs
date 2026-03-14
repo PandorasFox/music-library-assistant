@@ -45,7 +45,7 @@ pub(super) enum HadesMessage {
 /// Witch-side handle for the Hades pipeline thread.
 pub(super) struct HadesHandle {
     command_tx: Sender<HadesCommand>,
-    message_rx: Receiver<HadesMessage>,
+    pub(super) message_rx: tokio::sync::mpsc::UnboundedReceiver<HadesMessage>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -55,7 +55,7 @@ impl HadesHandle {
     /// `initial_config` is `None` only during AwaitingSetup (no config on disk yet).
     pub fn spawn(initial_config: Option<Config>) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
-        let (message_tx, message_rx) = mpsc::channel();
+        let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let initial_threads = config_mod::get_worker_thread_count();
 
@@ -81,14 +81,6 @@ impl HadesHandle {
     /// Dispatch a task for execution on the rayon pool.
     pub fn dispatch(&self, task: Task, label: String) {
         let _ = self.command_tx.send(HadesCommand::Dispatch { task, label });
-    }
-
-    /// Non-blocking drain of completed results.
-    pub fn drain_results(&self) -> impl Iterator<Item = TaskResult> + '_ {
-        std::iter::from_fn(move || match self.message_rx.try_recv() {
-            Ok(HadesMessage::Result(r)) => Some(r),
-            Err(_) => None,
-        })
     }
 
     /// Send updated config to Hades for snapshot + pool rebuild.
@@ -138,7 +130,7 @@ fn close_pool_connections(pool: &rayon::ThreadPool) {
 
 fn run_hades(
     command_rx: Receiver<HadesCommand>,
-    message_tx: Sender<HadesMessage>,
+    message_tx: tokio::sync::mpsc::UnboundedSender<HadesMessage>,
     initial_threads: usize,
     initial_config: Option<Config>,
 ) {

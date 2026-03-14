@@ -17,8 +17,9 @@
 //!   (for out-of-process clients)
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::sync::Arc;
+
+use tokio::sync::oneshot;
 
 use crate::auth::SessionToken;
 use crate::decisions::{Decision, DecisionKey, DiscardSummary, TransactionError};
@@ -44,13 +45,13 @@ pub enum HandleCommand {
     Authenticated {
         token: SessionToken,
         body: Box<AuthenticatedBody>,
-        reply: mpsc::Sender<Result<AuthenticatedResponse, ProtocolError>>,
+        reply: oneshot::Sender<Result<AuthenticatedResponse, ProtocolError>>,
     },
 
     /// Unauthenticated protocol request (login, setup).
     Unauthenticated {
         body: UnauthenticatedBody,
-        reply: mpsc::Sender<Result<UnauthenticatedResponse, ProtocolError>>,
+        reply: oneshot::Sender<Result<UnauthenticatedResponse, ProtocolError>>,
     },
 
     /// Notify auth thread that DB is now available (after first-time setup).
@@ -66,8 +67,8 @@ pub enum HandleCommand {
 
 /// Transport backing a WitchHandle — either in-process mpsc or Unix socket.
 enum Transport {
-    /// In-process: direct mpsc channel to the Witch thread.
-    Channel(mpsc::Sender<HandleCommand>),
+    /// In-process: tokio unbounded channel to the Witch.
+    Channel(tokio::sync::mpsc::UnboundedSender<HandleCommand>),
     /// Remote: Unix domain socket with length-prefixed bincode framing.
     /// Mutex satisfies the borrow checker — WitchHandle methods take `&self`,
     /// but socket I/O needs exclusive access. Single-client handle, so no
@@ -97,8 +98,8 @@ pub struct WitchHandle {
 }
 
 impl WitchHandle {
-    /// Create a new handle backed by an in-process mpsc channel.
-    pub fn new(cmd_tx: mpsc::Sender<HandleCommand>) -> Self {
+    /// Create a new handle backed by a tokio unbounded channel.
+    pub fn new(cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>) -> Self {
         Self {
             transport: Transport::Channel(cmd_tx),
             session_token: None,
@@ -155,7 +156,7 @@ impl WitchHandle {
 
         match &self.transport {
             Transport::Channel(cmd_tx) => {
-                let (tx, rx) = mpsc::channel();
+                let (tx, rx) = oneshot::channel();
                 cmd_tx
                     .send(HandleCommand::Authenticated {
                         token,
@@ -163,7 +164,7 @@ impl WitchHandle {
                         reply: tx,
                     })
                     .expect("Witch thread has shut down unexpectedly");
-                rx.recv()
+                rx.blocking_recv()
                     .expect("Witch thread dropped reply channel unexpectedly")
             }
             Transport::Socket(stream) => {
@@ -231,11 +232,11 @@ impl WitchHandle {
     ) -> Result<UnauthenticatedResponse, ProtocolError> {
         match &self.transport {
             Transport::Channel(cmd_tx) => {
-                let (tx, rx) = mpsc::channel();
+                let (tx, rx) = oneshot::channel();
                 cmd_tx
                     .send(HandleCommand::Unauthenticated { body, reply: tx })
                     .expect("Witch thread has shut down unexpectedly");
-                rx.recv()
+                rx.blocking_recv()
                     .expect("Witch thread dropped reply channel unexpectedly")
             }
             Transport::Socket(stream) => {

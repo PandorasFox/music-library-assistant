@@ -52,7 +52,8 @@ pub mod zones;
 
 use anyhow::Result;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Initialize log channel FIRST (before any logging happens)
     let log_rx = logging::init_log_channel();
 
@@ -61,7 +62,7 @@ fn main() -> Result<()> {
     std::fs::create_dir_all(&config_dir)?;
 
     // Witch owns the main thread. Clients connect over Unix socket.
-    witch::Witch::run(Some(log_rx));
+    witch::Witch::run(Some(log_rx)).await;
 
     Ok(())
 }

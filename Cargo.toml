@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/mm-utils", "crates/mm-derive", "crates/mm-meta", "crates/mm-tui"]
+members = [".", "crates/mm-utils", "crates/mm-derive", "crates/mm-meta", "crates/mm-ui", "crates/mm-tui"]
 default-members = [".", "crates/mm-tui"]
 
 [package]
@@ -80,6 +80,9 @@ arc-swap = "1"
 # HTTP client (async + blocking)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 serde_json = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
 
 # Base64 encoding (for chromaprint fingerprint compression)
 base64 = "0.22"

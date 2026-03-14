@@ -11,6 +11,7 @@
 use std::io::{self, Read, Write};
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::auth::SessionToken;
 use crate::protocol::{

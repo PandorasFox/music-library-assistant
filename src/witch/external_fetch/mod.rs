@@ -30,7 +30,7 @@ pub(super) use types::SchedulerMessage;
 
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::thread;
 use std::time::Duration;
 
@@ -52,7 +52,7 @@ use types::FetchCommand;
 /// HTTP calls are made directly using blocking reqwest clients.
 fn run_scheduler(
     command_rx: Receiver<FetchCommand>,
-    message_tx: Sender<SchedulerMessage>,
+    message_tx: tokio::sync::mpsc::UnboundedSender<SchedulerMessage>,
     shared_config: SharedConfig,
 ) {
     crate::logging::log_general("[FETCH] Scheduler started");
@@ -92,7 +92,7 @@ fn run_scheduler(
 fn run_scheduling_loop(
     db: &Database,
     command_rx: &Receiver<FetchCommand>,
-    message_tx: &Sender<SchedulerMessage>,
+    message_tx: &tokio::sync::mpsc::UnboundedSender<SchedulerMessage>,
     shared_config: &SharedConfig,
     eligible_dirs: Vec<PathBuf>,
 ) -> bool {
@@ -713,7 +713,7 @@ fn populate_mb_queue(db: &Database, ttl_secs: i64, queue: &mut VecDeque<MbQueueI
 
 /// Send a combined progress snapshot for both sources.
 fn send_progress(
-    message_tx: &Sender<SchedulerMessage>,
+    message_tx: &tokio::sync::mpsc::UnboundedSender<SchedulerMessage>,
     acoustid: &SourceProgress,
     mb: &SourceProgress,
     acoustid_limiter: &RateLimiter,

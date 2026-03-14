@@ -138,7 +138,7 @@ pub struct FsWatcherHandle {
     /// Send commands to watcher (start, shutdown).
     command_tx: Sender<WatcherCommand>,
     /// Receive messages from watcher (scan results + events).
-    message_rx: Receiver<WatcherMessage>,
+    pub(super) message_rx: tokio::sync::mpsc::UnboundedReceiver<WatcherMessage>,
     /// Join handle for the watcher thread.
     handle: Option<JoinHandle<()>>,
 }
@@ -150,7 +150,7 @@ impl FsWatcherHandle {
     /// zone directories and sets up inotify watches for steady-state monitoring.
     pub fn spawn() -> Self {
         let (command_tx, command_rx) = mpsc::channel();
-        let (message_tx, message_rx) = mpsc::channel();
+        let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let handle = thread::spawn(move || {
             run_watcher(command_rx, message_tx);
@@ -178,14 +178,6 @@ impl FsWatcherHandle {
             .send(WatcherCommand::Poll { db_cache, poll_interval_secs });
     }
 
-    /// Drain available messages from the watcher (non-blocking).
-    pub(super) fn drain_messages(&self) -> Vec<WatcherMessage> {
-        let mut msgs = Vec::new();
-        while let Ok(msg) = self.message_rx.try_recv() {
-            msgs.push(msg);
-        }
-        msgs
-    }
 }
 
 impl super::types::ManagedThread for FsWatcherHandle {
@@ -271,7 +263,7 @@ const DEBOUNCE_DURATION: Duration = Duration::from_millis(200);
 
 /// Watcher main loop. Waits for commands, performs directory walks,
 /// then enters steady-state inotify monitoring.
-fn run_watcher(command_rx: Receiver<WatcherCommand>, message_tx: Sender<WatcherMessage>) {
+fn run_watcher(command_rx: Receiver<WatcherCommand>, message_tx: tokio::sync::mpsc::UnboundedSender<WatcherMessage>) {
     crate::logging::log_general("[FS_WATCHER] Watcher thread started");
 
     while let Ok(command) = command_rx.recv() {
@@ -299,7 +291,7 @@ fn run_scan_and_monitor(
     zones: &[(Zone, PathBuf)],
     db_cache: &HashMap<i64, CachedInodeState>,
     command_rx: &Receiver<WatcherCommand>,
-    message_tx: &Sender<WatcherMessage>,
+    message_tx: &tokio::sync::mpsc::UnboundedSender<WatcherMessage>,
 ) -> bool {
     // Phase 1: Initial scan — walk and report
     let mut zone_states = Vec::new();
@@ -549,7 +541,7 @@ fn run_polling_loop(
     mut db_cache: HashMap<i64, CachedInodeState>,
     mut poll_interval: Duration,
     command_rx: &Receiver<WatcherCommand>,
-    message_tx: &Sender<WatcherMessage>,
+    message_tx: &tokio::sync::mpsc::UnboundedSender<WatcherMessage>,
 ) -> bool {
     use std::sync::mpsc::RecvTimeoutError;
 
@@ -655,7 +647,7 @@ fn process_notify_event(
 fn process_settled_event(
     path: &Path,
     zone_states: &mut [ZoneState],
-    message_tx: &Sender<WatcherMessage>,
+    message_tx: &tokio::sync::mpsc::UnboundedSender<WatcherMessage>,
 ) {
     // Find which zone this path belongs to
     let zone_idx = match zone_states.iter().position(|zs| path.starts_with(&zs.root)) {
@@ -843,7 +835,7 @@ fn maybe_send_image_observed(
     mtime_nanos: i64,
     file_size: i64,
     zone_root: &Path,
-    message_tx: &Sender<WatcherMessage>,
+    message_tx: &tokio::sync::mpsc::UnboundedSender<WatcherMessage>,
 ) {
     if !crate::meta::computations::helpers::is_image_file(path) {
         return;

@@ -14,8 +14,9 @@ use std::io;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 use std::sync::Arc;
+
+use tokio::sync::oneshot;
 
 use crate::meta::wire::{self, WireRequest, WireResponse};
 
@@ -63,7 +64,7 @@ pub fn socket_path() -> Option<PathBuf> {
 /// Returns a handle for shutdown coordination, or `None` if XDG_RUNTIME_DIR
 /// is not set (no socket in that case — in-process only).
 pub(super) fn spawn_listener(
-    cmd_tx: mpsc::Sender<HandleCommand>,
+    cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
 ) -> Option<SocketListenerHandle> {
     let path = socket_path()?;
 
@@ -108,7 +109,7 @@ pub(super) fn spawn_listener(
 /// Listener loop: accept connections, spawn handler per connection.
 fn run_listener(
     listener: UnixListener,
-    cmd_tx: mpsc::Sender<HandleCommand>,
+    cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
     shutdown: Arc<AtomicBool>,
 ) {
     for stream in listener.incoming() {
@@ -141,7 +142,7 @@ fn run_listener(
 /// Per-connection handler: blocking request/response loop.
 fn handle_connection(
     stream: std::os::unix::net::UnixStream,
-    cmd_tx: mpsc::Sender<HandleCommand>,
+    cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
 ) {
     let mut reader = io::BufReader::new(stream.try_clone().expect("Failed to clone UnixStream"));
     let mut writer = io::BufWriter::new(stream);
@@ -165,7 +166,7 @@ fn handle_connection(
         // Translate to HandleCommand and shuttle through the Witch's mpsc.
         let response = match request {
             WireRequest::Authenticated { token, body } => {
-                let (tx, rx) = mpsc::channel();
+                let (tx, rx) = oneshot::channel();
                 if cmd_tx
                     .send(HandleCommand::Authenticated {
                         token,
@@ -177,20 +178,20 @@ fn handle_connection(
                     // Witch shut down.
                     return;
                 }
-                match rx.recv() {
+                match rx.blocking_recv() {
                     Ok(result) => WireResponse::Authenticated(Box::new(result)),
                     Err(_) => return, // Witch dropped the reply channel.
                 }
             }
             WireRequest::Unauthenticated(body) => {
-                let (tx, rx) = mpsc::channel();
+                let (tx, rx) = oneshot::channel();
                 if cmd_tx
                     .send(HandleCommand::Unauthenticated { body, reply: tx })
                     .is_err()
                 {
                     return;
                 }
-                match rx.recv() {
+                match rx.blocking_recv() {
                     Ok(result) => WireResponse::Unauthenticated(result),
                     Err(_) => return,
                 }

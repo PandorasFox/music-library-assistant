@@ -19,5 +19,6 @@ pub mod rich_text;
 pub mod route;
 pub mod standard_list;
 pub mod text_input;
+pub mod view_state;
 pub mod wizard;
 pub mod wizard_pane;

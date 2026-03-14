@@ -34,7 +34,10 @@ impl App {
         // Take the progress view out temporarily via replace with a throwaway Insights.
         let old = std::mem::replace(
             &mut self.view,
-            ActiveView::Insights(insights_view::InsightsViewState::new()),
+            ActiveView::Insights {
+                data: insights_view::InsightsViewData::new(),
+                interaction: insights_view::HealthInteraction::new(),
+            },
         );
         let ActiveView::Progress {
             mut screen,
@@ -140,7 +143,10 @@ impl App {
         // Take the progressive work view out temporarily
         let old = std::mem::replace(
             &mut self.view,
-            ActiveView::Insights(insights_view::InsightsViewState::new()),
+            ActiveView::Insights {
+                data: insights_view::InsightsViewData::new(),
+                interaction: insights_view::HealthInteraction::new(),
+            },
         );
         let ActiveView::ProgressiveWork(mut worker) = old else {
             unreachable!()

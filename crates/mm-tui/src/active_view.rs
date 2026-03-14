@@ -26,14 +26,23 @@ pub(crate) enum ActiveView {
 
     // Lateral view ring
     ConfigEditor(config_editor::ConfigEditorState),
-    Insights(insights_view::InsightsViewState),
+    Insights {
+        data: insights_view::InsightsViewData,
+        interaction: insights_view::HealthInteraction,
+    },
     History(history_view::HistoryViewState),
     CorpusBrowser(tree_browser::TreeBrowserState),
     TagSearch(tag_search::TagSearchState),
-    Inbox(inbox_view::InboxViewState),
+    Inbox {
+        data: inbox_view::InboxViewData,
+        interaction: inbox_view::InboxInteraction,
+    },
     TabbedTransactionReview(tabbed_transaction_review::TabbedTransactionReviewState),
     Deploy(deploy_modal::DeployViewState),
-    ExternalMatches(external_match_view::ExternalMatchesViewState),
+    ExternalMatches {
+        data: external_match_view::ExternalMatchesViewData,
+        interaction: external_match_view::ExternalMatchesInteraction,
+    },
 
     // Progress (non-interactive, owns eye animation)
     Progress {
@@ -100,14 +109,14 @@ impl ActiveView {
         match self {
             Self::StartupMaintenance => Some("Startup"),
             Self::ConfigEditor(_) => Some("Config Editor"),
-            Self::Insights(_) => Some("Corpus Insights"),
+            Self::Insights { .. } => Some("Corpus Insights"),
             Self::History(_) => Some("Edit History"),
             Self::CorpusBrowser(_) => Some("Corpus Browser"),
             Self::TagSearch(_) => Some("Tag Search"),
-            Self::Inbox(_) => Some("Inbox"),
+            Self::Inbox { .. } => Some("Inbox"),
             Self::TabbedTransactionReview(_) => Some("Transaction"),
             Self::Deploy(_) => Some("Deploy"),
-            Self::ExternalMatches(_) => Some("External Matches"),
+            Self::ExternalMatches { .. } => Some("External Matches"),
             Self::Progress { .. } => None,
             Self::ProgressiveWork(_) => Some("Processing"),
             Self::ExitConfirm(_) => Some("Exit Confirmation"),
@@ -163,7 +172,7 @@ impl ActiveView {
             Self::MissingAlbumSingleResolution(s) => s.selected_path(),
             Self::DiscExtractionResolution(s) => s.selected_path(),
             Self::ManualReview(s) => s.selected_path(),
-            Self::Inbox(s) => s.selected_entry().map(|e| e.label.as_str()),
+            Self::Inbox { ref data, ref interaction } => data.selected_entry(interaction.list.cursor).map(|e| e.label.as_str()),
             _ => None,
         }
     }
@@ -175,12 +184,12 @@ impl ActiveView {
             Self::ConfigEditor(_) => Some(LateralView::Config),
             Self::TagSearch(_) => Some(LateralView::Search),
             Self::CorpusBrowser(_) => Some(LateralView::Files),
-            Self::Insights(_) => Some(LateralView::Health),
+            Self::Insights { .. } => Some(LateralView::Health),
             Self::History(_) => Some(LateralView::History),
-            Self::Inbox(_) => Some(LateralView::Inbox),
+            Self::Inbox { .. } => Some(LateralView::Inbox),
             Self::TabbedTransactionReview(_) => Some(LateralView::Transaction),
             Self::Deploy(_) => Some(LateralView::Deploy),
-            Self::ExternalMatches(_) => Some(LateralView::ExternalMatches),
+            Self::ExternalMatches { .. } => Some(LateralView::ExternalMatches),
             _ => None,
         }
     }
@@ -223,10 +232,10 @@ pub(crate) enum SuspendedView {
 pub(crate) enum ViewAction {
     None,
     ConfigEditor(config_editor::ConfigEditorAction),
-    Insights(insights_view::InsightsAction),
+    Insights(insights_view::HealthAction),
     CorpusBrowser(tree_browser::TreeBrowserAction),
     TagSearch(tag_search::TagSearchAction),
-    Inbox(inbox_view::InboxAction),
+    Inbox(inbox_view::InboxInsightAction),
     TabbedTransactionReview(tabbed_transaction_review::TabbedTransactionReviewAction),
     Deploy(deploy_modal::DeployAction),
     ExternalMatches(external_match_view::ExternalMatchesAction),

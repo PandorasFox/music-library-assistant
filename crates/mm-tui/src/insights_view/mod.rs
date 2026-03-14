@@ -27,30 +27,21 @@
 
 mod render;
 
-use std::collections::BTreeSet;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
-use crate::input::InputAction;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use mm_meta::decisions::DecisionKeyKind;
 use mm_meta::views::{CorpusFilesBucket, InsightsData, OtherSignalsBucket, TagSquashBucket};
-use crate::widgets::standard_list::{ListEntry, ListInputResult, StandardListConfig, StandardListState};
+use crate::widgets::standard_list::ListEntry;
 use crate::widgets::wizard::{WizardItem, WizardOffer};
 use mm_meta::witch_types::WorkStatus;
 
 pub use render::render_insights_view;
 
-/// Domain action returned from input handling.
-///
-/// Protocol actions (CycleNext, CyclePrev, Cancel-as-quit) are handled centrally
-/// in `App::handle_input` — views return `None` for those inputs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InsightsAction {
-    /// Launch modal for selected insight
-    Launch,
-}
+/// Re-export the interaction type and action from mm-ui.
+pub use mm_ui::view_state::lateral::health::{HealthAction, HealthInteraction};
 
 // ============================================================================
 // Unified Bucket Entry System
@@ -631,11 +622,14 @@ fn build_flat_items(
 }
 
 // ============================================================================
-// Insights View State
+// Insights View Data (server-fetched + derived)
 // ============================================================================
 
-/// State for the insights view
-pub struct InsightsViewState {
+/// Server-fetched data and derived render data for the insights view.
+///
+/// Interaction state (cursor, scroll, wizard) lives separately in
+/// [`mm_ui::view_state::lateral::health::HealthInteraction`].
+pub struct InsightsViewData {
     /// Whether the Witch has operations in-flight (actions blocked).
     pub witch_busy: bool,
     /// Cached insights data from UiReadCache
@@ -644,49 +638,47 @@ pub struct InsightsViewState {
     pub cached_entries: CachedBucketEntries,
     /// Flattened list items (headers + entries)
     pub flat_items: Vec<InsightListItem>,
-    /// StandardList state machine
-    pub list: StandardListState,
     /// Last handled-kinds set, for change detection
     last_handled_sources: HashSet<DecisionKeyKind>,
 }
 
-impl Default for InsightsViewState {
+impl Default for InsightsViewData {
     fn default() -> Self {
         Self {
             witch_busy: false,
             cached_data: None,
             cached_entries: CachedBucketEntries::default(),
             flat_items: Vec::new(),
-            list: StandardListState::new(StandardListConfig::default()),
             last_handled_sources: HashSet::new(),
         }
     }
 }
 
-impl InsightsViewState {
-    /// Create a new insights view state
+impl InsightsViewData {
+    /// Create new empty insights data.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Rebuild the flat item list from cached entries.
     fn rebuild_flat_items(&mut self) {
-        let busy = self.is_witch_busy();
         self.flat_items = build_flat_items(
             &self.cached_entries,
             self.cached_data.as_ref(),
-            busy,
+            self.witch_busy,
         );
-        self.list.clamp_cursor(&self.flat_items);
     }
 
-    /// Update state every tick - checks Witch status and refreshes insights data.
+    /// Update data — checks Witch status and refreshes insights.
+    ///
+    /// Returns `true` if the flat item list was rebuilt (caller should
+    /// clamp interaction cursor via `interaction.list.clamp_cursor(&data.flat_items)`).
     pub fn update(
         &mut self,
         witch_status: Option<&WorkStatus>,
         insights_data: Option<InsightsData>,
         handled_sources: &HashSet<DecisionKeyKind>,
-    ) {
+    ) -> bool {
         let busy = witch_status.map(|s| s.pending > 0).unwrap_or(false);
 
         self.witch_busy = busy;
@@ -711,62 +703,35 @@ impl InsightsViewState {
             }
 
             self.rebuild_flat_items();
+            return true;
         }
+        false
     }
 
-    /// Get the currently selected entry
-    pub fn selected_entry(&self) -> Option<&BucketEntry> {
-        match self.flat_items.get(self.list.cursor) {
+    /// Get the entry at a given cursor position.
+    pub fn entry_at(&self, cursor: usize) -> Option<&BucketEntry> {
+        match self.flat_items.get(cursor) {
             Some(InsightListItem::Entry { entry, .. }) => Some(entry),
             _ => None,
         }
     }
 
-    /// Get the action for the currently selected entry
-    pub fn selected_action(&self) -> Option<InsightAction> {
-        self.selected_entry().map(|e| e.action)
+    /// Get the action for the entry at a given cursor position.
+    pub fn action_at(&self, cursor: usize) -> Option<InsightAction> {
+        self.entry_at(cursor).map(|e| e.action)
     }
 
-    /// Get the insight type for the currently selected entry
-    pub fn selected_insight_type(&self) -> Option<InsightType> {
-        self.selected_entry().map(|e| e.insight_type.clone())
-    }
-
-    /// Check if the Witch is busy (actions should be blocked)
-    pub fn is_witch_busy(&self) -> bool {
-        self.witch_busy
-    }
-
-    /// Handle mouse click, updating selection if hit.
-    /// Returns true if selection changed.
-    pub fn handle_click(&mut self, x: u16, y: u16) -> bool {
-        self.list.handle_click(x, y, &self.flat_items).is_some()
-    }
-
-    /// Handle semantic input action. Returns `None` for protocol actions
-    /// (cycle, cancel) which are handled centrally by `App::handle_input`.
-    pub fn handle_input(&mut self, action: &InputAction) -> Option<InsightsAction> {
-        let result = self.list.handle_input(action, &self.flat_items);
-
-        match result {
-            ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
-                None
-            }
-            ListInputResult::Confirm(_insight_type) => {
-                // Block launch if the Witch is busy
-                if self.is_witch_busy() {
-                    return None;
-                }
-                Some(InsightsAction::Launch)
-            }
-            ListInputResult::Unhandled => None,
-        }
+    /// Get the insight type for the entry at a given cursor position.
+    pub fn insight_type_at(&self, cursor: usize) -> Option<InsightType> {
+        self.entry_at(cursor).map(|e| e.insight_type.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::InputAction;
+    use mm_ui::view_state::lateral::health::HealthInputCtx;
 
     /// Create a test InsightsData with standard bucket sizes
     fn mock_insights_data() -> InsightsData {
@@ -804,85 +769,91 @@ mod tests {
         }
     }
 
-    /// Create a state with populated cached_entries for navigation tests
-    fn state_with_data() -> InsightsViewState {
-        let mut state = InsightsViewState::new();
-        let data = mock_insights_data();
-        state.cached_entries = CachedBucketEntries::from_insights_data(&data);
-        state.cached_data = Some(data);
-        state.rebuild_flat_items();
-        state
+    /// Create data + interaction with populated entries for navigation tests
+    fn data_with_content() -> (InsightsViewData, HealthInteraction) {
+        let mut data = InsightsViewData::new();
+        let insights = mock_insights_data();
+        data.cached_entries = CachedBucketEntries::from_insights_data(&insights);
+        data.cached_data = Some(insights);
+        data.rebuild_flat_items();
+        let mut interaction = HealthInteraction::new();
+        interaction.list.clamp_cursor(&data.flat_items);
+        (data, interaction)
+    }
+
+    fn input_ctx<'a>(data: &'a InsightsViewData) -> HealthInputCtx<'a, InsightListItem> {
+        HealthInputCtx { items: &data.flat_items, busy: data.witch_busy }
     }
 
     #[test]
     fn test_cancel_returns_none() {
-        let mut state = InsightsViewState::new();
-        // Cancel/quit is handled centrally, not by the view
-        let action = state.handle_input(&InputAction::Cancel);
+        let data = InsightsViewData::new();
+        let mut interaction = HealthInteraction::new();
+        let action = interaction.handle_input_with(&InputAction::Cancel, &input_ctx(&data));
         assert_eq!(action, None);
     }
 
     #[test]
     fn test_witch_busy_blocks_enter() {
-        let mut state = state_with_data();
+        let (mut data, mut interaction) = data_with_content();
 
         // Not busy - Enter should launch modal
-        state.witch_busy = false;
-        let action = state.handle_input(&InputAction::Confirm);
-        assert_eq!(action, Some(InsightsAction::Launch));
+        data.witch_busy = false;
+        let action = interaction.handle_input_with(&InputAction::Confirm, &input_ctx(&data));
+        assert_eq!(action, Some(HealthAction::Launch));
 
         // Busy - Enter should be blocked
-        state.witch_busy = true;
-        let action = state.handle_input(&InputAction::Confirm);
+        data.witch_busy = true;
+        let action = interaction.handle_input_with(&InputAction::Confirm, &input_ctx(&data));
         assert_eq!(action, None);
     }
 
     #[test]
     fn test_update_witch_status() {
-        let mut state = InsightsViewState::new();
+        let mut data = InsightsViewData::new();
         let no_handled = HashSet::new();
 
         // No status - should be Ready
-        state.update(None, None, &no_handled);
-        assert!(!state.witch_busy);
+        data.update(None, None, &no_handled);
+        assert!(!data.witch_busy);
 
         // Pending > 0 - should be busy
         let busy_status = WorkStatus {
             pending: 5,
             ..Default::default()
         };
-        state.update(Some(&busy_status), None, &no_handled);
-        assert!(state.witch_busy);
+        data.update(Some(&busy_status), None, &no_handled);
+        assert!(data.witch_busy);
 
         // Pending = 0 - should be ready again
         let idle_status = WorkStatus {
             pending: 0,
             ..Default::default()
         };
-        state.update(Some(&idle_status), None, &no_handled);
-        assert!(!state.witch_busy);
+        data.update(Some(&idle_status), None, &no_handled);
+        assert!(!data.witch_busy);
     }
 
     #[test]
     fn test_filter_hides_handled_entries() {
-        let mut state = InsightsViewState::new();
-        let data = mock_insights_data();
+        let mut data = InsightsViewData::new();
+        let insights = mock_insights_data();
         let no_handled = HashSet::new();
 
         // Populate with data, no filtering
-        state.update(None, Some(data.clone()), &no_handled);
-        let corpus_count_before = state.cached_entries.corpus.len();
+        data.update(None, Some(insights.clone()), &no_handled);
+        let corpus_count_before = data.cached_entries.corpus.len();
         assert!(corpus_count_before > 0);
 
         // Now mark MtimeAck as handled — CorpusMtimeOnly should disappear
         let mut handled = HashSet::new();
         handled.insert(DecisionKeyKind::MtimeAck);
-        state.update(None, None, &handled);
+        data.update(None, None, &handled);
 
         // Should have one fewer entry
-        assert_eq!(state.cached_entries.corpus.len(), corpus_count_before - 1);
+        assert_eq!(data.cached_entries.corpus.len(), corpus_count_before - 1);
         // And it shouldn't contain CorpusMtimeOnly
-        assert!(!state
+        assert!(!data
             .cached_entries
             .corpus
             .iter()
@@ -891,8 +862,8 @@ mod tests {
 
     #[test]
     fn test_informational_entries_survive_filtering() {
-        let mut state = InsightsViewState::new();
-        let data = mock_insights_data();
+        let mut data = InsightsViewData::new();
+        let insights = mock_insights_data();
 
         // Handle several sources
         let mut handled = HashSet::new();
@@ -900,15 +871,15 @@ mod tests {
         handled.insert(DecisionKeyKind::OobSync);
         handled.insert(DecisionKeyKind::MissingFile);
 
-        state.update(None, Some(data), &handled);
+        data.update(None, Some(insights), &handled);
 
         // Informational entries (FilesInCorpus, FilesIndexed) should survive
-        assert!(state
+        assert!(data
             .cached_entries
             .corpus
             .iter()
             .any(|e| e.insight_type == InsightType::CorpusFilesInCorpus));
-        assert!(state
+        assert!(data
             .cached_entries
             .corpus
             .iter()
@@ -917,14 +888,15 @@ mod tests {
 
     #[test]
     fn test_selection_clamped_after_filter() {
-        let mut state = InsightsViewState::new();
-        let data = mock_insights_data();
+        let (mut data, mut interaction) = data_with_content();
         let no_handled = HashSet::new();
 
-        // Populate and select last item
-        state.update(None, Some(data.clone()), &no_handled);
+        // Re-populate to get clean state
+        let insights = mock_insights_data();
+        data.update(None, Some(insights), &no_handled);
+        interaction.list.clamp_cursor(&data.flat_items);
         // Move to end
-        state.list.cursor = state.flat_items.len().saturating_sub(1);
+        interaction.list.cursor = data.flat_items.len().saturating_sub(1);
 
         // Handle multiple sources to shrink the list
         let mut handled = HashSet::new();
@@ -938,51 +910,53 @@ mod tests {
         handled.insert(DecisionKeyKind::ShitFormat);
         handled.insert(DecisionKeyKind::IntakeIndex);
 
-        state.update(None, None, &handled);
+        data.update(None, None, &handled);
+        interaction.list.clamp_cursor(&data.flat_items);
 
         // Cursor should be within bounds
-        assert!(state.list.cursor < state.flat_items.len());
+        assert!(interaction.list.cursor < data.flat_items.len());
     }
 
     #[test]
     fn test_handled_set_change_triggers_rebuild() {
-        let mut state = InsightsViewState::new();
-        let data = mock_insights_data();
+        let mut data = InsightsViewData::new();
+        let insights = mock_insights_data();
         let no_handled = HashSet::new();
 
         // Initial populate
-        state.update(None, Some(data), &no_handled);
-        let count_before = state.cached_entries.corpus.len();
+        data.update(None, Some(insights), &no_handled);
+        let count_before = data.cached_entries.corpus.len();
 
         // Change handled set without new InsightsData — should still rebuild
         let mut handled = HashSet::new();
         handled.insert(DecisionKeyKind::MtimeAck);
-        state.update(None, None, &handled);
-        assert_eq!(state.cached_entries.corpus.len(), count_before - 1);
+        data.update(None, None, &handled);
+        assert_eq!(data.cached_entries.corpus.len(), count_before - 1);
 
         // Discard (empty handled) — should restore
-        state.update(None, None, &no_handled);
-        assert_eq!(state.cached_entries.corpus.len(), count_before);
+        data.update(None, None, &no_handled);
+        assert_eq!(data.cached_entries.corpus.len(), count_before);
     }
 
     #[test]
     fn test_tab_navigation_not_blocked() {
-        let mut state = InsightsViewState::new();
-        state.witch_busy = true;
+        let mut data = InsightsViewData::new();
+        data.witch_busy = true;
+        let mut interaction = HealthInteraction::new();
 
         // Tab is handled centrally — view returns None (unhandled)
-        let action = state.handle_input(&InputAction::CycleNext);
+        let action = interaction.handle_input_with(&InputAction::CycleNext, &input_ctx(&data));
         assert_eq!(action, None);
 
-        let action = state.handle_input(&InputAction::CyclePrev);
+        let action = interaction.handle_input_with(&InputAction::CyclePrev, &input_ctx(&data));
         assert_eq!(action, None);
     }
 
     #[test]
     fn test_flat_items_have_headers() {
-        let state = state_with_data();
+        let (data, _interaction) = data_with_content();
         // Should have 3 headers + entries
-        let header_count = state
+        let header_count = data
             .flat_items
             .iter()
             .filter(|i| matches!(i, InsightListItem::Header { .. }))
@@ -992,41 +966,39 @@ mod tests {
 
     #[test]
     fn test_cursor_skips_headers() {
-        let mut state = state_with_data();
+        let (data, interaction) = data_with_content();
         // Cursor should start on first selectable item (index 1, after first header)
-        state.list.clamp_cursor(&state.flat_items);
         assert!(matches!(
-            state.flat_items[state.list.cursor],
+            data.flat_items[interaction.list.cursor],
             InsightListItem::Entry { .. }
         ));
     }
 
     #[test]
     fn test_navigation_down_and_up() {
-        let mut state = state_with_data();
-        state.list.visible_height = 30;
-        state.list.clamp_cursor(&state.flat_items);
-        let start = state.list.cursor;
+        let (data, mut interaction) = data_with_content();
+        interaction.list.visible_height = 30;
+        let start = interaction.list.cursor;
 
         // Navigate down
-        state.handle_input(&InputAction::NavDown);
-        assert!(state.list.cursor > start);
+        interaction.handle_input_with(&InputAction::NavDown, &input_ctx(&data));
+        assert!(interaction.list.cursor > start);
         // Should still be on an entry, not a header
         assert!(matches!(
-            state.flat_items[state.list.cursor],
+            data.flat_items[interaction.list.cursor],
             InsightListItem::Entry { .. }
         ));
 
         // Navigate back up
-        state.handle_input(&InputAction::NavUp);
-        assert_eq!(state.list.cursor, start);
+        interaction.handle_input_with(&InputAction::NavUp, &input_ctx(&data));
+        assert_eq!(interaction.list.cursor, start);
     }
 
     #[test]
     fn test_selected_entry_returns_bucket_entry() {
-        let state = state_with_data();
+        let (data, interaction) = data_with_content();
         // Should be able to get the selected entry
-        let entry = state.selected_entry();
+        let entry = data.entry_at(interaction.list.cursor);
         assert!(entry.is_some());
     }
 }

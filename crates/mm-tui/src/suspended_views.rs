@@ -68,7 +68,10 @@ impl App {
     fn suspend_current_view(&mut self) -> SuspendedView {
         let old_view = std::mem::replace(
             &mut self.view,
-            ActiveView::Insights(insights_view::InsightsViewState::new()),
+            ActiveView::Insights {
+                data: insights_view::InsightsViewData::new(),
+                interaction: insights_view::HealthInteraction::new(),
+            },
         );
         match old_view {
             ActiveView::TagCanonicityResolution { clusters, .. } => {

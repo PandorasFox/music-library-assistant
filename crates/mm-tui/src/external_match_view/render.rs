@@ -11,25 +11,25 @@ use ratatui::{
     Frame,
 };
 
-use super::{ExternalMatchListItem, ExternalMatchesViewState, NavigableEntry};
+use super::{ExternalMatchListItem, ExternalMatchesInteraction, ExternalMatchesViewData, NavigableEntry};
 use mm_meta::views::ConfidenceTier;
 use crate::release_packing_browser::types::PackingCategory;
 use crate::widgets::standard_list::render_standard_list;
 
-pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewState) {
-    // Snapshot fields for the render closure (avoids borrowing all of `state`
+pub(crate) fn render(f: &mut Frame, area: Rect, data: &ExternalMatchesViewData, interaction: &mut ExternalMatchesInteraction) {
+    // Snapshot fields for the render closure (avoids borrowing all of `data`
     // while `list` is mutably borrowed by render_standard_list).
     let snap = RenderSnapshot {
-        has_api_key: state.has_api_key,
-        fetch_active: state.fetch_active,
-        fetch_progress: state.fetch_progress.as_ref(),
-        cached_data: state.cached_data.as_ref(),
+        has_api_key: data.has_api_key,
+        fetch_active: data.fetch_active,
+        fetch_progress: data.fetch_progress.as_ref(),
+        cached_data: data.cached_data.as_ref(),
     };
 
-    let ExternalMatchesViewState { ref mut list, ref flat_items, .. } = *state;
+    let flat_items = &data.flat_items;
 
     render_standard_list(
-        list,
+        &mut interaction.list,
         f,
         area,
         flat_items,

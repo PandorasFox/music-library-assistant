@@ -16,11 +16,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use mm_meta::views::{ConfidenceTier, ExternalMatchesData};
-use crate::input::InputAction;
 use crate::release_packing_browser::types::PackingCategory;
-use crate::widgets::standard_list::{
-    ListEntry, ListInputResult, StandardListConfig, StandardListState,
-};
+use crate::widgets::standard_list::ListEntry;
 use crate::widgets::wizard::{WizardItem, WizardOffer};
 
 // ============================================================================
@@ -111,22 +108,24 @@ impl ListEntry for ExternalMatchListItem {
 // State
 // ============================================================================
 
-/// Main view state for the External Matches lateral view.
-pub(crate) struct ExternalMatchesViewState {
+/// Re-export interaction type from mm-ui.
+pub use mm_ui::view_state::lateral::external_matches::ExternalMatchesInteraction;
+
+/// Server-fetched data for the External Matches lateral view.
+///
+/// Interaction state (list cursor, tick counter) lives separately in
+/// [`ExternalMatchesInteraction`].
+pub(crate) struct ExternalMatchesViewData {
     /// Cached data from the cache thread
     pub cached_data: Option<ExternalMatchesData>,
     /// Pre-built flat items for StandardList
     pub flat_items: Vec<ExternalMatchListItem>,
-    /// StandardList state machine
-    pub list: StandardListState,
     /// Whether the Witch has an active fetch batch
     pub fetch_active: bool,
     /// Whether an AcoustID API key is configured
     pub has_api_key: bool,
     /// Latest fetch progress snapshot from the Witch
     pub fetch_progress: Option<mm_meta::witch_types::FetchProgress>,
-    /// Animation tick counter (incremented each UI tick while fetch is active).
-    pub tick_count: u32,
     /// Whether to show singles before incompletes in the menu (from config).
     pub singles_before_incompletes: bool,
 }
@@ -135,31 +134,26 @@ pub(crate) struct ExternalMatchesViewState {
 // Construction & Update
 // ============================================================================
 
-impl ExternalMatchesViewState {
+impl ExternalMatchesViewData {
     pub fn new(fetch_active: bool, has_api_key: bool, singles_before_incompletes: bool) -> Self {
-        let mut state = Self {
+        let mut data = Self {
             cached_data: None,
             flat_items: Vec::new(),
-            list: StandardListState::new(StandardListConfig::default()),
             fetch_active,
             has_api_key,
             fetch_progress: None,
-            tick_count: 0,
             singles_before_incompletes,
         };
-        state.rebuild_items();
-        state
-    }
-
-    /// Handle mouse click for cursor selection.
-    pub fn handle_click(&mut self, x: u16, y: u16) {
-        self.list.handle_click(x, y, &self.flat_items);
+        data.rebuild_items();
+        data
     }
 
     /// Update cached data from cache thread.
-    pub fn update(&mut self, data: ExternalMatchesData) {
+    /// Returns true (caller should clamp interaction cursor).
+    pub fn update(&mut self, data: ExternalMatchesData) -> bool {
         self.cached_data = Some(data);
         self.rebuild_items();
+        true
     }
 
     /// Rebuild flat items from current state. Call after any state change
@@ -295,7 +289,6 @@ impl ExternalMatchesViewState {
         }
 
         self.flat_items = items;
-        self.list.clamp_cursor(&self.flat_items);
     }
 
     // ── Detail line generators (baked into items at construction) ──
@@ -652,43 +645,35 @@ impl ExternalMatchesViewState {
 // Key Handling
 // ============================================================================
 
-impl ExternalMatchesViewState {
-    pub fn handle_input(&mut self, action: &InputAction) -> Option<ExternalMatchesAction> {
-        let result = self.list.handle_input(action, &self.flat_items);
-
-        match result {
-            ListInputResult::Consumed
-            | ListInputResult::CursorMoved
-            | ListInputResult::Toggled => None,
-
-            ListInputResult::Confirm(nav) => match nav {
-                NavigableEntry::FetchAction => {
-                    if self.has_api_key && !self.fetch_active {
-                        Some(ExternalMatchesAction::RequestFetch)
-                    } else {
-                        None
-                    }
+impl ExternalMatchesViewData {
+    /// Map a list confirm result to a domain action.
+    /// Called by the input dispatch after `interaction.list.handle_input()`.
+    pub fn map_confirm(&self, nav: NavigableEntry) -> Option<ExternalMatchesAction> {
+        match nav {
+            NavigableEntry::FetchAction => {
+                if self.has_api_key && !self.fetch_active {
+                    Some(ExternalMatchesAction::RequestFetch)
+                } else {
+                    None
                 }
-                NavigableEntry::PackReleasesAction => {
-                    let has_data = self.cached_data.as_ref().is_some_and(|d| {
-                        !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty()
-                    });
-                    if !self.fetch_active && has_data {
-                        Some(ExternalMatchesAction::RequestReleasePacking)
-                    } else {
-                        None
-                    }
+            }
+            NavigableEntry::PackReleasesAction => {
+                let has_data = self.cached_data.as_ref().is_some_and(|d| {
+                    !d.untagged_entries.is_empty() || !d.confidence_buckets.is_empty()
+                });
+                if !self.fetch_active && has_data {
+                    Some(ExternalMatchesAction::RequestReleasePacking)
+                } else {
+                    None
                 }
-                NavigableEntry::UntaggedMatches => Some(ExternalMatchesAction::LaunchUntaggedReview),
-                NavigableEntry::ConfidenceBucket(tier) => {
-                    Some(ExternalMatchesAction::LaunchTierReview(tier))
-                }
-                NavigableEntry::PackingCategory(cat) => {
-                    Some(ExternalMatchesAction::LaunchPackingCategory(cat))
-                }
-            },
-
-            ListInputResult::Unhandled => None,
+            }
+            NavigableEntry::UntaggedMatches => Some(ExternalMatchesAction::LaunchUntaggedReview),
+            NavigableEntry::ConfidenceBucket(tier) => {
+                Some(ExternalMatchesAction::LaunchTierReview(tier))
+            }
+            NavigableEntry::PackingCategory(cat) => {
+                Some(ExternalMatchesAction::LaunchPackingCategory(cat))
+            }
         }
     }
 }

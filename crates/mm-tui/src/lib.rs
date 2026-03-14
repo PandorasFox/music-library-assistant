@@ -209,7 +209,10 @@ impl App {
         Self {
             should_quit: false,
             status_message: None,
-            view: ActiveView::Insights(insights_view::InsightsViewState::new()),
+            view: ActiveView::Insights {
+                data: insights_view::InsightsViewData::new(),
+                interaction: insights_view::HealthInteraction::new(),
+            },
             socket,
             session_token: Some(session_token),
             cached_config,
@@ -307,10 +310,24 @@ impl App {
             ActiveView::Progress { .. } => ViewAction::None,
             ActiveView::ProgressiveWork(_) => ViewAction::None,
             ActiveView::ConfigEditor(s) => dispatch_input!(ConfigEditor, s),
-            ActiveView::Insights(s) => dispatch_input!(Insights, s),
+            ActiveView::Insights { ref data, ref mut interaction } => {
+                use mm_ui::view_state::lateral::health::HealthInputCtx;
+                let ctx = HealthInputCtx { items: &data.flat_items, busy: data.witch_busy };
+                match interaction.handle_input_with(&action, &ctx) {
+                    Some(a) => ViewAction::Insights(a),
+                    None => ViewAction::None,
+                }
+            }
             ActiveView::CorpusBrowser(s) => dispatch_input!(CorpusBrowser, s),
             ActiveView::TagSearch(s) => dispatch_input!(TagSearch, s),
-            ActiveView::Inbox(s) => dispatch_input!(Inbox, s),
+            ActiveView::Inbox { ref data, ref mut interaction } => {
+                use mm_ui::view_state::lateral::inbox::InboxInputCtx;
+                let ctx = InboxInputCtx { items: &data.entries, busy: data.busy };
+                match interaction.handle_input_with(&action, &ctx) {
+                    Some(a) => ViewAction::Inbox(a),
+                    None => ViewAction::None,
+                }
+            }
             ActiveView::TabbedTransactionReview(ref mut s) => dispatch_input!(TabbedTransactionReview, s),
             ActiveView::ExitConfirm(state) => {
                 let a = match action {
@@ -358,7 +375,17 @@ impl App {
             }
             ActiveView::UnifiedTagEditor(s) => dispatch_input_raw!(UnifiedTagEditor, s),
             ActiveView::Deploy(s) => dispatch_input!(Deploy, s),
-            ActiveView::ExternalMatches(s) => dispatch_input!(ExternalMatches, s),
+            ActiveView::ExternalMatches { ref data, ref mut interaction } => {
+                match interaction.list.handle_input(&action, &data.flat_items) {
+                    crate::widgets::standard_list::ListInputResult::Confirm(nav) => {
+                        match data.map_confirm(nav) {
+                            Some(a) => ViewAction::ExternalMatches(a),
+                            None => ViewAction::None,
+                        }
+                    }
+                    _ => ViewAction::None,
+                }
+            }
             ActiveView::MissingFileResolution(s) => dispatch_input_raw!(MissingFileResolution, s),
             ActiveView::MissingDirectoryResolution(s) => dispatch_input!(MissingDirectoryResolution, s),
             ActiveView::CorruptFileResolution(s) => dispatch_input!(CorruptFileResolution, s),
@@ -407,7 +434,10 @@ impl App {
     pub(crate) fn start_health_view(&mut self) {
         self.clear_view_stack();
         self.last_lateral_view = widgets::LateralView::Health;
-        self.view = ActiveView::Insights(insights_view::InsightsViewState::new());
+        self.view = ActiveView::Insights {
+            data: insights_view::InsightsViewData::new(),
+            interaction: insights_view::HealthInteraction::new(),
+        };
     }
 
     /// Start the configured default view (post-startup landing screen).
@@ -454,7 +484,10 @@ impl App {
         if let Some(state) = intake_state {
             self.view = ActiveView::IntakeConfirmation(state);
         } else {
-            self.view = ActiveView::Inbox(inbox_view::InboxViewState::new());
+            self.view = ActiveView::Inbox {
+                data: inbox_view::InboxViewData::new(),
+                interaction: inbox_view::InboxInteraction::new(),
+            };
         }
     }
 
@@ -473,14 +506,16 @@ impl App {
         let singles_before_incompletes = self
             .config()
             .opinions.release_packing.singles_before_incompletes;
-        let mut state = external_match_view::ExternalMatchesViewState::new(
+        let mut data = external_match_view::ExternalMatchesViewData::new(
             fetch_active,
             has_api_key,
             singles_before_incompletes,
         );
-        let data = self.query(mm_meta::domain_queries::GetExternalMatches);
-        state.update(data);
-        self.view = ActiveView::ExternalMatches(state);
+        let mut interaction = external_match_view::ExternalMatchesInteraction::new();
+        let ext_data = self.query(mm_meta::domain_queries::GetExternalMatches);
+        data.update(ext_data);
+        interaction.clamp_to_data(&data.flat_items);
+        self.view = ActiveView::ExternalMatches { data, interaction };
     }
 
     /// Start the lateral view identified by the given variant.
@@ -1045,22 +1080,27 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Update views with query data.
         // Queries need &mut app (socket), so we query first then borrow view.
-        if matches!(app.view, ActiveView::Insights(_)) {
+        if matches!(app.view, ActiveView::Insights { .. }) {
             let insights_data = app.query(mm_meta::domain_queries::GetInsights);
-            if let ActiveView::Insights(ref mut view) = app.view {
-                view.update(
+            if let ActiveView::Insights { ref mut data, ref mut interaction } = app.view {
+                let rebuilt = data.update(
                     Some(&app.cached_status.work),
                     Some(insights_data),
                     &app.cached_status.handled_decision_kinds,
                 );
+                if rebuilt {
+                    interaction.list.clamp_cursor(&data.flat_items);
+                }
             }
         }
-        if matches!(app.view, ActiveView::Inbox(_)) {
+        if matches!(app.view, ActiveView::Inbox { .. }) {
             let inbox_data = app.query(mm_meta::domain_queries::GetInboxOverview);
             let busy = app.cached_status.work.pending > 0;
-            if let ActiveView::Inbox(ref mut view) = app.view {
-                view.busy = busy;
-                view.update(Some(inbox_data));
+            if let ActiveView::Inbox { ref mut data, ref mut interaction } = app.view {
+                data.busy = busy;
+                if data.update(Some(inbox_data)) {
+                    interaction.clamp_to_data(&data.entries);
+                }
             }
         }
         if matches!(app.view, ActiveView::History(_)) {
@@ -1069,20 +1109,22 @@ fn run_app<B: ratatui::backend::Backend>(
                 view.update(Some(history_data));
             }
         }
-        if matches!(app.view, ActiveView::ExternalMatches(_)) {
-            let data = app.query(mm_meta::domain_queries::GetExternalMatches);
+        if matches!(app.view, ActiveView::ExternalMatches { .. }) {
+            let ext_data = app.query(mm_meta::domain_queries::GetExternalMatches);
             let new_fetch_active = app.cached_status.is_external_fetch_active;
             let fetch_progress = app.cached_status.external_fetch_progress.clone();
-            if let ActiveView::ExternalMatches(ref mut view) = app.view {
-                view.update(data);
-                let fetch_changed = view.fetch_active != new_fetch_active;
-                view.fetch_active = new_fetch_active;
-                view.fetch_progress = fetch_progress;
-                if view.fetch_active {
-                    view.tick_count = view.tick_count.wrapping_add(1);
+            if let ActiveView::ExternalMatches { ref mut data, ref mut interaction } = app.view {
+                data.update(ext_data);
+                interaction.clamp_to_data(&data.flat_items);
+                let fetch_changed = data.fetch_active != new_fetch_active;
+                data.fetch_active = new_fetch_active;
+                data.fetch_progress = fetch_progress;
+                if data.fetch_active {
+                    interaction.tick_count = interaction.tick_count.wrapping_add(1);
                 }
                 if fetch_changed {
-                    view.rebuild_items();
+                    data.rebuild_items();
+                    interaction.clamp_to_data(&data.flat_items);
                 }
             }
         }

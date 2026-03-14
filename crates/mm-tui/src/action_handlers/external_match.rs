@@ -21,8 +21,8 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
                 let _ = app.queue_task(mm_meta::protocol::BackgroundTask::ExternalFetch);
                 app.status_message = Some("External fetch requested".to_string());
                 let fetch_active = app.witch_status().is_external_fetch_active;
-                if let ActiveView::ExternalMatches(ref mut state) = app.view {
-                    state.fetch_active = fetch_active;
+                if let ActiveView::ExternalMatches { ref mut data, .. } = app.view {
+                    data.fetch_active = fetch_active;
                 }
             }
             external_match_view::ExternalMatchesAction::RequestReleasePacking => {
@@ -35,8 +35,8 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
                 app.launch_release_packing_browser(cat);
             }
             external_match_view::ExternalMatchesAction::LaunchUntaggedReview => {
-                let entries = if let ActiveView::ExternalMatches(ref state) = app.view {
-                    state
+                let entries = if let ActiveView::ExternalMatches { ref data, .. } = app.view {
+                    data
                         .cached_data
                         .as_ref()
                         .map(|d| d.untagged_entries.clone())
@@ -47,8 +47,8 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
                 app.start_external_match_review_with(entries);
             }
             external_match_view::ExternalMatchesAction::LaunchTierReview(tier) => {
-                let entries = if let ActiveView::ExternalMatches(ref state) = app.view {
-                    state
+                let entries = if let ActiveView::ExternalMatches { ref data, .. } = app.view {
+                    data
                         .cached_data
                         .as_ref()
                         .and_then(|d| {

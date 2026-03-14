@@ -379,14 +379,23 @@ impl App {
             ActiveView::MissingFileResolution(s) => click_dispatch!(gesture MissingFileResolution, s),
             ActiveView::ShitFormatResolution(s) => click_dispatch!(gesture ShitFormatResolution, s),
             ActiveView::DirectoryClusterResolution(s) => click_dispatch!(gesture DirectoryClusterResolution, s),
-            ActiveView::Insights(s) => click_dispatch!(void s),
+            ActiveView::Insights { ref data, ref mut interaction } => {
+                interaction.list.handle_click(x, y, &data.flat_items);
+                None
+            }
             ActiveView::TagCanonicityResolution { ref mut state, .. } => click_dispatch!(void state),
             ActiveView::CompoundTagSplit { ref mut state, .. } => click_dispatch!(void state),
             ActiveView::UnifiedTagEditor(ref mut s) => click_dispatch!(void s),
             ActiveView::CorpusBrowser(ref mut s) => click_dispatch!(void s),
             ActiveView::History(ref mut s) => click_dispatch!(void s),
-            ActiveView::ExternalMatches(ref mut s) => click_dispatch!(void s),
-            ActiveView::Inbox(ref mut s) => click_dispatch!(void s),
+            ActiveView::ExternalMatches { ref data, ref mut interaction } => {
+                interaction.list.handle_click(x, y, &data.flat_items);
+                None
+            }
+            ActiveView::Inbox { ref data, ref mut interaction } => {
+                interaction.list.handle_click(x, y, &data.entries);
+                None
+            }
             ActiveView::TagSearch(ref mut s) => click_dispatch!(void s),
             ActiveView::KnotBrowser(ref mut s) => click_dispatch!(void s),
             _ => None,
@@ -462,15 +471,16 @@ impl HandleAction for super::config_editor::ConfigEditorAction {
     }
 }
 
-impl HandleAction for insights_view::InsightsAction {
+impl HandleAction for insights_view::HealthAction {
     fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            insights_view::InsightsAction::Launch => {
-                // Use selected_action() to dispatch to appropriate modal
-                let selected = if let ActiveView::Insights(ref v) = app.view {
-                    v.selected_action()
+            insights_view::HealthAction::Launch => {
+                // Extract cursor and data to dispatch to appropriate modal
+                let (selected, insight_type) = if let ActiveView::Insights { ref data, ref interaction } = app.view {
+                    let cursor = interaction.list.cursor;
+                    (data.action_at(cursor), data.insight_type_at(cursor))
                 } else {
-                    None
+                    (None, None)
                 };
                 match selected {
                     Some(insights_view::InsightAction::LaunchMissingFileResolution) => {
@@ -480,29 +490,21 @@ impl HandleAction for insights_view::InsightsAction {
                         app.start_tag_canonicity_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchCompoundTagSplitSafe) => {
-                        let tag_name = if let ActiveView::Insights(ref v) = app.view {
-                            v.selected_insight_type().and_then(|t| match t {
-                                insights_view::InsightType::CompoundTagValueSafe { tag_name } => {
-                                    Some(tag_name)
-                                }
-                                _ => None,
-                            })
-                        } else {
-                            None
-                        };
+                        let tag_name = insight_type.and_then(|t| match t {
+                            insights_view::InsightType::CompoundTagValueSafe { tag_name } => {
+                                Some(tag_name)
+                            }
+                            _ => None,
+                        });
                         app.start_compound_split_resolution(true, tag_name.as_deref());
                     }
                     Some(insights_view::InsightAction::LaunchCompoundTagSplitReview) => {
-                        let tag_name = if let ActiveView::Insights(ref v) = app.view {
-                            v.selected_insight_type().and_then(|t| match t {
-                                insights_view::InsightType::CompoundTagValueReview { tag_name } => {
-                                    Some(tag_name)
-                                }
-                                _ => None,
-                            })
-                        } else {
-                            None
-                        };
+                        let tag_name = insight_type.and_then(|t| match t {
+                            insights_view::InsightType::CompoundTagValueReview { tag_name } => {
+                                Some(tag_name)
+                            }
+                            _ => None,
+                        });
                         app.start_compound_split_resolution(false, tag_name.as_deref());
                     }
                     Some(insights_view::InsightAction::LaunchOobTagSync) => {

@@ -151,17 +151,17 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::CorpusBrowser(ref mut browser) => {
             browser.render(f, area, &mut app.art_picker, &mut app.art_cache);
         }
-        ActiveView::Insights(ref mut view) => {
-            insights_view::render_insights_view(f, area, view);
+        ActiveView::Insights { ref data, ref mut interaction } => {
+            insights_view::render_insights_view(f, area, data, interaction);
         }
         ActiveView::History(ref mut state) => {
             super::history_view::render::render(f, area, state);
         }
-        ActiveView::ExternalMatches(ref mut state) => {
-            super::external_match_view::render::render(f, area, state);
+        ActiveView::ExternalMatches { ref data, ref mut interaction } => {
+            super::external_match_view::render::render(f, area, data, interaction);
         }
-        ActiveView::Inbox(ref mut state) => {
-            inbox_view::render_inbox_view(f, area, state);
+        ActiveView::Inbox { ref data, ref mut interaction } => {
+            inbox_view::render_inbox_view(f, area, data, interaction);
         }
         ActiveView::TabbedTransactionReview(ref mut state) => {
             tabbed_transaction_review::render(f, area, state);

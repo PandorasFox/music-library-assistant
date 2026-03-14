@@ -24,7 +24,7 @@ impl App {
     pub(crate) fn start_tag_canonicity_resolution(&mut self) {
         // Get the selected insight type to determine what to load
         let insight_type = match &self.view {
-            ActiveView::Insights(v) => v.selected_insight_type(),
+            ActiveView::Insights { ref data, ref interaction } => data.insight_type_at(interaction.list.cursor),
             _ => None,
         };
         let insight_type = match insight_type {
@@ -362,7 +362,10 @@ impl App {
         // Extract clusters from current view (take ownership via replace)
         let clusters = match std::mem::replace(
             &mut self.view,
-            ActiveView::Insights(insights_view::InsightsViewState::new()),
+            ActiveView::Insights {
+                data: insights_view::InsightsViewData::new(),
+                interaction: insights_view::HealthInteraction::new(),
+            },
         ) {
             ActiveView::TagCanonicityResolution { clusters, .. } => clusters,
             other => {

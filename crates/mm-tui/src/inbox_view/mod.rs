@@ -5,46 +5,21 @@
 //! rather than individual files.
 //!
 //! Part of the lateral view ring - can cycle to adjacent views with Tab/Shift-Tab.
-//!
-//! Bucket entries (shown when count > 0):
-//! - Corpus matches (magenta) — inbox files matching corpus fingerprints
-//! - Unindexed (yellow) — inbox files not yet indexed
-//! - Files in inbox (gray) — total file count (informational)
-//!
-//! Actions:
-//! - Enter on "Unindexed": launch intake confirmation for inbox files
-//! - Enter on other entries: informational (future actions)
 
 mod render;
 
 use std::collections::BTreeSet;
 
-use crate::input::InputAction;
-use crate::widgets::standard_list::{ListEntry, ListInputResult, StandardListConfig, StandardListState};
-use crate::widgets::wizard::{WizardItem, WizardOffer};
 use ratatui::style::Color;
 
 use mm_meta::views::InboxOverviewData;
+use crate::widgets::standard_list::ListEntry;
+use crate::widgets::wizard::{WizardItem, WizardOffer};
 
 pub use render::render_inbox_view;
 
-/// Domain action returned from input handling.
-///
-/// Protocol actions (CycleNext, CyclePrev, Cancel-as-quit) are handled centrally.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InboxAction {
-    /// Launch intake confirmation for inbox unindexed files
-    LaunchIntake,
-    /// Launch inbox corpus match resolution modal
-    LaunchCorpusMatchResolution,
-    /// Launch inbox tag canonicity view
-    LaunchInboxTagCanonicity,
-    /// Launch inbox organize workflow
-    LaunchOrganize,
-    /// Launch inbox compound tag split resolution
-    LaunchInboxCompoundSplit,
-}
-
+/// Re-export interaction type from mm-ui.
+pub use mm_ui::view_state::lateral::inbox::InboxInteraction;
 pub use mm_ui::domain_types::InboxInsightAction;
 
 /// A single bucket entry in the inbox overview.
@@ -73,40 +48,34 @@ impl ListEntry for InboxBucketEntry {
     }
 }
 
-/// State for the inbox view.
-#[derive(Debug)]
-pub struct InboxViewState {
-    /// Aggregate bucket entries (not individual files)
+/// Server-fetched data for the inbox view.
+///
+/// Interaction state lives separately in [`InboxInteraction`].
+pub struct InboxViewData {
+    /// Aggregate bucket entries (not individual files).
     pub entries: Vec<InboxBucketEntry>,
-    /// StandardList state machine
-    pub list: StandardListState,
     /// True when the Witch has pending work (dims UI, blocks actions).
     pub busy: bool,
 }
 
-impl Default for InboxViewState {
+impl Default for InboxViewData {
     fn default() -> Self {
         Self {
             entries: Vec::new(),
-            list: StandardListState::new(StandardListConfig::default()),
             busy: false,
         }
     }
 }
 
-impl InboxViewState {
+impl InboxViewData {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Handle mouse click for cursor selection.
-    pub fn handle_click(&mut self, x: u16, y: u16) {
-        self.list.handle_click(x, y, &self.entries);
-    }
-
     /// Update entries from cached overview data.
-    pub fn update(&mut self, data: Option<InboxOverviewData>) {
-        let Some(data) = data else { return };
+    /// Returns true if entries changed (caller should clamp cursor).
+    pub fn update(&mut self, data: Option<InboxOverviewData>) -> bool {
+        let Some(data) = data else { return false };
 
         let mut entries = Vec::new();
 
@@ -174,43 +143,11 @@ impl InboxViewState {
         }
 
         self.entries = entries;
-        self.list.clamp_cursor(&self.entries);
+        true
     }
 
-    /// Get the currently selected entry, if any.
-    pub fn selected_entry(&self) -> Option<&InboxBucketEntry> {
-        self.entries.get(self.list.cursor)
-    }
-
-    /// Handle a semantic input action. Returns `None` for protocol actions
-    /// (cycle, cancel) which are handled centrally by `App::handle_input`.
-    pub fn handle_input(&mut self, action: &InputAction) -> Option<InboxAction> {
-        let result = self.list.handle_input(action, &self.entries);
-
-        match result {
-            ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
-                None
-            }
-            ListInputResult::Confirm(insight_action) => {
-                if self.busy {
-                    return None;
-                }
-                match insight_action {
-                    InboxInsightAction::LaunchIntake => Some(InboxAction::LaunchIntake),
-                    InboxInsightAction::LaunchCorpusMatchResolution => {
-                        Some(InboxAction::LaunchCorpusMatchResolution)
-                    }
-                    InboxInsightAction::LaunchInboxTagCanonicity => {
-                        Some(InboxAction::LaunchInboxTagCanonicity)
-                    }
-                    InboxInsightAction::LaunchOrganize => Some(InboxAction::LaunchOrganize),
-                    InboxInsightAction::LaunchInboxCompoundSplit => {
-                        Some(InboxAction::LaunchInboxCompoundSplit)
-                    }
-                    InboxInsightAction::Informational => None,
-                }
-            }
-            ListInputResult::Unhandled => None,
-        }
+    /// Get the currently selected entry at a cursor position.
+    pub fn selected_entry(&self, cursor: usize) -> Option<&InboxBucketEntry> {
+        self.entries.get(cursor)
     }
 }

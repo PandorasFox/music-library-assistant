@@ -154,8 +154,8 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::Insights { ref data, ref mut interaction } => {
             insights_view::render_insights_view(f, area, data, interaction);
         }
-        ActiveView::History(ref mut state) => {
-            super::history_view::render::render(f, area, state);
+        ActiveView::History { ref mut data, ref mut interaction } => {
+            super::history_view::render::render(f, area, data, &mut interaction.session_list);
         }
         ActiveView::ExternalMatches { ref data, ref mut interaction } => {
             super::external_match_view::render::render(f, area, data, interaction);

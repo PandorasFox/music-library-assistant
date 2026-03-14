@@ -36,8 +36,8 @@ impl HandleAction for HistoryAction {
             }
 
             HistoryAction::ToggleConflictDisposition(idx) => {
-                if let ActiveView::History(ref mut state) = app.view {
-                    if let HistoryPhase::ConflictResolution(ref mut cr) = state.phase {
+                if let ActiveView::History { ref mut data, .. } = app.view {
+                    if let HistoryPhase::ConflictResolution(ref mut cr) = data.phase {
                         if let Some(conflict) = cr.conflicts.get_mut(idx) {
                             conflict.disposition = match conflict.disposition {
                                 ConflictDisposition::RevertAnyway => ConflictDisposition::Skip,
@@ -55,8 +55,8 @@ impl HandleAction for HistoryAction {
             }
 
             HistoryAction::CancelConflictResolution => {
-                if let ActiveView::History(ref mut state) = app.view {
-                    state.phase = HistoryPhase::SessionDetail;
+                if let ActiveView::History { ref mut data, .. } = app.view {
+                    data.phase = HistoryPhase::SessionDetail;
                 }
             }
 
@@ -70,11 +70,11 @@ impl HandleAction for HistoryAction {
                 app.enter_jettison_all();
             }
             HistoryAction::AdvanceJettisonAll => {
-                if let ActiveView::History(ref mut state) = app.view {
+                if let ActiveView::History { ref mut data, .. } = app.view {
                     if let HistoryPhase::ConfirmJettisonAll(ja) =
-                        std::mem::replace(&mut state.phase, HistoryPhase::SessionList)
+                        std::mem::replace(&mut data.phase, HistoryPhase::SessionList)
                     {
-                        state.phase = HistoryPhase::ConfirmJettisonAllFinal(ja);
+                        data.phase = HistoryPhase::ConfirmJettisonAllFinal(ja);
                     }
                 }
             }
@@ -82,8 +82,8 @@ impl HandleAction for HistoryAction {
                 app.execute_jettison_all();
             }
             HistoryAction::CancelJettison => {
-                if let ActiveView::History(ref mut state) = app.view {
-                    state.phase = HistoryPhase::SessionList;
+                if let ActiveView::History { ref mut data, .. } = app.view {
+                    data.phase = HistoryPhase::SessionList;
                 }
             }
         }
@@ -98,8 +98,8 @@ impl App {
                 session_id: session_id.clone(),
             });
 
-        if let ActiveView::History(ref mut state) = self.view {
-            state.set_detail(session_id, result.edits, result.inode_paths);
+        if let ActiveView::History { ref mut data, .. } = self.view {
+            data.set_detail(session_id, result.edits, result.inode_paths);
         }
     }
 
@@ -107,11 +107,11 @@ impl App {
     fn initiate_history_reversal(&mut self) {
         // Collect selected edits from the detail view
         let selected_edits = {
-            let state = match self.view {
-                ActiveView::History(ref state) => state,
+            let data = match self.view {
+                ActiveView::History { ref data, .. } => data,
                 _ => return,
             };
-            let detail = match state.detail {
+            let detail = match data.detail {
                 Some(ref d) => d,
                 None => return,
             };
@@ -161,26 +161,26 @@ impl App {
             }
         }
 
-        if let ActiveView::History(ref mut state) = self.view {
-            state.set_conflict_resolution(clean, conflicts);
+        if let ActiveView::History { ref mut data, .. } = self.view {
+            data.set_conflict_resolution(clean, conflicts);
         }
     }
 
     /// Confirm reversal: generate TagOps from clean reversals + accepted conflicts.
     fn confirm_history_reversal(&mut self, gesture: &witness::ConfirmationGesture) {
         let ops = {
-            let state = match self.view {
-                ActiveView::History(ref state) => state,
+            let data = match self.view {
+                ActiveView::History { ref data, .. } => data,
                 _ => return,
             };
-            let cr = match state.phase {
+            let cr = match data.phase {
                 HistoryPhase::ConflictResolution(ref cr) => cr,
                 _ => return,
             };
 
             let mut ops = Vec::new();
 
-            // Clean reversals: swap new→old
+            // Clean reversals: swap new->old
             for item in &cr.clean_reversals {
                 if let Some(op) = reversal_op(&item.edit) {
                     ops.push(op);
@@ -202,8 +202,8 @@ impl App {
 
         if ops.is_empty() {
             // Nothing to revert (all conflicts skipped and no clean reversals)
-            if let ActiveView::History(ref mut state) = self.view {
-                state.phase = HistoryPhase::SessionDetail;
+            if let ActiveView::History { ref mut data, .. } = self.view {
+                data.phase = HistoryPhase::SessionDetail;
             }
             self.status_message = Some("No reversals to apply".to_string());
             return;
@@ -215,11 +215,11 @@ impl App {
         });
 
         let session_label = {
-            let state = match self.view {
-                ActiveView::History(ref state) => state,
+            let data = match self.view {
+                ActiveView::History { ref data, .. } => data,
                 _ => return,
             };
-            state
+            data
                 .detail
                 .as_ref()
                 .map(|d| d.session_id.clone())
@@ -242,9 +242,9 @@ impl App {
     /// Enter confirm-jettison-session phase for the currently selected session.
     fn enter_jettison_session(&mut self) {
         let (session_id, edit_count) = match self.view {
-            ActiveView::History(ref state) => {
-                let cursor = state.session_list.cursor;
-                match state.sessions.get(cursor) {
+            ActiveView::History { ref data, ref interaction } => {
+                let cursor = interaction.session_list.cursor;
+                match data.sessions.get(cursor) {
                     Some(entry) => (entry.summary.session_id.clone(), entry.summary.edit_count),
                     None => return,
                 }
@@ -252,8 +252,8 @@ impl App {
             _ => return,
         };
 
-        if let ActiveView::History(ref mut state) = self.view {
-            state.phase = HistoryPhase::ConfirmJettisonSession(JettisonSessionState {
+        if let ActiveView::History { ref mut data, .. } = self.view {
+            data.phase = HistoryPhase::ConfirmJettisonSession(JettisonSessionState {
                 session_id,
                 edit_count,
             });
@@ -263,15 +263,15 @@ impl App {
     /// Enter first jettison-all confirmation phase.
     fn enter_jettison_all(&mut self) {
         let (total_records, session_count) = match self.view {
-            ActiveView::History(ref state) => {
-                let total: usize = state.sessions.iter().map(|e| e.summary.edit_count).sum();
-                (total, state.sessions.len())
+            ActiveView::History { ref data, .. } => {
+                let total: usize = data.sessions.iter().map(|e| e.summary.edit_count).sum();
+                (total, data.sessions.len())
             }
             _ => return,
         };
 
-        if let ActiveView::History(ref mut state) = self.view {
-            state.phase = HistoryPhase::ConfirmJettisonAll(JettisonAllState {
+        if let ActiveView::History { ref mut data, .. } = self.view {
+            data.phase = HistoryPhase::ConfirmJettisonAll(JettisonAllState {
                 total_records,
                 session_count,
             });
@@ -281,7 +281,7 @@ impl App {
     /// Execute jettison for a single session: export to log, delete from DB.
     fn execute_jettison_session(&mut self) {
         let session_id = match self.view {
-            ActiveView::History(ref state) => match state.phase {
+            ActiveView::History { ref data, .. } => match data.phase {
                 HistoryPhase::ConfirmJettisonSession(ref js) => js.session_id.clone(),
                 _ => return,
             },
@@ -296,9 +296,9 @@ impl App {
         let sid = session_id.clone();
         self.finalize_jettison(rows, "Jettisoned", move |app| {
             let _ = app.jettison_edit_history(Some(&sid));
-        }, |state| {
-            state.sessions.retain(|e| e.summary.session_id != session_id);
-            state.session_list.clamp_cursor(&state.sessions);
+        }, |data, interaction| {
+            data.sessions.retain(|e| e.summary.session_id != session_id);
+            interaction.session_list.clamp_cursor(&data.sessions);
         });
     }
 
@@ -311,10 +311,10 @@ impl App {
 
         self.finalize_jettison(rows, "Jettisoned all", |app| {
             let _ = app.jettison_edit_history(None);
-        }, |state| {
-            state.sessions.clear();
-            state.session_list.reset();
-            state.detail = None;
+        }, |data, interaction| {
+            data.sessions.clear();
+            interaction.session_list.reset();
+            data.detail = None;
         });
     }
 
@@ -324,12 +324,15 @@ impl App {
         rows: Vec<EditHistoryExportRow>,
         prefix: &str,
         delete_fn: impl FnOnce(&mut App),
-        reset_fn: impl FnOnce(&mut crate::history_view::HistoryViewState),
+        reset_fn: impl FnOnce(
+            &mut crate::history_view::HistoryViewData,
+            &mut crate::history_view::HistoryInteraction,
+        ),
     ) {
         if rows.is_empty() {
             self.status_message = Some("No records to export".to_string());
-            if let ActiveView::History(ref mut state) = self.view {
-                state.phase = HistoryPhase::SessionList;
+            if let ActiveView::History { ref mut data, .. } = self.view {
+                data.phase = HistoryPhase::SessionList;
             }
             return;
         }
@@ -342,15 +345,15 @@ impl App {
                     "{} {} record{} → {}",
                     prefix, count, if count == 1 { "" } else { "s" }, path,
                 ));
-                if let ActiveView::History(ref mut state) = self.view {
-                    reset_fn(state);
-                    state.phase = HistoryPhase::SessionList;
+                if let ActiveView::History { ref mut data, ref mut interaction } = self.view {
+                    reset_fn(data, interaction);
+                    data.phase = HistoryPhase::SessionList;
                 }
             }
             Err(e) => {
                 self.status_message = Some(format!("Export failed: {}", e));
-                if let ActiveView::History(ref mut state) = self.view {
-                    state.phase = HistoryPhase::SessionList;
+                if let ActiveView::History { ref mut data, .. } = self.view {
+                    data.phase = HistoryPhase::SessionList;
                 }
             }
         }
@@ -403,7 +406,7 @@ fn export_to_log(rows: &[EditHistoryExportRow]) -> Result<String, String> {
 /// Generate a TagOp for a clean reversal (current == new_value, revert to old_value).
 fn reversal_op(edit: &mm_meta::views::EditRecord) -> Option<TagOp> {
     match (&edit.old_value, &edit.new_value) {
-        // Was replace: old→new, revert: new→old
+        // Was replace: old->new, revert: new->old
         (Some(old), Some(new)) => Some(TagOp::replace_tag(
             edit.inode,
             &edit.field_name,
@@ -425,7 +428,7 @@ fn conflict_reversal_op(
     current_value: &Option<String>,
 ) -> Option<TagOp> {
     match (&edit.old_value, current_value) {
-        // Current exists, old existed: replace current→old
+        // Current exists, old existed: replace current->old
         (Some(old), Some(cur)) => Some(TagOp::replace_tag(
             edit.inode,
             &edit.field_name,

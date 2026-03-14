@@ -413,7 +413,12 @@ impl App {
             ActiveView::ExternalMatchReview(s) => dispatch_input_raw!(ExternalMatchReview, s),
             ActiveView::ReleasePackingBrowser(s) => dispatch_input_raw!(ReleasePackingBrowser, s),
             ActiveView::KnotBrowser(s) => dispatch_input_raw!(KnotBrowser, s),
-            ActiveView::History(s) => dispatch_input!(History, s),
+            ActiveView::History { ref mut data, ref mut interaction } => {
+                match data.handle_input(&mut interaction.session_list, &action) {
+                    Some(a) => ViewAction::History(a),
+                    None => ViewAction::None,
+                }
+            }
             ActiveView::TagCanonicityResolution { state, .. } => dispatch_input_raw!(TagCanonicityResolution, state),
             ActiveView::CompoundTagSplit { state, .. } => dispatch_input_raw!(CompoundTagSplit, state),
             ActiveView::MissingAlbumSingleResolution(s) => dispatch_input_raw!(MissingAlbumSingleResolution, s),
@@ -507,7 +512,10 @@ impl App {
     /// Start the history lateral view.
     pub(crate) fn start_history_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::History;
-        self.view = ActiveView::History(history_view::HistoryViewState::new());
+        self.view = ActiveView::History {
+            data: history_view::HistoryViewData::new(),
+            interaction: history_view::HistoryInteraction::new(),
+        };
     }
 
     /// Start the external matches lateral view.
@@ -1121,10 +1129,10 @@ fn run_app<B: ratatui::backend::Backend>(
                 }
             }
         }
-        if matches!(app.view, ActiveView::History(_)) {
+        if matches!(app.view, ActiveView::History { .. }) {
             let history_data = app.query(mm_meta::domain_queries::GetEditHistory);
-            if let ActiveView::History(ref mut view) = app.view {
-                view.update(Some(history_data));
+            if let ActiveView::History { ref mut data, ref mut interaction } = app.view {
+                data.update(&mut interaction.session_list, Some(history_data));
             }
         }
         if matches!(app.view, ActiveView::ExternalMatches { .. }) {

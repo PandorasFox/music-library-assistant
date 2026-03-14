@@ -9,23 +9,28 @@ use ratatui::{
 };
 
 use super::{
-    ConflictDisposition, EditDetailState, HistoryPhase, HistoryViewState, JettisonAllState,
+    ConflictDisposition, EditDetailState, HistoryPhase, HistoryViewData, JettisonAllState,
     JettisonSessionState,
 };
 use crate::helpers::truncate_right;
 use crate::widgets::control_colors as cc;
-use crate::widgets::standard_list::{render_standard_list, ListEntry};
+use crate::widgets::standard_list::{render_standard_list, ListEntry, StandardListState};
 use crate::widgets::{ConfirmationButton, ConfirmationModal};
 
-pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
-    match state.phase {
+pub(crate) fn render(
+    f: &mut Frame,
+    area: Rect,
+    data: &mut HistoryViewData,
+    session_list: &mut StandardListState,
+) {
+    match data.phase {
         HistoryPhase::SessionList
         | HistoryPhase::ConfirmJettisonSession(_)
         | HistoryPhase::ConfirmJettisonAll(_)
         | HistoryPhase::ConfirmJettisonAllFinal(_) => {
-            render_session_list(f, area, state);
+            render_session_list(f, area, data, session_list);
             // Overlays
-            match &state.phase {
+            match &data.phase {
                 HistoryPhase::ConfirmJettisonSession(js) => {
                     render_confirm_jettison_session(f, area, js)
                 }
@@ -36,7 +41,7 @@ pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
                 _ => {}
             }
         }
-        HistoryPhase::SessionDetail => render_session_detail(f, area, state),
+        HistoryPhase::SessionDetail => render_session_detail(f, area, data),
         HistoryPhase::ConflictResolution(ref mut cr) => {
             render_conflict_resolution(f, area, cr)
         }
@@ -47,7 +52,12 @@ pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
 // Session List (Level 1 — StandardList)
 // ============================================================================
 
-fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
+fn render_session_list(
+    f: &mut Frame,
+    area: Rect,
+    data: &mut HistoryViewData,
+    session_list: &mut StandardListState,
+) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -56,7 +66,7 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) 
         ])
         .split(area);
 
-    if state.sessions.is_empty() {
+    if data.sessions.is_empty() {
         let block = Block::default()
             .title(" Edit History — Sessions ")
             .borders(Borders::ALL)
@@ -69,7 +79,7 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) 
         )));
         f.render_widget(empty, inner);
     } else {
-        let HistoryViewState { ref mut session_list, ref sessions, .. } = *state;
+        let sessions = &data.sessions;
         render_standard_list(
             session_list,
             f,
@@ -150,8 +160,8 @@ fn render_session_row(
 // Session Detail (Level 2 — StandardList with multi-select)
 // ============================================================================
 
-fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
-    let detail = match state.detail {
+fn render_session_detail(f: &mut Frame, area: Rect, data: &mut HistoryViewData) {
+    let detail = match data.detail {
         Some(ref mut d) => d,
         None => return,
     };

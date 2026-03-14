@@ -14,6 +14,8 @@ use std::collections::{BTreeSet, HashMap};
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 
+pub use mm_ui::view_state::lateral::history::HistoryInteraction;
+
 use mm_meta::views::{EditHistoryData, EditRecord, EditSessionSummary};
 use crate::input::InputAction;
 use crate::widgets::ListClickTargets;
@@ -321,12 +323,13 @@ pub(crate) struct EditDetailState {
     pub detail_list: StandardListState,
 }
 
-/// Main view state for the History lateral view.
-pub(crate) struct HistoryViewState {
+/// Data for the History lateral view.
+///
+/// Interaction state (session_list cursor/scroll) lives in
+/// `mm_ui::view_state::lateral::history::HistoryInteraction`.
+pub(crate) struct HistoryViewData {
     /// Session list entries
     pub sessions: Vec<SessionListEntry>,
-    /// StandardList state for session navigation
-    pub session_list: StandardListState,
     /// Expanded session detail (loaded on-demand via one-shot query)
     pub detail: Option<EditDetailState>,
     /// Phase of the view
@@ -367,21 +370,20 @@ pub(crate) enum ConflictDisposition {
 // Construction & Update
 // ============================================================================
 
-impl HistoryViewState {
+impl HistoryViewData {
     pub fn new() -> Self {
         Self {
             sessions: Vec::new(),
-            session_list: StandardListState::new(StandardListConfig::default()),
             detail: None,
             phase: HistoryPhase::SessionList,
         }
     }
 
     /// Handle mouse click (delegates to appropriate StandardList).
-    pub fn handle_click(&mut self, x: u16, y: u16) {
+    pub fn handle_click(&mut self, session_list: &mut StandardListState, x: u16, y: u16) {
         match self.phase {
             HistoryPhase::SessionList => {
-                self.session_list.handle_click(x, y, &self.sessions);
+                session_list.handle_click(x, y, &self.sessions);
             }
             HistoryPhase::SessionDetail => {
                 if let Some(ref mut detail) = self.detail {
@@ -403,14 +405,14 @@ impl HistoryViewState {
     }
 
     /// Update cached session data from cache thread.
-    pub fn update(&mut self, data: Option<EditHistoryData>) {
+    pub fn update(&mut self, session_list: &mut StandardListState, data: Option<EditHistoryData>) {
         if let Some(d) = data {
             self.sessions = d
                 .sessions
                 .into_iter()
                 .map(|s| SessionListEntry { summary: s })
                 .collect();
-            self.session_list.clamp_cursor(&self.sessions);
+            session_list.clamp_cursor(&self.sessions);
         }
     }
 
@@ -590,10 +592,14 @@ fn group_edits(
 // Key Handling
 // ============================================================================
 
-impl HistoryViewState {
-    pub fn handle_input(&mut self, action: &InputAction) -> Option<HistoryAction> {
+impl HistoryViewData {
+    pub fn handle_input(
+        &mut self,
+        session_list: &mut StandardListState,
+        action: &InputAction,
+    ) -> Option<HistoryAction> {
         match self.phase {
-            HistoryPhase::SessionList => self.handle_session_list_input(action),
+            HistoryPhase::SessionList => self.handle_session_list_input(session_list, action),
             HistoryPhase::SessionDetail => self.handle_session_detail_input(action),
             HistoryPhase::ConflictResolution(ref mut state) => {
                 handle_conflict_resolution_input(state, action)
@@ -610,8 +616,12 @@ impl HistoryViewState {
         }
     }
 
-    fn handle_session_list_input(&mut self, action: &InputAction) -> Option<HistoryAction> {
-        match self.session_list.handle_input(action, &self.sessions) {
+    fn handle_session_list_input(
+        &mut self,
+        session_list: &mut StandardListState,
+        action: &InputAction,
+    ) -> Option<HistoryAction> {
+        match session_list.handle_input(action, &self.sessions) {
             ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
                 None
             }

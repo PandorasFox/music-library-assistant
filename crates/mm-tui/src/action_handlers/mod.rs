@@ -387,7 +387,10 @@ impl App {
             ActiveView::CompoundTagSplit { ref mut state, .. } => click_dispatch!(void state),
             ActiveView::UnifiedTagEditor(ref mut s) => click_dispatch!(void s),
             ActiveView::CorpusBrowser(ref mut s) => click_dispatch!(void s),
-            ActiveView::History(ref mut s) => click_dispatch!(void s),
+            ActiveView::History { ref mut data, ref mut interaction } => {
+                data.handle_click(&mut interaction.session_list, x, y);
+                None
+            }
             ActiveView::ExternalMatches { ref data, ref mut interaction } => {
                 interaction.list.handle_click(x, y, &data.flat_items);
                 None

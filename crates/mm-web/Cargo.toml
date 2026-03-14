@@ -15,7 +15,7 @@ path = "src/lib.rs"
 mm-meta = { path = "../mm-meta" }
 
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "signal", "fs"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"

@@ -179,6 +179,14 @@ pub async fn get_config_json() -> Result<serde_json::Value, JsValue> {
     get("/config").await
 }
 
+/// GET /config-kdl → raw KDL text of config.kdl
+pub async fn get_config_kdl() -> Result<String, JsValue> {
+    let val = get("/config-kdl").await?;
+    val.as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| JsValue::from_str("expected string response from /config-kdl"))
+}
+
 /// GET /queries/insights → InsightsData
 pub async fn get_insights() -> Result<InsightsData, JsValue> {
     from_json(get("/queries/insights").await?)
@@ -286,7 +294,3 @@ pub async fn execute_action(binding: &serde_json::Value) -> Result<serde_json::V
     post("/actions/execute", binding).await
 }
 
-/// POST /commands/save-config → save edited config
-pub async fn save_config(config: &serde_json::Value) -> Result<serde_json::Value, JsValue> {
-    post("/commands/save-config", &serde_json::json!({ "new_config": config })).await
-}

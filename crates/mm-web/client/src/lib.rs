@@ -836,6 +836,11 @@ fn find_config_slot<'a>(
 }
 
 async fn do_config_save() -> Result<(), JsValue> {
+    use mm_meta::config::Config;
+    use mm_meta::decisions::{Decision, DecisionKey};
+    use mm_meta::mutations::config_edit::ApplyConfigEditsMutation;
+    use mm_meta::mutations::Mutation;
+
     let config_json = CONFIG_DATA.with(|cell| cell.borrow().clone());
     let Some(mut config) = config_json else {
         return Err(JsValue::from_str("no config data cached"));
@@ -896,7 +901,29 @@ async fn do_config_save() -> Result<(), JsValue> {
         }
     }
 
-    api::save_config(&config).await?;
+    // Fetch old config and original KDL for the mutation.
+    let old_config: Config = serde_json::from_value(api::get_config_json().await?)
+        .map_err(|e| JsValue::from_str(&format!("deserialize old config: {e}")))?;
+    let original_kdl = api::get_config_kdl().await?;
+    let new_config: Config = serde_json::from_value(config)
+        .map_err(|e| JsValue::from_str(&format!("deserialize new config: {e}")))?;
+
+    let mutation = Mutation::ApplyConfigEdits(Box::new(ApplyConfigEditsMutation {
+        original_kdl,
+        old_config,
+        new_config,
+    }));
+
+    let decision = Decision {
+        label: "Config edit".to_string(),
+        mutations: vec![mutation],
+    };
+
+    // Auto-confirm: start transaction, add decision, confirm immediately.
+    api::tx_start("Config edit").await?;
+    api::tx_add(&DecisionKey::ConfigEdit, &decision).await?;
+    api::tx_confirm().await?;
+
     // Reload config view to show saved state.
     load_from_hash().await?;
     Ok(())

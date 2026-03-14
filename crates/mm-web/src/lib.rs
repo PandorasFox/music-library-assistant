@@ -50,6 +50,7 @@ pub fn router(state: AppState) -> Router {
         // Queries
         .route("/status", get(api::queries::status))
         .route("/config", get(api::queries::config))
+        .route("/config-kdl", get(api::queries::config_kdl))
         .route("/queries/{name}", get(api::queries::domain_query).post(api::queries::domain_query))
         // Transactions
         .route("/tx/start", post(api::transactions::start))
@@ -62,7 +63,6 @@ pub fn router(state: AppState) -> Router {
         .route("/actions/execute", post(api::actions::execute))
         // Commands
         .route("/commands/queue-task", post(api::commands::queue_task))
-        .route("/commands/save-config", post(api::commands::save_config))
         .route("/commands/shutdown", post(api::commands::shutdown))
         // Static files (CSS, WASM, JS)
         .nest_service("/static", ServeDir::new(static_dir))

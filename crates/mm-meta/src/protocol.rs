@@ -284,11 +284,6 @@ pub enum BackgroundTask {
 pub enum CommandPayload {
     /// Queue a background task.
     QueueTask(BackgroundTask),
-    /// Save edited config — Witch handles KDL read/diff/write-back.
-    ///
-    /// DEPRECATED: Should be unwound into a query (GetConfigEditContext) +
-    /// transaction flow. The Witch should not build mutations from commands.
-    SaveConfig(Box<Config>),
     /// Initiate server shutdown.
     Shutdown,
 }

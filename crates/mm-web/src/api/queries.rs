@@ -78,6 +78,21 @@ pub async fn config(
 }
 
 // ============================================================================
+// GET /config-kdl
+// ============================================================================
+
+pub async fn config_kdl(
+    State(state): State<AppState>,
+    BearerToken(token): BearerToken,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let qr = send_query(&state, token, QueryPayload::ConfigKdl).await?;
+    match qr {
+        QueryResponse::ConfigKdl(s) => to_json(s),
+        _ => Err(ApiError::Internal("expected ConfigKdl response".into())),
+    }
+}
+
+// ============================================================================
 // GET|POST /queries/{name}
 // ============================================================================
 

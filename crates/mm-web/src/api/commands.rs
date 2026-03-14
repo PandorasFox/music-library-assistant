@@ -64,29 +64,6 @@ pub async fn queue_task(
 }
 
 // ============================================================================
-// POST /commands/save-config
-// ============================================================================
-
-#[derive(Deserialize)]
-pub struct SaveConfigRequest {
-    new_config: mm_meta::config::Config,
-}
-
-pub async fn save_config(
-    State(state): State<AppState>,
-    BearerToken(token): BearerToken,
-    Json(body): Json<SaveConfigRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let cr = send_cmd(
-        &state,
-        token,
-        CommandPayload::SaveConfig(Box::new(body.new_config)),
-    )
-    .await?;
-    cmd_to_json(cr)
-}
-
-// ============================================================================
 // POST /commands/shutdown
 // ============================================================================
 

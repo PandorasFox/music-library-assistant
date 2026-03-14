@@ -203,6 +203,8 @@ pub struct Witch {
     // -- Generation counters (monotonically increasing, published in WitchStatus) --
     /// Increments when a mutation batch completes.
     mutations_generation: u64,
+    /// Increments when a computation batch completes.
+    computations_generation: u64,
     /// Increments when a new task error occurs.
     error_generation: u64,
     /// Increments when config is mutated.
@@ -330,6 +332,7 @@ impl Witch {
             db_thread_handle: write_thread::spawn(),
             cache_thread_handle: cache_witch_handle,
             mutations_generation: 0,
+            computations_generation: 0,
             error_generation: 0,
             config_generation: 0,
             handled_sources: std::collections::HashSet::new(),
@@ -685,26 +688,6 @@ impl Witch {
                                         BackgroundTask::SchemaReconciliation => w.queue_schema_reconciliation(),
                                         BackgroundTask::Vacuum => w.queue_vacuum(),
                                     }
-                                    CommandResponse::Ok
-                                }
-                                CommandPayload::SaveConfig(new_config) => {
-                                    let config_dir = mm_utils::get_config_dir()
-                                        .map_err(|e| ProtocolError::Internal(e.to_string()))?;
-                                    let original_kdl = std::fs::read_to_string(config_dir.join("config.kdl"))
-                                        .unwrap_or_default();
-                                    let old_config = w.read_config(|c| c.clone())
-                                        .ok_or(ProtocolError::NotReady)?;
-                                    let mutation = Mutation::ApplyConfigEdits(Box::new(
-                                        mm_meta::mutations::config_edit::ApplyConfigEditsMutation {
-                                            original_kdl,
-                                            old_config,
-                                            new_config: *new_config,
-                                        },
-                                    ));
-                                    w.queue_mutations_internal(
-                                        vec![mutation],
-                                        Some("Config edit (web)".into()),
-                                    );
                                     CommandResponse::Ok
                                 }
                                 CommandPayload::Shutdown => {
@@ -1477,6 +1460,11 @@ impl Witch {
             }
         }
 
+        // Bump computations_generation if any computations ran this session
+        if self.kind_counts.get(&types::TaskKind::Computation).is_some_and(|&c| c > 0) {
+            self.computations_generation += 1;
+        }
+
         // Transition to Done state
         self.work_state = WorkState::Done {
             finished_at: Instant::now(),
@@ -2066,6 +2054,7 @@ impl Witch {
             external_fetch_progress: self.external_fetch_progress().cloned(),
             has_acoustid_api_key: self.has_acoustid_api_key(),
             mutations_generation: self.mutations_generation,
+            computations_generation: self.computations_generation,
             last_error: self.recent_errors.back().cloned(),
             error_generation: self.error_generation,
             config_generation: self.config_generation,

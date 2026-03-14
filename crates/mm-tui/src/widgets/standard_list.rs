@@ -144,7 +144,7 @@ fn render_list_inner<T>(
     focused: bool,
     item_count: usize,
 ) {
-    let border_color = if focused { Color::White } else { Color::DarkGray };
+    let border_color = if focused { Color::Yellow } else { Color::DarkGray };
     let block = ratatui::widgets::Block::default()
         .borders(ratatui::widgets::Borders::ALL)
         .border_style(Style::default().fg(border_color))

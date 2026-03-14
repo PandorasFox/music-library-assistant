@@ -1,24 +1,36 @@
 //! fetch() wrapper for the mm-web JSON API.
 //!
 //! Uses web-sys Request/Response directly. All paths are relative (same origin).
-//! Parses response text with serde_json (avoids serde_wasm_bindgen dependency).
-
-use std::cell::RefCell;
+//! Session token persisted in localStorage across page refreshes.
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Headers, Request, RequestInit, RequestMode, Response};
 
-thread_local! {
-    static AUTH_TOKEN: RefCell<Option<String>> = const { RefCell::new(None) };
+const TOKEN_KEY: &str = "mm-session-token";
+
+fn storage() -> web_sys::Storage {
+    web_sys::window()
+        .unwrap()
+        .local_storage()
+        .unwrap()
+        .unwrap()
 }
 
 pub fn set_token(token: &str) {
-    AUTH_TOKEN.with(|t| *t.borrow_mut() = Some(token.to_string()));
+    storage().set_item(TOKEN_KEY, token).ok();
 }
 
-fn get_token() -> Option<String> {
-    AUTH_TOKEN.with(|t| t.borrow().clone())
+pub fn get_token() -> Option<String> {
+    storage().get_item(TOKEN_KEY).ok().flatten()
+}
+
+pub fn clear_token() {
+    storage().remove_item(TOKEN_KEY).ok();
+}
+
+pub fn has_token() -> bool {
+    get_token().is_some()
 }
 
 // ============================================================================
@@ -48,12 +60,18 @@ async fn fetch(method: &str, path: &str, body: Option<&str>) -> Result<serde_jso
     let resp_value = JsFuture::from(window.fetch_with_request(&request)).await?;
     let resp: Response = resp_value.dyn_into()?;
 
+    let status = resp.status();
     let text_promise = resp.text()?;
     let text_js = JsFuture::from(text_promise).await?;
     let text = text_js.as_string().unwrap_or_default();
 
     let value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|e| JsValue::from_str(&format!("JSON parse error: {e}")))?;
+
+    // 401 = token expired/invalid — clear it so refresh shows login.
+    if status == 401 {
+        clear_token();
+    }
 
     // Check for error field in response.
     if let Some(err) = value.get("error") {
@@ -87,17 +105,20 @@ pub async fn setup_check() -> Result<bool, JsValue> {
         .unwrap_or(false))
 }
 
-/// POST /auth/login → token string
+/// POST /auth/login → token string (saved to localStorage)
 pub async fn login(username: &str, password: &str) -> Result<String, JsValue> {
     let body = serde_json::json!({
         "username": username,
         "password": password,
     });
     let resp = post("/auth/login", &body).await?;
-    resp.get("token")
+    let token = resp
+        .get("token")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| JsValue::from_str("no token in response"))
+        .ok_or_else(|| JsValue::from_str("no token in response"))?;
+    set_token(&token);
+    Ok(token)
 }
 
 /// GET /status → raw JSON value

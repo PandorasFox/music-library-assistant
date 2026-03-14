@@ -198,16 +198,23 @@ pub fn render_text_input(state: &TextInputState, input_label: &str, focused: boo
 }
 
 /// Render the lateral view tab bar.
+///
+/// Each tab has an `onclick` that calls `window.__mm_navigate(label)`.
 pub fn render_titlebar(active: LateralView, transactions_open: bool) -> Node {
     let views = LateralView::all(transactions_open);
 
     let tabs: Vec<Node> = views
         .iter()
         .map(|view| {
+            let label = view.label();
             a().class("mm-tab")
                 .class_if("mm-tab--active", *view == active)
-                .attr("data-view", view.label())
-                .text(view.label())
+                .attr("href", "#")
+                .attr(
+                    "onclick",
+                    format!("event.preventDefault();window.__mm_navigate('{label}')"),
+                )
+                .text(label)
                 .into()
         })
         .collect();

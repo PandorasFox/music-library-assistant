@@ -548,10 +548,10 @@ impl HandleAction for insights_view::HealthAction {
                         app.start_missing_tag_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchMissingAlbumSingleResolution) => {
-                        app.start_missing_album_single_resolution();
+                        app.start_missing_album_single_resolution_v3();
                     }
                     Some(insights_view::InsightAction::LaunchDiscExtractionResolution) => {
-                        app.start_disc_extraction_resolution();
+                        app.start_disc_extraction_resolution_v3();
                     }
                     Some(insights_view::InsightAction::LaunchPathTagMismatchResolution) => {
                         app.status_message = Some("Not yet implemented".to_string());

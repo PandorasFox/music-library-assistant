@@ -438,6 +438,44 @@ fn build_domain_payload(
             ))
         }
 
+        // ================================================================
+        // Packed resolution queries (cluster-nav)
+        // ================================================================
+
+        // tag-canonicity-resolution?tag_name=ARTIST&zone=Corpus&filter_existing_canonicals=true
+        "tag-canonicity-resolution" => {
+            let tag_name = require_param(params, "tag_name")?;
+            let zone = parse_enum(params, "zone")?;
+            let filter_existing_canonicals = params
+                .get("filter_existing_canonicals")
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            Ok(DomainQueryPayload::GetTagCanonicityResolution(
+                GetTagCanonicityResolution {
+                    tag_name,
+                    zone,
+                    filter_existing_canonicals,
+                },
+            ))
+        }
+
+        // compound-split-resolution?tag_name=GENRE&zone=Corpus&safe_only=true
+        "compound-split-resolution" => {
+            let tag_name = require_param(params, "tag_name")?;
+            let zone = parse_enum(params, "zone")?;
+            let safe_only = params
+                .get("safe_only")
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            Ok(DomainQueryPayload::GetCompoundSplitResolution(
+                GetCompoundSplitResolution {
+                    tag_name,
+                    zone,
+                    safe_only,
+                },
+            ))
+        }
+
         _ => Err(ApiError::BadRequest(format!(
             "unknown query: '{name}'"
         ))),

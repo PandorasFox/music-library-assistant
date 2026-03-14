@@ -526,6 +526,18 @@ pub fn mm_logout() {
     mount(&render_login(None));
 }
 
+/// Cancel a resolution modal — navigate back to the Health view.
+#[wasm_bindgen]
+pub fn mm_resolve_cancel() {
+    stop_poll();
+    navigate_to(&Route::Health(Default::default()));
+    spawn_local(async move {
+        if let Err(e) = load_from_hash().await {
+            web_sys::console::error_1(&format!("resolve cancel error: {e:?}").into());
+        }
+    });
+}
+
 #[wasm_bindgen]
 pub fn mm_tx_confirm() {
     spawn_local(async {

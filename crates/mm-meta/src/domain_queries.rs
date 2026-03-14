@@ -335,10 +335,15 @@ pub struct GetFileTagValues {
 
 /// Packed tag canonicity resolution: all clusters for a tag+zone in one response.
 /// Replaces the two-phase GetTagCanonicityKeys + GetTagCanonicitySignalData pattern.
+///
+/// `filter_existing_canonicals`: when true, omit clusters where a CanonicalTagSignal
+/// already covers all variants (the operator already resolved them). When false,
+/// include everything for review.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetTagCanonicityResolution {
     pub tag_name: String,
     pub zone: crate::db_types::Zone,
+    pub filter_existing_canonicals: bool,
 }
 
 /// Packed compound split resolution: all groups for a tag+zone in one response.

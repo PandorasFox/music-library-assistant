@@ -138,19 +138,22 @@ pub struct TagCanonicityResolutionData {
     pub clusters: Vec<CanonicityCluster>,
 }
 
-/// A single canonicity cluster: the canonical candidate, its count, and outlier variants.
+/// A single canonicity cluster: all variants in the collision group.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanonicityCluster {
     pub signal_key: String,
-    pub canonical_candidate: String,
-    pub canonical_count: usize,
-    pub outlier_variants: Vec<OutlierVariant>,
-    pub default_canonical: Option<String>,
+    /// All tag value variants in this collision group (including the majority).
+    pub variants: Vec<Variant>,
+    /// If a CanonicalTagSignal exists, the confirmed canonical value.
+    /// None means no canonical has been established — operator must decide.
+    pub confirmed_canonical: Option<String>,
+    /// Suggested canonical for DecisionField pre-fill (majority value or confirmed).
+    pub suggested_canonical: Option<String>,
 }
 
-/// A non-canonical variant with the files that carry it.
+/// A tag value variant with the files that carry it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OutlierVariant {
+pub struct Variant {
     pub value: String,
     pub files: Vec<ResolutionFileInfo>,
 }

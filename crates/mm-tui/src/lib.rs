@@ -437,7 +437,7 @@ impl App {
                             *current_cluster += 1;
                             list.reset();
                             if let Some(cluster) = data.clusters.get(*current_cluster) {
-                                field.set_value(&cluster.canonical_candidate);
+                                field.set_value(&cluster.suggested_canonical.as_deref().unwrap_or(""));
                             }
                         }
                         ViewAction::None
@@ -447,7 +447,7 @@ impl App {
                             *current_cluster -= 1;
                             list.reset();
                             if let Some(cluster) = data.clusters.get(*current_cluster) {
-                                field.set_value(&cluster.canonical_candidate);
+                                field.set_value(&cluster.suggested_canonical.as_deref().unwrap_or(""));
                             }
                         }
                         ViewAction::None
@@ -468,8 +468,8 @@ impl App {
                     // Route by focus pane
                     _ => {
                         let ctx = CanonicityButtonCtx {
-                            has_outliers: data.clusters.get(*current_cluster)
-                                .map_or(false, |c| !c.outlier_variants.is_empty()),
+                            has_variants: data.clusters.get(*current_cluster)
+                                .map_or(false, |c| !c.variants.is_empty()),
                             current_cluster_index: *current_cluster,
                         };
                         match focus {

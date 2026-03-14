@@ -510,6 +510,7 @@ impl App {
         let data = self.query(mm_meta::domain_queries::GetTagCanonicityResolution {
             tag_name: tag_name.clone(),
             zone,
+            filter_existing_canonicals: true,
         });
 
         if data.clusters.is_empty() {
@@ -522,7 +523,7 @@ impl App {
 
         // Pre-fill DecisionField with first cluster's canonical candidate
         let prefill = data.clusters.first()
-            .map(|c| c.canonical_candidate.as_str())
+            .map(|c| c.suggested_canonical.as_deref().unwrap_or(""))
             .unwrap_or("");
         let field = mm_ui::decision_field::DecisionField::new("Squash to:")
             .with_value(prefill);
@@ -551,7 +552,7 @@ impl App {
                 list.reset();
                 // Pre-fill field with new cluster's canonical candidate
                 if let Some(cluster) = data.clusters.get(*current_cluster) {
-                    field.set_value(&cluster.canonical_candidate);
+                    field.set_value(&cluster.suggested_canonical.as_deref().unwrap_or(""));
                 }
             } else {
                 // Last cluster — go to review
@@ -583,7 +584,7 @@ impl App {
 
                 // Build tag ops: for each outlier file, replace its tag value with canonical
                 let mut ops = Vec::new();
-                for variant in &cluster.outlier_variants {
+                for variant in &cluster.variants {
                     for file in &variant.files {
                         ops.push(TagOp::replace_tag(
                             file.inode,
@@ -636,7 +637,7 @@ impl App {
 
                 // Emit canonical tag for each outlier variant + the canonical candidate
                 let mut mutations: Vec<Mutation> = cluster
-                    .outlier_variants
+                    .variants
                     .iter()
                     .map(|v| {
                         Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
@@ -649,7 +650,7 @@ impl App {
                 // Also flag the canonical candidate itself
                 mutations.push(Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
                     tag_name: data.tag_name.clone(),
-                    canonical_value: cluster.canonical_candidate.clone(),
+                    canonical_value: cluster.suggested_canonical.clone().unwrap_or_default(),
                 }));
 
                 if mutations.is_empty() {

@@ -47,12 +47,12 @@ impl ResolutionData for AlbumArtistData {
         self.inner
             .clusters
             .get(self.current_cluster)
-            .map_or(0, |c| c.outlier_variants.len())
+            .map_or(0, |c| c.variants.len())
     }
 
     fn button_ctx(&self) -> AlbumArtistButtonCtx {
         AlbumArtistButtonCtx {
-            has_outliers: self.list_len() > 0,
+            has_variants: self.list_len() > 0,
             current_cluster_index: self.current_cluster,
         }
     }
@@ -61,7 +61,7 @@ impl ResolutionData for AlbumArtistData {
         self.inner
             .clusters
             .get(self.current_cluster)
-            .and_then(|c| c.outlier_variants.get(cursor))
+            .and_then(|c| c.variants.get(cursor))
             .and_then(|v| v.files.first())
             .map(|f| f.display_name.as_str())
     }
@@ -125,7 +125,7 @@ pub enum AlbumArtistButton {
 }
 
 pub struct AlbumArtistButtonCtx {
-    pub has_outliers: bool,
+    pub has_variants: bool,
     pub current_cluster_index: usize,
 }
 
@@ -147,7 +147,7 @@ impl ModalButtons for AlbumArtistButton {
 
     fn color(&self, ctx: &Self::Context) -> Color {
         match self {
-            Self::Confirm if ctx.has_outliers => Color::Green,
+            Self::Confirm if ctx.has_variants => Color::Green,
             Self::Confirm => Color::DarkGray,
             Self::FlagNonCompilation => Color::Yellow,
             Self::Cancel => Color::White,
@@ -156,7 +156,7 @@ impl ModalButtons for AlbumArtistButton {
 
     fn enabled(&self, ctx: &Self::Context) -> bool {
         match self {
-            Self::Confirm => ctx.has_outliers,
+            Self::Confirm => ctx.has_variants,
             Self::FlagNonCompilation | Self::Cancel => true,
         }
     }
@@ -194,7 +194,7 @@ impl ModalButtons for AlbumArtistButton {
 mod tests {
     use super::*;
     use mm_meta::views::canonicity_compound::{
-        CanonicityCluster, OutlierVariant, ResolutionFileInfo, TagCanonicityResolutionData,
+        CanonicityCluster, Variant, ResolutionFileInfo, TagCanonicityResolutionData,
     };
 
     fn make_file(name: &str) -> ResolutionFileInfo {
@@ -205,8 +205,8 @@ mod tests {
     }
 
     fn make_cluster(num_variants: usize, files_per_variant: usize) -> CanonicityCluster {
-        let outlier_variants = (0..num_variants)
-            .map(|v| OutlierVariant {
+        let variants = (0..num_variants)
+            .map(|v| Variant {
                 value: format!("variant_{v}"),
                 files: (0..files_per_variant)
                     .map(|f| make_file(&format!("file_{v}_{f}.flac")))
@@ -215,10 +215,9 @@ mod tests {
             .collect();
         CanonicityCluster {
             signal_key: "album_artist::cluster_0".to_string(),
-            canonical_candidate: "Various Artists".to_string(),
-            canonical_count: 15,
-            outlier_variants,
-            default_canonical: None,
+            confirmed_canonical: None,
+            suggested_canonical: Some("Variant_0".to_string()),
+            variants,
         }
     }
 
@@ -319,12 +318,12 @@ mod tests {
     fn button_ctx_reflects_data_state() {
         let data = AlbumArtistData::new(make_test_data(1));
         let ctx = data.button_ctx();
-        assert!(ctx.has_outliers);
+        assert!(ctx.has_variants);
         assert_eq!(ctx.current_cluster_index, 0);
 
         let empty = AlbumArtistData::new(make_test_data(0));
         let ctx = empty.button_ctx();
-        assert!(!ctx.has_outliers);
+        assert!(!ctx.has_variants);
     }
 
     // -- ModalButtons tests --
@@ -341,7 +340,7 @@ mod tests {
     #[test]
     fn confirm_disabled_when_no_outliers() {
         let ctx = AlbumArtistButtonCtx {
-            has_outliers: false,
+            has_variants: false,
             current_cluster_index: 0,
         };
         assert!(!AlbumArtistButton::Confirm.enabled(&ctx));
@@ -352,7 +351,7 @@ mod tests {
     #[test]
     fn confirm_enabled_when_outliers_exist() {
         let ctx = AlbumArtistButtonCtx {
-            has_outliers: true,
+            has_variants: true,
             current_cluster_index: 0,
         };
         assert!(AlbumArtistButton::Confirm.enabled(&ctx));
@@ -366,7 +365,7 @@ mod tests {
     #[test]
     fn actions_map_correctly() {
         let ctx = AlbumArtistButtonCtx {
-            has_outliers: true,
+            has_variants: true,
             current_cluster_index: 0,
         };
         assert_eq!(
@@ -386,7 +385,7 @@ mod tests {
     #[test]
     fn labels_are_nonempty() {
         let ctx = AlbumArtistButtonCtx {
-            has_outliers: true,
+            has_variants: true,
             current_cluster_index: 0,
         };
         for button in AlbumArtistButton::all() {

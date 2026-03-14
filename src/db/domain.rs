@@ -801,7 +801,7 @@ impl_domain_query! {
 
 impl_domain_query! {
     GetTagCanonicityResolution => TagCanonicityResolutionData, |s, db| {
-        modal_loaders::load_tag_canonicity_resolution(&s.tag_name, s.zone, db)
+        modal_loaders::load_tag_canonicity_resolution(&s.tag_name, s.zone, s.filter_existing_canonicals, db)
     }
 }
 
@@ -1331,6 +1331,7 @@ mod tests {
         // Packed resolution queries
         t!(serde_json::to_string(&GetTagCanonicityResolution {
             tag_name: "ARTIST".to_string(),
+            filter_existing_canonicals: false,
             zone: mm_meta::db_types::Zone::Corpus,
         }.execute(&read_db)));
         t!(serde_json::to_string(&GetCompoundSplitResolution {
@@ -1348,6 +1349,7 @@ mod tests {
         let read_db = ReadOnlyDb::new(&db);
         let result = GetTagCanonicityResolution {
             tag_name: "ARTIST".to_string(),
+            filter_existing_canonicals: false,
             zone: mm_meta::db_types::Zone::Corpus,
         }.execute(&read_db);
         assert_eq!(result.tag_name, "ARTIST");
@@ -1360,6 +1362,7 @@ mod tests {
         let read_db = ReadOnlyDb::new(&db);
         let result = GetTagCanonicityResolution {
             tag_name: "ARTIST".to_string(),
+            filter_existing_canonicals: false,
             zone: mm_meta::db_types::Zone::Inbox,
         }.execute(&read_db);
         assert_eq!(result.tag_name, "ARTIST");

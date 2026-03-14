@@ -64,10 +64,10 @@ impl ListEntry for VariantListItem {
     }
 }
 
-/// Build the items vec from a cluster's outlier variants.
+/// Build the items vec from a cluster's variants.
 pub fn build_items(cluster: &CanonicityCluster) -> Vec<VariantListItem> {
     cluster
-        .outlier_variants
+        .variants
         .iter()
         .map(|v| VariantListItem {
             value: v.value.clone(),
@@ -138,7 +138,7 @@ pub fn render(
 
     // --- Buttons ---
     let ctx = CanonicityButtonCtx {
-        has_outliers: items.len() > 0,
+        has_variants: items.len() > 0,
         current_cluster_index: current_cluster,
     };
     let button_focused = focus == FocusPane::Buttons;
@@ -152,17 +152,21 @@ fn render_title_bar(
     current_cluster: usize,
 ) {
     let cluster = data.clusters.get(current_cluster);
-    let (canonical, canonical_count) = cluster
-        .map(|c| (c.canonical_candidate.as_str(), c.canonical_count))
-        .unwrap_or(("?", 0));
-
     let current = current_cluster + 1;
     let total = data.clusters.len();
+    let variant_count = cluster.map_or(0, |c| c.variants.len());
 
-    let title = format!(
-        " Squash \"{}\" variants ({}/{}) \u{2014} canonical: \"{}\" ({}) ",
-        data.tag_name, current, total, canonical, canonical_count,
-    );
+    let title = if let Some(ref confirmed) = cluster.and_then(|c| c.confirmed_canonical.as_ref()) {
+        format!(
+            " Squash \"{}\" ({}/{}) \u{2014} confirmed: \"{}\" ",
+            data.tag_name, current, total, confirmed,
+        )
+    } else {
+        format!(
+            " Squash \"{}\" ({}/{}) \u{2014} {} variants ",
+            data.tag_name, current, total, variant_count,
+        )
+    };
 
     let block = Block::default()
         .title(title)

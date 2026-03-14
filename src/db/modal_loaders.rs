@@ -1183,10 +1183,11 @@ pub fn load_inbox_tag_canonicity_data(
 pub fn load_tag_canonicity_resolution(
     tag_name: &str,
     zone: Zone,
+    filter_existing_canonicals: bool,
     db: &ReadOnlyDb,
 ) -> mm_meta::views::canonicity_compound::TagCanonicityResolutionData {
     use mm_meta::views::canonicity_compound::{
-        CanonicityCluster, OutlierVariant, ResolutionFileInfo, TagCanonicityResolutionData,
+        CanonicityCluster, Variant, ResolutionFileInfo, TagCanonicityResolutionData,
     };
 
     let tag_prefix = format!("{}:", tag_name);
@@ -1213,130 +1214,107 @@ pub fn load_tag_canonicity_resolution(
         };
     }
 
-    // Step 2: Load each signal and collect clusters + outlier inodes
+    // Step 2: Check for existing CanonicalTagSignal emissions
+    let canonical_signals: HashSet<String> = db
+        .aggregate_signal_keys::<crate::meta::signals::data::CanonicalTagSignal>()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    // Step 3: Load each signal and collect clusters with ALL variants
     let mut clusters: Vec<CanonicityCluster> = Vec::new();
-    let mut all_outlier_inodes: Vec<i64> = Vec::new();
+    let mut all_inodes: Vec<i64> = Vec::new();
 
     for key in &filtered_keys {
+        // Check if this cluster is already covered by a canonical signal
+        if filter_existing_canonicals && canonical_signals.contains(key.as_str()) {
+            continue;
+        }
+        let confirmed = if canonical_signals.contains(key.as_str()) {
+            // A canonical signal exists — extract the confirmed value from the signal key
+            // Signal keys are formatted as "TAG_NAME:value", extract the value part
+            key.strip_prefix(&tag_prefix).map(|v| v.to_string())
+        } else {
+            None
+        };
+
         match zone {
             Zone::Inbox => {
                 let Some(signal) = db.get_inbox_tag_canonicity_signal(key).ok().flatten() else {
                     continue;
                 };
-                // Inbox canonicity: canonical candidate is the top corpus variant
-                let canonical_candidate = signal
-                    .data
-                    .corpus_variants
+                // Suggested canonical = top corpus variant
+                let suggested = signal.data.corpus_variants
                     .first()
-                    .map(|(v, _)| v.clone())
-                    .unwrap_or_default();
-                let canonical_count = signal
-                    .data
-                    .corpus_variants
-                    .first()
-                    .map(|(_, c)| *c)
-                    .unwrap_or(0);
+                    .map(|(v, _)| v.clone());
 
-                // Outliers are the inbox variants (they don't match corpus)
-                let outlier_inodes = signal.data.inbox_inodes.clone();
-                all_outlier_inodes.extend(&outlier_inodes);
+                // ALL variants: corpus + inbox
+                let all_variant_inodes = signal.data.inbox_inodes.clone();
+                all_inodes.extend(&all_variant_inodes);
 
-                // Build outlier variants from inbox_variants
-                // Each inbox variant maps to the full set of inbox inodes
-                // (signal doesn't break down which inode has which variant)
-                let outlier_variants: Vec<OutlierVariant> = signal
-                    .data
-                    .inbox_variants
+                let variants: Vec<Variant> = signal.data.inbox_variants
                     .iter()
-                    .map(|(value, _)| OutlierVariant {
+                    .map(|(value, _)| Variant {
                         value: value.clone(),
-                        // Placeholder files, will be filled after batch lookup
-                        files: outlier_inodes
-                            .iter()
-                            .map(|&inode| ResolutionFileInfo {
-                                inode,
-                                display_name: String::new(),
-                            })
+                        files: all_variant_inodes.iter()
+                            .map(|&inode| ResolutionFileInfo { inode, display_name: String::new() })
                             .collect(),
                     })
                     .collect();
 
                 clusters.push(CanonicityCluster {
                     signal_key: key.to_string(),
-                    canonical_candidate: canonical_candidate.clone(),
-                    canonical_count,
-                    outlier_variants,
-                    default_canonical: Some(canonical_candidate),
+                    confirmed_canonical: confirmed.clone(),
+                    suggested_canonical: confirmed.or(suggested),
+                    variants,
                 });
             }
             _ => {
                 let Some(signal) = db.get_tag_canonicity_signal(key).ok().flatten() else {
                     continue;
                 };
-                // Corpus canonicity: canonical candidate is the most common variant
-                let canonical_candidate = signal
-                    .data
-                    .variants
+                // Suggested canonical = most common variant (first in sorted-by-count list)
+                let suggested = signal.data.variants
                     .first()
-                    .map(|(v, _)| v.clone())
-                    .unwrap_or_default();
-                let canonical_count = signal
-                    .data
-                    .variants
-                    .first()
-                    .map(|(_, c)| *c)
-                    .unwrap_or(0);
+                    .map(|(v, _)| v.clone());
 
-                // Outlier inodes: files NOT matching the canonical candidate
-                // Query the tag values to find which inodes have non-canonical values
+                // Query actual tag values per inode to build accurate variant→file mapping
                 let tag_values_map = db
                     .get_tag_values_batch(zone, tag_name, &signal.data.inodes)
                     .unwrap_or_default();
 
-                // Group outlier inodes by their variant value
+                // Group ALL inodes by their actual tag value
                 let mut variant_inodes: HashMap<String, Vec<i64>> = HashMap::new();
                 for &inode in &signal.data.inodes {
                     if let Some(values) = tag_values_map.get(&inode) {
                         for value in values {
-                            if value != &canonical_candidate {
-                                variant_inodes
-                                    .entry(value.clone())
-                                    .or_default()
-                                    .push(inode);
-                                all_outlier_inodes.push(inode);
-                            }
-                        }
-                    }
-                }
-
-                // If tag query didn't work, fall back to signal variants
-                if variant_inodes.is_empty() {
-                    for (value, _) in signal.data.variants.iter().skip(1) {
-                        for &inode in &signal.data.inodes {
                             variant_inodes
                                 .entry(value.clone())
                                 .or_default()
                                 .push(inode);
-                            all_outlier_inodes.push(inode);
+                        }
+                    }
+                }
+                all_inodes.extend(&signal.data.inodes);
+
+                // If tag query returned nothing, fall back to signal variant list
+                if variant_inodes.is_empty() {
+                    for (value, _) in &signal.data.variants {
+                        for &inode in &signal.data.inodes {
+                            variant_inodes.entry(value.clone()).or_default().push(inode);
                         }
                     }
                 }
 
-                let outlier_variants: Vec<OutlierVariant> = signal
-                    .data
-                    .variants
+                // Build ALL variants (no skip, no filtering)
+                let variants: Vec<Variant> = signal.data.variants
                     .iter()
-                    .skip(1) // Skip the canonical (most common) variant
                     .filter_map(|(value, _)| {
                         let inodes = variant_inodes.get(value)?;
-                        Some(OutlierVariant {
+                        Some(Variant {
                             value: value.clone(),
-                            files: inodes
-                                .iter()
-                                .map(|&inode| ResolutionFileInfo {
-                                    inode,
-                                    display_name: String::new(),
-                                })
+                            files: inodes.iter()
+                                .map(|&inode| ResolutionFileInfo { inode, display_name: String::new() })
                                 .collect(),
                         })
                     })
@@ -1344,25 +1322,24 @@ pub fn load_tag_canonicity_resolution(
 
                 clusters.push(CanonicityCluster {
                     signal_key: key.to_string(),
-                    canonical_candidate: canonical_candidate.clone(),
-                    canonical_count,
-                    outlier_variants,
-                    default_canonical: Some(canonical_candidate),
+                    confirmed_canonical: confirmed.clone(),
+                    suggested_canonical: confirmed.or(suggested),
+                    variants,
                 });
             }
         }
     }
 
-    // Step 3: Batch-query display names for all outlier inodes
-    all_outlier_inodes.sort_unstable();
-    all_outlier_inodes.dedup();
+    // Step 4: Batch-query display names for all inodes
+    all_inodes.sort_unstable();
+    all_inodes.dedup();
     let display_names = db
-        .get_display_names_batch(zone, &all_outlier_inodes)
+        .get_display_names_batch(zone, &all_inodes)
         .unwrap_or_default();
 
-    // Step 4: Fill in display names
+    // Step 5: Fill in display names
     for cluster in &mut clusters {
-        for variant in &mut cluster.outlier_variants {
+        for variant in &mut cluster.variants {
             for file in &mut variant.files {
                 if let Some(name) = display_names.get(&file.inode) {
                     file.display_name = name.clone();

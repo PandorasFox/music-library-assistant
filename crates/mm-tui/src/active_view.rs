@@ -174,7 +174,7 @@ impl ActiveView {
             Self::TagCanonicityResolution { state, .. } => state.selected_path(),
             Self::TagCanonicityResolutionV3 { ref data, current_cluster, ref list, .. } => {
                 data.clusters.get(*current_cluster)
-                    .and_then(|c| c.outlier_variants.get(list.cursor))
+                    .and_then(|c| c.variants.get(list.cursor))
                     .and_then(|v| v.files.first())
                     .map(|f| f.display_name.as_str())
             }

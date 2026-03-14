@@ -4,6 +4,8 @@
 //! typed actions for expand, collapse, and selection. The app layer dispatches
 //! protocol queries in response to actions and feeds results back.
 
+use std::collections::HashSet;
+
 use crate::input::InputAction;
 use crate::text_input::TextInputState;
 use mm_meta::domain_query_types::DirectoryListingEntry;
@@ -81,6 +83,8 @@ pub struct DirectoryBrowser {
     pub search_active: bool,
     /// Current zone label (e.g. "corpus", "inbox").
     pub current_zone: String,
+    /// Active path filter (if any) — set of matching relative paths.
+    path_filter: Option<HashSet<String>>,
 }
 
 impl DirectoryBrowser {
@@ -94,6 +98,7 @@ impl DirectoryBrowser {
             search: TextInputState::new(),
             search_active: false,
             current_zone: zone.to_string(),
+            path_filter: None,
         }
     }
 
@@ -316,6 +321,95 @@ impl DirectoryBrowser {
             self.cursor = idx;
             self.ensure_visible();
         }
+    }
+
+    // =========================================================================
+    // Path navigation
+    // =========================================================================
+
+    /// Navigate to a specific path: expand ancestors, set cursor.
+    ///
+    /// The path must already be loaded in the entries list (ancestors expanded).
+    /// If found, moves cursor to it and ensures visible.
+    pub fn navigate_to_path(&mut self, path: &str) -> bool {
+        if let Some(idx) = self.entries.iter().position(|e| e.path == path) {
+            self.cursor = idx;
+            self.ensure_visible();
+            true
+        } else {
+            false
+        }
+    }
+
+    // =========================================================================
+    // Path filtering
+    // =========================================================================
+
+    /// Set a path filter — only entries whose paths are in the set (plus their
+    /// ancestor directories) will be visible. Does NOT modify the entries list;
+    /// the caller is responsible for rebuilding entries from a filtered query.
+    ///
+    /// The filter set is stored for `has_path_filter` / `clear_path_filter`.
+    pub fn set_path_filter(&mut self, matching_paths: HashSet<String>) {
+        self.path_filter = Some(matching_paths);
+    }
+
+    /// Clear the active path filter.
+    pub fn clear_path_filter(&mut self) {
+        self.path_filter = None;
+    }
+
+    /// Whether a path filter is currently active.
+    pub fn has_path_filter(&self) -> bool {
+        self.path_filter.is_some()
+    }
+
+    /// Number of matching files in the current path filter, if any.
+    pub fn filtered_file_count(&self) -> Option<usize> {
+        self.path_filter.as_ref().map(|f| f.len())
+    }
+
+    // =========================================================================
+    // Predicate search
+    // =========================================================================
+
+    /// Find the next entry (wrapping) matching a predicate, starting after `from`.
+    pub fn find_next_matching(
+        &self,
+        from: usize,
+        predicate: impl Fn(&BrowserEntry) -> bool,
+    ) -> Option<usize> {
+        let len = self.entries.len();
+        if len == 0 {
+            return None;
+        }
+        // Search from (from+1) to end, then wrap around from 0 to from
+        for offset in 1..=len {
+            let idx = (from + offset) % len;
+            if predicate(&self.entries[idx]) {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    /// Find the previous entry (wrapping) matching a predicate, starting before `from`.
+    pub fn find_prev_matching(
+        &self,
+        from: usize,
+        predicate: impl Fn(&BrowserEntry) -> bool,
+    ) -> Option<usize> {
+        let len = self.entries.len();
+        if len == 0 {
+            return None;
+        }
+        for offset in 1..=len {
+            let idx = (from + len - offset) % len;
+            if predicate(&self.entries[idx]) {
+                return Some(idx);
+            }
+        }
+        None
     }
 }
 

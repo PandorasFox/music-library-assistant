@@ -9,65 +9,21 @@
 //! Infrastructure creation (config, dirs, DB) is handled by the Witch via `CompleteSetup`.
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event};
 use ratatui::backend::Backend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Terminal;
-use std::path::{Path, PathBuf};
-
-use crate::tree_browser::{EntryFilter, TreeEntry, TreeNavigator};
-
-// Re-export from mm-meta where the canonical definition lives.
+use std::path::PathBuf;
 
 use crate::input;
-use crate::widgets::selection_styles::CURSOR_STYLE;
 use crate::widgets::TextInputState;
 
 // ============================================================================
 // Directory Picker
 // ============================================================================
-
-/// State for the directory picker step.
-struct DirectoryPickerState {
-    navigator: TreeNavigator,
-    /// Active inline directory creation (None = normal navigation mode)
-    creating_dir: Option<CreateDirState>,
-    /// Transient status message shown at bottom
-    status_message: Option<String>,
-}
-
-struct CreateDirState {
-    parent_path: PathBuf,
-    input: TextInputState,
-}
-
-impl DirectoryPickerState {
-    fn new() -> Self {
-        let start_path = PathBuf::from("/");
-        let filter = EntryFilter::directories_only();
-        let mut navigator = TreeNavigator::new(start_path, filter, false, vec![], vec![]);
-        navigator.show_new_dir_entry = true;
-
-        Self {
-            navigator,
-            creating_dir: None,
-            status_message: None,
-        }
-    }
-
-    /// Recreate the navigator (after creating a directory) and navigate to a path.
-    fn refresh_and_navigate_to(&mut self, target: &Path) {
-        let start_path = PathBuf::from("/");
-        let filter = EntryFilter::directories_only();
-        let mut navigator = TreeNavigator::new(start_path, filter, false, vec![], vec![]);
-        navigator.show_new_dir_entry = true;
-        navigator.navigate_to_path(target);
-        self.navigator = navigator;
-    }
-}
 
 /// Run the directory picker, returning the selected path.
 ///
@@ -75,343 +31,46 @@ impl DirectoryPickerState {
 /// If `suggested_root` is provided (e.g. from MM_ROOT env var), the picker
 /// navigates there initially.
 pub fn run_directory_picker<B: Backend>(
-    terminal: &mut Terminal<B>,
-    suggested_root: Option<PathBuf>,
+    _terminal: &mut Terminal<B>,
+    _suggested_root: Option<PathBuf>,
 ) -> Result<PathBuf> {
-    let mut state = DirectoryPickerState::new();
-    if let Some(ref root) = suggested_root {
-        state.navigator.navigate_to_path(root);
-    }
-
-    loop {
-        terminal.draw(|f| render_directory_picker(f, &mut state))?;
-
-        if let Event::Key(key) = event::read()? {
-            if let Some(ref mut creating) = state.creating_dir {
-                // Creating-directory mode: text input captures keys
-                match key.code {
-                    KeyCode::Enter => {
-                        let name = creating.input.value().trim().to_string();
-                        let parent = creating.parent_path.clone();
-                        if !name.is_empty() && !name.contains('/') {
-                            let new_path = parent.join(&name);
-                            match std::fs::create_dir(&new_path) {
-                                Ok(()) => {
-                                    state.status_message =
-                                        Some(format!("Created: {}", new_path.display()));
-                                    state.creating_dir = None;
-                                    state.refresh_and_navigate_to(&new_path);
-                                }
-                                Err(e) => {
-                                    state.status_message = Some(format!("Error: {}", e));
-                                    state.creating_dir = None;
-                                }
-                            }
-                        } else {
-                            state.creating_dir = None;
-                        }
-                    }
-                    KeyCode::Esc => {
-                        state.creating_dir = None;
-                    }
-                    _ => {
-                        creating.input.handle_input(&input::map_key(key));
-                    }
-                }
-            } else {
-                // Normal navigation mode
-                match key.code {
-                    KeyCode::Up => {
-                        state.navigator.move_up();
-                        state.status_message = None;
-                    }
-                    KeyCode::Down => {
-                        state.navigator.move_down();
-                        state.status_message = None;
-                    }
-                    KeyCode::Right => {
-                        state.navigator.expand_current();
-                    }
-                    KeyCode::Left => {
-                        state.navigator.collapse_or_parent();
-                    }
-                    KeyCode::Enter => {
-                        if let Some(entry) = state.navigator.current_entry().cloned() {
-                            if entry.is_synthetic {
-                                // Activate inline directory creation
-                                state.creating_dir = Some(CreateDirState {
-                                    parent_path: entry.path.clone(),
-                                    input: TextInputState::new(),
-                                });
-                            } else if entry.is_directory() {
-                                // Select this directory as archive root
-                                return Ok(entry.path);
-                            }
-                        }
-                    }
-                    KeyCode::Char('n') | KeyCode::Char('N') => {
-                        // Create new directory inside the currently selected directory
-                        if let Some(entry) = state.navigator.current_entry().cloned() {
-                            if entry.is_directory() && !entry.is_synthetic {
-                                let parent = entry.path.clone();
-                                // Expand directory if collapsed
-                                if !entry.is_expanded {
-                                    state.navigator.expand_current();
-                                }
-                                // Move cursor down to the [+ new directory] entry
-                                state.navigator.move_down();
-                                state.creating_dir = Some(CreateDirState {
-                                    parent_path: parent,
-                                    input: TextInputState::new(),
-                                });
-                            }
-                        }
-                    }
-                    KeyCode::Esc => {
-                        return Err(anyhow::anyhow!("Setup cancelled by user"));
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+    // TODO: reconnect when first-time setup directory picker is migrated to
+    // protocol-driven DirectoryBrowser (needs pre-auth filesystem listing query)
+    todo!("first-time setup directory picker needs protocol-driven migration")
 }
 
 // ============================================================================
-// Step 1: Directory Picker Rendering
+// Account Creation
 // ============================================================================
 
-fn render_directory_picker(f: &mut ratatui::Frame, state: &mut DirectoryPickerState) {
-    let area = f.area();
-
-    let outer_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" First-Time Setup \u{2014} Step 1 of 3 ")
-        .title_alignment(Alignment::Center);
-
-    let inner = outer_block.inner(area);
-    f.render_widget(outer_block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(7), // Description
-            Constraint::Min(5),    // Tree browser
-            Constraint::Length(1), // Controls hint
-        ])
-        .split(inner);
-
-    // Description
-    let desc_lines = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            " Select a read/write directory for your music archive root.",
-            Style::default().fg(Color::White),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            " This directory should be empty. MM will create subdirectories:",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(vec![
-            Span::styled("   corpus/", Style::default().fg(Color::Yellow)),
-            Span::styled("  libraries/", Style::default().fg(Color::Yellow)),
-            Span::styled("  stash/", Style::default().fg(Color::Yellow)),
-            Span::styled("  inbox/", Style::default().fg(Color::Yellow)),
-        ]),
-        Line::from(""),
-    ];
-    f.render_widget(Paragraph::new(desc_lines), chunks[0]);
-
-    // Tree browser
-    render_tree(f, chunks[1], state);
-
-    // Controls hint
-    let controls = if state.creating_dir.is_some() {
-        Line::from(vec![
-            Span::styled(" Enter", Style::default().fg(Color::Green)),
-            Span::styled(" create  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Esc", Style::default().fg(Color::DarkGray)),
-            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
-        ])
-    } else if let Some(ref msg) = state.status_message {
-        Line::from(Span::styled(
-            format!(" {}", msg),
-            Style::default().fg(Color::Green),
-        ))
-    } else {
-        Line::from(vec![
-            Span::styled(" \u{25b2}/\u{25bc}", Style::default().fg(Color::Yellow)),
-            Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("\u{2192}/\u{2190}", Style::default().fg(Color::Yellow)),
-            Span::styled(" expand  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("n", Style::default().fg(Color::Yellow)),
-            Span::styled(" new dir  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Enter", Style::default().fg(Color::Green)),
-            Span::styled(" select  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Esc", Style::default().fg(Color::DarkGray)),
-            Span::styled(" exit", Style::default().fg(Color::DarkGray)),
-        ])
-    };
-    f.render_widget(Paragraph::new(controls), chunks[2]);
-}
-
-fn render_tree(f: &mut ratatui::Frame, area: Rect, state: &mut DirectoryPickerState) {
-    let tree_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
-
-    let inner = tree_block.inner(area);
-    f.render_widget(tree_block, area);
-
-    let visible_height = inner.height as usize;
-    state.navigator.set_visible_height(visible_height);
-
-    let entries = state.navigator.entries();
-    let cursor_idx = state.navigator.cursor_idx();
-    let scroll = state.navigator.scroll_offset();
-
-    let creating_at_cursor = state.creating_dir.is_some();
-    let mut lines: Vec<Line> = Vec::new();
-
-    for (idx, entry) in entries.iter().enumerate().skip(scroll).take(visible_height) {
-        let is_cursor = idx == cursor_idx;
-
-        if is_cursor && creating_at_cursor {
-            // Render inline text input instead of the tree entry
-            let creating = state.creating_dir.as_ref().unwrap();
-            let indent = "  ".repeat(entry.depth);
-
-            let text = creating.input.value().to_string();
-            let cursor_pos = creating.input.cursor;
-            let chars: Vec<char> = text.chars().collect();
-            let before: String = chars[..cursor_pos].iter().collect();
-            let at_cursor = chars
-                .get(cursor_pos)
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| " ".to_string());
-            let after: String = if cursor_pos < chars.len() {
-                chars[cursor_pos + 1..].iter().collect()
-            } else {
-                String::new()
-            };
-
-            lines.push(Line::from(vec![
-                Span::raw(format!("{}  ", indent)),
-                Span::styled("Name: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(before, Style::default().fg(Color::White)),
-                Span::styled(at_cursor, Style::default().fg(Color::Black).bg(Color::Cyan)),
-                Span::styled(after, Style::default().fg(Color::White)),
-            ]));
-        } else {
-            lines.push(render_picker_entry(entry, is_cursor));
-        }
-    }
-
-    f.render_widget(Paragraph::new(lines), inner);
-}
-
-fn render_picker_entry(entry: &TreeEntry, is_cursor: bool) -> Line<'static> {
-    let indent = "  ".repeat(entry.depth);
-
-    let expand_indicator = if entry.is_directory() && !entry.is_synthetic {
-        if entry.has_children {
-            if entry.is_expanded {
-                "\u{25bc} "
-            } else {
-                "\u{25b6} "
-            }
-        } else {
-            "  "
-        }
-    } else {
-        "  "
-    };
-
-    let name_style = if is_cursor {
-        CURSOR_STYLE
-    } else if entry.is_synthetic {
-        Style::default().fg(Color::Green)
-    } else {
-        Style::default().fg(Color::Blue)
-    };
-
-    Line::from(vec![
-        Span::raw(indent),
-        Span::styled(expand_indicator, Style::default().fg(Color::Yellow)),
-        Span::styled(entry.name.clone(), name_style),
-    ])
-}
-
-// ============================================================================
-// Step 2: Create First Account
-// ============================================================================
-
-/// Focus state for the account creation form.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AccountField {
-    Username,
-    Password,
-    Confirm,
-}
-
-/// State for the account creation step.
-struct CreateAccountState {
-    username: TextInputState,
-    password: TextInputState,
-    confirm: TextInputState,
-    focused: AccountField,
-    error_message: Option<String>,
+/// State for the create-account step.
+pub struct CreateAccountState {
+    pub username: TextInputState,
+    pub password: TextInputState,
+    pub confirm_password: TextInputState,
+    /// Which field has focus (0=username, 1=password, 2=confirm)
+    pub focus: usize,
+    /// Error message to display
+    pub error: Option<String>,
 }
 
 impl CreateAccountState {
-    fn new() -> Self {
+    pub fn new() -> Self {
         let mut username = TextInputState::new();
         username.focused = true;
         Self {
             username,
             password: TextInputState::new(),
-            confirm: TextInputState::new(),
-            focused: AccountField::Username,
-            error_message: None,
+            confirm_password: TextInputState::new(),
+            focus: 0,
+            error: None,
         }
-    }
-
-    fn focus_field(&mut self, field: AccountField) {
-        self.username.focused = false;
-        self.password.focused = false;
-        self.confirm.focused = false;
-        match field {
-            AccountField::Username => self.username.focused = true,
-            AccountField::Password => self.password.focused = true,
-            AccountField::Confirm => self.confirm.focused = true,
-        }
-        self.focused = field;
-    }
-
-    fn focus_next(&mut self) {
-        let next = match self.focused {
-            AccountField::Username => AccountField::Password,
-            AccountField::Password => AccountField::Confirm,
-            AccountField::Confirm => AccountField::Username,
-        };
-        self.focus_field(next);
-    }
-
-    fn focus_prev(&mut self) {
-        let prev = match self.focused {
-            AccountField::Username => AccountField::Confirm,
-            AccountField::Password => AccountField::Username,
-            AccountField::Confirm => AccountField::Password,
-        };
-        self.focus_field(prev);
     }
 }
 
-/// Run the "Create Account" step of first-time setup.
+/// Run the create-account form, returning (username, password).
 ///
-/// Returns `(username, password_hash)` on success.
+/// Called from `run_tui()` during first-time setup when `has_any_users` is false.
 pub fn run_create_account<B: Backend>(
     terminal: &mut Terminal<B>,
 ) -> Result<(String, String)> {
@@ -420,62 +79,69 @@ pub fn run_create_account<B: Backend>(
     loop {
         terminal.draw(|f| render_create_account(f, &state))?;
 
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Tab => {
-                    state.focus_next();
-                    state.error_message = None;
-                }
-                KeyCode::BackTab => {
-                    state.focus_prev();
-                    state.error_message = None;
-                }
-                KeyCode::Down => {
-                    state.focus_next();
-                    state.error_message = None;
-                }
-                KeyCode::Up => {
-                    state.focus_prev();
-                    state.error_message = None;
-                }
-                KeyCode::Enter => {
-                    // Validate and submit
-                    let username = state.username.value().trim().to_string();
-                    let password = state.password.value().to_string();
-                    let confirm = state.confirm.value().to_string();
+        if event::poll(std::time::Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                let action = input::map_key(key);
 
-                    if username.is_empty() {
-                        state.error_message = Some("Username cannot be empty".to_string());
-                        state.focus_field(AccountField::Username);
-                    } else if password.is_empty() {
-                        state.error_message = Some("Password cannot be empty".to_string());
-                        state.focus_field(AccountField::Password);
-                    } else if password != confirm {
-                        state.error_message = Some("Passwords do not match".to_string());
-                        state.confirm.clear();
-                        state.focus_field(AccountField::Confirm);
-                    } else {
-                        // Return plaintext credentials — server hashes at storage time
-                        return Ok((username, password));
+                match action {
+                    input::InputAction::Cancel => {
+                        anyhow::bail!("Setup cancelled");
                     }
-                }
-                KeyCode::Esc => {
-                    return Err(anyhow::anyhow!("Setup cancelled by user"));
-                }
-                _ => {
-                    let action = input::map_key(key);
-                    match state.focused {
-                        AccountField::Username => {
-                            state.username.handle_input(&action);
+                    input::InputAction::CycleNext | input::InputAction::NavDown => {
+                        // Unfocus current, focus next
+                        match state.focus {
+                            0 => state.username.focused = false,
+                            1 => state.password.focused = false,
+                            2 => state.confirm_password.focused = false,
+                            _ => {}
                         }
-                        AccountField::Password => {
-                            state.password.handle_input(&action);
-                        }
-                        AccountField::Confirm => {
-                            state.confirm.handle_input(&action);
+                        state.focus = (state.focus + 1) % 3;
+                        match state.focus {
+                            0 => state.username.focused = true,
+                            1 => state.password.focused = true,
+                            2 => state.confirm_password.focused = true,
+                            _ => {}
                         }
                     }
-                    state.error_message = None;
+                    input::InputAction::NavUp => {
+                        match state.focus {
+                            0 => state.username.focused = false,
+                            1 => state.password.focused = false,
+                            2 => state.confirm_password.focused = false,
+                            _ => {}
+                        }
+                        state.focus = if state.focus == 0 { 2 } else { state.focus - 1 };
+                        match state.focus {
+                            0 => state.username.focused = true,
+                            1 => state.password.focused = true,
+                            2 => state.confirm_password.focused = true,
+                            _ => {}
+                        }
+                    }
+                    input::InputAction::Confirm => {
+                        let username = state.username.value().to_string();
+                        let password = state.password.value().to_string();
+                        let confirm = state.confirm_password.value().to_string();
+
+                        if username.is_empty() {
+                            state.error = Some("Username cannot be empty".to_string());
+                        } else if password.is_empty() {
+                            state.error = Some("Password cannot be empty".to_string());
+                        } else if password != confirm {
+                            state.error = Some("Passwords do not match".to_string());
+                        } else {
+                            return Ok((username, password));
+                        }
+                    }
+                    other => {
+                        state.error = None;
+                        match state.focus {
+                            0 => { state.username.handle_input(&other); }
+                            1 => { state.password.handle_input(&other); }
+                            2 => { state.confirm_password.handle_input(&other); }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
@@ -485,160 +151,94 @@ pub fn run_create_account<B: Backend>(
 fn render_create_account(f: &mut ratatui::Frame, state: &CreateAccountState) {
     let area = f.area();
 
-    let outer_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" First-Time Setup \u{2014} Step 2 of 3 ")
-        .title_alignment(Alignment::Center);
+    // Center a 50x12 box
+    let popup_width = 50u16.min(area.width.saturating_sub(4));
+    let popup_height = 12u16.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(popup_width)) / 2;
+    let y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup = Rect::new(x, y, popup_width, popup_height);
 
-    let inner = outer_block.inner(area);
-    f.render_widget(outer_block, area);
-
-    let dialog_width = 50.min(inner.width.saturating_sub(4));
-    let dialog_height = 16.min(inner.height.saturating_sub(4));
-
-    let dialog_area = Rect {
-        x: inner.x + (inner.width.saturating_sub(dialog_width)) / 2,
-        y: inner.y + (inner.height.saturating_sub(dialog_height)) / 2,
-        width: dialog_width,
-        height: dialog_height,
-    };
-
-    f.render_widget(Clear, dialog_area);
+    f.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Create Account ")
-        .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-    let form_area = block.inner(dialog_area);
-    f.render_widget(block, dialog_area);
+        .border_style(Style::default().fg(Color::Green))
+        .title(" Create Admin Account ")
+        .title_alignment(Alignment::Center);
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Description
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Username label
-            Constraint::Length(1), // Username input
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Password label
-            Constraint::Length(1), // Password input
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Confirm label
-            Constraint::Length(1), // Confirm input
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Error / controls
+            Constraint::Length(2), // username
+            Constraint::Length(2), // password
+            Constraint::Length(2), // confirm
+            Constraint::Length(1), // error/hint
+            Constraint::Min(0),
         ])
-        .split(form_area);
+        .split(inner);
 
+    // Username
+    let label_style = if state.focus == 0 {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
     f.render_widget(
-        Paragraph::new(" Create your administrator account.")
-            .style(Style::default().fg(Color::White)),
+        Paragraph::new(vec![
+            Line::from(Span::styled("Username:", label_style)),
+            Line::from(Span::styled(
+                state.username.value(),
+                Style::default().fg(Color::White),
+            )),
+        ]),
         chunks[0],
     );
 
-    // Username
-    let label_style = if state.focused == AccountField::Username {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    f.render_widget(
-        Paragraph::new(" Username:").style(label_style),
-        chunks[2],
-    );
-    render_text_field(f, chunks[3], &state.username, false);
-
     // Password
-    let label_style = if state.focused == AccountField::Password {
+    let label_style = if state.focus == 1 {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
     };
+    let masked: String = "*".repeat(state.password.value().len());
     f.render_widget(
-        Paragraph::new(" Password:").style(label_style),
-        chunks[5],
+        Paragraph::new(vec![
+            Line::from(Span::styled("Password:", label_style)),
+            Line::from(Span::styled(masked, Style::default().fg(Color::White))),
+        ]),
+        chunks[1],
     );
-    render_text_field(f, chunks[6], &state.password, true);
 
     // Confirm
-    let label_style = if state.focused == AccountField::Confirm {
+    let label_style = if state.focus == 2 {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
     };
+    let masked: String = "*".repeat(state.confirm_password.value().len());
     f.render_widget(
-        Paragraph::new(" Confirm:").style(label_style),
-        chunks[8],
+        Paragraph::new(vec![
+            Line::from(Span::styled("Confirm:", label_style)),
+            Line::from(Span::styled(masked, Style::default().fg(Color::White))),
+        ]),
+        chunks[2],
     );
-    render_text_field(f, chunks[9], &state.confirm, true);
 
-    // Error or controls
-    if let Some(ref err) = state.error_message {
+    // Error or hint
+    if let Some(ref err) = state.error {
         f.render_widget(
-            Paragraph::new(format!(" {}", err)).style(Style::default().fg(Color::Red)),
-            chunks[11],
+            Paragraph::new(Span::styled(err, Style::default().fg(Color::Red))),
+            chunks[3],
         );
     } else {
         f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(" Tab", Style::default().fg(Color::Yellow)),
-                Span::styled(" next  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Enter", Style::default().fg(Color::Green)),
-                Span::styled(" create  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Esc", Style::default().fg(Color::DarkGray)),
-                Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
-            ])),
-            chunks[11],
-        );
-    }
-}
-
-/// Render a text input field, optionally masked for passwords.
-fn render_text_field(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    input: &TextInputState,
-    masked: bool,
-) {
-    let value = input.value().to_string();
-    let display: String = if masked {
-        "*".repeat(value.chars().count())
-    } else {
-        value.clone()
-    };
-
-    if input.focused {
-        let cursor_pos = input.cursor;
-        let chars: Vec<char> = display.chars().collect();
-        let before: String = chars[..cursor_pos.min(chars.len())].iter().collect();
-        let at_cursor = chars
-            .get(cursor_pos)
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| " ".to_string());
-        let after: String = if cursor_pos < chars.len() {
-            chars[cursor_pos + 1..].iter().collect()
-        } else {
-            String::new()
-        };
-
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::raw(" "),
-                Span::styled(before, Style::default().fg(Color::White)),
-                Span::styled(
-                    at_cursor,
-                    Style::default().fg(Color::Black).bg(Color::Cyan),
-                ),
-                Span::styled(after, Style::default().fg(Color::White)),
-            ])),
-            area,
-        );
-    } else {
-        f.render_widget(
-            Paragraph::new(format!(" {}", display)).style(Style::default().fg(Color::White)),
-            area,
+            Paragraph::new(Span::styled(
+                "Tab: next field  Enter: submit  Esc: cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+            chunks[3],
         );
     }
 }

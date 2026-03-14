@@ -158,7 +158,7 @@ impl ActiveView {
     pub(crate) fn selected_path(&self) -> Option<&str> {
         match self {
             Self::StartupMaintenance => None,
-            Self::CorpusBrowser(browser) => browser.selected_path().and_then(|p| p.to_str()),
+            Self::CorpusBrowser(browser) => browser.selected_path(),
             Self::TagCanonicityResolution { state, .. } => state.selected_path(),
             Self::CompoundTagSplit { state, .. } => state.selected_path(),
             Self::MissingFileResolution(s) => s.selected_path(),

@@ -2,8 +2,7 @@
 //!
 //! Browse files and directories with persistent search bar and tag editor launch.
 
-use std::collections::HashSet;
-use std::fs;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use ratatui::layout::Rect;
@@ -11,6 +10,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+
+use mm_meta::signals::packing_category::PackingCategory;
+use mm_ui::directory_browser::{BrowserAction, DirectoryBrowser};
 
 use crate::packing_colors::PackingCategoryColor;
 use crate::helpers::truncate_left;
@@ -21,9 +23,8 @@ use crate::widgets::detail_panel::{
 use crate::widgets::TextInputState;
 
 use crate::tree_browser::actions::TreeBrowserAction;
-use crate::tree_browser::config::CorpusBrowserConfig;
-use crate::tree_browser::entry::PackingMarker;
-use crate::tree_browser::navigator::TreeNavigator;
+use crate::tree_browser::entry::{DeployMarker, PackingMarker};
+use crate::tree_browser::variants::VariantInputResult;
 use crate::widgets::wizard::{WizardOffer, WizardState};
 use crate::widgets::wizard_pane::WizardPaneState;
 
@@ -50,10 +51,8 @@ pub enum PanelFocus {
 /// Search result state
 #[derive(Debug, Clone, Default)]
 pub struct SearchState {
-    /// Directory being searched (root of search)
-    pub search_root: Option<PathBuf>,
-    /// Matching paths found (files and directories)
-    pub matches: Vec<PathBuf>,
+    /// Matching paths found (relative String paths)
+    pub matches: Vec<String>,
     /// Index in entries list for first match (for auto-scroll)
     pub first_match_idx: Option<usize>,
 }
@@ -61,7 +60,6 @@ pub struct SearchState {
 impl SearchState {
     /// Clear search results
     pub fn clear(&mut self) {
-        self.search_root = None;
         self.matches.clear();
         self.first_match_idx = None;
     }
@@ -100,18 +98,14 @@ pub struct DirConfigPanelState {
     /// 0=libraries, 1=can_stash_dupes, 2=interior_dupes, 3=path_schema, 4=enable_acoustid, 5=pinned_release
     pub field_cursor: usize,
     pub focus: PanelFocus,
-    /// 0=Save, 1=Discard
     pub button_cursor: usize,
-    /// Selected library item within the libraries list (None = field label focused).
     pub lib_cursor: Option<usize>,
-    /// Active text input for library editing/adding.
     pub text_input: Option<TextInputState>,
-    /// Wizard popup state for Z-key help text.
     pub wizard_state: WizardState,
 }
 
 impl DirConfigPanelState {
-    /// Whether any edits have been made.
+    /// Whether the panel has any edits compared to the original values.
     pub fn has_edits(&self) -> bool {
         self.libraries != self.orig_libraries
             || self.can_stash_dupes != self.orig_can_stash_dupes
@@ -121,116 +115,59 @@ impl DirConfigPanelState {
             || self.pinned_release != self.orig_pinned_release
     }
 
-    /// Render the config panel using the detail_panel widget.
+    /// Render the config panel.
     pub fn render_config_panel(&self, f: &mut Frame, area: Rect) {
-        let path_str = self.source_path.display().to_string();
-        let title = format!(" Dir: {} ", path_str);
-        let border_color = if self.has_edits() {
-            Color::Yellow
-        } else {
-            Color::Cyan
-        };
-
-        let libs_edited = self.libraries != self.orig_libraries;
-        let stash_edited = self.can_stash_dupes != self.orig_can_stash_dupes;
-        let interior_edited = self.interior_dupes != self.orig_interior_dupes;
-        let schema_edited = self.path_schema != self.orig_path_schema;
-        let acoustid_edited = self.enable_acoustid != self.orig_enable_acoustid;
-        let pinned_edited = self.pinned_release != self.orig_pinned_release;
-
-        // If we're in text input mode, show the input line instead of the list
-        let libs_for_display: Vec<String> = if let Some(ref input) = self.text_input {
-            // Show current items + the input line
-            let mut items = self.libraries.clone();
-            if let Some(cursor) = self.lib_cursor {
-                if cursor < items.len() {
-                    items[cursor] = format!("{}|", input.value());
-                }
-            } else {
-                items.push(format!("{}|", input.value()));
-            }
-            items
-        } else {
-            self.libraries.clone()
-        };
-
-        let schema_display = self.path_schema.as_deref().unwrap_or("(none)").to_string();
-        let schema_display_with_cursor = if self.field_cursor == 3 && self.text_input.is_some() {
-            if let Some(ref input) = self.text_input {
-                format!("{}|", input.value())
-            } else {
-                schema_display.clone()
-            }
-        } else {
-            schema_display.clone()
-        };
-
-        let pinned_display = self.pinned_release.as_deref().unwrap_or("(none)").to_string();
-        let pinned_display_with_cursor = if self.field_cursor == 5 && self.text_input.is_some() {
-            if let Some(ref input) = self.text_input {
-                format!("{}|", input.value())
-            } else {
-                pinned_display.clone()
-            }
-        } else {
-            pinned_display.clone()
-        };
-
-        let fields = [
+        let fields = vec![
             DetailField {
                 label: "Libraries",
-                widget: DetailWidget::StringItems {
-                    items: &libs_for_display,
-                    cursor: if self.field_cursor == 0 {
-                        self.lib_cursor.or(if self.text_input.is_some() {
-                            Some(libs_for_display.len().saturating_sub(1))
-                        } else {
-                            None
-                        })
-                    } else {
-                        None
-                    },
-                    edited: libs_edited,
+                widget: if self.libraries.is_empty() {
+                    DetailWidget::Text { value: "(none)", edited: false }
+                } else {
+                    DetailWidget::StringItems {
+                        items: &self.libraries,
+                        cursor: self.lib_cursor,
+                        edited: self.libraries != self.orig_libraries,
+                    }
                 },
             },
             DetailField {
                 label: "Can stash dupes",
                 widget: DetailWidget::OptBool {
                     value: self.can_stash_dupes,
-                    edited: stash_edited,
+                    edited: self.can_stash_dupes != self.orig_can_stash_dupes,
                 },
             },
             DetailField {
                 label: "Interior dupes",
                 widget: DetailWidget::OptBool {
                     value: self.interior_dupes,
-                    edited: interior_edited,
+                    edited: self.interior_dupes != self.orig_interior_dupes,
                 },
             },
             DetailField {
                 label: "Path schema",
                 widget: DetailWidget::Text {
-                    value: &schema_display_with_cursor,
-                    edited: schema_edited,
+                    value: self.path_schema.as_deref().unwrap_or("(inherit)"),
+                    edited: self.path_schema != self.orig_path_schema,
                 },
             },
             DetailField {
                 label: "AcoustID lookup",
                 widget: DetailWidget::OptBool {
                     value: self.enable_acoustid,
-                    edited: acoustid_edited,
+                    edited: self.enable_acoustid != self.orig_enable_acoustid,
                 },
             },
             DetailField {
                 label: "Pinned release",
                 widget: DetailWidget::Text {
-                    value: &pinned_display_with_cursor,
-                    edited: pinned_edited,
+                    value: self.pinned_release.as_deref().unwrap_or("(none)"),
+                    edited: self.pinned_release != self.orig_pinned_release,
                 },
             },
         ];
 
-        let buttons = [
+        let buttons = vec![
             PanelButton {
                 label: "Save",
                 color: Color::Green,
@@ -243,59 +180,27 @@ impl DirConfigPanelState {
             },
         ];
 
-        let has_help = !DIR_FIELD_HELP[self.field_cursor].is_empty();
-        let z_suffix = if has_help { "  Z info" } else { "" };
-
-        let hint: Option<String> = if self.text_input.is_some() {
-            Some("Enter confirm  Esc cancel".to_string())
-        } else if self.focus == PanelFocus::Buttons {
-            Some("Enter select  Up fields".to_string())
-        } else if self.field_cursor == 0 {
-            Some(format!("n add  x del  Enter edit  Tab buttons{z_suffix}"))
-        } else if self.field_cursor == 3 || self.field_cursor == 5 {
-            Some(format!("Enter edit  Tab buttons{z_suffix}"))
-        } else {
-            // Bool fields: can_stash_dupes, interior_dupes, enable_acoustid
-            Some(format!("Enter/Space toggle  Tab buttons{z_suffix}"))
+        let params = DetailPanelParams {
+            title: &format!("Config: {}", self.source_path.display()),
+            border_color: Color::Cyan,
+            fields: &fields,
+            field_cursor: self.field_cursor,
+            buttons: &buttons,
+            focus_on_buttons: self.focus == PanelFocus::Buttons,
+            hint: None,
         };
 
-        render_detail_panel(
-            f,
-            area,
-            &DetailPanelParams {
-                title: &title,
-                border_color,
-                fields: &fields,
-                field_cursor: self.field_cursor,
-                buttons: &buttons,
-                focus_on_buttons: self.focus == PanelFocus::Buttons,
-                hint: hint.as_deref(),
-            },
-        );
-
-        // Render wizard popup if showing
-        if self.wizard_state.is_showing_popup() {
-            let help = DIR_FIELD_HELP[self.field_cursor];
-            if !help.is_empty() {
-                use crate::widgets::wizard_popup::WizardPopup;
-                let popup_lines: Vec<Line<'_>> =
-                    help.iter().map(|s| Line::raw(s.to_string())).collect();
-                // Anchor to field cursor row within the panel (border=1, each field ~1 row)
-                let anchor_y = area.y + 1 + self.field_cursor as u16;
-                let anchor_x = area.x + area.width / 2;
-                WizardPopup::render(f, &popup_lines, anchor_x, anchor_y, area);
-            }
-        }
+        render_detail_panel(f, area, &params);
     }
 }
 
 /// Corpus browser variant state.
 #[derive(Debug)]
 pub struct CorpusBrowserVariant {
-    /// Variant-specific configuration
-    config: CorpusBrowserConfig,
-    /// Absolute path to corpus directory (for C key guard)
+    /// Absolute path to corpus directory (for C key guard path comparison)
     corpus_dir: PathBuf,
+    /// Relative path to corpus directory from archive root (for DirectoryBrowser relative paths)
+    corpus_dir_rel: String,
     /// Current focus (tree browser, search bar, or config panel)
     focus: CorpusBrowserFocus,
     /// Text input state for search bar
@@ -320,14 +225,29 @@ pub struct CorpusBrowserVariant {
     filter_input: TextInputState,
     /// Whether the inline filter bar is actively accepting input
     filter_active: bool,
+
+    // -- Marker lookup data (String relative paths for DirectoryBrowser) --
+    /// Configured deployment source directories (relative paths within archive root).
+    deploy_source_dirs: Vec<String>,
+    /// Primary zone directories (relative paths: corpus root, inbox, stash).
+    primary_zone_dirs: Vec<String>,
+    /// Files with release packing matches (relative paths), refreshed on computations_generation bump.
+    packing_file_paths: HashSet<String>,
+    /// Directory → best packing category, refreshed on computations_generation bump.
+    packing_dir_categories: HashMap<String, PackingCategory>,
 }
 
 impl CorpusBrowserVariant {
     /// Create a new corpus browser variant.
-    pub fn new(config: CorpusBrowserConfig, corpus_dir: PathBuf) -> Self {
+    pub fn new(
+        corpus_dir: PathBuf,
+        corpus_dir_rel: String,
+        deploy_source_dirs: Vec<String>,
+        primary_zone_dirs: Vec<String>,
+    ) -> Self {
         Self {
-            config,
             corpus_dir,
+            corpus_dir_rel,
             focus: CorpusBrowserFocus::TreeBrowser,
             search_input: TextInputState::new(),
             search: SearchState::default(),
@@ -340,12 +260,21 @@ impl CorpusBrowserVariant {
             wizard_pane: WizardPaneState::new(),
             filter_input: TextInputState::new(),
             filter_active: false,
+            deploy_source_dirs,
+            primary_zone_dirs,
+            packing_file_paths: HashSet::new(),
+            packing_dir_categories: HashMap::new(),
         }
     }
 
-    /// Get the corpus directory path.
+    /// Get the corpus directory path (absolute).
     pub fn corpus_dir(&self) -> &Path {
         &self.corpus_dir
+    }
+
+    /// Get the corpus directory relative path.
+    pub fn corpus_dir_rel(&self) -> &str {
+        &self.corpus_dir_rel
     }
 
     /// Set focus to config panel.
@@ -373,6 +302,62 @@ impl CorpusBrowserVariant {
         !self.pending_edit_paths.is_empty()
     }
 
+    // -- Marker lookup data (String relative paths for DirectoryBrowser) --
+
+    /// Update packing marker data from a fresh `GetPackingDirs` response.
+    pub fn set_packing_markers(
+        &mut self,
+        file_paths: HashSet<String>,
+        dir_categories: HashMap<String, PackingCategory>,
+    ) {
+        self.packing_file_paths = file_paths;
+        self.packing_dir_categories = dir_categories;
+    }
+
+    /// Compute the deploy marker for a relative path.
+    pub fn deploy_marker_for(&self, path: &str) -> DeployMarker {
+        for src in &self.deploy_source_dirs {
+            if path == src {
+                return DeployMarker::SourceRoot;
+            }
+        }
+        for src in &self.deploy_source_dirs {
+            if path.starts_with(src.as_str()) {
+                return DeployMarker::Inherited;
+            }
+        }
+        DeployMarker::None
+    }
+
+    /// Compute the packing marker for a relative path (file or directory).
+    pub fn packing_marker_for(&self, path: &str, is_dir: bool) -> PackingMarker {
+        if is_dir {
+            self.packing_dir_categories
+                .get(path)
+                .map(|&cat| PackingMarker::Directory(cat))
+                .unwrap_or(PackingMarker::None)
+        } else if self.packing_file_paths.contains(path) {
+            PackingMarker::Matched
+        } else {
+            PackingMarker::None
+        }
+    }
+
+    /// Whether a relative path should be visually dimmed (not under any primary zone).
+    pub fn is_dimmed(&self, path: &str) -> bool {
+        !self.primary_zone_dirs.iter().any(|z| path.starts_with(z.as_str()))
+    }
+
+    /// Get the packing file paths set (for render helpers).
+    pub fn packing_file_paths(&self) -> &HashSet<String> {
+        &self.packing_file_paths
+    }
+
+    /// Get the packing dir categories map (for render helpers).
+    pub fn packing_dir_categories(&self) -> &HashMap<String, PackingCategory> {
+        &self.packing_dir_categories
+    }
+
     /// Whether the inline filter bar is actively accepting input.
     pub fn filter_active(&self) -> bool {
         self.filter_active
@@ -390,35 +375,56 @@ impl CorpusBrowserVariant {
         self.focus = CorpusBrowserFocus::TreeBrowser;
     }
 
-    /// Apply the current filter text to the tree navigator.
-    fn apply_filter(&mut self, nav: &mut TreeNavigator) {
-        let query = self.filter_input.value().trim().to_lowercase();
-        if query.is_empty() {
-            nav.clear_path_filter();
-        } else {
-            nav.apply_text_filter(&query);
-        }
+    /// Apply the current filter text to the browser.
+    ///
+    /// If non-empty, stores a `BrowserAction::RequestSearch` as pending for
+    /// the app layer to dispatch as a server-side search query.
+    fn apply_filter(&mut self, browser: &mut DirectoryBrowser) -> Option<BrowserAction> {
+        let query = self.filter_input.value().trim().to_string();
         self.filter_active = false;
         self.filter_input.focused = false;
+        if query.is_empty() {
+            browser.clear_path_filter();
+            None
+        } else {
+            Some(BrowserAction::RequestSearch(query))
+        }
     }
 
     /// Deactivate the filter bar and clear any active filter.
-    fn deactivate_filter(&mut self, nav: &mut TreeNavigator) {
+    fn deactivate_filter(&mut self, browser: &mut DirectoryBrowser) {
         self.filter_active = false;
         self.filter_input.focused = false;
         self.filter_input.clear();
-        nav.clear_path_filter();
+        browser.clear_path_filter();
+    }
+
+    /// Set search results from a server-side query response.
+    ///
+    /// Called by the app layer after dispatching `SearchCorpusFiles`.
+    pub fn set_search_results(&mut self, matches: Vec<String>, browser: &DirectoryBrowser) {
+        self.search.first_match_idx = matches
+            .first()
+            .and_then(|path| browser.entries.iter().position(|e| e.path == *path));
+        self.search.matches = matches;
+    }
+
+    /// Set filter results from a server-side search query response.
+    ///
+    /// Called by the app layer after dispatching the filter's `RequestSearch`.
+    pub fn set_filter_results(&mut self, matching_paths: HashSet<String>, browser: &mut DirectoryBrowser) {
+        browser.set_path_filter(matching_paths);
     }
 
     /// Called when cursor moves — dismiss any active wizard.
-    pub fn on_cursor_move(&mut self, _nav: &TreeNavigator) {
+    pub fn on_cursor_move(&mut self, _browser: &DirectoryBrowser) {
         self.wizard_state.dismiss();
         self.wizard_offer = None;
         self.wizard_pane.reset();
     }
 
     /// Handle Escape - dismiss wizard, clear filter/search, return focus to tree.
-    pub fn handle_escape(&mut self, nav: &mut TreeNavigator) -> bool {
+    pub fn handle_escape(&mut self, browser: &mut DirectoryBrowser) -> bool {
         // Wizard dismiss takes priority
         if !self.wizard_state.is_idle() {
             self.wizard_state.dismiss();
@@ -448,8 +454,8 @@ impl CorpusBrowserVariant {
         }
 
         // Inline filter bar: Esc clears filter and deactivates
-        if self.filter_active || nav.has_path_filter() {
-            self.deactivate_filter(nav);
+        if self.filter_active || browser.has_path_filter() {
+            self.deactivate_filter(browser);
             return true;
         }
 
@@ -468,8 +474,6 @@ impl CorpusBrowserVariant {
     }
 
     /// Check if variant wants to capture navigation keys.
-    /// Returns true when search is active (search bar focused or has results),
-    /// config panel is focused, filter is active, or wizard pane is showing.
     pub fn wants_navigation_keys(&self) -> bool {
         self.filter_active
             || self.focus == CorpusBrowserFocus::ConfigPanel
@@ -483,27 +487,31 @@ impl CorpusBrowserVariant {
     pub fn handle_input(
         &mut self,
         action: &InputAction,
-        nav: &mut TreeNavigator,
-    ) -> Option<TreeBrowserAction> {
+        browser: &mut DirectoryBrowser,
+    ) -> VariantInputResult {
+        let none = VariantInputResult { tree_action: None, browser_action: None };
+
         // Config panel has priority when focused
         if self.focus == CorpusBrowserFocus::ConfigPanel {
-            return self.handle_config_panel_input(action);
+            return VariantInputResult {
+                tree_action: self.handle_config_panel_input(action),
+                browser_action: None,
+            };
         }
 
         // Inline filter bar captures all input when active
         if self.filter_active {
             match action {
                 InputAction::Confirm => {
-                    self.apply_filter(nav);
-                    return None;
+                    let browser_action = self.apply_filter(browser);
+                    return VariantInputResult { tree_action: None, browser_action };
                 }
                 InputAction::Cancel => {
-                    // Esc handled by handle_escape
-                    return None;
+                    return none;
                 }
                 other => {
                     self.filter_input.handle_input(other);
-                    return None;
+                    return none;
                 }
             }
         }
@@ -512,28 +520,31 @@ impl CorpusBrowserVariant {
         if self.wizard_state.is_showing_pane()
             && self.wizard_pane.handle_input(action)
         {
-            return None;
-            // Esc handled by handle_escape; other keys fall through to tree
+            return none;
         }
 
         // Match selection mode has priority (modal overlay)
         if self.match_selection_mode {
-            return self.handle_match_selection_input(action, nav);
+            return VariantInputResult {
+                tree_action: self.handle_match_selection_input(action, browser),
+                browser_action: None,
+            };
         }
 
         // Route based on focus
-        match self.focus {
-            CorpusBrowserFocus::SearchBar => self.handle_search_bar_input(action, nav),
-            CorpusBrowserFocus::TreeBrowser => self.handle_tree_browser_input(action, nav),
+        let tree_action = match self.focus {
+            CorpusBrowserFocus::SearchBar => self.handle_search_bar_input(action, browser),
+            CorpusBrowserFocus::TreeBrowser => self.handle_tree_browser_input(action, browser),
             CorpusBrowserFocus::ConfigPanel => unreachable!(),
-        }
+        };
+        VariantInputResult { tree_action, browser_action: None }
     }
 
     /// Handle input when tree browser is focused.
     fn handle_tree_browser_input(
         &mut self,
         action: &InputAction,
-        nav: &mut TreeNavigator,
+        browser: &mut DirectoryBrowser,
     ) -> Option<TreeBrowserAction> {
         // If we have search results visible, capture navigation keys
         if !self.search.matches.is_empty() {
@@ -556,8 +567,8 @@ impl CorpusBrowserVariant {
 
         match action {
             InputAction::Confirm => {
-                if let Some(entry) = nav.current_entry() {
-                    if entry.is_directory() {
+                if let Some(entry) = browser.current_entry() {
+                    if entry.is_dir {
                         Some(TreeBrowserAction::EditDirectory(entry.path.clone()))
                     } else {
                         Some(TreeBrowserAction::EditFile(entry.path.clone()))
@@ -568,8 +579,8 @@ impl CorpusBrowserVariant {
             }
             // C opens dir config panel on any corpus directory
             InputAction::Char('C') => {
-                if let Some(entry) = nav.current_entry() {
-                    if entry.is_directory() && entry.path.starts_with(&self.corpus_dir) {
+                if let Some(entry) = browser.current_entry() {
+                    if entry.is_dir && entry.path.starts_with(&self.corpus_dir_rel) {
                         return Some(TreeBrowserAction::OpenDirConfig(entry.path.clone()));
                     }
                 }
@@ -581,11 +592,12 @@ impl CorpusBrowserVariant {
             }
             // Z opens/advances wizard popup/pane on entries with packing markers
             InputAction::Char('Z') => {
-                if let Some(entry) = nav.current_entry() {
-                    if entry.packing_marker != PackingMarker::None {
+                if let Some(entry) = browser.current_entry() {
+                    let marker = self.packing_marker_for(&entry.path, entry.is_dir);
+                    if marker != PackingMarker::None {
                         let offer = self
                             .wizard_offer
-                            .get_or_insert_with(|| Self::build_wizard_offer(&entry.packing_marker, &entry.name));
+                            .get_or_insert_with(|| Self::build_wizard_offer(&marker, &entry.name));
                         self.wizard_state.advance(offer);
                         if self.wizard_state.is_idle() {
                             self.wizard_offer = None;
@@ -597,14 +609,14 @@ impl CorpusBrowserVariant {
             }
             // Tab cycles through [MB] directories
             InputAction::CycleNext => {
-                if self.cycle_packing_dirs(nav, true) {
+                if self.cycle_packing_dirs(browser, true) {
                     None
                 } else {
                     Some(TreeBrowserAction::CycleNext)
                 }
             }
             InputAction::CyclePrev => {
-                if self.cycle_packing_dirs(nav, false) {
+                if self.cycle_packing_dirs(browser, false) {
                     None
                 } else {
                     Some(TreeBrowserAction::CyclePrev)
@@ -632,19 +644,15 @@ impl CorpusBrowserVariant {
                 InputAction::Confirm => {
                     let value = input.value().to_string();
                     if panel.field_cursor == 3 {
-                        // Path schema text input
                         panel.path_schema = if value.is_empty() { None } else { Some(value) };
                     } else if panel.field_cursor == 5 {
-                        // Pinned release text input
                         panel.pinned_release = if value.is_empty() { None } else { Some(value) };
                     } else if !value.is_empty() {
                         if let Some(cursor) = panel.lib_cursor {
                             if cursor < panel.libraries.len() {
-                                // Editing existing item
                                 panel.libraries[cursor] = value;
                             }
                         } else {
-                            // Adding new item
                             panel.libraries.push(value);
                             panel.lib_cursor = Some(panel.libraries.len() - 1);
                         }
@@ -684,10 +692,8 @@ impl CorpusBrowserVariant {
                 }
                 InputAction::Confirm => {
                     if panel.button_cursor == 0 {
-                        // Save
                         return Some(TreeBrowserAction::SaveDirConfig);
                     } else {
-                        // Discard
                         return Some(TreeBrowserAction::CloseDirConfig);
                     }
                 }
@@ -704,12 +710,10 @@ impl CorpusBrowserVariant {
             InputAction::NavUp => {
                 panel.wizard_state.dismiss();
                 if panel.field_cursor == 0 {
-                    // Within libraries field, navigate items
                     if let Some(ref mut cursor) = panel.lib_cursor {
                         if *cursor > 0 {
                             *cursor -= 1;
                         } else {
-                            // Deselect library items, stay on libraries field
                             panel.lib_cursor = None;
                         }
                     }
@@ -722,18 +726,15 @@ impl CorpusBrowserVariant {
             InputAction::NavDown => {
                 panel.wizard_state.dismiss();
                 if panel.field_cursor == 0 {
-                    // Navigate into library items first
                     if !panel.libraries.is_empty() {
                         if let Some(ref mut cursor) = panel.lib_cursor {
                             if *cursor + 1 < panel.libraries.len() {
                                 *cursor += 1;
                             } else {
-                                // Move to next field
                                 panel.field_cursor = 1;
                                 panel.lib_cursor = None;
                             }
                         } else {
-                            // Enter library items
                             panel.lib_cursor = Some(0);
                         }
                     } else {
@@ -752,7 +753,6 @@ impl CorpusBrowserVariant {
             InputAction::Confirm | InputAction::Toggle => {
                 match panel.field_cursor {
                     0 => {
-                        // Libraries: edit selected item
                         if let Some(cursor) = panel.lib_cursor {
                             if cursor < panel.libraries.len() {
                                 let mut input = TextInputState::new();
@@ -768,7 +768,6 @@ impl CorpusBrowserVariant {
                         panel.interior_dupes = cycle_opt_bool(panel.interior_dupes);
                     }
                     3 => {
-                        // Path schema: edit as text
                         let mut input = TextInputState::new();
                         if let Some(ref schema) = panel.path_schema {
                             input.set_value(schema.clone());
@@ -779,7 +778,6 @@ impl CorpusBrowserVariant {
                         panel.enable_acoustid = cycle_opt_bool(panel.enable_acoustid);
                     }
                     5 => {
-                        // Pinned release: edit as text
                         let mut input = TextInputState::new();
                         if let Some(ref release) = panel.pinned_release {
                             input.set_value(release.clone());
@@ -790,15 +788,13 @@ impl CorpusBrowserVariant {
                 }
                 None
             }
-            // n: add new library
             InputAction::Char('n') => {
                 if panel.field_cursor == 0 {
-                    panel.lib_cursor = None; // New item, no cursor position
+                    panel.lib_cursor = None;
                     panel.text_input = Some(TextInputState::new());
                 }
                 None
             }
-            // x: delete selected library
             InputAction::Char('x') => {
                 if panel.field_cursor == 0 {
                     if let Some(cursor) = panel.lib_cursor {
@@ -833,15 +829,14 @@ impl CorpusBrowserVariant {
     fn handle_search_bar_input(
         &mut self,
         action: &InputAction,
-        nav: &mut TreeNavigator,
+        browser: &mut DirectoryBrowser,
     ) -> Option<TreeBrowserAction> {
         match action {
             InputAction::Confirm => {
-                self.handle_search_enter(nav);
+                self.handle_search_enter(browser);
                 None
             }
             InputAction::Cancel => {
-                // Clear search and return to tree
                 self.search_input.clear();
                 self.search.clear();
                 self.focus = CorpusBrowserFocus::TreeBrowser;
@@ -849,14 +844,11 @@ impl CorpusBrowserVariant {
                 None
             }
             InputAction::CycleNext => {
-                // Apply suggestion if available
                 if let Some(suggestion) = self.get_suggestion() {
                     self.search_input.set_value(suggestion);
-                    self.update_search_matches(nav);
                 }
                 None
             }
-            // Up/Down navigate search results (if any), or do nothing
             InputAction::NavUp => {
                 if !self.search.matches.is_empty() {
                     self.enter_match_and_up();
@@ -869,15 +861,12 @@ impl CorpusBrowserVariant {
                 }
                 None
             }
-            // Arrow keys and Home/End for cursor navigation in text input
             InputAction::NavLeft | InputAction::NavRight | InputAction::Home | InputAction::End => {
                 self.search_input.handle_input(action);
                 None
             }
-            // Character input
             InputAction::Char(c) => {
                 self.search_input.insert_char(*c);
-                self.update_search_matches(nav);
                 self.reset_match_selection();
                 None
             }
@@ -885,8 +874,6 @@ impl CorpusBrowserVariant {
                 self.search_input.backspace();
                 if self.search_input.is_empty() {
                     self.search.clear();
-                } else {
-                    self.update_search_matches(nav);
                 }
                 self.reset_match_selection();
                 None
@@ -895,13 +882,10 @@ impl CorpusBrowserVariant {
                 self.search_input.delete();
                 if self.search_input.is_empty() {
                     self.search.clear();
-                } else {
-                    self.update_search_matches(nav);
                 }
                 self.reset_match_selection();
                 None
             }
-            // Ctrl+U clears input
             InputAction::KillToStart => {
                 self.search_input.clear();
                 self.search.clear();
@@ -913,24 +897,21 @@ impl CorpusBrowserVariant {
     }
 
     /// Handle Enter in search bar
-    fn handle_search_enter(&mut self, nav: &mut TreeNavigator) {
+    fn handle_search_enter(&mut self, browser: &mut DirectoryBrowser) {
         let match_count = self.search.matches.len();
 
         if match_count == 0 {
-            // No results - do nothing, stay in search
             return;
         }
 
         if match_count == 1 {
-            // Single result - focus it and return to tree
             let target = self.search.matches[0].clone();
-            nav.navigate_to_path(&target);
+            browser.navigate_to_path(&target);
             self.search_input.clear();
             self.search.clear();
             self.focus = CorpusBrowserFocus::TreeBrowser;
             self.search_input.focused = false;
         } else {
-            // Multiple results - enter match selection modal
             self.match_selection_mode = true;
             self.match_selection_idx = 0;
         }
@@ -940,7 +921,7 @@ impl CorpusBrowserVariant {
     fn handle_match_selection_input(
         &mut self,
         action: &InputAction,
-        nav: &mut TreeNavigator,
+        browser: &mut DirectoryBrowser,
     ) -> Option<TreeBrowserAction> {
         match action {
             InputAction::NavUp => {
@@ -952,7 +933,7 @@ impl CorpusBrowserVariant {
                 None
             }
             InputAction::Confirm => {
-                self.confirm_match_selection(nav);
+                self.confirm_match_selection(browser);
                 None
             }
             InputAction::Cancel => {
@@ -972,7 +953,6 @@ impl CorpusBrowserVariant {
         match marker {
             PackingMarker::None => unreachable!("called with None marker"),
             PackingMarker::Matched => {
-                // File-level: simple popup
                 WizardOffer::Popup(vec![
                     Line::styled(
                         "MusicBrainz Match",
@@ -992,7 +972,6 @@ impl CorpusBrowserVariant {
                 ])
             }
             PackingMarker::Directory(cat) => {
-                // Directory-level: popup + pane
                 let symbol = cat.marker_symbol();
                 let label = cat.label();
                 let color = cat.color();
@@ -1059,38 +1038,21 @@ impl CorpusBrowserVariant {
     }
 
     /// Cycle to the next/previous [MB] directory. Returns true if cycled.
-    fn cycle_packing_dirs(&mut self, nav: &mut TreeNavigator, forward: bool) -> bool {
-        let entries = nav.entries();
-        let packing_indices: Vec<usize> = entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| matches!(e.packing_marker, PackingMarker::Directory(_)))
-            .map(|(i, _)| i)
-            .collect();
+    fn cycle_packing_dirs(&mut self, browser: &mut DirectoryBrowser, forward: bool) -> bool {
+        let packing_cats = &self.packing_dir_categories;
+        let predicate = |entry: &mm_ui::directory_browser::BrowserEntry| {
+            entry.is_dir && packing_cats.contains_key(&entry.path)
+        };
 
-        if packing_indices.is_empty() {
-            return false;
-        }
-
-        let cursor = nav.cursor_idx();
         let target = if forward {
-            packing_indices
-                .iter()
-                .find(|&&idx| idx > cursor)
-                .or(packing_indices.first())
-                .copied()
+            browser.find_next_matching(browser.cursor, predicate)
         } else {
-            packing_indices
-                .iter()
-                .rev()
-                .find(|&&idx| idx < cursor)
-                .or(packing_indices.last())
-                .copied()
+            browser.find_prev_matching(browser.cursor, predicate)
         };
 
         if let Some(target_idx) = target {
-            nav.set_cursor(target_idx);
-            self.on_cursor_move(nav);
+            browser.set_cursor(target_idx);
+            self.on_cursor_move(browser);
             true
         } else {
             false
@@ -1113,82 +1075,15 @@ impl CorpusBrowserVariant {
     }
 
     // =========================================================================
-    // Search Methods
+    // Search helpers
     // =========================================================================
 
-    /// Start search from navigator root.
-    /// Update search matches based on current input.
-    fn update_search_matches(&mut self, nav: &TreeNavigator) {
-        let query = self.search_input.value().to_lowercase();
-        if query.is_empty() {
-            self.search.matches.clear();
-            self.search.first_match_idx = None;
-            return;
-        }
-
-        let search_root = match &self.search.search_root {
-            Some(root) => root.clone(),
-            None => return,
-        };
-
-        // Find all matching items recursively
-        let mut matches = Vec::new();
-        Self::search_items_recursive(&search_root, &query, &mut matches, self.config.show_files);
-
-        // Sort alphabetically by name
-        matches.sort_by(|a, b| {
-            let name_a = a.file_name().map(|n| n.to_string_lossy().to_lowercase());
-            let name_b = b.file_name().map(|n| n.to_string_lossy().to_lowercase());
-            name_a.cmp(&name_b)
-        });
-
-        // Find index in entries list for first match
-        self.search.first_match_idx = matches
-            .first()
-            .and_then(|path| nav.entries().iter().position(|e| &e.path == path));
-
-        self.search.matches = matches;
-    }
-
-    /// Recursively search for items matching query.
-    fn search_items_recursive(
-        dir: &Path,
-        query: &str,
-        matches: &mut Vec<PathBuf>,
-        include_files: bool,
-    ) {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-
-                // Skip hidden items
-                if name.starts_with('.') {
-                    continue;
-                }
-
-                // Check if name contains query (case-insensitive)
-                if name.to_lowercase().contains(query) && (path.is_dir() || include_files) {
-                    matches.push(path.clone());
-                }
-
-                // Recurse into subdirectories
-                if path.is_dir() {
-                    Self::search_items_recursive(&path, query, matches, include_files);
-                }
-            }
-        }
-    }
-
-    /// Get suggestion for tab completion (first match name).
+    /// Get suggestion for tab completion (first match filename).
     fn get_suggestion(&self) -> Option<String> {
         self.search
             .matches
             .first()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .and_then(|p| p.rsplit('/').next().map(|s| s.to_string()))
     }
 
     fn reset_match_selection(&mut self) {
@@ -1196,7 +1091,6 @@ impl CorpusBrowserVariant {
         self.match_selection_idx = 0;
     }
 
-    /// Enter match selection mode (if not already) and move up.
     fn enter_match_and_up(&mut self) {
         if !self.match_selection_mode {
             self.match_selection_mode = true;
@@ -1207,7 +1101,6 @@ impl CorpusBrowserVariant {
         }
     }
 
-    /// Enter match selection mode (if not already) and move down.
     fn enter_match_and_down(&mut self) {
         if !self.match_selection_mode {
             self.match_selection_mode = true;
@@ -1218,18 +1111,16 @@ impl CorpusBrowserVariant {
         }
     }
 
-    fn confirm_match_selection(&mut self, nav: &mut TreeNavigator) {
+    fn confirm_match_selection(&mut self, browser: &mut DirectoryBrowser) {
         if let Some(path) = self.search.matches.get(self.match_selection_idx).cloned() {
-            nav.navigate_to_path(&path);
+            browser.navigate_to_path(&path);
         }
         self.reset_match_selection();
-        // Clear search and return to tree
         self.search_input.clear();
         self.search.clear();
         self.focus = CorpusBrowserFocus::TreeBrowser;
         self.search_input.focused = false;
     }
-
 
     // =========================================================================
     /// Render variant-specific overlays.
@@ -1246,22 +1137,19 @@ impl CorpusBrowserVariant {
             return;
         }
 
-        // Calculate modal size
         let max_width = matches
             .iter()
-            .map(|p| p.to_string_lossy().len())
+            .map(|p| p.len())
             .max()
             .unwrap_or(30)
             .min(60) as u16
             + 6;
         let height = (matches.len() as u16 + 4).min(area.height - 4);
 
-        // Center modal
         let x = area.x + (area.width.saturating_sub(max_width)) / 2;
         let y = area.y + (area.height.saturating_sub(height)) / 2;
         let modal_area = Rect::new(x, y, max_width, height);
 
-        // Build lines
         let visible_height = (height - 4) as usize;
         let scroll_offset = self.match_selection_idx.saturating_sub(visible_height / 2);
 
@@ -1271,7 +1159,7 @@ impl CorpusBrowserVariant {
             .skip(scroll_offset)
             .take(visible_height)
             .map(|(idx, path)| {
-                let path_str = truncate_left(&path.to_string_lossy(), (max_width - 6) as usize);
+                let path_str = truncate_left(path, (max_width - 6) as usize);
                 let indicator = if idx == self.match_selection_idx {
                     "▷ "
                 } else {

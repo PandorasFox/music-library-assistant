@@ -1,10 +1,11 @@
 //! Rendering
 //!
 //! Unified rendering for the tree browser.
-//! Dispatches to variant-specific layouts while sharing common tree rendering.
+//! Uses BrowserEntry (mm-ui) with variant-provided marker lookups for
+//! deploy/packing/dimming decorations.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -12,8 +13,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use super::entry::PackingMarker;
+use mm_ui::directory_browser::{BrowserEntry, DirectoryBrowser};
+
+use super::entry::{DeployMarker, PackingMarker};
 use crate::packing_colors::PackingCategoryColor;
+use mm_meta::paths::PathResolver;
 use crate::widgets::control_colors;
 use crate::widgets::CURSOR_STYLE;
 use crate::widgets::{
@@ -22,8 +26,6 @@ use crate::widgets::{
 
 use crate::widgets::ListClickTargets;
 
-use super::entry::{DeployMarker, EntryKind, TreeEntry};
-use super::navigator::TreeNavigator;
 use super::variants::BrowserVariant;
 use crate::widgets::wizard::WizardOffer;
 use crate::widgets::wizard_pane::render_wizard_pane;
@@ -33,24 +35,26 @@ use crate::widgets::wizard_popup::WizardPopup;
 pub fn render(
     f: &mut Frame,
     area: Rect,
-    nav: &mut TreeNavigator,
+    browser: &mut DirectoryBrowser,
     variant: &mut BrowserVariant,
     art_picker: &mut AlbumArtPicker,
     art_cache: &mut AlbumArtCache,
     click_targets: &mut ListClickTargets,
+    resolver: &PathResolver,
 ) {
-    render_corpus_browser(f, area, nav, variant, art_picker, art_cache, click_targets);
+    render_corpus_browser(f, area, browser, variant, art_picker, art_cache, click_targets, resolver);
 }
 
 /// Render corpus browser layout: content + hint line.
 fn render_corpus_browser(
     f: &mut Frame,
     area: Rect,
-    nav: &mut TreeNavigator,
+    browser: &mut DirectoryBrowser,
     variant: &mut BrowserVariant,
     art_picker: &mut AlbumArtPicker,
     art_cache: &mut AlbumArtCache,
     click_targets: &mut ListClickTargets,
+    resolver: &PathResolver,
 ) {
     // Carve out 1 line at the bottom for control hints
     let outer = Layout::default()
@@ -64,10 +68,10 @@ fn render_corpus_browser(
     let content_area = outer[0];
     let hints_area = outer[1];
 
-    // Extract pending edit info from variant for tree rendering
+    // Extract variant state for rendering
     let BrowserVariant::CorpusBrowser(ref v) = variant;
     let pending_edit_paths = v.pending_edit_paths().clone();
-    let corpus_dir = v.corpus_dir().to_path_buf();
+    let corpus_dir_rel = v.corpus_dir_rel().to_string();
     let wizard_state = v.wizard_state();
     let wizard_offer_snapshot = v.wizard_offer().cloned();
 
@@ -77,12 +81,10 @@ fn render_corpus_browser(
     // - Selected entry is a file (not directory)
     let show_art = v.config_panel.is_none()
         && !wizard_state.is_showing_pane()
-        && nav.current_entry().is_some_and(|e| e.is_file());
+        && browser.current_entry().is_some_and(|e| !e.is_dir);
 
-    // Track tree_area for popup overlay
     let mut tree_area = content_area;
 
-    // Check if config panel is open for horizontal split
     if v.config_panel.is_some() {
         // Horizontal split: tree (65%) | config panel (35%)
         let h_chunks = Layout::default()
@@ -91,17 +93,8 @@ fn render_corpus_browser(
             .split(content_area);
 
         tree_area = h_chunks[0];
-        render_corpus_tree(
-            f,
-            h_chunks[0],
-            nav,
-            variant,
-            &pending_edit_paths,
-            &corpus_dir,
-            click_targets,
-        );
+        render_corpus_tree(f, h_chunks[0], browser, variant, &pending_edit_paths, &corpus_dir_rel, click_targets);
 
-        // Render config panel
         let BrowserVariant::CorpusBrowser(ref v) = variant;
         if let Some(ref panel) = v.config_panel {
             panel.render_config_panel(f, h_chunks[1]);
@@ -114,17 +107,8 @@ fn render_corpus_browser(
             .split(content_area);
 
         tree_area = h_chunks[0];
-        render_corpus_tree(
-            f,
-            h_chunks[0],
-            nav,
-            variant,
-            &pending_edit_paths,
-            &corpus_dir,
-            click_targets,
-        );
+        render_corpus_tree(f, h_chunks[0], browser, variant, &pending_edit_paths, &corpus_dir_rel, click_targets);
 
-        // Render wizard pane
         let BrowserVariant::CorpusBrowser(ref mut v) = variant;
         if let Some(ref offer) = wizard_offer_snapshot {
             let (title, content) = match offer {
@@ -146,38 +130,22 @@ fn render_corpus_browser(
             .split(content_area);
 
         tree_area = h_chunks[0];
-        render_corpus_tree(
-            f,
-            h_chunks[0],
-            nav,
-            variant,
-            &pending_edit_paths,
-            &corpus_dir,
-            click_targets,
-        );
+        render_corpus_tree(f, h_chunks[0], browser, variant, &pending_edit_paths, &corpus_dir_rel, click_targets);
 
-        // Render art preview for selected file
-        let selected_entry = nav.current_entry();
-        let selected_path = selected_entry.map(|e| e.path.clone());
-        let is_image = selected_entry.is_some_and(|e| e.kind == EntryKind::ImageFile);
+        // Render art preview: resolve relative path to absolute for file loading
+        let selected_entry = browser.current_entry();
+        let selected_abs_path = selected_entry
+            .map(|e| resolver.resolve(std::path::Path::new(&e.path)));
         render_file_art_preview(
             f,
             h_chunks[1],
-            selected_path.as_deref(),
-            is_image,
+            selected_abs_path.as_deref(),
+            false, // BrowserEntry doesn't distinguish image files; treat as audio
             art_picker,
             art_cache,
         );
     } else {
-        render_corpus_tree(
-            f,
-            content_area,
-            nav,
-            variant,
-            &pending_edit_paths,
-            &corpus_dir,
-            click_targets,
-        );
+        render_corpus_tree(f, content_area, browser, variant, &pending_edit_paths, &corpus_dir_rel, click_targets);
     }
 
     // Overlay wizard popup when showing
@@ -189,18 +157,16 @@ fn render_corpus_browser(
                 WizardOffer::Pane { .. } => &[],
             };
             if !popup_lines.is_empty() {
-                let cursor_idx = nav.cursor_idx();
-                let scroll = nav.scroll_offset();
-                // +1 for the block border
+                let cursor_idx = browser.cursor;
+                let scroll = browser.scroll;
                 let anchor_y = tree_area.y + 1 + (cursor_idx.saturating_sub(scroll)) as u16;
-                // Anchor X: after the entry text (approximate)
-                let cursor_entry = nav.current_entry();
+                let cursor_entry = browser.current_entry();
                 let entry_width = cursor_entry
                     .map(|e| {
                         let indent = e.depth * 2;
                         let expand = 2;
                         let name_len = e.name.chars().count();
-                        indent + expand + name_len + 10 // icon + count + marker
+                        indent + expand + name_len + 10
                     })
                     .unwrap_or(20);
                 let anchor_x = tree_area.x + 1 + entry_width as u16;
@@ -209,15 +175,14 @@ fn render_corpus_browser(
         }
     }
 
-    // Render control hints
-    render_hints(f, hints_area, nav, variant);
+    render_hints(f, hints_area, browser, variant);
 }
 
 /// Render a file art preview panel in the corpus browser.
 fn render_file_art_preview(
     f: &mut Frame,
     area: Rect,
-    file_path: Option<&Path>,
+    file_path: Option<&std::path::Path>,
     is_image: bool,
     art_picker: &mut AlbumArtPicker,
     art_cache: &mut AlbumArtCache,
@@ -241,7 +206,6 @@ fn render_file_art_preview(
         }
     };
 
-    // Evict stale cache entries — use appropriate key type
     let key = if is_image {
         ArtCacheKey::Sidecar(path.to_path_buf())
     } else {
@@ -258,7 +222,6 @@ fn render_file_art_preview(
     if cached.width == 0 {
         render_no_art_placeholder(f, inner);
     } else {
-        // Split into image + metadata
         if inner.height > 3 {
             let meta_height = if !cached.role.is_empty() && cached.role != "other" {
                 3
@@ -272,7 +235,6 @@ fn render_file_art_preview(
 
             render_album_art_preview(f, split[0], cached);
 
-            // Metadata lines: filename, dimensions, and optional role
             let filename = cached
                 .path
                 .file_name()
@@ -286,17 +248,12 @@ fn render_file_art_preview(
                 };
                 format!(
                     "{}x{} {} [{}]",
-                    cached.width,
-                    cached.height,
-                    cached.format.to_uppercase(),
-                    role_label
+                    cached.width, cached.height, cached.format.to_uppercase(), role_label
                 )
             } else {
                 format!(
                     "{}x{} {}",
-                    cached.width,
-                    cached.height,
-                    cached.format.to_uppercase()
+                    cached.width, cached.height, cached.format.to_uppercase()
                 )
             };
             let lines = vec![
@@ -314,44 +271,32 @@ fn render_file_art_preview(
 fn render_corpus_tree(
     f: &mut Frame,
     area: Rect,
-    nav: &mut TreeNavigator,
+    browser: &mut DirectoryBrowser,
     variant: &mut BrowserVariant,
     pending_edit_paths: &HashSet<PathBuf>,
-    corpus_dir: &Path,
+    corpus_dir_rel: &str,
     click_targets: &mut ListClickTargets,
 ) {
-    // Layout: Filter bar | Tree (full width)
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Filter bar (3 lines: border + content + border)
+            Constraint::Length(3), // Filter bar
             Constraint::Min(5),    // Tree browser
         ])
         .split(area);
 
-    // Filter bar - show filter status or hint
-    render_filter_bar(f, main_chunks[0], nav, variant);
+    render_filter_bar(f, main_chunks[0], browser, variant);
 
-    // Tree pane at full width
-    render_tree_pane(
-        f,
-        main_chunks[1],
-        nav,
-        pending_edit_paths,
-        corpus_dir,
-        click_targets,
-    );
+    render_tree_pane(f, main_chunks[1], browser, variant, pending_edit_paths, corpus_dir_rel, click_targets);
 
-    // Overlays (match selection modal)
     variant.render_overlays(f, area);
 }
 
 /// Render the filter status bar for corpus browser.
-fn render_filter_bar(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &BrowserVariant) {
+fn render_filter_bar(f: &mut Frame, area: Rect, browser: &DirectoryBrowser, variant: &BrowserVariant) {
     let BrowserVariant::CorpusBrowser(ref v) = variant;
 
     if v.filter_active() {
-        // Active text input mode
         let input = v.filter_input();
         let block = Block::default()
             .borders(Borders::ALL)
@@ -361,20 +306,17 @@ fn render_filter_bar(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &B
         let inner = block.inner(area);
         f.render_widget(block, area);
 
-        // Render "Filter: " label + input text
         let label = Span::styled("Filter: ", Style::default().fg(Color::Yellow));
         let text = Span::styled(input.value(), Style::default().fg(Color::White));
         let line = Line::from(vec![label, text]);
         f.render_widget(Paragraph::new(line), inner);
 
-        // Position cursor after the text
-        let cursor_x = inner.x + 8 + input.cursor as u16; // "Filter: " = 8 chars
+        let cursor_x = inner.x + 8 + input.cursor as u16;
         if cursor_x < inner.x + inner.width {
             f.set_cursor_position((cursor_x, inner.y));
         }
-    } else if nav.has_path_filter() {
-        // Filter applied — show count and hint to clear
-        let count = nav.filtered_file_count().unwrap_or(0);
+    } else if browser.has_path_filter() {
+        let count = browser.filtered_file_count().unwrap_or(0);
         let content = format!("Filtered: {} files  (Esc to clear)", count);
         let block = Block::default()
             .borders(Borders::ALL)
@@ -384,7 +326,6 @@ fn render_filter_bar(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &B
             Paragraph::new(Span::styled(content, Style::default().fg(Color::Green))).block(block);
         f.render_widget(paragraph, area);
     } else {
-        // No filter — show hint
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray))
@@ -402,19 +343,19 @@ fn render_filter_bar(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &B
 fn render_tree_pane(
     f: &mut Frame,
     area: Rect,
-    nav: &mut TreeNavigator,
+    browser: &mut DirectoryBrowser,
+    variant: &BrowserVariant,
     pending_edit_paths: &HashSet<PathBuf>,
-    corpus_dir: &Path,
+    corpus_dir_rel: &str,
     click_targets: &mut ListClickTargets,
 ) {
     let inner_height = area.height.saturating_sub(2) as usize;
-    nav.set_visible_height(inner_height);
+    browser.visible_height = inner_height;
 
-    let entries = nav.entries();
-    let cursor_idx = nav.cursor_idx();
-    let scroll = nav.scroll_offset();
+    let entries = &browser.entries;
+    let cursor_idx = browser.cursor;
+    let scroll = browser.scroll;
 
-    // Populate click targets
     let inner_area = Rect {
         x: area.x + 1,
         y: area.y + 1,
@@ -423,40 +364,44 @@ fn render_tree_pane(
     };
     click_targets.populate(inner_area, scroll, entries.len());
 
+    let BrowserVariant::CorpusBrowser(ref v) = variant;
+
     let lines: Vec<Line> = entries
         .iter()
         .enumerate()
         .skip(scroll)
         .take(inner_height)
         .map(|(idx, entry)| {
-            let is_pending = if entry.is_directory() && !pending_edit_paths.is_empty() {
-                // Compute relative path from corpus dir to check against pending edits
-                entry
-                    .path
-                    .strip_prefix(corpus_dir)
-                    .ok()
-                    .map(|rel| pending_edit_paths.contains(rel))
+            // Compute markers from variant lookup data
+            let deploy_marker = v.deploy_marker_for(&entry.path);
+            let packing_marker = v.packing_marker_for(&entry.path, entry.is_dir);
+            let is_dimmed = entry.depth == 0 && v.is_dimmed(&entry.path);
+
+            let is_pending = if entry.is_dir && !pending_edit_paths.is_empty() {
+                // Strip corpus_dir_rel prefix to get the config-relative path
+                entry.path.strip_prefix(corpus_dir_rel)
+                    .and_then(|rest| rest.strip_prefix('/'))
+                    .map(|rel| pending_edit_paths.contains(std::path::Path::new(rel)))
                     .unwrap_or(false)
             } else {
                 false
             };
-            render_entry_line(entry, idx == cursor_idx, is_pending)
+
+            render_entry_line(entry, idx == cursor_idx, is_pending, deploy_marker, packing_marker, is_dimmed)
         })
         .collect();
 
     let title = format!("Files [{}/{}]", cursor_idx + 1, entries.len());
-
     let block = Block::default().borders(Borders::ALL).title(title);
     let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, area);
 }
 
 /// Render context-sensitive control hints at the bottom.
-fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &BrowserVariant) {
+fn render_hints(f: &mut Frame, area: Rect, browser: &DirectoryBrowser, variant: &BrowserVariant) {
     let BrowserVariant::CorpusBrowser(ref v) = variant;
 
     let hints = if v.config_panel.is_some() {
-        // Config panel is open — hints are shown inside the panel itself
         Line::from(vec![
             control_colors::nav("^v"),
             control_colors::text(" nav  "),
@@ -466,12 +411,11 @@ fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &Browse
             control_colors::text(" close panel"),
         ])
     } else {
-        // Standard tree browser hints
-        let cursor_entry = nav.current_entry();
+        let cursor_entry = browser.current_entry();
         let on_corpus_dir = cursor_entry
-            .map(|e| e.is_directory() && e.path.starts_with(v.corpus_dir()))
+            .map(|e| e.is_dir && e.path.starts_with(v.corpus_dir_rel()))
             .unwrap_or(false);
-        let on_dir = cursor_entry.map(|e| e.is_directory()).unwrap_or(false);
+        let on_dir = cursor_entry.map(|e| e.is_dir).unwrap_or(false);
 
         let mut spans = vec![
             control_colors::nav("^v"),
@@ -496,9 +440,8 @@ fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &Browse
             spans.push(control_colors::text(" review"));
         }
 
-        // Show Z hint when cursor is on an [MB] entry
         let on_packing = cursor_entry
-            .map(|e| e.packing_marker != PackingMarker::None)
+            .map(|e| v.packing_marker_for(&e.path, e.is_dir) != PackingMarker::None)
             .unwrap_or(false);
         if on_packing {
             spans.push(control_colors::text("  "));
@@ -506,11 +449,7 @@ fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &Browse
             spans.push(control_colors::text(" info"));
         }
 
-        // Show Tab hint when there are [MB] directories to cycle through
-        let has_packing_dirs = nav
-            .entries()
-            .iter()
-            .any(|e| matches!(e.packing_marker, PackingMarker::Directory(_)));
+        let has_packing_dirs = !v.packing_dir_categories().is_empty();
         if has_packing_dirs {
             spans.push(control_colors::text("  "));
             spans.push(control_colors::nav("Tab"));
@@ -523,40 +462,40 @@ fn render_hints(f: &mut Frame, area: Rect, nav: &TreeNavigator, variant: &Browse
     f.render_widget(Paragraph::new(hints), area);
 }
 
-/// Render a single tree entry line.
-fn render_entry_line(entry: &TreeEntry, is_cursor: bool, is_pending_edit: bool) -> Line<'static> {
+/// Render a single tree entry line using BrowserEntry + computed markers.
+fn render_entry_line(
+    entry: &BrowserEntry,
+    is_cursor: bool,
+    is_pending_edit: bool,
+    deploy_marker: DeployMarker,
+    packing_marker: PackingMarker,
+    is_dimmed: bool,
+) -> Line<'static> {
     let indent = "  ".repeat(entry.depth);
 
-    let expand_indicator = if entry.is_directory() {
-        if entry.is_expanded {
+    let expand_indicator = if entry.is_dir {
+        if entry.expanded {
             "▽ "
-        } else if entry.has_children {
-            "▷ "
         } else {
-            "  "
+            "▷ "
         }
     } else {
         "  "
     };
 
-    let icon = match entry.kind {
-        EntryKind::Directory => "",
-        EntryKind::AudioFile => "♪ ",
-        EntryKind::ImageFile => "\u{1f5bc}\u{fe0e} ", // 🖼︎ with text presentation selector
+    let icon = if entry.is_dir {
+        ""
+    } else {
+        "♪ "
     };
 
-    let count_suffix = if entry.is_directory() {
-        match (entry.item_count, entry.image_count) {
-            (0, 0) => String::new(),
-            (t, 0) => format!("  ({} tracks)", t),
-            (0, i) => format!("  ({} images)", i),
-            (t, i) => format!("  ({} tracks, {} images)", t, i),
-        }
+    let count_suffix = if entry.is_dir && entry.file_count > 0 {
+        format!("  ({} tracks)", entry.file_count)
     } else {
         String::new()
     };
 
-    let (deploy_suffix, deploy_style) = match entry.deploy_marker {
+    let (deploy_suffix, deploy_style) = match deploy_marker {
         DeployMarker::SourceRoot => ("  [D]", Style::default().fg(Color::Magenta)),
         DeployMarker::Inherited => ("  [d]", Style::default().fg(Color::DarkGray)),
         DeployMarker::None => ("", Style::default()),
@@ -564,9 +503,9 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool, is_pending_edit: bool) 
 
     let base_style = if is_cursor {
         CURSOR_STYLE
-    } else if entry.is_dimmed {
+    } else if is_dimmed {
         Style::default().fg(Color::DarkGray)
-    } else if entry.is_directory() {
+    } else if entry.is_dir {
         Style::default().fg(Color::Blue)
     } else {
         Style::default().fg(Color::White)
@@ -584,8 +523,7 @@ fn render_entry_line(entry: &TreeEntry, is_cursor: bool, is_pending_edit: bool) 
         Span::styled(deploy_suffix, deploy_style),
     ];
 
-    // Packing marker: [MB] for files, [MB✓] etc. for directories
-    match &entry.packing_marker {
+    match &packing_marker {
         PackingMarker::None => {}
         PackingMarker::Matched => {
             spans.push(Span::styled("  [MB]", Style::default().fg(Color::Green)));

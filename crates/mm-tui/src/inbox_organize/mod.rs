@@ -30,7 +30,7 @@ use mm_meta::mutations::{
     file_ops::{InboxDirToCorpusMutation, InboxDirTrackedFile, InboxToCorpusMutation},
     Mutation,
 };
-use crate::tree_browser::{EntryFilter, TreeNavigator};
+use mm_ui::directory_browser::DirectoryBrowser;
 use crate::widgets::TextInputState;
 
 pub use mm_meta::views::startup_organize::{InboxDirectory, InboxOrganizeFile};
@@ -106,8 +106,8 @@ pub struct InboxOrganizeState {
     pub directories: Vec<InboxDirectory>,
     /// Index into `directories` for the current directory
     pub current_dir_idx: usize,
-    /// Corpus tree navigator for destination selection
-    pub corpus_navigator: TreeNavigator,
+    /// Corpus tree browser for destination selection (protocol-driven).
+    pub corpus_browser: DirectoryBrowser,
     /// Current phase of the workflow
     pub phase: OrganizePhase,
     /// Selected option in the emplace popup
@@ -125,27 +125,19 @@ impl InboxOrganizeState {
     ///
     /// The directories come from `GetInboxOrganizeData` domain query.
     /// Returns None if directories is empty.
-    pub fn from_directories(directories: Vec<InboxDirectory>, config: &Config) -> Option<Self> {
+    pub fn from_directories(directories: Vec<InboxDirectory>, _config: &Config) -> Option<Self> {
         if directories.is_empty() {
             return None;
         }
 
-        let corpus_dir = config.corpus_dir();
-
-        // Create corpus navigator (directories only, show root, with synthetic entry)
-        let mut corpus_navigator = TreeNavigator::new(
-            corpus_dir,
-            EntryFilter::directories_only(),
-            true,
-            Vec::new(), // no deploy source paths needed for selection
-            Vec::new(), // no zone dimming needed
-        );
-        corpus_navigator.show_new_dir_entry = true;
+        // TODO: reconnect when inbox organize is migrated to protocol-driven DirectoryBrowser.
+        // Needs: GetDirectoryListing query dispatch at construction + expand handling.
+        let corpus_browser = DirectoryBrowser::new("corpus");
 
         Some(Self {
             directories,
             current_dir_idx: 0,
-            corpus_navigator,
+            corpus_browser,
             phase: OrganizePhase::BrowsingCorpus,
             popup_selection: EmplaceOption::EmplaceDirectory,
             new_dir_input: TextInputState::default(),
@@ -177,49 +169,9 @@ impl InboxOrganizeState {
     // Phase: Browsing Corpus
     // =========================================================================
 
-    fn handle_browsing_input(&mut self, action: &InputAction) -> InboxOrganizeAction {
-        match action {
-            InputAction::Cancel => InboxOrganizeAction::Cancel,
-
-            InputAction::NavUp => {
-                self.corpus_navigator.move_up();
-                InboxOrganizeAction::None
-            }
-            InputAction::NavDown => {
-                self.corpus_navigator.move_down();
-                InboxOrganizeAction::None
-            }
-            InputAction::NavRight => {
-                self.corpus_navigator.expand_current();
-                InboxOrganizeAction::None
-            }
-            InputAction::NavLeft => {
-                self.corpus_navigator.collapse_or_parent();
-                InboxOrganizeAction::None
-            }
-
-            InputAction::Char('s') | InputAction::Char('S') => self.advance_to_next_dir(),
-
-            InputAction::Confirm => {
-                if let Some(entry) = self.corpus_navigator.current_entry().cloned() {
-                    if entry.is_synthetic {
-                        // "[+ new directory]" — switch to text input
-                        self.new_dir_input.clear();
-                        // The synthetic entry's path is the parent directory
-                        self.selected_dest = entry.path.clone();
-                        self.phase = OrganizePhase::NewDirectoryInput;
-                    } else if entry.is_directory() {
-                        // Select this directory as destination
-                        self.selected_dest = entry.path.clone();
-                        self.popup_selection = EmplaceOption::EmplaceDirectory;
-                        self.phase = OrganizePhase::EmplacePopup;
-                    }
-                }
-                InboxOrganizeAction::None
-            }
-
-            _ => InboxOrganizeAction::None,
-        }
+    fn handle_browsing_input(&mut self, _action: &InputAction) -> InboxOrganizeAction {
+        // TODO: reconnect when inbox organize is migrated to protocol-driven DirectoryBrowser
+        todo!("inbox organize browsing needs protocol-driven DirectoryBrowser migration")
     }
 
     // =========================================================================
@@ -295,12 +247,9 @@ impl InboxOrganizeState {
     // =========================================================================
 
     /// If the selected destination doesn't exist on disk yet, register it as a
-    /// pending directory in the tree navigator so it appears for subsequent groups.
+    /// pending directory in the browser so it appears for subsequent groups.
     fn register_pending_dest(&mut self) {
-        if !self.selected_dest.exists() {
-            self.corpus_navigator
-                .add_pending_dir(self.selected_dest.clone());
-        }
+        // TODO: reconnect when inbox organize is migrated to protocol-driven DirectoryBrowser
     }
 
     // =========================================================================

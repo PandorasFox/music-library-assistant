@@ -152,6 +152,7 @@ pub struct TransactionSnapshot {
 ///
 /// Generation counters allow event detection by diffing between frames:
 /// - `mutations_generation`: increments when a mutation batch completes
+/// - `computations_generation`: increments when a computation batch completes
 /// - `error_generation`: increments when a task error occurs
 /// - `config_generation`: increments when config is mutated
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -189,6 +190,8 @@ pub struct WitchStatus {
     // -- Generation counters (for event detection via frame diffing) --
     /// Increments each time a mutation batch completes.
     pub mutations_generation: u64,
+    /// Increments each time a computation batch completes.
+    pub computations_generation: u64,
     /// Most recent task error message, if any.
     pub last_error: Option<String>,
     /// Increments each time a new task error occurs.

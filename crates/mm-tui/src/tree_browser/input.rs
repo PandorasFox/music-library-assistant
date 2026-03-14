@@ -3,40 +3,50 @@
 //! Unified keyboard input handling for the tree browser.
 //! Common navigation keys are handled here; variant-specific keys delegate to variants.
 
+use mm_ui::directory_browser::{BrowserAction, DirectoryBrowser};
+
 use crate::input::InputAction;
 
 use super::actions::TreeBrowserAction;
-use super::navigator::TreeNavigator;
 use super::variants::BrowserVariant;
 
+/// Result of handling input — may include both a domain action and a browser action.
+pub struct InputResult {
+    /// Domain action for the app layer (e.g. EditDirectory, Cancel).
+    pub tree_action: Option<TreeBrowserAction>,
+    /// Browser action requiring app-layer dispatch (e.g. RequestExpand, Collapse).
+    pub browser_action: Option<BrowserAction>,
+}
+
 /// Handle a semantic input action for the tree browser.
-///
-/// Returns the resulting action. Common navigation is handled here;
-/// variant-specific behavior delegates to the variant.
 pub fn handle_input(
     action: &InputAction,
-    nav: &mut TreeNavigator,
+    browser: &mut DirectoryBrowser,
     variant: &mut BrowserVariant,
-) -> Option<TreeBrowserAction> {
+) -> InputResult {
     // Check if variant wants to capture navigation keys (e.g., search active)
     let variant_captures_nav = variant.wants_navigation_keys();
 
     // Handle Escape first - variant gets priority
     if matches!(action, InputAction::Cancel) {
-        if variant.handle_escape(nav) {
-            return None;
+        if variant.handle_escape(browser) {
+            return InputResult { tree_action: None, browser_action: None };
         }
-        return Some(TreeBrowserAction::Cancel);
+        return InputResult {
+            tree_action: Some(TreeBrowserAction::Cancel),
+            browser_action: None,
+        };
     }
 
     // Tab for lateral ring cycling — but NOT when variant captures navigation
-    // (config panel uses Tab internally for focus switching)
     if !variant_captures_nav {
         match action {
             InputAction::CycleNext | InputAction::CyclePrev => {
-                // Let variant try to handle Tab first (e.g., cycling MB dirs).
-                // If variant returns a domain action, propagate it.
-                return variant.handle_input(action, nav);
+                let vr = variant.handle_input(action, browser);
+                return InputResult {
+                    tree_action: vr.tree_action,
+                    browser_action: vr.browser_action,
+                };
             }
             _ => {}
         }
@@ -44,32 +54,33 @@ pub fn handle_input(
 
     // If variant wants navigation keys, delegate everything to it
     if variant_captures_nav {
-        return variant.handle_input(action, nav);
+        let vr = variant.handle_input(action, browser);
+        return InputResult {
+            tree_action: vr.tree_action,
+            browser_action: vr.browser_action,
+        };
     }
 
     // Common navigation keys (only when variant doesn't capture)
     match action {
-        InputAction::NavUp => {
-            nav.move_up();
-            variant.on_cursor_move(nav);
-            return None;
+        InputAction::NavUp | InputAction::NavDown
+        | InputAction::Home | InputAction::End
+        | InputAction::PageUp | InputAction::PageDown => {
+            browser.handle_input(action);
+            variant.on_cursor_move(browser);
+            return InputResult { tree_action: None, browser_action: None };
         }
-        InputAction::NavDown => {
-            nav.move_down();
-            variant.on_cursor_move(nav);
-            return None;
-        }
-        InputAction::NavRight => {
-            nav.expand_current();
-            return None;
-        }
-        InputAction::NavLeft => {
-            nav.collapse_or_parent();
-            return None;
+        InputAction::NavRight | InputAction::NavLeft => {
+            let browser_action = browser.handle_input(action);
+            return InputResult { tree_action: None, browser_action };
         }
         _ => {}
     }
 
     // Delegate remaining keys to variant
-    variant.handle_input(action, nav)
+    let vr = variant.handle_input(action, browser);
+    InputResult {
+        tree_action: vr.tree_action,
+        browser_action: vr.browser_action,
+    }
 }

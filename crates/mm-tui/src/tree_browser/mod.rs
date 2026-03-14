@@ -1,24 +1,18 @@
 //! Tree Browser Module
 //!
 //! Unified tree browser with variant modes. Currently only CorpusBrowser exists.
-//!
-//! ## Usage
-//!
-//! ```ignore
-//! // Create a corpus browser
-//! let browser = TreeBrowserState::corpus_browser(corpus_root, CorpusBrowserConfig::default());
-//! ```
+//! Uses DirectoryBrowser (mm-ui) for backend-agnostic tree navigation, with
+//! variant-specific marker lookups for deploy/packing/dimming.
 
 mod actions;
-mod config;
 mod entry;
 mod input;
-mod navigator;
 mod render;
 pub mod variants;
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+
+use mm_ui::directory_browser::DirectoryBrowser;
 
 use ratatui::layout::Rect;
 use ratatui::Frame;
@@ -27,9 +21,7 @@ use crate::input::InputAction;
 use crate::widgets::{AlbumArtCache, AlbumArtPicker};
 
 pub use actions::TreeBrowserAction;
-pub use config::CorpusBrowserConfig;
-pub use entry::TreeEntry;
-pub use navigator::{EntryFilter, TreeNavigator};
+pub use entry::{DeployMarker, PackingMarker};
 pub use variants::{BrowserVariant, CorpusBrowserVariant};
 
 /// Unified tree browser state.
@@ -37,56 +29,71 @@ pub use variants::{BrowserVariant, CorpusBrowserVariant};
 /// Instantiate with a specific variant - no unvarianted mode exists.
 #[derive(Debug)]
 pub struct TreeBrowserState {
-    /// Shared navigation state
-    pub(crate) navigator: TreeNavigator,
+    /// Backend-agnostic tree browser (entries, cursor, scroll, search).
+    pub(crate) browser: DirectoryBrowser,
     /// Variant-specific state and behavior
     variant: BrowserVariant,
     /// Click targets for tree entries (set during render).
     pub click_targets: crate::widgets::ListClickTargets,
+    /// Pending browser action from last handle_input (e.g. RequestExpand).
+    /// Consumed by the app layer after handle_input returns.
+    pending_browser_action: Option<mm_ui::directory_browser::BrowserAction>,
 }
 
 impl TreeBrowserState {
     /// Create a CorpusBrowser for browsing files and directories.
     ///
-    /// Features:
-    /// - Shows both files and directories (full width)
-    /// - Type-to-jump search for directories
-    /// - Enter launches tag editor (directory = bulk edit, file = single edit)
-    /// - Part of lateral view ring (Tab/Shift-Tab cycling)
-    ///
-    /// `root` is the archive root (shows zone dirs at depth 0).
-    /// `corpus_dir` is the corpus subdirectory (for C key and initial focus).
-    /// `primary_zone_paths` lists corpus/inbox/stash for dimming non-zone dirs.
+    /// `corpus_dir_rel` is the corpus directory relative to archive root (e.g. "corpus").
+    /// `deploy_source_dirs` are relative paths for deploy source markers.
+    /// `primary_zone_dirs` are relative paths for dimming non-zone entries.
     pub fn corpus_browser(
-        root: PathBuf,
-        variant_config: CorpusBrowserConfig,
-        deploy_source_paths: Vec<PathBuf>,
-        corpus_dir: PathBuf,
-        primary_zone_paths: Vec<PathBuf>,
+        corpus_dir: std::path::PathBuf,
+        corpus_dir_rel: String,
+        deploy_source_dirs: Vec<String>,
+        primary_zone_dirs: Vec<String>,
     ) -> Self {
-        let filter = if variant_config.show_files {
-            EntryFilter::with_files()
-        } else {
-            EntryFilter::directories_only()
-        };
-
-        let mut navigator =
-            TreeNavigator::new(root, filter, false, deploy_source_paths, primary_zone_paths);
-        navigator.focus_and_expand(&corpus_dir);
-        let variant =
-            BrowserVariant::CorpusBrowser(CorpusBrowserVariant::new(variant_config, corpus_dir));
+        let browser = DirectoryBrowser::new("corpus");
+        let variant = BrowserVariant::CorpusBrowser(CorpusBrowserVariant::new(
+            corpus_dir,
+            corpus_dir_rel,
+            deploy_source_dirs,
+            primary_zone_dirs,
+        ));
 
         Self {
-            navigator,
+            browser,
             variant,
             click_targets: Default::default(),
+            pending_browser_action: None,
         }
     }
 
-    /// Handle a semantic input action. CorpusBrowser keeps CycleNext/CyclePrev/Cancel
-    /// as domain actions (complex Tab and Cancel behavior).
+    /// Handle a semantic input action.
+    ///
+    /// Returns the domain action (for the app-level action handler).
+    /// Browser-level actions (RequestExpand, Collapse) are handled internally
+    /// or stored as pending for the app layer to dispatch via `take_pending_browser_action()`.
     pub fn handle_input(&mut self, action: &InputAction) -> Option<TreeBrowserAction> {
-        input::handle_input(action, &mut self.navigator, &mut self.variant)
+        let result = input::handle_input(action, &mut self.browser, &mut self.variant);
+        if let Some(ba) = result.browser_action {
+            match ba {
+                mm_ui::directory_browser::BrowserAction::Collapse => {
+                    self.browser.collapse_at_cursor();
+                }
+                other => {
+                    self.pending_browser_action = Some(other);
+                }
+            }
+        }
+        result.tree_action
+    }
+
+    /// Take the pending browser action, if any (e.g. RequestExpand after Right arrow).
+    ///
+    /// The app layer should call this after handle_input and dispatch the
+    /// appropriate protocol query if it returns Some.
+    pub fn take_pending_browser_action(&mut self) -> Option<mm_ui::directory_browser::BrowserAction> {
+        self.pending_browser_action.take()
     }
 
     /// Render the browser.
@@ -96,21 +103,43 @@ impl TreeBrowserState {
         area: Rect,
         art_picker: &mut AlbumArtPicker,
         art_cache: &mut AlbumArtCache,
+        resolver: &mm_meta::paths::PathResolver,
     ) {
         render::render(
             f,
             area,
-            &mut self.navigator,
+            &mut self.browser,
             &mut self.variant,
             art_picker,
             art_cache,
             &mut self.click_targets,
+            resolver,
         );
     }
 
-    /// Get the path of the currently selected entry (if any).
-    pub fn selected_path(&self) -> Option<&std::path::Path> {
-        self.navigator.current_entry().map(|e| e.path.as_path())
+    /// Get the relative path of the currently selected entry (if any).
+    pub fn selected_path(&self) -> Option<&str> {
+        self.browser.current_entry().map(|e| e.path.as_str())
+    }
+
+    /// Get a reference to the DirectoryBrowser.
+    pub fn browser(&self) -> &DirectoryBrowser {
+        &self.browser
+    }
+
+    /// Get a mutable reference to the DirectoryBrowser.
+    pub fn browser_mut(&mut self) -> &mut DirectoryBrowser {
+        &mut self.browser
+    }
+
+    /// Get a reference to the variant.
+    pub fn variant(&self) -> &BrowserVariant {
+        &self.variant
+    }
+
+    /// Get a mutable reference to the variant.
+    pub fn variant_mut(&mut self) -> &mut BrowserVariant {
+        &mut self.variant
     }
 
     // =========================================================================
@@ -141,7 +170,7 @@ impl TreeBrowserState {
     pub fn handle_click(&mut self, x: u16, y: u16) {
         if let Some(id) = self.click_targets.hit_test(x, y) {
             if let Ok(idx) = id.parse::<usize>() {
-                self.navigator.set_cursor(idx);
+                self.browser.set_cursor(idx);
             }
         }
     }

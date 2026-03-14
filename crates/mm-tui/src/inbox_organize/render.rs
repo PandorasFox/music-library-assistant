@@ -105,11 +105,11 @@ fn render_inbox_pane(f: &mut Frame, area: Rect, state: &InboxOrganizeState) {
 /// Render the corpus tree browser (right pane, interactive).
 fn render_corpus_pane(f: &mut Frame, area: Rect, state: &mut InboxOrganizeState) {
     let inner_height = area.height.saturating_sub(2) as usize;
-    state.corpus_navigator.set_visible_height(inner_height);
+    state.corpus_browser.visible_height = inner_height;
 
-    let entries = state.corpus_navigator.entries();
-    let cursor_idx = state.corpus_navigator.cursor_idx();
-    let scroll = state.corpus_navigator.scroll_offset();
+    let entries = &state.corpus_browser.entries;
+    let cursor_idx = state.corpus_browser.cursor;
+    let scroll = state.corpus_browser.scroll;
 
     let lines: Vec<Line> = entries
         .iter()
@@ -129,36 +129,16 @@ fn render_corpus_pane(f: &mut Frame, area: Rect, state: &mut InboxOrganizeState)
 
 /// Render a single corpus tree entry line.
 fn render_corpus_entry(
-    entry: &crate::tree_browser::TreeEntry,
+    entry: &mm_ui::directory_browser::BrowserEntry,
     is_cursor: bool,
 ) -> Line<'static> {
     let indent = "  ".repeat(entry.depth);
 
-    if entry.is_synthetic {
-        // Render "[+ new directory]" in distinctive style
-        let style = if is_cursor {
-            CURSOR_STYLE
+    let expand_indicator = if entry.is_dir {
+        if entry.expanded {
+            "▽ "
         } else {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::ITALIC)
-        };
-        return Line::from(vec![
-            Span::raw(indent),
-            Span::styled("  ", Style::default()),
-            Span::styled(entry.name.clone(), style),
-        ]);
-    }
-
-    let expand_indicator = if entry.is_directory() {
-        if entry.has_children {
-            if entry.is_expanded {
-                "▽ "
-            } else {
-                "▷ "
-            }
-        } else {
-            "  "
+            "▷ "
         }
     } else {
         "  "
@@ -166,7 +146,7 @@ fn render_corpus_entry(
 
     let base_style = if is_cursor {
         CURSOR_STYLE
-    } else if entry.is_directory() {
+    } else if entry.is_dir {
         Style::default().fg(Color::Blue)
     } else {
         Style::default().fg(Color::White)
@@ -208,16 +188,8 @@ fn render_emplace_popup(f: &mut Frame, area: Rect, state: &InboxOrganizeState) {
         .map(|d| d.dir_path.to_string_lossy().to_string())
         .unwrap_or_else(|| "?".to_string());
 
-    let root = state.corpus_navigator.root_path();
-    let root_name = root
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "corpus".to_string());
-    let dest_display = match state.selected_dest.strip_prefix(root) {
-        Ok(rel) if rel.as_os_str().is_empty() => root_name,
-        Ok(rel) => format!("{}/{}", root_name, rel.display()),
-        Err(_) => state.selected_dest.to_string_lossy().to_string(),
-    };
+    let zone = &state.corpus_browser.current_zone;
+    let dest_display = format!("{}/{}", zone, state.selected_dest.display());
 
     let block = Block::default()
         .borders(Borders::ALL)

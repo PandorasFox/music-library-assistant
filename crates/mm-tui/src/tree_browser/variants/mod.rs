@@ -1,7 +1,7 @@
 //! Browser Variants
 //!
 //! Each variant provides a distinct, purpose-tuned mode for the tree browser.
-//! Currently only CorpusBrowser exists - DirectorySelector was removed as vestigial.
+//! Currently only CorpusBrowser exists.
 
 pub mod corpus;
 
@@ -10,10 +10,17 @@ pub use corpus::CorpusBrowserVariant;
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
+use mm_ui::directory_browser::{BrowserAction, DirectoryBrowser};
+
 use crate::input::InputAction;
 
 use super::actions::TreeBrowserAction;
-use super::navigator::TreeNavigator;
+
+/// Result from variant input handling — may include a browser action alongside the domain action.
+pub struct VariantInputResult {
+    pub tree_action: Option<TreeBrowserAction>,
+    pub browser_action: Option<BrowserAction>,
+}
 
 /// Browser variants - each is a distinct, purpose-tuned mode.
 #[derive(Debug)]
@@ -24,16 +31,16 @@ pub enum BrowserVariant {
 
 impl BrowserVariant {
     /// Called when cursor moves - allows variants to update state.
-    pub fn on_cursor_move(&mut self, nav: &TreeNavigator) {
+    pub fn on_cursor_move(&mut self, browser: &DirectoryBrowser) {
         match self {
-            BrowserVariant::CorpusBrowser(v) => v.on_cursor_move(nav),
+            BrowserVariant::CorpusBrowser(v) => v.on_cursor_move(browser),
         }
     }
 
     /// Handle Escape key - return true if handled (don't propagate Cancel).
-    pub fn handle_escape(&mut self, nav: &mut TreeNavigator) -> bool {
+    pub fn handle_escape(&mut self, browser: &mut DirectoryBrowser) -> bool {
         match self {
-            BrowserVariant::CorpusBrowser(v) => v.handle_escape(nav),
+            BrowserVariant::CorpusBrowser(v) => v.handle_escape(browser),
         }
     }
 
@@ -49,10 +56,10 @@ impl BrowserVariant {
     pub fn handle_input(
         &mut self,
         action: &InputAction,
-        nav: &mut TreeNavigator,
-    ) -> Option<TreeBrowserAction> {
+        browser: &mut DirectoryBrowser,
+    ) -> VariantInputResult {
         match self {
-            BrowserVariant::CorpusBrowser(v) => v.handle_input(action, nav),
+            BrowserVariant::CorpusBrowser(v) => v.handle_input(action, browser),
         }
     }
 

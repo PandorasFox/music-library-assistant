@@ -149,7 +149,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
             render_exit_confirm_modal(f, area, state);
         }
         ActiveView::CorpusBrowser(ref mut browser) => {
-            browser.render(f, area, &mut app.art_picker, &mut app.art_cache);
+            browser.render(f, area, &mut app.art_picker, &mut app.art_cache, &app.resolver);
         }
         ActiveView::Insights { ref data, ref mut interaction } => {
             insights_view::render_insights_view(f, area, data, interaction);

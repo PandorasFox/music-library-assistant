@@ -128,6 +128,7 @@ pub(crate) struct App {
     /// Generation counters from last frame — used to detect events by diffing
     /// against the current WitchStatus each frame.
     prev_mutations_generation: u64,
+    prev_computations_generation: u64,
     prev_error_generation: u64,
     prev_config_generation: u64,
 
@@ -222,6 +223,7 @@ impl App {
             last_lateral_view: widgets::LateralView::Health,
             startup_complete: false,
             prev_mutations_generation: 0,
+            prev_computations_generation: 0,
             prev_error_generation: 0,
             prev_config_generation: 0,
             cached_status,
@@ -441,6 +443,46 @@ impl App {
         // Phase 2: dispatch with confirmation flag
         let is_confirmation = matches!(action, InputAction::Confirm);
         self.dispatch_action(view_action, is_confirmation);
+
+        // Phase 3: handle pending DirectoryBrowser actions (expand, search)
+        self.handle_pending_browser_action();
+    }
+
+    /// Dispatch any pending DirectoryBrowser action (RequestExpand, RequestSearch).
+    ///
+    /// Called after input dispatch. Separated to avoid borrow conflicts between
+    /// `self.view` (take action) and `self.query()` (socket).
+    fn handle_pending_browser_action(&mut self) {
+        let pending = match self.view {
+            ActiveView::CorpusBrowser(ref mut browser_state) => browser_state.take_pending_browser_action(),
+            _ => None,
+        };
+        let Some(action) = pending else { return };
+        match action {
+            mm_ui::directory_browser::BrowserAction::RequestExpand(path) => {
+                let children = self.query(mm_meta::domain_queries::GetDirectoryListing {
+                    zone: mm_meta::db_types::Zone::Corpus,
+                    parent: Some(path.clone()),
+                });
+                if let ActiveView::CorpusBrowser(ref mut bs) = self.view {
+                    bs.browser_mut().populate_children(&path, children);
+                }
+            }
+            mm_ui::directory_browser::BrowserAction::RequestSearch(query) => {
+                let results = self.query(mm_meta::domain_queries::SearchCorpusFiles {
+                    query,
+                    limit: 100,
+                });
+                let matching_paths: std::collections::HashSet<String> = results.iter()
+                    .map(|r| r.path.clone())
+                    .collect();
+                if let ActiveView::CorpusBrowser(ref mut bs) = self.view {
+                    // Set filter on the browser directly (variant stores it, browser stores display)
+                    bs.browser_mut().set_path_filter(matching_paths);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Check if there are any pending operations (Witch work).
@@ -448,14 +490,97 @@ impl App {
         self.witch_status().has_pending
     }
 
+    /// Re-fetch data for the currently active view.
+    ///
+    /// Called when a generation counter bumps (computations or mutations completed)
+    /// to refresh the active view's data without a full view restart.
+    fn refresh_active_view_data(&mut self) {
+        match &self.view {
+            ActiveView::Insights { .. } => {
+                let insights_data = self.query(mm_meta::domain_queries::GetInsights);
+                if let ActiveView::Insights { ref mut data, ref mut interaction } = self.view {
+                    let rebuilt = data.update(
+                        Some(&self.cached_status.work),
+                        Some(insights_data),
+                        &self.cached_status.handled_decision_kinds,
+                    );
+                    if rebuilt {
+                        interaction.list.clamp_cursor(&data.flat_items);
+                    }
+                }
+            }
+            ActiveView::Inbox { .. } => {
+                let inbox_data = self.query(mm_meta::domain_queries::GetInboxOverview);
+                let busy = self.cached_status.work.pending > 0;
+                if let ActiveView::Inbox { ref mut data, ref mut interaction } = self.view {
+                    data.busy = busy;
+                    if data.update(Some(inbox_data)) {
+                        interaction.clamp_to_data(&data.entries);
+                    }
+                }
+            }
+            ActiveView::History { .. } => {
+                let history_data = self.query(mm_meta::domain_queries::GetEditHistory);
+                if let ActiveView::History { ref mut data, ref mut interaction } = self.view {
+                    data.update(&mut interaction.session_list, Some(history_data));
+                }
+            }
+            ActiveView::ExternalMatches { .. } => {
+                let ext_data = self.query(mm_meta::domain_queries::GetExternalMatches);
+                if let ActiveView::ExternalMatches { ref mut data, ref mut interaction } = self.view {
+                    data.update(ext_data);
+                    interaction.clamp_to_data(&data.flat_items);
+                    data.rebuild_items();
+                    interaction.clamp_to_data(&data.flat_items);
+                }
+            }
+            ActiveView::Deploy { data: deploy_modal::DeployViewData::UpToDate { .. }, .. } => {
+                let status = self.query(mm_meta::domain_queries::GetDeployStatus);
+                if let ActiveView::Deploy {
+                    data: deploy_modal::DeployViewData::UpToDate {
+                        ref mut library_file_counts,
+                    },
+                    ..
+                } = self.view
+                {
+                    *library_file_counts = status.library_file_counts;
+                }
+            }
+            ActiveView::CorpusBrowser(_) => {
+                let config = self.config();
+                let packing = self.query(mm_meta::domain_queries::GetPackingDirs);
+                if let ActiveView::CorpusBrowser(ref mut browser_state) = self.view {
+                    let tree_browser::BrowserVariant::CorpusBrowser(ref mut v) = browser_state.variant_mut();
+                    let file_paths: std::collections::HashSet<String> = packing.file_paths.iter()
+                        .filter_map(|p| p.strip_prefix(&config.root).ok())
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect();
+                    let dir_categories: std::collections::HashMap<String, mm_meta::signals::packing_category::PackingCategory> = packing.dir_categories.iter()
+                        .filter_map(|(p, &cat)| {
+                            p.strip_prefix(&config.root).ok().map(|rel| (rel.to_string_lossy().to_string(), cat))
+                        })
+                        .collect();
+                    v.set_packing_markers(file_paths, dir_categories);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Start the health view.
     pub(crate) fn start_health_view(&mut self) {
         self.clear_view_stack();
         self.last_lateral_view = widgets::LateralView::Health;
-        self.view = ActiveView::Insights {
-            data: insights_view::InsightsViewData::new(),
-            interaction: insights_view::HealthInteraction::new(),
-        };
+        let insights_data = self.query(mm_meta::domain_queries::GetInsights);
+        let mut data = insights_view::InsightsViewData::new();
+        let mut interaction = insights_view::HealthInteraction::new();
+        data.update(
+            Some(&self.cached_status.work),
+            Some(insights_data),
+            &self.cached_status.handled_decision_kinds,
+        );
+        interaction.list.clamp_cursor(&data.flat_items);
+        self.view = ActiveView::Insights { data, interaction };
     }
 
     /// Start the configured default view (post-startup landing screen).
@@ -502,20 +627,25 @@ impl App {
         if let Some(state) = intake_state {
             self.view = ActiveView::IntakeConfirmation(state);
         } else {
-            self.view = ActiveView::Inbox {
-                data: inbox_view::InboxViewData::new(),
-                interaction: inbox_view::InboxInteraction::new(),
-            };
+            let inbox_data = self.query(mm_meta::domain_queries::GetInboxOverview);
+            let busy = self.cached_status.work.pending > 0;
+            let mut data = inbox_view::InboxViewData::new();
+            let mut interaction = inbox_view::InboxInteraction::new();
+            data.busy = busy;
+            data.update(Some(inbox_data));
+            interaction.clamp_to_data(&data.entries);
+            self.view = ActiveView::Inbox { data, interaction };
         }
     }
 
     /// Start the history lateral view.
     pub(crate) fn start_history_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::History;
-        self.view = ActiveView::History {
-            data: history_view::HistoryViewData::new(),
-            interaction: history_view::HistoryInteraction::new(),
-        };
+        let history_data = self.query(mm_meta::domain_queries::GetEditHistory);
+        let mut data = history_view::HistoryViewData::new();
+        let mut interaction = history_view::HistoryInteraction::new();
+        data.update(&mut interaction.session_list, Some(history_data));
+        self.view = ActiveView::History { data, interaction };
     }
 
     /// Start the external matches lateral view.
@@ -605,23 +735,51 @@ impl App {
 
     pub(crate) fn start_corpus_browser(&mut self) {
         self.last_lateral_view = widgets::LateralView::Files;
-        let variant_config = tree_browser::CorpusBrowserConfig::default();
         let config = self.config();
-        let archive_root = config.root.clone();
         let corpus_dir = config.corpus_dir();
-        let deploy_source_paths: Vec<std::path::PathBuf> = config
+        let corpus_dir_rel = "corpus".to_string();
+
+        // Compute relative paths for marker lookups
+        let deploy_source_dirs: Vec<String> = config
             .source_dirs
             .iter()
-            .map(|sd| corpus_dir.join(&sd.path))
+            .map(|sd| format!("corpus/{}", sd.path.display()))
             .collect();
-        let primary_zone_paths = vec![corpus_dir.clone(), config.inbox_dir(), config.stash_dir()];
-        self.view = ActiveView::CorpusBrowser(tree_browser::TreeBrowserState::corpus_browser(
-            archive_root,
-            variant_config,
-            deploy_source_paths,
+        let primary_zone_dirs = vec![
+            "corpus".to_string(),
+            "inbox".to_string(),
+            "stash".to_string(),
+        ];
+
+        let mut browser_state = tree_browser::TreeBrowserState::corpus_browser(
             corpus_dir,
-            primary_zone_paths,
-        ));
+            corpus_dir_rel,
+            deploy_source_dirs,
+            primary_zone_dirs,
+        );
+
+        // Load initial directory listing via protocol
+        let root_entries = self.query(mm_meta::domain_queries::GetDirectoryListing {
+            zone: mm_meta::db_types::Zone::Corpus,
+            parent: None,
+        });
+        browser_state.browser_mut().populate_root(root_entries);
+
+        // Load packing marker data
+        let packing = self.query(mm_meta::domain_queries::GetPackingDirs);
+        let tree_browser::BrowserVariant::CorpusBrowser(ref mut v) = browser_state.variant_mut();
+        let file_paths: std::collections::HashSet<String> = packing.file_paths.iter()
+            .filter_map(|p| p.strip_prefix(&config.root).ok())
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let dir_categories: std::collections::HashMap<String, mm_meta::signals::packing_category::PackingCategory> = packing.dir_categories.iter()
+            .filter_map(|(p, &cat)| {
+                p.strip_prefix(&config.root).ok().map(|rel| (rel.to_string_lossy().to_string(), cat))
+            })
+            .collect();
+        v.set_packing_markers(file_paths, dir_categories);
+
+        self.view = ActiveView::CorpusBrowser(browser_state);
     }
 
     // =========================================================================
@@ -1045,9 +1203,18 @@ fn run_app<B: ratatui::backend::Backend>(
 
         // Detect events via generation counter diffing against WitchStatus
         {
-            // Mutations completed
+            let mut view_data_stale = false;
+
+            // Mutations completed — views dependent on mutation state need refresh
             if app.cached_status.mutations_generation != app.prev_mutations_generation {
                 app.prev_mutations_generation = app.cached_status.mutations_generation;
+                view_data_stale = true;
+            }
+
+            // Computations completed — views dependent on signal-derived data need refresh
+            if app.cached_status.computations_generation != app.prev_computations_generation {
+                app.prev_computations_generation = app.cached_status.computations_generation;
+                view_data_stale = true;
             }
 
             // New error → show status message
@@ -1066,76 +1233,28 @@ fn run_app<B: ratatui::backend::Backend>(
                 let new_config = app.config();
                 app.resolver = PathResolver::from_config(&new_config);
             }
+
+            if view_data_stale {
+                app.refresh_active_view_data();
+            }
         }
 
-        // Update views with query data.
-        // Queries need &mut app (socket), so we query first then borrow view.
-        if matches!(app.view, ActiveView::Insights { .. }) {
-            let insights_data = app.query(mm_meta::domain_queries::GetInsights);
-            if let ActiveView::Insights { ref mut data, ref mut interaction } = app.view {
-                let rebuilt = data.update(
-                    Some(&app.cached_status.work),
-                    Some(insights_data),
-                    &app.cached_status.handled_decision_kinds,
-                );
-                if rebuilt {
-                    interaction.list.clamp_cursor(&data.flat_items);
-                }
-            }
-        }
-        if matches!(app.view, ActiveView::Inbox { .. }) {
-            let inbox_data = app.query(mm_meta::domain_queries::GetInboxOverview);
-            let busy = app.cached_status.work.pending > 0;
-            if let ActiveView::Inbox { ref mut data, ref mut interaction } = app.view {
-                data.busy = busy;
-                if data.update(Some(inbox_data)) {
-                    interaction.clamp_to_data(&data.entries);
-                }
-            }
-        }
-        if matches!(app.view, ActiveView::History { .. }) {
-            let history_data = app.query(mm_meta::domain_queries::GetEditHistory);
-            if let ActiveView::History { ref mut data, ref mut interaction } = app.view {
-                data.update(&mut interaction.session_list, Some(history_data));
-            }
-        }
+        // ExternalMatches: poll fetch status each tick when active (progress display)
         if matches!(app.view, ActiveView::ExternalMatches { .. }) {
-            let ext_data = app.query(mm_meta::domain_queries::GetExternalMatches);
             let new_fetch_active = app.cached_status.is_external_fetch_active;
             let fetch_progress = app.cached_status.external_fetch_progress.clone();
+            let mut fetch_changed = false;
             if let ActiveView::ExternalMatches { ref mut data, ref mut interaction } = app.view {
-                data.update(ext_data);
-                interaction.clamp_to_data(&data.flat_items);
-                let fetch_changed = data.fetch_active != new_fetch_active;
+                fetch_changed = data.fetch_active != new_fetch_active;
                 data.fetch_active = new_fetch_active;
                 data.fetch_progress = fetch_progress;
                 if data.fetch_active {
                     interaction.tick_count = interaction.tick_count.wrapping_add(1);
                 }
-                if fetch_changed {
-                    data.rebuild_items();
-                    interaction.clamp_to_data(&data.flat_items);
-                }
             }
-        }
-        if matches!(app.view, ActiveView::Deploy { data: deploy_modal::DeployViewData::UpToDate { .. }, .. }) {
-            let status = app.query(mm_meta::domain_queries::GetDeployStatus);
-            if let ActiveView::Deploy {
-                data: deploy_modal::DeployViewData::UpToDate {
-                    ref mut library_file_counts,
-                },
-                ..
-            } = app.view
-            {
-                *library_file_counts = status.library_file_counts;
-            }
-        }
-        if matches!(app.view, ActiveView::CorpusBrowser(_)) {
-            let data = app.query(mm_meta::domain_queries::GetPackingDirs);
-            if let ActiveView::CorpusBrowser(ref mut browser) = app.view {
-                browser
-                    .navigator
-                    .set_packing_data(&data.file_paths, &data.dir_categories);
+            if fetch_changed {
+                // Fetch state toggled — re-query data and rebuild items
+                app.refresh_active_view_data();
             }
         }
 

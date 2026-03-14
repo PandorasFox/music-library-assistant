@@ -13,13 +13,15 @@ impl HandleAction for tree_browser::TreeBrowserAction {
             tree_browser::TreeBrowserAction::Cancel => {
                 app.start_health_view();
             }
-            tree_browser::TreeBrowserAction::EditDirectory(path) => {
+            tree_browser::TreeBrowserAction::EditDirectory(rel_path) => {
+                let abs_path = app.resolver.resolve(std::path::Path::new(&rel_path));
                 app.push_current_view();
-                app.open_unified_tag_editor_for_directory(&path);
+                app.open_unified_tag_editor_for_directory(&abs_path);
             }
-            tree_browser::TreeBrowserAction::EditFile(path) => {
+            tree_browser::TreeBrowserAction::EditFile(rel_path) => {
+                let abs_path = app.resolver.resolve(std::path::Path::new(&rel_path));
                 app.push_current_view();
-                app.start_tag_editor_for_path(&path, false);
+                app.start_tag_editor_for_path(&abs_path, false);
             }
             tree_browser::TreeBrowserAction::CycleNext => {
                 app.handle_lateral_cycle(widgets::LateralView::Files, true);
@@ -27,8 +29,9 @@ impl HandleAction for tree_browser::TreeBrowserAction {
             tree_browser::TreeBrowserAction::CyclePrev => {
                 app.handle_lateral_cycle(widgets::LateralView::Files, false);
             }
-            tree_browser::TreeBrowserAction::OpenDirConfig(path) => {
-                app.open_dir_config_panel(path);
+            tree_browser::TreeBrowserAction::OpenDirConfig(rel_path) => {
+                let abs_path = app.resolver.resolve(std::path::Path::new(&rel_path));
+                app.open_dir_config_panel(abs_path);
             }
             tree_browser::TreeBrowserAction::SaveDirConfig => {
                 if let Some(gesture) = witness {
@@ -47,21 +50,15 @@ impl HandleAction for tree_browser::TreeBrowserAction {
 
 impl App {
     /// Open a dir config panel for the given absolute corpus directory path.
-    ///
-    /// If an exact SourceDir match exists, loads its values. Otherwise opens
-    /// panel with defaults so the user can create a new config entry.
     fn open_dir_config_panel(&mut self, abs_path: std::path::PathBuf) {
         let config = self.config();
         let corpus_dir = config.corpus_dir();
 
-        // Strip corpus_dir prefix to get relative path
         let relative = match abs_path.strip_prefix(&corpus_dir) {
             Ok(r) => r.to_path_buf(),
             Err(_) => return,
         };
 
-        // Find exact matching SourceDir (raw, with Option fields) for editing.
-        // We show what THIS dir explicitly sets, not the resolved/inherited values.
         let (libraries, can_stash_dupes, interior_dupes, path_schema, enable_acoustid, pinned_release) =
             match config.get_raw_source_dir(&relative) {
                 Some(sd) => (
@@ -73,7 +70,6 @@ impl App {
                     sd.pinned_release.clone(),
                 ),
                 None => {
-                    // Defaults for a new (unconfigured) directory
                     (vec![], None, None, None, None, None)
                 }
             };
@@ -106,7 +102,6 @@ impl App {
 
     /// Save dir config edits and stage decision.
     fn save_dir_config(&mut self, gesture: &witness::ConfirmationGesture) {
-        // Extract panel data from the browser view
         let (source_path, old_dir, new_dir) = {
             let panel = match self.view {
                 ActiveView::CorpusBrowser(ref browser) => {
@@ -119,7 +114,6 @@ impl App {
             };
 
             if !panel.has_edits() {
-                // No edits, just close
                 self.close_dir_config_panel();
                 return;
             }
@@ -151,10 +145,6 @@ impl App {
             (panel.source_path.clone(), old_dir, new_dir)
         };
 
-        // Construct the full new Config with the dir edit applied,
-        // so the Witch can update SharedConfig in-memory after execution.
-        // Default entries (all-defaults, no meaningful config) are elided —
-        // they carry no information and will be dropped from dirs.kdl on write.
         let new_config = {
             let mut cfg = (*self.config()).clone();
             let mut found = false;
@@ -197,7 +187,6 @@ impl App {
             decision,
         );
 
-        // Close panel and stay in browser for batch editing
         self.close_dir_config_panel();
         self.sync_browser_pending_edits();
         self.status_message = Some(format!("Dir config staged: {}", source_path.display()));

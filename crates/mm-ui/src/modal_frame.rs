@@ -5,6 +5,7 @@
 //! `ModalFrame` supertrait.
 
 use crate::click_targets::ListClickTargets;
+use crate::decision_field::DecisionField;
 use crate::geometry::FocusPane;
 use crate::input::InputAction;
 use crate::modal_buttons::{ButtonRowState, ModalButtons};
@@ -20,6 +21,9 @@ pub enum ContentLayout {
     DetailAboveList { detail_height: u16 },
     FourSection { header_height: u16, detail_height: u16 },
     HorizontalSplit { list_percent: u16, info_height: u16 },
+    /// DecisionField above the list, detail below. For modals where the
+    /// operator specifies a value (canonical tag, album name) via text input.
+    FieldAboveList { field_height: u16, detail_height: u16 },
 }
 
 /// Common frame state fields shared by all ModalFrame implementors.
@@ -64,22 +68,62 @@ pub trait ModalFrameCore {
     fn button_ctx(&self) -> <Self::Button as ModalButtons>::Context;
     fn escape_action(&self) -> <Self::Button as ModalButtons>::Action;
 
+    /// Optional decision text field. Override to provide a labeled text input
+    /// above the list pane. When present, `FocusPane::Field` becomes part of
+    /// the focus cycle.
+    fn decision_field(&self) -> Option<&DecisionField> { None }
+
+    /// Mutable access to the decision field for input handling.
+    fn decision_field_mut(&mut self) -> Option<&mut DecisionField> { None }
+
     fn handle_frame_input(
         &mut self, action: &InputAction,
     ) -> FrameInputResult<<Self::Button as ModalButtons>::Action> {
+        let has_field = self.decision_field().is_some();
+
+        // Focus pane cycling (Shift+arrow)
         match action {
             InputAction::FocusUp => {
                 let fp = &mut self.frame_state_mut().focus_pane;
-                *fp = fp.prev();
+                *fp = fp.prev(has_field);
                 return FrameInputResult::Consumed;
             }
             InputAction::FocusDown => {
                 let fp = &mut self.frame_state_mut().focus_pane;
-                *fp = fp.next();
+                *fp = fp.next(has_field);
                 return FrameInputResult::Consumed;
             }
             _ => {}
         }
+
+        // Decision field input (when focused)
+        if self.frame_state().focus_pane == FocusPane::Field {
+            match action {
+                InputAction::Cancel => {
+                    return FrameInputResult::Action(self.escape_action());
+                }
+                InputAction::Confirm => {
+                    // Confirm from field fires the currently selected button,
+                    // matching the tag canonicity UX where Enter from the text
+                    // field confirms the whole modal.
+                    let ctx = self.button_ctx();
+                    return match self.frame_state_mut().buttons.confirm(&ctx) {
+                        Some(a) => FrameInputResult::Action(a),
+                        None => FrameInputResult::Consumed,
+                    };
+                }
+                other => {
+                    if let Some(field) = self.decision_field_mut() {
+                        if field.handle_input(other) {
+                            return FrameInputResult::Consumed;
+                        }
+                    }
+                    return FrameInputResult::Unhandled;
+                }
+            }
+        }
+
+        // List and button pane input
         match action {
             InputAction::NavUp if self.frame_state().focus_pane == FocusPane::List => {
                 *self.cursor_mut() = self.cursor().saturating_sub(1);

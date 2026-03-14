@@ -37,6 +37,7 @@ pub trait ModalFrame: ModalFrameCore {
     fn render_detail(&mut self, f: &mut Frame, area: Rect);
     fn render_header(&self, _f: &mut Frame, _area: Rect) {}
     fn render_info_bar(&self, _f: &mut Frame, _area: Rect) {}
+    fn render_decision_field(&self, _f: &mut Frame, _area: Rect) {}
 
     // === Provided defaults ===
 
@@ -100,6 +101,24 @@ pub trait ModalFrame: ModalFrameCore {
                 self.render_frame_list(f, layout.list_pane);
                 self.render_detail(f, layout.details_pane);
                 self.render_frame_controls(f, layout.buttons);
+            }
+            ContentLayout::FieldAboveList { field_height, detail_height } => {
+                f.render_widget(Clear, area);
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(3),              // title
+                        Constraint::Length(field_height),   // decision field
+                        Constraint::Min(5),                 // list
+                        Constraint::Length(detail_height),  // detail
+                        Constraint::Length(controls_h),     // buttons
+                    ])
+                    .split(area);
+                self.render_frame_title(f, chunks[0]);
+                self.render_decision_field(f, chunks[1]);
+                self.render_frame_list(f, chunks[2]);
+                self.render_detail(f, chunks[3]);
+                self.render_frame_controls(f, chunks[4]);
             }
         }
     }

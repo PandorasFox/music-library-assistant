@@ -5,8 +5,10 @@
 //! `mm-web` (HTML + WASM) consume this crate for shared logic.
 
 pub mod click_targets;
+pub mod decision_field;
 pub mod directory_browser;
 pub mod domain_types;
+pub mod group_navigation;
 pub mod html;
 pub mod geometry;
 pub mod helpers;

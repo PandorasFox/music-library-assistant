@@ -7,6 +7,7 @@
 //! Path segments carry identity (which view, which entity).
 //! Query parameters carry position (cursor, scroll, focus, filter text).
 
+use mm_meta::db_types::Zone;
 use std::fmt;
 
 // ============================================================================
@@ -147,37 +148,35 @@ pub struct KnotBrowserRoute {
 /// Discriminant for resolution modal type + keying parameters.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolutionRoute {
-    MissingFiles { cursor: Option<usize>, focus: Option<FocusTarget> },
+    // === Simple-batch (path alone = load anchor) ===
+    MissingFilesRestorable { cursor: Option<usize>, focus: Option<FocusTarget> },
+    MissingFilesPermanent { cursor: Option<usize> },
     MissingDirectories { cursor: Option<usize> },
     CorruptFiles { cursor: Option<usize> },
-    ShitFormat { cursor: Option<usize> },
+    LosslessRemux { cursor: Option<usize> },
     SubparDuplicates { cursor: Option<usize> },
     InboxCorpusMatch { cursor: Option<usize> },
-    InboxOrganize,
-    DirectoryCluster { cursor: Option<usize> },
+    DirectoryCluster { cluster: Option<usize>, cursor: Option<usize> },
     MovedFiles { cursor: Option<usize> },
     OobSync { cursor: Option<usize> },
-    OobConflict { cursor: Option<usize> },
+    OobConflictMtimeOnly { cursor: Option<usize> },
+    OobConflictDbOnly { cursor: Option<usize> },
+    OobConflictDiskOnly { cursor: Option<usize> },
+    OobConflictTwoWay { cursor: Option<usize> },
     ExternalMatchReview { cursor: Option<usize> },
-    TagCanonicity {
-        tag_name: String,
-        /// canonicity | inconsistent-album-artist | inbox-canonicity
-        kind: String,
-        cluster_index: Option<usize>,
-    },
-    CompoundTagSplit {
-        tag_name: String,
-        safe_mode: bool,
-        /// corpus | inbox
-        zone: String,
-    },
-    MissingAlbum { group: Option<usize>, resolution: Option<String> },
-    DiscExtraction { cursor: Option<usize> },
-    ManualReview {
-        /// redundant-duplicate | deploy-conflict | metadata-duplicate | same-recording
-        kind: String,
-        group: Option<usize>,
-    },
+
+    // === Cluster-nav (path + identity params = load anchor) ===
+    TagCanonicity { tag_name: String, zone: Zone, cluster: Option<usize> },
+    InconsistentAlbumArtist { tag_name: String, cluster: Option<usize> },
+    CompoundSplit { tag_name: String, zone: Zone, safe_mode: bool, cluster: Option<usize> },
+    MissingAlbum { group: Option<usize> },
+    DiscExtraction { group: Option<usize> },
+
+    // === Group-review (path + group = load anchor) ===
+    RedundantDuplicates { group: Option<usize> },
+    DeployConflicts { group: Option<usize> },
+    MetadataDuplicates { group: Option<usize> },
+    SameRecording { group: Option<usize> },
 }
 
 // ============================================================================
@@ -470,10 +469,15 @@ impl Route {
 fn resolution_to_url(r: &ResolutionRoute, path: &mut String, params: &mut QueryParams) {
     path.push_str("/resolve/");
     match r {
-        ResolutionRoute::MissingFiles { cursor, focus } => {
-            path.push_str("missing-files");
+        // === Simple-batch ===
+        ResolutionRoute::MissingFilesRestorable { cursor, focus } => {
+            path.push_str("missing-files/restorable");
             params.set_usize("cursor", *cursor);
             params.set_focus("focus", *focus);
+        }
+        ResolutionRoute::MissingFilesPermanent { cursor } => {
+            path.push_str("missing-files/permanent");
+            params.set_usize("cursor", *cursor);
         }
         ResolutionRoute::MissingDirectories { cursor } => {
             path.push_str("missing-directories");
@@ -483,8 +487,8 @@ fn resolution_to_url(r: &ResolutionRoute, path: &mut String, params: &mut QueryP
             path.push_str("corrupt-files");
             params.set_usize("cursor", *cursor);
         }
-        ResolutionRoute::ShitFormat { cursor } => {
-            path.push_str("shit-format");
+        ResolutionRoute::LosslessRemux { cursor } => {
+            path.push_str("lossless-remux");
             params.set_usize("cursor", *cursor);
         }
         ResolutionRoute::SubparDuplicates { cursor } => {
@@ -495,11 +499,9 @@ fn resolution_to_url(r: &ResolutionRoute, path: &mut String, params: &mut QueryP
             path.push_str("inbox-corpus-match");
             params.set_usize("cursor", *cursor);
         }
-        ResolutionRoute::InboxOrganize => {
-            path.push_str("inbox-organize");
-        }
-        ResolutionRoute::DirectoryCluster { cursor } => {
+        ResolutionRoute::DirectoryCluster { cluster, cursor } => {
             path.push_str("directory-cluster");
+            params.set_usize("cluster", *cluster);
             params.set_usize("cursor", *cursor);
         }
         ResolutionRoute::MovedFiles { cursor } => {
@@ -510,38 +512,70 @@ fn resolution_to_url(r: &ResolutionRoute, path: &mut String, params: &mut QueryP
             path.push_str("oob-sync");
             params.set_usize("cursor", *cursor);
         }
-        ResolutionRoute::OobConflict { cursor } => {
-            path.push_str("oob-conflict");
+        ResolutionRoute::OobConflictMtimeOnly { cursor } => {
+            path.push_str("oob-conflict/mtime-only");
+            params.set_usize("cursor", *cursor);
+        }
+        ResolutionRoute::OobConflictDbOnly { cursor } => {
+            path.push_str("oob-conflict/db-only");
+            params.set_usize("cursor", *cursor);
+        }
+        ResolutionRoute::OobConflictDiskOnly { cursor } => {
+            path.push_str("oob-conflict/disk-only");
+            params.set_usize("cursor", *cursor);
+        }
+        ResolutionRoute::OobConflictTwoWay { cursor } => {
+            path.push_str("oob-conflict/two-way");
             params.set_usize("cursor", *cursor);
         }
         ResolutionRoute::ExternalMatchReview { cursor } => {
             path.push_str("external-match-review");
             params.set_usize("cursor", *cursor);
         }
-        ResolutionRoute::TagCanonicity { tag_name, kind, cluster_index } => {
+
+        // === Cluster-nav ===
+        ResolutionRoute::TagCanonicity { tag_name, zone, cluster } => {
             path.push_str("tag-canonicity/");
             path.push_str(tag_name);
-            params.set_str("kind", Some(kind));
-            params.set_usize("cluster", *cluster_index);
+            params.set_str("zone", Some(zone.as_str()));
+            params.set_usize("cluster", *cluster);
         }
-        ResolutionRoute::CompoundTagSplit { tag_name, safe_mode, zone } => {
+        ResolutionRoute::InconsistentAlbumArtist { tag_name, cluster } => {
+            path.push_str("inconsistent-album-artist/");
+            path.push_str(tag_name);
+            params.set_usize("cluster", *cluster);
+        }
+        ResolutionRoute::CompoundSplit { tag_name, zone, safe_mode, cluster } => {
             path.push_str("compound-split/");
             path.push_str(tag_name);
+            params.set_str("zone", Some(zone.as_str()));
             params.set_str("safe", Some(if *safe_mode { "true" } else { "false" }));
-            params.set_str("zone", Some(zone));
+            params.set_usize("cluster", *cluster);
         }
-        ResolutionRoute::MissingAlbum { group, resolution } => {
+        ResolutionRoute::MissingAlbum { group } => {
             path.push_str("missing-album");
             params.set_usize("group", *group);
-            params.set_str("resolution", resolution.as_deref());
         }
-        ResolutionRoute::DiscExtraction { cursor } => {
+        ResolutionRoute::DiscExtraction { group } => {
             path.push_str("disc-extraction");
-            params.set_usize("cursor", *cursor);
+            params.set_usize("group", *group);
         }
-        ResolutionRoute::ManualReview { kind, group } => {
-            path.push_str("manual-review");
-            params.set_str("kind", Some(kind));
+
+        // === Group-review ===
+        ResolutionRoute::RedundantDuplicates { group } => {
+            path.push_str("redundant-duplicates");
+            params.set_usize("group", *group);
+        }
+        ResolutionRoute::DeployConflicts { group } => {
+            path.push_str("deploy-conflicts");
+            params.set_usize("group", *group);
+        }
+        ResolutionRoute::MetadataDuplicates { group } => {
+            path.push_str("metadata-duplicates");
+            params.set_usize("group", *group);
+        }
+        ResolutionRoute::SameRecording { group } => {
+            path.push_str("same-recording");
             params.set_usize("group", *group);
         }
     }
@@ -556,17 +590,32 @@ fn resolution_from_url(
     })?;
 
     let route = match *res_type {
-        "missing-files" => ResolutionRoute::MissingFiles {
-            cursor: params.get_usize("cursor"),
-            focus: params.get_focus("focus"),
-        },
+        "missing-files" => {
+            let sub = segments.get(2).ok_or_else(|| RouteParseError {
+                message: "missing-files requires a sub-type (restorable|permanent)".into(),
+            })?;
+            match *sub {
+                "restorable" => ResolutionRoute::MissingFilesRestorable {
+                    cursor: params.get_usize("cursor"),
+                    focus: params.get_focus("focus"),
+                },
+                "permanent" => ResolutionRoute::MissingFilesPermanent {
+                    cursor: params.get_usize("cursor"),
+                },
+                other => {
+                    return Err(RouteParseError {
+                        message: format!("unknown missing-files sub-type: {other}"),
+                    });
+                }
+            }
+        }
         "missing-directories" => ResolutionRoute::MissingDirectories {
             cursor: params.get_usize("cursor"),
         },
         "corrupt-files" => ResolutionRoute::CorruptFiles {
             cursor: params.get_usize("cursor"),
         },
-        "shit-format" => ResolutionRoute::ShitFormat {
+        "lossless-remux" => ResolutionRoute::LosslessRemux {
             cursor: params.get_usize("cursor"),
         },
         "subpar-duplicates" => ResolutionRoute::SubparDuplicates {
@@ -575,8 +624,8 @@ fn resolution_from_url(
         "inbox-corpus-match" => ResolutionRoute::InboxCorpusMatch {
             cursor: params.get_usize("cursor"),
         },
-        "inbox-organize" => ResolutionRoute::InboxOrganize,
         "directory-cluster" => ResolutionRoute::DirectoryCluster {
+            cluster: params.get_usize("cluster"),
             cursor: params.get_usize("cursor"),
         },
         "moved-files" => ResolutionRoute::MovedFiles {
@@ -585,9 +634,30 @@ fn resolution_from_url(
         "oob-sync" => ResolutionRoute::OobSync {
             cursor: params.get_usize("cursor"),
         },
-        "oob-conflict" => ResolutionRoute::OobConflict {
-            cursor: params.get_usize("cursor"),
-        },
+        "oob-conflict" => {
+            let sub = segments.get(2).ok_or_else(|| RouteParseError {
+                message: "oob-conflict requires a sub-type (mtime-only|db-only|disk-only|two-way)".into(),
+            })?;
+            match *sub {
+                "mtime-only" => ResolutionRoute::OobConflictMtimeOnly {
+                    cursor: params.get_usize("cursor"),
+                },
+                "db-only" => ResolutionRoute::OobConflictDbOnly {
+                    cursor: params.get_usize("cursor"),
+                },
+                "disk-only" => ResolutionRoute::OobConflictDiskOnly {
+                    cursor: params.get_usize("cursor"),
+                },
+                "two-way" => ResolutionRoute::OobConflictTwoWay {
+                    cursor: params.get_usize("cursor"),
+                },
+                other => {
+                    return Err(RouteParseError {
+                        message: format!("unknown oob-conflict sub-type: {other}"),
+                    });
+                }
+            }
+        }
         "external-match-review" => ResolutionRoute::ExternalMatchReview {
             cursor: params.get_usize("cursor"),
         },
@@ -595,31 +665,58 @@ fn resolution_from_url(
             let tag_name = segments.get(2).ok_or_else(|| RouteParseError {
                 message: "tag-canonicity requires a tag name".into(),
             })?;
+            let zone = params.get_string("zone")
+                .and_then(|s| Zone::from_str(&s))
+                .ok_or_else(|| RouteParseError {
+                    message: "tag-canonicity requires a valid zone parameter".into(),
+                })?;
             ResolutionRoute::TagCanonicity {
                 tag_name: (*tag_name).to_string(),
-                kind: params.get_string("kind").unwrap_or_else(|| "canonicity".into()),
-                cluster_index: params.get_usize("cluster"),
+                zone,
+                cluster: params.get_usize("cluster"),
+            }
+        }
+        "inconsistent-album-artist" => {
+            let tag_name = segments.get(2).ok_or_else(|| RouteParseError {
+                message: "inconsistent-album-artist requires a tag name".into(),
+            })?;
+            ResolutionRoute::InconsistentAlbumArtist {
+                tag_name: (*tag_name).to_string(),
+                cluster: params.get_usize("cluster"),
             }
         }
         "compound-split" => {
             let tag_name = segments.get(2).ok_or_else(|| RouteParseError {
                 message: "compound-split requires a tag name".into(),
             })?;
-            ResolutionRoute::CompoundTagSplit {
+            let zone = params.get_string("zone")
+                .and_then(|s| Zone::from_str(&s))
+                .ok_or_else(|| RouteParseError {
+                    message: "compound-split requires a valid zone parameter".into(),
+                })?;
+            ResolutionRoute::CompoundSplit {
                 tag_name: (*tag_name).to_string(),
+                zone,
                 safe_mode: params.get_string("safe").map_or(false, |s| s == "true"),
-                zone: params.get_string("zone").unwrap_or_else(|| "corpus".into()),
+                cluster: params.get_usize("cluster"),
             }
         }
         "missing-album" => ResolutionRoute::MissingAlbum {
             group: params.get_usize("group"),
-            resolution: params.get_string("resolution"),
         },
         "disc-extraction" => ResolutionRoute::DiscExtraction {
-            cursor: params.get_usize("cursor"),
+            group: params.get_usize("group"),
         },
-        "manual-review" => ResolutionRoute::ManualReview {
-            kind: params.get_string("kind").unwrap_or_else(|| "redundant-duplicate".into()),
+        "redundant-duplicates" => ResolutionRoute::RedundantDuplicates {
+            group: params.get_usize("group"),
+        },
+        "deploy-conflicts" => ResolutionRoute::DeployConflicts {
+            group: params.get_usize("group"),
+        },
+        "metadata-duplicates" => ResolutionRoute::MetadataDuplicates {
+            group: params.get_usize("group"),
+        },
+        "same-recording" => ResolutionRoute::SameRecording {
             group: params.get_usize("group"),
         },
         other => {
@@ -868,10 +965,17 @@ mod tests {
     // -- Resolutions --
 
     #[test]
-    fn round_trip_resolution_missing_files() {
-        assert_round_trip(&Route::Resolution(ResolutionRoute::MissingFiles {
+    fn round_trip_resolution_missing_files_restorable() {
+        assert_round_trip(&Route::Resolution(ResolutionRoute::MissingFilesRestorable {
             cursor: Some(3),
             focus: Some(FocusTarget::Buttons),
+        }));
+    }
+
+    #[test]
+    fn round_trip_resolution_missing_files_permanent() {
+        assert_round_trip(&Route::Resolution(ResolutionRoute::MissingFilesPermanent {
+            cursor: Some(1),
         }));
     }
 
@@ -879,31 +983,59 @@ mod tests {
     fn round_trip_resolution_tag_canonicity() {
         assert_round_trip(&Route::Resolution(ResolutionRoute::TagCanonicity {
             tag_name: "artist".into(),
-            kind: "canonicity".into(),
-            cluster_index: Some(2),
+            zone: Zone::Corpus,
+            cluster: Some(2),
+        }));
+    }
+
+    #[test]
+    fn round_trip_resolution_tag_canonicity_inbox() {
+        assert_round_trip(&Route::Resolution(ResolutionRoute::TagCanonicity {
+            tag_name: "genre".into(),
+            zone: Zone::Inbox,
+            cluster: None,
+        }));
+    }
+
+    #[test]
+    fn round_trip_resolution_inconsistent_album_artist() {
+        assert_round_trip(&Route::Resolution(ResolutionRoute::InconsistentAlbumArtist {
+            tag_name: "albumartist".into(),
+            cluster: Some(5),
         }));
     }
 
     #[test]
     fn round_trip_resolution_compound_split() {
-        assert_round_trip(&Route::Resolution(ResolutionRoute::CompoundTagSplit {
+        assert_round_trip(&Route::Resolution(ResolutionRoute::CompoundSplit {
             tag_name: "genre".into(),
+            zone: Zone::Corpus,
             safe_mode: true,
-            zone: "corpus".into(),
+            cluster: Some(3),
         }));
     }
 
     #[test]
-    fn round_trip_resolution_manual_review() {
-        assert_round_trip(&Route::Resolution(ResolutionRoute::ManualReview {
-            kind: "redundant-duplicate".into(),
-            group: Some(1),
+    fn round_trip_resolution_compound_split_inbox() {
+        assert_round_trip(&Route::Resolution(ResolutionRoute::CompoundSplit {
+            tag_name: "artist".into(),
+            zone: Zone::Inbox,
+            safe_mode: false,
+            cluster: None,
         }));
     }
 
     #[test]
-    fn round_trip_resolution_inbox_organize() {
-        assert_round_trip(&Route::Resolution(ResolutionRoute::InboxOrganize));
+    fn round_trip_resolution_group_review_variants() {
+        let cases = vec![
+            ResolutionRoute::RedundantDuplicates { group: Some(1) },
+            ResolutionRoute::DeployConflicts { group: Some(2) },
+            ResolutionRoute::MetadataDuplicates { group: None },
+            ResolutionRoute::SameRecording { group: Some(0) },
+        ];
+        for r in cases {
+            assert_round_trip(&Route::Resolution(r));
+        }
     }
 
     #[test]
@@ -911,16 +1043,19 @@ mod tests {
         let cases = vec![
             ResolutionRoute::MissingDirectories { cursor: Some(1) },
             ResolutionRoute::CorruptFiles { cursor: Some(2) },
-            ResolutionRoute::ShitFormat { cursor: None },
+            ResolutionRoute::LosslessRemux { cursor: None },
             ResolutionRoute::SubparDuplicates { cursor: Some(4) },
             ResolutionRoute::InboxCorpusMatch { cursor: Some(0) },
-            ResolutionRoute::DirectoryCluster { cursor: Some(3) },
+            ResolutionRoute::DirectoryCluster { cluster: Some(7), cursor: Some(3) },
             ResolutionRoute::MovedFiles { cursor: Some(1) },
             ResolutionRoute::OobSync { cursor: Some(5) },
-            ResolutionRoute::OobConflict { cursor: None },
+            ResolutionRoute::OobConflictMtimeOnly { cursor: None },
+            ResolutionRoute::OobConflictDbOnly { cursor: Some(2) },
+            ResolutionRoute::OobConflictDiskOnly { cursor: Some(1) },
+            ResolutionRoute::OobConflictTwoWay { cursor: None },
             ResolutionRoute::ExternalMatchReview { cursor: Some(2) },
-            ResolutionRoute::MissingAlbum { group: Some(1), resolution: Some("singles".into()) },
-            ResolutionRoute::DiscExtraction { cursor: Some(0) },
+            ResolutionRoute::MissingAlbum { group: Some(1) },
+            ResolutionRoute::DiscExtraction { group: Some(0) },
         ];
         for r in cases {
             assert_round_trip(&Route::Resolution(r));
@@ -968,11 +1103,11 @@ mod tests {
     fn url_shape_resolve_tag_canonicity() {
         let url = Route::Resolution(ResolutionRoute::TagCanonicity {
             tag_name: "artist".into(),
-            kind: "canonicity".into(),
-            cluster_index: Some(2),
+            zone: Zone::Corpus,
+            cluster: Some(2),
         })
         .to_url();
-        assert_eq!(url, "/resolve/tag-canonicity/artist?kind=canonicity&cluster=2");
+        assert_eq!(url, "/resolve/tag-canonicity/artist?zone=corpus&cluster=2");
     }
 
     #[test]

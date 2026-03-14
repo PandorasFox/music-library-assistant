@@ -4,10 +4,13 @@ use ratatui::layout::Rect;
 
 /// Focus pane for resolution modals.
 ///
+/// Spatial order top-to-bottom: Field → List → Buttons.
 /// Details pane is not focusable (informational only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FocusPane {
-    /// File list pane (default)
+    /// Decision text field (above list, only present in some modals)
+    Field,
+    /// Item list pane (default)
     #[default]
     List,
     /// Decision buttons bar
@@ -15,18 +18,28 @@ pub enum FocusPane {
 }
 
 impl FocusPane {
-    /// Cycle to next focus pane (Shift+Down)
-    pub fn next(self) -> Self {
+    /// Cycle to next focus pane downward (Shift+Down).
+    ///
+    /// Order: Field → List → Buttons → wrap.
+    /// When `has_field` is false, Field is skipped.
+    pub fn next(self, has_field: bool) -> Self {
         match self {
+            Self::Field => Self::List,
             Self::List => Self::Buttons,
-            Self::Buttons => Self::List,
+            Self::Buttons => if has_field { Self::Field } else { Self::List },
         }
     }
 
-    /// Cycle to previous focus pane (Shift+Up)
-    pub fn prev(self) -> Self {
-        // With only 2 panes, prev == next
-        self.next()
+    /// Cycle to previous focus pane upward (Shift+Up).
+    ///
+    /// Order: Buttons → List → Field → wrap.
+    /// When `has_field` is false, Field is skipped.
+    pub fn prev(self, has_field: bool) -> Self {
+        match self {
+            Self::Field => Self::Buttons,
+            Self::List => if has_field { Self::Field } else { Self::Buttons },
+            Self::Buttons => Self::List,
+        }
     }
 }
 
@@ -95,10 +108,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_focus_pane_cycling() {
+    fn focus_cycling_without_field() {
         let focus = FocusPane::List;
-        assert_eq!(focus.next(), FocusPane::Buttons);
-        assert_eq!(focus.next().next(), FocusPane::List);
+        assert_eq!(focus.next(false), FocusPane::Buttons);
+        assert_eq!(focus.next(false).next(false), FocusPane::List);
+        assert_eq!(focus.prev(false), FocusPane::Buttons);
+    }
+
+    #[test]
+    fn focus_cycling_with_field() {
+        // Forward: Field → List → Buttons → Field
+        assert_eq!(FocusPane::Field.next(true), FocusPane::List);
+        assert_eq!(FocusPane::List.next(true), FocusPane::Buttons);
+        assert_eq!(FocusPane::Buttons.next(true), FocusPane::Field);
+
+        // Backward: Buttons → List → Field → Buttons
+        assert_eq!(FocusPane::Buttons.prev(true), FocusPane::List);
+        assert_eq!(FocusPane::List.prev(true), FocusPane::Field);
+        assert_eq!(FocusPane::Field.prev(true), FocusPane::Buttons);
+    }
+
+    #[test]
+    fn focus_cycling_skips_field_when_absent() {
+        // Forward: List → Buttons → List (no Field)
+        assert_eq!(FocusPane::List.next(false), FocusPane::Buttons);
+        assert_eq!(FocusPane::Buttons.next(false), FocusPane::List);
+
+        // Backward: List → Buttons → List (no Field)
+        assert_eq!(FocusPane::List.prev(false), FocusPane::Buttons);
+        assert_eq!(FocusPane::Buttons.prev(false), FocusPane::List);
     }
 
     #[test]

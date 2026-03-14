@@ -218,11 +218,11 @@ impl MissingAlbumState {
         // FocusUp/FocusDown: cycle focus pane
         match action {
             InputAction::FocusUp => {
-                self.focus_pane = self.focus_pane.prev();
+                self.focus_pane = self.focus_pane.prev(false);
                 return MissingAlbumAction::None;
             }
             InputAction::FocusDown => {
-                self.focus_pane = self.focus_pane.next();
+                self.focus_pane = self.focus_pane.next(false);
                 return MissingAlbumAction::None;
             }
             _ => {}

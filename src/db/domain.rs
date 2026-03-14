@@ -767,6 +767,24 @@ impl_domain_query! {
     }
 }
 
+// ============================================================================
+// Web File Browser & Search
+// ============================================================================
+
+impl_domain_query! {
+    GetDirectoryListing => Vec<mm_meta::domain_query_types::DirectoryListingEntry>, |s, db| {
+        db.get_directory_listing(s.zone, s.parent.as_deref())
+            .unwrap_or_default()
+    }
+}
+
+impl_domain_query! {
+    SearchCorpusFiles => Vec<mm_meta::domain_query_types::SearchResult>, |s, db| {
+        db.search_corpus_files(&s.query, s.limit)
+            .unwrap_or_default()
+    }
+}
+
 /// Read tags from disk for a batch of audio files.
 fn load_file_tag_values(
     inodes: &[i64],
@@ -865,6 +883,8 @@ dispatch_domain_query_impl! {
     GetTagEditorFiles,
     GetInboxOrganizeData,
     GetFileTagValues,
+    GetDirectoryListing,
+    SearchCorpusFiles,
 }
 
 // ============================================================================

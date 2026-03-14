@@ -971,6 +971,194 @@ impl Database {
 
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
+
+    // =========================================================================
+    // Directory Listing & Search (for web file browser)
+    // =========================================================================
+
+    /// List immediate children of a directory: subdirectories with audio file
+    /// counts, and audio files with duration/bitrate metadata.
+    ///
+    /// `parent: None` returns top-level directories (distinct first path
+    /// components). `parent: Some(dir)` returns children of that directory.
+    pub fn get_directory_listing(
+        &self,
+        zone: Zone,
+        parent: Option<&str>,
+    ) -> Result<Vec<mm_meta::domain_query_types::DirectoryListingEntry>> {
+        let zone_str = zone.as_str();
+        let mut entries = Vec::new();
+
+        match parent {
+            None => {
+                // Root listing: find distinct top-level directory components.
+                // e.g. paths "rock/foo.flac", "rock/bar.flac", "jazz/x.flac"
+                //   → directories "rock" (2 files), "jazz" (1 file)
+                let mut stmt = self.conn.prepare(
+                    "SELECT
+                        CASE WHEN INSTR(path, '/') > 0
+                            THEN SUBSTR(path, 1, INSTR(path, '/') - 1)
+                            ELSE path
+                        END AS top_dir,
+                        COUNT(*) AS cnt
+                     FROM files f
+                     JOIN audio_info a ON f.inode = a.inode
+                     WHERE f.zone = ?1 AND f.is_dir = 0
+                     GROUP BY top_dir
+                     ORDER BY top_dir",
+                )?;
+                let rows = stmt.query_map(params![zone_str], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+                })?;
+                for row in rows {
+                    let (name, count) = row?;
+                    entries.push(mm_meta::domain_query_types::DirectoryListingEntry {
+                        path: name.clone(),
+                        name,
+                        is_dir: true,
+                        file_count: count,
+                        inode: None,
+                        duration_ms: None,
+                        bitrate_kbps: None,
+                    });
+                }
+            }
+            Some(dir) => {
+                let prefix = format!("{}/", dir.trim_end_matches('/'));
+                let prefix_len = prefix.len() as i64;
+
+                // Subdirectories: paths that start with prefix and have another '/' after it.
+                let mut dir_stmt = self.conn.prepare(
+                    "SELECT
+                        SUBSTR(path, ?1 + 1, INSTR(SUBSTR(path, ?1 + 1), '/') - 1) AS child_dir,
+                        COUNT(*) AS cnt
+                     FROM files f
+                     JOIN audio_info a ON f.inode = a.inode
+                     WHERE f.zone = ?2 AND f.is_dir = 0
+                       AND path LIKE ?3 ESCAPE '\\'
+                       AND INSTR(SUBSTR(path, ?1 + 1), '/') > 0
+                     GROUP BY child_dir
+                     ORDER BY child_dir",
+                )?;
+                let like_pattern = format!("{}%", super::escape_like_wildcards(&prefix));
+                let dir_rows = dir_stmt.query_map(
+                    params![prefix_len, zone_str, like_pattern],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?)),
+                )?;
+                for row in dir_rows {
+                    let (name, count) = row?;
+                    entries.push(mm_meta::domain_query_types::DirectoryListingEntry {
+                        path: format!("{}{}", prefix, name),
+                        name,
+                        is_dir: true,
+                        file_count: count,
+                        inode: None,
+                        duration_ms: None,
+                        bitrate_kbps: None,
+                    });
+                }
+
+                // Direct child files (no further '/' after prefix).
+                let mut file_stmt = self.conn.prepare(
+                    "SELECT f.inode, f.path, a.duration_ms, a.bitrate_kbps
+                     FROM files f
+                     JOIN audio_info a ON f.inode = a.inode
+                     WHERE f.zone = ?1 AND f.is_dir = 0
+                       AND path LIKE ?2 ESCAPE '\\'
+                       AND INSTR(SUBSTR(path, ?3 + 1), '/') = 0
+                     ORDER BY f.path",
+                )?;
+                let file_rows = file_stmt.query_map(
+                    params![zone_str, like_pattern, prefix_len],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<i64>>(2)?,
+                            row.get::<_, Option<i32>>(3)?,
+                        ))
+                    },
+                )?;
+                for row in file_rows {
+                    let (inode, path, duration_ms, bitrate_kbps) = row?;
+                    let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+                    entries.push(mm_meta::domain_query_types::DirectoryListingEntry {
+                        name,
+                        path,
+                        is_dir: false,
+                        file_count: 0,
+                        inode: Some(inode),
+                        duration_ms,
+                        bitrate_kbps,
+                    });
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
+    /// Server-side substring search across file paths and tag values.
+    ///
+    /// UNIONs path matches with tag value matches (ARTIST, ALBUM, TITLE),
+    /// deduplicates by inode, caps at `limit` results.
+    pub fn search_corpus_files(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<mm_meta::domain_query_types::SearchResult>> {
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let like = format!("%{}%", super::escape_like_wildcards(query));
+        let limit_i64 = limit as i64;
+
+        // UNION two searches: path match and tag value match.
+        // For tag matches, fetch ARTIST/ALBUM/TITLE directly.
+        let sql = r#"
+            SELECT inode, path, artist, album, title FROM (
+                -- Path matches
+                SELECT f.inode, f.path,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
+                FROM files f
+                JOIN audio_info a ON f.inode = a.inode
+                WHERE f.zone = 'corpus' AND f.is_dir = 0
+                  AND f.path LIKE ?1 ESCAPE '\'
+
+                UNION
+
+                -- Tag value matches
+                SELECT f.inode, f.path,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
+                    (SELECT tag_value FROM corpus_tags WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
+                FROM files f
+                JOIN audio_info a ON f.inode = a.inode
+                JOIN corpus_tags ct ON f.inode = ct.inode
+                WHERE f.zone = 'corpus' AND f.is_dir = 0
+                  AND UPPER(ct.tag_name) IN ('ARTIST', 'ALBUM', 'TITLE')
+                  AND ct.tag_value LIKE ?1 ESCAPE '\'
+            )
+            ORDER BY path
+            LIMIT ?2
+        "#;
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![like, limit_i64], |row| {
+            Ok(mm_meta::domain_query_types::SearchResult {
+                inode: row.get(0)?,
+                path: row.get(1)?,
+                artist: row.get(2)?,
+                album: row.get(3)?,
+                title: row.get(4)?,
+            })
+        })?;
+
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
 }
 
 /// A corpus image file with its inode (for batch sidecar deploy processing).

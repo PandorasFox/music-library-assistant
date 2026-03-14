@@ -398,6 +398,31 @@ fn build_domain_payload(
             Ok(DomainQueryPayload::GetFileTagValues(q))
         }
 
+        // ================================================================
+        // Web file browser & search
+        // ================================================================
+
+        // directory-listing?zone=Corpus&parent=some/path (parent optional)
+        "directory-listing" => {
+            let zone = parse_enum(params, "zone")?;
+            let parent = params.get("parent").cloned();
+            Ok(DomainQueryPayload::GetDirectoryListing(
+                GetDirectoryListing { zone, parent },
+            ))
+        }
+
+        // search-corpus?query=radiohead&limit=200 (limit optional, default 200)
+        "search-corpus" => {
+            let query = require_param(params, "query")?;
+            let limit = params
+                .get("limit")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(200);
+            Ok(DomainQueryPayload::SearchCorpusFiles(
+                SearchCorpusFiles { query, limit },
+            ))
+        }
+
         _ => Err(ApiError::BadRequest(format!(
             "unknown query: '{name}'"
         ))),

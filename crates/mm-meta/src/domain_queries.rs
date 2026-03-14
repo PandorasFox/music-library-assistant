@@ -329,6 +329,28 @@ pub struct GetFileTagValues {
 }
 
 // ============================================================================
+// Web File Browser & Search
+// ============================================================================
+
+/// List immediate children of a directory: subdirectories with file counts,
+/// and audio files with display metadata. No tags loaded.
+///
+/// `parent: None` = list top-level source directories.
+/// `parent: Some("path/to/dir")` = children of that directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetDirectoryListing {
+    pub zone: crate::db_types::Zone,
+    pub parent: Option<String>,
+}
+
+/// Server-side substring search across paths and tag values, with result cap.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchCorpusFiles {
+    pub query: String,
+    pub limit: usize,
+}
+
+// ============================================================================
 // Protocol Bridge Macro
 // ============================================================================
 
@@ -433,4 +455,8 @@ domain_query_protocol! {
     GetTagEditorFiles => (Vec<crate::db_types::AudioFile>, usize),
     GetInboxOrganizeData => Vec<crate::views::startup_organize::InboxDirectory>,
     GetFileTagValues => Vec<(i64, Vec<(String, String)>)>,
+
+    // Web file browser & search
+    GetDirectoryListing => Vec<crate::domain_query_types::DirectoryListingEntry>,
+    SearchCorpusFiles => Vec<crate::domain_query_types::SearchResult>,
 }

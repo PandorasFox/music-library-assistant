@@ -213,9 +213,26 @@ pub async fn get_query_with(name: &str, params: &str) -> Result<serde_json::Valu
     get(&format!("/queries/{name}?{params}")).await
 }
 
-/// GET /queries/all-audio-files-with-tags?zone=Corpus&include_library=false
-pub async fn get_corpus_files_with_tags() -> Result<serde_json::Value, JsValue> {
-    get("/queries/all-audio-files-with-tags?zone=Corpus&include_library=false").await
+/// GET /queries/directory-listing?zone=Corpus[&parent=some/path]
+pub async fn get_directory_listing(parent: Option<&str>) -> Result<serde_json::Value, JsValue> {
+    let url = match parent {
+        Some(p) => format!(
+            "/queries/directory-listing?zone=Corpus&parent={}",
+            js_sys::encode_uri_component(p)
+        ),
+        None => "/queries/directory-listing?zone=Corpus".to_string(),
+    };
+    get(&url).await
+}
+
+/// GET /queries/search-corpus?query=X&limit=200
+pub async fn search_corpus(query: &str, limit: usize) -> Result<serde_json::Value, JsValue> {
+    let url = format!(
+        "/queries/search-corpus?query={}&limit={}",
+        js_sys::encode_uri_component(query),
+        limit,
+    );
+    get(&url).await
 }
 
 // ============================================================================

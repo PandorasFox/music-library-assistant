@@ -864,12 +864,12 @@ pub fn render_packing_browser_data(category: &str, data: &serde_json::Value) -> 
 }
 
 // ============================================================================
-// Search view (stays on serde_json::Value — composite response)
+// Search view — server-side search, no upfront data load
 // ============================================================================
 
-pub fn render_search_view(data: &serde_json::Value) -> Node {
-    let total = data.as_array().map_or(0, |a| a.len());
-
+/// Render the search view shell: search input + empty results container.
+/// Data is fetched on demand via debounced `mm_search` calls.
+pub fn render_search_view() -> Node {
     div()
         .child(
             div()
@@ -878,79 +878,43 @@ pub fn render_search_view(data: &serde_json::Value) -> Node {
                     html::input()
                         .attr("type", "text")
                         .attr("id", "mm-search-input")
-                        .attr("placeholder", format!("Search {total} files..."))
+                        .attr("placeholder", "Search corpus files...")
                         .attr("oninput", "window.__mm_search(this.value)")
                         .attr("autocomplete", "off")
                         .class("mm-search-input"),
                 ),
         )
-        .child(
-            div()
-                .attr("id", "mm-search-results")
-                .child(render_search_results(data, "")),
-        )
+        .child(div().attr("id", "mm-search-results"))
         .into()
 }
 
-pub fn render_search_results(data: &serde_json::Value, query: &str) -> Node {
-    let files = match data.as_array() {
+/// Render search results from server response (Vec<SearchResult> as JSON).
+pub fn render_search_results(data: &serde_json::Value) -> Node {
+    let results = match data.as_array() {
         Some(a) => a,
-        None => return span().class("mm-kv__val").text("No files loaded").into(),
+        None => return span().class("mm-kv__val").text("No results").into(),
     };
 
-    let query_lower = query.to_lowercase();
-    let mut results = Vec::new();
-    let limit = 200;
+    if results.is_empty() {
+        return span().class("mm-kv__val").text("No results").into();
+    }
 
-    for entry in files {
-        let arr = match entry.as_array() {
-            Some(a) if a.len() >= 2 => a,
-            _ => continue,
-        };
-        let audio_file = &arr[0];
-        let tags_map = &arr[1];
-
-        let path = audio_file
-            .get("entry")
-            .and_then(|e| e.get("path"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        if !query_lower.is_empty() {
-            let path_match = path.to_lowercase().contains(&query_lower);
-            let tag_match = tags_map.as_object().map_or(false, |obj| {
-                obj.values().any(|vals| {
-                    vals.as_array().map_or(false, |arr| {
-                        arr.iter().any(|v| {
-                            v.as_str()
-                                .map_or(false, |s| s.to_lowercase().contains(&query_lower))
-                        })
-                    })
-                })
-            });
-            if !path_match && !tag_match {
-                continue;
-            }
-        }
-
-        let inode = audio_file
-            .get("entry")
-            .and_then(|e| e.get("inode"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-
-        let artist = tag_first(tags_map, "ARTIST");
-        let album = tag_first(tags_map, "ALBUM");
-        let title = tag_first(tags_map, "TITLE");
+    let mut rows = Vec::new();
+    for entry in results {
+        let inode = entry.get("inode").and_then(|v| v.as_i64()).unwrap_or(0);
+        let path = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let artist = entry.get("artist").and_then(|v| v.as_str()).unwrap_or("");
+        let album = entry.get("album").and_then(|v| v.as_str()).unwrap_or("");
+        let title = entry.get("title").and_then(|v| v.as_str()).unwrap_or("");
 
         let tag_line = [artist, album, title]
             .iter()
             .filter(|s| !s.is_empty())
-            .cloned()
+            .copied()
             .collect::<Vec<_>>()
             .join(" / ");
 
-        results.push(
+        rows.push(
             div()
                 .class("mm-file-row")
                 .child(
@@ -962,159 +926,115 @@ pub fn render_search_results(data: &serde_json::Value, query: &str) -> Node {
                 .child(span().class("mm-file-row__tags").text(&tag_line))
                 .into(),
         );
-
-        if results.len() >= limit {
-            break;
-        }
     }
 
-    let shown = results.len();
+    let count = rows.len();
     let mut container = div();
     container = container.child(
-        span()
-            .class("mm-kv__val")
-            .text(if query_lower.is_empty() {
-                format!("{shown} files (showing first {limit})")
-            } else {
-                format!("{shown} results")
-            }),
+        span().class("mm-kv__val").text(format!("{count} results")),
     );
-    container = container.children(results);
+    container = container.children(rows);
     container.into()
 }
 
-fn tag_first(tags_map: &serde_json::Value, key: &str) -> String {
-    tags_map
-        .get(key)
-        .and_then(|v| v.as_array())
-        .and_then(|a| a.first())
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string()
-}
-
 // ============================================================================
-// Files view (stays on serde_json::Value — composite response)
+// Files view — lazy directory browser
 // ============================================================================
 
+/// Render the files view from a directory listing (Vec<DirectoryListingEntry> as JSON).
+/// Initial call shows top-level directories; clicking expands via `mm_expand_dir`.
 pub fn render_files_view(data: &serde_json::Value) -> Node {
-    let files = match data.as_array() {
+    let entries = match data.as_array() {
         Some(a) => a,
         None => return span().class("mm-kv__val").text("No files loaded").into(),
     };
 
-    let mut dirs: std::collections::BTreeMap<String, Vec<(&serde_json::Value, &serde_json::Value)>> =
-        std::collections::BTreeMap::new();
+    let sections: Vec<Node> = entries
+        .iter()
+        .filter_map(|entry| render_listing_entry(entry))
+        .collect();
 
-    for entry in files {
-        let arr = match entry.as_array() {
-            Some(a) if a.len() >= 2 => a,
-            _ => continue,
-        };
-        let audio_file = &arr[0];
-        let tags_map = &arr[1];
+    div().children(sections).into()
+}
 
-        let path = audio_file
-            .get("entry")
-            .and_then(|e| e.get("path"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+/// Render children fetched by `mm_expand_dir` into a container.
+pub fn render_directory_children(data: &serde_json::Value) -> Node {
+    let entries = match data.as_array() {
+        Some(a) => a,
+        None => return span().class("mm-kv__val").text("Error loading directory").into(),
+    };
 
-        let dir = match path.rfind('/') {
-            Some(pos) => &path[..pos],
-            None => "",
-        };
+    let children: Vec<Node> = entries
+        .iter()
+        .filter_map(|entry| render_listing_entry(entry))
+        .collect();
 
-        dirs.entry(dir.to_string())
-            .or_default()
-            .push((audio_file, tags_map));
-    }
+    div().children(children).into()
+}
 
-    let mut sections = Vec::new();
+/// Render a single DirectoryListingEntry (directory or file).
+fn render_listing_entry(entry: &serde_json::Value) -> Option<Node> {
+    let is_dir = entry.get("is_dir")?.as_bool()?;
+    let name = entry.get("name")?.as_str()?;
+    let path = entry.get("path")?.as_str()?;
 
-    for (dir, entries) in &dirs {
-        let count = entries.len();
-        let display_dir = if dir.is_empty() { "/" } else { dir.as_str() };
+    if is_dir {
+        let file_count = entry.get("file_count").and_then(|v| v.as_u64()).unwrap_or(0);
+        let dir_id = format!("mm-dir-{}", simple_hash(path));
+        // Escape single quotes in path for the onclick JS string.
+        let escaped_path = path.replace('\'', "\\'");
 
-        let dir_id = format!("mm-dir-{}", simple_hash(dir));
         let header = div()
             .class("mm-dir-header")
-            .attr("onclick", format!("window.__mm_toggle_dir('{dir_id}')"))
-            .child(span().text(format!("{display_dir} ({count} files)")));
-
-        let mut file_rows = Vec::new();
-        for (audio_file, tags_map) in entries {
-            let inode = audio_file
-                .get("entry")
-                .and_then(|e| e.get("inode"))
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let path = audio_file
-                .get("entry")
-                .and_then(|e| e.get("path"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let filename = path.rsplit('/').next().unwrap_or(path);
-
-            let title = tag_first(tags_map, "TITLE");
-            let display = if title.is_empty() {
-                filename.to_string()
-            } else {
-                title
-            };
-
-            let duration_ms = audio_file
-                .get("audio")
-                .and_then(|a| a.get("duration_ms"))
-                .and_then(|v| v.as_i64());
-            let bitrate = audio_file
-                .get("audio")
-                .and_then(|a| a.get("bitrate_kbps"))
-                .and_then(|v| v.as_i64());
-
-            let mut meta_parts = Vec::new();
-            if let Some(ms) = duration_ms {
-                let secs = ms / 1000;
-                meta_parts.push(format!("{}:{:02}", secs / 60, secs % 60));
-            }
-            if let Some(kbps) = bitrate {
-                meta_parts.push(format!("{kbps}k"));
-            }
-            let meta = meta_parts.join(" ");
-
-            file_rows.push(
-                div()
-                    .class("mm-file-row")
-                    .child(
-                        html::a()
-                            .class("mm-link mm-file-row__path")
-                            .attr("href", format!("#tags/{inode}"))
-                            .text(&display),
-                    )
-                    .child(span().class("mm-file-row__meta").text(&meta))
-                    .into(),
-            );
-        }
+            .attr(
+                "onclick",
+                format!("window.__mm_expand_dir('{escaped_path}')"),
+            )
+            .child(span().text(format!("{name} ({file_count} files)")));
 
         let files_container = div()
             .class("mm-dir-files")
             .attr("id", &dir_id)
-            .attr("style", "display:none")
-            .children(file_rows);
+            .attr("style", "display:none");
 
-        sections.push(
+        Some(
             div()
                 .class("mm-dir-group")
                 .child(header)
                 .child(files_container)
                 .into(),
-        );
-    }
+        )
+    } else {
+        let inode = entry.get("inode").and_then(|v| v.as_i64()).unwrap_or(0);
+        let duration_ms = entry.get("duration_ms").and_then(|v| v.as_i64());
+        let bitrate = entry.get("bitrate_kbps").and_then(|v| v.as_i64());
 
-    div().children(sections).into()
+        let mut meta_parts = Vec::new();
+        if let Some(ms) = duration_ms {
+            let secs = ms / 1000;
+            meta_parts.push(format!("{}:{:02}", secs / 60, secs % 60));
+        }
+        if let Some(kbps) = bitrate {
+            meta_parts.push(format!("{kbps}k"));
+        }
+        let meta = meta_parts.join(" ");
+
+        Some(
+            div()
+                .class("mm-file-row")
+                .child(
+                    html::a()
+                        .class("mm-link mm-file-row__path")
+                        .attr("href", format!("#tags/{inode}"))
+                        .text(name),
+                )
+                .child(span().class("mm-file-row__meta").text(&meta))
+                .into(),
+        )
+    }
 }
 
-fn simple_hash(s: &str) -> u64 {
+pub fn simple_hash(s: &str) -> u64 {
     let mut h: u64 = 5381;
     for b in s.bytes() {
         h = h.wrapping_mul(33).wrapping_add(b as u64);

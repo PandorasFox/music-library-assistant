@@ -19,10 +19,11 @@ use mm_ui::lateral_view::LateralView;
 use mm_ui::route::{self, Route};
 
 thread_local! {
-    static SEARCH_DATA: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
     static CONFIG_DATA: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
     /// JS interval handle for health view polling. Cleared on navigation.
     static POLL_HANDLE: RefCell<Option<i32>> = const { RefCell::new(None) };
+    /// JS timeout handle for search debounce. Cleared on new keystrokes.
+    static SEARCH_DEBOUNCE: RefCell<Option<i32>> = const { RefCell::new(None) };
 }
 
 // ============================================================================
@@ -332,12 +333,10 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
             Ok(views::render_transaction_content(&status, details.as_ref()))
         }
         Route::Search(_) => {
-            let data = api::get_corpus_files_with_tags().await?;
-            SEARCH_DATA.with(|cell| *cell.borrow_mut() = Some(data.clone()));
-            Ok(views::render_search_view(&data))
+            Ok(views::render_search_view())
         }
         Route::Files(_) => {
-            let data = api::get_corpus_files_with_tags().await?;
+            let data = api::get_directory_listing(None).await?;
             Ok(views::render_files_view(&data))
         }
 
@@ -662,21 +661,53 @@ pub fn mm_execute(binding_json: &str) {
     });
 }
 
-/// Filter search results without full page re-render.
-/// Reads cached data from SEARCH_DATA and only replaces the results container.
+/// Debounced server-side search. Cancels any pending search timer, then
+/// fires a new one after 300ms. The search hits the server and replaces
+/// the results container with server-returned results.
 #[wasm_bindgen]
 pub fn mm_search(query: &str) {
-    let q = query.to_string();
-    SEARCH_DATA.with(|cell| {
-        let data = cell.borrow();
-        if let Some(ref d) = *data {
-            let node = views::render_search_results(d, &q);
-            let doc = web_sys::window().unwrap().document().unwrap();
-            if let Some(container) = doc.get_element_by_id("mm-search-results") {
-                container.set_inner_html(&node.to_html());
-            }
+    let window = web_sys::window().unwrap();
+    // Cancel any pending debounce timer.
+    SEARCH_DEBOUNCE.with(|cell| {
+        if let Some(handle) = cell.borrow_mut().take() {
+            window.clear_timeout_with_handle(handle);
         }
     });
+
+    let q = query.to_string();
+    if q.is_empty() {
+        // Clear results immediately for empty query.
+        let doc = window.document().unwrap();
+        if let Some(container) = doc.get_element_by_id("mm-search-results") {
+            container.set_inner_html("");
+        }
+        return;
+    }
+
+    let cb = wasm_bindgen::closure::Closure::once(move || {
+        spawn_local(async move {
+            match api::search_corpus(&q, 200).await {
+                Ok(data) => {
+                    let node = views::render_search_results(&data);
+                    let doc = web_sys::window().unwrap().document().unwrap();
+                    if let Some(container) = doc.get_element_by_id("mm-search-results") {
+                        container.set_inner_html(&node.to_html());
+                    }
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("search error: {e:?}").into());
+                }
+            }
+        });
+    });
+    let handle = window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(
+            cb.as_ref().unchecked_ref(),
+            300,
+        )
+        .unwrap_or(-1);
+    cb.forget();
+    SEARCH_DEBOUNCE.with(|cell| *cell.borrow_mut() = Some(handle));
 }
 
 /// Save edited config — collects form values, patches cached JSON, POSTs to server.
@@ -784,13 +815,42 @@ async fn do_config_save() -> Result<(), JsValue> {
     Ok(())
 }
 
-/// Toggle expand/collapse of a directory in the Files view.
+/// Expand/collapse a directory in the Files view. On first expand, fetches
+/// children from the server. Subsequent toggles just show/hide.
 #[wasm_bindgen]
-pub fn mm_toggle_dir(dir_id: &str) {
+pub fn mm_expand_dir(path: &str) {
+    let dir_path = path.to_string();
+    let dir_id = format!("mm-dir-{}", views::simple_hash(&dir_path));
     let doc = web_sys::window().unwrap().document().unwrap();
-    if let Some(el) = doc.get_element_by_id(dir_id) {
+
+    if let Some(el) = doc.get_element_by_id(&dir_id) {
         let current = el.get_attribute("style").unwrap_or_default();
         let hidden = current.contains("display:none") || current.contains("display: none");
-        el.set_attribute("style", if hidden { "" } else { "display:none" }).ok();
+        if hidden {
+            // Show the container.
+            el.set_attribute("style", "").ok();
+            // If empty (not yet loaded), fetch from server.
+            if el.inner_html().is_empty() {
+                spawn_local(async move {
+                    match api::get_directory_listing(Some(&dir_path)).await {
+                        Ok(data) => {
+                            let node = views::render_directory_children(&data);
+                            let doc = web_sys::window().unwrap().document().unwrap();
+                            if let Some(container) = doc.get_element_by_id(&dir_id) {
+                                container.set_inner_html(&node.to_html());
+                            }
+                        }
+                        Err(e) => {
+                            web_sys::console::error_1(
+                                &format!("expand dir error: {e:?}").into(),
+                            );
+                        }
+                    }
+                });
+            }
+        } else {
+            // Collapse.
+            el.set_attribute("style", "display:none").ok();
+        }
     }
 }

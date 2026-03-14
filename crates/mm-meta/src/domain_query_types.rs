@@ -86,3 +86,40 @@ pub enum TagEditorLoadMode {
 /// Tag names are uppercased; values are collected into Vec since a
 /// single tag name can have multiple values (e.g. multiple genres).
 pub type AudioFileWithTags = (crate::db_types::AudioFile, HashMap<String, Vec<String>>);
+
+// ============================================================================
+// Directory Listing
+// ============================================================================
+
+/// A single entry in a directory listing (either a subdirectory or an audio file).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectoryListingEntry {
+    /// Just the directory or file name (last path component).
+    pub name: String,
+    /// Relative path within the zone.
+    pub path: String,
+    /// True for directories, false for files.
+    pub is_dir: bool,
+    /// Number of direct-child audio files (directories only).
+    pub file_count: usize,
+    /// Inode (files only).
+    pub inode: Option<i64>,
+    /// Duration in milliseconds (files only).
+    pub duration_ms: Option<i64>,
+    /// Bitrate in kbps (files only).
+    pub bitrate_kbps: Option<i32>,
+}
+
+// ============================================================================
+// Search Result
+// ============================================================================
+
+/// A single result from server-side corpus file search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub inode: i64,
+    pub path: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub title: Option<String>,
+}

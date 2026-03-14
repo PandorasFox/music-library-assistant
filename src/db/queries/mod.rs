@@ -34,7 +34,7 @@ use crate::config;
 ///
 /// Uses `\` as the escape character. **Important**: Queries using these patterns
 /// MUST include `ESCAPE '\'` in the LIKE clause.
-fn escape_like_wildcards(s: &str) -> String {
+pub(crate) fn escape_like_wildcards(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 8);
     for c in s.chars() {
         match c {
@@ -339,6 +339,8 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_tags_for_zone(inode: i64, zone: super::types::Zone) -> Result<Vec<super::types::AudioTag>>;
         fn get_audio_info(inode: i64) -> Result<Option<super::types::AudioInfo>>;
         fn get_has_pictures(inode: i64) -> Result<bool>;
+        fn get_directory_listing(zone: super::types::Zone, parent: Option<&str>) -> Result<Vec<mm_meta::domain_query_types::DirectoryListingEntry>>;
+        fn search_corpus_files(query: &str, limit: usize) -> Result<Vec<mm_meta::domain_query_types::SearchResult>>;
     }
 
     // =========================================================================

@@ -90,11 +90,15 @@ pub(crate) enum ActiveView {
         clusters: TagCanonicityClusters,
     },
 
-    // V3: single-load canonicity with packed data + DecisionField
+    // V3: single-load canonicity with packed data + StandardList + DecisionField
     TagCanonicityResolutionV3 {
-        state: mm_ui::resolutions::tag_canonicity::TagCanonicityState,
+        data: mm_meta::views::canonicity_compound::TagCanonicityResolutionData,
+        current_cluster: usize,
+        list: mm_ui::standard_list::StandardListState,
+        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::tag_canonicity::CanonicityButton>,
         field: mm_ui::decision_field::DecisionField,
         zone: mm_meta::db_types::Zone,
+        focus: mm_ui::geometry::FocusPane,
     },
     CompoundTagSplit {
         state: compound_split_v2::CompoundSplitStateV2,
@@ -168,7 +172,12 @@ impl ActiveView {
             Self::StartupMaintenance => None,
             Self::CorpusBrowser(browser) => browser.selected_path(),
             Self::TagCanonicityResolution { state, .. } => state.selected_path(),
-            Self::TagCanonicityResolutionV3 { state, .. } => state.selected_path(),
+            Self::TagCanonicityResolutionV3 { ref data, current_cluster, ref list, .. } => {
+                data.clusters.get(*current_cluster)
+                    .and_then(|c| c.outlier_variants.get(list.cursor))
+                    .and_then(|v| v.files.first())
+                    .map(|f| f.display_name.as_str())
+            }
             Self::CompoundTagSplit { state, .. } => state.selected_path(),
             Self::MissingFileResolution(s) => s.selected_path(),
             Self::MissingDirectoryResolution(s) => s.selected_path(),

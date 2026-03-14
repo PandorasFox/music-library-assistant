@@ -527,22 +527,30 @@ impl App {
         let field = mm_ui::decision_field::DecisionField::new("Squash to:")
             .with_value(prefill);
 
-        let state = mm_ui::resolutions::tag_canonicity::TagCanonicityState::new(
-            mm_ui::resolutions::tag_canonicity::TagCanonicityData::new(data),
-        );
-
-        self.view = ActiveView::TagCanonicityResolutionV3 { state, field, zone };
+        self.view = ActiveView::TagCanonicityResolutionV3 {
+            data,
+            current_cluster: 0,
+            list: mm_ui::standard_list::StandardListState::new(
+                mm_ui::standard_list::StandardListConfig::default(),
+            ),
+            buttons: mm_ui::modal_buttons::ButtonRowState::new(),
+            field,
+            zone,
+            focus: mm_ui::geometry::FocusPane::List,
+        };
     }
 
     /// Advance to next cluster or go to review (V3).
     fn advance_canonicity_v3(&mut self) {
-        if let ActiveView::TagCanonicityResolutionV3 { ref mut state, ref mut field, .. } = self.view {
-            use mm_ui::group_navigation::GroupNavigation;
-            if state.data.has_next() {
-                state.data.current_cluster += 1;
-                state.cursor = 0;
+        if let ActiveView::TagCanonicityResolutionV3 {
+            ref data, ref mut current_cluster, ref mut list, ref mut field, ..
+        } = self.view
+        {
+            if *current_cluster + 1 < data.clusters.len() {
+                *current_cluster += 1;
+                list.reset();
                 // Pre-fill field with new cluster's canonical candidate
-                if let Some(cluster) = state.data.inner.clusters.get(state.data.current_cluster) {
+                if let Some(cluster) = data.clusters.get(*current_cluster) {
                     field.set_value(&cluster.canonical_candidate);
                 }
             } else {
@@ -557,7 +565,9 @@ impl App {
     /// Stage canonicity squash decision for current cluster (V3).
     fn stage_canonicity_decision_v3(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, cluster_idx, tag_name) = match &self.view {
-            ActiveView::TagCanonicityResolutionV3 { ref state, ref field, ref zone, .. } => {
+            ActiveView::TagCanonicityResolutionV3 {
+                ref data, current_cluster, ref field, ref zone, ..
+            } => {
                 use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
                 use mm_meta::mutations::{Mutation, TagOp};
 
@@ -566,7 +576,7 @@ impl App {
                     return;
                 }
 
-                let cluster = match state.data.inner.clusters.get(state.data.current_cluster) {
+                let cluster = match data.clusters.get(*current_cluster) {
                     Some(c) => c,
                     None => return,
                 };
@@ -577,7 +587,7 @@ impl App {
                     for file in &variant.files {
                         ops.push(TagOp::replace_tag(
                             file.inode,
-                            &state.data.inner.tag_name,
+                            &data.tag_name,
                             &variant.value,
                             &canonical_value,
                         ));
@@ -593,7 +603,7 @@ impl App {
                     zone: *zone,
                 })];
 
-                (mutations, state.data.current_cluster, state.data.inner.tag_name.clone())
+                (mutations, *current_cluster, data.tag_name.clone())
             }
             _ => return,
         };
@@ -613,21 +623,24 @@ impl App {
     /// Stage flag-canonical decision for current cluster (V3).
     fn stage_flag_canonical_v3(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, cluster_idx, tag_name) = match &self.view {
-            ActiveView::TagCanonicityResolutionV3 { ref state, .. } => {
+            ActiveView::TagCanonicityResolutionV3 {
+                ref data, current_cluster, ..
+            } => {
                 use mm_meta::mutations::indexing::EmitCanonicalTagMutation;
                 use mm_meta::mutations::Mutation;
 
-                let cluster = match state.data.inner.clusters.get(state.data.current_cluster) {
+                let cluster = match data.clusters.get(*current_cluster) {
                     Some(c) => c,
                     None => return,
                 };
 
                 // Emit canonical tag for each outlier variant + the canonical candidate
-                let mut mutations: Vec<Mutation> = cluster.outlier_variants
+                let mut mutations: Vec<Mutation> = cluster
+                    .outlier_variants
                     .iter()
                     .map(|v| {
                         Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
-                            tag_name: state.data.inner.tag_name.clone(),
+                            tag_name: data.tag_name.clone(),
                             canonical_value: v.value.clone(),
                         })
                     })
@@ -635,7 +648,7 @@ impl App {
 
                 // Also flag the canonical candidate itself
                 mutations.push(Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
-                    tag_name: state.data.inner.tag_name.clone(),
+                    tag_name: data.tag_name.clone(),
                     canonical_value: cluster.canonical_candidate.clone(),
                 }));
 
@@ -643,7 +656,7 @@ impl App {
                     return;
                 }
 
-                (mutations, state.data.current_cluster, state.data.inner.tag_name.clone())
+                (mutations, *current_cluster, data.tag_name.clone())
             }
             _ => return,
         };

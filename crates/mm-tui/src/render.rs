@@ -184,10 +184,13 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::TagCanonicityResolution { ref mut state, .. } => {
             tag_canonicity_v2::render(f, area, state);
         }
-        ActiveView::TagCanonicityResolutionV3 { ref mut state, ref mut field, .. } => {
-            use mm_ui::decision_field::WithDecisionField;
-            let mut view = WithDecisionField::new(state, field);
-            view.render_frame(f, area);
+        ActiveView::TagCanonicityResolutionV3 {
+            ref data, current_cluster, ref mut list, ref mut buttons,
+            ref field, focus, ..
+        } => {
+            tag_canonicity_v2::render_v3::render(
+                f, area, data, current_cluster, list, buttons, field, focus,
+            );
         }
         ActiveView::CompoundTagSplit { ref mut state, .. } => {
             compound_split_v2::render(f, area, state);

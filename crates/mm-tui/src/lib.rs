@@ -422,35 +422,103 @@ impl App {
                 }
             }
             ActiveView::TagCanonicityResolution { state, .. } => dispatch_input_raw!(TagCanonicityResolution, state),
-            ActiveView::TagCanonicityResolutionV3 { ref mut state, ref mut field, .. } => {
-                use mm_ui::group_navigation::{try_group_navigate, GroupInputResult};
-                use mm_ui::modal_frame::FrameInputResult;
+            ActiveView::TagCanonicityResolutionV3 {
+                ref data, ref mut current_cluster, ref mut list,
+                ref mut buttons, ref mut field, ref mut focus, ..
+            } => {
+                use mm_ui::input::InputAction as IA;
+                use mm_ui::resolutions::tag_canonicity::{CanonicityAction, CanonicityButtonCtx};
+                use mm_ui::standard_list::ListInputResult;
+
                 // Group navigation first (Tab/Shift+Tab)
-                if let Some(result) = try_group_navigate(&state.data, &action) {
-                    match result {
-                        GroupInputResult::NavigateNext => {
-                            state.data.current_cluster += 1;
-                            // Pre-fill decision field with new cluster's canonical candidate
-                            if let Some(cluster) = state.data.inner.clusters.get(state.data.current_cluster) {
+                match action {
+                    IA::CycleNext => {
+                        if *current_cluster + 1 < data.clusters.len() {
+                            *current_cluster += 1;
+                            list.reset();
+                            if let Some(cluster) = data.clusters.get(*current_cluster) {
                                 field.set_value(&cluster.canonical_candidate);
                             }
-                            ViewAction::None
                         }
-                        GroupInputResult::NavigatePrev => {
-                            state.data.current_cluster = state.data.current_cluster.saturating_sub(1);
-                            if let Some(cluster) = state.data.inner.clusters.get(state.data.current_cluster) {
-                                field.set_value(&cluster.canonical_candidate);
-                            }
-                            ViewAction::None
-                        }
-                        GroupInputResult::Consumed => ViewAction::None,
-                        _ => ViewAction::None,
+                        ViewAction::None
                     }
-                } else {
-                    // Normal modal input (DecisionField handles text when focused)
-                    match state.handle_input(&action) {
-                        Some(a) => ViewAction::TagCanonicityResolutionV3(a),
-                        None => ViewAction::None,
+                    IA::CyclePrev => {
+                        if *current_cluster > 0 {
+                            *current_cluster -= 1;
+                            list.reset();
+                            if let Some(cluster) = data.clusters.get(*current_cluster) {
+                                field.set_value(&cluster.canonical_candidate);
+                            }
+                        }
+                        ViewAction::None
+                    }
+                    // Focus cycling (Shift+Up/Down)
+                    IA::FocusUp => {
+                        *focus = focus.prev(true);
+                        ViewAction::None
+                    }
+                    IA::FocusDown => {
+                        *focus = focus.next(true);
+                        ViewAction::None
+                    }
+                    // Cancel always cancels
+                    IA::Cancel => {
+                        ViewAction::TagCanonicityResolutionV3(CanonicityAction::Cancel)
+                    }
+                    // Route by focus pane
+                    _ => {
+                        let ctx = CanonicityButtonCtx {
+                            has_outliers: data.clusters.get(*current_cluster)
+                                .map_or(false, |c| !c.outlier_variants.is_empty()),
+                            current_cluster_index: *current_cluster,
+                        };
+                        match focus {
+                            mm_ui::geometry::FocusPane::Field => {
+                                match action {
+                                    IA::Confirm => {
+                                        // Confirm from field fires the selected button
+                                        match buttons.confirm(&ctx) {
+                                            Some(a) => ViewAction::TagCanonicityResolutionV3(a),
+                                            None => ViewAction::None,
+                                        }
+                                    }
+                                    ref other => {
+                                        field.handle_input(other);
+                                        ViewAction::None
+                                    }
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::List => {
+                                let items = data.clusters.get(*current_cluster)
+                                    .map(|c| tag_canonicity_v2::render_v3::build_items(c))
+                                    .unwrap_or_default();
+                                match list.handle_input(&action, &items) {
+                                    ListInputResult::Consumed | ListInputResult::CursorMoved
+                                    | ListInputResult::Toggled => ViewAction::None,
+                                    ListInputResult::Confirm(()) => ViewAction::None,
+                                    ListInputResult::Unhandled => ViewAction::None,
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::Buttons => {
+                                match action {
+                                    IA::NavLeft => {
+                                        buttons.nav_left(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::NavRight => {
+                                        buttons.nav_right(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::Confirm => {
+                                        match buttons.confirm(&ctx) {
+                                            Some(a) => ViewAction::TagCanonicityResolutionV3(a),
+                                            None => ViewAction::None,
+                                        }
+                                    }
+                                    _ => ViewAction::None,
+                                }
+                            }
+                        }
                     }
                 }
             }

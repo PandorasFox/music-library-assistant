@@ -2,10 +2,19 @@
 //!
 //! Uses web-sys Request/Response directly. All paths are relative (same origin).
 //! Session token persisted in localStorage across page refreshes.
+//!
+//! Typed functions deserialize into mm-meta structs where possible, so the
+//! compiler catches field name mismatches rather than silently rendering nothing.
 
+use serde::de::DeserializeOwned;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Headers, Request, RequestInit, RequestMode, Response};
+
+use mm_meta::views::{
+    DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
+};
+use mm_meta::witch_types::WitchStatus;
 
 const TOKEN_KEY: &str = "mm-session-token";
 
@@ -92,20 +101,14 @@ async fn post(path: &str, body: &serde_json::Value) -> Result<serde_json::Value,
     fetch("POST", path, Some(&body_str)).await
 }
 
-// ============================================================================
-// Typed API helpers
-// ============================================================================
-
-/// POST /setup/complete → complete first-time setup
-pub async fn setup_complete(root: &str, username: &str, password: &str) -> Result<(), JsValue> {
-    let mut body = serde_json::json!({ "root": root });
-    if !username.is_empty() && !password.is_empty() {
-        body["username"] = serde_json::Value::String(username.to_string());
-        body["password"] = serde_json::Value::String(password.to_string());
-    }
-    post("/setup/complete", &body).await?;
-    Ok(())
+/// Deserialize a JSON value into a typed struct.
+fn from_json<T: DeserializeOwned>(val: serde_json::Value) -> Result<T, JsValue> {
+    serde_json::from_value(val).map_err(|e| JsValue::from_str(&format!("deserialize: {e}")))
 }
+
+// ============================================================================
+// Unauthenticated endpoints
+// ============================================================================
 
 /// Setup status: whether first-time setup is needed, and optional suggested root.
 pub struct SetupStatus {
@@ -120,6 +123,17 @@ pub async fn setup_check() -> Result<SetupStatus, JsValue> {
         needs_setup: resp.get("needs_setup").and_then(|v| v.as_bool()).unwrap_or(false),
         suggested_root: resp.get("suggested_root").and_then(|v| v.as_str()).map(String::from),
     })
+}
+
+/// POST /setup/complete → complete first-time setup
+pub async fn setup_complete(root: &str, username: &str, password: &str) -> Result<(), JsValue> {
+    let mut body = serde_json::json!({ "root": root });
+    if !username.is_empty() && !password.is_empty() {
+        body["username"] = serde_json::Value::String(username.to_string());
+        body["password"] = serde_json::Value::String(password.to_string());
+    }
+    post("/setup/complete", &body).await?;
+    Ok(())
 }
 
 /// POST /auth/login → token string (saved to localStorage)
@@ -138,27 +152,64 @@ pub async fn login(username: &str, password: &str) -> Result<String, JsValue> {
     Ok(token)
 }
 
-/// GET /status → raw JSON value
-pub async fn get_status() -> Result<serde_json::Value, JsValue> {
-    get("/status").await
+// ============================================================================
+// Typed query endpoints
+// ============================================================================
+
+/// GET /status → WitchStatus
+pub async fn get_status() -> Result<WitchStatus, JsValue> {
+    from_json(get("/status").await?)
 }
 
-/// GET /config → raw JSON value
-pub async fn get_config() -> Result<serde_json::Value, JsValue> {
+/// GET /config → raw JSON (for config editor's generic field renderer)
+pub async fn get_config_json() -> Result<serde_json::Value, JsValue> {
     get("/config").await
 }
 
-/// GET /queries/{name} → raw JSON value
-pub async fn get_query(name: &str) -> Result<serde_json::Value, JsValue> {
-    get(&format!("/queries/{name}")).await
+/// GET /queries/insights → InsightsData
+pub async fn get_insights() -> Result<InsightsData, JsValue> {
+    from_json(get("/queries/insights").await?)
 }
 
-/// GET /queries/{name}?key=value → raw JSON value
+/// GET /queries/inbox-overview → InboxOverviewData
+pub async fn get_inbox_overview() -> Result<InboxOverviewData, JsValue> {
+    from_json(get("/queries/inbox-overview").await?)
+}
+
+/// GET /queries/deploy-status → DeployStatus
+pub async fn get_deploy_status() -> Result<DeployStatus, JsValue> {
+    from_json(get("/queries/deploy-status").await?)
+}
+
+/// GET /queries/edit-history → EditHistoryData
+pub async fn get_edit_history() -> Result<EditHistoryData, JsValue> {
+    from_json(get("/queries/edit-history").await?)
+}
+
+/// GET /queries/external-matches → ExternalMatchesData
+pub async fn get_external_matches() -> Result<ExternalMatchesData, JsValue> {
+    from_json(get("/queries/external-matches").await?)
+}
+
+// ============================================================================
+// Untyped query endpoints (composite/complex responses)
+// ============================================================================
+
+/// GET /queries/{name}?params → raw JSON (for complex/composite responses)
 pub async fn get_query_with(name: &str, params: &str) -> Result<serde_json::Value, JsValue> {
     get(&format!("/queries/{name}?{params}")).await
 }
 
-/// GET /tx/details → transaction decision details
+/// GET /queries/all-audio-files-with-tags?zone=Corpus&include_library=false
+pub async fn get_corpus_files_with_tags() -> Result<serde_json::Value, JsValue> {
+    get("/queries/all-audio-files-with-tags?zone=Corpus&include_library=false").await
+}
+
+// ============================================================================
+// Transaction endpoints
+// ============================================================================
+
+/// GET /tx/details → transaction decision details (raw JSON)
 pub async fn tx_details() -> Result<serde_json::Value, JsValue> {
     get("/tx/details").await
 }
@@ -173,12 +224,16 @@ pub async fn tx_discard() -> Result<serde_json::Value, JsValue> {
     post("/tx/discard", &serde_json::json!({})).await
 }
 
+// ============================================================================
+// Command endpoints
+// ============================================================================
+
 /// POST /commands/queue-task → queue a background task
 pub async fn queue_task(task: &str) -> Result<serde_json::Value, JsValue> {
     post("/commands/queue-task", &serde_json::json!({ "task": task })).await
 }
 
-/// GET /queries/all-audio-files-with-tags?zone=Corpus&include_library=false
-pub async fn get_corpus_files_with_tags() -> Result<serde_json::Value, JsValue> {
-    get("/queries/all-audio-files-with-tags?zone=Corpus&include_library=false").await
+/// POST /commands/save-config → save edited config
+pub async fn save_config(config: &serde_json::Value) -> Result<serde_json::Value, JsValue> {
+    post("/commands/save-config", &serde_json::json!({ "new_config": config })).await
 }

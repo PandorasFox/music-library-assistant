@@ -264,6 +264,8 @@ pub enum CommandPayload {
     QueueTask(BackgroundTask),
     /// Delete edit history. `None` = all sessions; `Some(id)` = single session.
     JettisonEditHistory { session_id: Option<String> },
+    /// Save edited config — Witch handles KDL read/diff/write-back.
+    SaveConfig(Box<Config>),
     /// Initiate server shutdown.
     Shutdown,
 }

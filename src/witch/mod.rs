@@ -695,6 +695,26 @@ impl Witch {
                                     w.queue_mutations_internal(vec![mutation], Some(label));
                                     CommandResponse::Ok
                                 }
+                                CommandPayload::SaveConfig(new_config) => {
+                                    let config_dir = mm_utils::get_config_dir()
+                                        .map_err(|e| ProtocolError::Internal(e.to_string()))?;
+                                    let original_kdl = std::fs::read_to_string(config_dir.join("config.kdl"))
+                                        .unwrap_or_default();
+                                    let old_config = w.read_config(|c| c.clone())
+                                        .ok_or(ProtocolError::NotReady)?;
+                                    let mutation = Mutation::ApplyConfigEdits(Box::new(
+                                        mm_meta::mutations::config_edit::ApplyConfigEditsMutation {
+                                            original_kdl,
+                                            old_config,
+                                            new_config: *new_config,
+                                        },
+                                    ));
+                                    w.queue_mutations_internal(
+                                        vec![mutation],
+                                        Some("Config edit (web)".into()),
+                                    );
+                                    CommandResponse::Ok
+                                }
                                 CommandPayload::Shutdown => {
                                     CommandResponse::Goodbye
                                 }

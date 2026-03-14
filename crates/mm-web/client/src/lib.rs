@@ -16,10 +16,11 @@ use mm_ui::html::widgets::{render_status_bar, render_titlebar};
 use mm_ui::html::{self, div, Node};
 use mm_ui::lateral_view::LateralView;
 
-// Search/Files views cache the full file list in a thread_local so that
-// filtering on keystroke doesn't require a re-fetch.
 thread_local! {
     static SEARCH_DATA: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
+    static CONFIG_DATA: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
+    /// JS interval handle for health view polling. Cleared on navigation.
+    static POLL_HANDLE: RefCell<Option<i32>> = const { RefCell::new(None) };
 }
 
 // ============================================================================
@@ -282,31 +283,33 @@ async fn load_view(hash: &str) -> Result<Node, JsValue> {
     match view {
         LateralView::Health => {
             let status = api::get_status().await?;
-            let insights = api::get_query("insights").await.ok();
+            let insights = api::get_insights().await.ok();
             let mut children = vec![views::render_status_content(&status)];
-            if let Some(ins) = insights {
-                children.push(views::render_insights_content(&ins));
+            if let Some(ref ins) = insights {
+                children.push(views::render_insights_content(ins));
             }
+            start_health_poll();
             Ok(div().children(children).into())
         }
         LateralView::Config => {
-            let config = api::get_config().await?;
-            Ok(views::render_config_editor(&config))
+            let config_json = api::get_config_json().await?;
+            CONFIG_DATA.with(|cell| *cell.borrow_mut() = Some(config_json.clone()));
+            Ok(views::render_config_editor(&config_json))
         }
         LateralView::Deploy => {
-            let data = api::get_query("deploy-status").await?;
+            let data = api::get_deploy_status().await?;
             Ok(views::render_deploy_content(&data))
         }
         LateralView::Inbox => {
-            let data = api::get_query("inbox-overview").await?;
+            let data = api::get_inbox_overview().await?;
             Ok(views::render_inbox_content(&data))
         }
         LateralView::History => {
-            let data = api::get_query("edit-history").await?;
+            let data = api::get_edit_history().await?;
             Ok(views::render_edit_history_content(&data))
         }
         LateralView::ExternalMatches => {
-            let data = api::get_query("external-matches").await?;
+            let data = api::get_external_matches().await?;
             let mut children = vec![views::render_external_matches_content(&data)];
             children.push(views::render_packing_overview(&data));
             Ok(div().children(children).into())
@@ -340,8 +343,7 @@ async fn load_view_from_hash() -> Result<(), JsValue> {
     };
     let tx_open = status
         .as_ref()
-        .and_then(|s| s.get("transaction"))
-        .map_or(false, |t| !t.is_null());
+        .map_or(false, |s| s.transaction.is_some());
 
     let content = load_view(hash).await?;
     mount(&render_app_shell(view, tx_open, content, Some("Connected")));
@@ -387,6 +389,7 @@ async fn do_login() -> Result<(), JsValue> {
 
 #[wasm_bindgen]
 pub fn mm_navigate(view_name: &str) {
+    stop_poll();
     let view = match view_name {
         "Config" => LateralView::Config,
         "Search" => LateralView::Search,
@@ -527,6 +530,51 @@ pub fn mm_packing_browse(category: &str) {
     });
 }
 
+/// Start polling status + insights for the Health view (~3s interval).
+fn start_health_poll() {
+    stop_poll();
+    let window = web_sys::window().unwrap();
+    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(|| {
+        spawn_local(async {
+            do_health_refresh().await;
+        });
+    }) as Box<dyn Fn()>);
+    let handle = window
+        .set_interval_with_callback_and_timeout_and_arguments_0(
+            cb.as_ref().unchecked_ref(),
+            3000,
+        )
+        .unwrap_or(-1);
+    cb.forget(); // Leak closure — lives for the interval lifetime.
+    POLL_HANDLE.with(|cell| *cell.borrow_mut() = Some(handle));
+}
+
+fn stop_poll() {
+    POLL_HANDLE.with(|cell| {
+        if let Some(handle) = cell.borrow_mut().take() {
+            web_sys::window().unwrap().clear_interval_with_handle(handle);
+        }
+    });
+}
+
+async fn do_health_refresh() {
+    let doc = web_sys::window().unwrap().document().unwrap();
+
+    if let Ok(status) = api::get_status().await {
+        let node = views::render_status_content(&status);
+        if let Some(el) = doc.get_element_by_id("mm-status-section") {
+            el.set_inner_html(&node.to_html());
+        }
+    }
+
+    if let Ok(insights) = api::get_insights().await {
+        let node = views::render_insights_content(&insights);
+        if let Some(el) = doc.get_element_by_id("mm-insights-section") {
+            el.set_inner_html(&node.to_html());
+        }
+    }
+}
+
 /// Queue a background task (e.g. "SchemaReconciliation") and refresh the view.
 #[wasm_bindgen]
 pub fn mm_queue_task(task: &str) {
@@ -557,6 +605,89 @@ pub fn mm_search(query: &str) {
             }
         }
     });
+}
+
+/// Save edited config — collects form values, patches cached JSON, POSTs to server.
+#[wasm_bindgen]
+pub fn mm_config_save() {
+    spawn_local(async {
+        if let Err(e) = do_config_save().await {
+            web_sys::console::error_1(&format!("config save error: {e:?}").into());
+        }
+    });
+}
+
+async fn do_config_save() -> Result<(), JsValue> {
+    let config_json = CONFIG_DATA.with(|cell| cell.borrow().clone());
+    let Some(mut config) = config_json else {
+        return Err(JsValue::from_str("no config data cached"));
+    };
+
+    // Walk all form inputs and patch changed values into the config JSON.
+    let doc = web_sys::window().unwrap().document().unwrap();
+    let inputs = doc.query_selector_all("input[id^='cfg-']")
+        .map_err(|e| JsValue::from_str(&format!("querySelectorAll: {e:?}")))?;
+
+    for i in 0..inputs.length() {
+        let el = inputs.get(i).unwrap();
+        let input: web_sys::HtmlInputElement = el.dyn_into()?;
+        let name = input.get_attribute("name").unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let input_type = input.get_attribute("type").unwrap_or_default();
+
+        // Find this field in the config JSON and update it.
+        // Fields can be in opinions top-level or in opinions sub-blocks.
+        let new_val = if input_type == "checkbox" {
+            serde_json::Value::Bool(input.checked())
+        } else if input_type == "number" {
+            let v = input.value();
+            if let Ok(n) = v.parse::<f64>() {
+                serde_json::json!(n)
+            } else {
+                continue;
+            }
+        } else {
+            serde_json::Value::String(input.value())
+        };
+
+        // Try root level first.
+        if config.get(&name).is_some() {
+            config[&name] = new_val;
+            continue;
+        }
+
+        // Try opinions top-level.
+        if let Some(opinions) = config.get_mut("opinions") {
+            if opinions.get(&name).is_some() {
+                opinions[&name] = new_val;
+                continue;
+            }
+
+            // Try opinions sub-blocks.
+            if let Some(obj) = opinions.as_object_mut() {
+                let mut found = false;
+                for (_block_key, block_val) in obj.iter_mut() {
+                    if let Some(block_obj) = block_val.as_object_mut() {
+                        if block_obj.contains_key(&name) {
+                            block_obj.insert(name.clone(), new_val.clone());
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if found {
+                    continue;
+                }
+            }
+        }
+    }
+
+    api::save_config(&config).await?;
+    // Reload config view to show saved state.
+    load_view_from_hash().await?;
+    Ok(())
 }
 
 /// Toggle expand/collapse of a directory in the Files view.

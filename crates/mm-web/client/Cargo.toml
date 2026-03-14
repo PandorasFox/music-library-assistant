@@ -20,6 +20,7 @@ web-sys = { version = "0.3", features = [
     "HtmlInputElement",
     "Location",
     "Node",
+    "NodeList",
     "Storage",
     "Window",
     "Headers",

@@ -13,12 +13,15 @@ if [ ! -f "$XDG_CONFIG_HOME/mm/config.kdl" ] && [ -n "$MM_ROOT" ]; then
         > "$XDG_CONFIG_HOME/mm/config.kdl"
 fi
 
+# Clean stale socket from previous run (bind-mounted dir persists across restarts)
+SOCKET="$XDG_RUNTIME_DIR/mm.sock"
+rm -f "$SOCKET"
+
 # Start the Witch in the background
 mm &
 WITCH_PID=$!
 
 # Wait for the socket to appear
-SOCKET="$XDG_RUNTIME_DIR/mm.sock"
 echo "Waiting for Witch socket at $SOCKET ..."
 for i in $(seq 1 30); do
     [ -S "$SOCKET" ] && break

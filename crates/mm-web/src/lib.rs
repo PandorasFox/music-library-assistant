@@ -60,6 +60,7 @@ pub fn router(state: AppState) -> Router {
         .route("/tx/discard", post(api::transactions::discard))
         // Commands
         .route("/commands/queue-task", post(api::commands::queue_task))
+        .route("/commands/save-config", post(api::commands::save_config))
         .route("/commands/jettison", post(api::commands::jettison))
         .route("/commands/shutdown", post(api::commands::shutdown))
         // Static files (CSS, WASM, JS)

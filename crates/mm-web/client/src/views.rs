@@ -1,6 +1,14 @@
 //! View renderers — each lateral view's content as HTML Node trees.
+//!
+//! Typed functions accept mm-meta structs so the compiler catches field name
+//! mismatches. Functions that remain on `&serde_json::Value` are generic
+//! display utilities or use composite responses without a single mm-meta type.
 
-use mm_ui::html::{self, div, h3, span, section, Node};
+use mm_meta::views::{
+    DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
+};
+use mm_meta::witch_types::{WitchStatus, WorkStateSnapshot};
+use mm_ui::html::{self, div, h3, section, span, Node};
 
 // ============================================================================
 // Shared helpers
@@ -24,255 +32,334 @@ pub fn titled_section(title: &str, items: Vec<Node>) -> Node {
         .into()
 }
 
-/// Render flat key-value section from a JSON object (skips nested).
-pub fn render_kv_section(title: &str, json: &serde_json::Value) -> Node {
-    let mut items = Vec::new();
-    if let Some(obj) = json.as_object() {
-        for (key, val) in obj {
-            if val.is_object() || val.is_array() {
-                continue;
-            }
-            let val_str = match val {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Bool(b) => b.to_string(),
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::Null => "—".into(),
-                _ => continue,
-            };
-            let display_key = key.replace('_', " ");
-            items.push(kv(&display_key, &val_str));
-        }
-    }
-    titled_section(title, items)
-}
 
 // ============================================================================
-// Health view
+// Health view — typed
 // ============================================================================
 
-pub fn render_status_content(status: &serde_json::Value) -> Node {
-    let mut sections = Vec::new();
-    sections.push(render_kv_section("Witch", status));
-
-    if let Some(work) = status.get("work") {
-        sections.push(render_kv_section("Work", work));
-        if let Some(pending) = work.get("pending_by_label").and_then(|v| v.as_object()) {
-            if !pending.is_empty() {
-                let items: Vec<Node> = pending
-                    .iter()
-                    .map(|(k, v)| kv(k, &v.as_u64().unwrap_or(0).to_string()))
-                    .collect();
-                sections.push(titled_section("Pending Work", items));
-            }
-        }
-    }
-    if let Some(tx) = status.get("transaction") {
-        if !tx.is_null() {
-            sections.push(render_kv_section("Transaction", tx));
-        }
-    }
-    if let Some(progress) = status.get("external_fetch_progress") {
-        if !progress.is_null() {
-            sections.push(render_kv_section("External Fetch", progress));
-        }
-    }
-    div().children(sections).into()
-}
-
-pub fn render_insights_content(insights: &serde_json::Value) -> Node {
+pub fn render_status_content(status: &WitchStatus) -> Node {
     let mut sections = Vec::new();
 
-    // Intake alert banner — surface actionable file issues prominently.
-    if let Some(corpus) = insights.get("corpus_files") {
-        let unindexed = corpus.get("files_unindexed").and_then(|v| v.as_u64()).unwrap_or(0);
-        let missing = corpus.get("files_missing").and_then(|v| v.as_u64()).unwrap_or(0);
-        let corrupt = corpus.get("corrupt_files").and_then(|v| v.as_u64()).unwrap_or(0);
-        let relocated = corpus.get("files_relocated").and_then(|v| v.as_u64()).unwrap_or(0);
+    // Work status with progress.
+    let work = &status.work;
+    let state_str = match work.state {
+        WorkStateSnapshot::Idle => "Idle",
+        WorkStateSnapshot::Working => "Working",
+        WorkStateSnapshot::Done => "Done",
+    };
 
-        if unindexed > 0 {
-            sections.push(
-                div()
-                    .class("mm-alert")
-                    .child(span().class("mm-alert__text").text(
-                        format!("{unindexed} unindexed files"),
-                    ))
-                    .child(
-                        html::button()
-                            .class("mm-btn mm-alert__action")
-                            .attr("onclick", "window.__mm_queue_task('SchemaReconciliation')")
-                            .text("Index Now"),
-                    )
-                    .into(),
-            );
-        }
-        if missing > 0 {
-            sections.push(
-                div()
-                    .class("mm-alert mm-alert--warning")
-                    .child(span().class("mm-alert__text").text(
-                        format!("{missing} missing files"),
-                    ))
-                    .into(),
-            );
-        }
-        if corrupt > 0 {
-            sections.push(
-                div()
-                    .class("mm-alert mm-alert--warning")
-                    .child(span().class("mm-alert__text").text(
-                        format!("{corrupt} corrupt files"),
-                    ))
-                    .into(),
-            );
-        }
-        if relocated > 0 {
-            sections.push(
-                div()
-                    .class("mm-alert mm-alert--info")
-                    .child(span().class("mm-alert__text").text(
-                        format!("{relocated} relocated files"),
-                    ))
-                    .into(),
-            );
-        }
-    }
+    let mut work_items = Vec::new();
+    work_items.push(kv("state", state_str));
 
-    if let Some(corpus) = insights.get("corpus_files") {
-        sections.push(render_kv_section("Corpus Files", corpus));
+    if work.session_queued > 0 {
+        let pct = if work.session_queued > 0 {
+            (work.total_processed as f64 / work.session_queued as f64 * 100.0) as u64
+        } else {
+            0
+        };
+        work_items.push(kv(
+            "progress",
+            &format!("{}/{} ({}%)", work.total_processed, work.session_queued, pct),
+        ));
     }
-    if let Some(placeholders) = insights.get("placeholders") {
-        sections.push(render_kv_section("Tag Health", placeholders));
+    if work.pending > 0 {
+        work_items.push(kv("pending", &work.pending.to_string()));
     }
-    if let Some(other) = insights.get("other_signals").and_then(|v| v.as_array()) {
-        let items: Vec<Node> = other
+    if status.db_queue_depth > 0 {
+        work_items.push(kv("DB queue", &status.db_queue_depth.to_string()));
+    }
+    sections.push(titled_section("Work", work_items));
+
+    // Task breakdown.
+    if !work.pending_by_label.is_empty() {
+        let items: Vec<Node> = work
+            .pending_by_label
             .iter()
-            .filter_map(|entry| {
-                let label = entry.get("label")?.as_str()?;
-                let count = entry.get("count")?.as_u64()?;
-                if count == 0 { return None; }
-                Some(kv(label, &count.to_string()))
-            })
+            .map(|(k, v)| kv(k, &v.to_string()))
             .collect();
-        if !items.is_empty() {
-            sections.push(titled_section("Signals", items));
-        }
+        sections.push(titled_section("Pending Work", items));
     }
+
+    // Transaction.
+    if let Some(ref tx) = status.transaction {
+        let tx_items = vec![
+            kv("Label", &tx.label),
+            kv("Decisions", &tx.decision_count.to_string()),
+            kv("Mutations", &tx.mutation_count.to_string()),
+        ];
+        sections.push(titled_section("Transaction", tx_items));
+    }
+
+    // External fetch progress.
+    if let Some(ref progress) = status.external_fetch_progress {
+        let a = &progress.acoustid;
+        let m = &progress.mb;
+        let mut items = vec![
+            kv(
+                "AcoustID",
+                &format!(
+                    "{}/{} ({} matched, {} no match)",
+                    a.processed, a.total, a.matched, a.no_match
+                ),
+            ),
+            kv(
+                "MusicBrainz",
+                &format!(
+                    "{}/{} ({} matched, {} no match)",
+                    m.processed, m.total, m.matched, m.no_match
+                ),
+            ),
+        ];
+        if progress.acoustid_rps > 0.0 || progress.mb_rps > 0.0 {
+            items.push(kv(
+                "rate",
+                &format!("{:.1} aid/s, {:.1} mb/s", progress.acoustid_rps, progress.mb_rps),
+            ));
+        }
+        sections.push(titled_section("External Fetch", items));
+    }
+
+    // Last error.
+    if let Some(ref err) = status.last_error {
+        sections.push(
+            div()
+                .class("mm-alert mm-alert--warning")
+                .child(span().class("mm-alert__text").text(err))
+                .into(),
+        );
+    }
+
+    div().attr("id", "mm-status-section").children(sections).into()
+}
+
+pub fn render_insights_content(insights: &InsightsData) -> Node {
+    let mut sections = Vec::new();
+    let corpus = &insights.bucket_corpus;
+
+    // Intake alert banners.
+    if corpus.files_unindexed > 0 {
+        sections.push(
+            div()
+                .class("mm-alert")
+                .child(span().class("mm-alert__text").text(
+                    format!("{} unindexed files", corpus.files_unindexed),
+                ))
+                .child(
+                    html::button()
+                        .class("mm-btn mm-alert__action")
+                        .attr("onclick", "window.__mm_queue_task('SchemaReconciliation')")
+                        .text("Index Now"),
+                )
+                .into(),
+        );
+    }
+    if corpus.files_missing > 0 {
+        sections.push(
+            div()
+                .class("mm-alert mm-alert--warning")
+                .child(span().class("mm-alert__text").text(
+                    format!("{} missing files", corpus.files_missing),
+                ))
+                .into(),
+        );
+    }
+    if corpus.corrupt_files > 0 {
+        sections.push(
+            div()
+                .class("mm-alert mm-alert--warning")
+                .child(span().class("mm-alert__text").text(
+                    format!("{} corrupt files", corpus.corrupt_files),
+                ))
+                .into(),
+        );
+    }
+    if corpus.files_relocated > 0 {
+        sections.push(
+            div()
+                .class("mm-alert mm-alert--info")
+                .child(span().class("mm-alert__text").text(
+                    format!("{} relocated files", corpus.files_relocated),
+                ))
+                .into(),
+        );
+    }
+
+    // Corpus file stats.
+    let mut corpus_items = vec![
+        kv("files in corpus", &corpus.files_in_corpus.to_string()),
+        kv("indexed", &corpus.files_indexed.to_string()),
+        kv("unindexed", &corpus.files_unindexed.to_string()),
+    ];
+    if corpus.files_missing > 0 {
+        corpus_items.push(kv("missing", &corpus.files_missing.to_string()));
+    }
+    if corpus.directories_missing > 0 {
+        corpus_items.push(kv("dirs missing", &corpus.directories_missing.to_string()));
+    }
+    if corpus.corrupt_files > 0 {
+        corpus_items.push(kv("corrupt", &corpus.corrupt_files.to_string()));
+    }
+    if corpus.shit_format_files > 0 {
+        corpus_items.push(kv("non-vorbis", &corpus.shit_format_files.to_string()));
+    }
+    if corpus.oob_tag_sync > 0 {
+        corpus_items.push(kv("OOB tag sync", &corpus.oob_tag_sync.to_string()));
+    }
+    if corpus.oob_tag_conflict > 0 {
+        corpus_items.push(kv("OOB tag conflict", &corpus.oob_tag_conflict.to_string()));
+    }
+    sections.push(titled_section("Corpus Files", corpus_items));
+
+    // Tag health (placeholder/squash bucket).
+    let ph = &insights.bucket_placeholder;
+    let mut tag_items = Vec::new();
+    if ph.cross_source_overlap_count > 0 {
+        tag_items.push(kv("source overlaps", &ph.cross_source_overlap_count.to_string()));
+    }
+    if ph.release_overlap_count > 0 {
+        tag_items.push(kv("release overlaps", &ph.release_overlap_count.to_string()));
+    }
+    if ph.subpar_duplicate_count > 0 {
+        tag_items.push(kv("subpar duplicates", &ph.subpar_duplicate_count.to_string()));
+    }
+    if ph.redundant_duplicate_count > 0 {
+        tag_items.push(kv("redundant duplicates", &ph.redundant_duplicate_count.to_string()));
+    }
+    for entry in &ph.tag_canonicity {
+        tag_items.push(kv(&format!("{} canonicity", entry.tag_name), &entry.cluster_count.to_string()));
+    }
+    if ph.inconsistent_album_artist_count > 0 {
+        tag_items.push(kv("album artist issues", &ph.inconsistent_album_artist_count.to_string()));
+    }
+    for entry in &ph.compound_tags {
+        let total = entry.safe_count + entry.review_count;
+        tag_items.push(kv(&format!("{} compound", entry.tag_name), &total.to_string()));
+    }
+    if ph.missing_album_single_count > 0 {
+        tag_items.push(kv("missing album singles", &ph.missing_album_single_count.to_string()));
+    }
+    if ph.disc_extraction_count > 0 {
+        tag_items.push(kv("disc extraction", &ph.disc_extraction_count.to_string()));
+    }
+    if ph.path_tag_mismatch_count > 0 {
+        tag_items.push(kv("path/tag mismatch", &ph.path_tag_mismatch_count.to_string()));
+    }
+    if !tag_items.is_empty() {
+        sections.push(titled_section("Tag Health", tag_items));
+    }
+
+    // Other signals.
+    let other_items: Vec<Node> = insights
+        .bucket_other
+        .entries
+        .iter()
+        .filter(|e| e.count > 0)
+        .map(|e| kv(&e.display_label, &e.count.to_string()))
+        .collect();
+    if !other_items.is_empty() {
+        sections.push(titled_section("Signals", other_items));
+    }
+
     if sections.is_empty() {
         span().class("mm-kv__val").text("No insights data").into()
     } else {
-        div().children(sections).into()
+        div().attr("id", "mm-insights-section").children(sections).into()
     }
 }
 
 // ============================================================================
-// External Matches view
+// External Matches view — typed
 // ============================================================================
 
-pub fn render_external_matches_content(data: &serde_json::Value) -> Node {
+pub fn render_external_matches_content(data: &ExternalMatchesData) -> Node {
     let mut sections = Vec::new();
 
-    let packing_fields = [
-        ("packing_perfect_count", "Perfect"),
-        ("packing_full_match_count", "Full match"),
-        ("packing_singles_count", "Singles"),
-        ("packing_incomplete_count", "Incomplete"),
-        ("packing_low_confidence_count", "Low confidence"),
-        ("packing_knots_count", "Knots"),
+    let packing_items = vec![
+        kv("Perfect", &data.packing_perfect_count.to_string()),
+        kv("Full match", &data.packing_full_match_count.to_string()),
+        kv("Singles", &data.packing_singles_count.to_string()),
+        kv("Incomplete", &data.packing_incomplete_count.to_string()),
+        kv("Low confidence", &data.packing_low_confidence_count.to_string()),
+        kv("Knots", &data.packing_knots_count.to_string()),
     ];
-    let packing_items: Vec<Node> = packing_fields
-        .iter()
-        .filter_map(|(key, label)| {
-            let n = data.get(key)?.as_u64()?;
-            Some(kv(label, &n.to_string()))
-        })
-        .collect();
-    if !packing_items.is_empty() {
-        sections.push(titled_section("Release Packing", packing_items));
-    }
+    sections.push(titled_section("Release Packing", packing_items));
 
     let unsolved_fields = [
-        ("unsolved_conflict_count", "Conflicts"),
-        ("unsolved_no_release_count", "No release"),
-        ("unsolved_no_match_count", "No match"),
-        ("va_override_count", "VA overrides"),
-        ("pinned_conflict_count", "Pinned conflicts"),
+        (data.unsolved_conflict_count, "Conflicts"),
+        (data.unsolved_no_release_count, "No release"),
+        (data.unsolved_no_match_count, "No match"),
+        (data.va_override_count, "VA overrides"),
+        (data.pinned_conflict_count, "Pinned conflicts"),
     ];
     let unsolved_items: Vec<Node> = unsolved_fields
         .iter()
-        .filter_map(|(key, label)| {
-            let n = data.get(key)?.as_u64()?;
-            if n == 0 { return None; }
-            Some(kv(label, &n.to_string()))
-        })
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, label)| kv(label, &n.to_string()))
         .collect();
     if !unsolved_items.is_empty() {
         sections.push(titled_section("Unsolved", unsolved_items));
     }
 
-    if let Some(buckets) = data.get("confidence_buckets").and_then(|v| v.as_array()) {
-        let bucket_items: Vec<Node> = buckets
-            .iter()
-            .filter_map(|b| {
-                let tier = b.get("tier")?.as_str().unwrap_or("?");
-                let total = b.get("total")?.as_u64()?;
-                Some(kv(tier, &total.to_string()))
-            })
-            .collect();
-        if !bucket_items.is_empty() {
-            sections.push(titled_section("Confidence Tiers", bucket_items));
-        }
+    let bucket_items: Vec<Node> = data
+        .confidence_buckets
+        .iter()
+        .map(|b| kv(&format!("{:?}", b.tier), &b.total.to_string()))
+        .collect();
+    if !bucket_items.is_empty() {
+        sections.push(titled_section("Confidence Tiers", bucket_items));
     }
 
     div().children(sections).into()
 }
 
 // ============================================================================
-// Edit History view
+// Edit History view — typed
 // ============================================================================
 
-pub fn render_edit_history_content(data: &serde_json::Value) -> Node {
-    let sessions = match data.get("sessions").and_then(|v| v.as_array()) {
-        Some(s) => s,
-        None => return span().class("mm-kv__val").text("No edit history").into(),
-    };
-    if sessions.is_empty() {
+pub fn render_edit_history_content(data: &EditHistoryData) -> Node {
+    if data.sessions.is_empty() {
         return span().class("mm-kv__val").text("No edit sessions").into();
     }
 
-    let items: Vec<Node> = sessions
+    let items: Vec<Node> = data
+        .sessions
         .iter()
-        .filter_map(|s| {
-            let session_id = s.get("session_id")?.as_str()?;
-            let earliest = s.get("earliest_at")?.as_str().unwrap_or("?");
-            let edits = s.get("edit_count")?.as_u64().unwrap_or(0);
-            let inodes = s.get("inode_count")?.as_u64().unwrap_or(0);
-            Some(
-                div()
-                    .class("mm-history-session")
-                    .child(
-                        div()
-                            .class("mm-kv")
-                            .child(
-                                html::a()
-                                    .class("mm-link")
-                                    .attr("href", "#")
-                                    .attr("onclick", format!(
-                                        "event.preventDefault();window.__mm_expand_session('{session_id}')"
-                                    ))
-                                    .text(session_id),
-                            )
-                            .child(span().class("mm-kv__val").text(
-                                format!("{edits} edits, {inodes} files — {earliest}"),
-                            )),
-                    )
-                    .child(div().attr("id", format!("session-{session_id}")).class("mm-session-detail"))
-                    .into(),
-            )
+        .map(|s| {
+            div()
+                .class("mm-history-session")
+                .child(
+                    div()
+                        .class("mm-kv")
+                        .child(
+                            html::a()
+                                .class("mm-link")
+                                .attr("href", "#")
+                                .attr(
+                                    "onclick",
+                                    format!(
+                                        "event.preventDefault();window.__mm_expand_session('{}')",
+                                        s.session_id
+                                    ),
+                                )
+                                .text(&s.session_id),
+                        )
+                        .child(span().class("mm-kv__val").text(format!(
+                            "{} edits, {} files — {}",
+                            s.edit_count, s.inode_count, s.earliest_at
+                        ))),
+                )
+                .child(
+                    div()
+                        .attr("id", format!("session-{}", s.session_id))
+                        .class("mm-session-detail"),
+                )
+                .into()
         })
         .collect();
     titled_section("Edit Sessions", items)
 }
 
+/// Session detail remains untyped (lazy-loaded via separate fetch).
 pub fn render_session_detail(detail: &serde_json::Value) -> Node {
     let edits = match detail.get("edits").and_then(|v| v.as_array()) {
         Some(e) => e,
@@ -315,82 +402,63 @@ pub fn render_session_detail(detail: &serde_json::Value) -> Node {
 }
 
 // ============================================================================
-// Inbox view
+// Inbox view — typed
 // ============================================================================
 
-pub fn render_inbox_content(data: &serde_json::Value) -> Node {
-    let fields = [
-        ("file_in_inbox", "Files in inbox"),
-        ("unindexed", "Unindexed"),
-        ("corpus_match", "Corpus matches"),
-        ("organizable", "Organizable"),
-        ("tag_canonicity", "Tag canonicity"),
-        ("missing_tags", "Missing tags"),
-        ("compound_tags", "Compound tags"),
+pub fn render_inbox_content(data: &InboxOverviewData) -> Node {
+    let items = vec![
+        kv("Files in inbox", &data.file_in_inbox.to_string()),
+        kv("Unindexed", &data.unindexed.to_string()),
+        kv("Corpus matches", &data.corpus_match.to_string()),
+        kv("Organizable", &data.organizable.to_string()),
+        kv("Tag canonicity", &data.tag_canonicity.to_string()),
+        kv("Missing tags", &data.missing_tags.to_string()),
+        kv("Compound tags", &data.compound_tags.to_string()),
     ];
-    let items: Vec<Node> = fields
-        .iter()
-        .filter_map(|(key, label)| {
-            let n = data.get(key)?.as_u64()?;
-            Some(kv(label, &n.to_string()))
-        })
-        .collect();
     titled_section("Inbox", items)
 }
 
 // ============================================================================
-// Deploy view
+// Deploy view — typed
 // ============================================================================
 
-pub fn render_deploy_content(data: &serde_json::Value) -> Node {
-    let mut items = Vec::new();
-    if let Some(needs) = data.get("needs_action").and_then(|v| v.as_bool()) {
-        items.push(kv("Needs action", if needs { "yes" } else { "no" }));
-    }
-    if let Some(libs) = data.get("library_file_counts").and_then(|v| v.as_array()) {
-        for entry in libs {
-            if let Some(arr) = entry.as_array() {
-                let name = arr.first().and_then(|v| v.as_str()).unwrap_or("?");
-                let count = arr.get(1).and_then(|v| v.as_u64()).unwrap_or(0);
-                items.push(kv(name, &count.to_string()));
-            }
-        }
+pub fn render_deploy_content(data: &DeployStatus) -> Node {
+    let mut items = vec![kv(
+        "Needs action",
+        if data.needs_action { "yes" } else { "no" },
+    )];
+    for (name, count) in &data.library_file_counts {
+        items.push(kv(name, &count.to_string()));
     }
     titled_section("Deploy Status", items)
 }
 
 // ============================================================================
-// Transaction view
+// Transaction view — partially typed
 // ============================================================================
 
 pub fn render_transaction_content(
-    status: &serde_json::Value,
+    status: &WitchStatus,
     details: Option<&serde_json::Value>,
 ) -> Node {
-    let tx = status.get("transaction");
-    let has_tx = tx.map_or(false, |t| !t.is_null());
+    let tx = match status.transaction {
+        Some(ref tx) => tx,
+        None => {
+            return section()
+                .class("mm-section")
+                .child(h3().class("mm-section__title").text("Transaction"))
+                .child(span().class("mm-kv__val").text("No active transaction"))
+                .into()
+        }
+    };
 
-    if !has_tx {
-        return section()
-            .class("mm-section")
-            .child(h3().class("mm-section__title").text("Transaction"))
-            .child(span().class("mm-kv__val").text("No active transaction"))
-            .into();
-    }
-
-    let tx = tx.unwrap();
     let mut sections = Vec::new();
 
-    let mut summary = Vec::new();
-    if let Some(label) = tx.get("label").and_then(|v| v.as_str()) {
-        summary.push(kv("Label", label));
-    }
-    if let Some(dc) = tx.get("decision_count").and_then(|v| v.as_u64()) {
-        summary.push(kv("Decisions", &dc.to_string()));
-    }
-    if let Some(mc) = tx.get("mutation_count").and_then(|v| v.as_u64()) {
-        summary.push(kv("Mutations", &mc.to_string()));
-    }
+    let mut summary = vec![
+        kv("Label", &tx.label),
+        kv("Decisions", &tx.decision_count.to_string()),
+        kv("Mutations", &tx.mutation_count.to_string()),
+    ];
     summary.push(
         div()
             .class("mm-buttons")
@@ -431,7 +499,7 @@ pub fn render_transaction_content(
 }
 
 // ============================================================================
-// Config editor view
+// Config editor view (stays on serde_json::Value — generic field renderer)
 // ============================================================================
 
 pub fn render_config_editor(config: &serde_json::Value) -> Node {
@@ -474,11 +542,10 @@ pub fn render_config_editor(config: &serde_json::Value) -> Node {
 
     // Opinions — render each sub-block as a form section.
     if let Some(opinions) = config.get("opinions").and_then(|v| v.as_object()) {
-        // Top-level opinion scalars.
         let mut top_items = Vec::new();
         for (key, val) in opinions {
             if val.is_object() {
-                continue; // sub-blocks handled below
+                continue;
             }
             top_items.push(config_field(key, val));
         }
@@ -486,7 +553,6 @@ pub fn render_config_editor(config: &serde_json::Value) -> Node {
             sections.push(titled_section("Opinions", top_items));
         }
 
-        // Sub-blocks.
         let block_labels = [
             ("quality_resolution", "Quality Resolution"),
             ("canonicalization", "Canonicalization"),
@@ -514,20 +580,23 @@ pub fn render_config_editor(config: &serde_json::Value) -> Node {
         }
     }
 
-    // Config editing note — mutation shape is too complex for web client v1.
+    // Save button.
     sections.push(
         div()
-            .class("mm-alert mm-alert--info")
-            .child(span().class("mm-alert__text").text(
-                "Config editing is read-only in the web UI. Use the TUI to modify settings.",
-            ))
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-green)")
+                    .attr("onclick", "window.__mm_config_save()")
+                    .text("Save"),
+            )
             .into(),
     );
 
     div().class("mm-config-editor").children(sections).into()
 }
 
-/// Render a config field as the appropriate form input.
 fn config_field(key: &str, val: &serde_json::Value) -> Node {
     let display_key = key.replace('_', " ");
     match val {
@@ -592,7 +661,6 @@ fn config_field(key: &str, val: &serde_json::Value) -> Node {
                 .into()
         }
         serde_json::Value::Object(obj) => {
-            // Nested object — render as sub-fields.
             let items: Vec<Node> = obj.iter().map(|(k, v)| config_field(k, v)).collect();
             div()
                 .class("mm-config-nested")
@@ -629,49 +697,45 @@ fn config_field_readonly(key: &str, val: &str) -> Node {
 }
 
 // ============================================================================
-// Packing browser view
+// Packing browser view (stays on serde_json::Value)
 // ============================================================================
 
-pub fn render_packing_overview(ext_data: &serde_json::Value) -> Node {
+pub fn render_packing_overview(ext_data: &ExternalMatchesData) -> Node {
     let categories = [
-        ("perfect", "Perfect", "packing_perfect_count"),
-        ("full_match", "Full Match", "packing_full_match_count"),
-        ("single", "Singles", "packing_singles_count"),
-        ("incomplete", "Incomplete", "packing_incomplete_count"),
-        ("low_confidence", "Low Confidence", "packing_low_confidence_count"),
+        ("perfect", "Perfect", ext_data.packing_perfect_count),
+        ("full_match", "Full Match", ext_data.packing_full_match_count),
+        ("single", "Singles", ext_data.packing_singles_count),
+        ("incomplete", "Incomplete", ext_data.packing_incomplete_count),
+        ("low_confidence", "Low Confidence", ext_data.packing_low_confidence_count),
     ];
 
     let items: Vec<Node> = categories
         .iter()
-        .filter_map(|(prefix, label, count_key)| {
-            let count = ext_data.get(count_key)?.as_u64().unwrap_or(0);
-            Some(
-                div()
-                    .class("mm-kv")
-                    .child(
-                        html::a()
-                            .class("mm-link")
-                            .attr("href", "#")
-                            .attr("onclick", format!(
-                                "event.preventDefault();window.__mm_packing_browse('{prefix}')"
-                            ))
-                            .text(&format!("{label} ({count})")),
-                    )
-                    .into(),
-            )
+        .map(|(prefix, label, count)| {
+            div()
+                .class("mm-kv")
+                .child(
+                    html::a()
+                        .class("mm-link")
+                        .attr("href", "#")
+                        .attr(
+                            "onclick",
+                            format!("event.preventDefault();window.__mm_packing_browse('{prefix}')"),
+                        )
+                        .text(&format!("{label} ({count})")),
+                )
+                .into()
         })
         .collect();
 
     let mut sections = vec![titled_section("Release Packing Categories", items)];
 
-    // Knots.
-    let knots = ext_data.get("packing_knots_count").and_then(|v| v.as_u64()).unwrap_or(0);
-    if knots > 0 {
+    if ext_data.packing_knots_count > 0 {
         sections.push(
             div()
                 .class("mm-kv")
                 .child(span().class("mm-kv__key").text("Knots"))
-                .child(span().class("mm-kv__val").text(knots.to_string()))
+                .child(span().class("mm-kv__val").text(ext_data.packing_knots_count.to_string()))
                 .into(),
         );
     }
@@ -682,7 +746,6 @@ pub fn render_packing_overview(ext_data: &serde_json::Value) -> Node {
 pub fn render_packing_browser_data(category: &str, data: &serde_json::Value) -> Node {
     let mut sections = Vec::new();
 
-    // Back link.
     sections.push(
         div()
             .child(
@@ -695,7 +758,6 @@ pub fn render_packing_browser_data(category: &str, data: &serde_json::Value) -> 
             .into(),
     );
 
-    // Packed releases.
     if let Some(packed) = data.get("packed").and_then(|v| v.as_array()) {
         if !packed.is_empty() {
             let items: Vec<Node> = packed
@@ -721,7 +783,6 @@ pub fn render_packing_browser_data(category: &str, data: &serde_json::Value) -> 
         }
     }
 
-    // Per-track packing assignments.
     if let Some(packing) = data.get("packing").and_then(|v| v.as_array()) {
         if !packing.is_empty() {
             let items: Vec<Node> = packing
@@ -749,7 +810,6 @@ pub fn render_packing_browser_data(category: &str, data: &serde_json::Value) -> 
         }
     }
 
-    // Unfilled slots.
     if let Some(unfilled) = data.get("unfilled").and_then(|v| v.as_array()) {
         if !unfilled.is_empty() {
             let items: Vec<Node> = unfilled
@@ -778,15 +838,9 @@ pub fn render_packing_browser_data(category: &str, data: &serde_json::Value) -> 
 }
 
 // ============================================================================
-// Tag editor view (form-based)
+// Search view (stays on serde_json::Value — composite response)
 // ============================================================================
 
-// ============================================================================
-// Search view
-// ============================================================================
-
-/// Render search view with input and results container.
-/// `data` is Vec<[AudioFile, HashMap<String, Vec<String>>]> from the API.
 pub fn render_search_view(data: &serde_json::Value) -> Node {
     let total = data.as_array().map_or(0, |a| a.len());
 
@@ -812,7 +866,6 @@ pub fn render_search_view(data: &serde_json::Value) -> Node {
         .into()
 }
 
-/// Render filtered search results. Called both at init and on each keystroke.
 pub fn render_search_results(data: &serde_json::Value, query: &str) -> Node {
     let files = match data.as_array() {
         Some(a) => a,
@@ -904,7 +957,6 @@ pub fn render_search_results(data: &serde_json::Value, query: &str) -> Node {
     container.into()
 }
 
-/// Extract the first value for a tag key from a tags map.
 fn tag_first(tags_map: &serde_json::Value, key: &str) -> String {
     tags_map
         .get(key)
@@ -916,18 +968,15 @@ fn tag_first(tags_map: &serde_json::Value, key: &str) -> String {
 }
 
 // ============================================================================
-// Files view (directory-grouped corpus browser)
+// Files view (stays on serde_json::Value — composite response)
 // ============================================================================
 
-/// Render files view grouped by parent directory.
-/// `data` is same Vec<[AudioFile, HashMap<String, Vec<String>>]> as search.
 pub fn render_files_view(data: &serde_json::Value) -> Node {
     let files = match data.as_array() {
         Some(a) => a,
         None => return span().class("mm-kv__val").text("No files loaded").into(),
     };
 
-    // Group by parent directory.
     let mut dirs: std::collections::BTreeMap<String, Vec<(&serde_json::Value, &serde_json::Value)>> =
         std::collections::BTreeMap::new();
 
@@ -961,17 +1010,12 @@ pub fn render_files_view(data: &serde_json::Value) -> Node {
         let count = entries.len();
         let display_dir = if dir.is_empty() { "/" } else { dir.as_str() };
 
-        // Directory header (clickable to toggle).
         let dir_id = format!("mm-dir-{}", simple_hash(dir));
         let header = div()
             .class("mm-dir-header")
-            .attr(
-                "onclick",
-                format!("window.__mm_toggle_dir('{dir_id}')"),
-            )
+            .attr("onclick", format!("window.__mm_toggle_dir('{dir_id}')"))
             .child(span().text(format!("{display_dir} ({count} files)")));
 
-        // File rows inside this directory (initially collapsed via CSS).
         let mut file_rows = Vec::new();
         for (audio_file, tags_map) in entries {
             let inode = audio_file
@@ -1044,7 +1088,6 @@ pub fn render_files_view(data: &serde_json::Value) -> Node {
     div().children(sections).into()
 }
 
-/// Simple string hash for generating stable DOM IDs.
 fn simple_hash(s: &str) -> u64 {
     let mut h: u64 = 5381;
     for b in s.bytes() {
@@ -1054,10 +1097,9 @@ fn simple_hash(s: &str) -> u64 {
 }
 
 // ============================================================================
-// Tag editor view (form-based)
+// Tag editor view (stays on serde_json::Value)
 // ============================================================================
 
-/// Render tag editor for a single inode. `tags` is Vec<(String, String)>.
 pub fn render_tag_editor(inode: i64, path: &str, tags: &serde_json::Value) -> Node {
     let mut rows = Vec::new();
 

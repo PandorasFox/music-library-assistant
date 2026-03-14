@@ -152,7 +152,8 @@ fn render_setup_form(error: Option<&str>, suggested_root: Option<&str>) -> Node 
     let mut root_input = html::input()
         .attr("type", "text")
         .attr("id", "setup-root")
-        .attr("placeholder", "/path/to/music");
+        .attr("placeholder", "/path/to/music")
+        .attr("onkeydown", "if(event.key==='Enter')window.__mm_setup()");
     if let Some(root) = suggested_root {
         root_input = root_input.attr("value", root);
     }
@@ -173,7 +174,8 @@ fn render_setup_form(error: Option<&str>, suggested_root: Option<&str>) -> Node 
                     html::input()
                         .attr("type", "text")
                         .attr("id", "setup-user")
-                        .attr("autocomplete", "username"),
+                        .attr("autocomplete", "username")
+                        .attr("onkeydown", "if(event.key==='Enter')window.__mm_setup()"),
                 ),
         )
         .child(
@@ -184,7 +186,8 @@ fn render_setup_form(error: Option<&str>, suggested_root: Option<&str>) -> Node 
                     html::input()
                         .attr("type", "password")
                         .attr("id", "setup-pass")
-                        .attr("autocomplete", "new-password"),
+                        .attr("autocomplete", "new-password")
+                        .attr("onkeydown", "if(event.key==='Enter')window.__mm_setup()"),
                 ),
         )
         .child(
@@ -217,7 +220,8 @@ fn render_login(error: Option<&str>) -> Node {
                     html::input()
                         .attr("type", "text")
                         .attr("id", "login-user")
-                        .attr("autocomplete", "username"),
+                        .attr("autocomplete", "username")
+                        .attr("onkeydown", "if(event.key==='Enter')window.__mm_login()"),
                 ),
         )
         .child(
@@ -228,7 +232,8 @@ fn render_login(error: Option<&str>) -> Node {
                     html::input()
                         .attr("type", "password")
                         .attr("id", "login-pass")
-                        .attr("autocomplete", "current-password"),
+                        .attr("autocomplete", "current-password")
+                        .attr("onkeydown", "if(event.key==='Enter')window.__mm_login()"),
                 ),
         )
         .child(

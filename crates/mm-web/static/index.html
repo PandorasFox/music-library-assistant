@@ -9,8 +9,9 @@
 <body>
     <div id="mm-root"></div>
     <script type="module">
-        import init from '/static/pkg/mm_web_client.js';
-        init();
+        import init, { mm_login } from '/static/pkg/mm_web_client.js';
+        await init();
+        window.__mm_login = mm_login;
     </script>
 </body>
 </html>

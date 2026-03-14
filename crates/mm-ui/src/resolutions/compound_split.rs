@@ -191,3 +191,199 @@ impl ModalButtons for CompoundSplitButton {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mm_meta::views::canonicity_compound::{CompoundSplitCluster, ResolutionFileInfo};
+
+    fn make_file(name: &str) -> ResolutionFileInfo {
+        ResolutionFileInfo {
+            inode: 1,
+            display_name: name.to_string(),
+        }
+    }
+
+    fn make_group(num_files: usize) -> CompoundSplitCluster {
+        CompoundSplitCluster {
+            tag_name: "genre".to_string(),
+            compound_value: "Rock; Metal".to_string(),
+            split_parts: vec!["Rock".to_string(), "Metal".to_string()],
+            matching_parts: vec!["Rock".to_string()],
+            files: (0..num_files)
+                .map(|i| make_file(&format!("track_{i}.flac")))
+                .collect(),
+        }
+    }
+
+    fn make_test_data(num_groups: usize) -> CompoundSplitResolutionData {
+        CompoundSplitResolutionData {
+            groups: (0..num_groups).map(|_| make_group(4)).collect(),
+        }
+    }
+
+    // -- GroupNavigation tests --
+
+    #[test]
+    fn group_nav_zero_groups() {
+        let data = CompoundSplitData::new(make_test_data(0));
+        assert_eq!(data.group_count(), 0);
+        assert!(!data.has_next());
+        assert!(!data.has_prev());
+    }
+
+    #[test]
+    fn group_nav_three_groups_boundaries() {
+        let mut data = CompoundSplitData::new(make_test_data(3));
+        // At start
+        assert_eq!(data.group_count(), 3);
+        assert_eq!(data.current_group(), 0);
+        assert!(data.has_next());
+        assert!(!data.has_prev());
+
+        // Middle
+        data.current_group = 1;
+        assert!(data.has_next());
+        assert!(data.has_prev());
+
+        // End
+        data.current_group = 2;
+        assert!(!data.has_next());
+        assert!(data.has_prev());
+    }
+
+    // -- ResolutionData tests --
+
+    #[test]
+    fn list_len_returns_file_count() {
+        let data = CompoundSplitData::new(make_test_data(1));
+        // Each group has 4 files
+        assert_eq!(data.list_len(), 4);
+    }
+
+    #[test]
+    fn list_len_empty_groups() {
+        let data = CompoundSplitData::new(make_test_data(0));
+        assert_eq!(data.list_len(), 0);
+    }
+
+    #[test]
+    fn list_len_changes_with_group() {
+        let mut inner = CompoundSplitResolutionData { groups: vec![] };
+        inner.groups.push(make_group(2)); // group 0: 2 files
+        inner.groups.push(make_group(7)); // group 1: 7 files
+        let mut data = CompoundSplitData::new(inner);
+        assert_eq!(data.list_len(), 2);
+        data.current_group = 1;
+        assert_eq!(data.list_len(), 7);
+    }
+
+    #[test]
+    fn selected_path_returns_file_display_name() {
+        let data = CompoundSplitData::new(make_test_data(1));
+        assert_eq!(data.selected_path(0), Some("track_0.flac"));
+        assert_eq!(data.selected_path(1), Some("track_1.flac"));
+    }
+
+    #[test]
+    fn selected_path_out_of_bounds() {
+        let data = CompoundSplitData::new(make_test_data(1));
+        assert_eq!(data.selected_path(999), None);
+    }
+
+    #[test]
+    fn list_title_includes_compound_value_and_position() {
+        let data = CompoundSplitData::new(make_test_data(3));
+        let title = data.list_title();
+        assert!(title.contains("Rock; Metal"));
+        assert!(title.contains("1/3"));
+    }
+
+    #[test]
+    fn content_layout_is_field_above_list() {
+        let data = CompoundSplitData::new(make_test_data(1));
+        assert!(matches!(
+            data.content_layout(),
+            ContentLayout::FieldAboveList { .. }
+        ));
+    }
+
+    #[test]
+    fn button_ctx_reflects_data_state() {
+        let data = CompoundSplitData::new(make_test_data(1));
+        let ctx = data.button_ctx();
+        assert!(ctx.has_files);
+        assert_eq!(ctx.current_group_index, 0);
+
+        let empty = CompoundSplitData::new(make_test_data(0));
+        let ctx = empty.button_ctx();
+        assert!(!ctx.has_files);
+    }
+
+    // -- ModalButtons tests --
+
+    #[test]
+    fn all_buttons_returned() {
+        let all = CompoundSplitButton::all();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0], CompoundSplitButton::Confirm);
+        assert_eq!(all[1], CompoundSplitButton::Canonicalize);
+        assert_eq!(all[2], CompoundSplitButton::Cancel);
+    }
+
+    #[test]
+    fn confirm_disabled_when_no_files() {
+        let ctx = CompoundSplitButtonCtx {
+            has_files: false,
+            current_group_index: 0,
+        };
+        assert!(!CompoundSplitButton::Confirm.enabled(&ctx));
+        assert!(CompoundSplitButton::Canonicalize.enabled(&ctx));
+        assert!(CompoundSplitButton::Cancel.enabled(&ctx));
+    }
+
+    #[test]
+    fn confirm_enabled_when_files_exist() {
+        let ctx = CompoundSplitButtonCtx {
+            has_files: true,
+            current_group_index: 0,
+        };
+        assert!(CompoundSplitButton::Confirm.enabled(&ctx));
+    }
+
+    #[test]
+    fn default_button_is_cancel() {
+        assert_eq!(CompoundSplitButton::default(), CompoundSplitButton::Cancel);
+    }
+
+    #[test]
+    fn actions_map_correctly() {
+        let ctx = CompoundSplitButtonCtx {
+            has_files: true,
+            current_group_index: 0,
+        };
+        assert_eq!(
+            CompoundSplitButton::Confirm.action(&ctx),
+            CompoundSplitAction::Confirm
+        );
+        assert_eq!(
+            CompoundSplitButton::Canonicalize.action(&ctx),
+            CompoundSplitAction::Canonicalize
+        );
+        assert_eq!(
+            CompoundSplitButton::Cancel.action(&ctx),
+            CompoundSplitAction::Cancel
+        );
+    }
+
+    #[test]
+    fn labels_are_nonempty() {
+        let ctx = CompoundSplitButtonCtx {
+            has_files: true,
+            current_group_index: 0,
+        };
+        for button in CompoundSplitButton::all() {
+            assert!(!button.label(&ctx).is_empty());
+        }
+    }
+}

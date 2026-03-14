@@ -180,3 +180,171 @@ impl ModalButtons for DiscExtractionButton {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mm_meta::domain_queries::{DiscExtractionGroup, DiscFileEntry};
+
+    fn make_file_entry(path: &str) -> DiscFileEntry {
+        DiscFileEntry {
+            inode: 1,
+            path: path.to_string(),
+            original_value: "Album, Disc 1".to_string(),
+            cleaned_value: "Album".to_string(),
+            source_tag: "ALBUM".to_string(),
+        }
+    }
+
+    fn make_group(desc: &str, num_files: usize) -> DiscExtractionGroup {
+        let files = (0..num_files)
+            .map(|i| make_file_entry(&format!("corpus/{desc}/track_{i}.flac")))
+            .collect();
+        DiscExtractionGroup {
+            description: desc.to_string(),
+            disc_value: "1".to_string(),
+            files,
+        }
+    }
+
+    fn make_disc_data(num_groups: usize, files_per_group: usize) -> DiscExtractionModalData {
+        let groups = (0..num_groups)
+            .map(|i| make_group(&format!("disc_{i}"), files_per_group))
+            .collect();
+        DiscExtractionModalData { groups }
+    }
+
+    // -- GroupNavigation tests --
+
+    #[test]
+    fn zero_groups_navigation() {
+        let data = DiscExtractionData::new(make_disc_data(0, 0));
+        assert_eq!(data.group_count(), 0);
+        assert!(!data.has_next());
+        assert!(!data.has_prev());
+    }
+
+    #[test]
+    fn three_groups_navigation() {
+        let mut data = DiscExtractionData::new(make_disc_data(3, 2));
+        assert_eq!(data.group_count(), 3);
+        assert!(data.has_next());
+        assert!(!data.has_prev());
+
+        data.current_group = 1;
+        assert!(data.has_next());
+        assert!(data.has_prev());
+
+        data.current_group = 2;
+        assert!(!data.has_next());
+        assert!(data.has_prev());
+    }
+
+    // -- ResolutionData tests --
+
+    #[test]
+    fn list_len_returns_file_count() {
+        let mut inner = DiscExtractionModalData::default();
+        inner.groups.push(make_group("a", 3));
+        inner.groups.push(make_group("b", 7));
+        let data = DiscExtractionData::new(inner);
+        assert_eq!(data.list_len(), 3);
+    }
+
+    #[test]
+    fn list_len_zero_when_empty() {
+        let data = DiscExtractionData::new(make_disc_data(0, 0));
+        assert_eq!(data.list_len(), 0);
+    }
+
+    #[test]
+    fn list_len_changes_with_current_group() {
+        let mut inner = DiscExtractionModalData::default();
+        inner.groups.push(make_group("small", 2));
+        inner.groups.push(make_group("big", 6));
+        let mut data = DiscExtractionData::new(inner);
+        assert_eq!(data.list_len(), 2);
+        data.current_group = 1;
+        assert_eq!(data.list_len(), 6);
+    }
+
+    #[test]
+    fn selected_path_valid_cursor() {
+        let data = DiscExtractionData::new(make_disc_data(1, 3));
+        assert_eq!(
+            data.selected_path(0),
+            Some("corpus/disc_0/track_0.flac")
+        );
+        assert_eq!(
+            data.selected_path(2),
+            Some("corpus/disc_0/track_2.flac")
+        );
+    }
+
+    #[test]
+    fn selected_path_out_of_bounds() {
+        let data = DiscExtractionData::new(make_disc_data(1, 1));
+        assert!(data.selected_path(99).is_none());
+    }
+
+    #[test]
+    fn list_title_includes_group_position() {
+        let data = DiscExtractionData::new(make_disc_data(3, 4));
+        let title = data.list_title();
+        assert!(title.contains("1/3"), "expected '1/3' in: {title}");
+        assert!(title.contains("4"), "expected file count '4' in: {title}");
+    }
+
+    // -- ModalButtons tests --
+
+    #[test]
+    fn apply_and_skip_enabled_when_has_files() {
+        let ctx = DiscExtractionButtonCtx {
+            has_files: true,
+            group_index: 0,
+        };
+        assert!(DiscExtractionButton::Apply.enabled(&ctx));
+        assert!(DiscExtractionButton::Skip.enabled(&ctx));
+    }
+
+    #[test]
+    fn apply_and_skip_disabled_when_empty() {
+        let ctx = DiscExtractionButtonCtx {
+            has_files: false,
+            group_index: 0,
+        };
+        assert!(!DiscExtractionButton::Apply.enabled(&ctx));
+        assert!(!DiscExtractionButton::Skip.enabled(&ctx));
+    }
+
+    #[test]
+    fn cancel_always_enabled() {
+        for has_files in [true, false] {
+            let ctx = DiscExtractionButtonCtx {
+                has_files,
+                group_index: 0,
+            };
+            assert!(DiscExtractionButton::Cancel.enabled(&ctx));
+        }
+    }
+
+    #[test]
+    fn actions_return_correct_variants() {
+        let ctx = DiscExtractionButtonCtx {
+            has_files: true,
+            group_index: 0,
+        };
+        assert_eq!(
+            DiscExtractionButton::Apply.action(&ctx),
+            DiscExtractionAction::Apply
+        );
+        assert_eq!(
+            DiscExtractionButton::Skip.action(&ctx),
+            DiscExtractionAction::Skip
+        );
+        assert_eq!(
+            DiscExtractionButton::Cancel.action(&ctx),
+            DiscExtractionAction::Cancel
+        );
+    }
+}

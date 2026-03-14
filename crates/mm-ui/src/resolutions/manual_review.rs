@@ -205,3 +205,230 @@ impl ModalButtons for ReviewButton {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mm_meta::views::review_match::{FileMetaSummary, ReviewFileEntry, ReviewGroup};
+
+    fn make_file_entry(path: &str) -> ReviewFileEntry {
+        ReviewFileEntry {
+            corpus_path: path.to_string(),
+            inode: 1,
+            context: String::new(),
+            stashed: false,
+            meta: Some(FileMetaSummary::default()),
+        }
+    }
+
+    fn make_group(label: &str, num_files: usize) -> ReviewGroup {
+        let files = (0..num_files)
+            .map(|i| make_file_entry(&format!("corpus/{label}/track_{i}.flac")))
+            .collect();
+        ReviewGroup {
+            label: label.to_string(),
+            files,
+            signal_key: None,
+        }
+    }
+
+    fn make_review_data(num_groups: usize, files_per_group: usize) -> ManualReviewData {
+        let groups = (0..num_groups)
+            .map(|i| make_group(&format!("group_{i}"), files_per_group))
+            .collect();
+        ManualReviewData { groups }
+    }
+
+    // -- GroupNavigation tests --
+
+    #[test]
+    fn zero_groups_navigation() {
+        let data = ManualReviewResolutionData::new(
+            make_review_data(0, 0),
+            ReviewKind::RedundantDuplicate,
+        );
+        assert_eq!(data.group_count(), 0);
+        assert!(!data.has_next());
+        assert!(!data.has_prev());
+    }
+
+    #[test]
+    fn three_groups_navigation() {
+        let mut data = ManualReviewResolutionData::new(
+            make_review_data(3, 2),
+            ReviewKind::RedundantDuplicate,
+        );
+        // At group 0
+        assert_eq!(data.group_count(), 3);
+        assert!(data.has_next());
+        assert!(!data.has_prev());
+
+        // At group 1
+        data.current_group = 1;
+        assert!(data.has_next());
+        assert!(data.has_prev());
+
+        // At group 2 (last)
+        data.current_group = 2;
+        assert!(!data.has_next());
+        assert!(data.has_prev());
+    }
+
+    // -- ResolutionData tests --
+
+    #[test]
+    fn list_len_returns_file_count_for_current_group() {
+        let mut inner = make_review_data(0, 0);
+        inner.groups.push(make_group("small", 2));
+        inner.groups.push(make_group("big", 5));
+        let data = ManualReviewResolutionData::new(inner, ReviewKind::DeployConflict);
+        assert_eq!(data.list_len(), 2);
+    }
+
+    #[test]
+    fn list_len_zero_when_groups_empty() {
+        let data = ManualReviewResolutionData::new(
+            make_review_data(0, 0),
+            ReviewKind::DeployConflict,
+        );
+        assert_eq!(data.list_len(), 0);
+    }
+
+    #[test]
+    fn list_len_changes_with_current_group() {
+        let mut inner = ManualReviewData::default();
+        inner.groups.push(make_group("a", 1));
+        inner.groups.push(make_group("b", 4));
+        let mut data =
+            ManualReviewResolutionData::new(inner, ReviewKind::MetadataDuplicate);
+        assert_eq!(data.list_len(), 1);
+        data.current_group = 1;
+        assert_eq!(data.list_len(), 4);
+    }
+
+    #[test]
+    fn selected_path_returns_corpus_path() {
+        let data = ManualReviewResolutionData::new(
+            make_review_data(1, 3),
+            ReviewKind::RedundantDuplicate,
+        );
+        assert_eq!(
+            data.selected_path(0),
+            Some("corpus/group_0/track_0.flac")
+        );
+        assert_eq!(
+            data.selected_path(2),
+            Some("corpus/group_0/track_2.flac")
+        );
+    }
+
+    #[test]
+    fn selected_path_out_of_bounds_returns_none() {
+        let data = ManualReviewResolutionData::new(
+            make_review_data(1, 2),
+            ReviewKind::RedundantDuplicate,
+        );
+        assert!(data.selected_path(99).is_none());
+    }
+
+    #[test]
+    fn list_title_includes_group_position() {
+        let mut data = ManualReviewResolutionData::new(
+            make_review_data(3, 1),
+            ReviewKind::RedundantDuplicate,
+        );
+        let title = data.list_title();
+        assert!(title.contains("1/3"), "expected '1/3' in: {title}");
+
+        data.current_group = 2;
+        let title = data.list_title();
+        assert!(title.contains("3/3"), "expected '3/3' in: {title}");
+    }
+
+    // -- ModalButtons tests: ReviewKind-specific enablement --
+
+    #[test]
+    fn mark_expected_enabled_only_for_redundant_duplicate() {
+        let kinds = [
+            (ReviewKind::RedundantDuplicate, true),
+            (ReviewKind::DeployConflict, false),
+            (ReviewKind::MetadataDuplicate, false),
+            (ReviewKind::SameRecordingDifferentRelease, false),
+        ];
+        for (kind, expected_enabled) in kinds {
+            let ctx = ReviewButtonCtx {
+                has_files: true,
+                review_kind: kind,
+                current_group_index: 0,
+            };
+            assert_eq!(
+                ReviewButton::MarkExpected.enabled(&ctx),
+                expected_enabled,
+                "MarkExpected enablement wrong for {:?}",
+                kind,
+            );
+        }
+    }
+
+    #[test]
+    fn stash_enabled_when_has_files_disabled_when_empty() {
+        let ctx_with = ReviewButtonCtx {
+            has_files: true,
+            review_kind: ReviewKind::RedundantDuplicate,
+            current_group_index: 0,
+        };
+        let ctx_without = ReviewButtonCtx {
+            has_files: false,
+            review_kind: ReviewKind::RedundantDuplicate,
+            current_group_index: 0,
+        };
+        assert!(ReviewButton::Stash.enabled(&ctx_with));
+        assert!(!ReviewButton::Stash.enabled(&ctx_without));
+    }
+
+    #[test]
+    fn cancel_always_enabled() {
+        for has_files in [true, false] {
+            let ctx = ReviewButtonCtx {
+                has_files,
+                review_kind: ReviewKind::DeployConflict,
+                current_group_index: 0,
+            };
+            assert!(ReviewButton::Cancel.enabled(&ctx));
+        }
+    }
+
+    #[test]
+    fn actions_return_correct_variants() {
+        let ctx = ReviewButtonCtx {
+            has_files: true,
+            review_kind: ReviewKind::RedundantDuplicate,
+            current_group_index: 0,
+        };
+        assert_eq!(ReviewButton::Stash.action(&ctx), ReviewAction::Stash);
+        assert_eq!(
+            ReviewButton::MarkExpected.action(&ctx),
+            ReviewAction::MarkExpected
+        );
+        assert_eq!(ReviewButton::Cancel.action(&ctx), ReviewAction::Cancel);
+    }
+
+    #[test]
+    fn button_ctx_reflects_data_state() {
+        let data = ManualReviewResolutionData::new(
+            make_review_data(1, 3),
+            ReviewKind::DeployConflict,
+        );
+        let ctx = data.button_ctx();
+        assert!(ctx.has_files);
+        assert_eq!(ctx.review_kind, ReviewKind::DeployConflict);
+        assert_eq!(ctx.current_group_index, 0);
+
+        let empty = ManualReviewResolutionData::new(
+            make_review_data(0, 0),
+            ReviewKind::MetadataDuplicate,
+        );
+        let ctx = empty.button_ctx();
+        assert!(!ctx.has_files);
+    }
+}

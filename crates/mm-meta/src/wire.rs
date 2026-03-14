@@ -3,10 +3,10 @@
 //! Provides:
 //! - `WireRequest` / `WireResponse` — envelope types mapping 1:1 to `HandleCommand`
 //!   minus lifecycle variants (Shutdown) and minus in-process reply channels.
-//! - Length-prefixed bincode framing for `std::io::Read` / `Write` streams.
+//! - Length-prefixed bincode framing in both sync (`std::io`) and async (`tokio::io`) variants.
 //!
-//! The framing is synchronous (blocking I/O), matching the plain
-//! `std::thread` + `std::net::UnixStream` transport design.
+//! Sync framing is used by the TUI client (blocking socket I/O).
+//! Async framing is used by the server-side socket handler (tokio tasks).
 
 use std::io::{self, Read, Write};
 
@@ -85,6 +85,45 @@ pub fn read_frame<R: Read, T: DeserializeOwned>(r: &mut R) -> io::Result<T> {
     }
     let mut buf = vec![0u8; len as usize];
     r.read_exact(&mut buf)?;
+    bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+// ============================================================================
+// Async Length-Prefixed Bincode Framing
+// ============================================================================
+
+/// Write a length-prefixed bincode frame (async).
+///
+/// Wire format: `[u32 big-endian length] [bincode payload]`
+pub async fn write_frame_async<W: tokio::io::AsyncWrite + Unpin, T: Serialize>(
+    w: &mut W,
+    msg: &T,
+) -> io::Result<()> {
+    let payload =
+        bincode::serialize(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let len = payload.len() as u32;
+    w.write_all(&len.to_be_bytes()).await?;
+    w.write_all(&payload).await?;
+    w.flush().await
+}
+
+/// Read a length-prefixed bincode frame (async).
+///
+/// Returns `UnexpectedEof` on clean connection close (zero bytes read).
+pub async fn read_frame_async<R: tokio::io::AsyncRead + Unpin, T: DeserializeOwned>(
+    r: &mut R,
+) -> io::Result<T> {
+    let mut len_buf = [0u8; 4];
+    r.read_exact(&mut len_buf).await?;
+    let len = u32::from_be_bytes(len_buf);
+    if len > MAX_FRAME_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame size {len} exceeds maximum {MAX_FRAME_SIZE}"),
+        ));
+    }
+    let mut buf = vec![0u8; len as usize];
+    r.read_exact(&mut buf).await?;
     bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 

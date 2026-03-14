@@ -1,20 +1,17 @@
 //! Unix domain socket listener for out-of-process Witch clients.
 //!
-//! Spawns a listener thread that accepts connections on a Unix socket.
-//! Each connection gets a dedicated handler thread that:
-//! 1. Reads `WireRequest` frames from the socket
-//! 2. Translates them to `HandleCommand`s on the Witch's existing mpsc channel
-//! 3. Blocks on the reply channel
-//! 4. Writes `WireResponse` frames back to the socket
+//! Spawns a tokio task that accepts connections on a Unix socket.
+//! Each connection gets a dedicated async task that:
+//! 1. Reads `WireRequest` frames from the socket (async)
+//! 2. Translates them to `HandleCommand`s on the Witch's mpsc channel
+//! 3. Awaits the oneshot reply
+//! 4. Writes `WireResponse` frames back to the socket (async)
 //!
-//! Connection close exits the handler thread. No explicit cleanup needed —
-//! mpsc channels drop naturally.
+//! Connection close exits the handler task. No explicit cleanup needed —
+//! channels drop naturally.
 
 use std::io;
-use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use tokio::sync::oneshot;
 
@@ -22,31 +19,27 @@ use crate::meta::wire::{self, WireRequest, WireResponse};
 
 use super::handle::{HandleCommand, WitchHandle};
 
-/// Handle to the socket listener thread for lifecycle management.
+/// Handle to the socket listener task for lifecycle management.
 pub(super) struct SocketListenerHandle {
     /// Path to the socket file, for cleanup.
     socket_path: PathBuf,
-    /// Shutdown flag — set to true to stop accepting connections.
-    shutdown: Arc<AtomicBool>,
-    /// Join handle for the listener thread.
-    thread: Option<std::thread::JoinHandle<()>>,
+    /// Tokio task handle for the accept loop.
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl SocketListenerHandle {
-    /// Signal the listener to stop and wait for it to exit.
+    /// Abort the listener task and clean up the socket file.
     pub fn shutdown(&mut self) {
-        self.shutdown.store(true, Ordering::Relaxed);
-
-        // Connect to the socket to unblock the accept() call so the
-        // listener thread sees the shutdown flag.
-        let _ = std::os::unix::net::UnixStream::connect(&self.socket_path);
-
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        if let Some(task) = self.task.take() {
+            task.abort();
         }
-
-        // Clean up socket file.
         let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
+impl Drop for SocketListenerHandle {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -55,11 +48,11 @@ pub fn socket_path() -> Option<PathBuf> {
     WitchHandle::default_socket_path()
 }
 
-/// Spawn the socket listener thread.
+/// Spawn the socket listener as a tokio task.
 ///
 /// Binds the socket synchronously on the calling thread so it is ready for
-/// `WitchHandle::connect()` immediately on return. The accept loop runs in
-/// the spawned thread.
+/// `WitchHandle::connect()` immediately on return. The accept loop runs as
+/// an async tokio task.
 ///
 /// Returns a handle for shutdown coordination, or `None` if XDG_RUNTIME_DIR
 /// is not set (no socket in that case — in-process only).
@@ -74,7 +67,7 @@ pub(super) fn spawn_listener(
     }
 
     // Bind synchronously so the socket is ready before we return.
-    let listener = match UnixListener::bind(&path) {
+    let std_listener = match std::os::unix::net::UnixListener::bind(&path) {
         Ok(l) => {
             crate::logging::log_general(format!(
                 "[SOCKET] Listening on {}",
@@ -91,74 +84,62 @@ pub(super) fn spawn_listener(
         }
     };
 
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let shutdown_clone = shutdown.clone();
+    // Convert to tokio's async listener.
+    std_listener
+        .set_nonblocking(true)
+        .expect("Failed to set socket nonblocking");
+    let listener = tokio::net::UnixListener::from_std(std_listener)
+        .expect("Failed to convert UnixListener to tokio");
 
-    let thread = std::thread::Builder::new()
-        .name("socket-listener".into())
-        .spawn(move || run_listener(listener, cmd_tx, shutdown_clone))
-        .expect("Failed to spawn socket listener thread");
+    let task = tokio::spawn(async move {
+        run_listener(listener, cmd_tx).await;
+    });
 
     Some(SocketListenerHandle {
         socket_path: path,
-        shutdown,
-        thread: Some(thread),
+        task: Some(task),
     })
 }
 
-/// Listener loop: accept connections, spawn handler per connection.
-fn run_listener(
-    listener: UnixListener,
+/// Async accept loop: spawn a task per connection.
+async fn run_listener(
+    listener: tokio::net::UnixListener,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
-    shutdown: Arc<AtomicBool>,
 ) {
-    for stream in listener.incoming() {
-        if shutdown.load(Ordering::Relaxed) {
-            break;
-        }
-
-        match stream {
-            Ok(stream) => {
+    loop {
+        match listener.accept().await {
+            Ok((stream, _)) => {
                 let cmd_tx = cmd_tx.clone();
-                std::thread::Builder::new()
-                    .name("socket-conn".into())
-                    .spawn(move || handle_connection(stream, cmd_tx))
-                    .expect("Failed to spawn socket connection handler");
+                tokio::spawn(async move {
+                    handle_connection(stream, cmd_tx).await;
+                });
             }
             Err(e) => {
-                if shutdown.load(Ordering::Relaxed) {
-                    break;
-                }
-                crate::logging::log_general(format!(
-                    "[SOCKET] Accept error: {e}"
-                ));
+                crate::logging::log_general(format!("[SOCKET] Accept error: {e}"));
             }
         }
     }
-
-    crate::logging::log_general("[SOCKET] Listener shutting down");
 }
 
-/// Per-connection handler: blocking request/response loop.
-fn handle_connection(
-    stream: std::os::unix::net::UnixStream,
+/// Per-connection handler: async request/response loop.
+async fn handle_connection(
+    stream: tokio::net::UnixStream,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<HandleCommand>,
 ) {
-    let mut reader = io::BufReader::new(stream.try_clone().expect("Failed to clone UnixStream"));
-    let mut writer = io::BufWriter::new(stream);
+    let (read_half, write_half) = tokio::io::split(stream);
+    let mut reader = tokio::io::BufReader::new(read_half);
+    let mut writer = tokio::io::BufWriter::new(write_half);
 
     loop {
         // Read next request frame.
-        let request: WireRequest = match wire::read_frame(&mut reader) {
+        let request: WireRequest = match wire::read_frame_async(&mut reader).await {
             Ok(req) => req,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
                 // Clean disconnect.
                 return;
             }
             Err(e) => {
-                crate::logging::log_general(format!(
-                    "[SOCKET] Read error: {e}"
-                ));
+                crate::logging::log_general(format!("[SOCKET] Read error: {e}"));
                 return;
             }
         };
@@ -178,7 +159,7 @@ fn handle_connection(
                     // Witch shut down.
                     return;
                 }
-                match rx.blocking_recv() {
+                match rx.await {
                     Ok(result) => WireResponse::Authenticated(Box::new(result)),
                     Err(_) => return, // Witch dropped the reply channel.
                 }
@@ -191,7 +172,7 @@ fn handle_connection(
                 {
                     return;
                 }
-                match rx.blocking_recv() {
+                match rx.await {
                     Ok(result) => WireResponse::Unauthenticated(result),
                     Err(_) => return,
                 }
@@ -205,10 +186,8 @@ fn handle_connection(
         };
 
         // Write response frame.
-        if let Err(e) = wire::write_frame(&mut writer, &response) {
-            crate::logging::log_general(format!(
-                "[SOCKET] Write error: {e}"
-            ));
+        if let Err(e) = wire::write_frame_async(&mut writer, &response).await {
+            crate::logging::log_general(format!("[SOCKET] Write error: {e}"));
             return;
         }
     }

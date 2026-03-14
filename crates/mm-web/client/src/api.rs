@@ -74,13 +74,26 @@ async fn fetch(method: &str, path: &str, body: Option<&str>) -> Result<serde_jso
     let text_js = JsFuture::from(text_promise).await?;
     let text = text_js.as_string().unwrap_or_default();
 
-    let value: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| JsValue::from_str(&format!("JSON parse error: {e}")))?;
-
     // 401 = token expired/invalid — clear it so refresh shows login.
     if status == 401 {
         clear_token();
     }
+
+    // Non-2xx with non-JSON body — surface the raw text.
+    if status >= 400 {
+        // Try to extract a JSON error message, fall back to raw text.
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(err) = value.get("error") {
+                return Err(JsValue::from_str(
+                    err.as_str().unwrap_or("unknown error"),
+                ));
+            }
+        }
+        return Err(JsValue::from_str(&format!("HTTP {status}: {text}")));
+    }
+
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| JsValue::from_str(&format!("JSON parse error: {e}")))?;
 
     // Check for error field in response.
     if let Some(err) = value.get("error") {

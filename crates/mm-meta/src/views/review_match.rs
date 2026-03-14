@@ -1,8 +1,13 @@
 //! Review and match modal data types.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::external::musicbrainz::{MbArtist, MbRecording, MbRelease};
+use crate::mutations::file_ops::StashFromZoneMutation;
+use crate::mutations::indexing::DropFromIndexMutation;
+use crate::mutations::Mutation;
 use crate::views::{InboxCorpusMatchEntry, MatchClassification};
 
 // ============================================================================
@@ -175,5 +180,47 @@ impl InboxCorpusMatchModalData {
             }
         }
         (better, equivalent, subpar)
+    }
+
+    /// Generate StashFromZone + DropFromIndex mutations for Equivalent + Subpar files.
+    pub fn stash_and_drop_mutations(
+        &self,
+        resolver: &crate::paths::PathResolver,
+    ) -> Vec<Mutation> {
+        self.stash_mutations_for(resolver, |c| {
+            matches!(c, MatchClassification::Equivalent | MatchClassification::Subpar)
+        })
+    }
+
+    /// Generate StashFromZone + DropFromIndex mutations for ALL inbox files.
+    pub fn stash_all_mutations(
+        &self,
+        resolver: &crate::paths::PathResolver,
+    ) -> Vec<Mutation> {
+        self.stash_mutations_for(resolver, |_| true)
+    }
+
+    fn stash_mutations_for(
+        &self,
+        resolver: &crate::paths::PathResolver,
+        predicate: impl Fn(MatchClassification) -> bool,
+    ) -> Vec<Mutation> {
+        let mut mutations = Vec::new();
+        for entry in &self.entries {
+            if !predicate(entry.classification) {
+                continue;
+            }
+            let abs_path = resolver.resolve(std::path::Path::new(&entry.inbox_path));
+            mutations.push(Mutation::StashFromZone(StashFromZoneMutation {
+                path: abs_path,
+                stash_name: "inbox_duplicate".to_string(),
+            }));
+            mutations.push(Mutation::DropFromIndex(DropFromIndexMutation {
+                path: PathBuf::from(&entry.inbox_path),
+                inode: Some(entry.inbox_inode),
+                zone: Some("inbox".to_string()),
+            }));
+        }
+        mutations
     }
 }

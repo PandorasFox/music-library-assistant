@@ -4,6 +4,7 @@
 //! (Serialize/Deserialize) with no execution logic. The `MutationExecutor`
 //! trait and impls live in the `mm` crate.
 
+pub mod builders;
 pub mod config_edit;
 pub mod diffable;
 pub mod dir_config_edit;

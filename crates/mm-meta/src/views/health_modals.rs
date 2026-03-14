@@ -148,6 +148,24 @@ impl CorruptFileModalData {
     pub fn has_files(&self) -> bool {
         !self.files.is_empty()
     }
+
+    /// Generate StashFromZone + DropFromIndex mutations for all corrupt files.
+    pub fn stash_and_drop_mutations(
+        &self,
+        resolver: &crate::paths::PathResolver,
+    ) -> Vec<Mutation> {
+        self.files
+            .iter()
+            .flat_map(|f| {
+                crate::mutations::builders::stash_file_mutations(
+                    &f.corpus_path,
+                    f.inode,
+                    "corrupt",
+                    resolver,
+                )
+            })
+            .collect()
+    }
 }
 
 // ============================================================================
@@ -187,5 +205,23 @@ impl SubparDuplicateModalData {
     /// Check if there are any subpar files.
     pub fn has_files(&self) -> bool {
         !self.files.is_empty()
+    }
+
+    /// Generate StashFromZone + DropFromIndex mutations for all subpar files.
+    pub fn stash_and_drop_mutations(
+        &self,
+        resolver: &crate::paths::PathResolver,
+    ) -> Vec<Mutation> {
+        self.files
+            .iter()
+            .flat_map(|f| {
+                crate::mutations::builders::stash_file_mutations(
+                    &f.corpus_path,
+                    f.inode,
+                    "subpar",
+                    resolver,
+                )
+            })
+            .collect()
     }
 }

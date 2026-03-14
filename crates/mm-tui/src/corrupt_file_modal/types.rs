@@ -13,8 +13,6 @@ use mm_ui::modal_frame::ContentLayout;
 use mm_ui::protocol_binding::ProtocolBinding;
 use mm_ui::resolution_state::{ResolutionData, ResolutionState};
 
-use crate::helpers::stash_file_mutations;
-
 // ============================================================================
 // Data wrapper + ResolutionData impl
 // ============================================================================
@@ -84,10 +82,7 @@ pub fn stash_and_drop_mutations(
     data: &CorruptFileModalData,
     resolver: &mm_meta::paths::PathResolver,
 ) -> Vec<Mutation> {
-    data.files
-        .iter()
-        .flat_map(|f| stash_file_mutations(&f.corpus_path, f.inode, "corrupt", resolver))
-        .collect()
+    data.stash_and_drop_mutations(resolver)
 }
 
 // ============================================================================

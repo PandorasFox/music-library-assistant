@@ -5,5 +5,5 @@
 
 pub use mm_meta::views::review_match::*;
 
-// Re-export from shared helpers for callers that import from here.
-pub use crate::helpers::stash_file_mutations;
+// Re-export stash_file_mutations from mm-meta for callers that import from here.
+pub use mm_meta::mutations::builders::stash_file_mutations;

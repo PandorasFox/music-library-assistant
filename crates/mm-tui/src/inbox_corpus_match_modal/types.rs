@@ -1,14 +1,8 @@
 //! Inbox Corpus Match Resolution Modal Types
 
 use std::borrow::Cow;
-use std::path::PathBuf;
 
 use ratatui::style::Color;
-
-use mm_meta::mutations::file_ops::StashFromZoneMutation;
-use mm_meta::mutations::indexing::DropFromIndexMutation;
-use mm_meta::mutations::Mutation;
-use mm_meta::views::MatchClassification;
 
 use mm_meta::decisions::DecisionKey;
 use mm_ui::modal_buttons::ModalButtons;
@@ -77,60 +71,8 @@ pub enum InboxCorpusMatchPreviewAction {
 // ============================================================================
 
 /// Extension methods for InboxCorpusMatchModalData that depend on server-only types.
-pub trait InboxCorpusMatchModalDataExt {
-    fn stash_and_drop_mutations(&self, resolver: &mm_meta::paths::PathResolver) -> Vec<Mutation>;
-    fn stash_all_mutations(&self, resolver: &mm_meta::paths::PathResolver) -> Vec<Mutation>;
-}
-
-impl InboxCorpusMatchModalDataExt for InboxCorpusMatchModalData {
-    fn stash_and_drop_mutations(
-        &self,
-        resolver: &mm_meta::paths::PathResolver,
-    ) -> Vec<Mutation> {
-        stash_mutations_for(&self.entries, resolver, |c| {
-            matches!(
-                c,
-                MatchClassification::Equivalent | MatchClassification::Subpar
-            )
-        })
-    }
-
-    fn stash_all_mutations(
-        &self,
-        resolver: &mm_meta::paths::PathResolver,
-    ) -> Vec<Mutation> {
-        stash_mutations_for(&self.entries, resolver, |_| true)
-    }
-}
-
-fn stash_mutations_for(
-    entries: &[mm_meta::views::InboxCorpusMatchEntry],
-    resolver: &mm_meta::paths::PathResolver,
-    predicate: impl Fn(MatchClassification) -> bool,
-) -> Vec<Mutation> {
-    let mut mutations = Vec::new();
-
-    for entry in entries {
-        if !predicate(entry.classification) {
-            continue;
-        }
-
-        let abs_path = resolver.resolve(std::path::Path::new(&entry.inbox_path));
-
-        mutations.push(Mutation::StashFromZone(StashFromZoneMutation {
-            path: abs_path,
-            stash_name: "inbox_duplicate".to_string(),
-        }));
-
-        mutations.push(Mutation::DropFromIndex(DropFromIndexMutation {
-            path: PathBuf::from(&entry.inbox_path),
-            inode: Some(entry.inbox_inode),
-            zone: Some("inbox".to_string()),
-        }));
-    }
-
-    mutations
-}
+// Mutation builder methods (stash_and_drop_mutations, stash_all_mutations)
+// live on InboxCorpusMatchModalData in mm-meta.
 
 // ============================================================================
 // Button Definition

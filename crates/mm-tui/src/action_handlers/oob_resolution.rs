@@ -376,31 +376,18 @@ impl App {
 
     /// Stage mutations for moved file acknowledgement.
     fn stage_moved_file_acknowledge(&mut self, gesture: &witness::ConfirmationGesture) {
-        use mm_meta::mutations::indexing::UpdateFilePathMutation;
-        use mm_meta::mutations::Mutation;
-        use std::path::PathBuf;
-
         let (mutations, label) = match &self.view {
             ActiveView::MovedFileAcknowledge(ref state) => {
                 if state.data.files.is_empty() {
                     return;
                 }
 
-                // Create UpdateFilePath mutations for each moved file
-                let mut mutations = Vec::new();
-                for f in &state.data.files {
-                    let cross_zone = if f.old_zone != f.new_zone {
-                        Some(f.new_zone.clone())
-                    } else {
-                        None
-                    };
-                    mutations.push(Mutation::UpdateFilePath(UpdateFilePathMutation {
-                        zone: f.old_zone.clone(),
-                        inode: f.inode,
-                        new_path: PathBuf::from(&f.new_path),
-                        new_zone: cross_zone,
-                    }));
-                }
+                let mutations: Vec<_> = state
+                    .data
+                    .files
+                    .iter()
+                    .map(|f| f.to_update_mutation())
+                    .collect();
 
                 let label = format!(
                     "Acknowledge {} moved file{}",

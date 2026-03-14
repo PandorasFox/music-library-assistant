@@ -613,3 +613,22 @@ pub struct MovedFileInfo {
     /// Zone the file is now found in.
     pub new_zone: String,
 }
+
+impl MovedFileInfo {
+    /// Build an UpdateFilePath mutation to acknowledge this move.
+    pub fn to_update_mutation(&self) -> crate::mutations::Mutation {
+        let cross_zone = if self.old_zone != self.new_zone {
+            Some(self.new_zone.clone())
+        } else {
+            None
+        };
+        crate::mutations::Mutation::UpdateFilePath(
+            crate::mutations::indexing::UpdateFilePathMutation {
+                zone: self.old_zone.clone(),
+                inode: self.inode,
+                new_path: std::path::PathBuf::from(&self.new_path),
+                new_zone: cross_zone,
+            },
+        )
+    }
+}

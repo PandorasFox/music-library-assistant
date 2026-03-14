@@ -7,17 +7,11 @@ pub use mm_ui::helpers::{
     handle_scroll_input, truncate_left, truncate_right, StashCancelButton,
 };
 
-use std::path::PathBuf;
-
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear};
 use ratatui::Frame;
-
-use mm_meta::mutations::file_ops::StashFromZoneMutation;
-use mm_meta::mutations::indexing::DropFromIndexMutation;
-use mm_meta::mutations::Mutation;
 
 // ============================================================================
 // Pane Rendering Utilities
@@ -211,28 +205,3 @@ pub fn pending_edits_from_mutations(
     result
 }
 
-// ============================================================================
-// Mutation Helpers
-// ============================================================================
-
-/// Generate StashFromZone + DropFromIndex mutations for a single corpus file.
-pub fn stash_file_mutations(
-    corpus_path: &str,
-    inode: i64,
-    stash_name: &str,
-    resolver: &mm_meta::paths::PathResolver,
-) -> Vec<Mutation> {
-    let abs_path = resolver.resolve(std::path::Path::new(corpus_path));
-
-    vec![
-        Mutation::StashFromZone(StashFromZoneMutation {
-            path: abs_path,
-            stash_name: stash_name.to_string(),
-        }),
-        Mutation::DropFromIndex(DropFromIndexMutation {
-            path: PathBuf::from(corpus_path),
-            inode: Some(inode),
-            zone: Some("corpus".to_string()),
-        }),
-    ]
-}

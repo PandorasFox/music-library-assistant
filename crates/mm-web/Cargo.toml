@@ -1,0 +1,23 @@
+[package]
+name = "mm-web"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mm-web"
+path = "src/main.rs"
+
+[lib]
+name = "mm_web"
+path = "src/lib.rs"
+
+[dependencies]
+mm-meta = { path = "../mm-meta" }
+
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+anyhow = "1.0"
+tower-http = { version = "0.6", features = ["cors"] }

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/mm-utils", "crates/mm-derive", "crates/mm-meta", "crates/mm-ui", "crates/mm-tui"]
+members = [".", "crates/mm-utils", "crates/mm-derive", "crates/mm-meta", "crates/mm-ui", "crates/mm-tui", "crates/mm-web"]
 default-members = [".", "crates/mm-tui"]
 
 [package]
@@ -78,7 +78,7 @@ argon2 = "0.5"
 arc-swap = "1"
 
 # HTTP client (async + blocking)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde_json = "1"
 
 # Async runtime

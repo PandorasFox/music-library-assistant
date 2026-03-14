@@ -149,3 +149,281 @@ pub enum InboxInsightAction {
     /// Informational only, no action
     Informational,
 }
+
+// ============================================================================
+// Search types
+// ============================================================================
+
+/// Type of search condition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConditionType {
+    #[default]
+    Tag,
+    FileType,
+    SampleRate,
+    Bitrate,
+    Duration,
+}
+
+impl ConditionType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ConditionType::Tag => "TAG",
+            ConditionType::FileType => "TYPE",
+            ConditionType::SampleRate => "RATE",
+            ConditionType::Bitrate => "KBPS",
+            ConditionType::Duration => "TIME",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            ConditionType::Tag => ConditionType::FileType,
+            ConditionType::FileType => ConditionType::SampleRate,
+            ConditionType::SampleRate => ConditionType::Bitrate,
+            ConditionType::Bitrate => ConditionType::Duration,
+            ConditionType::Duration => ConditionType::Tag,
+        }
+    }
+}
+
+/// Specific file format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FileFormat {
+    #[default]
+    Flac,
+    Mp3,
+    Opus,
+    Ogg,
+    Wav,
+    Aac,
+}
+
+impl FileFormat {
+    pub fn label(&self) -> &'static str {
+        match self {
+            FileFormat::Flac => "FLAC",
+            FileFormat::Mp3 => "MP3",
+            FileFormat::Opus => "Opus",
+            FileFormat::Ogg => "OGG",
+            FileFormat::Wav => "WAV",
+            FileFormat::Aac => "AAC",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            FileFormat::Flac => FileFormat::Mp3,
+            FileFormat::Mp3 => FileFormat::Opus,
+            FileFormat::Opus => FileFormat::Ogg,
+            FileFormat::Ogg => FileFormat::Wav,
+            FileFormat::Wav => FileFormat::Aac,
+            FileFormat::Aac => FileFormat::Flac,
+        }
+    }
+
+    pub fn matches(&self, file_type: &str) -> bool {
+        match self {
+            FileFormat::Flac => file_type == "flac",
+            FileFormat::Mp3 => file_type == "mp3",
+            FileFormat::Opus => file_type == "opus",
+            FileFormat::Ogg => file_type == "ogg",
+            FileFormat::Wav => file_type == "wav",
+            FileFormat::Aac => file_type == "aac" || file_type == "m4a",
+        }
+    }
+}
+
+/// File type category for filtering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FileTypeCategory {
+    #[default]
+    Any,
+    Lossless,
+    Lossy,
+    Specific(FileFormat),
+}
+
+impl FileTypeCategory {
+    pub fn label(&self) -> &'static str {
+        match self {
+            FileTypeCategory::Any => "Any",
+            FileTypeCategory::Lossless => "Lossless",
+            FileTypeCategory::Lossy => "Lossy",
+            FileTypeCategory::Specific(f) => f.label(),
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            FileTypeCategory::Any => FileTypeCategory::Lossless,
+            FileTypeCategory::Lossless => FileTypeCategory::Lossy,
+            FileTypeCategory::Lossy => FileTypeCategory::Specific(FileFormat::Flac),
+            FileTypeCategory::Specific(f) => {
+                let next_format = f.next();
+                if next_format == FileFormat::Flac {
+                    FileTypeCategory::Any
+                } else {
+                    FileTypeCategory::Specific(next_format)
+                }
+            }
+        }
+    }
+
+    pub fn matches(&self, file_type: &str) -> bool {
+        let file_type_lower = file_type.to_lowercase();
+        match self {
+            FileTypeCategory::Any => true,
+            FileTypeCategory::Lossless => {
+                matches!(
+                    file_type_lower.as_str(),
+                    "flac" | "wav" | "alac" | "aiff" | "ape"
+                )
+            }
+            FileTypeCategory::Lossy => {
+                matches!(
+                    file_type_lower.as_str(),
+                    "mp3" | "opus" | "ogg" | "aac" | "m4a"
+                )
+            }
+            FileTypeCategory::Specific(f) => f.matches(&file_type_lower),
+        }
+    }
+}
+
+/// Logical operators for combining search conditions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LogicalOperator {
+    #[default]
+    And,
+    Or,
+    Xor,
+}
+
+impl LogicalOperator {
+    pub fn label(&self) -> &'static str {
+        match self {
+            LogicalOperator::And => "AND",
+            LogicalOperator::Or => "OR",
+            LogicalOperator::Xor => "XOR",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            LogicalOperator::And => LogicalOperator::Or,
+            LogicalOperator::Or => LogicalOperator::Xor,
+            LogicalOperator::Xor => LogicalOperator::And,
+        }
+    }
+}
+
+/// Comparison operators for tag value matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ComparisonOperator {
+    #[default]
+    Is,
+    Not,
+    Contains,
+    Like,
+}
+
+impl ComparisonOperator {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ComparisonOperator::Is => "IS",
+            ComparisonOperator::Not => "NOT",
+            ComparisonOperator::Contains => "CONTAINS",
+            ComparisonOperator::Like => "LIKE",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            ComparisonOperator::Is => ComparisonOperator::Not,
+            ComparisonOperator::Not => ComparisonOperator::Contains,
+            ComparisonOperator::Contains => ComparisonOperator::Like,
+            ComparisonOperator::Like => ComparisonOperator::Is,
+        }
+    }
+}
+
+/// A single search condition.
+#[derive(Debug, Clone, Default)]
+pub struct SearchCondition {
+    pub condition_type: ConditionType,
+    pub operator: LogicalOperator,
+    pub tag_name: crate::text_input::TextInputState,
+    pub comparison: ComparisonOperator,
+    pub search_value: crate::text_input::TextInputState,
+    pub file_type_category: FileTypeCategory,
+    pub range_min: crate::text_input::TextInputState,
+    pub range_max: crate::text_input::TextInputState,
+}
+
+impl SearchCondition {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Current mode of the tag search view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TagSearchMode {
+    #[default]
+    QueryBuilder,
+    Results,
+}
+
+/// Searchable tag field names.
+pub const SEARCHABLE_TAGS: &[&str] = &["artist", "album", "album_artist", "title", "genre"];
+
+// ============================================================================
+// Tag editor types
+// ============================================================================
+
+/// A single tag field (name + value pair) for editing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TagField {
+    pub name: String,
+    pub value: String,
+    pub editable: bool,
+    pub deleted: bool,
+}
+
+/// Tag editor mode (single-track or aggregated bulk view).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TagEditorMode {
+    #[default]
+    Individual,
+    Aggregated,
+}
+
+/// Whether a field is currently being edited, and which part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldEditState {
+    NonEditable,
+    EditingName,
+    EditingValue,
+}
+
+/// Aggregated value across multiple tracks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AggregatedValue {
+    /// All tracks have the same value.
+    Consistent(String),
+    /// Tracks have different values.
+    Various,
+    /// Various, but operator has confirmed they want to see individual tracks.
+    VariousConfirming,
+    /// Operator has set a new value for all tracks.
+    Edited(String),
+}
+
+/// An aggregated tag field across multiple tracks.
+#[derive(Debug, Clone)]
+pub struct AggregatedTagField {
+    pub name: String,
+    pub value: AggregatedValue,
+    pub original_value: AggregatedValue,
+}

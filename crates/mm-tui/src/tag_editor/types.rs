@@ -37,17 +37,6 @@ pub enum TagEditorLaunchMode {
     },
 }
 
-/// Editing mode for the tag editor
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TagEditorMode {
-    /// Edit tracks one at a time (Tab to navigate between tracks)
-    #[default]
-    Individual,
-    /// Edit aggregated view (changes apply to all tracks)
-    /// Shows "(various)" when tracks have different values for a tag
-    Aggregated,
-}
-
 /// Context for tag editing - determines mode and available features
 #[derive(Debug, Clone)]
 pub enum TagEditContext {
@@ -203,61 +192,16 @@ pub enum StageChangesButton {
     Cancel,
 }
 
-// ============================================================================
-// Legacy Types (to be removed after refactoring)
-// ============================================================================
+// Re-export shared types from mm-ui.
+pub use mm_ui::domain_types::{
+    AggregatedTagField, AggregatedValue, FieldEditState, TagEditorMode, TagField,
+};
 
-/// Edit mode for tag fields
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldEditState {
-    /// Field is not being edited (navigation mode)
-    NonEditable,
-    /// User is editing the tag name
-    EditingName,
-    /// User is editing the tag value
-    EditingValue,
-}
-
-/// A single tag field with its metadata
-#[derive(Debug, Clone, PartialEq)]
-pub struct TagField {
-    pub name: String,
-    pub value: String,
-    pub editable: bool,
-    /// Marked for deletion (shown with strikethrough)
-    pub deleted: bool,
-}
-
-/// A single change to a tag field
+/// A single change to a tag field.
 #[derive(Debug, Clone)]
 pub struct TagChange {
     pub track_idx: usize,
     pub field_name: String,
     pub old_value: String,
     pub new_value: String,
-}
-
-// ============================================================================
-// Directory Tag Editor Types
-// ============================================================================
-
-/// Value state for an aggregated tag field across multiple files
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AggregatedValue {
-    /// All files have the same value - directly editable
-    Consistent(String),
-    /// Files have different values - shown as "(various values)", needs two-phase Enter
-    Various,
-    /// User is confirming they want to overwrite various values
-    VariousConfirming,
-    /// User has entered a new value that will fill to all files
-    Edited(String),
-}
-
-/// An aggregated tag field representing the same field across all files
-#[derive(Debug, Clone)]
-pub struct AggregatedTagField {
-    pub name: String,
-    pub value: AggregatedValue,
-    pub original_value: AggregatedValue,
 }

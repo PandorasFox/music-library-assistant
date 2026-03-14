@@ -66,7 +66,7 @@ pub(crate) enum ActiveView {
 
     // Resolution flows (single state)
     MissingFileResolution(missing_file_modal::MissingFilePreviewState),
-    MissingDirectoryResolution(missing_directory_modal::MissingDirectoryPreviewState),
+    MissingDirectoryResolution(missing_directory_modal::MissingDirectoryState),
     CorruptFileResolution(corrupt_file_modal::CorruptFilePreviewState),
     ShitFormatResolution(shit_format_modal::ShitFormatPreviewState),
     SubparDuplicateResolution(subpar_duplicate_modal::SubparDuplicatePreviewState),
@@ -249,7 +249,7 @@ pub(crate) enum ViewAction {
     IntakeConfirmation(startup::IntakeConfirmationAction),
     UnifiedTagEditor(tag_editor::UnifiedTagEditorAction),
     MissingFileResolution(missing_file_modal::MissingFilePreviewAction),
-    MissingDirectoryResolution(missing_directory_modal::MissingDirectoryPreviewAction),
+    MissingDirectoryResolution(missing_directory_modal::MissingDirectoryAction),
     CorruptFileResolution(corrupt_file_modal::CorruptFilePreviewAction),
     ShitFormatResolution(shit_format_modal::ShitFormatPreviewAction),
     SubparDuplicateResolution(subpar_duplicate_modal::SubparDuplicatePreviewAction),

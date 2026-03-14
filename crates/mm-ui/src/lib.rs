@@ -18,6 +18,7 @@ pub mod modal_buttons;
 pub mod modal_frame;
 pub mod protocol_binding;
 pub mod resolution_state;
+pub mod resolutions;
 pub mod rich_text;
 pub mod route;
 pub mod search_widget;

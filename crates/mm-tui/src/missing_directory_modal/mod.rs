@@ -3,4 +3,4 @@
 pub mod preview;
 
 pub use mm_meta::views::health_modals::MissingDirectoryModalData;
-pub use preview::{MissingDirectoryData, MissingDirectoryPreviewAction, MissingDirectoryPreviewState};
+pub use preview::{MissingDirectoryAction, MissingDirectoryData, MissingDirectoryState};

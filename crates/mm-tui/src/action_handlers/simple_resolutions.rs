@@ -72,10 +72,10 @@ impl HandleAction for missing_file_modal::MissingFilePreviewAction {
 // Missing Directory Resolution
 // =========================================================================
 
-impl HandleAction for missing_directory_modal::MissingDirectoryPreviewAction {
+impl HandleAction for missing_directory_modal::MissingDirectoryAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            missing_directory_modal::MissingDirectoryPreviewAction::ConfirmDrop => {
+            missing_directory_modal::MissingDirectoryAction::ConfirmDrop => {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
                     ActiveView::MissingDirectoryResolution(ref p) => p.data.0.drop_mutations(),
@@ -83,7 +83,7 @@ impl HandleAction for missing_directory_modal::MissingDirectoryPreviewAction {
                 };
                 app.stage_resolution(mutations, "Drop missing directories", DecisionKey::MissingDirectory, "No directories to drop", w);
             }
-            missing_directory_modal::MissingDirectoryPreviewAction::Cancel => {
+            missing_directory_modal::MissingDirectoryAction::Cancel => {
                 app.cancel_and_return_to_source("Missing directory resolution cancelled");
             }
         }
@@ -348,7 +348,7 @@ impl App {
 
     pub(crate) fn start_missing_directory_resolution(&mut self) {
         let data = self.query(mm_meta::domain_queries::GetMissingDirectoryData);
-        let preview = missing_directory_modal::MissingDirectoryPreviewState::new(
+        let preview = missing_directory_modal::MissingDirectoryState::new(
             missing_directory_modal::MissingDirectoryData(data),
         );
         self.view = ActiveView::MissingDirectoryResolution(preview);

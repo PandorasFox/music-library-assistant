@@ -299,11 +299,21 @@ pub enum Computation {
         new_separators: Vec<(String, String)>,
     },
 
-    /// Index images observed by the FS watcher.
+    /// Register images observed by the FS watcher into the `files` table.
     ///
-    /// Carries pre-extracted metadata (format, dimensions, role) from the
-    /// watcher thread. Writes to both `files` and `image_info` tables.
+    /// Fast path: only writes path/inode/mtime/size — no image decoding.
+    /// Spawns `AnalyzeImageMetadata` as a follow-up for the slow decode pass.
+    /// This must complete before derivation runs so images aren't seen as ghosts.
     IndexObservedImages {
+        images: Vec<crate::witch::fs_thread::ObservedImage>,
+    },
+
+    /// Extract format, dimensions, and role from image files on disk.
+    ///
+    /// Slow path spawned by `IndexObservedImages` — opens each file to read
+    /// dimensions and classify role (cover_front, cover_back, other).
+    /// Writes to `image_info` table. Does NOT gate derivation or startup.
+    AnalyzeImageMetadata {
         images: Vec<crate::witch::fs_thread::ObservedImage>,
     },
 }
@@ -345,7 +355,8 @@ impl Computation {
             Computation::EmitUnmatchedSignals => "Emitting unmatched signals",
             Computation::DeriveExternalMatches => "Deriving external match signals",
             Computation::SeedCompoundTagDirtyInodes { .. } => "Seeding compound tag dirty inodes",
-            Computation::IndexObservedImages { .. } => "Indexing observed images",
+            Computation::IndexObservedImages { .. } => "Registering observed images",
+            Computation::AnalyzeImageMetadata { .. } => "Analyzing image metadata",
         }
     }
 
@@ -458,6 +469,9 @@ impl Computation {
             }
             Computation::IndexObservedImages { ref images } => {
                 execute_index_observed_images(ctx, images)
+            }
+            Computation::AnalyzeImageMetadata { ref images } => {
+                image_index::execute_analyze_image_metadata(ctx, images)
             }
         }
     }

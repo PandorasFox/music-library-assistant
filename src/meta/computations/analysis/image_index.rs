@@ -1,7 +1,10 @@
-//! Image file indexing computation.
+//! Image file indexing and metadata analysis computations.
 //!
-//! Indexes watcher-observed image files: extracts format, dimensions, and role
-//! from file content, then writes to both `files` and `image_info` tables.
+//! Split into two phases:
+//! - `IndexObservedImages` (fast): registers files in the `files` table so
+//!   derivation doesn't see them as ghosts. No image decoding.
+//! - `AnalyzeImageMetadata` (slow): opens each file to extract format,
+//!   dimensions, and role. Writes to `image_info` table. Does not gate startup.
 
 use crate::corpus::paths;
 use crate::corpus::tags;
@@ -13,11 +16,10 @@ pub(crate) use mm_meta::tags::{COVER_BACK_NAMES, COVER_FRONT_NAMES};
 
 use super::{Computation, Result};
 
-/// Execute IndexObservedImages — index watcher-observed image files.
+/// Execute IndexObservedImages — fast file registration only.
 ///
-/// The watcher provides FS-level data (inode, path, mtime, size). This
-/// executor extracts format, dimensions, and role from the file content,
-/// then writes to both `files` and `image_info` tables.
+/// Writes path/inode/mtime/size to the `files` table for each observed image.
+/// Spawns `AnalyzeImageMetadata` as a follow-up for the slow decode pass.
 pub fn execute_index_observed_images(
     ctx: &ComputationContext<'_>,
     images: &[ObservedImage],
@@ -26,10 +28,6 @@ pub fn execute_index_observed_images(
     let computation = Computation::IndexObservedImages { images: images.to_vec() };
     let sender = require_sender!(computation);
 
-    let resolver = paths::get_resolver();
-    let mut indexed = 0;
-    let mut skipped = 0;
-
     for img in images {
         let zone_str = match img.zone {
             crate::db::types::Zone::Corpus => "corpus",
@@ -37,7 +35,6 @@ pub fn execute_index_observed_images(
             crate::db::types::Zone::Library => "library",
         };
 
-        // Register in files table (always — keeps path/mtime fresh)
         sender.index_image_file(
             &img.path,
             zone_str,
@@ -47,8 +44,35 @@ pub fn execute_index_observed_images(
             img.file_size,
             witness,
         );
+    }
 
-        // Extract format, dimensions, role from the actual file
+    log_general(format!(
+        "[COMPUTE] IndexObservedImages: registered {} images in files table",
+        images.len(),
+    ));
+
+    // Spawn the slow metadata analysis as a follow-up — doesn't gate derivation.
+    let spawn = vec![Computation::AnalyzeImageMetadata { images: images.to_vec() }];
+    Result::success(computation, spawn)
+}
+
+/// Execute AnalyzeImageMetadata — slow image decode pass.
+///
+/// Opens each file to extract format, dimensions, and cover role, then
+/// writes to `image_info`. This runs after derivation has already started.
+pub fn execute_analyze_image_metadata(
+    ctx: &ComputationContext<'_>,
+    images: &[ObservedImage],
+) -> Result {
+    let witness = ctx.witness;
+    let computation = Computation::AnalyzeImageMetadata { images: images.to_vec() };
+    let sender = require_sender!(computation);
+
+    let resolver = paths::get_resolver();
+    let mut analyzed = 0;
+    let mut skipped = 0;
+
+    for img in images {
         let abs_path = resolver.resolve(std::path::Path::new(&img.path));
         if !abs_path.exists() {
             skipped += 1;
@@ -85,12 +109,12 @@ pub fn execute_index_observed_images(
         let (width, height, _) = tags::image_dimensions(&abs_path);
 
         sender.upsert_image_info(img.inode, format, width, height, role, witness);
-        indexed += 1;
+        analyzed += 1;
     }
 
     log_general(format!(
-        "[COMPUTE] IndexObservedImages: {} images (indexed={}, skipped={})",
-        images.len(), indexed, skipped,
+        "[COMPUTE] AnalyzeImageMetadata: {} images (analyzed={}, skipped={})",
+        images.len(), analyzed, skipped,
     ));
 
     Result::success(computation, Vec::new())

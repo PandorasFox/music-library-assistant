@@ -21,6 +21,9 @@ mm
 # Local test scripts
 test_instance.sh
 
+# WASM build output (built by wasm-pack during Docker build)
+crates/mm-web/static/pkg/
+
 # claude lol
 .claude/
 analysis_reports/

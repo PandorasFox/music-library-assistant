@@ -239,7 +239,8 @@ pub fn escape_attr(s: &str, buf: &mut String) {
             '"' => buf.push_str("&quot;"),
             '<' => buf.push_str("&lt;"),
             '>' => buf.push_str("&gt;"),
-            '\'' => buf.push_str("&#x27;"),
+            // Single quotes are safe inside double-quoted attributes and must
+            // NOT be escaped — onclick handlers rely on them for JS string literals.
             _ => buf.push(ch),
         }
     }

@@ -328,6 +328,23 @@ pub struct GetFileTagValues {
     pub zone: crate::db_types::Zone,
 }
 
+/// Packed tag canonicity resolution: all clusters for a tag+zone in one response.
+/// Replaces the two-phase GetTagCanonicityKeys + GetTagCanonicitySignalData pattern.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetTagCanonicityResolution {
+    pub tag_name: String,
+    pub zone: crate::db_types::Zone,
+}
+
+/// Packed compound split resolution: all groups for a tag+zone in one response.
+/// Replaces the two-phase GetCompoundSignalGroups + GetCompoundSplitGroupData pattern.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetCompoundSplitResolution {
+    pub tag_name: String,
+    pub zone: crate::db_types::Zone,
+    pub safe_only: bool,
+}
+
 // ============================================================================
 // Web File Browser & Search
 // ============================================================================
@@ -471,4 +488,8 @@ domain_query_protocol! {
     GetDirectoryListing => Vec<crate::domain_query_types::DirectoryListingEntry>,
     SearchCorpusFiles => Vec<crate::domain_query_types::SearchResult>,
     SearchWithConditions => Vec<crate::domain_query_types::SearchResult>,
+
+    // Packed resolution queries (cluster-nav)
+    GetTagCanonicityResolution => crate::views::canonicity_compound::TagCanonicityResolutionData,
+    GetCompoundSplitResolution => crate::views::canonicity_compound::CompoundSplitResolutionData,
 }

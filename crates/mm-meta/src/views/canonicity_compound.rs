@@ -114,3 +114,58 @@ impl TagCanonicalityModalDataV2 {
             .unwrap_or_default()
     }
 }
+
+// ============================================================================
+// Packed Resolution Types (slim, for cluster-nav resolution queries)
+// ============================================================================
+
+/// Per-file info for resolution display. Slim — no full tag dump.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolutionFileInfo {
+    pub inode: i64,
+    pub display_name: String,
+}
+
+// === Tag Canonicity (packed, all clusters) ===
+
+/// All canonicity clusters for a tag+zone in one response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagCanonicityResolutionData {
+    pub tag_name: String,
+    pub clusters: Vec<CanonicityCluster>,
+}
+
+/// A single canonicity cluster: the canonical candidate, its count, and outlier variants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicityCluster {
+    pub signal_key: String,
+    pub canonical_candidate: String,
+    pub canonical_count: usize,
+    pub outlier_variants: Vec<OutlierVariant>,
+    pub default_canonical: Option<String>,
+}
+
+/// A non-canonical variant with the files that carry it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutlierVariant {
+    pub value: String,
+    pub files: Vec<ResolutionFileInfo>,
+}
+
+// === Compound Split (packed, all groups) ===
+
+/// All compound split groups for a tag+zone in one response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompoundSplitResolutionData {
+    pub groups: Vec<CompoundSplitCluster>,
+}
+
+/// A single compound split group with affected files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompoundSplitCluster {
+    pub tag_name: String,
+    pub compound_value: String,
+    pub split_parts: Vec<String>,
+    pub matching_parts: Vec<String>,
+    pub files: Vec<ResolutionFileInfo>,
+}

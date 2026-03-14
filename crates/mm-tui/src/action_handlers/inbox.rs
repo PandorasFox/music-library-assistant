@@ -56,12 +56,11 @@ impl HandleAction for super::super::inbox_view::InboxAction {
 impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchPreviewAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::None => {}
             inbox_corpus_match_modal::InboxCorpusMatchPreviewAction::ConfirmStash => {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
                     ActiveView::InboxCorpusMatchResolution(ref preview) => {
-                        preview.cached_data.stash_and_drop_mutations(&app.resolver)
+                        preview.data.0.stash_and_drop_mutations(&app.resolver)
                     }
                     _ => Vec::new(),
                 };
@@ -71,7 +70,7 @@ impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchPreviewAction {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
                     ActiveView::InboxCorpusMatchResolution(ref preview) => {
-                        preview.cached_data.stash_all_mutations(&app.resolver)
+                        preview.data.0.stash_all_mutations(&app.resolver)
                     }
                     _ => Vec::new(),
                 };
@@ -151,7 +150,9 @@ impl App {
                 bitrate_fuzz_percent: fuzz,
             });
 
-        let preview = inbox_corpus_match_modal::InboxCorpusMatchPreviewState::new(data);
+        let preview = inbox_corpus_match_modal::InboxCorpusMatchPreviewState::new(
+            inbox_corpus_match_modal::InboxCorpusMatchData(data),
+        );
         self.view = ActiveView::InboxCorpusMatchResolution(preview);
     }
 

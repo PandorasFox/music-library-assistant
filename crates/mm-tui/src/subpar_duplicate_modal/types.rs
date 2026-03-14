@@ -1,7 +1,4 @@
 //! Subpar Duplicate Resolution Modal Types
-//!
-//! Data structures for the subpar duplicate resolution modal, including
-//! file entries and button state.
 
 pub use mm_meta::views::health_modals::{SubparDuplicateModalData, SubparFileEntry};
 
@@ -11,11 +8,70 @@ use ratatui::style::Color;
 
 use mm_meta::decisions::DecisionKey;
 use mm_meta::mutations::Mutation;
+use mm_ui::modal_buttons::ModalButtons;
+use mm_ui::modal_frame::ContentLayout;
 use mm_ui::protocol_binding::ProtocolBinding;
-use crate::helpers::stash_file_mutations;
-use crate::widgets::modal_buttons::ModalButtons;
+use mm_ui::resolution_state::{ResolutionData, ResolutionState};
 
-use super::preview::SubparDuplicatePreviewAction;
+use crate::helpers::stash_file_mutations;
+
+// ============================================================================
+// Data wrapper
+// ============================================================================
+
+/// Data payload for the subpar duplicate resolution modal.
+pub struct SubparDuplicateData(pub SubparDuplicateModalData);
+
+impl ResolutionData for SubparDuplicateData {
+    type ButtonCtx = SubparDuplicateModalData;
+
+    fn list_len(&self) -> usize {
+        self.0.files.len()
+    }
+
+    fn button_ctx(&self) -> SubparDuplicateModalData {
+        self.0.clone()
+    }
+
+    fn selected_path(&self, cursor: usize) -> Option<&str> {
+        self.0.files.get(cursor).map(|f| f.corpus_path.as_str())
+    }
+
+    fn content_layout(&self) -> ContentLayout {
+        // Dynamic detail height from path lengths (approximate)
+        ContentLayout::ListAboveDetail { detail_height: 6 }
+    }
+
+    fn list_title(&self) -> String {
+        format!(" Subpar Files ({}) ", self.0.files.len())
+    }
+
+    fn empty_message(&self) -> &'static str {
+        "No subpar duplicates found"
+    }
+}
+
+// ============================================================================
+// Concrete state type alias
+// ============================================================================
+
+pub type SubparDuplicatePreviewState = ResolutionState<SubparDuplicateData, SubparButton>;
+
+// ============================================================================
+// Action Enum
+// ============================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubparDuplicatePreviewAction {
+    /// User confirmed stash + drop action.
+    ConfirmStashAll,
+    /// Cancel and return to Insights view.
+    Cancel,
+}
+
+// ============================================================================
+// Mutation builder
+// ============================================================================
 
 /// Generate StashFromZone + DropFromIndex mutations for all subpar files.
 pub fn stash_and_drop_mutations(
@@ -28,7 +84,10 @@ pub fn stash_and_drop_mutations(
         .collect()
 }
 
-/// Button choices for the subpar duplicate resolution modal.
+// ============================================================================
+// Button Definition
+// ============================================================================
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SubparButton {
     StashAll,

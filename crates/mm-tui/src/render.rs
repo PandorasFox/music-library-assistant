@@ -179,7 +179,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
             preview.render(f, area);
         }
         ActiveView::MissingDirectoryResolution(ref mut preview) => {
-            preview.render(f, area);
+            preview.render_frame(f, area);
         }
         ActiveView::TagCanonicityResolution { ref mut state, .. } => {
             tag_canonicity_v2::render(f, area, state);
@@ -215,10 +215,10 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
             preview.render(f, area);
         }
         ActiveView::SubparDuplicateResolution(ref mut preview) => {
-            preview.render(f, area);
+            preview.render_frame(f, area);
         }
         ActiveView::InboxCorpusMatchResolution(ref mut preview) => {
-            preview.render(f, area);
+            preview.render_frame(f, area);
         }
         ActiveView::InboxOrganize(ref mut state) => {
             super::inbox_organize::render::render(f, area, state);

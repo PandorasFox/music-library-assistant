@@ -1,17 +1,10 @@
 //! Missing Directory Resolution Preview UI
 //!
-//! Shows missing directories with action buttons for acknowledgment/drop operations.
-//!
-//! - Shift+Up/Down: Switch focus between list and buttons
-//! - Up/Down: Scroll through directory list (when list focused)
-//! - Left/Right: Move between action buttons (when buttons focused)
-//! - Enter: Execute selected button action
-//! - Escape: Cancel
+//! Uses the generic `ResolutionState` — only the data wrapper, button enum,
+//! and rendering are modal-specific.
 
 use std::borrow::Cow;
 
-use crate::action_handlers::witness::ConfirmationGesture;
-use crate::input::InputAction;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -21,19 +14,68 @@ use ratatui::{
 };
 
 use mm_meta::decisions::DecisionKey;
+use mm_ui::modal_buttons::ModalButtons;
+use mm_ui::modal_frame::ContentLayout;
 use mm_ui::protocol_binding::ProtocolBinding;
+use mm_ui::resolution_state::{ResolutionData, ResolutionState};
 
 use super::MissingDirectoryModalData;
 use crate::helpers::truncate_left;
-use crate::widgets::{FocusPane, ModalButtons};
-use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame, ModalFrameCore};
+use crate::widgets::modal_frame::ModalFrame;
 
-/// Actions returned from the missing directory preview.
+// ============================================================================
+// Data wrapper
+// ============================================================================
+
+/// Data payload for the missing directory resolution modal.
+pub struct MissingDirectoryData(pub MissingDirectoryModalData);
+
+impl ResolutionData for MissingDirectoryData {
+    type ButtonCtx = MissingDirectoryButtonCtx;
+
+    fn list_len(&self) -> usize {
+        self.0.count()
+    }
+
+    fn button_ctx(&self) -> MissingDirectoryButtonCtx {
+        MissingDirectoryButtonCtx {
+            has_directories: self.0.count() > 0,
+        }
+    }
+
+    fn selected_path(&self, cursor: usize) -> Option<&str> {
+        self.0.directories.get(cursor).map(|s| s.as_str())
+    }
+
+    fn content_layout(&self) -> ContentLayout {
+        ContentLayout::FourSection {
+            header_height: 3,
+            detail_height: 2,
+        }
+    }
+
+    fn list_title(&self) -> String {
+        format!(" Deleted Directories ({}) ", self.0.count())
+    }
+
+    fn empty_message(&self) -> &'static str {
+        "No missing directories"
+    }
+}
+
+// ============================================================================
+// Concrete state type alias
+// ============================================================================
+
+pub type MissingDirectoryPreviewState = ResolutionState<MissingDirectoryData, MissingDirectoryButton>;
+
+// ============================================================================
+// Action Enum
+// ============================================================================
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MissingDirectoryPreviewAction {
-    /// No action needed.
-    None,
-    /// User confirmed drop action - generate DropDirectoryFromIndex mutations.
+    /// User confirmed drop action.
     ConfirmDrop,
     /// Cancel and return to Insights view.
     Cancel,
@@ -43,15 +85,13 @@ pub enum MissingDirectoryPreviewAction {
 // Button Definition
 // ============================================================================
 
-/// Button choices for the missing directory resolution modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MissingDirectoryButton {
-    #[default]
     Drop,
+    #[default]
     Cancel,
 }
 
-/// Lightweight context for button enablement/labels.
 pub struct MissingDirectoryButtonCtx {
     pub has_directories: bool,
 }
@@ -106,132 +146,8 @@ impl ModalButtons for MissingDirectoryButton {
 }
 
 // ============================================================================
-// State
+// ModalFrame Rendering
 // ============================================================================
-
-/// State for the missing directory resolution modal.
-#[derive(Debug)]
-pub struct MissingDirectoryPreviewState {
-    /// Cached modal data (loaded once on init).
-    pub cached_data: MissingDirectoryModalData,
-    /// Cursor position for the directory list.
-    pub cursor: usize,
-    /// Shared frame state (focus, buttons, click targets).
-    pub frame: FrameState<MissingDirectoryButton>,
-}
-
-impl MissingDirectoryPreviewState {
-    /// Path of the currently selected directory (for status bar).
-    pub fn selected_path(&self) -> Option<&str> {
-        self.cached_data
-            .directories
-            .get(self.cursor)
-            .map(|s| s.as_str())
-    }
-
-    /// Create a new preview state with cached data.
-    pub fn new(cached_data: MissingDirectoryModalData) -> Self {
-        let mut frame = FrameState::new();
-        if cached_data.count() > 0 {
-            frame.buttons.selected = MissingDirectoryButton::Drop;
-        }
-
-        Self {
-            cached_data,
-            cursor: 0,
-            frame,
-        }
-    }
-
-    fn button_ctx(&self) -> MissingDirectoryButtonCtx {
-        MissingDirectoryButtonCtx {
-            has_directories: self.cached_data.count() > 0,
-        }
-    }
-
-    /// Handle a mouse click at (x, y).
-    pub(crate) fn handle_click(
-        &mut self,
-        x: u16,
-        y: u16,
-        _gesture: &ConfirmationGesture,
-    ) -> Option<MissingDirectoryPreviewAction> {
-        let ctx = self.button_ctx();
-        if let Some(action) = self.frame.buttons.handle_click(x, y, &ctx) {
-            self.frame.focus_pane = FocusPane::Buttons;
-            return Some(action);
-        }
-        if let Some(id) = self.frame.click_targets.hit_test(x, y) {
-            if let Ok(idx) = id.parse::<usize>() {
-                if idx < self.cached_data.count() {
-                    self.frame.focus_pane = FocusPane::List;
-                    self.cursor = idx;
-                }
-            }
-        }
-        None
-    }
-
-    /// Handle input action.
-    pub fn handle_input(&mut self, action: &InputAction) -> MissingDirectoryPreviewAction {
-        match self.handle_frame_input(action) {
-            FrameInputResult::Action(a) => a,
-            FrameInputResult::Consumed | FrameInputResult::Unhandled => {
-                MissingDirectoryPreviewAction::None
-            }
-        }
-    }
-
-    /// Render the missing directory resolution modal.
-    pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        self.render_frame(f, area);
-    }
-}
-
-// ============================================================================
-// ModalFrame Implementation
-// ============================================================================
-
-impl ModalFrameCore for MissingDirectoryPreviewState {
-    type Button = MissingDirectoryButton;
-
-    fn content_layout(&self) -> ContentLayout {
-        ContentLayout::FourSection {
-            header_height: 3,
-            detail_height: 2,
-        }
-    }
-
-    fn list_title(&self) -> String {
-        format!(" Deleted Directories ({}) ", self.cached_data.count())
-    }
-
-    fn empty_message(&self) -> &'static str {
-        "No missing directories"
-    }
-
-    fn frame_state(&self) -> &FrameState<MissingDirectoryButton> {
-        &self.frame
-    }
-    fn frame_state_mut(&mut self) -> &mut FrameState<MissingDirectoryButton> {
-        &mut self.frame
-    }
-    fn cursor(&self) -> usize {
-        self.cursor
-    }
-    fn cursor_mut(&mut self) -> &mut usize {
-        &mut self.cursor
-    }
-    fn list_len(&self) -> usize {
-        self.cached_data.count()
-    }
-    fn button_ctx(&self) -> MissingDirectoryButtonCtx {
-        MissingDirectoryPreviewState::button_ctx(self)
-    }
-    fn escape_action(&self) -> MissingDirectoryPreviewAction {
-        MissingDirectoryPreviewAction::Cancel
-    }
-}
 
 impl ModalFrame for MissingDirectoryPreviewState {
     fn accent_color(&self) -> Color {
@@ -239,7 +155,7 @@ impl ModalFrame for MissingDirectoryPreviewState {
     }
 
     fn render_header(&self, f: &mut Frame, area: Rect) {
-        let count = self.cached_data.count();
+        let count = self.data.0.count();
         let title = Paragraph::new(Line::from(vec![
             Span::styled(
                 " Missing Directory Acknowledgment ",
@@ -263,7 +179,7 @@ impl ModalFrame for MissingDirectoryPreviewState {
         is_cursor: bool,
         _is_focused: bool,
     ) -> ListItem<'static> {
-        let dir = &self.cached_data.directories[idx];
+        let dir = &self.data.0.directories[idx];
         let path = truncate_left(dir, width.saturating_sub(2) as usize);
         let style = if is_cursor {
             Style::default().fg(Color::Yellow)

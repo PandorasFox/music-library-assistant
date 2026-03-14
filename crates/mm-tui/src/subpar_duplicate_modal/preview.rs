@@ -1,17 +1,5 @@
-//! Subpar Duplicate Resolution Preview UI
-//!
-//! Shows subpar duplicate files (lower quality versions identified by
-//! fingerprint analysis) with action buttons for stash/drop operations.
-//!
-//! Navigation:
-//! - Up/Down: Scroll file list
-//! - Shift+Up/Down: Move focus between list and buttons
-//! - Left/Right: Move between action buttons (when buttons focused)
-//! - Enter: Execute selected button action
-//! - Escape: Cancel
+//! Subpar Duplicate Resolution Rendering
 
-use crate::action_handlers::witness::ConfirmationGesture;
-use crate::input::InputAction;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -20,89 +8,13 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{SubparButton, SubparDuplicateModalData};
+use super::types::SubparDuplicatePreviewState;
 use crate::helpers::{render_pane, truncate_left};
-use crate::widgets::{
-    FocusPane, FrameInputResult, ModalFrame, PathField, CURSOR_STYLE,
-    modal_frame::{ContentLayout, FrameState, ModalFrameCore},
-};
+use crate::widgets::{ModalFrame, PathField, CURSOR_STYLE};
 
-/// Actions returned from the subpar duplicate preview.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SubparDuplicatePreviewAction {
-    /// No action needed.
-    None,
-    /// User confirmed stash + drop action.
-    ConfirmStashAll,
-    /// Cancel and return to Insights view.
-    Cancel,
-}
-
-/// State for the subpar duplicate resolution modal.
-#[derive(Debug)]
-pub struct SubparDuplicatePreviewState {
-    /// Cached modal data (loaded once on init).
-    pub cached_data: SubparDuplicateModalData,
-    /// Scroll position for the file list.
-    pub scroll: usize,
-    /// Shared frame state (focus, buttons, click targets).
-    pub frame: FrameState<SubparButton>,
-}
-
-impl SubparDuplicatePreviewState {
-    /// Path of the currently selected file (for status bar).
-    pub fn selected_path(&self) -> Option<&str> {
-        self.cached_data
-            .files
-            .get(self.scroll)
-            .map(|f| f.corpus_path.as_str())
-    }
-
-    /// Create a new preview state with cached data.
-    pub fn new(cached_data: SubparDuplicateModalData) -> Self {
-        Self {
-            cached_data,
-            scroll: 0,
-            frame: FrameState::new(),
-        }
-    }
-
-    /// Handle a mouse click at (x, y).
-    pub(crate) fn handle_click(
-        &mut self,
-        x: u16,
-        y: u16,
-        _gesture: &ConfirmationGesture,
-    ) -> Option<SubparDuplicatePreviewAction> {
-        if let Some(id) = self.frame.click_targets.hit_test(x, y) {
-            if let Ok(idx) = id.parse::<usize>() {
-                if idx < self.cached_data.files.len() {
-                    self.frame.focus_pane = FocusPane::List;
-                    self.scroll = idx;
-                }
-            }
-        }
-        None
-    }
-
-    /// Handle input action.
-    pub fn handle_input(&mut self, action: &InputAction) -> SubparDuplicatePreviewAction {
-        match self.handle_frame_input(action) {
-            FrameInputResult::Action(a) => a,
-            FrameInputResult::Consumed | FrameInputResult::Unhandled => {
-                SubparDuplicatePreviewAction::None
-            }
-        }
-    }
-
-    /// Render the subpar duplicate resolution modal.
-    pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        self.render_frame(f, area);
-    }
-
-    /// Build the detail lines for the currently selected pair.
-    fn build_detail_lines(&self, width: u16) -> Vec<Line<'static>> {
-        match self.cached_data.files.get(self.scroll) {
+/// Build the detail lines for the currently selected pair.
+fn build_detail_lines(state: &SubparDuplicatePreviewState, width: u16) -> Vec<Line<'static>> {
+    match state.data.0.files.get(state.cursor) {
             Some(file) => {
                 let mut lines = PathField::new(
                     Span::styled("Subpar: ", Style::default().fg(Color::Red)),
@@ -131,40 +43,11 @@ impl SubparDuplicatePreviewState {
                 Style::default().fg(Color::DarkGray),
             ))],
         }
-    }
-}
-
-impl ModalFrameCore for SubparDuplicatePreviewState {
-    type Button = SubparButton;
-
-    fn content_layout(&self) -> ContentLayout {
-        // Compute dynamic detail height from path lengths
-        let detail_inner_width = 80u16; // approximate; actual width comes from render area
-        let detail_lines = self.build_detail_lines(detail_inner_width);
-        let detail_height = (detail_lines.len() as u16) + 2; // +2 for borders
-        ContentLayout::ListAboveDetail { detail_height }
-    }
-
-    fn list_title(&self) -> String {
-        format!(" Subpar Files ({}) ", self.cached_data.files.len())
-    }
-
-    fn empty_message(&self) -> &'static str {
-        "No subpar duplicates found"
-    }
-
-    fn frame_state(&self) -> &FrameState<SubparButton> { &self.frame }
-    fn frame_state_mut(&mut self) -> &mut FrameState<SubparButton> { &mut self.frame }
-    fn cursor(&self) -> usize { self.scroll }
-    fn cursor_mut(&mut self) -> &mut usize { &mut self.scroll }
-    fn list_len(&self) -> usize { self.cached_data.files.len() }
-    fn button_ctx(&self) -> SubparDuplicateModalData { self.cached_data.clone() }
-    fn escape_action(&self) -> SubparDuplicatePreviewAction { SubparDuplicatePreviewAction::Cancel }
 }
 
 impl ModalFrame for SubparDuplicatePreviewState {
     fn frame_title(&self) -> Line<'static> {
-        let total = self.cached_data.total_count();
+        let total = self.data.0.total_count();
         Line::from(vec![
             Span::styled(
                 " Subpar Duplicate Resolution ",
@@ -186,7 +69,7 @@ impl ModalFrame for SubparDuplicatePreviewState {
         is_cursor: bool,
         is_focused: bool,
     ) -> ListItem<'static> {
-        let file = &self.cached_data.files[idx];
+        let file = &self.data.0.files[idx];
 
         let total_width = width as usize;
         let left_width = (total_width * 40) / 100;
@@ -241,7 +124,7 @@ impl ModalFrame for SubparDuplicatePreviewState {
 
     fn render_detail(&mut self, f: &mut Frame, area: Rect) {
         let detail_inner_width = area.width.saturating_sub(2);
-        let detail_lines = self.build_detail_lines(detail_inner_width);
+        let detail_lines = build_detail_lines(self,detail_inner_width);
 
         let detail_block = Block::default()
             .title(" Selected Pair ")

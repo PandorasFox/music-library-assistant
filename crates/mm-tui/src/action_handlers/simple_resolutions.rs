@@ -75,10 +75,12 @@ impl HandleAction for missing_file_modal::MissingFilePreviewAction {
 impl HandleAction for missing_directory_modal::MissingDirectoryPreviewAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            missing_directory_modal::MissingDirectoryPreviewAction::None => {}
             missing_directory_modal::MissingDirectoryPreviewAction::ConfirmDrop => {
                 let Some(w) = witness else { return };
-                let mutations = extract_mutations!(app, MissingDirectoryResolution, drop_mutations);
+                let mutations = match &app.view {
+                    ActiveView::MissingDirectoryResolution(ref p) => p.data.0.drop_mutations(),
+                    _ => Vec::new(),
+                };
                 app.stage_resolution(mutations, "Drop missing directories", DecisionKey::MissingDirectory, "No directories to drop", w);
             }
             missing_directory_modal::MissingDirectoryPreviewAction::Cancel => {
@@ -161,11 +163,10 @@ impl HandleAction for shit_format_modal::ShitFormatPreviewAction {
 impl HandleAction for subpar_duplicate_modal::SubparDuplicatePreviewAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            subpar_duplicate_modal::SubparDuplicatePreviewAction::None => {}
             subpar_duplicate_modal::SubparDuplicatePreviewAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
                 let mutations = match &app.view {
-                    ActiveView::SubparDuplicateResolution(ref p) => subpar_duplicate_modal::stash_and_drop_mutations(&p.cached_data, &app.resolver),
+                    ActiveView::SubparDuplicateResolution(ref p) => subpar_duplicate_modal::stash_and_drop_mutations(&p.data.0, &app.resolver),
                     _ => Vec::new(),
                 };
                 app.stage_resolution(mutations, "Stash subpar duplicates", DecisionKey::SubparDuplicate, "No files to stash", w);
@@ -346,11 +347,11 @@ impl App {
     }
 
     pub(crate) fn start_missing_directory_resolution(&mut self) {
-        start_resolution!(self,
-            mm_meta::domain_queries::GetMissingDirectoryData,
-            missing_directory_modal::MissingDirectoryPreviewState,
-            MissingDirectoryResolution
+        let data = self.query(mm_meta::domain_queries::GetMissingDirectoryData);
+        let preview = missing_directory_modal::MissingDirectoryPreviewState::new(
+            missing_directory_modal::MissingDirectoryData(data),
         );
+        self.view = ActiveView::MissingDirectoryResolution(preview);
     }
 
     pub(crate) fn start_corrupt_file_resolution(&mut self) {
@@ -370,11 +371,11 @@ impl App {
     }
 
     pub(crate) fn start_subpar_duplicate_resolution(&mut self) {
-        start_resolution!(self,
-            mm_meta::domain_queries::GetSubparDuplicateData,
-            subpar_duplicate_modal::SubparDuplicatePreviewState,
-            SubparDuplicateResolution
+        let data = self.query(mm_meta::domain_queries::GetSubparDuplicateData);
+        let preview = subpar_duplicate_modal::SubparDuplicatePreviewState::new(
+            subpar_duplicate_modal::SubparDuplicateData(data),
         );
+        self.view = ActiveView::SubparDuplicateResolution(preview);
     }
 
     pub(crate) fn start_directory_overlap_resolution(&mut self) {

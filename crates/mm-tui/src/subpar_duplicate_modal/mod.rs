@@ -1,11 +1,9 @@
 //! Subpar Duplicate Resolution Modal
-//!
-//! Provides the interactive workflow for resolving subpar corpus duplicates.
-//! Shows files identified as lower-quality versions by fingerprint analysis
-//! and allows the operator to stash + drop them from the index.
 
-pub mod preview;
+mod preview;
 pub mod types;
 
-pub use preview::{SubparDuplicatePreviewAction, SubparDuplicatePreviewState};
-pub use types::{SubparDuplicateModalData, stash_and_drop_mutations};
+pub use types::{
+    SubparDuplicateData, SubparDuplicateModalData, SubparDuplicatePreviewAction,
+    SubparDuplicatePreviewState, stash_and_drop_mutations,
+};

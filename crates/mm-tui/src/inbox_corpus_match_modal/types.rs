@@ -1,7 +1,4 @@
 //! Inbox Corpus Match Resolution Modal Types
-//!
-//! Data structures for the inbox corpus match resolution modal, including
-//! file entries, quality classification, and button state.
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -14,33 +11,78 @@ use mm_meta::mutations::Mutation;
 use mm_meta::views::MatchClassification;
 
 use mm_meta::decisions::DecisionKey;
+use mm_ui::modal_buttons::ModalButtons;
+use mm_ui::modal_frame::ContentLayout;
 use mm_ui::protocol_binding::ProtocolBinding;
-use crate::widgets::modal_buttons::ModalButtons;
-
-use super::preview::InboxCorpusMatchPreviewAction;
+use mm_ui::resolution_state::{ResolutionData, ResolutionState};
 
 pub use mm_meta::views::review_match::InboxCorpusMatchModalData;
 
+// ============================================================================
+// Data wrapper
+// ============================================================================
+
+/// Data payload for the inbox corpus match resolution modal.
+pub struct InboxCorpusMatchData(pub InboxCorpusMatchModalData);
+
+impl ResolutionData for InboxCorpusMatchData {
+    type ButtonCtx = InboxCorpusMatchModalData;
+
+    fn list_len(&self) -> usize {
+        self.0.entries.len()
+    }
+
+    fn button_ctx(&self) -> InboxCorpusMatchModalData {
+        self.0.clone()
+    }
+
+    fn selected_path(&self, cursor: usize) -> Option<&str> {
+        self.0.entries.get(cursor).map(|e| e.inbox_path.as_str())
+    }
+
+    fn content_layout(&self) -> ContentLayout {
+        ContentLayout::DetailAboveList { detail_height: 6 }
+    }
+
+    fn list_title(&self) -> String {
+        format!(" Inbox Files ({}) ", self.0.entries.len())
+    }
+
+    fn empty_message(&self) -> &'static str {
+        "No inbox corpus matches found"
+    }
+}
+
+// ============================================================================
+// Concrete state type alias
+// ============================================================================
+
+pub type InboxCorpusMatchPreviewState = ResolutionState<InboxCorpusMatchData, InboxMatchButton>;
+
+// ============================================================================
+// Action Enum
+// ============================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InboxCorpusMatchPreviewAction {
+    /// Stash equivalent + subpar entries only
+    ConfirmStash,
+    /// Stash ALL inbox duplicates (including better-quality ones)
+    ConfirmStashAll,
+    Cancel,
+}
+
+// ============================================================================
+// Mutation builders
+// ============================================================================
+
 /// Extension methods for InboxCorpusMatchModalData that depend on server-only types.
 pub trait InboxCorpusMatchModalDataExt {
-    /// Generate StashFromZone + DropFromIndex mutations for stashable entries.
-    fn stash_and_drop_mutations(
-        &self,
-        resolver: &mm_meta::paths::PathResolver,
-    ) -> Vec<Mutation>;
-
-    /// Generate StashFromZone + DropFromIndex mutations for ALL entries.
-    fn stash_all_mutations(
-        &self,
-        resolver: &mm_meta::paths::PathResolver,
-    ) -> Vec<Mutation>;
+    fn stash_and_drop_mutations(&self, resolver: &mm_meta::paths::PathResolver) -> Vec<Mutation>;
+    fn stash_all_mutations(&self, resolver: &mm_meta::paths::PathResolver) -> Vec<Mutation>;
 }
 
 impl InboxCorpusMatchModalDataExt for InboxCorpusMatchModalData {
-    /// Generate StashFromZone + DropFromIndex mutations for stashable entries.
-    ///
-    /// Only Equivalent and Subpar entries are stashed. Better entries
-    /// (inbox is higher quality) are left alone.
     fn stash_and_drop_mutations(
         &self,
         resolver: &mm_meta::paths::PathResolver,
@@ -53,8 +95,6 @@ impl InboxCorpusMatchModalDataExt for InboxCorpusMatchModalData {
         })
     }
 
-    /// Generate StashFromZone + DropFromIndex mutations for ALL entries,
-    /// including those classified as Better.
     fn stash_all_mutations(
         &self,
         resolver: &mm_meta::paths::PathResolver,
@@ -92,12 +132,13 @@ fn stash_mutations_for(
     mutations
 }
 
-/// Button choices for the inbox corpus match resolution modal.
+// ============================================================================
+// Button Definition
+// ============================================================================
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InboxMatchButton {
-    /// Stash only equivalent + subpar entries
     StashEquivalents,
-    /// Stash ALL inbox duplicates (including better-quality ones)
     StashAll,
     #[default]
     Cancel,

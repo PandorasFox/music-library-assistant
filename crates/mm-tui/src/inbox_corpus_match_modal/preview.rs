@@ -1,17 +1,5 @@
-//! Inbox Corpus Match Resolution Preview UI
-//!
-//! Shows inbox files with corpus fingerprint matches, classified by quality.
-//! Allows stashing equivalent/subpar inbox copies, or all duplicates.
-//!
-//! Navigation:
-//! - Up/Down: Scroll file list
-//! - Shift+Up/Down: Move focus between list and buttons
-//! - Left/Right: Move between action buttons (when buttons focused)
-//! - Enter: Execute selected button action
-//! - Escape: Cancel
+//! Inbox Corpus Match Resolution Rendering
 
-use crate::action_handlers::witness::ConfirmationGesture;
-use crate::input::InputAction;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -22,108 +10,13 @@ use ratatui::{
 
 use mm_meta::views::MatchClassification;
 use crate::helpers::{render_pane, truncate_left};
-use crate::widgets::{
-    FocusPane, FrameInputResult, ModalFrame, PathField, CURSOR_STYLE,
-    modal_frame::{ContentLayout, FrameState, ModalFrameCore},
-};
+use crate::widgets::{ModalFrame, PathField, CURSOR_STYLE};
 
-use super::types::{InboxCorpusMatchModalData, InboxMatchButton};
-
-/// Actions returned from the inbox corpus match preview.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InboxCorpusMatchPreviewAction {
-    None,
-    /// Stash equivalent + subpar entries only
-    ConfirmStash,
-    /// Stash ALL inbox duplicates (including better-quality ones)
-    ConfirmStashAll,
-    Cancel,
-}
-
-/// State for the inbox corpus match resolution modal.
-#[derive(Debug)]
-pub struct InboxCorpusMatchPreviewState {
-    pub cached_data: InboxCorpusMatchModalData,
-    pub scroll: usize,
-    /// Shared frame state (focus, buttons, click targets).
-    pub frame: FrameState<InboxMatchButton>,
-}
-
-impl InboxCorpusMatchPreviewState {
-    pub fn selected_path(&self) -> Option<&str> {
-        self.cached_data
-            .entries
-            .get(self.scroll)
-            .map(|e| e.inbox_path.as_str())
-    }
-
-    pub fn new(cached_data: InboxCorpusMatchModalData) -> Self {
-        Self {
-            cached_data,
-            scroll: 0,
-            frame: FrameState::new(),
-        }
-    }
-
-    /// Handle a mouse click at (x, y).
-    pub(crate) fn handle_click(
-        &mut self,
-        x: u16,
-        y: u16,
-        _gesture: &ConfirmationGesture,
-    ) -> Option<InboxCorpusMatchPreviewAction> {
-        if let Some(id) = self.frame.click_targets.hit_test(x, y) {
-            if let Ok(idx) = id.parse::<usize>() {
-                if idx < self.cached_data.entries.len() {
-                    self.frame.focus_pane = FocusPane::List;
-                    self.scroll = idx;
-                }
-            }
-        }
-        None
-    }
-
-    pub fn handle_input(&mut self, action: &InputAction) -> InboxCorpusMatchPreviewAction {
-        match self.handle_frame_input(action) {
-            FrameInputResult::Action(a) => a,
-            FrameInputResult::Consumed | FrameInputResult::Unhandled => {
-                InboxCorpusMatchPreviewAction::None
-            }
-        }
-    }
-
-    pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        self.render_frame(f, area);
-    }
-}
-
-impl ModalFrameCore for InboxCorpusMatchPreviewState {
-    type Button = InboxMatchButton;
-
-    fn content_layout(&self) -> ContentLayout {
-        ContentLayout::DetailAboveList { detail_height: 6 }
-    }
-
-    fn list_title(&self) -> String {
-        format!(" Inbox Files ({}) ", self.cached_data.entries.len())
-    }
-
-    fn empty_message(&self) -> &'static str {
-        "No inbox corpus matches found"
-    }
-
-    fn frame_state(&self) -> &FrameState<InboxMatchButton> { &self.frame }
-    fn frame_state_mut(&mut self) -> &mut FrameState<InboxMatchButton> { &mut self.frame }
-    fn cursor(&self) -> usize { self.scroll }
-    fn cursor_mut(&mut self) -> &mut usize { &mut self.scroll }
-    fn list_len(&self) -> usize { self.cached_data.entries.len() }
-    fn button_ctx(&self) -> InboxCorpusMatchModalData { self.cached_data.clone() }
-    fn escape_action(&self) -> InboxCorpusMatchPreviewAction { InboxCorpusMatchPreviewAction::Cancel }
-}
+use super::types::InboxCorpusMatchPreviewState;
 
 impl ModalFrame for InboxCorpusMatchPreviewState {
     fn frame_title(&self) -> Line<'static> {
-        let (better, equivalent, subpar) = self.cached_data.count_by_class();
+        let (better, equivalent, subpar) = self.data.0.count_by_class();
         Line::from(vec![
             Span::styled(
                 " Inbox Corpus Match Resolution ",
@@ -148,7 +41,7 @@ impl ModalFrame for InboxCorpusMatchPreviewState {
         is_cursor: bool,
         is_focused: bool,
     ) -> ListItem<'static> {
-        let entry = &self.cached_data.entries[idx];
+        let entry = &self.data.0.entries[idx];
 
         let total_width = width as usize;
         let icon_width = 3;
@@ -204,7 +97,7 @@ impl ModalFrame for InboxCorpusMatchPreviewState {
 
         let inner = render_pane(f, area, block);
 
-        let current = self.cached_data.entries.get(self.scroll);
+        let current = self.data.0.entries.get(self.cursor);
 
         let lines = if let Some(entry) = current {
             let mut inbox_lines = PathField::new(

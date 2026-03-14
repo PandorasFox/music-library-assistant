@@ -45,22 +45,7 @@ pub enum InboxAction {
     LaunchInboxCompoundSplit,
 }
 
-/// What action an inbox bucket entry triggers on Enter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InboxInsightAction {
-    /// Launch inbox intake confirmation
-    LaunchIntake,
-    /// Launch inbox corpus match resolution modal
-    LaunchCorpusMatchResolution,
-    /// Launch inbox tag canonicity view
-    LaunchInboxTagCanonicity,
-    /// Launch inbox organize workflow
-    LaunchOrganize,
-    /// Launch inbox compound tag split resolution
-    LaunchInboxCompoundSplit,
-    /// Informational only, no action
-    Informational,
-}
+pub use mm_ui::domain_types::InboxInsightAction;
 
 /// A single bucket entry in the inbox overview.
 #[derive(Debug, Clone)]

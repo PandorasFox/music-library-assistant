@@ -127,52 +127,7 @@ impl InsightType {
     }
 }
 
-/// Actions that can be launched from specific insight types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InsightAction {
-    /// Launch missing file resolution modal
-    LaunchMissingFileResolution,
-    /// Launch missing directory acknowledgment modal
-    LaunchMissingDirectoryResolution,
-    /// Launch tag canonicity resolution modal
-    LaunchTagCanonicityResolution,
-    /// Launch compound tag split modal (safe - all parts exist)
-    LaunchCompoundTagSplitSafe,
-    /// Launch compound tag split modal (review - some parts new)
-    LaunchCompoundTagSplitReview,
-    /// Launch OOB tag sync resolution modal
-    LaunchOobTagSync,
-    /// Launch OOB tag conflict inspection
-    LaunchOobTagConflict,
-    /// Launch moved file acknowledgement modal
-    LaunchMovedFileAcknowledge,
-    /// Launch corrupt file resolution modal (stash + drop)
-    LaunchCorruptFileResolution,
-    /// Launch shit format transcode modal
-    LaunchShitFormatTranscode,
-    /// Launch intake confirmation for unindexed files
-    LaunchIntakeConfirmation,
-    /// Launch fingerprint duplicate resolution modal
-    LaunchCrossSourceOverlapResolution,
-    /// Launch release overlap resolution modal
-    LaunchReleaseOverlapResolution,
-    /// Launch subpar duplicate stash
-    LaunchSubparDuplicateResolution,
-    /// Launch manual review modal (redundant dups, deploy conflicts, metadata dups)
-    LaunchManualReview(crate::manual_review_modal::ReviewKind),
-    /// Launch missing tag resolution (opens tag editor with all affected files)
-    LaunchMissingTagResolution,
-    /// Launch missing album single resolution modal
-    LaunchMissingAlbumSingleResolution,
-    /// Launch embedded disc number resolution
-    LaunchDiscExtractionResolution,
-    /// Launch path-tag schema mismatch resolution
-    LaunchPathTagMismatchResolution,
-    /// Not yet implemented
-    NotImplemented,
-    /// Informational only - no action available
-    Informational,
-}
+pub use mm_ui::domain_types::InsightAction;
 
 /// A single rendered entry in an insights bucket.
 /// Contains all information needed for rendering, selection, and action dispatch.

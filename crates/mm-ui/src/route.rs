@@ -95,7 +95,7 @@ pub struct TransactionRoute {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DeployRoute {
-    pub tab: Option<String>,
+    pub tab: Option<crate::domain_types::DeployTab>,
     pub scroll: Option<usize>,
 }
 
@@ -273,7 +273,7 @@ impl Route {
             }
             Route::Deploy(r) => {
                 path.push_str("/deploy");
-                params.set_str("tab", r.tab.as_deref());
+                params.set_str("tab", r.tab.map(|t| t.as_str()));
                 params.set_usize("scroll", r.scroll);
             }
             Route::ExternalMatches(r) => {
@@ -380,7 +380,7 @@ impl Route {
                 focus: params.get_focus("focus"),
             })),
             "deploy" => Ok(Route::Deploy(DeployRoute {
-                tab: params.get_string("tab"),
+                tab: params.get_string("tab").and_then(|s| crate::domain_types::DeployTab::from_str(&s)),
                 scroll: params.get_usize("scroll"),
             })),
             "external-matches" => Ok(Route::ExternalMatches(ExternalMatchesRoute {
@@ -803,8 +803,9 @@ mod tests {
 
     #[test]
     fn round_trip_deploy() {
+        use crate::domain_types::DeployTab;
         assert_round_trip(&Route::Deploy(DeployRoute {
-            tab: Some("conflicts".into()),
+            tab: Some(DeployTab::Conflicts),
             scroll: Some(5),
         }));
     }

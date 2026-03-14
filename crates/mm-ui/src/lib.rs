@@ -14,6 +14,7 @@ pub mod modal_buttons;
 pub mod modal_frame;
 pub mod protocol_binding;
 pub mod rich_text;
+pub mod route;
 pub mod standard_list;
 pub mod text_input;
 pub mod wizard;

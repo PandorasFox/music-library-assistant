@@ -563,6 +563,12 @@ fn stop_poll() {
 }
 
 async fn do_health_refresh() {
+    // Stop polling if we've lost auth.
+    if !api::has_token() {
+        stop_poll();
+        return;
+    }
+
     let doc = web_sys::window().unwrap().document().unwrap();
 
     if let Ok(status) = api::get_status().await {
@@ -648,7 +654,9 @@ async fn do_config_save() -> Result<(), JsValue> {
             serde_json::Value::Bool(input.checked())
         } else if input_type == "number" {
             let v = input.value();
-            if let Ok(n) = v.parse::<f64>() {
+            if let Ok(n) = v.parse::<i64>() {
+                serde_json::json!(n)
+            } else if let Ok(n) = v.parse::<f64>() {
                 serde_json::json!(n)
             } else {
                 continue;

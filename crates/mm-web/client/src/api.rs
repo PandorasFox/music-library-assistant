@@ -126,6 +126,11 @@ pub async fn get_status() -> Result<serde_json::Value, JsValue> {
     get("/status").await
 }
 
+/// GET /config → raw JSON value
+pub async fn get_config() -> Result<serde_json::Value, JsValue> {
+    get("/config").await
+}
+
 /// GET /queries/{name} → raw JSON value
 pub async fn get_query(name: &str) -> Result<serde_json::Value, JsValue> {
     get(&format!("/queries/{name}")).await

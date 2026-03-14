@@ -530,3 +530,146 @@ html, body {
 .mm-edit-new {
     color: var(--c-green);
 }
+
+/* ============================================================
+ * Config Editor
+ * ============================================================ */
+
+.mm-config-editor {
+    max-width: 800px;
+}
+
+.mm-config-field {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.2rem 0;
+}
+
+.mm-config-field label {
+    color: var(--c-fg-dim);
+    min-width: 20ch;
+    white-space: nowrap;
+}
+
+.mm-config-field--bool {
+    flex-direction: row-reverse;
+    justify-content: flex-end;
+}
+
+.mm-config-field--bool label {
+    min-width: unset;
+}
+
+.mm-config-input {
+    background: var(--c-bg);
+    color: var(--c-fg);
+    border: 1px solid var(--c-fg-muted);
+    border-radius: 2px;
+    padding: 0.2rem 0.4rem;
+    font-family: inherit;
+    font-size: inherit;
+    flex: 1;
+    max-width: 400px;
+}
+
+.mm-config-input:focus {
+    outline: none;
+    border-color: var(--c-yellow);
+}
+
+.mm-config-checkbox {
+    accent-color: var(--c-yellow);
+    width: 1rem;
+    height: 1rem;
+}
+
+.mm-config-nested {
+    padding-left: 1rem;
+    border-left: 1px solid var(--c-fg-muted);
+    margin: 0.3rem 0;
+}
+
+.mm-config-nested-label {
+    color: var(--c-fg-dim);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* ============================================================
+ * Packing Browser
+ * ============================================================ */
+
+.mm-packing-release {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.2rem 0;
+}
+
+.mm-packing-title {
+    flex: 1;
+    color: var(--c-fg);
+}
+
+.mm-packing-count {
+    color: var(--c-fg-dim);
+    white-space: nowrap;
+}
+
+/* ============================================================
+ * Tag Editor
+ * ============================================================ */
+
+.mm-tag-editor {
+    max-width: 800px;
+}
+
+.mm-tag-editor__header {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--c-fg-muted);
+    color: var(--c-fg-dim);
+    font-size: 0.85rem;
+}
+
+.mm-tag-header-name {
+    min-width: 15ch;
+}
+
+.mm-tag-header-value {
+    flex: 1;
+}
+
+.mm-tag-row {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.2rem 0;
+}
+
+.mm-tag-name {
+    background: transparent;
+    color: var(--c-cyan);
+    border: none;
+    font-family: inherit;
+    font-size: inherit;
+    min-width: 15ch;
+    max-width: 15ch;
+}
+
+.mm-tag-value {
+    background: var(--c-bg);
+    color: var(--c-fg);
+    border: 1px solid var(--c-fg-muted);
+    border-radius: 2px;
+    padding: 0.2rem 0.4rem;
+    font-family: inherit;
+    font-size: inherit;
+    flex: 1;
+}
+
+.mm-tag-value:focus {
+    outline: none;
+    border-color: var(--c-yellow);
+}

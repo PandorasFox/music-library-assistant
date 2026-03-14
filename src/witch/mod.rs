@@ -606,6 +606,13 @@ impl Witch {
                                         .ok_or(ProtocolError::NotReady)?;
                                     QueryResponse::Config(Box::new(config))
                                 }
+                                QueryPayload::ConfigKdl => {
+                                    let config_dir = mm_utils::get_config_dir()
+                                        .map_err(|e| ProtocolError::Internal(e.to_string()))?;
+                                    let kdl = std::fs::read_to_string(config_dir.join("config.kdl"))
+                                        .unwrap_or_default();
+                                    QueryResponse::ConfigKdl(kdl)
+                                }
                                 QueryPayload::Domain(_) => {
                                     unreachable!("domain queries handled above")
                                 }
@@ -678,21 +685,6 @@ impl Witch {
                                         BackgroundTask::SchemaReconciliation => w.queue_schema_reconciliation(),
                                         BackgroundTask::Vacuum => w.queue_vacuum(),
                                     }
-                                    CommandResponse::Ok
-                                }
-                                CommandPayload::JettisonEditHistory { session_id } => {
-                                    let now = chrono::Local::now().to_rfc3339();
-                                    let label = match &session_id {
-                                        Some(sid) => format!("Jettison edit history: session {}", sid),
-                                        None => "Jettison edit history: all sessions".to_string(),
-                                    };
-                                    let mutation = Mutation::JettisonEditHistory(
-                                        mm_meta::mutations::jettison::JettisonEditHistoryMutation {
-                                            session_id,
-                                            timestamp: now,
-                                        },
-                                    );
-                                    w.queue_mutations_internal(vec![mutation], Some(label));
                                     CommandResponse::Ok
                                 }
                                 CommandPayload::SaveConfig(new_config) => {

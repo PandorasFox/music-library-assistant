@@ -63,7 +63,6 @@ pub fn router(state: AppState) -> Router {
         // Commands
         .route("/commands/queue-task", post(api::commands::queue_task))
         .route("/commands/save-config", post(api::commands::save_config))
-        .route("/commands/jettison", post(api::commands::jettison))
         .route("/commands/shutdown", post(api::commands::shutdown))
         // Static files (CSS, WASM, JS)
         .nest_service("/static", ServeDir::new(static_dir))

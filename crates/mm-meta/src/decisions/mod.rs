@@ -57,6 +57,7 @@ pub enum DecisionKey {
     ConfigEdit,
     DirConfigEdit { source_path: std::path::PathBuf },
     MbReleaseApproval { release_id: String },
+    JettisonEditHistory,
 }
 
 impl DecisionKey {
@@ -138,6 +139,8 @@ impl DecisionKey {
             DecisionKey::DirConfigEdit { .. } => &[ApplyDirConfigEdit, ApplyBatchDirConfigEdits],
             // MB release approval → tag ops + dir config edit
             DecisionKey::MbReleaseApproval { .. } => &[ApplyTagOps, ApplyDirConfigEdit],
+            // Jettison edit history → export to file (chain-emits clear)
+            DecisionKey::JettisonEditHistory => &[ExportEditHistory],
         }
     }
 }
@@ -198,6 +201,7 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::MbReleaseApproval { release_id } => {
                 write!(f, "MB Release Approval:{}", release_id)
             }
+            DecisionKey::JettisonEditHistory => write!(f, "Jettison Edit History"),
         }
     }
 }

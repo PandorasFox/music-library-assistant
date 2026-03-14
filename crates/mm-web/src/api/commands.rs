@@ -64,31 +64,6 @@ pub async fn queue_task(
 }
 
 // ============================================================================
-// POST /commands/jettison
-// ============================================================================
-
-#[derive(Deserialize)]
-pub struct JettisonRequest {
-    session_id: Option<String>,
-}
-
-pub async fn jettison(
-    State(state): State<AppState>,
-    BearerToken(token): BearerToken,
-    Json(body): Json<JettisonRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let cr = send_cmd(
-        &state,
-        token,
-        CommandPayload::JettisonEditHistory {
-            session_id: body.session_id,
-        },
-    )
-    .await?;
-    cmd_to_json(cr)
-}
-
-// ============================================================================
 // POST /commands/save-config
 // ============================================================================
 

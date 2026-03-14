@@ -3,17 +3,15 @@
 //! Handles session expansion, edit reversal with conflict detection,
 //! and mutation staging through the witnessed-decision pipeline.
 
-use std::io::Write;
-
 use super::super::App;
 use super::witness;
 use super::HandleAction;
 use mm_meta::db_types::Zone;
 use mm_meta::decisions::DecisionKey;
+use mm_meta::mutations::jettison::ExportEditHistoryMutation;
 use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
 use mm_meta::mutations::Mutation;
 use mm_meta::mutations::TagOp;
-use mm_meta::views::EditHistoryExportRow;
 use crate::history_view::{
     ConflictDisposition, ConflictItem, HistoryAction, HistoryPhase, JettisonAllState,
     JettisonSessionState, ReversalItem,
@@ -64,7 +62,9 @@ impl HandleAction for HistoryAction {
                 app.enter_jettison_session();
             }
             HistoryAction::ConfirmJettisonSession => {
-                app.execute_jettison_session();
+                if let Some(g) = witness {
+                    app.execute_jettison_session(g);
+                }
             }
             HistoryAction::JettisonAll => {
                 app.enter_jettison_all();
@@ -79,7 +79,9 @@ impl HandleAction for HistoryAction {
                 }
             }
             HistoryAction::ConfirmJettisonAll => {
-                app.execute_jettison_all();
+                if let Some(g) = witness {
+                    app.execute_jettison_all(g);
+                }
             }
             HistoryAction::CancelJettison => {
                 if let ActiveView::History { ref mut data, .. } = app.view {
@@ -236,7 +238,7 @@ impl App {
     }
 
     // =========================================================================
-    // Jettison (export + delete edit history)
+    // Jettison (export + delete edit history via transaction)
     // =========================================================================
 
     /// Enter confirm-jettison-session phase for the currently selected session.
@@ -278,8 +280,8 @@ impl App {
         }
     }
 
-    /// Execute jettison for a single session: export to log, delete from DB.
-    fn execute_jettison_session(&mut self) {
+    /// Stage jettison for a single session via the transaction system.
+    fn execute_jettison_session(&mut self, gesture: &witness::ConfirmationGesture) {
         let session_id = match self.view {
             ActiveView::History { ref data, .. } => match data.phase {
                 HistoryPhase::ConfirmJettisonSession(ref js) => js.session_id.clone(),
@@ -288,119 +290,45 @@ impl App {
             _ => return,
         };
 
-        let rows = self
-            .query(mm_meta::domain_queries::GetEditHistoryExport {
-                session_id: Some(session_id.clone()),
-            });
-
-        let sid = session_id.clone();
-        self.finalize_jettison(rows, "Jettisoned", move |app| {
-            let _ = app.jettison_edit_history(Some(&sid));
-        }, |data, interaction| {
-            data.sessions.retain(|e| e.summary.session_id != session_id);
-            interaction.session_list.clamp_cursor(&data.sessions);
+        let mutation = Mutation::ExportEditHistory(ExportEditHistoryMutation {
+            session_id: Some(session_id.clone()),
         });
+        let label = format!("Jettison edit history: session {}", session_id);
+
+        self.stage_mutations_with_transaction(
+            vec![mutation],
+            &label,
+            DecisionKey::JettisonEditHistory,
+            gesture,
+        );
+
+        // Return to session list and navigate to transaction review
+        if let ActiveView::History { ref mut data, .. } = self.view {
+            data.phase = HistoryPhase::SessionList;
+        }
+        self.after_staging_decisions();
     }
 
-    /// Execute jettison-all: export everything to log, delete all from DB.
-    fn execute_jettison_all(&mut self) {
-        let rows = self
-            .query(mm_meta::domain_queries::GetEditHistoryExport {
-                session_id: None,
-            });
-
-        self.finalize_jettison(rows, "Jettisoned all", |app| {
-            let _ = app.jettison_edit_history(None);
-        }, |data, interaction| {
-            data.sessions.clear();
-            interaction.session_list.reset();
-            data.detail = None;
+    /// Stage jettison-all via the transaction system.
+    fn execute_jettison_all(&mut self, gesture: &witness::ConfirmationGesture) {
+        let mutation = Mutation::ExportEditHistory(ExportEditHistoryMutation {
+            session_id: None,
         });
-    }
+        let label = "Jettison edit history: all sessions".to_string();
 
-    /// Shared jettison logic: export rows, send delete, update status and state.
-    fn finalize_jettison(
-        &mut self,
-        rows: Vec<EditHistoryExportRow>,
-        prefix: &str,
-        delete_fn: impl FnOnce(&mut App),
-        reset_fn: impl FnOnce(
-            &mut crate::history_view::HistoryViewData,
-            &mut crate::history_view::HistoryInteraction,
-        ),
-    ) {
-        if rows.is_empty() {
-            self.status_message = Some("No records to export".to_string());
-            if let ActiveView::History { ref mut data, .. } = self.view {
-                data.phase = HistoryPhase::SessionList;
-            }
-            return;
+        self.stage_mutations_with_transaction(
+            vec![mutation],
+            &label,
+            DecisionKey::JettisonEditHistory,
+            gesture,
+        );
+
+        // Return to session list and navigate to transaction review
+        if let ActiveView::History { ref mut data, .. } = self.view {
+            data.phase = HistoryPhase::SessionList;
         }
-
-        match export_to_log(&rows) {
-            Ok(path) => {
-                delete_fn(self);
-                let count = rows.len();
-                self.status_message = Some(format!(
-                    "{} {} record{} → {}",
-                    prefix, count, if count == 1 { "" } else { "s" }, path,
-                ));
-                if let ActiveView::History { ref mut data, ref mut interaction } = self.view {
-                    reset_fn(data, interaction);
-                    data.phase = HistoryPhase::SessionList;
-                }
-            }
-            Err(e) => {
-                self.status_message = Some(format!("Export failed: {}", e));
-                if let ActiveView::History { ref mut data, .. } = self.view {
-                    data.phase = HistoryPhase::SessionList;
-                }
-            }
-        }
+        self.after_staging_decisions();
     }
-}
-
-/// Export edit history rows to a tab-separated log file.
-///
-/// Returns the path to the written file on success.
-fn export_to_log(rows: &[EditHistoryExportRow]) -> Result<String, String> {
-    let logs_dir =
-        mm_utils::paths::get_logs_dir().map_err(|e| format!("Cannot resolve logs dir: {}", e))?;
-
-    let now = chrono::Local::now();
-    let filename = format!(
-        "tag_edit_history_export_{}.log",
-        now.format("%Y-%m-%d_%H%M%S")
-    );
-    let path = logs_dir.join(&filename);
-
-    let mut file = std::fs::File::create(&path)
-        .map_err(|e| format!("Cannot create {}: {}", path.display(), e))?;
-
-    // Header
-    writeln!(
-        file,
-        "id\tinode\tfield_name\told_value\tnew_value\tedited_at\tsession_id"
-    )
-    .map_err(|e| format!("Write error: {}", e))?;
-
-    // Data rows
-    for row in rows {
-        writeln!(
-            file,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            row.id,
-            row.inode,
-            row.field_name,
-            row.old_value.as_deref().unwrap_or(""),
-            row.new_value.as_deref().unwrap_or(""),
-            row.edited_at,
-            row.session_id,
-        )
-        .map_err(|e| format!("Write error: {}", e))?;
-    }
-
-    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Generate a TagOp for a clean reversal (current == new_value, revert to old_value).

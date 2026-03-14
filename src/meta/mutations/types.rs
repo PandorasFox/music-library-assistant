@@ -137,7 +137,8 @@ impl MutationDispatch for Mutation {
             Mutation::ApplyConfigEdits(m) => m.as_ref(),
             Mutation::ApplyDirConfigEdit(m) => m.as_ref(),
             Mutation::ApplyBatchDirConfigEdits(m) => m.as_ref(),
-            Mutation::JettisonEditHistory(m) => m,
+            Mutation::ExportEditHistory(m) => m,
+            Mutation::ClearEditHistory(m) => m,
         }
     }
 

@@ -567,10 +567,8 @@ impl App {
     pub(crate) fn start_config_editor(&mut self) {
         self.last_lateral_view = widgets::LateralView::Config;
         let config = self.config();
-        let kdl_content = mm_utils::get_config_dir()
-            .ok()
-            .map(|dir| dir.join("config.kdl"))
-            .and_then(|path| std::fs::read_to_string(path).ok());
+        let kdl_content = self.query(mm_meta::protocol::ConfigKdlQuery);
+        let kdl_content = if kdl_content.is_empty() { None } else { Some(kdl_content) };
         self.view =
             ActiveView::ConfigEditor(config_editor::ConfigEditorState::new(&config, kdl_content));
     }
@@ -802,13 +800,6 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn jettison_edit_history(&mut self, session_id: Option<&str>) -> Result<(), mm_meta::protocol::ProtocolError> {
-        self.send_command(mm_meta::protocol::CommandPayload::JettisonEditHistory {
-            session_id: session_id.map(|s| s.to_owned()),
-        })?;
-        Ok(())
-    }
-
     pub(crate) fn shutdown(&mut self) -> Result<(), mm_meta::protocol::ProtocolError> {
         match self.send_command(mm_meta::protocol::CommandPayload::Shutdown)? {
             mm_meta::protocol::CommandResponse::Goodbye => Ok(()),
@@ -857,12 +848,16 @@ pub(crate) mod startup_socket {
             }
         }
 
-        pub fn needs_setup(&mut self) -> bool {
+        /// Query setup status from the Witch.
+        ///
+        /// Returns `(needs_setup, suggested_root)`. Two states: either setup
+        /// is needed (fresh install) or the system is ready for login.
+        pub fn setup_status(&mut self) -> (bool, Option<std::path::PathBuf>) {
             match self.send_unauthenticated(mm_meta::protocol::UnauthenticatedBody::SetupQuery) {
-                Ok(mm_meta::protocol::UnauthenticatedResponse::SetupStatus { needs_setup, .. }) => {
-                    needs_setup
+                Ok(mm_meta::protocol::UnauthenticatedResponse::SetupStatus { needs_setup, suggested_root }) => {
+                    (needs_setup, suggested_root)
                 }
-                _ => false,
+                _ => (false, None),
             }
         }
 
@@ -965,42 +960,11 @@ pub fn run_tui(
     {
         let mut startup = StartupSocket::new(&mut socket);
 
-        // Check startup state from the Witch (unauthenticated — before login)
-        if startup.needs_setup() {
-            let has_config = mm_utils::get_config_dir()
-                .map(|dir| dir.join("config.kdl").exists())
-                .unwrap_or(false);
-
-            let root = if has_config {
-                // Config exists but DB was deleted — show DB setup dialog, use existing root
-                let db_path = mm_utils::get_db_path()?;
-                startup::handle_db_setup_dialog(&mut terminal, &db_path)?;
-                // The config root query requires auth which we don't have yet.
-                // Parse the root path directly from config.kdl on disk.
-                let root = mm_utils::get_config_dir()
-                    .ok()
-                    .map(|dir| dir.join("config.kdl"))
-                    .and_then(|path| std::fs::read_to_string(path).ok())
-                    .and_then(|text| {
-                        // Extract root "..." from KDL — it's always a top-level node.
-                        for line in text.lines() {
-                            let trimmed = line.trim();
-                            if trimmed.starts_with("root ") || trimmed.starts_with("root\t") {
-                                let rest = trimmed.strip_prefix("root")?.trim();
-                                let path = rest.trim_matches('"');
-                                return Some(std::path::PathBuf::from(path));
-                            }
-                        }
-                        None
-                    })
-                    .ok_or_else(|| anyhow::anyhow!("could not read root from config.kdl"))?;
-                root
-            } else {
-                // Fresh install — directory picker
-                startup::run_directory_picker(&mut terminal)?
-            };
-
-            // Collect first-user credentials
+        // Two states: needs setup (first time) or ready for login.
+        let (needs_setup, suggested_root) = startup.setup_status();
+        if needs_setup {
+            // First-time setup: pick archive root, create first account
+            let root = startup::run_directory_picker(&mut terminal, suggested_root)?;
             let first_user = startup::first_time_setup::run_create_account(&mut terminal)?;
 
             startup

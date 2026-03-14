@@ -121,6 +121,8 @@ pub enum QueryPayload {
     Status,
     /// Current config snapshot.
     Config,
+    /// Raw KDL text of config.kdl (for source detection in config editor).
+    ConfigKdl,
     /// Domain-specific DB query (dispatched to cache thread).
     Domain(Box<crate::domain_queries::DomainQueryPayload>),
 }
@@ -132,6 +134,8 @@ pub enum QueryResponse {
     Status(WitchStatus),
     /// Config snapshot.
     Config(Box<Config>),
+    /// Raw KDL text from config.kdl.
+    ConfigKdl(String),
     /// Domain query result.
     Domain(crate::domain_queries::DomainQueryResult),
 }
@@ -184,6 +188,24 @@ impl ProtocolQuery for ConfigQuery {
         match resp {
             QueryResponse::Config(c) => *c,
             _ => unreachable!("protocol bug: expected Config response"),
+        }
+    }
+}
+
+/// Query for the raw KDL text of config.kdl.
+pub struct ConfigKdlQuery;
+
+impl ProtocolQuery for ConfigKdlQuery {
+    type Response = String;
+
+    fn into_payload(self) -> QueryPayload {
+        QueryPayload::ConfigKdl
+    }
+
+    fn extract_response(resp: QueryResponse) -> String {
+        match resp {
+            QueryResponse::ConfigKdl(s) => s,
+            _ => unreachable!("protocol bug: expected ConfigKdl response"),
         }
     }
 }
@@ -262,9 +284,10 @@ pub enum BackgroundTask {
 pub enum CommandPayload {
     /// Queue a background task.
     QueueTask(BackgroundTask),
-    /// Delete edit history. `None` = all sessions; `Some(id)` = single session.
-    JettisonEditHistory { session_id: Option<String> },
     /// Save edited config — Witch handles KDL read/diff/write-back.
+    ///
+    /// DEPRECATED: Should be unwound into a query (GetConfigEditContext) +
+    /// transaction flow. The Witch should not build mutations from commands.
     SaveConfig(Box<Config>),
     /// Initiate server shutdown.
     Shutdown,

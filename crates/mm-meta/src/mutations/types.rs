@@ -21,7 +21,7 @@ use super::indexing::{
     EmitExpectedOverlapMutation, FlushTagsToDiskMutation, IndexFileFromPathMutation,
     UpdateFilePathMutation,
 };
-use super::jettison::JettisonEditHistoryMutation;
+use super::jettison::{ClearEditHistoryMutation, ExportEditHistoryMutation};
 use super::tag_edit::ApplyTagOpsMutation;
 use super::transcode::TranscodeMutation;
 
@@ -285,8 +285,10 @@ pub enum Mutation {
     ApplyDirConfigEdit(Box<ApplyDirConfigEditMutation>),
     /// Batch-apply multiple source directory config edits atomically.
     ApplyBatchDirConfigEdits(Box<ApplyBatchDirConfigEditsMutation>),
-    /// Jettison (delete) tag edit history from the database.
-    JettisonEditHistory(JettisonEditHistoryMutation),
+    /// Export tag edit history to log file, then chain-emit DB clear.
+    ExportEditHistory(ExportEditHistoryMutation),
+    /// Clear tag edit history rows from the database (chain-emitted only).
+    ClearEditHistory(ClearEditHistoryMutation),
 }
 
 /// Fieldless mirror of `Mutation` for compile-time-enforced mapping tables.
@@ -322,7 +324,8 @@ pub enum MutationKind {
     ApplyConfigEdits,
     ApplyDirConfigEdit,
     ApplyBatchDirConfigEdits,
-    JettisonEditHistory,
+    ExportEditHistory,
+    ClearEditHistory,
 }
 
 impl Mutation {
@@ -354,7 +357,8 @@ impl Mutation {
             Mutation::ApplyConfigEdits(_) => MutationKind::ApplyConfigEdits,
             Mutation::ApplyDirConfigEdit(_) => MutationKind::ApplyDirConfigEdit,
             Mutation::ApplyBatchDirConfigEdits(_) => MutationKind::ApplyBatchDirConfigEdits,
-            Mutation::JettisonEditHistory(_) => MutationKind::JettisonEditHistory,
+            Mutation::ExportEditHistory(_) => MutationKind::ExportEditHistory,
+            Mutation::ClearEditHistory(_) => MutationKind::ClearEditHistory,
         }
     }
 
@@ -386,7 +390,8 @@ impl Mutation {
             Mutation::ApplyConfigEdits(_) => "Config update",
             Mutation::ApplyDirConfigEdit(_) => "Dir config update",
             Mutation::ApplyBatchDirConfigEdits(_) => "Dir config batch update",
-            Mutation::JettisonEditHistory(_) => "Jettison edit history",
+            Mutation::ExportEditHistory(_) => "Export edit history",
+            Mutation::ClearEditHistory(_) => "Clear edit history",
         }
     }
 
@@ -421,7 +426,8 @@ impl Mutation {
             Mutation::ApplyConfigEdits(m) => m.diff_entries(),
             Mutation::ApplyDirConfigEdit(m) => m.diff_entries(),
             Mutation::ApplyBatchDirConfigEdits(m) => m.diff_entries(),
-            Mutation::JettisonEditHistory(m) => m.diff_entries(),
+            Mutation::ExportEditHistory(m) => m.diff_entries(),
+            Mutation::ClearEditHistory(m) => m.diff_entries(),
         }
     }
 }

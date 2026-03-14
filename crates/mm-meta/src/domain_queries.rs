@@ -350,6 +350,17 @@ pub struct SearchCorpusFiles {
     pub limit: usize,
 }
 
+/// Server-side structured search: translates typed conditions to SQL.
+///
+/// Replaces client-side `evaluate_conditions()` + `GetAllAudioFilesWithTags` pattern.
+/// Each condition maps to SQL predicates composed with the condition's logical operator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchWithConditions {
+    pub conditions: Vec<crate::domain_query_types::SearchConditionWire>,
+    pub zone: crate::db_types::Zone,
+    pub limit: usize,
+}
+
 // ============================================================================
 // Protocol Bridge Macro
 // ============================================================================
@@ -459,4 +470,5 @@ domain_query_protocol! {
     // Web file browser & search
     GetDirectoryListing => Vec<crate::domain_query_types::DirectoryListingEntry>,
     SearchCorpusFiles => Vec<crate::domain_query_types::SearchResult>,
+    SearchWithConditions => Vec<crate::domain_query_types::SearchResult>,
 }

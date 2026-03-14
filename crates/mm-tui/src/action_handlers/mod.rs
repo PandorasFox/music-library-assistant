@@ -575,19 +575,42 @@ impl HandleAction for tag_search::TagSearchAction {
                 app.start_health_view();
             }
             tag_search::TagSearchAction::ExecuteSearch => {
-                // Execute search via cache thread (blocking — fast single query)
-                let all_files = app
-                    .query(mm_meta::domain_queries::GetAllAudioFilesWithTags {
-                        zone: mm_meta::db_types::Zone::Corpus,
-                        include_library: false,
-                    });
+                // Execute search via server-side query
+                let conditions = if let ActiveView::TagSearch(ref search) = app.view {
+                    search.widget.conditions_to_wire()
+                } else {
+                    return;
+                };
+                let results = app.query(mm_meta::domain_queries::SearchWithConditions {
+                    conditions,
+                    zone: mm_meta::db_types::Zone::Corpus,
+                    limit: 500,
+                });
                 if let ActiveView::TagSearch(ref mut search) = app.view {
-                    search.execute_search(all_files);
+                    search.set_search_results(results);
                 }
             }
-            tag_search::TagSearchAction::EditAudioFile(audio_file) => {
-                app.push_current_view();
-                app.start_unified_tag_editor_for_audio_file(audio_file);
+            tag_search::TagSearchAction::EditAudioFile(inode) => {
+                // Resolve inode to AudioFile, then open tag editor
+                let files = app.query(mm_meta::domain_queries::GetAudioFilesByInodes {
+                    inodes: vec![inode],
+                    zone: mm_meta::db_types::Zone::Corpus,
+                });
+                if let Some(audio_file) = files.into_iter().next() {
+                    app.push_current_view();
+                    app.start_unified_tag_editor_for_audio_file(audio_file);
+                }
+            }
+            tag_search::TagSearchAction::BulkEdit(inodes) => {
+                // Resolve inodes to AudioFiles, then open bulk tag editor
+                let files = app.query(mm_meta::domain_queries::GetAudioFilesByInodes {
+                    inodes,
+                    zone: mm_meta::db_types::Zone::Corpus,
+                });
+                if !files.is_empty() {
+                    app.push_current_view();
+                    app.start_unified_tag_editor_for_audio_files(files);
+                }
             }
         }
     }

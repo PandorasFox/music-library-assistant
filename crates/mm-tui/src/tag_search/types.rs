@@ -2,26 +2,20 @@
 //!
 //! Re-exports shared search types from mm-ui and adds TUI-specific types.
 
-use mm_meta::db_types::AudioFile;
-
 // Re-export shared types from mm-ui.
-pub use mm_ui::domain_types::{
-    ComparisonOperator, ConditionType, LogicalOperator, SearchCondition, TagSearchMode,
-    SEARCHABLE_TAGS,
-};
+pub use mm_ui::domain_types::{ConditionType, SearchCondition, TagSearchMode};
 
 /// Domain actions returned from tag search key handling.
-///
-/// CycleNext/CyclePrev are handled centrally. Cancel is a domain action here
-/// because it has multi-modal behavior (dismiss modal, exit results, exit search).
 #[derive(Debug, Clone)]
 pub enum TagSearchAction {
     /// Cancel tag search (Escape when nothing to cancel).
     Cancel,
-    /// Execute the search query (requires db access).
+    /// Execute the search query (requires server-side query).
     ExecuteSearch,
-    /// Open tag editor for a single audio file.
-    EditAudioFile(AudioFile),
+    /// Open tag editor for a single audio file by inode.
+    EditAudioFile(i64),
+    /// Bulk edit all result inodes.
+    BulkEdit(Vec<i64>),
 }
 
 /// Modal dialogs for tag search.

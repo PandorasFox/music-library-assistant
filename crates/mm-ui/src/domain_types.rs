@@ -155,7 +155,7 @@ pub enum InboxInsightAction {
 // ============================================================================
 
 /// Type of search condition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ConditionType {
     #[default]
     Tag,
@@ -188,7 +188,7 @@ impl ConditionType {
 }
 
 /// Specific file format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum FileFormat {
     #[default]
     Flac,
@@ -235,7 +235,7 @@ impl FileFormat {
 }
 
 /// File type category for filtering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum FileTypeCategory {
     #[default]
     Any,
@@ -292,7 +292,7 @@ impl FileTypeCategory {
 }
 
 /// Logical operators for combining search conditions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum LogicalOperator {
     #[default]
     And,
@@ -319,7 +319,7 @@ impl LogicalOperator {
 }
 
 /// Comparison operators for tag value matching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ComparisonOperator {
     #[default]
     Is,
@@ -365,10 +365,57 @@ impl SearchCondition {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Extract a wire-safe projection (replaces TextInputState with String,
+    /// converts enums to wire mirrors).
+    pub fn to_wire(&self) -> mm_meta::domain_query_types::SearchConditionWire {
+        use mm_meta::domain_query_types::*;
+
+        let wire_ct = match self.condition_type {
+            ConditionType::Tag => WireConditionType::Tag,
+            ConditionType::FileType => WireConditionType::FileType,
+            ConditionType::SampleRate => WireConditionType::SampleRate,
+            ConditionType::Bitrate => WireConditionType::Bitrate,
+            ConditionType::Duration => WireConditionType::Duration,
+        };
+        let wire_op = match self.operator {
+            LogicalOperator::And => WireLogicalOperator::And,
+            LogicalOperator::Or => WireLogicalOperator::Or,
+            LogicalOperator::Xor => WireLogicalOperator::Xor,
+        };
+        let wire_cmp = match self.comparison {
+            ComparisonOperator::Is => WireComparisonOperator::Is,
+            ComparisonOperator::Not => WireComparisonOperator::Not,
+            ComparisonOperator::Contains => WireComparisonOperator::Contains,
+            ComparisonOperator::Like => WireComparisonOperator::Like,
+        };
+        let wire_ftc = match self.file_type_category {
+            FileTypeCategory::Any => WireFileTypeCategory::Any,
+            FileTypeCategory::Lossless => WireFileTypeCategory::Lossless,
+            FileTypeCategory::Lossy => WireFileTypeCategory::Lossy,
+            FileTypeCategory::Specific(FileFormat::Flac) => WireFileTypeCategory::Flac,
+            FileTypeCategory::Specific(FileFormat::Mp3) => WireFileTypeCategory::Mp3,
+            FileTypeCategory::Specific(FileFormat::Opus) => WireFileTypeCategory::Opus,
+            FileTypeCategory::Specific(FileFormat::Ogg) => WireFileTypeCategory::Ogg,
+            FileTypeCategory::Specific(FileFormat::Wav) => WireFileTypeCategory::Wav,
+            FileTypeCategory::Specific(FileFormat::Aac) => WireFileTypeCategory::Aac,
+        };
+
+        SearchConditionWire {
+            condition_type: wire_ct,
+            operator: wire_op,
+            tag_name: self.tag_name.value().to_string(),
+            comparison: wire_cmp,
+            search_value: self.search_value.value().to_string(),
+            file_type_category: wire_ftc,
+            range_min: self.range_min.value().to_string(),
+            range_max: self.range_max.value().to_string(),
+        }
+    }
 }
 
 /// Current mode of the tag search view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TagSearchMode {
     #[default]
     QueryBuilder,

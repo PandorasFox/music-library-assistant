@@ -88,6 +88,66 @@ pub enum TagEditorLoadMode {
 pub type AudioFileWithTags = (crate::db_types::AudioFile, HashMap<String, Vec<String>>);
 
 // ============================================================================
+// Search Condition Wire Type
+// ============================================================================
+
+/// Wire-safe projection of `SearchCondition` (replaces `TextInputState` fields
+/// with plain `String`s, enum fields with serde-compatible copies).
+/// Used by `SearchWithConditions` query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchConditionWire {
+    pub condition_type: WireConditionType,
+    pub operator: WireLogicalOperator,
+    pub tag_name: String,
+    pub comparison: WireComparisonOperator,
+    pub search_value: String,
+    pub file_type_category: WireFileTypeCategory,
+    pub range_min: String,
+    pub range_max: String,
+}
+
+/// Wire-safe mirror of `mm_ui::domain_types::ConditionType`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireConditionType {
+    Tag,
+    FileType,
+    SampleRate,
+    Bitrate,
+    Duration,
+}
+
+/// Wire-safe mirror of `mm_ui::domain_types::LogicalOperator`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireLogicalOperator {
+    And,
+    Or,
+    Xor,
+}
+
+/// Wire-safe mirror of `mm_ui::domain_types::ComparisonOperator`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireComparisonOperator {
+    Is,
+    Not,
+    Contains,
+    Like,
+}
+
+/// Wire-safe mirror of `mm_ui::domain_types::FileTypeCategory`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireFileTypeCategory {
+    Any,
+    Lossless,
+    Lossy,
+    Flac,
+    Mp3,
+    Opus,
+    Ogg,
+    Wav,
+    Aac,
+}
+
+// ============================================================================
 // Directory Listing
 // ============================================================================
 

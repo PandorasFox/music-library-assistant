@@ -2,13 +2,9 @@
 //!
 //! Provides tag-based searching of the corpus with a query builder UI.
 //!
-//! ## Features
-//!
-//! - Query builder with tag name/value conditions
-//! - Logical operators (AND/OR/XOR/NOT) for combining conditions
-//! - Tab-completion for tag names
-//! - Search results view with track list and info pane
-//! - Integration with tag editor (Enter = single track, Shift+Enter = all results)
+//! The query builder conditions are managed by `mm_ui::search_widget::SearchWidget`.
+//! Search execution fires `SearchWithConditions` server-side query instead of
+//! loading all files and filtering locally.
 
 mod state;
 mod types;
@@ -28,30 +24,50 @@ pub use types::{
     SearchCondition, TagSearchAction, TagSearchMode,
 };
 
+use mm_ui::search_widget::{QueryFieldFocus, SearchAction};
+
 impl TagSearchState {
-    /// Handle a semantic input action. Returns `None` for protocol actions
-    /// (cycle) handled centrally. Cancel is a domain action here because it
-    /// has multi-modal behavior (dismiss modal, exit results, exit search).
+    /// Handle a semantic input action. Returns a domain action for the
+    /// action handler to dispatch, or None if consumed internally.
     pub fn handle_input(&mut self, action: &InputAction) -> Option<TagSearchAction> {
         // Handle modal first if active
         if self.modal.is_some() {
             return self.handle_modal_input(action);
         }
 
-        match self.mode {
-            TagSearchMode::QueryBuilder => self.handle_query_builder_input(action),
-            TagSearchMode::Results => self.handle_results_mode_input(action),
+        // In results mode, handle StandardList for wizard/click support
+        if self.widget.mode == TagSearchMode::Results {
+            return self.handle_results_mode_input(action);
+        }
+
+        // Delegate to widget
+        match self.widget.handle_input(action) {
+            Some(SearchAction::ExecuteSearch) => Some(TagSearchAction::ExecuteSearch),
+            Some(SearchAction::Cancel) => Some(TagSearchAction::Cancel),
+            Some(SearchAction::BulkEdit) => {
+                let inodes = self.all_result_inodes();
+                if !inodes.is_empty() {
+                    self.modal = Some(types::TagSearchModal::GatheringTags);
+                    self.pending_bulk_edit = Some(inodes.clone());
+                    Some(TagSearchAction::BulkEdit(inodes))
+                } else {
+                    None
+                }
+            }
+            Some(SearchAction::SelectResult(idx)) => {
+                self.results.get(idx).map(|r| TagSearchAction::EditAudioFile(r.result.inode))
+            }
+            Some(SearchAction::SwitchMode) | None => None,
         }
     }
 
     fn handle_modal_input(&mut self, action: &InputAction) -> Option<TagSearchAction> {
-        // GatheringTags modal is non-interactive - handled by tick
+        // GatheringTags modal is non-interactive
         if matches!(self.modal, Some(types::TagSearchModal::GatheringTags)) {
             return None;
         }
 
         match action {
-            // Enter or Escape dismisses the modal
             InputAction::Confirm | InputAction::Cancel => {
                 self.modal = None;
                 None
@@ -60,114 +76,30 @@ impl TagSearchState {
         }
     }
 
-    fn handle_query_builder_input(&mut self, action: &InputAction) -> Option<TagSearchAction> {
-        match action {
-            // Tab: if on TagName field with partial text, apply tab-completion
-            InputAction::CycleNext => {
-                if self.field_focus == QueryFieldFocus::TagName
-                    && !self
-                        .conditions
-                        .get(self.focused_condition)
-                        .map(|c| c.tag_name.is_empty())
-                        .unwrap_or(true)
-                {
-                    self.apply_tag_name_suggestion();
-                    None
-                } else {
-                    None // Centralized cycle handler fires
-                }
-            }
-
-            // Escape — domain action (exit search)
-            InputAction::Cancel => Some(TagSearchAction::Cancel),
-
-            // Navigate between conditions and fields
-            InputAction::NavUp => {
-                self.move_focus_up();
-                None
-            }
-            InputAction::NavDown => {
-                self.move_focus_down();
-                None
-            }
-            InputAction::NavLeft => {
-                self.move_focus_left();
-                None
-            }
-            InputAction::NavRight => {
-                self.move_focus_right();
-                None
-            }
-
-            // Enter to execute search or add condition
-            InputAction::Confirm => {
-                if self.is_on_search_button() {
-                    // Return action to execute search (db access happens in action handler)
-                    Some(TagSearchAction::ExecuteSearch)
-                } else if self.is_on_add_condition() {
-                    self.add_condition();
-                    None
-                } else if self.is_on_operator_field() {
-                    self.cycle_operator();
-                    None
-                } else if self.is_on_comparison_field() {
-                    self.cycle_comparison();
-                    None
-                } else if self.field_focus == QueryFieldFocus::ConditionType {
-                    self.cycle_condition_type();
-                    None
-                } else if self.field_focus == QueryFieldFocus::FileTypeCategory {
-                    self.cycle_file_type_category();
-                    None
-                } else {
-                    // Move to next field
-                    self.move_focus_right();
-                    None
-                }
-            }
-
-            // Text editing actions — delegate to focused TextInputState
-            InputAction::Char(_)
-            | InputAction::Paste(_)
-            | InputAction::Backspace
-            | InputAction::Delete
-            | InputAction::TextHome
-            | InputAction::TextEnd
-            | InputAction::WordLeft
-            | InputAction::WordRight
-            | InputAction::KillToStart
-            | InputAction::KillToEnd => {
-                self.handle_text_input(action);
-                None
-            }
-
-            _ => None,
-        }
-    }
-
     fn handle_results_mode_input(&mut self, action: &InputAction) -> Option<TagSearchAction> {
-        // Handle 'b'/'B' before StandardList (it would treat Char as Unhandled anyway)
+        // B for bulk edit before StandardList
         if matches!(action, InputAction::Char('b' | 'B')) {
-            let audio_files = self.all_result_audio_files();
-            if !audio_files.is_empty() {
+            let inodes = self.all_result_inodes();
+            if !inodes.is_empty() {
                 self.modal = Some(types::TagSearchModal::GatheringTags);
-                self.pending_bulk_edit = Some(audio_files);
+                self.pending_bulk_edit = Some(inodes.clone());
+                return Some(TagSearchAction::BulkEdit(inodes));
             }
             return None;
         }
 
-        let result = self.results_list.handle_input(action, &self.results);
+        let result = self.widget.results_list.handle_input(action, &self.results);
 
         match result {
             ListInputResult::Consumed | ListInputResult::CursorMoved | ListInputResult::Toggled => {
                 None
             }
-            ListInputResult::Confirm(audio_file) => {
-                Some(TagSearchAction::EditAudioFile(audio_file))
+            ListInputResult::Confirm(inode) => {
+                Some(TagSearchAction::EditAudioFile(inode))
             }
             ListInputResult::Unhandled => match action {
                 InputAction::Cancel => {
-                    self.mode = TagSearchMode::QueryBuilder;
+                    self.widget.mode = TagSearchMode::QueryBuilder;
                     None
                 }
                 _ => None,
@@ -177,13 +109,11 @@ impl TagSearchState {
 
     /// Render the tag search view (titlebar is rendered by render_app).
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        // Content based on mode
-        match self.mode {
+        match self.widget.mode {
             TagSearchMode::QueryBuilder => self.render_query_builder(f, area),
             TagSearchMode::Results => self.render_results(f, area),
         }
 
-        // Render modal overlay if active
         if let Some(ref modal) = self.modal {
             self.render_modal(f, area, modal);
         }
@@ -241,18 +171,16 @@ impl TagSearchState {
 
         let inner = render_pane(f, area, block);
 
-        // Layout conditions vertically
         let mut y = inner.y;
 
-        for (idx, condition) in self.conditions.iter().enumerate() {
+        for (idx, condition) in self.widget.conditions.iter().enumerate() {
             if y >= inner.y + inner.height - 3 {
-                break; // Not enough space
+                break;
             }
 
-            let is_focused = self.focused_condition == idx;
+            let is_focused = self.widget.focused_condition == idx;
             let line_height = 1;
 
-            // Render condition row
             let row_area = Rect::new(inner.x, y, inner.width, line_height);
             self.render_condition_row(f, row_area, idx, condition, is_focused);
 
@@ -261,7 +189,7 @@ impl TagSearchState {
 
         // Add condition button
         if y < inner.y + inner.height - 2 {
-            let add_style = if self.is_on_add_condition() {
+            let add_style = if self.widget.is_on_add_condition() {
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD)
@@ -278,7 +206,7 @@ impl TagSearchState {
 
         // Search button
         if y < inner.y + inner.height {
-            let search_style = if self.is_on_search_button() {
+            let search_style = if self.widget.is_on_search_button() {
                 Style::default()
                     .bg(Color::Cyan)
                     .fg(Color::Black)
@@ -306,7 +234,7 @@ impl TagSearchState {
 
         // Operator (for non-first conditions)
         if idx > 0 {
-            let op_focused = is_focused && self.field_focus == QueryFieldFocus::Operator;
+            let op_focused = is_focused && self.widget.field_focus == QueryFieldFocus::Operator;
             let op_style = if op_focused {
                 Style::default().bg(Color::Yellow).fg(Color::Black)
             } else {
@@ -317,11 +245,11 @@ impl TagSearchState {
                 op_style,
             ));
         } else {
-            spans.push(Span::raw("    ")); // Align with operators (4 chars: "AND ")
+            spans.push(Span::raw("    "));
         }
 
-        // Condition type selector [TAG/TYPE/RATE/KBPS/TIME]
-        let type_focused = is_focused && self.field_focus == QueryFieldFocus::ConditionType;
+        // Condition type selector
+        let type_focused = is_focused && self.widget.field_focus == QueryFieldFocus::ConditionType;
         let type_style = if type_focused {
             Style::default().bg(Color::Blue).fg(Color::White)
         } else {
@@ -333,11 +261,9 @@ impl TagSearchState {
         ));
         spans.push(Span::raw(" "));
 
-        // Render fields based on condition type
         match condition.condition_type {
             ConditionType::Tag => {
-                // Tag name field
-                let name_focused = is_focused && self.field_focus == QueryFieldFocus::TagName;
+                let name_focused = is_focused && self.widget.field_focus == QueryFieldFocus::TagName;
                 let name_style = if name_focused {
                     Style::default().bg(Color::DarkGray).fg(Color::White)
                 } else {
@@ -360,8 +286,7 @@ impl TagSearchState {
                 ));
                 spans.push(Span::raw(" "));
 
-                // Comparison operator
-                let comp_focused = is_focused && self.field_focus == QueryFieldFocus::Comparison;
+                let comp_focused = is_focused && self.widget.field_focus == QueryFieldFocus::Comparison;
                 let comp_style = if comp_focused {
                     Style::default().bg(Color::Magenta).fg(Color::Black)
                 } else {
@@ -373,8 +298,7 @@ impl TagSearchState {
                 ));
                 spans.push(Span::raw(" "));
 
-                // Value field
-                let value_focused = is_focused && self.field_focus == QueryFieldFocus::Value;
+                let value_focused = is_focused && self.widget.field_focus == QueryFieldFocus::Value;
                 let value_style = if value_focused {
                     Style::default().bg(Color::DarkGray).fg(Color::White)
                 } else {
@@ -394,9 +318,8 @@ impl TagSearchState {
                 spans.push(Span::styled(value_with_cursor, value_style));
             }
             ConditionType::FileType => {
-                // File type category selector
                 let cat_focused =
-                    is_focused && self.field_focus == QueryFieldFocus::FileTypeCategory;
+                    is_focused && self.widget.field_focus == QueryFieldFocus::FileTypeCategory;
                 let cat_style = if cat_focused {
                     Style::default().bg(Color::Green).fg(Color::Black)
                 } else {
@@ -408,8 +331,7 @@ impl TagSearchState {
                 ));
             }
             ConditionType::SampleRate | ConditionType::Bitrate | ConditionType::Duration => {
-                // Range min field
-                let min_focused = is_focused && self.field_focus == QueryFieldFocus::RangeMin;
+                let min_focused = is_focused && self.widget.field_focus == QueryFieldFocus::RangeMin;
                 let min_style = if min_focused {
                     Style::default().bg(Color::DarkGray).fg(Color::White)
                 } else {
@@ -429,8 +351,7 @@ impl TagSearchState {
                 spans.push(Span::styled(format!("{:<8}", min_with_cursor), min_style));
                 spans.push(Span::styled(" to ", Style::default().fg(Color::DarkGray)));
 
-                // Range max field
-                let max_focused = is_focused && self.field_focus == QueryFieldFocus::RangeMax;
+                let max_focused = is_focused && self.widget.field_focus == QueryFieldFocus::RangeMax;
                 let max_style = if max_focused {
                     Style::default().bg(Color::DarkGray).fg(Color::White)
                 } else {
@@ -449,7 +370,6 @@ impl TagSearchState {
                 };
                 spans.push(Span::styled(format!("{:<8}", max_with_cursor), max_style));
 
-                // Show unit hint
                 let unit = match condition.condition_type {
                     ConditionType::SampleRate => "Hz",
                     ConditionType::Bitrate => "kbps",
@@ -468,15 +388,15 @@ impl TagSearchState {
 
     fn render_results(&mut self, f: &mut Frame, area: Rect) {
         let title = format!("Results ({} tracks)", self.results.len());
-        let Self { ref mut results_list, ref results, .. } = *self;
+        let Self { ref mut widget, ref results, .. } = *self;
 
         render_standard_list(
-            results_list,
+            &mut widget.results_list,
             f,
             area,
             results,
             |idx, is_cursor, _is_selected, _width| {
-                let full_path = results[idx].audio_file.path();
+                let full_path = &results[idx].result.path;
                 let path_str = full_path.strip_prefix("corpus/").unwrap_or(full_path);
                 let indicator = if is_cursor { "▶ " } else { "  " };
                 let style = if is_cursor {
@@ -492,24 +412,4 @@ impl TagSearchState {
             true,
         );
     }
-}
-
-/// Focus within query builder
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum QueryFieldFocus {
-    Operator,
-    /// Condition type selector (TAG/TYPE/RATE/KBPS/TIME)
-    ConditionType,
-    #[default]
-    TagName,
-    Comparison,
-    Value,
-    /// Range minimum for range conditions
-    RangeMin,
-    /// Range maximum for range conditions
-    RangeMax,
-    /// File type category selector (for FileType conditions)
-    FileTypeCategory,
-    AddCondition,
-    SearchButton,
 }

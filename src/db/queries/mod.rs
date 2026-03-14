@@ -341,6 +341,7 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_has_pictures(inode: i64) -> Result<bool>;
         fn get_directory_listing(zone: super::types::Zone, parent: Option<&str>) -> Result<Vec<mm_meta::domain_query_types::DirectoryListingEntry>>;
         fn search_corpus_files(query: &str, limit: usize) -> Result<Vec<mm_meta::domain_query_types::SearchResult>>;
+        fn search_with_conditions(conditions: &[mm_meta::domain_query_types::SearchConditionWire], zone: super::types::Zone, limit: usize) -> Result<Vec<mm_meta::domain_query_types::SearchResult>>;
     }
 
     // =========================================================================

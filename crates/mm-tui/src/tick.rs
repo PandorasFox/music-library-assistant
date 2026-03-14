@@ -103,9 +103,15 @@ impl App {
         } else {
             None
         };
-        if let Some(audio_files) = pending {
-            self.push_current_view();
-            self.start_unified_tag_editor_for_audio_files(audio_files);
+        if let Some(inodes) = pending {
+            let files = self.query(mm_meta::domain_queries::GetAudioFilesByInodes {
+                inodes,
+                zone: mm_meta::db_types::Zone::Corpus,
+            });
+            if !files.is_empty() {
+                self.push_current_view();
+                self.start_unified_tag_editor_for_audio_files(files);
+            }
         }
     }
 

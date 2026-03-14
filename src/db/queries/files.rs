@@ -1159,6 +1159,246 @@ impl Database {
 
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
+
+    /// Server-side structured search: translates typed conditions to SQL.
+    ///
+    /// Each condition becomes a SQL predicate composed with its logical operator.
+    /// First condition's operator is ignored (it's the base).
+    pub fn search_with_conditions(
+        &self,
+        conditions: &[mm_meta::domain_query_types::SearchConditionWire],
+        zone: Zone,
+        limit: usize,
+    ) -> Result<Vec<mm_meta::domain_query_types::SearchResult>> {
+        use mm_meta::domain_query_types::*;
+
+        if conditions.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let zone_str = zone.as_str();
+        let tag_table = zone.tag_table().unwrap_or("corpus_tags");
+
+        // Build the WHERE clause from conditions.
+        // We accumulate SQL fragments and parameters.
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut param_idx = 3_usize; // ?1 = zone, ?2 = limit, start conditions at ?3
+
+        // Build individual condition predicates
+        let mut predicates: Vec<(WireLogicalOperator, String)> = Vec::new();
+
+        for cond in conditions {
+            let pred = match cond.condition_type {
+                WireConditionType::Tag => {
+                    if cond.tag_name.is_empty() || cond.search_value.is_empty() {
+                        // Empty conditions match everything
+                        "1=1".to_string()
+                    } else {
+                        let tag_idx = param_idx;
+                        param_idx += 1;
+                        let val_idx = param_idx;
+                        param_idx += 1;
+
+                        params.push(Box::new(cond.tag_name.to_uppercase()));
+
+                        let sql = match cond.comparison {
+                            WireComparisonOperator::Is => {
+                                params.push(Box::new(cond.search_value.to_lowercase()));
+                                format!(
+                                    "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = f.inode \
+                                     AND UPPER(tag_name) = ?{tag_idx} \
+                                     AND LOWER(tag_value) = ?{val_idx})"
+                                )
+                            }
+                            WireComparisonOperator::Not => {
+                                params.push(Box::new(cond.search_value.to_lowercase()));
+                                format!(
+                                    "NOT EXISTS (SELECT 1 FROM {tag_table} WHERE inode = f.inode \
+                                     AND UPPER(tag_name) = ?{tag_idx} \
+                                     AND LOWER(tag_value) = ?{val_idx})"
+                                )
+                            }
+                            WireComparisonOperator::Contains => {
+                                let like = format!("%{}%", super::escape_like_wildcards(&cond.search_value.to_lowercase()));
+                                params.push(Box::new(like));
+                                format!(
+                                    "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = f.inode \
+                                     AND UPPER(tag_name) = ?{tag_idx} \
+                                     AND LOWER(tag_value) LIKE ?{val_idx} ESCAPE '\\')"
+                                )
+                            }
+                            WireComparisonOperator::Like => {
+                                params.push(Box::new(cond.search_value.to_lowercase()));
+                                format!(
+                                    "EXISTS (SELECT 1 FROM {tag_table} WHERE inode = f.inode \
+                                     AND UPPER(tag_name) = ?{tag_idx} \
+                                     AND LOWER(tag_value) LIKE ?{val_idx})"
+                                )
+                            }
+                        };
+                        sql
+                    }
+                }
+                WireConditionType::FileType => {
+                    let file_types: Vec<&str> = match cond.file_type_category {
+                        WireFileTypeCategory::Any => vec![],
+                        WireFileTypeCategory::Lossless => vec!["flac", "wav", "alac", "aiff", "ape"],
+                        WireFileTypeCategory::Lossy => vec!["mp3", "opus", "ogg", "aac", "m4a"],
+                        WireFileTypeCategory::Flac => vec!["flac"],
+                        WireFileTypeCategory::Mp3 => vec!["mp3"],
+                        WireFileTypeCategory::Opus => vec!["opus"],
+                        WireFileTypeCategory::Ogg => vec!["ogg"],
+                        WireFileTypeCategory::Wav => vec!["wav"],
+                        WireFileTypeCategory::Aac => vec!["aac", "m4a"],
+                    };
+
+                    if file_types.is_empty() {
+                        "1=1".to_string()
+                    } else {
+                        let placeholders: Vec<String> = file_types
+                            .iter()
+                            .map(|ft| {
+                                let idx = param_idx;
+                                param_idx += 1;
+                                params.push(Box::new(ft.to_string()));
+                                format!("?{idx}")
+                            })
+                            .collect();
+                        format!("LOWER(a.file_type) IN ({})", placeholders.join(", "))
+                    }
+                }
+                WireConditionType::SampleRate => {
+                    build_range_predicate("a.sample_rate", &cond.range_min, &cond.range_max, &mut params, &mut param_idx)
+                }
+                WireConditionType::Bitrate => {
+                    build_range_predicate("a.bitrate_kbps", &cond.range_min, &cond.range_max, &mut params, &mut param_idx)
+                }
+                WireConditionType::Duration => {
+                    // User enters seconds, DB stores milliseconds
+                    let min_ms = cond.range_min.parse::<i64>().ok().map(|s| s * 1000);
+                    let max_ms = cond.range_max.parse::<i64>().ok().map(|s| s * 1000);
+                    match (min_ms, max_ms) {
+                        (Some(min), Some(max)) => {
+                            let min_idx = param_idx;
+                            param_idx += 1;
+                            let max_idx = param_idx;
+                            param_idx += 1;
+                            params.push(Box::new(min));
+                            params.push(Box::new(max));
+                            format!("a.duration_ms BETWEEN ?{min_idx} AND ?{max_idx}")
+                        }
+                        (Some(min), None) => {
+                            let idx = param_idx;
+                            param_idx += 1;
+                            params.push(Box::new(min));
+                            format!("a.duration_ms >= ?{idx}")
+                        }
+                        (None, Some(max)) => {
+                            let idx = param_idx;
+                            param_idx += 1;
+                            params.push(Box::new(max));
+                            format!("a.duration_ms <= ?{idx}")
+                        }
+                        (None, None) => "1=1".to_string(),
+                    }
+                }
+            };
+            predicates.push((cond.operator, pred));
+        }
+
+        // Compose predicates with logical operators.
+        // First condition stands alone; subsequent use their operator.
+        let mut where_clause = String::new();
+        for (i, (op, pred)) in predicates.iter().enumerate() {
+            if i == 0 {
+                where_clause = format!("({})", pred);
+            } else {
+                match op {
+                    WireLogicalOperator::And => {
+                        where_clause = format!("({} AND {})", where_clause, pred);
+                    }
+                    WireLogicalOperator::Or => {
+                        where_clause = format!("({} OR {})", where_clause, pred);
+                    }
+                    WireLogicalOperator::Xor => {
+                        where_clause = format!(
+                            "(({wc} AND NOT ({pred})) OR (NOT ({wc}) AND ({pred})))",
+                            wc = where_clause,
+                            pred = pred,
+                        );
+                    }
+                }
+            }
+        }
+
+        let sql = format!(
+            "SELECT f.inode, f.path,
+                (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'ARTIST' LIMIT 1) AS artist,
+                (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'ALBUM' LIMIT 1) AS album,
+                (SELECT tag_value FROM {tag_table} WHERE inode = f.inode AND UPPER(tag_name) = 'TITLE' LIMIT 1) AS title
+             FROM files f
+             JOIN audio_info a ON f.inode = a.inode
+             WHERE f.zone = ?1 AND f.is_dir = 0 AND {where_clause}
+             ORDER BY f.path
+             LIMIT ?2"
+        );
+
+        let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        all_params.push(Box::new(zone_str.to_string()));
+        all_params.push(Box::new(limit as i64));
+        all_params.extend(params);
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = all_params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*param_refs, |row| {
+            Ok(mm_meta::domain_query_types::SearchResult {
+                inode: row.get(0)?,
+                path: row.get(1)?,
+                artist: row.get(2)?,
+                album: row.get(3)?,
+                title: row.get(4)?,
+            })
+        })?;
+
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+}
+
+/// Build a BETWEEN / >= / <= predicate for numeric range conditions.
+fn build_range_predicate(
+    column: &str,
+    range_min: &str,
+    range_max: &str,
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    param_idx: &mut usize,
+) -> String {
+    let min = range_min.parse::<i64>().ok();
+    let max = range_max.parse::<i64>().ok();
+    match (min, max) {
+        (Some(min_val), Some(max_val)) => {
+            let min_i = *param_idx;
+            *param_idx += 1;
+            let max_i = *param_idx;
+            *param_idx += 1;
+            params.push(Box::new(min_val));
+            params.push(Box::new(max_val));
+            format!("{column} BETWEEN ?{min_i} AND ?{max_i}")
+        }
+        (Some(min_val), None) => {
+            let idx = *param_idx;
+            *param_idx += 1;
+            params.push(Box::new(min_val));
+            format!("{column} >= ?{idx}")
+        }
+        (None, Some(max_val)) => {
+            let idx = *param_idx;
+            *param_idx += 1;
+            params.push(Box::new(max_val));
+            format!("{column} <= ?{idx}")
+        }
+        (None, None) => "1=1".to_string(),
+    }
 }
 
 /// A corpus image file with its inode (for batch sidecar deploy processing).

@@ -785,6 +785,13 @@ impl_domain_query! {
     }
 }
 
+impl_domain_query! {
+    SearchWithConditions => Vec<mm_meta::domain_query_types::SearchResult>, |s, db| {
+        db.search_with_conditions(&s.conditions, s.zone, s.limit)
+            .unwrap_or_default()
+    }
+}
+
 /// Read tags from disk for a batch of audio files.
 fn load_file_tag_values(
     inodes: &[i64],
@@ -885,6 +892,7 @@ dispatch_domain_query_impl! {
     GetFileTagValues,
     GetDirectoryListing,
     SearchCorpusFiles,
+    SearchWithConditions,
 }
 
 // ============================================================================

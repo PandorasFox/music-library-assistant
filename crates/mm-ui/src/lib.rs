@@ -5,6 +5,7 @@
 //! `mm-web` (HTML + WASM) consume this crate for shared logic.
 
 pub mod click_targets;
+pub mod directory_browser;
 pub mod domain_types;
 pub mod html;
 pub mod geometry;
@@ -17,6 +18,7 @@ pub mod protocol_binding;
 pub mod resolution_state;
 pub mod rich_text;
 pub mod route;
+pub mod search_widget;
 pub mod standard_list;
 pub mod text_input;
 pub mod view_state;

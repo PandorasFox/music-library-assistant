@@ -11,7 +11,10 @@ pub mod types;
 pub use preview::DeploymentPreviewState;
 pub use types::DeployModalData;
 
-use crate::input::InputAction;
+// Re-export interaction + action from mm-ui
+pub use mm_ui::view_state::lateral::deploy::{DeployAction, DeployInputCtx, DeployInteraction};
+
+use mm_ui::domain_types::DeployTab;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -22,92 +25,67 @@ use ratatui::{
 use crate::helpers::format_si;
 use crate::widgets::{Modal, ModalStyle};
 
-/// Domain actions returned from the Deploy lateral view.
-///
-/// Protocol actions (CycleNext, CyclePrev, Cancel-as-quit) are handled centrally.
-#[derive(Debug, Clone)]
-pub enum DeployAction {
-    /// User confirmed deployment — generate mutations (Preview only).
-    Confirm,
-}
-
-/// State for the Deploy lateral view tab.
+/// Data for the Deploy lateral view tab.
 #[derive(Debug)]
-pub enum DeployViewState {
+pub enum DeployViewData {
     /// Nothing to deploy — show centered "up to date" modal with library file counts.
     UpToDate {
         library_file_counts: Vec<(String, usize)>,
     },
     /// Actionable deploy preview (existing UI).
-    Preview(Box<DeploymentPreviewState>),
+    Preview {
+        cached_data: DeployModalData,
+    },
 }
 
-impl DeployViewState {
-    /// Handle semantic input action for the Deploy view. Returns `None` for
-    /// protocol actions (cycle, cancel) handled centrally by `App::handle_input`.
-    pub fn handle_input(&mut self, action: &InputAction) -> Option<DeployAction> {
+impl DeployViewData {
+    /// Path of the currently selected item (for status bar).
+    pub fn selected_path(&self, interaction: &DeployInteraction) -> Option<&str> {
         match self {
-            DeployViewState::UpToDate { .. } => None,
-            DeployViewState::Preview(preview) => {
-                match action {
-                    InputAction::Confirm => Some(DeployAction::Confirm),
-                    // Left/Right switch deploy tabs, Up/Down/PgUp/PgDn scroll
-                    InputAction::NavLeft => {
-                        preview.active_tab = preview.active_tab.prev();
-                        None
-                    }
-                    InputAction::NavRight => {
-                        preview.active_tab = preview.active_tab.next();
-                        None
-                    }
-                    InputAction::NavUp => {
-                        let idx = preview.active_tab.index();
-                        preview.tab_scroll[idx] = preview.tab_scroll[idx].saturating_sub(1);
-                        None
-                    }
-                    InputAction::NavDown => {
-                        let idx = preview.active_tab.index();
-                        let max_scroll = preview.max_scroll_for_current_tab();
-                        if preview.tab_scroll[idx] < max_scroll {
-                            preview.tab_scroll[idx] += 1;
-                        }
-                        None
-                    }
-                    InputAction::PageUp => {
-                        let idx = preview.active_tab.index();
-                        preview.tab_scroll[idx] = preview.tab_scroll[idx].saturating_sub(10);
-                        None
-                    }
-                    InputAction::PageDown => {
-                        let idx = preview.active_tab.index();
-                        let max_scroll = preview.max_scroll_for_current_tab();
-                        preview.tab_scroll[idx] = (preview.tab_scroll[idx] + 10).min(max_scroll);
-                        None
-                    }
-                    _ => None,
-                }
+            DeployViewData::UpToDate { .. } => None,
+            DeployViewData::Preview { cached_data } => {
+                DeploymentPreviewState::selected_path_static(
+                    cached_data,
+                    interaction.active_tab,
+                    interaction.tab_scroll[interaction.active_tab.index()],
+                )
             }
         }
     }
 
-    /// Path of the currently selected item (for status bar).
-    pub fn selected_path(&self) -> Option<&str> {
+    /// Max scroll position for the given tab.
+    pub fn max_scroll_for_tab(&self, active_tab: DeployTab) -> usize {
         match self {
-            DeployViewState::UpToDate { .. } => None,
-            DeployViewState::Preview(p) => p.selected_path(),
+            DeployViewData::UpToDate { .. } => 0,
+            DeployViewData::Preview { cached_data } => {
+                let count = match active_tab {
+                    DeployTab::Healthy => cached_data.healthy.len(),
+                    DeployTab::New => cached_data.new_by_dir.len(),
+                    DeployTab::Conflicts => cached_data.conflicts.len(),
+                    DeployTab::Leftover => cached_data.leftover_by_dir.len(),
+                    DeployTab::Stale => cached_data.stale.len(),
+                };
+                count.saturating_sub(1)
+            }
         }
     }
 
     /// Render the Deploy view.
-    pub fn render(&self, f: &mut Frame, area: Rect) {
+    pub fn render(&self, f: &mut Frame, area: Rect, interaction: &DeployInteraction) {
         match self {
-            DeployViewState::UpToDate {
+            DeployViewData::UpToDate {
                 library_file_counts,
             } => {
                 render_up_to_date(f, area, library_file_counts);
             }
-            DeployViewState::Preview(preview) => {
-                preview.render(f, area);
+            DeployViewData::Preview { cached_data } => {
+                DeploymentPreviewState::render_static(
+                    cached_data,
+                    interaction.active_tab,
+                    interaction.tab_scroll,
+                    f,
+                    area,
+                );
             }
         }
     }

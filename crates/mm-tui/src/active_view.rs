@@ -38,7 +38,10 @@ pub(crate) enum ActiveView {
         interaction: inbox_view::InboxInteraction,
     },
     TabbedTransactionReview(tabbed_transaction_review::TabbedTransactionReviewState),
-    Deploy(deploy_modal::DeployViewState),
+    Deploy {
+        data: deploy_modal::DeployViewData,
+        interaction: deploy_modal::DeployInteraction,
+    },
     ExternalMatches {
         data: external_match_view::ExternalMatchesViewData,
         interaction: external_match_view::ExternalMatchesInteraction,
@@ -115,7 +118,7 @@ impl ActiveView {
             Self::TagSearch(_) => Some("Tag Search"),
             Self::Inbox { .. } => Some("Inbox"),
             Self::TabbedTransactionReview(_) => Some("Transaction"),
-            Self::Deploy(_) => Some("Deploy"),
+            Self::Deploy { .. } => Some("Deploy"),
             Self::ExternalMatches { .. } => Some("External Matches"),
             Self::Progress { .. } => None,
             Self::ProgressiveWork(_) => Some("Processing"),
@@ -167,7 +170,7 @@ impl ActiveView {
             Self::OobSyncResolution(s) => s.selected_path(),
             Self::OobConflictInspection(s) => s.selected_path(),
             Self::ExternalMatchReview(s) => s.selected_path(),
-            Self::Deploy(s) => s.selected_path(),
+            Self::Deploy { ref data, ref interaction } => data.selected_path(interaction),
             Self::UnifiedTagEditor(s) => s.selected_path(),
             Self::MissingAlbumSingleResolution(s) => s.selected_path(),
             Self::DiscExtractionResolution(s) => s.selected_path(),
@@ -188,7 +191,7 @@ impl ActiveView {
             Self::History(_) => Some(LateralView::History),
             Self::Inbox { .. } => Some(LateralView::Inbox),
             Self::TabbedTransactionReview(_) => Some(LateralView::Transaction),
-            Self::Deploy(_) => Some(LateralView::Deploy),
+            Self::Deploy { .. } => Some(LateralView::Deploy),
             Self::ExternalMatches { .. } => Some(LateralView::ExternalMatches),
             _ => None,
         }

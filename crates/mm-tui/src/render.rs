@@ -142,8 +142,8 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::ProgressiveWork(ref worker) => {
             progressive_worker::render(f, area, worker);
         }
-        ActiveView::Deploy(ref state) => {
-            state.render(f, area);
+        ActiveView::Deploy { ref data, ref interaction } => {
+            data.render(f, area, interaction);
         }
         ActiveView::ExitConfirm(ref mut state) => {
             render_exit_confirm_modal(f, area, state);

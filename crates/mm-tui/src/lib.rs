@@ -374,7 +374,20 @@ impl App {
                 ViewAction::IntakeConfirmation(startup::intake_confirmation::handle_input(state, &action, visible_height))
             }
             ActiveView::UnifiedTagEditor(s) => dispatch_input_raw!(UnifiedTagEditor, s),
-            ActiveView::Deploy(s) => dispatch_input!(Deploy, s),
+            ActiveView::Deploy { ref data, ref mut interaction } => {
+                match data {
+                    deploy_modal::DeployViewData::UpToDate { .. } => ViewAction::None,
+                    deploy_modal::DeployViewData::Preview { .. } => {
+                        let ctx = deploy_modal::DeployInputCtx {
+                            max_scroll: data.max_scroll_for_tab(interaction.active_tab),
+                        };
+                        match interaction.handle_input_preview(&action, &ctx) {
+                            Some(a) => ViewAction::Deploy(a),
+                            None => ViewAction::None,
+                        }
+                    }
+                }
+            }
             ActiveView::ExternalMatches { ref data, ref mut interaction } => {
                 match interaction.list.handle_input(&action, &data.flat_items) {
                     crate::widgets::standard_list::ListInputResult::Confirm(nav) => {
@@ -565,17 +578,22 @@ impl App {
 
         if deploy_status.needs_action {
             let config = self.config();
-            let data = self
+            let cached_data = self
                 .query(mm_meta::domain_queries::GetDeployData {
                     config: Some((*config).clone()),
                 });
-            let preview = deploy_modal::DeploymentPreviewState::new(data);
-            self.view =
-                ActiveView::Deploy(deploy_modal::DeployViewState::Preview(Box::new(preview)));
+            let initial_tab = deploy_modal::DeploymentPreviewState::initial_tab(&cached_data);
+            self.view = ActiveView::Deploy {
+                data: deploy_modal::DeployViewData::Preview { cached_data },
+                interaction: deploy_modal::DeployInteraction::new_with_tab(initial_tab),
+            };
         } else {
-            self.view = ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate {
-                library_file_counts: deploy_status.library_file_counts,
-            });
+            self.view = ActiveView::Deploy {
+                data: deploy_modal::DeployViewData::UpToDate {
+                    library_file_counts: deploy_status.library_file_counts,
+                },
+                interaction: deploy_modal::DeployInteraction::new(),
+            };
         }
     }
 
@@ -1128,11 +1146,14 @@ fn run_app<B: ratatui::backend::Backend>(
                 }
             }
         }
-        if matches!(app.view, ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate { .. })) {
+        if matches!(app.view, ActiveView::Deploy { data: deploy_modal::DeployViewData::UpToDate { .. }, .. }) {
             let status = app.query(mm_meta::domain_queries::GetDeployStatus);
-            if let ActiveView::Deploy(deploy_modal::DeployViewState::UpToDate {
-                ref mut library_file_counts,
-            }) = app.view
+            if let ActiveView::Deploy {
+                data: deploy_modal::DeployViewData::UpToDate {
+                    ref mut library_file_counts,
+                },
+                ..
+            } = app.view
             {
                 *library_file_counts = status.library_file_counts;
             }

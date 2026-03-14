@@ -14,10 +14,11 @@ use ratatui::{
 use super::{ExternalMatchListItem, ExternalMatchesViewState, NavigableEntry};
 use mm_meta::views::ConfidenceTier;
 use crate::release_packing_browser::types::PackingCategory;
+use crate::widgets::standard_list::render_standard_list;
 
 pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewState) {
     // Snapshot fields for the render closure (avoids borrowing all of `state`
-    // while `state.list` is mutably borrowed by render()).
+    // while `list` is mutably borrowed by render_standard_list).
     let snap = RenderSnapshot {
         has_api_key: state.has_api_key,
         fetch_active: state.fetch_active,
@@ -25,12 +26,15 @@ pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchesViewS
         cached_data: state.cached_data.as_ref(),
     };
 
-    state.list.render(
+    let ExternalMatchesViewState { ref mut list, ref flat_items, .. } = *state;
+
+    render_standard_list(
+        list,
         f,
         area,
-        &state.flat_items,
+        flat_items,
         |idx, is_cursor, _is_selected, _width| {
-            render_item(&state.flat_items, idx, is_cursor, &snap)
+            render_item(flat_items, idx, is_cursor, &snap)
         },
         "Ext. Matches",
         true, // always focused (only pane)

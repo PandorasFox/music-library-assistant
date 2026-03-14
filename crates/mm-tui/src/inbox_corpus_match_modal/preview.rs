@@ -24,7 +24,7 @@ use mm_meta::views::MatchClassification;
 use crate::helpers::{render_pane, truncate_left};
 use crate::widgets::{
     FocusPane, FrameInputResult, ModalFrame, PathField, CURSOR_STYLE,
-    modal_frame::{ContentLayout, FrameState},
+    modal_frame::{ContentLayout, FrameState, ModalFrameCore},
 };
 
 use super::types::{InboxCorpusMatchModalData, InboxMatchButton};
@@ -97,27 +97,8 @@ impl InboxCorpusMatchPreviewState {
     }
 }
 
-impl ModalFrame for InboxCorpusMatchPreviewState {
+impl ModalFrameCore for InboxCorpusMatchPreviewState {
     type Button = InboxMatchButton;
-
-    fn frame_title(&self) -> Line<'static> {
-        let (better, equivalent, subpar) = self.cached_data.count_by_class();
-        Line::from(vec![
-            Span::styled(
-                " Inbox Corpus Match Resolution ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(
-                    " {} better, {} equivalent, {} subpar",
-                    better, equivalent, subpar
-                ),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ])
-    }
 
     fn content_layout(&self) -> ContentLayout {
         ContentLayout::DetailAboveList { detail_height: 6 }
@@ -138,6 +119,27 @@ impl ModalFrame for InboxCorpusMatchPreviewState {
     fn list_len(&self) -> usize { self.cached_data.entries.len() }
     fn button_ctx(&self) -> InboxCorpusMatchModalData { self.cached_data.clone() }
     fn escape_action(&self) -> InboxCorpusMatchPreviewAction { InboxCorpusMatchPreviewAction::Cancel }
+}
+
+impl ModalFrame for InboxCorpusMatchPreviewState {
+    fn frame_title(&self) -> Line<'static> {
+        let (better, equivalent, subpar) = self.cached_data.count_by_class();
+        Line::from(vec![
+            Span::styled(
+                " Inbox Corpus Match Resolution ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    " {} better, {} equivalent, {} subpar",
+                    better, equivalent, subpar
+                ),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    }
 
     fn render_list_item(
         &self,

@@ -22,7 +22,7 @@ use ratatui::{
 use super::types::{CorruptButton, CorruptButtonCtx, CorruptFileModalData};
 use crate::helpers::truncate_right;
 use crate::widgets::FocusPane;
-use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame};
+use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame, ModalFrameCore};
 use crate::widgets::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 
 /// Actions returned from the corrupt file preview.
@@ -118,7 +118,7 @@ impl CorruptFilePreviewState {
 // ModalFrame Implementation
 // ============================================================================
 
-impl ModalFrame for CorruptFilePreviewState {
+impl ModalFrameCore for CorruptFilePreviewState {
     type Button = CorruptButton;
 
     fn content_layout(&self) -> ContentLayout {
@@ -130,10 +130,6 @@ impl ModalFrame for CorruptFilePreviewState {
 
     fn list_title(&self) -> String {
         format!(" Corrupt Files ({}) ", self.cached_data.files.len())
-    }
-
-    fn accent_color(&self) -> Color {
-        Color::Red
     }
 
     fn empty_message(&self) -> &'static str {
@@ -160,6 +156,12 @@ impl ModalFrame for CorruptFilePreviewState {
     }
     fn escape_action(&self) -> CorruptFilePreviewAction {
         CorruptFilePreviewAction::Cancel
+    }
+}
+
+impl ModalFrame for CorruptFilePreviewState {
+    fn accent_color(&self) -> Color {
+        Color::Red
     }
 
     fn render_header(&self, f: &mut Frame, area: Rect) {

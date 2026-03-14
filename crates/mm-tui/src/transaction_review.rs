@@ -20,7 +20,7 @@ use mm_meta::mutations::{DiffEntry, Mutation};
 use crate::widgets::modal_buttons::ModalButtons;
 use crate::widgets::rich_text::{RichBlock, RichSpan};
 use crate::widgets::standard_list::{
-    ListEntry, ListInputResult, StandardListConfig, StandardListState,
+    render_standard_list, ListEntry, ListInputResult, StandardListConfig, StandardListState,
 };
 use crate::widgets::wizard::{WizardItem, WizardOffer};
 use crate::widgets::{centered_rect_fixed, ButtonRowState};
@@ -472,13 +472,15 @@ pub(crate) fn render_content(f: &mut Frame, area: Rect, state: &mut TransactionR
         .split(area);
 
     let list_focused = !state.buttons_focused;
+    let TransactionReviewState { ref mut list, ref decisions, .. } = *state;
 
-    state.list.render(
+    render_standard_list(
+        list,
         f,
         chunks[0],
-        &state.decisions,
+        decisions,
         |idx, is_cursor, _is_selected, _width| {
-            render_decision_row(&state.decisions, idx, is_cursor)
+            render_decision_row(decisions, idx, is_cursor)
         },
         "Decisions",
         list_focused,
@@ -587,7 +589,7 @@ fn render_buttons_and_hints(
     state: &mut TransactionReviewState,
 ) {
     let ctx = state.button_ctx;
-    state.buttons.render(f, button_area, &ctx, state.buttons_focused);
+    crate::widgets::modal_buttons::render_buttons(&mut state.buttons, f, button_area, &ctx, state.buttons_focused);
 
     use crate::widgets::control_colors as cc;
 

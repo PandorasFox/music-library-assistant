@@ -24,7 +24,7 @@ use ratatui::{
 use super::types::{ShitFormatButton, ShitFormatButtonCtx, ShitFormatModalData};
 use crate::helpers::{render_pane, truncate_right};
 use crate::widgets::FocusPane;
-use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame};
+use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame, ModalFrameCore};
 use crate::widgets::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 
 /// Actions returned from the shit format preview.
@@ -303,7 +303,7 @@ impl ShitFormatPreviewState {
 // ModalFrame Implementation
 // ============================================================================
 
-impl ModalFrame for ShitFormatPreviewState {
+impl ModalFrameCore for ShitFormatPreviewState {
     type Button = ShitFormatButton;
 
     fn content_layout(&self) -> ContentLayout {
@@ -317,12 +317,36 @@ impl ModalFrame for ShitFormatPreviewState {
         format!(" Files ({}) ", self.cached_data.total_count())
     }
 
-    fn accent_color(&self) -> Color {
-        Color::Yellow
-    }
-
     fn empty_message(&self) -> &'static str {
         "No shit format files found"
+    }
+
+    fn frame_state(&self) -> &FrameState<ShitFormatButton> {
+        &self.frame
+    }
+    fn frame_state_mut(&mut self) -> &mut FrameState<ShitFormatButton> {
+        &mut self.frame
+    }
+    fn cursor(&self) -> usize {
+        self.cursor
+    }
+    fn cursor_mut(&mut self) -> &mut usize {
+        &mut self.cursor
+    }
+    fn list_len(&self) -> usize {
+        self.cached_data.total_count()
+    }
+    fn button_ctx(&self) -> ShitFormatButtonCtx {
+        ShitFormatPreviewState::button_ctx(self)
+    }
+    fn escape_action(&self) -> ShitFormatPreviewAction {
+        ShitFormatPreviewAction::Cancel
+    }
+}
+
+impl ModalFrame for ShitFormatPreviewState {
+    fn accent_color(&self) -> Color {
+        Color::Yellow
     }
 
     fn controls_hints(&self) -> Vec<Span<'static>> {
@@ -349,28 +373,6 @@ impl ModalFrame for ShitFormatPreviewState {
         hints.push(Span::styled("Enter", s));
         hints.push(Span::styled(" confirm", s));
         hints
-    }
-
-    fn frame_state(&self) -> &FrameState<ShitFormatButton> {
-        &self.frame
-    }
-    fn frame_state_mut(&mut self) -> &mut FrameState<ShitFormatButton> {
-        &mut self.frame
-    }
-    fn cursor(&self) -> usize {
-        self.cursor
-    }
-    fn cursor_mut(&mut self) -> &mut usize {
-        &mut self.cursor
-    }
-    fn list_len(&self) -> usize {
-        self.cached_data.total_count()
-    }
-    fn button_ctx(&self) -> ShitFormatButtonCtx {
-        ShitFormatPreviewState::button_ctx(self)
-    }
-    fn escape_action(&self) -> ShitFormatPreviewAction {
-        ShitFormatPreviewAction::Cancel
     }
 
     fn render_info_bar(&self, f: &mut Frame, area: Rect) {

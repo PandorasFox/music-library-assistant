@@ -17,7 +17,7 @@ use crate::widgets::{
     render_file_path_list, FocusPane, ModalFrame, PathEntry, PathField,
     StyledCell, ThreeColTable,
 };
-use crate::widgets::modal_frame::{ContentLayout, FrameState};
+use crate::widgets::modal_frame::{ContentLayout, FrameState, ModalFrameCore};
 
 use super::types::{OobSyncButton, OobSyncButtonCtx, OobSyncAction, OobSyncState};
 
@@ -25,7 +25,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut OobSyncState) {
     state.render_frame(f, area);
 }
 
-impl ModalFrame for OobSyncState {
+impl ModalFrameCore for OobSyncState {
     type Button = OobSyncButton;
 
     fn content_layout(&self) -> ContentLayout {
@@ -33,6 +33,17 @@ impl ModalFrame for OobSyncState {
     }
 
     fn list_title(&self) -> String { "Files".into() }
+
+    fn frame_state(&self) -> &FrameState<OobSyncButton> { &self.frame }
+    fn frame_state_mut(&mut self) -> &mut FrameState<OobSyncButton> { &mut self.frame }
+    fn cursor(&self) -> usize { self.current_file }
+    fn cursor_mut(&mut self) -> &mut usize { &mut self.current_file }
+    fn list_len(&self) -> usize { self.files.len() }
+    fn button_ctx(&self) -> OobSyncButtonCtx { OobSyncState::button_ctx(self) }
+    fn escape_action(&self) -> OobSyncAction { OobSyncAction::Cancel }
+}
+
+impl ModalFrame for OobSyncState {
     fn accent_color(&self) -> Color { Color::Yellow }
 
     fn controls_hints(&self) -> Vec<Span<'static>> {
@@ -47,14 +58,6 @@ impl ModalFrame for OobSyncState {
             Span::styled("Enter", s), Span::styled(" confirm", s),
         ]
     }
-
-    fn frame_state(&self) -> &FrameState<OobSyncButton> { &self.frame }
-    fn frame_state_mut(&mut self) -> &mut FrameState<OobSyncButton> { &mut self.frame }
-    fn cursor(&self) -> usize { self.current_file }
-    fn cursor_mut(&mut self) -> &mut usize { &mut self.current_file }
-    fn list_len(&self) -> usize { self.files.len() }
-    fn button_ctx(&self) -> OobSyncButtonCtx { OobSyncState::button_ctx(self) }
-    fn escape_action(&self) -> OobSyncAction { OobSyncAction::Cancel }
 
     fn render_info_bar(&self, f: &mut Frame, area: Rect) {
         render_info_bar(f, area, self);

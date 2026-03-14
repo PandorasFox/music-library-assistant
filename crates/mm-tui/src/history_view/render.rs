@@ -9,11 +9,12 @@ use ratatui::{
 };
 
 use super::{
-    ConflictDisposition, HistoryPhase, HistoryViewState, JettisonAllState, JettisonSessionState,
+    ConflictDisposition, EditDetailState, HistoryPhase, HistoryViewState, JettisonAllState,
+    JettisonSessionState,
 };
 use crate::helpers::truncate_right;
 use crate::widgets::control_colors as cc;
-use crate::widgets::standard_list::ListEntry;
+use crate::widgets::standard_list::{render_standard_list, ListEntry};
 use crate::widgets::{ConfirmationButton, ConfirmationModal};
 
 pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut HistoryViewState) {
@@ -68,12 +69,14 @@ fn render_session_list(f: &mut Frame, area: Rect, state: &mut HistoryViewState) 
         )));
         f.render_widget(empty, inner);
     } else {
-        state.session_list.render(
+        let HistoryViewState { ref mut session_list, ref sessions, .. } = *state;
+        render_standard_list(
+            session_list,
             f,
             chunks[0],
-            &state.sessions,
+            sessions,
             |idx, is_cursor, _is_selected, _width| {
-                render_session_row(&state.sessions, idx, is_cursor)
+                render_session_row(sessions, idx, is_cursor)
             },
             "Edit History — Sessions",
             true,
@@ -175,9 +178,9 @@ fn render_session_detail(f: &mut Frame, area: Rect, state: &mut HistoryViewState
         selected_count,
     );
 
-    // Borrow entries and list separately to avoid conflicting borrows
-    let entries = &detail.entries;
-    detail.detail_list.render(
+    let EditDetailState { ref mut detail_list, ref entries, .. } = *detail;
+    render_standard_list(
+        detail_list,
         f,
         chunks[0],
         entries,

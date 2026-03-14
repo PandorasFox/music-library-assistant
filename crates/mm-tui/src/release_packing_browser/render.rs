@@ -21,6 +21,7 @@ use super::ReleasePackingBrowserState;
 use mm_meta::signals::packing_category::PackingCategory;
 use crate::widgets::control_colors;
 use crate::widgets::rich_text::{RichBlock, RichSpan};
+use crate::widgets::standard_list::render_standard_list;
 
 // ============================================================================
 // Top-Level Render
@@ -51,13 +52,18 @@ pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowse
     render_controls(f, outer[2], has_release, is_release_category);
 
     // StandardList renders the list + wizard popup/pane
-    let entries = &state.entries;
-    let releases = &state.releases;
-    let unmatched = &state.unmatched;
-    let category = state.category;
-    let pinned = &state.pinned_release_ids;
+    let ReleasePackingBrowserState {
+        ref entries,
+        ref mut list_state,
+        ref releases,
+        ref unmatched,
+        category,
+        ref pinned_release_ids,
+        ..
+    } = *state;
 
-    state.list_state.render(
+    render_standard_list(
+        list_state,
         f,
         outer[1],
         entries,
@@ -70,7 +76,7 @@ pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut ReleasePackingBrowse
                 releases,
                 unmatched,
                 category,
-                pinned,
+                pinned_release_ids,
             )
         },
         category.label(),

@@ -462,7 +462,7 @@ fn render_collection_items<'a>(
 fn render_buttons(f: &mut Frame, area: Rect, state: &mut ConfigEditorState) {
     let in_buttons = state.focus == EditorFocus::Buttons;
     let ctx = EditorButtonCtx;
-    state.buttons.render(f, area, &ctx, in_buttons);
+    crate::widgets::modal_buttons::render_buttons(&mut state.buttons, f, area, &ctx, in_buttons);
 }
 
 /// Render the control hints line.

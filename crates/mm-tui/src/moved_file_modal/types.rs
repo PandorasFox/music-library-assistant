@@ -153,7 +153,7 @@ impl MovedFileState {
     }
 
     pub fn handle_input(&mut self, action: &InputAction) -> MovedFileAction {
-        use crate::widgets::modal_frame::{FrameInputResult, ModalFrame};
+        use crate::widgets::modal_frame::{FrameInputResult, ModalFrameCore};
         match self.handle_frame_input(action) {
             FrameInputResult::Action(a) => a,
             FrameInputResult::Consumed | FrameInputResult::Unhandled => MovedFileAction::None,

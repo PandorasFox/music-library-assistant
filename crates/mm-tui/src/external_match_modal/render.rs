@@ -12,6 +12,8 @@ use ratatui::Frame;
 use crate::helpers::render_pane;
 use crate::widgets::{PathField, ResolutionLayout};
 
+use crate::widgets::standard_list::render_standard_list;
+
 use super::types::ExternalMatchReviewState;
 
 pub fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
@@ -26,11 +28,14 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut ExternalMatchReviewState) {
 
     render_info_bar(f, vertical[0], state);
 
-    state.list.render(
+    let ExternalMatchReviewState { ref mut list, ref items } = *state;
+
+    render_standard_list(
+        list,
         f,
         vertical[1],
-        &state.items,
-        |idx, is_cursor, _is_selected, _width| render_item(&state.items, idx, is_cursor),
+        items,
+        |idx, is_cursor, _is_selected, _width| render_item(items, idx, is_cursor),
         "Files",
         true, // always focused
     );

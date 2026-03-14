@@ -78,4 +78,4 @@ pub use wizard::{WizardItem, WizardOffer, WizardState};
 pub use modal_buttons::{ButtonRowState, ModalButtons};
 
 // Modal frame
-pub use modal_frame::{FrameInputResult, ModalFrame};
+pub use modal_frame::{FrameInputResult, ModalFrame, ModalFrameCore};

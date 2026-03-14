@@ -1,6 +1,11 @@
 //! Shared UI rendering utilities
 //!
-//! Common helpers used across multiple UI modules to avoid code duplication.
+//! Pure logic re-exported from mm-ui. Rendering helpers stay here.
+
+pub use mm_ui::helpers::{
+    clamp_scroll, format_bytes, format_duration_ms, format_kbps, format_sample_rate, format_si,
+    handle_scroll_input, truncate_left, truncate_right, StashCancelButton,
+};
 
 use std::path::PathBuf;
 
@@ -35,24 +40,6 @@ pub fn render_pane(f: &mut Frame, area: Rect, block: Block) -> Rect {
     inner
 }
 
-/// Compute scroll offset to keep cursor visible (edge-pinning).
-///
-/// The cursor scrolls the viewport only when it reaches the edge.
-/// This is distinct from center-biased scrolling (used by `StandardList`)
-/// where the cursor stays near the middle of the viewport.
-pub fn clamp_scroll(cursor: usize, scroll: usize, visible_height: usize) -> usize {
-    if visible_height == 0 {
-        return 0;
-    }
-    if cursor >= scroll + visible_height {
-        cursor.saturating_sub(visible_height - 1)
-    } else if cursor < scroll {
-        cursor
-    } else {
-        scroll
-    }
-}
-
 /// Create a bordered block with focus-aware border color.
 ///
 /// Yellow border when focused, DarkGray when not. This is the standard
@@ -67,108 +54,6 @@ pub fn focused_block(title: &str, is_focused: bool) -> Block<'_> {
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-}
-
-// ============================================================================
-// Formatting Utilities
-// ============================================================================
-
-/// Truncate a string from the left, UTF-8 safe. Result: `...visible_end`
-///
-/// Keeps the rightmost `max_chars` characters. Useful for paths where
-/// the filename/end is most relevant.
-pub fn truncate_left(s: &str, max_chars: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_chars {
-        return s.to_string();
-    }
-    let skip = char_count.saturating_sub(max_chars - 3);
-    format!("...{}", s.chars().skip(skip).collect::<String>())
-}
-
-/// Truncate a string from the right, UTF-8 safe. Result: `visible_start...`
-///
-/// Keeps the leftmost `max_chars` characters. Useful for tag values and labels
-/// where the beginning is most relevant.
-pub fn truncate_right(s: &str, max_chars: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_chars {
-        return s.to_string();
-    }
-    if max_chars <= 3 {
-        return s.chars().take(max_chars).collect();
-    }
-    let take = max_chars - 3;
-    format!("{}...", s.chars().take(take).collect::<String>())
-}
-
-/// Format a number with SI suffix, always 3 significant digits.
-///
-/// - `< 1000`: raw number ("847")
-/// - `1000..10000`: X.XXk ("2.54k")
-/// - `10000..100000`: XX.Xk ("25.4k")
-/// - `100000..1000000`: XXXk ("254k")
-/// - Same pattern for M, G, T...
-pub fn format_si(n: usize) -> String {
-    if n < 1000 {
-        return n.to_string();
-    }
-
-    let suffixes = ['k', 'M', 'G', 'T', 'P'];
-    let mut value = n as f64;
-    for suffix in &suffixes {
-        value /= 1000.0;
-        if value < 10.0 {
-            return format!("{:.2}{}", value, suffix);
-        } else if value < 100.0 {
-            return format!("{:.1}{}", value, suffix);
-        } else if value < 1000.0 {
-            return format!("{:.0}{}", value, suffix);
-        }
-    }
-    // Fallback for astronomically large numbers
-    format!("{:.0}P", value)
-}
-
-/// Format a duration in milliseconds as "M:SS".
-pub fn format_duration_ms(ms: i64) -> String {
-    let total_secs = ms / 1000;
-    let mins = total_secs / 60;
-    let secs = total_secs % 60;
-    format!("{}:{:02}", mins, secs)
-}
-
-/// Format a byte count with appropriate unit (bytes, KB, MB, GB).
-pub fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} bytes", bytes)
-    }
-}
-
-/// Format a sample rate as kHz or Hz.
-pub fn format_sample_rate(sr: i32) -> String {
-    if sr >= 1000 && sr % 1000 == 0 {
-        format!("{} kHz", sr / 1000)
-    } else if sr >= 1000 {
-        format!("{:.1} kHz", sr as f64 / 1000.0)
-    } else {
-        format!("{} Hz", sr)
-    }
-}
-
-/// Format a bitrate in kbps.
-pub fn format_kbps(br: i32) -> String {
-    format!("{} kbps", br)
 }
 
 // ============================================================================
@@ -303,12 +188,6 @@ pub fn render_pending_edit_lines(
 // ============================================================================
 
 /// Extract pending tag edits from a list of mutations.
-///
-/// Returns a map of inode → [(tag_name, old_value, new_value)] for display
-/// in health modal right panes when a tag editor decision has been staged.
-///
-/// - `old_value` is empty for new tags
-/// - `new_value` is empty for deleted tags
 pub fn pending_edits_from_mutations(
     mutations: &[mm_meta::mutations::Mutation],
 ) -> std::collections::HashMap<i64, Vec<(String, String, String)>> {
@@ -333,80 +212,10 @@ pub fn pending_edits_from_mutations(
 }
 
 // ============================================================================
-// Scroll Input Helpers
-// ============================================================================
-
-/// Handle standard scroll input (NavUp/NavDown/PageUp/PageDown) for a single list.
-///
-/// Updates `scroll` in-place. Returns `true` if the action was handled,
-/// `false` if the caller should continue matching other actions.
-/// `item_count` is the total number of items in the list.
-pub fn handle_scroll_input(
-    scroll: &mut usize,
-    action: &crate::input::InputAction,
-    item_count: usize,
-) -> bool {
-    use crate::input::InputAction;
-    let max = item_count.saturating_sub(1);
-    match action {
-        InputAction::NavUp => {
-            *scroll = scroll.saturating_sub(1);
-            true
-        }
-        InputAction::NavDown => {
-            if *scroll < max {
-                *scroll += 1;
-            }
-            true
-        }
-        InputAction::PageUp => {
-            *scroll = scroll.saturating_sub(10);
-            true
-        }
-        InputAction::PageDown => {
-            *scroll = (*scroll + 10).min(max);
-            true
-        }
-        _ => false,
-    }
-}
-
-// ============================================================================
-// Modal Button State
-// ============================================================================
-
-/// Two-button state for resolution modals with a single action + cancel.
-///
-/// Used by corrupt file, subpar duplicate, and similar stash-all modals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum StashCancelButton {
-    StashAll,
-    #[default]
-    Cancel,
-}
-
-impl StashCancelButton {
-    /// Move selection left (toward action button if available).
-    pub fn left(&mut self, has_items: bool) {
-        *self = match *self {
-            Self::Cancel if has_items => Self::StashAll,
-            other => other,
-        };
-    }
-
-    /// Move selection right (toward cancel).
-    pub fn right(&mut self) {
-        *self = Self::Cancel;
-    }
-}
-
-// ============================================================================
 // Mutation Helpers
 // ============================================================================
 
 /// Generate StashFromZone + DropFromIndex mutations for a single corpus file.
-///
-/// Used by resolution modals that stash problematic files (corrupt, subpar, etc.).
 pub fn stash_file_mutations(
     corpus_path: &str,
     inode: i64,
@@ -426,42 +235,4 @@ pub fn stash_file_mutations(
             zone: Some("corpus".to_string()),
         }),
     ]
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_truncate_left_short() {
-        let path = "/home/user/file.mp3";
-        assert_eq!(truncate_left(path, 50), path);
-    }
-
-    #[test]
-    fn test_truncate_left_exact() {
-        let path = "exactly20chars!!!"; // 17 chars
-        assert_eq!(truncate_left(path, 17), path);
-    }
-
-    #[test]
-    fn test_truncate_left_long() {
-        let path = "/very/long/path/to/some/deeply/nested/file.mp3";
-        let truncated = truncate_left(path, 20);
-        assert!(truncated.starts_with("..."));
-        assert_eq!(truncated.chars().count(), 20);
-    }
-
-    #[test]
-    fn test_truncate_left_unicode() {
-        // Unicode characters should be handled correctly
-        let path = "/home/用户/音乐/歌曲.mp3";
-        let truncated = truncate_left(path, 15);
-        assert!(truncated.starts_with("..."));
-        assert_eq!(truncated.chars().count(), 15);
-    }
 }

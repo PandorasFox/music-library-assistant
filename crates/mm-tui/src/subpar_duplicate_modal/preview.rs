@@ -24,7 +24,7 @@ use super::types::{SubparButton, SubparDuplicateModalData};
 use crate::helpers::{render_pane, truncate_left};
 use crate::widgets::{
     FocusPane, FrameInputResult, ModalFrame, PathField, CURSOR_STYLE,
-    modal_frame::{ContentLayout, FrameState},
+    modal_frame::{ContentLayout, FrameState, ModalFrameCore},
 };
 
 /// Actions returned from the subpar duplicate preview.
@@ -134,24 +134,8 @@ impl SubparDuplicatePreviewState {
     }
 }
 
-impl ModalFrame for SubparDuplicatePreviewState {
+impl ModalFrameCore for SubparDuplicatePreviewState {
     type Button = SubparButton;
-
-    fn frame_title(&self) -> Line<'static> {
-        let total = self.cached_data.total_count();
-        Line::from(vec![
-            Span::styled(
-                " Subpar Duplicate Resolution ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(ratatui::style::Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" ({} files)", total),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ])
-    }
 
     fn content_layout(&self) -> ContentLayout {
         // Compute dynamic detail height from path lengths
@@ -176,6 +160,24 @@ impl ModalFrame for SubparDuplicatePreviewState {
     fn list_len(&self) -> usize { self.cached_data.files.len() }
     fn button_ctx(&self) -> SubparDuplicateModalData { self.cached_data.clone() }
     fn escape_action(&self) -> SubparDuplicatePreviewAction { SubparDuplicatePreviewAction::Cancel }
+}
+
+impl ModalFrame for SubparDuplicatePreviewState {
+    fn frame_title(&self) -> Line<'static> {
+        let total = self.cached_data.total_count();
+        Line::from(vec![
+            Span::styled(
+                " Subpar Duplicate Resolution ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" ({} files)", total),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    }
 
     fn render_list_item(
         &self,

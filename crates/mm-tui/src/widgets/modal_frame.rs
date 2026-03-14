@@ -1,7 +1,9 @@
-//! ModalFrame: trait-based frame rendering and input routing for modal dialogs.
+//! ModalFrame: trait-based frame rendering for modal dialogs.
 //!
-//! Each modal state describes its layout via `ContentLayout`, implements data-level
-//! hooks (render_list_item, render_detail), and gets rendering + input routing defaults.
+//! Logic (state accessors, input routing) lives in mm-ui's `ModalFrameCore`.
+//! This module adds rendering via the `ModalFrame` supertrait.
+
+pub use mm_ui::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrameCore};
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -10,57 +12,12 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::helpers::render_pane;
-use crate::input::InputAction;
-use super::list_click_targets::ListClickTargets;
-use super::modal_buttons::{ButtonRowState, ModalButtons};
+use super::modal_buttons::render_buttons;
 use super::resolution_layout::FocusPane;
 
-pub enum FrameInputResult<A> {
-    Action(A),
-    Consumed,
-    Unhandled,
-}
-
-pub enum ContentLayout {
-    ListAboveDetail { detail_height: u16 },
-    DetailAboveList { detail_height: u16 },
-    FourSection { header_height: u16, detail_height: u16 },
-    HorizontalSplit { list_percent: u16, info_height: u16 },
-}
-
-/// Common frame state fields shared by all ModalFrame implementors.
-#[derive(Debug)]
-pub struct FrameState<B: ModalButtons> {
-    pub focus_pane: FocusPane,
-    pub buttons: ButtonRowState<B>,
-    pub click_targets: ListClickTargets,
-}
-
-impl<B: ModalButtons> Default for FrameState<B> {
-    fn default() -> Self {
-        Self {
-            focus_pane: FocusPane::List,
-            buttons: ButtonRowState::new(),
-            click_targets: ListClickTargets::new(),
-        }
-    }
-}
-
-impl<B: ModalButtons> FrameState<B> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-pub trait ModalFrame {
-    type Button: ModalButtons;
-
+pub trait ModalFrame: ModalFrameCore {
     fn frame_title(&self) -> Line<'static> { Line::default() }
-    fn content_layout(&self) -> ContentLayout;
-    fn list_title(&self) -> String;
     fn accent_color(&self) -> Color { Color::Cyan }
-    fn empty_message(&self) -> &'static str { "No items" }
-    fn controls_height(&self) -> u16 { 3 }
     fn controls_hints(&self) -> Vec<Span<'static>> {
         let s = Style::default().fg(Color::DarkGray);
         vec![
@@ -72,15 +29,6 @@ pub trait ModalFrame {
             Span::styled(" confirm", s),
         ]
     }
-
-    // State accessors
-    fn frame_state(&self) -> &FrameState<Self::Button>;
-    fn frame_state_mut(&mut self) -> &mut FrameState<Self::Button>;
-    fn cursor(&self) -> usize;
-    fn cursor_mut(&mut self) -> &mut usize;
-    fn list_len(&self) -> usize;
-    fn button_ctx(&self) -> <Self::Button as ModalButtons>::Context;
-    fn escape_action(&self) -> <Self::Button as ModalButtons>::Action;
 
     // Data-level hooks
     fn render_list_item(&self, _idx: usize, _width: u16, _is_cursor: bool, _is_focused: bool) -> ListItem<'static> {
@@ -204,68 +152,10 @@ pub trait ModalFrame {
             .constraints([Constraint::Length(1), Constraint::Length(1)])
             .split(inner);
         let ctx = self.button_ctx();
-        self.frame_state_mut().buttons.render(f, rows[0], &ctx, focused);
+        render_buttons(&mut self.frame_state_mut().buttons, f, rows[0], &ctx, focused);
         let hints = self.controls_hints();
         if !hints.is_empty() {
             f.render_widget(Paragraph::new(Line::from(hints)).alignment(Alignment::Center), rows[1]);
-        }
-    }
-
-    fn handle_frame_input(
-        &mut self, action: &InputAction,
-    ) -> FrameInputResult<<Self::Button as ModalButtons>::Action> {
-        match action {
-            InputAction::FocusUp => {
-                let fp = &mut self.frame_state_mut().focus_pane;
-                *fp = fp.prev();
-                return FrameInputResult::Consumed;
-            }
-            InputAction::FocusDown => {
-                let fp = &mut self.frame_state_mut().focus_pane;
-                *fp = fp.next();
-                return FrameInputResult::Consumed;
-            }
-            _ => {}
-        }
-        match action {
-            InputAction::NavUp if self.frame_state().focus_pane == FocusPane::List => {
-                *self.cursor_mut() = self.cursor().saturating_sub(1);
-                FrameInputResult::Consumed
-            }
-            InputAction::NavDown if self.frame_state().focus_pane == FocusPane::List => {
-                let max = self.list_len().saturating_sub(1);
-                let c = self.cursor_mut();
-                if *c < max { *c += 1; }
-                FrameInputResult::Consumed
-            }
-            InputAction::PageUp => {
-                *self.cursor_mut() = self.cursor().saturating_sub(10);
-                FrameInputResult::Consumed
-            }
-            InputAction::PageDown => {
-                let max = self.list_len().saturating_sub(1);
-                *self.cursor_mut() = (self.cursor() + 10).min(max);
-                FrameInputResult::Consumed
-            }
-            InputAction::NavLeft if self.frame_state().focus_pane == FocusPane::Buttons => {
-                let ctx = self.button_ctx();
-                self.frame_state_mut().buttons.nav_left(&ctx);
-                FrameInputResult::Consumed
-            }
-            InputAction::NavRight if self.frame_state().focus_pane == FocusPane::Buttons => {
-                let ctx = self.button_ctx();
-                self.frame_state_mut().buttons.nav_right(&ctx);
-                FrameInputResult::Consumed
-            }
-            InputAction::Confirm if self.frame_state().focus_pane == FocusPane::Buttons => {
-                let ctx = self.button_ctx();
-                match self.frame_state_mut().buttons.confirm(&ctx) {
-                    Some(a) => FrameInputResult::Action(a),
-                    None => FrameInputResult::Consumed,
-                }
-            }
-            InputAction::Cancel => FrameInputResult::Action(self.escape_action()),
-            _ => FrameInputResult::Unhandled,
         }
     }
 }

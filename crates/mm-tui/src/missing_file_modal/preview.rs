@@ -23,7 +23,7 @@ use ratatui::{
 use super::types::{MissingFileButton, MissingFileButtonCtx, MissingFileModalData};
 use crate::helpers::{render_pane, truncate_right};
 use crate::widgets::{FocusPane, ListClickTargets};
-use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame};
+use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame, ModalFrameCore};
 use crate::widgets::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 use crate::widgets::file_path_list::{render_file_path_list, PathEntry};
 
@@ -199,7 +199,7 @@ impl MissingFilePreviewState {
 // ModalFrame Implementation
 // ============================================================================
 
-impl ModalFrame for MissingFilePreviewState {
+impl ModalFrameCore for MissingFilePreviewState {
     type Button = MissingFileButton;
 
     fn content_layout(&self) -> ContentLayout {
@@ -216,26 +216,8 @@ impl ModalFrame for MissingFilePreviewState {
         )
     }
 
-    fn accent_color(&self) -> Color {
-        Color::Cyan
-    }
-
     fn empty_message(&self) -> &'static str {
         "No restorable files"
-    }
-
-    fn controls_hints(&self) -> Vec<Span<'static>> {
-        let s = Style::default().fg(Color::DarkGray);
-        vec![
-            Span::styled("Shift+\u{2191}\u{2193}", s),
-            Span::styled(" focus  ", s),
-            Span::styled("Tab", s),
-            Span::styled(" switch list  ", s),
-            Span::styled("\u{2190}\u{2192}", s),
-            Span::styled(" select  ", s),
-            Span::styled("Enter", s),
-            Span::styled(" confirm", s),
-        ]
     }
 
     fn frame_state(&self) -> &FrameState<MissingFileButton> {
@@ -258,6 +240,26 @@ impl ModalFrame for MissingFilePreviewState {
     }
     fn escape_action(&self) -> MissingFilePreviewAction {
         MissingFilePreviewAction::Cancel
+    }
+}
+
+impl ModalFrame for MissingFilePreviewState {
+    fn accent_color(&self) -> Color {
+        Color::Cyan
+    }
+
+    fn controls_hints(&self) -> Vec<Span<'static>> {
+        let s = Style::default().fg(Color::DarkGray);
+        vec![
+            Span::styled("Shift+\u{2191}\u{2193}", s),
+            Span::styled(" focus  ", s),
+            Span::styled("Tab", s),
+            Span::styled(" switch list  ", s),
+            Span::styled("\u{2190}\u{2192}", s),
+            Span::styled(" select  ", s),
+            Span::styled("Enter", s),
+            Span::styled(" confirm", s),
+        ]
     }
 
     fn render_info_bar(&self, f: &mut Frame, area: Rect) {

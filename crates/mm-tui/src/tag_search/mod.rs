@@ -21,7 +21,7 @@ use ratatui::Frame;
 
 use crate::helpers::render_pane;
 use crate::input::InputAction;
-use crate::widgets::standard_list::ListInputResult;
+use crate::widgets::standard_list::{render_standard_list, ListInputResult};
 
 pub use state::TagSearchState;
 pub use types::{
@@ -468,13 +468,15 @@ impl TagSearchState {
 
     fn render_results(&mut self, f: &mut Frame, area: Rect) {
         let title = format!("Results ({} tracks)", self.results.len());
+        let Self { ref mut results_list, ref results, .. } = *self;
 
-        self.results_list.render(
+        render_standard_list(
+            results_list,
             f,
             area,
-            &self.results,
+            results,
             |idx, is_cursor, _is_selected, _width| {
-                let full_path = self.results[idx].audio_file.path();
+                let full_path = results[idx].audio_file.path();
                 let path_str = full_path.strip_prefix("corpus/").unwrap_or(full_path);
                 let indicator = if is_cursor { "▶ " } else { "  " };
                 let style = if is_cursor {

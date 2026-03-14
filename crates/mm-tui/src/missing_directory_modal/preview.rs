@@ -23,7 +23,7 @@ use ratatui::{
 use super::MissingDirectoryModalData;
 use crate::helpers::truncate_left;
 use crate::widgets::{FocusPane, ModalButtons};
-use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame};
+use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame, ModalFrameCore};
 
 /// Actions returned from the missing directory preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,7 +178,7 @@ impl MissingDirectoryPreviewState {
 // ModalFrame Implementation
 // ============================================================================
 
-impl ModalFrame for MissingDirectoryPreviewState {
+impl ModalFrameCore for MissingDirectoryPreviewState {
     type Button = MissingDirectoryButton;
 
     fn content_layout(&self) -> ContentLayout {
@@ -190,10 +190,6 @@ impl ModalFrame for MissingDirectoryPreviewState {
 
     fn list_title(&self) -> String {
         format!(" Deleted Directories ({}) ", self.cached_data.count())
-    }
-
-    fn accent_color(&self) -> Color {
-        Color::Yellow
     }
 
     fn empty_message(&self) -> &'static str {
@@ -220,6 +216,12 @@ impl ModalFrame for MissingDirectoryPreviewState {
     }
     fn escape_action(&self) -> MissingDirectoryPreviewAction {
         MissingDirectoryPreviewAction::Cancel
+    }
+}
+
+impl ModalFrame for MissingDirectoryPreviewState {
+    fn accent_color(&self) -> Color {
+        Color::Yellow
     }
 
     fn render_header(&self, f: &mut Frame, area: Rect) {

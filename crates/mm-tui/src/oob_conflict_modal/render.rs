@@ -17,7 +17,7 @@ use crate::widgets::{
     render_file_path_list, FocusPane, ModalFrame, PathEntry, PathField,
     StyledCell, ThreeColTable,
 };
-use crate::widgets::modal_frame::{ContentLayout, FrameState};
+use crate::widgets::modal_frame::{ContentLayout, FrameState, ModalFrameCore};
 
 use super::types::{OobConflictButton, OobConflictButtonCtx, OobConflictAction, OobConflictState};
 
@@ -25,7 +25,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
     state.render_frame(f, area);
 }
 
-impl ModalFrame for OobConflictState {
+impl ModalFrameCore for OobConflictState {
     type Button = OobConflictButton;
 
     fn content_layout(&self) -> ContentLayout {
@@ -33,6 +33,17 @@ impl ModalFrame for OobConflictState {
     }
 
     fn list_title(&self) -> String { "Files".into() }
+
+    fn frame_state(&self) -> &FrameState<OobConflictButton> { &self.frame }
+    fn frame_state_mut(&mut self) -> &mut FrameState<OobConflictButton> { &mut self.frame }
+    fn cursor(&self) -> usize { self.active_bucket_state().cursor }
+    fn cursor_mut(&mut self) -> &mut usize { &mut self.active_bucket_state_mut().cursor }
+    fn list_len(&self) -> usize { self.active_bucket_state().files.len() }
+    fn button_ctx(&self) -> OobConflictButtonCtx { OobConflictState::button_ctx(self) }
+    fn escape_action(&self) -> OobConflictAction { OobConflictAction::Cancel }
+}
+
+impl ModalFrame for OobConflictState {
     fn accent_color(&self) -> Color { Color::Red }
 
     fn controls_hints(&self) -> Vec<Span<'static>> {
@@ -47,14 +58,6 @@ impl ModalFrame for OobConflictState {
             Span::styled("Enter", s), Span::styled(" confirm", s),
         ]
     }
-
-    fn frame_state(&self) -> &FrameState<OobConflictButton> { &self.frame }
-    fn frame_state_mut(&mut self) -> &mut FrameState<OobConflictButton> { &mut self.frame }
-    fn cursor(&self) -> usize { self.active_bucket_state().cursor }
-    fn cursor_mut(&mut self) -> &mut usize { &mut self.active_bucket_state_mut().cursor }
-    fn list_len(&self) -> usize { self.active_bucket_state().files.len() }
-    fn button_ctx(&self) -> OobConflictButtonCtx { OobConflictState::button_ctx(self) }
-    fn escape_action(&self) -> OobConflictAction { OobConflictAction::Cancel }
 
     fn render_info_bar(&self, f: &mut Frame, area: Rect) {
         render_info_bar(f, area, self);

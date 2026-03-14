@@ -10,7 +10,8 @@ use crate::input::InputAction;
 use mm_meta::views::{OobSyncDirection, OobSyncFile};
 use crate::bulk_selection::BulkSelectionState;
 use crate::widgets::modal_buttons::ModalButtons;
-use crate::widgets::{FocusPane, FrameInputResult, ModalFrame, TextInputState};
+use crate::widgets::{FocusPane, FrameInputResult, TextInputState};
+use crate::widgets::modal_frame::ModalFrameCore;
 use crate::widgets::modal_frame::FrameState;
 
 // ============================================================================

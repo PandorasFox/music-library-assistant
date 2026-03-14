@@ -11,20 +11,15 @@ use ratatui::{
 use super::types::MovedFileState;
 use crate::helpers::render_pane;
 use crate::widgets::{ModalFrame, PathField, CURSOR_STYLE, LIST_ITEM_STYLE};
-use crate::widgets::modal_frame::{ContentLayout, FrameState};
+use crate::widgets::modal_frame::{ContentLayout, FrameState, ModalFrameCore};
 
 /// Render the moved file acknowledgement modal.
 pub fn render(state: &mut MovedFileState, f: &mut Frame, area: Rect) {
     state.render_frame(f, area);
 }
 
-impl ModalFrame for MovedFileState {
+impl ModalFrameCore for MovedFileState {
     type Button = super::types::MovedFileButton;
-
-    fn frame_title(&self) -> Line<'static> {
-        // Not used — FourSection uses render_header instead
-        Line::default()
-    }
 
     fn content_layout(&self) -> ContentLayout {
         ContentLayout::FourSection {
@@ -41,10 +36,6 @@ impl ModalFrame for MovedFileState {
         "No moved files to acknowledge"
     }
 
-    fn accent_color(&self) -> Color {
-        Color::Cyan
-    }
-
     fn frame_state(&self) -> &FrameState<super::types::MovedFileButton> { &self.frame }
     fn frame_state_mut(&mut self) -> &mut FrameState<super::types::MovedFileButton> { &mut self.frame }
     fn cursor(&self) -> usize { self.current_file }
@@ -52,6 +43,17 @@ impl ModalFrame for MovedFileState {
     fn list_len(&self) -> usize { self.files.len() }
     fn button_ctx(&self) -> super::types::MovedFileButtonCtx { MovedFileState::button_ctx(self) }
     fn escape_action(&self) -> super::types::MovedFileAction { super::types::MovedFileAction::Cancel }
+}
+
+impl ModalFrame for MovedFileState {
+    fn frame_title(&self) -> Line<'static> {
+        // Not used — FourSection uses render_header instead
+        Line::default()
+    }
+
+    fn accent_color(&self) -> Color {
+        Color::Cyan
+    }
 
     fn render_header(&self, f: &mut Frame, area: Rect) {
         let count = self.files.len();

@@ -1049,7 +1049,7 @@ mod tests {
     #[test]
     fn test_navigation_down_and_up() {
         let mut state = state_with_data();
-        state.list.set_visible_height(30);
+        state.list.visible_height = 30;
         state.list.clamp_cursor(&state.flat_items);
         let start = state.list.cursor;
 

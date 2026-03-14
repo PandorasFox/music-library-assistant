@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 use crate::widgets::rich_text::{RichBlock, RichSpan};
+use crate::widgets::standard_list::render_standard_list;
 
 use super::types::*;
 use super::KnotBrowserState;
@@ -39,14 +40,15 @@ pub(crate) fn render(f: &mut Frame, area: Rect, state: &mut KnotBrowserState) {
     render_header(f, outer[0], state);
     render_controls(f, outer[2], state);
 
-    let proposals = state
-        .knots
-        .get(state.knot_index)
+    let KnotBrowserState { ref knots, knot_index, ref sort_mode, ref mut list } = *state;
+    let proposals = knots
+        .get(knot_index)
         .map(|k| k.proposals.as_slice())
         .unwrap_or(&[]);
-    let sort_label = state.sort_mode.label();
+    let sort_label = sort_mode.label();
 
-    state.list.render(
+    render_standard_list(
+        list,
         f,
         outer[1],
         proposals,

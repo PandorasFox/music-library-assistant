@@ -93,6 +93,7 @@ pub fn render(
     buttons: &mut ButtonRowState<CanonicityButton>,
     field: &mm_ui::decision_field::DecisionField,
     focus: FocusPane,
+    is_album_artist: bool,
 ) {
     let padded = mm_ui::geometry::padded_rect(area);
     f.render_widget(Clear, padded);
@@ -109,7 +110,7 @@ pub fn render(
         .split(padded);
 
     // --- Title bar ---
-    render_title_bar(f, vertical[0], data, current_cluster);
+    render_title_bar(f, vertical[0], data, current_cluster, is_album_artist);
 
     // --- Decision field ---
     render_decision_field_widget(f, vertical[1], field, focus);
@@ -140,6 +141,7 @@ pub fn render(
     let ctx = CanonicityButtonCtx {
         has_variants: items.len() > 0,
         current_cluster_index: current_cluster,
+        is_album_artist,
     };
     let button_focused = focus == FocusPane::Buttons;
     render_buttons(buttons, f, vertical[3], &ctx, button_focused);
@@ -150,21 +152,23 @@ fn render_title_bar(
     area: Rect,
     data: &TagCanonicityResolutionData,
     current_cluster: usize,
+    is_album_artist: bool,
 ) {
     let cluster = data.clusters.get(current_cluster);
     let current = current_cluster + 1;
     let total = data.clusters.len();
     let variant_count = cluster.map_or(0, |c| c.variants.len());
 
+    let verb = if is_album_artist { "Album Artist" } else { "Squash" };
     let title = if let Some(ref confirmed) = cluster.and_then(|c| c.confirmed_canonical.as_ref()) {
         format!(
-            " Squash \"{}\" ({}/{}) \u{2014} confirmed: \"{}\" ",
-            data.tag_name, current, total, confirmed,
+            " {} \"{}\" ({}/{}) \u{2014} confirmed: \"{}\" ",
+            verb, data.tag_name, current, total, confirmed,
         )
     } else {
         format!(
-            " Squash \"{}\" ({}/{}) \u{2014} {} variants ",
-            data.tag_name, current, total, variant_count,
+            " {} \"{}\" ({}/{}) \u{2014} {} variants ",
+            verb, data.tag_name, current, total, variant_count,
         )
     };
 

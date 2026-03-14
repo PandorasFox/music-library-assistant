@@ -366,7 +366,12 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
             Ok(views::render_transaction_review(&status, &details))
         }
 
-        // Resolution, KnotBrowser — not yet wired to web renderers.
+        // -- Resolution views --
+        Route::Resolution(ref res) => {
+            load_resolution_view(res).await
+        }
+
+        // KnotBrowser — not yet wired to web renderers.
         // Fall back to health view for now.
         _ => {
             let status = api::get_status().await?;
@@ -378,6 +383,64 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
             start_health_poll();
             Ok(div().children(children).into())
         }
+    }
+}
+
+/// Fetch data and render content for a resolution route.
+async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsValue> {
+    use route::ResolutionRoute;
+    match res {
+        ResolutionRoute::MissingDirectories { .. } => {
+            let data = api::get_query("missing-directory-data").await?;
+            Ok(views::render_missing_directories(&data))
+        }
+        ResolutionRoute::CorruptFiles { .. } => {
+            let data = api::get_query("corrupt-file-data").await?;
+            Ok(views::render_corrupt_files(&data))
+        }
+        ResolutionRoute::MovedFiles { .. } => {
+            let data = api::get_query("moved-files").await?;
+            Ok(views::render_moved_files(&data))
+        }
+        // Other resolution types not yet wired — show placeholder.
+        _ => {
+            Ok(views::render_resolution_view(
+                &format!("Resolution — {}", resolution_label(res)),
+                &[],
+                &[("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()")],
+            ))
+        }
+    }
+}
+
+/// Human-readable label for a resolution route variant.
+fn resolution_label(res: &route::ResolutionRoute) -> &'static str {
+    use route::ResolutionRoute;
+    match res {
+        ResolutionRoute::MissingFilesRestorable { .. } => "Missing Files (Restorable)",
+        ResolutionRoute::MissingFilesPermanent { .. } => "Missing Files (Permanent)",
+        ResolutionRoute::MissingDirectories { .. } => "Missing Directories",
+        ResolutionRoute::CorruptFiles { .. } => "Corrupt Files",
+        ResolutionRoute::LosslessRemux { .. } => "Lossless Remux",
+        ResolutionRoute::SubparDuplicates { .. } => "Subpar Duplicates",
+        ResolutionRoute::InboxCorpusMatch { .. } => "Inbox/Corpus Match",
+        ResolutionRoute::DirectoryCluster { .. } => "Directory Cluster",
+        ResolutionRoute::MovedFiles { .. } => "Moved Files",
+        ResolutionRoute::OobSync { .. } => "OOB Tag Sync",
+        ResolutionRoute::OobConflictMtimeOnly { .. } => "OOB Conflict (mtime)",
+        ResolutionRoute::OobConflictDbOnly { .. } => "OOB Conflict (DB only)",
+        ResolutionRoute::OobConflictDiskOnly { .. } => "OOB Conflict (disk only)",
+        ResolutionRoute::OobConflictTwoWay { .. } => "OOB Conflict (two-way)",
+        ResolutionRoute::ExternalMatchReview { .. } => "External Match Review",
+        ResolutionRoute::TagCanonicity { .. } => "Tag Canonicity",
+        ResolutionRoute::InconsistentAlbumArtist { .. } => "Inconsistent Album Artist",
+        ResolutionRoute::CompoundSplit { .. } => "Compound Split",
+        ResolutionRoute::MissingAlbum { .. } => "Missing Album",
+        ResolutionRoute::DiscExtraction { .. } => "Disc Extraction",
+        ResolutionRoute::RedundantDuplicates { .. } => "Redundant Duplicates",
+        ResolutionRoute::DeployConflicts { .. } => "Deploy Conflicts",
+        ResolutionRoute::MetadataDuplicates { .. } => "Metadata Duplicates",
+        ResolutionRoute::SameRecording { .. } => "Same Recording",
     }
 }
 

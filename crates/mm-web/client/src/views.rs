@@ -1254,3 +1254,137 @@ pub fn render_tag_editor(inode: i64, path: &str, tags: &serde_json::Value) -> No
         .children(rows)
         .into()
 }
+
+// ============================================================================
+// Resolution views — generic renderer for resolution modals
+// ============================================================================
+
+/// Render a resolution modal from server-fetched data.
+///
+/// `title` — modal heading text
+/// `items` — display strings for the item list
+/// `buttons` — tuples of (label, css_color_var, onclick_js)
+pub fn render_resolution_view(
+    title: &str,
+    items: &[String],
+    buttons: &[(&str, &str, &str)],
+) -> Node {
+    let mut sections = Vec::new();
+
+    // Title.
+    sections.push(h3().class("mm-section__title").text(title).into());
+
+    // Item list (scrollable).
+    if items.is_empty() {
+        sections.push(
+            span().class("mm-kv__val").text("No items").into(),
+        );
+    } else {
+        let rows: Vec<Node> = items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                div()
+                    .class("mm-kv")
+                    .child(span().class("mm-kv__key").text(format!("{}", i + 1)))
+                    .child(span().class("mm-kv__val").text(item))
+                    .into()
+            })
+            .collect();
+        sections.push(
+            div()
+                .class("mm-resolution-items")
+                .children(rows)
+                .into(),
+        );
+    }
+
+    // Button row.
+    let btn_nodes: Vec<Node> = buttons
+        .iter()
+        .map(|(label, color, onclick)| {
+            html::button()
+                .class("mm-btn")
+                .attr("style", format!("border-color:{color}"))
+                .attr("onclick", *onclick)
+                .text(*label)
+                .into()
+        })
+        .collect();
+    sections.push(
+        div().class("mm-buttons").children(btn_nodes).into(),
+    );
+
+    div().class("mm-resolution").children(sections).into()
+}
+
+/// Render missing directory resolution data.
+pub fn render_missing_directories(data: &serde_json::Value) -> Node {
+    let items: Vec<String> = data
+        .get("directories")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    render_resolution_view(
+        &format!("Missing Directories ({})", items.len()),
+        &items,
+        &[
+            ("Drop All", "var(--c-yellow)", "window.__mm_resolve_cancel()"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+        ],
+    )
+}
+
+/// Render corrupt file resolution data.
+pub fn render_corrupt_files(data: &serde_json::Value) -> Node {
+    let items: Vec<String> = data
+        .get("files")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    entry.get("corpus_path").and_then(|v| v.as_str()).map(String::from)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    render_resolution_view(
+        &format!("Corrupt Files ({})", items.len()),
+        &items,
+        &[
+            ("Stash All", "var(--c-yellow)", "window.__mm_resolve_cancel()"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+        ],
+    )
+}
+
+/// Render moved files resolution data.
+pub fn render_moved_files(data: &serde_json::Value) -> Node {
+    let items: Vec<String> = data
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let old = entry.get("old_path")?.as_str()?;
+                    let new = entry.get("new_path")?.as_str()?;
+                    Some(format!("{old} \u{2192} {new}"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    render_resolution_view(
+        &format!("Moved Files ({})", items.len()),
+        &items,
+        &[
+            ("Accept All", "var(--c-green)", "window.__mm_resolve_cancel()"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+        ],
+    )
+}

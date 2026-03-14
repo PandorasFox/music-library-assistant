@@ -51,6 +51,7 @@ impl ResolutionData for TagCanonicityData {
         CanonicityButtonCtx {
             has_variants: self.list_len() > 0,
             current_cluster_index: self.current_cluster,
+            is_album_artist: false,
         }
     }
 
@@ -124,6 +125,8 @@ pub enum CanonicityButton {
 pub struct CanonicityButtonCtx {
     pub has_variants: bool,
     pub current_cluster_index: usize,
+    /// When true, FlagCanonical shows as "Not a Compilation" (album artist mode).
+    pub is_album_artist: bool,
 }
 
 impl ModalButtons for CanonicityButton {
@@ -134,9 +137,10 @@ impl ModalButtons for CanonicityButton {
         &[Self::Confirm, Self::FlagCanonical, Self::Cancel]
     }
 
-    fn label(&self, _ctx: &Self::Context) -> Cow<'static, str> {
+    fn label(&self, ctx: &Self::Context) -> Cow<'static, str> {
         match self {
             Self::Confirm => "Confirm".into(),
+            Self::FlagCanonical if ctx.is_album_artist => "Not a Compilation".into(),
             Self::FlagCanonical => "Flag Canonical".into(),
             Self::Cancel => "Cancel".into(),
         }
@@ -342,6 +346,7 @@ mod tests {
         let ctx = CanonicityButtonCtx {
             has_variants: false,
             current_cluster_index: 0,
+            is_album_artist: false,
         };
         assert!(!CanonicityButton::Confirm.enabled(&ctx));
         assert!(CanonicityButton::FlagCanonical.enabled(&ctx));
@@ -353,6 +358,7 @@ mod tests {
         let ctx = CanonicityButtonCtx {
             has_variants: true,
             current_cluster_index: 0,
+            is_album_artist: false,
         };
         assert!(CanonicityButton::Confirm.enabled(&ctx));
     }
@@ -367,6 +373,7 @@ mod tests {
         let ctx = CanonicityButtonCtx {
             has_variants: true,
             current_cluster_index: 0,
+            is_album_artist: false,
         };
         assert_eq!(
             CanonicityButton::Confirm.action(&ctx),
@@ -387,6 +394,7 @@ mod tests {
         let ctx = CanonicityButtonCtx {
             has_variants: true,
             current_cluster_index: 0,
+            is_album_artist: false,
         };
         for button in CanonicityButton::all() {
             assert!(!button.label(&ctx).is_empty());

@@ -186,10 +186,10 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         }
         ActiveView::TagCanonicityResolutionV3 {
             ref data, current_cluster, ref mut list, ref mut buttons,
-            ref field, focus, ..
+            ref field, focus, is_album_artist, ..
         } => {
             tag_canonicity_v2::render_v3::render(
-                f, area, data, current_cluster, list, buttons, field, focus,
+                f, area, data, current_cluster, list, buttons, field, focus, is_album_artist,
             );
         }
         ActiveView::CompoundTagSplit { ref mut state, .. } => {

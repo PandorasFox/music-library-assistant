@@ -99,6 +99,8 @@ pub(crate) enum ActiveView {
         field: mm_ui::decision_field::DecisionField,
         zone: mm_meta::db_types::Zone,
         focus: mm_ui::geometry::FocusPane,
+        /// When true, this is an inconsistent album artist resolution (different button labels/semantics).
+        is_album_artist: bool,
     },
     CompoundTagSplit {
         state: compound_split_v2::CompoundSplitStateV2,
@@ -154,6 +156,7 @@ impl ActiveView {
             Self::ReleasePackingBrowser(_) => Some("Release Packing Browser"),
             Self::KnotBrowser(_) => Some("Knot Browser"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
+            Self::TagCanonicityResolutionV3 { is_album_artist: true, .. } => Some("Album Artist"),
             Self::TagCanonicityResolutionV3 { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
             Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),

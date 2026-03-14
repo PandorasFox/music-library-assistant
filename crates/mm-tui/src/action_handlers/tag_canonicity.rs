@@ -467,7 +467,16 @@ impl HandleAction for CanonicityAction {
             }
             CanonicityAction::FlagCanonical => {
                 let Some(w) = witness else { return };
-                app.stage_flag_canonical_v3(w);
+                // In album artist mode, FlagCanonical means "flag as non-compilation"
+                let is_album_artist = matches!(
+                    &app.view,
+                    ActiveView::TagCanonicityResolutionV3 { is_album_artist: true, .. }
+                );
+                if is_album_artist {
+                    app.stage_flag_non_compilation_v3(w);
+                } else {
+                    app.stage_flag_canonical_v3(w);
+                }
                 app.advance_canonicity_v3();
             }
             CanonicityAction::Cancel => {
@@ -492,13 +501,13 @@ impl App {
             }
         };
 
-        // Determine tag_name and zone from insight type
-        let (tag_name, zone) = match &insight_type {
+        // Determine tag_name, zone, and whether this is album artist mode
+        let (tag_name, zone, is_album_artist) = match &insight_type {
             insights_view::InsightType::InconsistentAlbumArtist => {
-                ("ALBUMARTIST".to_string(), Zone::Corpus)
+                ("ALBUMARTIST".to_string(), Zone::Corpus, true)
             }
             insights_view::InsightType::TagCanonicity { tag_name } => {
-                (tag_name.clone(), Zone::Corpus)
+                (tag_name.clone(), Zone::Corpus, false)
             }
             _ => {
                 self.status_message = Some("Invalid insight type for tag resolution".to_string());
@@ -525,7 +534,8 @@ impl App {
         let prefill = data.clusters.first()
             .map(|c| c.suggested_canonical.as_deref().unwrap_or(""))
             .unwrap_or("");
-        let field = mm_ui::decision_field::DecisionField::new("Squash to:")
+        let field_label = if is_album_artist { "Album artist:" } else { "Squash to:" };
+        let field = mm_ui::decision_field::DecisionField::new(field_label)
             .with_value(prefill);
 
         self.view = ActiveView::TagCanonicityResolutionV3 {
@@ -538,6 +548,7 @@ impl App {
             field,
             zone,
             focus: mm_ui::geometry::FocusPane::List,
+            is_album_artist,
         };
     }
 
@@ -663,6 +674,55 @@ impl App {
         };
 
         let decision = gesture.decide("Flag canonical", mutations);
+        let _ = super::super::operator_decisions::stage_decision(
+            self,
+            DecisionKey::TagCanonicity {
+                tag_name,
+                cluster_index: cluster_idx,
+            },
+            decision,
+        );
+    }
+
+    /// Stage a "flag as non-compilation" decision for the current cluster (V3).
+    ///
+    /// Adds COMPILATION=0 to all tracks in the current group, which will
+    /// suppress this group in future inconsistent album artist detection runs.
+    fn stage_flag_non_compilation_v3(&mut self, gesture: &witness::ConfirmationGesture) {
+        let (mutations, cluster_idx, tag_name) = match &self.view {
+            ActiveView::TagCanonicityResolutionV3 {
+                ref data, current_cluster, ref zone, ..
+            } => {
+                use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
+                use mm_meta::mutations::{Mutation, TagOp};
+
+                let cluster = match data.clusters.get(*current_cluster) {
+                    Some(c) => c,
+                    None => return,
+                };
+
+                // Add COMPILATION=0 to every file in this cluster
+                let ops: Vec<TagOp> = cluster
+                    .variants
+                    .iter()
+                    .flat_map(|v| &v.files)
+                    .map(|f| TagOp::add_tag(f.inode, "COMPILATION", "0"))
+                    .collect();
+
+                if ops.is_empty() {
+                    return;
+                }
+
+                let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                    ops,
+                    zone: *zone,
+                })];
+                (mutations, *current_cluster, data.tag_name.clone())
+            }
+            _ => return,
+        };
+
+        let decision = gesture.decide("Flag non-compilation", mutations);
         let _ = super::super::operator_decisions::stage_decision(
             self,
             DecisionKey::TagCanonicity {

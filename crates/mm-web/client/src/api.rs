@@ -216,6 +216,11 @@ pub async fn get_external_matches() -> Result<ExternalMatchesData, JsValue> {
 // Untyped query endpoints (composite/complex responses)
 // ============================================================================
 
+/// GET /queries/{name} → raw JSON (paramless domain queries)
+pub async fn get_query(name: &str) -> Result<serde_json::Value, JsValue> {
+    get(&format!("/queries/{name}")).await
+}
+
 /// GET /queries/{name}?params → raw JSON (for complex/composite responses)
 pub async fn get_query_with(name: &str, params: &str) -> Result<serde_json::Value, JsValue> {
     get(&format!("/queries/{name}?{params}")).await

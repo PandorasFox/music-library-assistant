@@ -424,11 +424,14 @@ impl App {
             ActiveView::TagCanonicityResolution { state, .. } => dispatch_input_raw!(TagCanonicityResolution, state),
             ActiveView::TagCanonicityResolutionV3 {
                 ref data, ref mut current_cluster, ref mut list,
-                ref mut buttons, ref mut field, ref mut focus, ..
+                ref mut buttons, ref mut field, ref mut focus,
+                is_album_artist, ..
             } => {
                 use mm_ui::input::InputAction as IA;
                 use mm_ui::resolutions::tag_canonicity::{CanonicityAction, CanonicityButtonCtx};
                 use mm_ui::standard_list::ListInputResult;
+
+                let is_aa = *is_album_artist;
 
                 // Group navigation first (Tab/Shift+Tab)
                 match action {
@@ -471,6 +474,7 @@ impl App {
                             has_variants: data.clusters.get(*current_cluster)
                                 .map_or(false, |c| !c.variants.is_empty()),
                             current_cluster_index: *current_cluster,
+                            is_album_artist: is_aa,
                         };
                         match focus {
                             mm_ui::geometry::FocusPane::Field => {

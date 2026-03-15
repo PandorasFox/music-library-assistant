@@ -360,6 +360,11 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
             Ok(views::render_transaction_review(&status, &details))
         }
 
+        // -- External match overlay views --
+        Route::ExternalMatchOverlay(ref r) => {
+            load_external_match_overlay(r).await
+        }
+
         // -- Resolution views --
         Route::Resolution(ref res) => {
             load_resolution_view(res).await
@@ -553,6 +558,37 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
                 &[],
                 &[("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()")],
             ))
+        }
+    }
+}
+
+/// Fetch data and render content for an external match overlay route.
+async fn load_external_match_overlay(r: &route::ExternalMatchRoute) -> Result<Node, JsValue> {
+    use route::ExternalMatchRoute;
+    match r {
+        ExternalMatchRoute::AcoustidBrowse { confidence, .. } => {
+            let data = api::get_query_with(
+                "acoustid-matches",
+                &format!("confidence={}", serde_json::to_value(confidence)
+                    .ok()
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_else(|| format!("{confidence:?}"))),
+            ).await?;
+            Ok(views::render_acoustid_matches(&data))
+        }
+        ExternalMatchRoute::ReleaseReview { filter, .. } => {
+            let data = api::get_query_with(
+                "release-review",
+                &format!("filter={}", serde_json::to_value(filter)
+                    .ok()
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_else(|| format!("{filter:?}"))),
+            ).await?;
+            Ok(views::render_release_review(&data))
+        }
+        ExternalMatchRoute::ReleaseDetail { release_id, .. } => {
+            // Single release detail query not yet implemented server-side.
+            Ok(views::render_release_detail_placeholder(release_id))
         }
     }
 }

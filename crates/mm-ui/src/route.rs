@@ -181,7 +181,6 @@ pub enum ResolutionRoute {
     OobConflictDbOnly { cursor: Option<usize> },
     OobConflictDiskOnly { cursor: Option<usize> },
     OobConflictTwoWay { cursor: Option<usize> },
-    ExternalMatchReview { cursor: Option<usize> },
 
     // === Cluster-nav (path + identity params = load anchor) ===
     TagCanonicity { tag_name: String, zone: Zone, cluster: Option<usize> },
@@ -215,7 +214,6 @@ impl ResolutionRoute {
             Self::OobConflictDbOnly { .. } => "OOB Conflict (DB only)",
             Self::OobConflictDiskOnly { .. } => "OOB Conflict (disk only)",
             Self::OobConflictTwoWay { .. } => "OOB Conflict (two-way)",
-            Self::ExternalMatchReview { .. } => "External Match Review",
             Self::TagCanonicity { .. } => "Tag Canonicity",
             Self::InconsistentAlbumArtist { .. } => "Inconsistent Album Artist",
             Self::CompoundSplit { .. } => "Compound Split",
@@ -648,10 +646,6 @@ fn resolution_to_url(r: &ResolutionRoute, path: &mut String, params: &mut QueryP
             path.push_str("oob-conflict/two-way");
             params.set_usize("cursor", *cursor);
         }
-        ResolutionRoute::ExternalMatchReview { cursor } => {
-            path.push_str("external-match-review");
-            params.set_usize("cursor", *cursor);
-        }
 
         // === Cluster-nav ===
         ResolutionRoute::TagCanonicity { tag_name, zone, cluster } => {
@@ -778,9 +772,6 @@ fn resolution_from_url(
                 }
             }
         }
-        "external-match-review" => ResolutionRoute::ExternalMatchReview {
-            cursor: params.get_usize("cursor"),
-        },
         "tag-canonicity" => {
             let tag_name = segments.get(2).ok_or_else(|| RouteParseError {
                 message: "tag-canonicity requires a tag name".into(),
@@ -1198,7 +1189,6 @@ mod tests {
             ResolutionRoute::OobConflictDbOnly { cursor: Some(2) },
             ResolutionRoute::OobConflictDiskOnly { cursor: Some(1) },
             ResolutionRoute::OobConflictTwoWay { cursor: None },
-            ResolutionRoute::ExternalMatchReview { cursor: Some(2) },
             ResolutionRoute::MissingAlbum { group: Some(1) },
             ResolutionRoute::DiscExtraction { group: Some(0) },
         ];

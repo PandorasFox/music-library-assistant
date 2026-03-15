@@ -1040,6 +1040,178 @@ pub fn render_packing_browser_data(category: &str, data: &serde_json::Value) -> 
 }
 
 // ============================================================================
+// External match overlay views
+// ============================================================================
+
+/// Render AcoustID match browse results.
+pub fn render_acoustid_matches(data: &serde_json::Value) -> Node {
+    let mut sections = Vec::new();
+
+    sections.push(
+        div()
+            .child(
+                html::a()
+                    .class("mm-link")
+                    .attr("href", "#")
+                    .attr("onclick", "event.preventDefault();window.__mm_navigate('Ext. Matches')")
+                    .text("\u{2190} Back to External Matches"),
+            )
+            .into(),
+    );
+
+    let entries = data.as_array();
+    let count = entries.map_or(0, |e| e.len());
+
+    let items: Vec<Node> = entries
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let display_name = entry.get("display_name")?.as_str()?;
+                    let confidence = entry.get("confidence")?.as_f64().unwrap_or(0.0);
+                    let pct = (confidence * 100.0) as u32;
+                    let recording_title = entry.get("recording_title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(unknown)");
+                    let recording_artist = entry.get("recording_artist")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(unknown)");
+                    let recording_id = entry.get("recording_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+
+                    let mb_url = format!("https://musicbrainz.org/recording/{recording_id}");
+
+                    Some(
+                        div()
+                            .class("mm-kv")
+                            .child(span().class("mm-kv__key").text(
+                                format!("{display_name}  [{pct}%]"),
+                            ))
+                            .child(
+                                html::a()
+                                    .class("mm-link")
+                                    .attr("href", &mb_url)
+                                    .attr("target", "_blank")
+                                    .attr("rel", "noopener")
+                                    .text(format!("{recording_artist} — {recording_title}")),
+                            )
+                            .into(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    sections.push(titled_section(
+        &format!("AcoustID Matches ({count})"),
+        items,
+    ));
+
+    div().children(sections).into()
+}
+
+/// Render release review browse results.
+pub fn render_release_review(data: &serde_json::Value) -> Node {
+    let mut sections = Vec::new();
+
+    sections.push(
+        div()
+            .child(
+                html::a()
+                    .class("mm-link")
+                    .attr("href", "#")
+                    .attr("onclick", "event.preventDefault();window.__mm_navigate('Ext. Matches')")
+                    .text("\u{2190} Back to External Matches"),
+            )
+            .into(),
+    );
+
+    let releases = data.get("releases").and_then(|v| v.as_array());
+    let count = releases.map_or(0, |r| r.len());
+
+    if let Some(releases) = releases {
+        for release in releases {
+            let title = release.get("title").and_then(|v| v.as_str()).unwrap_or("?");
+            let artist = release.get("artist").and_then(|v| v.as_str()).unwrap_or("?");
+            let track_count = release.get("track_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let matched_count = release.get("matched_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let avg_confidence = release.get("avg_confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let avg_pct = (avg_confidence * 100.0) as u32;
+            let category = release.get("category").and_then(|v| v.as_str()).unwrap_or("?");
+
+            let mut track_items = Vec::new();
+            track_items.push(kv("Category", category));
+            track_items.push(kv("Tracks", &format!("{matched_count}/{track_count} matched")));
+            track_items.push(kv("Avg Confidence", &format!("{avg_pct}%")));
+
+            if let Some(tracks) = release.get("tracks").and_then(|v| v.as_array()) {
+                for track in tracks {
+                    let position = track.get("position").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let mb_title = track.get("mb_title").and_then(|v| v.as_str()).unwrap_or("?");
+                    let matched_name = track.get("matched_display_name")
+                        .and_then(|v| v.as_str());
+                    let track_confidence = track.get("confidence")
+                        .and_then(|v| v.as_f64());
+
+                    let val = if let Some(name) = matched_name {
+                        let conf_str = track_confidence
+                            .map(|c| format!(" [{:.0}%]", c * 100.0))
+                            .unwrap_or_default();
+                        format!("{name}{conf_str}")
+                    } else {
+                        "(unmatched)".to_string()
+                    };
+
+                    track_items.push(kv(
+                        &format!("{position}. {mb_title}"),
+                        &val,
+                    ));
+                }
+            }
+
+            sections.push(titled_section(
+                &format!("{artist} \u{2014} {title}"),
+                track_items,
+            ));
+        }
+    }
+
+    if count == 0 {
+        sections.push(
+            span().class("mm-kv__val").text("No releases match this filter").into(),
+        );
+    }
+
+    div().children(sections).into()
+}
+
+/// Placeholder for single release detail view (query not yet implemented).
+pub fn render_release_detail_placeholder(release_id: &str) -> Node {
+    let mut sections = Vec::new();
+
+    sections.push(
+        div()
+            .child(
+                html::a()
+                    .class("mm-link")
+                    .attr("href", "#")
+                    .attr("onclick", "event.preventDefault();window.__mm_navigate('Ext. Matches')")
+                    .text("\u{2190} Back to External Matches"),
+            )
+            .into(),
+    );
+
+    sections.push(titled_section(
+        &format!("Release Detail \u{2014} {release_id}"),
+        vec![
+            span().class("mm-kv__val").text("Detail query not yet implemented").into(),
+        ],
+    ));
+
+    div().children(sections).into()
+}
+
+// ============================================================================
 // Search view — server-side search, no upfront data load
 // ============================================================================
 

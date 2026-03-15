@@ -4,7 +4,6 @@
 
 use std::collections::VecDeque;
 
-use mm_meta::signals::data::CompoundGroup;
 use crate::action_handlers::witness::ConfirmationGesture;
 
 /// Unit of work to be processed incrementally.
@@ -13,14 +12,9 @@ use crate::action_handlers::witness::ConfirmationGesture;
 /// processed in time-sliced chunks on the UI thread.
 #[derive(Debug, Clone)]
 pub enum WorkItem {
-    /// Stage mutations for a compound split group (aggregated by value).
-    StageCompoundSplit {
-        /// The group of inodes sharing a compound value
-        group: CompoundGroup,
-        /// Index in the overall work queue (for decision numbering)
-        idx: usize,
-    },
-    // Future: LoadSignalData, LoadDeployPreview, etc.
+    // Currently no active work item types. The compound split progressive
+    // worker was replaced by the V3 interactive modal. Future progressive
+    // work types (e.g. batch deploy, bulk tag ops) can be added here.
 }
 
 /// Summary of work completed - returned via callback.
@@ -53,7 +47,7 @@ pub struct ProgressiveWorkerState {
     /// Whether we're in safe mode (for compound splits)
     pub is_safe_mode: bool,
     /// The confirmation gesture that authorized this progressive work.
-    pub(crate) gesture: ConfirmationGesture,
+    pub(crate) _gesture: ConfirmationGesture,
 }
 
 impl ProgressiveWorkerState {

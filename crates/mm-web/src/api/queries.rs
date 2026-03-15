@@ -195,9 +195,6 @@ unit_web_query!(
     GetShitFormatData, GetMissingTagAudioFiles,
 );
 
-#[allow(deprecated)]
-unit_web_query!(GetInconsistentAlbumArtistKeys);
-
 // -- Body-deserialized queries --
 
 body_web_query!(
@@ -205,9 +202,6 @@ body_web_query!(
     GetReleaseStagingData, GetInboxOrganizeData, GetFileTagValues,
     SearchWithConditions,
 );
-
-#[allow(deprecated)]
-body_web_query!(GetCompoundSplitGroupData);
 
 // -- Param-parsed queries (custom extraction per struct) --
 
@@ -220,27 +214,6 @@ impl WebQuery for GetOobFiles {
 impl WebQuery for GetEditHistoryExport {
     fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
         Ok(Self { session_id: params.get("session_id").cloned() })
-    }
-}
-
-#[allow(deprecated)]
-impl WebQuery for GetCompoundSignalGroups {
-    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
-        Ok(Self {
-            zone: parse_enum(params, "zone")?,
-            safe_only: parse_bool(params, "safe_only"),
-            tag_filter: params.get("tag_filter").cloned(),
-        })
-    }
-}
-
-#[allow(deprecated)]
-impl WebQuery for GetTagCanonicityKeys {
-    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
-        Ok(Self {
-            zone: parse_enum(params, "zone")?,
-            tag_filter: params.get("tag_filter").cloned(),
-        })
     }
 }
 
@@ -307,16 +280,6 @@ impl WebQuery for GetIntakeConfirmation {
         Ok(Self {
             source: parse_enum(params, "source")?,
             zone: parse_optional_enum(params, "zone")?,
-        })
-    }
-}
-
-#[allow(deprecated)]
-impl WebQuery for GetTagCanonicitySignalData {
-    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
-        Ok(Self {
-            signal_key: require_param(params, "signal_key")?,
-            kind: parse_enum(params, "kind")?,
         })
     }
 }
@@ -401,8 +364,8 @@ fn build_domain_payload(
         GetExternalMatches, GetPackingDirs,
         GetOobFiles,
         GetMovedFiles, GetMissingAlbumSingleSignals, GetEditHistoryExport,
-        GetCompoundSignalGroups, GetPackingKnots, GetPackingInodePaths,
-        GetInconsistentAlbumArtistKeys, GetTagCanonicityKeys, GetDiscExtractionData,
+        GetPackingKnots, GetPackingInodePaths,
+        GetDiscExtractionData,
         GetMissingFileData, GetMissingDirectoryData, GetCorruptFileData,
         GetSubparDuplicateData, GetDirectoryClusterData, GetReleaseOverlapData,
         GetShitFormatData, GetInboxCorpusMatchData, GetDeployData,
@@ -410,8 +373,7 @@ fn build_domain_payload(
         GetUnsolvedPackingData,
         GetAudioFilesByInodes, GetMissingTagAudioFiles, GetAllAudioFilesWithTags,
         GetSessionEditDetail, GetCurrentTagValues,
-        GetIntakeConfirmation, GetCompoundSplitGroupData,
-        GetTagCanonicitySignalData, GetRecordingBatchData, GetReleaseStagingData,
+        GetIntakeConfirmation, GetRecordingBatchData, GetReleaseStagingData,
         GetTagEditorFiles, GetInboxOrganizeData, GetFileTagValues,
         GetDirectoryListing, SearchCorpusFiles, SearchWithConditions,
         GetTagCanonicityResolution, GetCompoundSplitResolution,

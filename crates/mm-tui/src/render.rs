@@ -197,7 +197,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
                 f, area, data, current_group, list, buttons, field, focus, safe_mode, zone,
             );
         }
-        ActiveView::OobConflictInspection(ref mut state) => {
+        ActiveView::OobResolution(ref mut state) => {
             oob_conflict_modal::render(f, area, state);
         }
         ActiveView::ReleasePackingBrowser(ref mut state) => {

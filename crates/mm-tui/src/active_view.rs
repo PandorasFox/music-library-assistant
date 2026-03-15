@@ -80,7 +80,7 @@ pub(crate) enum ActiveView {
         focus: mm_ui::geometry::FocusPane,
     },
     MovedFileAcknowledge(moved_file_modal::MovedFileState),
-    OobConflictInspection(oob_conflict_modal::OobConflictState),
+    OobResolution(oob_conflict_modal::OobResolutionState),
     // Release packing browser (read-only)
     ReleasePackingBrowser(super::release_packing_browser::ReleasePackingBrowserState),
 
@@ -179,7 +179,7 @@ impl ActiveView {
             Self::InboxOrganize(_) => Some("Inbox Organize"),
             Self::DirectoryClusterResolution { .. } => Some("Directory Overlap Resolution"),
             Self::MovedFileAcknowledge(_) => Some("Moved Files"),
-            Self::OobConflictInspection(_) => Some("OOB Resolution"),
+            Self::OobResolution(_) => Some("OOB Resolution"),
             Self::ReleasePackingBrowser(_) => Some("Release Packing Browser"),
             Self::KnotBrowser(_) => Some("Knot Browser"),
             Self::AcoustidBrowse(_) => Some("AcoustID Browse"),
@@ -226,7 +226,7 @@ impl ActiveView {
                     .map(|d| d.path_suffix.as_str())
             }
             Self::MovedFileAcknowledge(s) => s.selected_path(),
-            Self::OobConflictInspection(s) => s.selected_path(),
+            Self::OobResolution(s) => s.selected_path(),
             Self::AcoustidBrowse(s) => s.selected_path(),
             Self::ReleaseReview(s) => s.selected_path(),
             Self::Deploy { ref data, ref interaction } => data.selected_path(interaction),
@@ -317,7 +317,7 @@ pub(crate) enum ViewAction {
     InboxOrganize(inbox_organize::InboxOrganizeAction),
     DirectoryClusterResolution(mm_ui::resolutions::directory_cluster::DirectoryClusterAction),
     MovedFileAcknowledge(moved_file_modal::MovedFileAction),
-    OobConflictInspection(oob_conflict_modal::OobConflictAction),
+    OobResolution(oob_conflict_modal::OobAction),
     ReleasePackingBrowser(super::release_packing_browser::ReleasePackingBrowserAction),
     KnotBrowser(super::knot_browser::KnotBrowserAction),
     AcoustidBrowse(acoustid_browse::AcoustidBrowseAction),

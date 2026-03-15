@@ -484,7 +484,7 @@ impl App {
                 }
             }
             ActiveView::MovedFileAcknowledge(s) => dispatch_input!(MovedFileAcknowledge, s),
-            ActiveView::OobConflictInspection(s) => dispatch_input_raw!(OobConflictInspection, s),
+            ActiveView::OobResolution(s) => dispatch_input_raw!(OobResolution, s),
             ActiveView::ReleasePackingBrowser(s) => dispatch_input_raw!(ReleasePackingBrowser, s),
             ActiveView::KnotBrowser(s) => dispatch_input_raw!(KnotBrowser, s),
             ActiveView::AcoustidBrowse(s) => dispatch_input_raw!(AcoustidBrowse, s),

@@ -116,14 +116,12 @@ macro_rules! impl_domain_query {
 // Imports for execute bodies
 // ============================================================================
 
-use crate::meta::signals::data::CompoundGroup;
 use crate::meta::views::{
     DeployStatus, EditHistoryData, EditHistoryExportRow, ExternalMatchesData,
     InboxOverviewData, InsightsData, MovedFileInfo, OobFile,
 };
 
 use crate::db::modal_loaders;
-use mm_meta::views::canonicity_compound::CanonicitySignalKind;
 use mm_meta::views::cluster_deploy::{
     DeployModalData, DirectoryClusterModalData, ShitFormatModalData,
 };
@@ -136,8 +134,7 @@ use mm_meta::views::review_match::{
 };
 use mm_meta::views::startup_organize::{IntakeConfirmationState, InboxDirectory};
 use mm_meta::views::canonicity_compound::{
-    CompoundSplitDataV2, CompoundSplitResolutionData, TagCanonicalityModalDataV2,
-    TagCanonicityResolutionData,
+    CompoundSplitResolutionData, TagCanonicityResolutionData,
 };
 
 // ============================================================================
@@ -216,17 +213,6 @@ impl_domain_query! {
 }
 
 impl_domain_query! {
-    GetCompoundSignalGroups => Vec<CompoundGroup>, |s, db| {
-        use mm_meta::db_types::Zone;
-        match s.zone {
-            Zone::Inbox => db.get_inbox_compound_signal_groups().unwrap_or_default(),
-            _ => db.get_compound_signal_groups_by_safety(s.safe_only, s.tag_filter.as_deref())
-                .unwrap_or_default(),
-        }
-    }
-}
-
-impl_domain_query! {
     GetPackingKnots => Vec<crate::meta::signals::data::PackingKnotData>, db.get_packing_knots()
 }
 
@@ -235,36 +221,8 @@ impl_domain_query! {
 }
 
 // ============================================================================
-// Detail Queries (Wave 2: signal key queries for canonicity resolution)
+// Detail Queries (Wave 2)
 // ============================================================================
-
-impl_domain_query! {
-    GetInconsistentAlbumArtistKeys => Vec<String>, |db| {
-        use crate::meta::signals::data::InconsistentAlbumArtistSignal;
-        db.aggregate_signal_keys::<InconsistentAlbumArtistSignal>().unwrap_or_default()
-    }
-}
-
-impl_domain_query! {
-    GetTagCanonicityKeys => Vec<String>, |s, db| {
-        use mm_meta::db_types::Zone;
-        use crate::meta::signals::data::{TagCanonicitySignal, InboxTagCanonicitySignal};
-        let all_keys = match s.zone {
-            Zone::Inbox => db.aggregate_signal_keys::<InboxTagCanonicitySignal>().unwrap_or_default(),
-            _ => db.aggregate_signal_keys::<TagCanonicitySignal>().unwrap_or_default(),
-        };
-        match &s.tag_filter {
-            Some(tag_name) => {
-                let prefix = format!("{}:", tag_name);
-                all_keys
-                    .into_iter()
-                    .filter(|k| k.starts_with(&prefix))
-                    .collect()
-            }
-            None => all_keys,
-        }
-    }
-}
 
 impl_domain_query! {
     GetDiscExtractionData => DiscExtractionModalData, |s, db| {
@@ -525,43 +483,6 @@ impl_domain_query! {
             }
             Some(_) => None,
             None => modal_loaders::gather_intake_startup(db),
-        }
-    }
-}
-
-impl_domain_query! {
-    GetCompoundSplitGroupData => Option<CompoundSplitDataV2>, |s, db| {
-        modal_loaders::load_compound_split_data(&s.group, db, s.zone)
-    }
-}
-
-impl_domain_query! {
-    GetTagCanonicitySignalData => Option<TagCanonicalityModalDataV2>, |s, db| {
-        load_tag_canonicity_signal_data(&s.signal_key, s.kind, db)
-    }
-}
-
-/// Load typed tag canonicity signal data by key and kind.
-///
-/// Extracted from `App::load_typed_signal_data` so it can be called
-/// from the domain query without needing `&self`.
-fn load_tag_canonicity_signal_data(
-    key: &str,
-    kind: CanonicitySignalKind,
-    read_db: &ReadOnlyDb,
-) -> Option<TagCanonicalityModalDataV2> {
-    match kind {
-        CanonicitySignalKind::TagCanonicity => {
-            let signal = read_db.get_tag_canonicity_signal(key).ok()??;
-            modal_loaders::load_tag_canonicity_data(&signal, read_db)
-        }
-        CanonicitySignalKind::InconsistentAlbumArtist => {
-            let signal = read_db.get_inconsistent_album_artist_signal(key).ok()??;
-            modal_loaders::load_inconsistent_album_artist_data(&signal, read_db)
-        }
-        CanonicitySignalKind::InboxTagCanonicity => {
-            let signal = read_db.get_inbox_tag_canonicity_signal(key).ok()??;
-            modal_loaders::load_inbox_tag_canonicity_data(&signal, read_db)
         }
     }
 }
@@ -1079,11 +1000,8 @@ dispatch_domain_query_impl! {
     GetMovedFiles,
     GetMissingAlbumSingleSignals,
     GetEditHistoryExport,
-    GetCompoundSignalGroups,
     GetPackingKnots,
     GetPackingInodePaths,
-    GetInconsistentAlbumArtistKeys,
-    GetTagCanonicityKeys,
     GetDiscExtractionData,
     GetMissingFileData,
     GetMissingDirectoryData,
@@ -1104,8 +1022,6 @@ dispatch_domain_query_impl! {
     GetSessionEditDetail,
     GetCurrentTagValues,
     GetIntakeConfirmation,
-    GetCompoundSplitGroupData,
-    GetTagCanonicitySignalData,
     GetRecordingBatchData,
     GetReleaseStagingData,
     GetTagEditorFiles,
@@ -1241,32 +1157,6 @@ mod tests {
     }
 
     #[test]
-    fn get_compound_signal_groups_corpus_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetCompoundSignalGroups {
-            zone: mm_meta::db_types::Zone::Corpus,
-            safe_only: false,
-            tag_filter: None,
-        }
-        .execute(&read_db);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn get_compound_signal_groups_inbox_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetCompoundSignalGroups {
-            zone: mm_meta::db_types::Zone::Inbox,
-            safe_only: false,
-            tag_filter: None,
-        }
-        .execute(&read_db);
-        assert!(result.is_empty());
-    }
-
-    #[test]
     fn get_packing_knots_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
@@ -1279,36 +1169,6 @@ mod tests {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
         let result = GetPackingInodePaths.execute(&read_db);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn get_inconsistent_album_artist_keys_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetInconsistentAlbumArtistKeys.execute(&read_db);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn get_tag_canonicity_keys_corpus_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetTagCanonicityKeys {
-            zone: mm_meta::db_types::Zone::Corpus,
-            tag_filter: None,
-        }.execute(&read_db);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn get_tag_canonicity_keys_inbox_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetTagCanonicityKeys {
-            zone: mm_meta::db_types::Zone::Inbox,
-            tag_filter: None,
-        }.execute(&read_db);
         assert!(result.is_empty());
     }
 
@@ -1496,18 +1356,8 @@ mod tests {
         t!(serde_json::to_string(&GetMovedFiles.execute(&read_db)));
         t!(serde_json::to_string(&GetMissingAlbumSingleSignals.execute(&read_db)));
         t!(serde_json::to_string(&GetEditHistoryExport { session_id: None }.execute(&read_db)));
-        t!(serde_json::to_string(&GetCompoundSignalGroups {
-            zone: mm_meta::db_types::Zone::Corpus,
-            safe_only: false,
-            tag_filter: None,
-        }.execute(&read_db)));
         t!(serde_json::to_string(&GetPackingKnots.execute(&read_db)));
         t!(serde_json::to_string(&GetPackingInodePaths.execute(&read_db)));
-        t!(serde_json::to_string(&GetInconsistentAlbumArtistKeys.execute(&read_db)));
-        t!(serde_json::to_string(&GetTagCanonicityKeys {
-            zone: mm_meta::db_types::Zone::Corpus,
-            tag_filter: None,
-        }.execute(&read_db)));
         t!(serde_json::to_string(&GetDiscExtractionData { map_letters_to_numbers: false }.execute(&read_db)));
 
         // Modal init loaders

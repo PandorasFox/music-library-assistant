@@ -9,8 +9,6 @@ use std::time::{Duration, Instant};
 use super::eye::Eye;
 use super::insights_view;
 use super::App;
-use mm_ui::modal_buttons::ModalButtons;
-use mm_ui::resolutions::compound_split::{CompoundSplitButton, CompoundSplitButtonCtx};
 use crate::{
     progress_screen::{ProgressPhase, ProgressScreen},
     progressive_worker::{OnComplete, ProgressiveWorkerState, WorkItem, WorkSummary},
@@ -184,103 +182,9 @@ impl App {
     }
 
     /// Process a single work item.
-    fn process_work_item(&mut self, item: &WorkItem, worker: &mut ProgressiveWorkerState) {
-        match item {
-            WorkItem::StageCompoundSplit { group, idx } => {
-                self.process_compound_split_item(group, *idx, worker);
-            }
-        }
-    }
-
-    /// Process a single compound split work item (group-based).
-    fn process_compound_split_item(
-        &mut self,
-        group: &mm_meta::signals::data::CompoundGroup,
-        idx: usize,
-        worker: &mut ProgressiveWorkerState,
-    ) {
-        use mm_meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation, TagOp};
-
-        let is_safe_mode = worker.is_safe_mode;
-
-        // Load compound split data from the group via cache thread
-        let data = match self
-            .query(mm_meta::domain_queries::GetCompoundSplitGroupData {
-                group: group.clone(),
-                zone: mm_meta::db_types::Zone::Corpus,
-            })
-        {
-            Some(d) => d,
-            None => {
-                worker.nops_elided += 1;
-                return;
-            }
-        };
-
-        // Update current label for display
-        worker.current_label = Some(format!(
-            "Split \"{}\" in {}",
-            data.compound.compound_value, data.compound.tag_name,
-        ));
-
-        // Build mutations directly from compound data
-        let parts = &data.compound.split_parts;
-        if parts.is_empty() {
-            worker.nops_elided += 1;
-            return;
-        }
-
-        let mut ops = Vec::new();
-        for file in &data.files {
-            // Replace compound value with first part
-            if let Some(first_part) = parts.first() {
-                ops.push(TagOp::replace_tag(
-                    file.inode,
-                    &data.compound.tag_name,
-                    &data.compound.compound_value,
-                    first_part,
-                ));
-            }
-            // Add remaining parts
-            for part in parts.iter().skip(1) {
-                ops.push(TagOp::add_tag(
-                    file.inode,
-                    &data.compound.tag_name,
-                    part,
-                ));
-            }
-        }
-
-        if ops.is_empty() {
-            worker.nops_elided += 1;
-            return;
-        }
-
-        let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
-            ops,
-            zone: mm_meta::db_types::Zone::Corpus,
-        })];
-
-        // Stage via operator_decisions
-        let description = format!(
-            "Split \"{}\" in {} \u{2192} [{}]",
-            data.compound.compound_value,
-            data.compound.tag_name,
-            parts.join(", ")
-        );
-
-        let ctx = CompoundSplitButtonCtx {
-            has_files: true,
-            current_group_index: idx,
-            tag_name: data.compound.tag_name.clone(),
-            zone: mm_meta::db_types::Zone::Corpus,
-            safe_mode: is_safe_mode,
-        };
-        let key = CompoundSplitButton::Confirm.protocol_binding(&ctx)
-            .decision_key().unwrap().clone();
-        let decision = worker.gesture.decide(&description, mutations);
-        let _ = super::operator_decisions::stage_decision(self, key, decision);
-        worker.mutations_generated += 1;
+    fn process_work_item(&mut self, _item: &WorkItem, _worker: &mut ProgressiveWorkerState) {
+        // No active work item types — the compound split progressive worker
+        // was replaced by the V3 interactive modal.
     }
 
     /// Handle completion of progressive work.

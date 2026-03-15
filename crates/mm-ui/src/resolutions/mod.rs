@@ -22,6 +22,7 @@ pub mod missing_album;
 pub mod missing_directory;
 pub mod missing_file;
 pub mod moved_file;
+pub mod oob_resolution;
 pub mod redundant_duplicates;
 pub mod same_recording;
 pub mod shit_format;

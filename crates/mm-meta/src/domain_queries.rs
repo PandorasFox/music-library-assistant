@@ -118,16 +118,6 @@ pub struct GetEditHistoryExport {
     pub session_id: Option<String>,
 }
 
-/// Compound tag signal groups (for compound split resolution).
-/// `Zone::Corpus` uses safety/tag filtering; `Zone::Inbox` returns all inbox groups.
-#[deprecated(note = "use GetCompoundSplitResolution")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetCompoundSignalGroups {
-    pub zone: crate::db_types::Zone,
-    pub safe_only: bool,
-    pub tag_filter: Option<String>,
-}
-
 /// Packing knot data (conflict tangles requiring review).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetPackingKnots;
@@ -139,20 +129,6 @@ pub struct GetPackingInodePaths;
 // ============================================================================
 // Detail Queries (Wave 2: signal key queries for canonicity resolution)
 // ============================================================================
-
-/// Aggregate signal keys for InconsistentAlbumArtist signals.
-#[deprecated(note = "use GetTagCanonicityResolution")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetInconsistentAlbumArtistKeys;
-
-/// Aggregate signal keys for tag canonicity signals, optionally filtered by tag prefix.
-/// `Zone::Corpus` queries `TagCanonicitySignal`; `Zone::Inbox` queries `InboxTagCanonicitySignal`.
-#[deprecated(note = "use GetTagCanonicityResolution")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetTagCanonicityKeys {
-    pub zone: crate::db_types::Zone,
-    pub tag_filter: Option<String>,
-}
 
 /// Disc extraction signals resolved into modal-ready data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,22 +250,6 @@ pub struct GetCurrentTagValues {
 pub struct GetIntakeConfirmation {
     pub source: crate::views::startup_organize::IntakeSource,
     pub zone: Option<crate::db_types::Zone>,
-}
-
-/// Load compound split modal data for a specific compound group.
-#[deprecated(note = "use GetCompoundSplitResolution")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetCompoundSplitGroupData {
-    pub group: crate::signals::data::CompoundGroup,
-    pub zone: crate::db_types::Zone,
-}
-
-/// Load tag canonicity signal data for a specific signal key.
-#[deprecated(note = "use GetTagCanonicityResolution")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetTagCanonicitySignalData {
-    pub signal_key: String,
-    pub kind: crate::views::canonicity_compound::CanonicitySignalKind,
 }
 
 /// Batch-load MB recording summaries and detail data from cache.
@@ -502,13 +462,10 @@ domain_query_protocol! {
     GetMovedFiles("moved-files") => Vec<crate::views::MovedFileInfo>,
     GetMissingAlbumSingleSignals("missing-album-single-signals") => Vec<MissingAlbumSingleSignalWire>,
     GetEditHistoryExport("edit-history-export") => Vec<crate::views::EditHistoryExportRow>,
-    GetCompoundSignalGroups("compound-signal-groups") => Vec<crate::signals::data::CompoundGroup>,
     GetPackingKnots("packing-knots") => Vec<crate::signals::data::PackingKnotData>,
     GetPackingInodePaths("packing-inode-paths") => Vec<(i64, String)>,
 
     // Detail queries (Wave 2)
-    GetInconsistentAlbumArtistKeys("inconsistent-album-artist-keys") => Vec<String>,
-    GetTagCanonicityKeys("tag-canonicity-keys") => Vec<String>,
     GetDiscExtractionData("disc-extraction-data") => DiscExtractionModalData,
 
     // Detail queries (Wave 3: modal init loaders)
@@ -535,8 +492,6 @@ domain_query_protocol! {
 
     // Wave 5
     GetIntakeConfirmation("intake-confirmation") => Option<crate::views::startup_organize::IntakeConfirmationState>,
-    GetCompoundSplitGroupData("compound-split-group-data") => Option<crate::views::canonicity_compound::CompoundSplitDataV2>,
-    GetTagCanonicitySignalData("tag-canonicity-signal-data") => Option<crate::views::canonicity_compound::TagCanonicalityModalDataV2>,
     GetRecordingBatchData("recording-batch-data") => crate::domain_query_types::RecordingBatchResult,
     GetReleaseStagingData("release-staging-data") => crate::domain_query_types::ReleaseStagingData,
     GetTagEditorFiles("tag-editor-files") => (Vec<crate::db_types::AudioFile>, usize),

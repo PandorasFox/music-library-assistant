@@ -1,9 +1,7 @@
-//! Rendering for OOB tag bucketed resolution modal.
+//! OOB Resolution — TUI rendering only.
 //!
-//! Uses full-area layout with:
-//! - Info bar showing bucket tabs and full path of selected file
-//! - 33% list pane / 67% details pane
-//! - Decision buttons bar (focusable via Shift+Up/Down)
+//! State, input handling, and ModalFrameCore live in mm-ui.
+//! This module provides the ratatui ModalFrame impl.
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -17,33 +15,14 @@ use crate::widgets::{
     render_file_path_list, FocusPane, ModalFrame, PathEntry, PathField,
     StyledCell, ThreeColTable,
 };
-use crate::widgets::modal_frame::{ContentLayout, FrameState, ModalFrameCore};
 
-use super::types::{OobConflictButton, OobConflictButtonCtx, OobConflictAction, OobConflictState};
+use super::types::OobResolutionState;
 
-pub fn render(f: &mut Frame, area: Rect, state: &mut OobConflictState) {
+pub fn render(f: &mut Frame, area: Rect, state: &mut OobResolutionState) {
     state.render_frame(f, area);
 }
 
-impl ModalFrameCore for OobConflictState {
-    type Button = OobConflictButton;
-
-    fn content_layout(&self) -> ContentLayout {
-        ContentLayout::HorizontalSplit { list_percent: 33, info_height: 4 }
-    }
-
-    fn list_title(&self) -> String { "Files".into() }
-
-    fn frame_state(&self) -> &FrameState<OobConflictButton> { &self.frame }
-    fn frame_state_mut(&mut self) -> &mut FrameState<OobConflictButton> { &mut self.frame }
-    fn cursor(&self) -> usize { self.active_bucket_state().list.cursor }
-    fn cursor_mut(&mut self) -> &mut usize { &mut self.active_bucket_state_mut().list.cursor }
-    fn list_len(&self) -> usize { self.active_bucket_state().files.len() }
-    fn button_ctx(&self) -> OobConflictButtonCtx { OobConflictState::button_ctx(self) }
-    fn escape_action(&self) -> OobConflictAction { OobConflictAction::Cancel }
-}
-
-impl ModalFrame for OobConflictState {
+impl ModalFrame for OobResolutionState {
     fn accent_color(&self) -> Color { Color::Red }
 
     fn controls_hints(&self) -> Vec<Span<'static>> {
@@ -72,23 +51,11 @@ impl ModalFrame for OobConflictState {
     }
 }
 
-fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
-    let bucket_state = state.active_bucket_state();
-
-    // Title with filter indicator
-    let filter_indicator = if bucket_state.filter_text.is_some() {
-        let filtered_count = bucket_state.get_filtered_indices().len();
-        let bucket_count = bucket_state.files.len();
-        format!(" [filtered: {}/{}]", filtered_count, bucket_count)
-    } else {
-        String::new()
-    };
-
+fn render_info_bar(f: &mut Frame, area: Rect, state: &OobResolutionState) {
     let title = format!(
-        " OOB Tag Resolution — {} file{}{} ",
+        " OOB Tag Resolution — {} file{} ",
         state.total_files(),
         if state.total_files() == 1 { "" } else { "s" },
-        filter_indicator,
     );
 
     let block = Block::default()
@@ -99,12 +66,11 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
 
     let inner = render_pane(f, area, block);
 
-    // Split inner: tab bar + path line
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Tab bar
-            Constraint::Length(1), // Path
+            Constraint::Length(1),
+            Constraint::Length(1),
         ])
         .split(inner);
 
@@ -135,7 +101,6 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
     let tab_line = Line::from(tab_spans);
     f.render_widget(Paragraph::new(tab_line), chunks[0]);
 
-    // Full path of selected file
     if let Some(file) = state.active_bucket_state().current_file() {
         let path_lines = PathField::new(
             Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
@@ -147,12 +112,11 @@ fn render_info_bar(f: &mut Frame, area: Rect, state: &OobConflictState) {
     }
 }
 
-fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
+fn render_file_list(f: &mut Frame, area: Rect, state: &OobResolutionState) {
     let is_focused = state.frame.focus_pane == FocusPane::List;
 
     let bucket_state = state.active_bucket_state();
 
-    // Build title with selection count if any selected
     let title = if !bucket_state.list.selected.is_empty() {
         format!(
             "Files ({}, {} selected)",
@@ -174,7 +138,6 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
         return;
     }
 
-    // Show selection indicators by default for resolvable buckets
     let show_selection = state.active_bucket.is_resolvable() || !bucket_state.list.selected.is_empty();
 
     let entries: Vec<PathEntry> = bucket_state
@@ -208,7 +171,7 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
     render_file_path_list(f, inner, &entries, bucket_state.list.cursor, bucket_state.list.scroll);
 }
 
-fn render_diff_details(f: &mut Frame, area: Rect, state: &OobConflictState) {
+fn render_diff_details(f: &mut Frame, area: Rect, state: &OobResolutionState) {
     let block = Block::default()
         .title("Tag Diff (DB vs Disk)")
         .borders(Borders::ALL)

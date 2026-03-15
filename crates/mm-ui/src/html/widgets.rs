@@ -130,8 +130,14 @@ where
     section()
         .class("mm-list")
         .class_if("mm-focused", focused)
+        .attr("tabindex", "0")
+        .attr("onkeydown", "window.__mm_list_nav(this,event)")
         .child(h2().class("mm-list__title").text(title))
-        .child(ul().class("mm-list__items").children(items))
+        .child(
+            ul().class("mm-list__items")
+                .attr("onclick", "window.__mm_list_click(this,event)")
+                .children(items),
+        )
         .into()
 }
 

@@ -8,6 +8,83 @@
 </head>
 <body>
     <div id="mm-root"></div>
+    <script>
+        // List keyboard navigation — mirrors TUI arrow/enter/home/end/pgup/pgdn.
+        window.__mm_list_nav = function(section, event) {
+            var ul = section.querySelector('.mm-list__items');
+            if (!ul) return;
+            var items = ul.children;
+            if (items.length === 0) return;
+
+            var cursorIdx = -1;
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].classList.contains('mm-list__item--cursor')) {
+                    cursorIdx = i;
+                    break;
+                }
+            }
+            if (cursorIdx === -1) cursorIdx = 0;
+
+            var newIdx = cursorIdx;
+            switch (event.key) {
+                case 'ArrowDown':
+                    event.preventDefault();
+                    newIdx = Math.min(cursorIdx + 1, items.length - 1);
+                    break;
+                case 'ArrowUp':
+                    event.preventDefault();
+                    newIdx = Math.max(cursorIdx - 1, 0);
+                    break;
+                case 'Home':
+                    event.preventDefault();
+                    newIdx = 0;
+                    break;
+                case 'End':
+                    event.preventDefault();
+                    newIdx = items.length - 1;
+                    break;
+                case 'PageDown':
+                    event.preventDefault();
+                    var pageH = items[0] ? items[0].offsetHeight : 24;
+                    var page = Math.max(1, Math.floor(ul.clientHeight / pageH) - 1);
+                    newIdx = Math.min(cursorIdx + page, items.length - 1);
+                    break;
+                case 'PageUp':
+                    event.preventDefault();
+                    var pageH2 = items[0] ? items[0].offsetHeight : 24;
+                    var page2 = Math.max(1, Math.floor(ul.clientHeight / pageH2) - 1);
+                    newIdx = Math.max(cursorIdx - page2, 0);
+                    break;
+                case 'Enter':
+                    event.preventDefault();
+                    var cur = items[cursorIdx];
+                    var clickable = cur.querySelector('[onclick]');
+                    if (clickable) clickable.click();
+                    return;
+                case ' ':
+                    event.preventDefault();
+                    items[cursorIdx].classList.toggle('mm-list__item--selected');
+                    return;
+                default:
+                    return;
+            }
+
+            if (newIdx !== cursorIdx) {
+                items[cursorIdx].classList.remove('mm-list__item--cursor');
+                items[newIdx].classList.add('mm-list__item--cursor');
+                items[newIdx].scrollIntoView({block: 'nearest'});
+            }
+        };
+
+        // Click-to-cursor: move cursor highlight to the clicked list item.
+        window.__mm_list_click = function(ul, event) {
+            var item = event.target.closest('.mm-list__item');
+            if (!item) return;
+            var prev = ul.querySelector('.mm-list__item--cursor');
+            if (prev) prev.classList.remove('mm-list__item--cursor');
+            item.classList.add('mm-list__item--cursor');
+        };
+    </script>
     <script type="module">
         import init, {
             mm_login, mm_navigate, mm_logout,

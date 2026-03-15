@@ -143,6 +143,12 @@ fn get_root() -> web_sys::Element {
 fn mount(tree: &Node) {
     let root = get_root();
     root.set_inner_html(&tree.to_html());
+    // Auto-focus the first keyboard-navigable list so arrow keys work immediately.
+    if let Ok(Some(el)) = root.query_selector(".mm-list[tabindex]") {
+        if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
+            html_el.focus().ok();
+        }
+    }
 }
 
 fn mount_error(msg: &str) {

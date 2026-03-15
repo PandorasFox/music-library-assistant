@@ -323,9 +323,9 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
         }
         Route::ExternalMatches(_) => {
             let data = api::get_external_matches().await?;
-            let mut children = vec![views::render_external_matches_content(&data)];
-            children.push(views::render_packing_overview(&data));
-            Ok(div().children(children).into())
+            let status = api::get_status().await.ok();
+            start_external_matches_poll();
+            Ok(views::render_external_matches_page(&data, status.as_ref()))
         }
         Route::Transaction(_) => {
             let status = api::get_status().await?;
@@ -884,6 +884,50 @@ async fn do_health_refresh() {
     if let Ok(insights) = api::get_insights().await {
         let node = views::render_insights_content(&insights);
         if let Some(el) = doc.get_element_by_id("mm-insights-section") {
+            el.set_inner_html(&node.to_html());
+        }
+    }
+}
+
+/// Start polling status + external matches data (~3s interval).
+fn start_external_matches_poll() {
+    stop_poll();
+    let window = web_sys::window().unwrap();
+    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(|| {
+        spawn_local(async {
+            do_external_matches_refresh().await;
+        });
+    }) as Box<dyn Fn()>);
+    let handle = window
+        .set_interval_with_callback_and_timeout_and_arguments_0(
+            cb.as_ref().unchecked_ref(),
+            3000,
+        )
+        .unwrap_or(-1);
+    cb.forget();
+    POLL_HANDLE.with(|cell| *cell.borrow_mut() = Some(handle));
+}
+
+async fn do_external_matches_refresh() {
+    if !api::has_token() {
+        stop_poll();
+        return;
+    }
+
+    let doc = web_sys::window().unwrap().document().unwrap();
+
+    // Refresh fetch progress section from status.
+    if let Ok(status) = api::get_status().await {
+        let node = views::render_fetch_progress_section(&status);
+        if let Some(el) = doc.get_element_by_id("mm-fetch-progress") {
+            el.set_inner_html(&node.to_html());
+        }
+    }
+
+    // Refresh external matches data (counts update as results arrive).
+    if let Ok(data) = api::get_external_matches().await {
+        let node = views::render_external_matches_data(&data);
+        if let Some(el) = doc.get_element_by_id("mm-external-data") {
             el.set_inner_html(&node.to_html());
         }
     }

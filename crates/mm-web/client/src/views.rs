@@ -36,6 +36,18 @@ fn kv_resolve(key: &str, val: &str, route: &str) -> Node {
         .into()
 }
 
+/// Key-value row with navigation link (hash-based routing).
+fn nav_kv(key: &str, val: &str, href: &str) -> Node {
+    div()
+        .class("mm-kv mm-kv--clickable")
+        .attr("onclick", &format!("location.hash='{}'", href))
+        .attr("style", "cursor: pointer;")
+        .child(span().class("mm-kv__key").text(key))
+        .child(span().class("mm-kv__val").text(val))
+        .child(span().class("mm-kv__action").text("\u{2192}"))
+        .into()
+}
+
 /// Section with a title and children.
 pub fn titled_section(title: &str, items: Vec<Node>) -> Node {
     section()
@@ -312,38 +324,101 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
 // External Matches view — typed
 // ============================================================================
 
-pub fn render_external_matches_content(data: &ExternalMatchesData) -> Node {
+/// Full External Matches page: progress + data sections with stable IDs for polling.
+pub fn render_external_matches_page(data: &ExternalMatchesData, status: Option<&WitchStatus>) -> Node {
+    let progress = if let Some(s) = status {
+        render_fetch_progress_section(s)
+    } else {
+        div().into()
+    };
+
+    div()
+        .child(
+            div()
+                .class("mm-buttons")
+                .child(
+                    html::button()
+                        .class("mm-btn")
+                        .attr("onclick", "window.__mm_queue_task('ExternalFetch')")
+                        .text("Fetch External Data"),
+                )
+                .child(
+                    html::button()
+                        .class("mm-btn")
+                        .attr("onclick", "window.__mm_queue_task('ReleasePacking')")
+                        .text("Run Packing"),
+                ),
+        )
+        .child(div().attr("id", "mm-fetch-progress").child(progress))
+        .child(div().attr("id", "mm-external-data").child(render_external_matches_data(data)))
+        .into()
+}
+
+/// Render fetch progress from WitchStatus (polled section).
+pub fn render_fetch_progress_section(status: &WitchStatus) -> Node {
+    if let Some(ref progress) = status.external_fetch_progress {
+        let a = &progress.acoustid;
+        let m = &progress.mb;
+        let mut items = vec![
+            kv(
+                "AcoustID",
+                &format!(
+                    "{}/{} ({} matched, {} no match)",
+                    a.processed, a.total, a.matched, a.no_match
+                ),
+            ),
+            kv(
+                "MusicBrainz",
+                &format!(
+                    "{}/{} ({} matched, {} no match)",
+                    m.processed, m.total, m.matched, m.no_match
+                ),
+            ),
+        ];
+        if progress.acoustid_rps > 0.0 || progress.mb_rps > 0.0 {
+            items.push(kv(
+                "rate",
+                &format!("{:.1} aid/s, {:.1} mb/s", progress.acoustid_rps, progress.mb_rps),
+            ));
+        }
+        titled_section("External Fetch (active)", items)
+    } else if status.is_external_fetch_active {
+        titled_section("External Fetch", vec![kv("status", "Starting...")])
+    } else {
+        titled_section("External Fetch", vec![kv("status", "Idle")])
+    }
+}
+
+/// Render external matches data (counts, tiers, packing — polled section).
+pub fn render_external_matches_data(data: &ExternalMatchesData) -> Node {
     let mut sections = Vec::new();
 
-    // Action buttons.
-    sections.push(
-        div()
-            .class("mm-buttons")
-            .child(
-                html::button()
-                    .class("mm-btn")
-                    .attr("onclick", "window.__mm_queue_task('ExternalFetch')")
-                    .text("Fetch External Data"),
-            )
-            .child(
-                html::button()
-                    .class("mm-btn")
-                    .attr("onclick", "window.__mm_queue_task('ReleasePacking')")
-                    .text("Run Packing"),
-            )
-            .into(),
-    );
+    // Confidence tiers with navigation links.
+    let bucket_items: Vec<Node> = data
+        .confidence_buckets
+        .iter()
+        .map(|b| {
+            let label = format!("{:?} ({})", b.tier, b.tier.label());
+            let href = format!("#/external-matches/acoustid/{}", tier_to_route_str(b.tier));
+            nav_kv(&label, &b.total.to_string(), &href)
+        })
+        .collect();
+    if !bucket_items.is_empty() {
+        sections.push(titled_section("Confidence Tiers", bucket_items));
+    }
 
+    // Packing categories with navigation links.
     let packing_items = vec![
-        kv("Perfect", &data.packing_perfect_count.to_string()),
-        kv("Full match", &data.packing_full_match_count.to_string()),
-        kv("Singles", &data.packing_singles_count.to_string()),
-        kv("Incomplete", &data.packing_incomplete_count.to_string()),
-        kv("Low confidence", &data.packing_low_confidence_count.to_string()),
+        nav_kv("Perfect", &data.packing_perfect_count.to_string(), "#/external-matches/review/perfect"),
+        nav_kv("Full match", &data.packing_full_match_count.to_string(), "#/external-matches/review/full-match"),
+        nav_kv("Singles", &data.packing_singles_count.to_string(), "#/external-matches/review/singles"),
+        nav_kv("Incomplete", &data.packing_incomplete_count.to_string(), "#/external-matches/review/incomplete"),
+        nav_kv("Low confidence", &data.packing_low_confidence_count.to_string(), "#/external-matches/review/low-confidence"),
         kv("Knots", &data.packing_knots_count.to_string()),
     ];
     sections.push(titled_section("Release Packing", packing_items));
 
+    // Unsolved.
     let unsolved_fields = [
         (data.unsolved_conflict_count, "Conflicts"),
         (data.unsolved_no_release_count, "No release"),
@@ -360,16 +435,18 @@ pub fn render_external_matches_content(data: &ExternalMatchesData) -> Node {
         sections.push(titled_section("Unsolved", unsolved_items));
     }
 
-    let bucket_items: Vec<Node> = data
-        .confidence_buckets
-        .iter()
-        .map(|b| kv(&format!("{:?}", b.tier), &b.total.to_string()))
-        .collect();
-    if !bucket_items.is_empty() {
-        sections.push(titled_section("Confidence Tiers", bucket_items));
-    }
-
     div().children(sections).into()
+}
+
+/// Map display-level ConfidenceTier to the AcoustidConfidence route segment.
+/// Perfect/VeryHigh/High all map to "high", Medium→"medium", Low→"low".
+fn tier_to_route_str(tier: mm_meta::views::ConfidenceTier) -> &'static str {
+    use mm_meta::views::ConfidenceTier;
+    match tier {
+        ConfidenceTier::Perfect | ConfidenceTier::VeryHigh | ConfidenceTier::High => "high",
+        ConfidenceTier::Medium => "medium",
+        ConfidenceTier::Low => "low",
+    }
 }
 
 // ============================================================================
@@ -901,49 +978,6 @@ fn config_field_readonly(key: &str, val: &str) -> Node {
 // ============================================================================
 // Packing browser view (stays on serde_json::Value)
 // ============================================================================
-
-pub fn render_packing_overview(ext_data: &ExternalMatchesData) -> Node {
-    let categories = [
-        ("perfect", "Perfect", ext_data.packing_perfect_count),
-        ("full_match", "Full Match", ext_data.packing_full_match_count),
-        ("single", "Singles", ext_data.packing_singles_count),
-        ("incomplete", "Incomplete", ext_data.packing_incomplete_count),
-        ("low_confidence", "Low Confidence", ext_data.packing_low_confidence_count),
-    ];
-
-    let items: Vec<Node> = categories
-        .iter()
-        .map(|(prefix, label, count)| {
-            div()
-                .class("mm-kv")
-                .child(
-                    html::a()
-                        .class("mm-link")
-                        .attr("href", "#")
-                        .attr(
-                            "onclick",
-                            format!("event.preventDefault();window.__mm_packing_browse('{prefix}')"),
-                        )
-                        .text(&format!("{label} ({count})")),
-                )
-                .into()
-        })
-        .collect();
-
-    let mut sections = vec![titled_section("Release Packing Categories", items)];
-
-    if ext_data.packing_knots_count > 0 {
-        sections.push(
-            div()
-                .class("mm-kv")
-                .child(span().class("mm-kv__key").text("Knots"))
-                .child(span().class("mm-kv__val").text(ext_data.packing_knots_count.to_string()))
-                .into(),
-        );
-    }
-
-    div().children(sections).into()
-}
 
 pub fn render_packing_browser_data(category: &str, data: &serde_json::Value) -> Node {
     let mut sections = Vec::new();

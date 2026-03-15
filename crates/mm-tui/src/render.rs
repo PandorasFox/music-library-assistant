@@ -16,9 +16,9 @@ use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::startup;
 use super::widgets::{status_bar, Modal, ModalButton, ModalFrame, ModalStyle, UnifiedTitleBar};
 use super::{
-    compound_split_v2, config_editor, external_match_modal, inbox_view,
-    insights_view, manual_review_modal, oob_conflict_modal, oob_sync_modal, progressive_worker,
-    tabbed_transaction_review, tag_canonicity_v2, transaction_review,
+    compound_split_v2, config_editor, disc_extraction_modal, external_match_modal, inbox_view,
+    insights_view, manual_review_modal, missing_album_modal, oob_conflict_modal, oob_sync_modal,
+    progressive_worker, tabbed_transaction_review, tag_canonicity_v2, transaction_review,
 };
 
 /// Main render entry point - dispatches to sub-renderers based on ActiveView.
@@ -237,8 +237,24 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::MissingAlbumSingleResolution(ref mut state) => {
             state.render(f, area);
         }
+        ActiveView::MissingAlbumSingleResolutionV3 {
+            ref data, current_group, ref mut list, ref mut buttons,
+            focus, ref suffix, ..
+        } => {
+            missing_album_modal::render_v3(
+                f, area, data, current_group, list, buttons, focus, suffix,
+            );
+        }
         ActiveView::DiscExtractionResolution(ref mut state) => {
             state.render(f, area);
+        }
+        ActiveView::DiscExtractionResolutionV3 {
+            ref data, current_group, ref mut list, ref mut buttons,
+            focus, ref disc_tag_name, ..
+        } => {
+            disc_extraction_modal::render_v3(
+                f, area, data, current_group, list, buttons, focus, disc_tag_name,
+            );
         }
         ActiveView::ManualReview(ref state) => {
             manual_review_modal::render(f, area, state);

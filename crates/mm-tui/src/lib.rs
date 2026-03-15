@@ -528,7 +528,159 @@ impl App {
             }
             ActiveView::CompoundTagSplit { state, .. } => dispatch_input_raw!(CompoundTagSplit, state),
             ActiveView::MissingAlbumSingleResolution(s) => dispatch_input_raw!(MissingAlbumSingleResolution, s),
+            ActiveView::MissingAlbumSingleResolutionV3 {
+                ref data, ref mut current_group, ref mut list,
+                ref mut buttons, ref mut focus, ..
+            } => {
+                use mm_ui::input::InputAction as IA;
+                use mm_ui::resolutions::missing_album::{MissingAlbumAction as MaAction, MissingAlbumButtonCtx};
+                use mm_ui::standard_list::ListInputResult;
+
+                match action {
+                    IA::CycleNext => {
+                        if *current_group + 1 < data.len() {
+                            *current_group += 1;
+                            list.reset();
+                        }
+                        ViewAction::None
+                    }
+                    IA::CyclePrev => {
+                        if *current_group > 0 {
+                            *current_group -= 1;
+                            list.reset();
+                        }
+                        ViewAction::None
+                    }
+                    IA::FocusUp => {
+                        *focus = focus.prev(false);
+                        ViewAction::None
+                    }
+                    IA::FocusDown => {
+                        *focus = focus.next(false);
+                        ViewAction::None
+                    }
+                    IA::Cancel => {
+                        ViewAction::MissingAlbumSingleResolutionV3(MaAction::Cancel)
+                    }
+                    _ => {
+                        let ctx = MissingAlbumButtonCtx {
+                            has_tracks: data.get(*current_group)
+                                .map_or(false, |s| !s.data.tracks.is_empty()),
+                            group_index: *current_group,
+                        };
+                        match focus {
+                            mm_ui::geometry::FocusPane::List => {
+                                let items = data.get(*current_group)
+                                    .map(|s| crate::missing_album_modal::build_track_items(s))
+                                    .unwrap_or_default();
+                                match list.handle_input(&action, &items) {
+                                    ListInputResult::Consumed | ListInputResult::CursorMoved
+                                    | ListInputResult::Toggled => ViewAction::None,
+                                    ListInputResult::Confirm(()) => ViewAction::None,
+                                    ListInputResult::Unhandled => ViewAction::None,
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::Buttons => {
+                                match action {
+                                    IA::NavLeft => {
+                                        buttons.nav_left(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::NavRight => {
+                                        buttons.nav_right(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::Confirm => {
+                                        match buttons.confirm(&ctx) {
+                                            Some(a) => ViewAction::MissingAlbumSingleResolutionV3(a),
+                                            None => ViewAction::None,
+                                        }
+                                    }
+                                    _ => ViewAction::None,
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::Field => ViewAction::None,
+                        }
+                    }
+                }
+            }
             ActiveView::DiscExtractionResolution(s) => dispatch_input_raw!(DiscExtractionResolution, s),
+            ActiveView::DiscExtractionResolutionV3 {
+                ref data, ref mut current_group, ref mut list,
+                ref mut buttons, ref mut focus, ..
+            } => {
+                use mm_ui::input::InputAction as IA;
+                use mm_ui::resolutions::disc_extraction::{DiscExtractionAction as DeAction, DiscExtractionButtonCtx};
+                use mm_ui::standard_list::ListInputResult;
+
+                match action {
+                    IA::CycleNext => {
+                        if *current_group + 1 < data.groups.len() {
+                            *current_group += 1;
+                            list.reset();
+                        }
+                        ViewAction::None
+                    }
+                    IA::CyclePrev => {
+                        if *current_group > 0 {
+                            *current_group -= 1;
+                            list.reset();
+                        }
+                        ViewAction::None
+                    }
+                    IA::FocusUp => {
+                        *focus = focus.prev(false);
+                        ViewAction::None
+                    }
+                    IA::FocusDown => {
+                        *focus = focus.next(false);
+                        ViewAction::None
+                    }
+                    IA::Cancel => {
+                        ViewAction::DiscExtractionResolutionV3(DeAction::Cancel)
+                    }
+                    _ => {
+                        let ctx = DiscExtractionButtonCtx {
+                            has_files: data.groups.get(*current_group)
+                                .map_or(false, |g| !g.files.is_empty()),
+                            group_index: *current_group,
+                        };
+                        match focus {
+                            mm_ui::geometry::FocusPane::List => {
+                                let items = data.groups.get(*current_group)
+                                    .map(|g| crate::disc_extraction_modal::build_file_items(g))
+                                    .unwrap_or_default();
+                                match list.handle_input(&action, &items) {
+                                    ListInputResult::Consumed | ListInputResult::CursorMoved
+                                    | ListInputResult::Toggled => ViewAction::None,
+                                    ListInputResult::Confirm(()) => ViewAction::None,
+                                    ListInputResult::Unhandled => ViewAction::None,
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::Buttons => {
+                                match action {
+                                    IA::NavLeft => {
+                                        buttons.nav_left(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::NavRight => {
+                                        buttons.nav_right(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::Confirm => {
+                                        match buttons.confirm(&ctx) {
+                                            Some(a) => ViewAction::DiscExtractionResolutionV3(a),
+                                            None => ViewAction::None,
+                                        }
+                                    }
+                                    _ => ViewAction::None,
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::Field => ViewAction::None,
+                        }
+                    }
+                }
+            }
             ActiveView::ManualReview(s) => dispatch_input_raw!(ManualReview, s),
             ActiveView::TransactionReview(s) => dispatch_input_raw!(TransactionReview, s),
         };

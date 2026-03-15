@@ -91,7 +91,9 @@ impl App {
             ViewAction::TagCanonicityResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::CompoundTagSplit(a) => a.handle(self, witness.as_ref()),
             ViewAction::MissingAlbumSingleResolution(a) => a.handle(self, witness.as_ref()),
+            ViewAction::MissingAlbumSingleResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::DiscExtractionResolution(a) => a.handle(self, witness.as_ref()),
+            ViewAction::DiscExtractionResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::ManualReview(a) => a.handle(self, witness.as_ref()),
             ViewAction::TransactionReview(a) => a.handle(self, witness.as_ref()),
         }

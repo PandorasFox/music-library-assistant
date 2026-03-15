@@ -92,8 +92,6 @@ pub enum DiscExtractionAction {
 // Data Types (re-exported from mm-meta)
 // ============================================================================
 
-pub use mm_meta::domain_queries::{DiscExtractionGroup as DiscExtractionGroupReexport, DiscExtractionModalData as DiscExtractionModalDataReexport};
-
 /// Loaded data for the modal — alias for the wire type from mm-meta.
 // DEPRECATED: use mm_ui::resolutions::disc_extraction types instead
 pub type DiscExtractionData = DiscExtractionModalData;

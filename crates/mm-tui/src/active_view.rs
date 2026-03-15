@@ -112,8 +112,28 @@ pub(crate) enum ActiveView {
     // Missing album singles resolution
     MissingAlbumSingleResolution(missing_album_modal::MissingAlbumState),
 
+    // V3: single-load missing album singles with StandardList + buttons
+    MissingAlbumSingleResolutionV3 {
+        data: Vec<mm_meta::domain_queries::MissingAlbumSingleSignalWire>,
+        current_group: usize,
+        list: mm_ui::standard_list::StandardListState,
+        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::missing_album::MissingAlbumButton>,
+        focus: mm_ui::geometry::FocusPane,
+        suffix: String,
+    },
+
     // Disc extraction resolution (ALBUM or TRACKNUMBER → DISCNUMBER)
     DiscExtractionResolution(disc_extraction_modal::DiscExtractionState),
+
+    // V3: single-load disc extraction with StandardList + buttons
+    DiscExtractionResolutionV3 {
+        data: mm_meta::domain_queries::DiscExtractionModalData,
+        current_group: usize,
+        list: mm_ui::standard_list::StandardListState,
+        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::disc_extraction::DiscExtractionButton>,
+        focus: mm_ui::geometry::FocusPane,
+        disc_tag_name: String,
+    },
 
     // Manual review (iterate through groups, stash/edit files)
     ManualReview(manual_review_modal::ManualReviewState),
@@ -160,7 +180,9 @@ impl ActiveView {
             Self::TagCanonicityResolutionV3 { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
             Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),
+            Self::MissingAlbumSingleResolutionV3 { .. } => Some("Missing Album Singles"),
             Self::DiscExtractionResolution(_) => Some("Disc Extraction"),
+            Self::DiscExtractionResolutionV3 { .. } => Some("Disc Extraction"),
             Self::ManualReview(s) => Some(s.header_suffix()),
             Self::TransactionReview(_) => Some("Transaction Review"),
         }
@@ -197,7 +219,17 @@ impl ActiveView {
             Self::Deploy { ref data, ref interaction } => data.selected_path(interaction),
             Self::UnifiedTagEditor(s) => s.selected_path(),
             Self::MissingAlbumSingleResolution(s) => s.selected_path(),
+            Self::MissingAlbumSingleResolutionV3 { ref data, current_group, ref list, .. } => {
+                data.get(*current_group)
+                    .and_then(|s| s.data.tracks.get(list.cursor))
+                    .map(|t| t.path.as_str())
+            }
             Self::DiscExtractionResolution(s) => s.selected_path(),
+            Self::DiscExtractionResolutionV3 { ref data, current_group, ref list, .. } => {
+                data.groups.get(*current_group)
+                    .and_then(|g| g.files.get(list.cursor))
+                    .map(|f| f.path.as_str())
+            }
             Self::ManualReview(s) => s.selected_path(),
             Self::Inbox { ref data, ref interaction } => data.selected_entry(interaction.list.cursor).map(|e| e.label.as_str()),
             _ => None,
@@ -288,7 +320,9 @@ pub(crate) enum ViewAction {
     TagCanonicityResolutionV3(mm_ui::resolutions::tag_canonicity::CanonicityAction),
     CompoundTagSplit(compound_split_v2::CompoundSplitActionV2),
     MissingAlbumSingleResolution(missing_album_modal::MissingAlbumAction),
+    MissingAlbumSingleResolutionV3(mm_ui::resolutions::missing_album::MissingAlbumAction),
     DiscExtractionResolution(disc_extraction_modal::DiscExtractionAction),
+    DiscExtractionResolutionV3(mm_ui::resolutions::disc_extraction::DiscExtractionAction),
     ManualReview(manual_review_modal::ManualReviewAction),
     TransactionReview(transaction_review::TransactionReviewAction),
 }

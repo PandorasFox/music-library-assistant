@@ -437,37 +437,30 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             ).await?;
             Ok(views::render_inbox_corpus_match(&data))
         }
-        ResolutionRoute::OobSync { .. } => {
-            let data = api::get_query("oob-sync-files").await?;
-            Ok(views::render_oob_sync(&data))
-        }
-        ResolutionRoute::OobConflictMtimeOnly { .. } => {
-            let data = api::get_query_with(
-                "oob-conflict-by-bucket",
-                "bucket=MtimeOnly",
-            ).await?;
-            Ok(views::render_oob_conflict_bucket("OOB Conflict — Mtime Only", &data))
-        }
-        ResolutionRoute::OobConflictDbOnly { .. } => {
-            let data = api::get_query_with(
-                "oob-conflict-by-bucket",
-                "bucket=DbOnly",
-            ).await?;
-            Ok(views::render_oob_conflict_bucket("OOB Conflict — DB Only", &data))
-        }
-        ResolutionRoute::OobConflictDiskOnly { .. } => {
-            let data = api::get_query_with(
-                "oob-conflict-by-bucket",
-                "bucket=DiskOnly",
-            ).await?;
-            Ok(views::render_oob_conflict_bucket("OOB Conflict — Disk Only", &data))
-        }
-        ResolutionRoute::OobConflictTwoWay { .. } => {
-            let data = api::get_query_with(
-                "oob-conflict-by-bucket",
-                "bucket=Conflict",
-            ).await?;
-            Ok(views::render_oob_conflict_bucket("OOB Conflict — Two-Way", &data))
+        ResolutionRoute::OobResolution { bucket, .. } => {
+            let data = match bucket {
+                Some(b) => {
+                    let bucket_str = match b {
+                        mm_meta::views::ConflictBucket::MtimeOnly => "MtimeOnly",
+                        mm_meta::views::ConflictBucket::DbOnly => "DbOnly",
+                        mm_meta::views::ConflictBucket::DiskOnly => "DiskOnly",
+                        mm_meta::views::ConflictBucket::Conflict => "Conflict",
+                    };
+                    api::get_query_with(
+                        "oob-files",
+                        &format!("bucket={bucket_str}"),
+                    ).await?
+                }
+                None => api::get_query("oob-files").await?,
+            };
+            let title = match bucket {
+                Some(mm_meta::views::ConflictBucket::MtimeOnly) => "OOB Resolution — Mtime Only",
+                Some(mm_meta::views::ConflictBucket::DbOnly) => "OOB Resolution — DB Only",
+                Some(mm_meta::views::ConflictBucket::DiskOnly) => "OOB Resolution — Disk Only",
+                Some(mm_meta::views::ConflictBucket::Conflict) => "OOB Resolution — Two-Way",
+                None => "OOB Resolution — All",
+            };
+            Ok(views::render_oob_conflict_bucket(title, &data))
         }
 
         // === Cluster-nav routes ===

@@ -87,9 +87,9 @@ impl InsightType {
     /// entries and per-item sources whose modals already back-fill state.
     pub fn single_decision_kind(&self) -> Option<DecisionKeyKind> {
         match self {
-            InsightType::CorpusMtimeOnly => Some(DecisionKeyKind::MtimeAck),
-            InsightType::CorpusOobTagSync => Some(DecisionKeyKind::OobSync),
-            InsightType::CorpusOobTagConflict => Some(DecisionKeyKind::OobConflict),
+            InsightType::CorpusMtimeOnly
+            | InsightType::CorpusOobTagSync
+            | InsightType::CorpusOobTagConflict => Some(DecisionKeyKind::OobResolution),
             InsightType::CorpusFilesUnindexed => Some(DecisionKeyKind::IntakeIndex),
             InsightType::CorpusFilesMissing => Some(DecisionKeyKind::MissingFile),
             InsightType::CorpusDirectoriesMissing => Some(DecisionKeyKind::MissingDirectory),
@@ -211,9 +211,9 @@ impl CachedBucketEntries {
 
     fn build_corpus_entries(c: &CorpusFilesBucket) -> Vec<BucketEntry> {
         let mut entries = vec![
-            BucketEntry::problem(InsightType::CorpusMtimeOnly, "Mtime changes (ack needed)", c.mtime_only_mismatch, Color::Yellow, InsightAction::LaunchOobTagConflict),
-            BucketEntry::problem(InsightType::CorpusOobTagSync, "Tags syncable (out-of-band)", c.oob_tag_sync, Color::Yellow, InsightAction::LaunchOobTagSync),
-            BucketEntry::problem(InsightType::CorpusOobTagConflict, "Tag conflicts (out-of-band)", c.oob_tag_conflict, Color::Red, InsightAction::LaunchOobTagConflict),
+            BucketEntry::problem(InsightType::CorpusMtimeOnly, "Mtime changes (ack needed)", c.mtime_only_mismatch, Color::Yellow, InsightAction::LaunchOobResolution),
+            BucketEntry::problem(InsightType::CorpusOobTagSync, "Tags syncable (out-of-band)", c.oob_tag_sync, Color::Yellow, InsightAction::LaunchOobResolution),
+            BucketEntry::problem(InsightType::CorpusOobTagConflict, "Tag conflicts (out-of-band)", c.oob_tag_conflict, Color::Red, InsightAction::LaunchOobResolution),
             BucketEntry::info(InsightType::CorpusFilesInCorpus, "Files in corpus", c.files_in_corpus, Color::Yellow),
             BucketEntry::info(InsightType::CorpusFilesIndexed, "Files indexed", c.files_indexed, Color::Green),
             BucketEntry::info(InsightType::CorpusImagesInCorpus, "Images in corpus", c.images_in_corpus, Color::Green),
@@ -845,19 +845,30 @@ mod tests {
         let corpus_count_before = data.cached_entries.corpus.len();
         assert!(corpus_count_before > 0);
 
-        // Now mark MtimeAck as handled — CorpusMtimeOnly should disappear
+        // Now mark OobResolution as handled — CorpusMtimeOnly should disappear
         let mut handled = HashSet::new();
-        handled.insert(DecisionKeyKind::MtimeAck);
+        handled.insert(DecisionKeyKind::OobResolution);
         data.update(None, None, &handled);
 
-        // Should have one fewer entry
-        assert_eq!(data.cached_entries.corpus.len(), corpus_count_before - 1);
-        // And it shouldn't contain CorpusMtimeOnly
+        // All three OOB insight types (MtimeOnly, OobTagSync, OobTagConflict) share
+        // the same DecisionKeyKind::OobResolution, so all three disappear.
+        assert_eq!(data.cached_entries.corpus.len(), corpus_count_before - 3);
+        // None of them should remain
         assert!(!data
             .cached_entries
             .corpus
             .iter()
             .any(|e| e.insight_type == InsightType::CorpusMtimeOnly));
+        assert!(!data
+            .cached_entries
+            .corpus
+            .iter()
+            .any(|e| e.insight_type == InsightType::CorpusOobTagSync));
+        assert!(!data
+            .cached_entries
+            .corpus
+            .iter()
+            .any(|e| e.insight_type == InsightType::CorpusOobTagConflict));
     }
 
     #[test]
@@ -867,8 +878,7 @@ mod tests {
 
         // Handle several sources
         let mut handled = HashSet::new();
-        handled.insert(DecisionKeyKind::MtimeAck);
-        handled.insert(DecisionKeyKind::OobSync);
+        handled.insert(DecisionKeyKind::OobResolution);
         handled.insert(DecisionKeyKind::MissingFile);
 
         data.update(None, Some(insights), &handled);
@@ -900,9 +910,7 @@ mod tests {
 
         // Handle multiple sources to shrink the list
         let mut handled = HashSet::new();
-        handled.insert(DecisionKeyKind::MtimeAck);
-        handled.insert(DecisionKeyKind::OobSync);
-        handled.insert(DecisionKeyKind::OobConflict);
+        handled.insert(DecisionKeyKind::OobResolution);
         handled.insert(DecisionKeyKind::MissingFile);
         handled.insert(DecisionKeyKind::MissingDirectory);
         handled.insert(DecisionKeyKind::MovedFile);
@@ -929,9 +937,10 @@ mod tests {
 
         // Change handled set without new InsightsData — should still rebuild
         let mut handled = HashSet::new();
-        handled.insert(DecisionKeyKind::MtimeAck);
+        handled.insert(DecisionKeyKind::OobResolution);
         data.update(None, None, &handled);
-        assert_eq!(data.cached_entries.corpus.len(), count_before - 1);
+        // OobResolution covers 3 insight types (MtimeOnly, OobTagSync, OobTagConflict)
+        assert_eq!(data.cached_entries.corpus.len(), count_before - 3);
 
         // Discard (empty handled) — should restore
         data.update(None, None, &no_handled);

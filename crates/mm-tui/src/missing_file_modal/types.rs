@@ -5,7 +5,7 @@
 
 pub use mm_meta::views::health_modals::*;
 pub use mm_ui::resolutions::missing_file::{
-    MissingFileAction, MissingFileButton, MissingFileButtonCtx,
+    MissingFileAction, MissingFileButton, MissingFileButtonCtx, MissingFilePreviewState,
 };
 
 use mm_meta::paths::PathResolver;

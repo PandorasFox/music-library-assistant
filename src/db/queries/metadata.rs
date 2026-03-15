@@ -231,71 +231,6 @@ impl Database {
     // OOB Tag Resolution Queries
     // ========================================================================
 
-    /// Get files with purely one-directional tag mismatches (sync-eligible).
-    ///
-    /// Reads from typed signal_oob_tag_sync table with bincode BLOB for mismatches.
-    pub fn get_oob_sync_files(&self) -> Result<Vec<crate::meta::views::OobSyncFile>> {
-        use crate::meta::signals::data::TagMismatchEntry as TypedEntry;
-        use crate::meta::views::{OobSyncDirection, OobSyncFile, TagMismatchEntry};
-
-        let mut stmt = self.conn.prepare(
-            "SELECT s.inode, s.path, s.data
-             FROM signal_oob_tag_sync s
-             INNER JOIN files f ON f.inode = s.inode AND f.zone = 'corpus'",
-        )?;
-
-        let mut files = Vec::new();
-
-        let rows = stmt.query_map(params![], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-            ))
-        })?;
-
-        for row in rows {
-            let (inode, path, blob) = row?;
-
-            let typed_mismatches: Vec<TypedEntry> = bincode::deserialize(&blob).unwrap_or_default();
-
-            if typed_mismatches.is_empty() {
-                continue;
-            }
-
-            let mismatches: Vec<TagMismatchEntry> = typed_mismatches
-                .into_iter()
-                .map(|m| TagMismatchEntry {
-                    field: m.tag_name,
-                    db_value: m.db_value,
-                    disk_value: m.disk_value,
-                })
-                .collect();
-
-            // Determine direction: all db NULL → DiskToIndex, all disk NULL → IndexToDisk
-            let all_db_null = mismatches.iter().all(|m| m.db_value.is_none());
-            let all_disk_null = mismatches.iter().all(|m| m.disk_value.is_none());
-
-            let direction = if all_db_null {
-                OobSyncDirection::DiskToIndex
-            } else if all_disk_null {
-                OobSyncDirection::IndexToDisk
-            } else {
-                // Mixed — shouldn't happen for sync signals, skip
-                continue;
-            };
-
-            files.push(OobSyncFile {
-                inode,
-                path,
-                direction,
-                mismatches,
-            });
-        }
-
-        Ok(files)
-    }
-
     /// Get ALL OOB signal files classified into resolution buckets.
     ///
     /// Reads from typed tables and classifies by mismatch direction.
@@ -303,9 +238,9 @@ impl Database {
     /// - Bucket 1 (DbOnly): all mismatches have disk_value NULL
     /// - Bucket 2 (DiskOnly): all mismatches have db_value NULL
     /// - Bucket 3 (Conflict): mismatches in both directions
-    pub fn get_oob_files_bucketed(&self) -> Result<Vec<crate::meta::views::BucketedOobFile>> {
+    pub fn get_oob_files_bucketed(&self) -> Result<Vec<crate::meta::views::OobFile>> {
         use crate::meta::signals::data::TagMismatchEntry as TypedEntry;
-        use crate::meta::views::{BucketedOobFile, ConflictBucket, TagMismatchEntry};
+        use crate::meta::views::{OobFile, ConflictBucket, TagMismatchEntry};
 
         /// Convert signal-level mismatches to view-level mismatches.
         fn to_view_mismatches(typed: Vec<TypedEntry>) -> Vec<TagMismatchEntry> {
@@ -329,7 +264,7 @@ impl Database {
                  ORDER BY s.path",
             )?;
             let rows = stmt.query_map(params![], |row| {
-                Ok(BucketedOobFile {
+                Ok(OobFile {
                     inode: row.get(0)?,
                     path: row.get(1)?,
                     bucket: ConflictBucket::MtimeOnly,
@@ -367,7 +302,7 @@ impl Database {
                 } else {
                     ConflictBucket::Conflict
                 };
-                files.push(BucketedOobFile {
+                files.push(OobFile {
                     inode,
                     path,
                     bucket,
@@ -393,7 +328,7 @@ impl Database {
             for row in rows {
                 let (inode, path, blob) = row?;
                 let typed: Vec<TypedEntry> = bincode::deserialize(&blob).unwrap_or_default();
-                files.push(BucketedOobFile {
+                files.push(OobFile {
                     inode,
                     path,
                     bucket: ConflictBucket::Conflict,

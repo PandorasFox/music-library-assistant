@@ -188,7 +188,7 @@ macro_rules! dispatch_route {
 unit_web_query!(
     GetInsights, GetInboxOverview, GetDeployStatus, GetEditHistory,
     GetExternalMatches, GetPackingDirs,
-    GetOobSyncFiles, GetOobFilesBucketed, GetMovedFiles,
+    GetMovedFiles,
     GetMissingAlbumSingleSignals, GetPackingKnots, GetPackingInodePaths,
     GetMissingFileData, GetMissingDirectoryData, GetCorruptFileData,
     GetSubparDuplicateData, GetDirectoryClusterData, GetReleaseOverlapData,
@@ -211,9 +211,9 @@ body_web_query!(GetCompoundSplitGroupData);
 
 // -- Param-parsed queries (custom extraction per struct) --
 
-impl WebQuery for GetOobConflictByBucket {
+impl WebQuery for GetOobFiles {
     fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
-        Ok(Self { bucket: parse_enum(params, "bucket")? })
+        Ok(Self { bucket: parse_optional_enum(params, "bucket")? })
     }
 }
 
@@ -399,7 +399,7 @@ fn build_domain_payload(
     dispatch_route!(route, params, body;
         GetInsights, GetInboxOverview, GetDeployStatus, GetEditHistory,
         GetExternalMatches, GetPackingDirs,
-        GetOobSyncFiles, GetOobFilesBucketed, GetOobConflictByBucket,
+        GetOobFiles,
         GetMovedFiles, GetMissingAlbumSingleSignals, GetEditHistoryExport,
         GetCompoundSignalGroups, GetPackingKnots, GetPackingInodePaths,
         GetInconsistentAlbumArtistKeys, GetTagCanonicityKeys, GetDiscExtractionData,

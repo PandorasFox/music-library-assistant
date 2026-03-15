@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::mutations::{Mutation, MutationKind};
+use crate::views::ConflictBucket;
 
 // ============================================================================
 // Decision Key Types
@@ -37,9 +38,7 @@ pub enum DecisionKey {
     Deploy,
     DeploySidecars,
     TagEdit { key_item: String },
-    OobSync,
-    OobConflict,
-    MtimeAck,
+    OobResolution { bucket: ConflictBucket },
     MovedFile,
     MissingFile,
     MissingDirectory,
@@ -64,9 +63,7 @@ impl DecisionKey {
     /// If this key is a singleton (no per-item data), return its kind.
     pub fn kind(&self) -> Option<DecisionKeyKind> {
         match self {
-            DecisionKey::OobSync => Some(DecisionKeyKind::OobSync),
-            DecisionKey::OobConflict => Some(DecisionKeyKind::OobConflict),
-            DecisionKey::MtimeAck => Some(DecisionKeyKind::MtimeAck),
+            DecisionKey::OobResolution { .. } => Some(DecisionKeyKind::OobResolution),
             DecisionKey::MovedFile => Some(DecisionKeyKind::MovedFile),
             DecisionKey::MissingFile => Some(DecisionKeyKind::MissingFile),
             DecisionKey::MissingDirectory => Some(DecisionKeyKind::MissingDirectory),
@@ -99,12 +96,9 @@ impl DecisionKey {
             DecisionKey::DeploySidecars => &[HardLink],
             // Tag edit → tag ops + DB→disk sync
             DecisionKey::TagEdit { .. } => &[ApplyTagOps, ApplyDbTagsToDisk],
-            // OOB sync → DB→disk sync (overwrite disk with DB) or disk→DB assimilation
-            DecisionKey::OobSync => &[ApplyDbTagsToDisk, AssimilateDiskTagsToDb],
-            // OOB conflict → same as OobSync (operator picks direction)
-            DecisionKey::OobConflict => &[ApplyDbTagsToDisk, AssimilateDiskTagsToDb],
-            // Mtime ack → acknowledge mtime-only changes
-            DecisionKey::MtimeAck => &[AcknowledgeMtimeOnly],
+            // OOB resolution: mtime-only → ack, all others → tag sync direction
+            DecisionKey::OobResolution { bucket: ConflictBucket::MtimeOnly } => &[AcknowledgeMtimeOnly],
+            DecisionKey::OobResolution { .. } => &[ApplyDbTagsToDisk, AssimilateDiskTagsToDb],
             // Moved file → update path in index
             DecisionKey::MovedFile => &[UpdateFilePath],
             // Missing file → drop from index or stash
@@ -167,9 +161,7 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::Deploy => write!(f, "Deploy"),
             DecisionKey::DeploySidecars => write!(f, "Deploy Sidecars"),
             DecisionKey::TagEdit { key_item } => write!(f, "Tag Edit:{}", key_item),
-            DecisionKey::OobSync => write!(f, "OOB Sync"),
-            DecisionKey::OobConflict => write!(f, "OOB Conflict"),
-            DecisionKey::MtimeAck => write!(f, "Mtime Ack"),
+            DecisionKey::OobResolution { bucket } => write!(f, "OOB Resolution:{}", bucket.label()),
             DecisionKey::MovedFile => write!(f, "Moved File"),
             DecisionKey::MissingFile => write!(f, "Missing File"),
             DecisionKey::MissingDirectory => write!(f, "Missing Directory"),
@@ -209,9 +201,7 @@ impl std::fmt::Display for DecisionKey {
 /// Fieldless mirror of DecisionKey for insight filtering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DecisionKeyKind {
-    OobSync,
-    OobConflict,
-    MtimeAck,
+    OobResolution,
     MovedFile,
     MissingFile,
     MissingDirectory,

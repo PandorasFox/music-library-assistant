@@ -5,5 +5,5 @@
 
 pub use mm_meta::views::cluster_deploy::{ShitFormatEntry, ShitFormatModalData};
 pub use mm_ui::resolutions::shit_format::{
-    ShitFormatAction, ShitFormatButton, ShitFormatButtonCtx,
+    ShitFormatAction, ShitFormatButton, ShitFormatButtonCtx, ShitFormatPreviewState,
 };

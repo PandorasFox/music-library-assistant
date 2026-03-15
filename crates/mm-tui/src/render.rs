@@ -17,7 +17,7 @@ use super::startup;
 use super::widgets::{status_bar, Modal, ModalButton, ModalFrame, ModalStyle, UnifiedTitleBar};
 use super::{
     compound_split_v2, config_editor, disc_extraction_modal, inbox_view,
-    insights_view, manual_review_modal, missing_album_modal, oob_conflict_modal, oob_sync_modal,
+    insights_view, manual_review_modal, missing_album_modal, oob_conflict_modal,
     progressive_worker, tabbed_transaction_review, tag_canonicity_v2,  transaction_review,
 };
 
@@ -176,7 +176,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
             editor.render(f, area, &mut app.art_picker, &mut app.art_cache, &app.resolver);
         }
         ActiveView::MissingFileResolution(ref mut preview) => {
-            preview.render(f, area);
+            super::missing_file_modal::preview::render(f, area, preview);
         }
         ActiveView::MissingDirectoryResolution(ref mut preview) => {
             preview.render_frame(f, area);
@@ -196,9 +196,6 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
             compound_split_v2::render_v3::render(
                 f, area, data, current_group, list, buttons, field, focus, safe_mode,
             );
-        }
-        ActiveView::OobSyncResolution(ref mut state) => {
-            oob_sync_modal::render(f, area, state);
         }
         ActiveView::OobConflictInspection(ref mut state) => {
             oob_conflict_modal::render(f, area, state);
@@ -225,7 +222,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
             preview.render_frame(f, area);
         }
         ActiveView::ShitFormatResolution(ref mut preview) => {
-            preview.render(f, area);
+            super::shit_format_modal::preview::render(f, area, preview);
         }
         ActiveView::SubparDuplicateResolution(ref mut preview) => {
             preview.render_frame(f, area);

@@ -27,7 +27,6 @@ pub mod tabbed_transaction_review;
 pub mod transaction_review;
 
 pub mod acoustid_browse;
-pub mod bulk_selection;
 pub mod compound_split_v2;
 pub mod config_editor;
 pub mod corrupt_file_modal;
@@ -49,7 +48,6 @@ pub mod missing_directory_modal;
 pub mod missing_file_modal;
 pub mod moved_file_modal;
 pub mod oob_conflict_modal;
-pub mod oob_sync_modal;
 pub mod progress_screen;
 pub mod progressive_worker;
 pub mod release_packing_browser;
@@ -486,7 +484,6 @@ impl App {
                 }
             }
             ActiveView::MovedFileAcknowledge(s) => dispatch_input!(MovedFileAcknowledge, s),
-            ActiveView::OobSyncResolution(s) => dispatch_input_raw!(OobSyncResolution, s),
             ActiveView::OobConflictInspection(s) => dispatch_input_raw!(OobConflictInspection, s),
             ActiveView::ReleasePackingBrowser(s) => dispatch_input_raw!(ReleasePackingBrowser, s),
             ActiveView::KnotBrowser(s) => dispatch_input_raw!(KnotBrowser, s),

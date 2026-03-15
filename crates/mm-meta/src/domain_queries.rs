@@ -98,18 +98,10 @@ pub struct GetPackingDirs;
 // Detail Queries (Wave 1: simple return types, no inode resolution)
 // ============================================================================
 
-/// OOB sync files (purely one-direction tag mismatches).
+/// OOB files classified into conflict buckets, optionally filtered by bucket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetOobSyncFiles;
-
-/// OOB files classified into conflict buckets.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetOobFilesBucketed;
-
-/// OOB conflict files filtered by bucket type.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetOobConflictByBucket {
-    pub bucket: crate::views::ConflictBucket,
+pub struct GetOobFiles {
+    pub bucket: Option<crate::views::ConflictBucket>,
 }
 
 /// Files with moved-file signals (same inode, different path).
@@ -506,9 +498,7 @@ domain_query_protocol! {
     GetPackingDirs("packing-dirs") => crate::domain_query_types::PackingDirsData,
 
     // Detail queries (Wave 1)
-    GetOobSyncFiles("oob-sync-files") => Vec<crate::views::OobSyncFile>,
-    GetOobFilesBucketed("oob-files-bucketed") => Vec<crate::views::BucketedOobFile>,
-    GetOobConflictByBucket("oob-conflict-by-bucket") => Vec<crate::views::BucketedOobFile>,
+    GetOobFiles("oob-files") => Vec<crate::views::OobFile>,
     GetMovedFiles("moved-files") => Vec<crate::views::MovedFileInfo>,
     GetMissingAlbumSingleSignals("missing-album-single-signals") => Vec<MissingAlbumSingleSignalWire>,
     GetEditHistoryExport("edit-history-export") => Vec<crate::views::EditHistoryExportRow>,

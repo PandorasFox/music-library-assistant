@@ -36,8 +36,8 @@ impl ModalFrameCore for OobConflictState {
 
     fn frame_state(&self) -> &FrameState<OobConflictButton> { &self.frame }
     fn frame_state_mut(&mut self) -> &mut FrameState<OobConflictButton> { &mut self.frame }
-    fn cursor(&self) -> usize { self.active_bucket_state().cursor }
-    fn cursor_mut(&mut self) -> &mut usize { &mut self.active_bucket_state_mut().cursor }
+    fn cursor(&self) -> usize { self.active_bucket_state().list.cursor }
+    fn cursor_mut(&mut self) -> &mut usize { &mut self.active_bucket_state_mut().list.cursor }
     fn list_len(&self) -> usize { self.active_bucket_state().files.len() }
     fn button_ctx(&self) -> OobConflictButtonCtx { OobConflictState::button_ctx(self) }
     fn escape_action(&self) -> OobConflictAction { OobConflictAction::Cancel }
@@ -152,12 +152,12 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
 
     let bucket_state = state.active_bucket_state();
 
-    // Build title with selection count if active
-    let title = if bucket_state.selection.is_active() {
+    // Build title with selection count if any selected
+    let title = if !bucket_state.list.selected.is_empty() {
         format!(
             "Files ({}, {} selected)",
             bucket_state.files.len(),
-            bucket_state.selection.selection_count()
+            bucket_state.list.selected.len()
         )
     } else {
         format!("Files ({})", bucket_state.files.len())
@@ -175,7 +175,7 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
     }
 
     // Show selection indicators by default for resolvable buckets
-    let show_selection = state.active_bucket.is_resolvable() || bucket_state.selection.is_active();
+    let show_selection = state.active_bucket.is_resolvable() || !bucket_state.list.selected.is_empty();
 
     let entries: Vec<PathEntry> = bucket_state
         .files
@@ -184,13 +184,15 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
         .map(|(idx, file)| {
             let mut prefix = Vec::new();
             if show_selection {
-                let marker_style = if bucket_state.selection.is_selected(idx) {
+                let is_sel = bucket_state.list.selected.contains(&idx);
+                let marker_style = if is_sel {
                     Style::default().fg(Color::Green)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
+                let marker = if is_sel { "[x]" } else { "[ ]" };
                 prefix.push(Span::styled(
-                    format!("{} ", bucket_state.selection.marker(idx)),
+                    format!("{} ", marker),
                     marker_style,
                 ));
             }
@@ -203,7 +205,7 @@ fn render_file_list(f: &mut Frame, area: Rect, state: &OobConflictState) {
         })
         .collect();
 
-    render_file_path_list(f, inner, &entries, bucket_state.cursor, bucket_state.scroll);
+    render_file_path_list(f, inner, &entries, bucket_state.list.cursor, bucket_state.list.scroll);
 }
 
 fn render_diff_details(f: &mut Frame, area: Rect, state: &OobConflictState) {

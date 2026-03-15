@@ -81,7 +81,6 @@ impl App {
             ViewAction::InboxOrganize(a) => a.handle(self, witness.as_ref()),
             ViewAction::DirectoryClusterResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::MovedFileAcknowledge(a) => a.handle(self, witness.as_ref()),
-            ViewAction::OobSyncResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::OobConflictInspection(a) => a.handle(self, witness.as_ref()),
             ViewAction::ReleasePackingBrowser(a) => a.handle(self, witness.as_ref()),
             ViewAction::KnotBrowser(a) => a.handle(self, witness.as_ref()),
@@ -332,15 +331,14 @@ impl App {
                     None
                 }
             }
-            ActiveView::OobSyncResolution(s) => click_dispatch!(gesture OobSyncResolution, s),
             ActiveView::OobConflictInspection(s) => click_dispatch!(gesture OobConflictInspection, s),
             ActiveView::MovedFileAcknowledge(s) => s.handle_click(x, y).map(ViewAction::MovedFileAcknowledge),
             ActiveView::SubparDuplicateResolution(s) => s.handle_click(x, y).map(ViewAction::SubparDuplicateResolution),
             ActiveView::InboxCorpusMatchResolution(s) => s.handle_click(x, y).map(ViewAction::InboxCorpusMatchResolution),
             ActiveView::CorruptFileResolution(s) => s.handle_click(x, y).map(ViewAction::CorruptFileResolution),
             ActiveView::MissingDirectoryResolution(s) => s.handle_click(x, y).map(ViewAction::MissingDirectoryResolution),
-            ActiveView::MissingFileResolution(s) => click_dispatch!(gesture MissingFileResolution, s),
-            ActiveView::ShitFormatResolution(s) => click_dispatch!(gesture ShitFormatResolution, s),
+            ActiveView::MissingFileResolution(s) => s.handle_click(x, y).map(ViewAction::MissingFileResolution),
+            ActiveView::ShitFormatResolution(s) => s.handle_click(x, y).map(ViewAction::ShitFormatResolution),
             ActiveView::Insights { ref data, ref mut interaction } => {
                 interaction.list.handle_click(x, y, &data.flat_items);
                 None
@@ -478,10 +476,7 @@ impl HandleAction for insights_view::HealthAction {
                         });
                         app.start_compound_split_resolution_v3(false, tag_name.as_deref());
                     }
-                    Some(insights_view::InsightAction::LaunchOobTagSync) => {
-                        app.start_oob_sync_resolution();
-                    }
-                    Some(insights_view::InsightAction::LaunchOobTagConflict) => {
+                    Some(insights_view::InsightAction::LaunchOobResolution) => {
                         app.start_oob_conflict_inspection();
                     }
                     Some(insights_view::InsightAction::LaunchMovedFileAcknowledge) => {

@@ -8,6 +8,7 @@
 //! Query parameters carry position (cursor, scroll, focus, filter text).
 
 use mm_meta::db_types::Zone;
+use mm_meta::views::ConflictBucket;
 use mm_meta::views::external_matches::{AcoustidConfidence, ReleaseReviewFilter};
 use std::fmt;
 
@@ -176,11 +177,7 @@ pub enum ResolutionRoute {
     InboxCorpusMatch { cursor: Option<usize> },
     DirectoryCluster { cluster: Option<usize>, cursor: Option<usize> },
     MovedFiles { cursor: Option<usize> },
-    OobSync { cursor: Option<usize> },
-    OobConflictMtimeOnly { cursor: Option<usize> },
-    OobConflictDbOnly { cursor: Option<usize> },
-    OobConflictDiskOnly { cursor: Option<usize> },
-    OobConflictTwoWay { cursor: Option<usize> },
+    OobResolution { bucket: Option<mm_meta::views::ConflictBucket>, cursor: Option<usize> },
 
     // === Cluster-nav (path + identity params = load anchor) ===
     TagCanonicity { tag_name: String, zone: Zone, cluster: Option<usize> },
@@ -209,11 +206,7 @@ impl ResolutionRoute {
             Self::InboxCorpusMatch { .. } => "Inbox/Corpus Match",
             Self::DirectoryCluster { .. } => "Directory Cluster",
             Self::MovedFiles { .. } => "Moved Files",
-            Self::OobSync { .. } => "OOB Tag Sync",
-            Self::OobConflictMtimeOnly { .. } => "OOB Conflict (mtime)",
-            Self::OobConflictDbOnly { .. } => "OOB Conflict (DB only)",
-            Self::OobConflictDiskOnly { .. } => "OOB Conflict (disk only)",
-            Self::OobConflictTwoWay { .. } => "OOB Conflict (two-way)",
+            Self::OobResolution { .. } => "OOB Resolution",
             Self::TagCanonicity { .. } => "Tag Canonicity",
             Self::InconsistentAlbumArtist { .. } => "Inconsistent Album Artist",
             Self::CompoundSplit { .. } => "Compound Split",
@@ -626,24 +619,16 @@ fn resolution_to_url(r: &ResolutionRoute, path: &mut String, params: &mut QueryP
             path.push_str("moved-files");
             params.set_usize("cursor", *cursor);
         }
-        ResolutionRoute::OobSync { cursor } => {
-            path.push_str("oob-sync");
-            params.set_usize("cursor", *cursor);
-        }
-        ResolutionRoute::OobConflictMtimeOnly { cursor } => {
-            path.push_str("oob-conflict/mtime-only");
-            params.set_usize("cursor", *cursor);
-        }
-        ResolutionRoute::OobConflictDbOnly { cursor } => {
-            path.push_str("oob-conflict/db-only");
-            params.set_usize("cursor", *cursor);
-        }
-        ResolutionRoute::OobConflictDiskOnly { cursor } => {
-            path.push_str("oob-conflict/disk-only");
-            params.set_usize("cursor", *cursor);
-        }
-        ResolutionRoute::OobConflictTwoWay { cursor } => {
-            path.push_str("oob-conflict/two-way");
+        ResolutionRoute::OobResolution { bucket, cursor } => {
+            path.push_str("oob-resolution");
+            if let Some(b) = bucket {
+                params.set_str("bucket", Some(match b {
+                    ConflictBucket::MtimeOnly => "mtime-only",
+                    ConflictBucket::DbOnly => "db-only",
+                    ConflictBucket::DiskOnly => "disk-only",
+                    ConflictBucket::Conflict => "two-way",
+                }));
+            }
             params.set_usize("cursor", *cursor);
         }
 
@@ -745,31 +730,19 @@ fn resolution_from_url(
         "moved-files" => ResolutionRoute::MovedFiles {
             cursor: params.get_usize("cursor"),
         },
-        "oob-sync" => ResolutionRoute::OobSync {
-            cursor: params.get_usize("cursor"),
-        },
-        "oob-conflict" => {
-            let sub = segments.get(2).ok_or_else(|| RouteParseError {
-                message: "oob-conflict requires a sub-type (mtime-only|db-only|disk-only|two-way)".into(),
-            })?;
-            match *sub {
-                "mtime-only" => ResolutionRoute::OobConflictMtimeOnly {
-                    cursor: params.get_usize("cursor"),
-                },
-                "db-only" => ResolutionRoute::OobConflictDbOnly {
-                    cursor: params.get_usize("cursor"),
-                },
-                "disk-only" => ResolutionRoute::OobConflictDiskOnly {
-                    cursor: params.get_usize("cursor"),
-                },
-                "two-way" => ResolutionRoute::OobConflictTwoWay {
-                    cursor: params.get_usize("cursor"),
-                },
-                other => {
-                    return Err(RouteParseError {
-                        message: format!("unknown oob-conflict sub-type: {other}"),
-                    });
-                }
+        "oob-resolution" => {
+            let bucket = params.get_string("bucket").map(|s| match s.as_str() {
+                "mtime-only" => Ok(ConflictBucket::MtimeOnly),
+                "db-only" => Ok(ConflictBucket::DbOnly),
+                "disk-only" => Ok(ConflictBucket::DiskOnly),
+                "two-way" => Ok(ConflictBucket::Conflict),
+                other => Err(RouteParseError {
+                    message: format!("unknown oob-resolution bucket: {other}"),
+                }),
+            }).transpose()?;
+            ResolutionRoute::OobResolution {
+                bucket,
+                cursor: params.get_usize("cursor"),
             }
         }
         "tag-canonicity" => {
@@ -1184,11 +1157,11 @@ mod tests {
             ResolutionRoute::InboxCorpusMatch { cursor: Some(0) },
             ResolutionRoute::DirectoryCluster { cluster: Some(7), cursor: Some(3) },
             ResolutionRoute::MovedFiles { cursor: Some(1) },
-            ResolutionRoute::OobSync { cursor: Some(5) },
-            ResolutionRoute::OobConflictMtimeOnly { cursor: None },
-            ResolutionRoute::OobConflictDbOnly { cursor: Some(2) },
-            ResolutionRoute::OobConflictDiskOnly { cursor: Some(1) },
-            ResolutionRoute::OobConflictTwoWay { cursor: None },
+            ResolutionRoute::OobResolution { bucket: None, cursor: Some(5) },
+            ResolutionRoute::OobResolution { bucket: Some(ConflictBucket::MtimeOnly), cursor: None },
+            ResolutionRoute::OobResolution { bucket: Some(ConflictBucket::DbOnly), cursor: Some(2) },
+            ResolutionRoute::OobResolution { bucket: Some(ConflictBucket::DiskOnly), cursor: Some(1) },
+            ResolutionRoute::OobResolution { bucket: Some(ConflictBucket::Conflict), cursor: None },
             ResolutionRoute::MissingAlbum { group: Some(1) },
             ResolutionRoute::DiscExtraction { group: Some(0) },
         ];

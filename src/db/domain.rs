@@ -118,8 +118,8 @@ macro_rules! impl_domain_query {
 
 use crate::meta::signals::data::CompoundGroup;
 use crate::meta::views::{
-    BucketedOobFile, DeployStatus, EditHistoryData, EditHistoryExportRow, ExternalMatchesData,
-    InboxOverviewData, InsightsData, MovedFileInfo, OobSyncFile,
+    DeployStatus, EditHistoryData, EditHistoryExportRow, ExternalMatchesData,
+    InboxOverviewData, InsightsData, MovedFileInfo, OobFile,
 };
 
 use crate::db::modal_loaders;
@@ -180,20 +180,12 @@ impl_domain_query! {
 // ============================================================================
 
 impl_domain_query! {
-    GetOobSyncFiles => Vec<OobSyncFile>, db.get_oob_sync_files()
-}
-
-impl_domain_query! {
-    GetOobFilesBucketed => Vec<BucketedOobFile>, db.get_oob_files_bucketed()
-}
-
-impl_domain_query! {
-    GetOobConflictByBucket => Vec<BucketedOobFile>, |s, db| {
-        db.get_oob_files_bucketed()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|f| f.bucket == s.bucket)
-            .collect()
+    GetOobFiles => Vec<OobFile>, |s, db| {
+        let all = db.get_oob_files_bucketed().unwrap_or_default();
+        match s.bucket {
+            Some(bucket) => all.into_iter().filter(|f| f.bucket == bucket).collect(),
+            None => all,
+        }
     }
 }
 
@@ -1083,9 +1075,7 @@ dispatch_domain_query_impl! {
     GetEditHistory,
     GetExternalMatches,
     GetPackingDirs,
-    GetOobSyncFiles,
-    GetOobFilesBucketed,
-    GetOobConflictByBucket,
+    GetOobFiles,
     GetMovedFiles,
     GetMissingAlbumSingleSignals,
     GetEditHistoryExport,
@@ -1201,28 +1191,16 @@ mod tests {
     // -- Detail queries: empty DB returns empty vecs --
 
     #[test]
-    fn get_oob_sync_files_empty_db() {
+    fn get_oob_files_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
-        let result = GetOobSyncFiles.execute(&read_db);
+        // All files
+        let result = GetOobFiles { bucket: None }.execute(&read_db);
         assert!(result.is_empty());
-    }
-
-    #[test]
-    fn get_oob_files_bucketed_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
-        let result = GetOobFilesBucketed.execute(&read_db);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn get_oob_conflict_by_bucket_empty_db() {
-        let db = test_db();
-        let read_db = ReadOnlyDb::new(&db);
+        // Per bucket
         use mm_meta::views::ConflictBucket;
         for bucket in ConflictBucket::ALL {
-            let result = GetOobConflictByBucket { bucket }.execute(&read_db);
+            let result = GetOobFiles { bucket: Some(bucket) }.execute(&read_db);
             assert!(result.is_empty(), "expected empty for bucket {:?}", bucket);
         }
     }
@@ -1513,9 +1491,8 @@ mod tests {
         t!(serde_json::to_string(&GetPackingDirs.execute(&read_db)));
 
         // Detail queries
-        t!(serde_json::to_string(&GetOobSyncFiles.execute(&read_db)));
-        t!(serde_json::to_string(&GetOobFilesBucketed.execute(&read_db)));
-        t!(serde_json::to_string(&GetOobConflictByBucket { bucket: mm_meta::views::ConflictBucket::MtimeOnly }.execute(&read_db)));
+        t!(serde_json::to_string(&GetOobFiles { bucket: None }.execute(&read_db)));
+        t!(serde_json::to_string(&GetOobFiles { bucket: Some(mm_meta::views::ConflictBucket::MtimeOnly) }.execute(&read_db)));
         t!(serde_json::to_string(&GetMovedFiles.execute(&read_db)));
         t!(serde_json::to_string(&GetMissingAlbumSingleSignals.execute(&read_db)));
         t!(serde_json::to_string(&GetEditHistoryExport { session_id: None }.execute(&read_db)));

@@ -398,15 +398,6 @@ pub struct SubparDuplicateEntry {
 // OOB Tag Resolution Types
 // ============================================================================
 
-/// Direction of a syncable OOB tag mismatch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OobSyncDirection {
-    /// Extra tags exist on disk only (db_value IS NULL) — sync disk -> index
-    DiskToIndex,
-    /// Extra tags exist in DB only (disk_value IS NULL) — sync index -> disk
-    IndexToDisk,
-}
-
 /// A single tag mismatch entry between DB and disk.
 ///
 /// Mirrors the signal-level `TagMismatchEntry` with UI-friendly field naming.
@@ -418,16 +409,6 @@ pub struct TagMismatchEntry {
     pub disk_value: Option<String>,
 }
 
-/// A file with purely sync-direction tag mismatches (all extras in one direction).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OobSyncFile {
-    pub inode: i64,
-    /// Relative path (as stored in signals/files)
-    pub path: String,
-    pub direction: OobSyncDirection,
-    pub mismatches: Vec<TagMismatchEntry>,
-}
-
 /// Classification bucket for OOB signal files.
 ///
 /// Determined by typed OOB signal classification:
@@ -435,7 +416,7 @@ pub struct OobSyncFile {
 /// - DbOnly: all mismatches have `disk_value IS NULL`
 /// - DiskOnly: all mismatches have `db_value IS NULL`
 /// - Conflict: both values present, or mixed null directions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConflictBucket {
     MtimeOnly,
     DbOnly,
@@ -498,7 +479,7 @@ impl ConflictBucket {
 /// Carries the mismatch data from the signal so the UI never needs to
 /// re-read tags from disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BucketedOobFile {
+pub struct OobFile {
     pub inode: i64,
     pub path: String,
     pub bucket: ConflictBucket,

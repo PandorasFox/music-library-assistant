@@ -509,8 +509,7 @@ impl<'a> ReadOnlyDb<'a> {
     // =========================================================================
 
     delegate_read! {
-        fn get_oob_sync_files() -> Result<Vec<crate::meta::views::OobSyncFile>>;
-        fn get_oob_files_bucketed() -> Result<Vec<crate::meta::views::BucketedOobFile>>;
+        fn get_oob_files_bucketed() -> Result<Vec<crate::meta::views::OobFile>>;
         fn get_moved_files() -> Result<Vec<crate::meta::views::MovedFileInfo>>;
     }
 

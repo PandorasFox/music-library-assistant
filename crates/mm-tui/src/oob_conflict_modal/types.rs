@@ -8,9 +8,9 @@ use crate::action_handlers::witness::ConfirmationGesture;
 use crate::input::InputAction;
 
 use mm_meta::decisions::DecisionKey;
-use mm_meta::views::{BucketedOobFile, ConflictBucket};
+use mm_meta::views::{OobFile, ConflictBucket};
 use mm_ui::protocol_binding::ProtocolBinding;
-use crate::bulk_selection::BulkSelectionState;
+use mm_ui::standard_list::{StandardListState, StandardListConfig};
 use crate::widgets::modal_buttons::ModalButtons;
 use crate::widgets::{FocusPane, FrameInputResult, TextInputState};
 use crate::widgets::modal_frame::ModalFrameCore;
@@ -87,15 +87,15 @@ impl ModalButtons for OobConflictButton {
     fn protocol_binding(&self, _ctx: &Self::Context) -> ProtocolBinding {
         match self {
             Self::ApplyDb => ProtocolBinding::Transaction {
-                decision_key: DecisionKey::OobConflict,
+                decision_key: DecisionKey::OobResolution { bucket: ConflictBucket::Conflict },
                 label: "Apply DB tags \u{2192} files".into(),
             },
             Self::AssimilateDisk => ProtocolBinding::Transaction {
-                decision_key: DecisionKey::OobConflict,
+                decision_key: DecisionKey::OobResolution { bucket: ConflictBucket::Conflict },
                 label: "Assimilate file tags \u{2192} DB".into(),
             },
             Self::Acknowledge => ProtocolBinding::Transaction {
-                decision_key: DecisionKey::MtimeAck,
+                decision_key: DecisionKey::OobResolution { bucket: ConflictBucket::MtimeOnly },
                 label: "Acknowledge mtime changes".into(),
             },
             Self::Cancel => ProtocolBinding::Navigation,
@@ -108,11 +108,8 @@ impl ModalButtons for OobConflictButton {
 // ============================================================================
 
 pub struct BucketFileState {
-    pub files: Vec<BucketedOobFile>,
-    pub cursor: usize,
-    pub scroll: usize,
-    /// Per-bucket selection state
-    pub selection: BulkSelectionState,
+    pub files: Vec<OobFile>,
+    pub list: StandardListState,
     /// Inline text filter input
     pub filter_input: TextInputState,
     /// Whether the inline filter bar is actively accepting input
@@ -124,16 +121,20 @@ pub struct BucketFileState {
 }
 
 impl BucketFileState {
-    pub fn new(files: Vec<BucketedOobFile>) -> Self {
+    pub fn new(files: Vec<OobFile>) -> Self {
         let file_count = files.len();
-        let mut selection = BulkSelectionState::new();
-        selection.select_all(file_count);
+        let mut list = StandardListState::new(StandardListConfig {
+            multi_select: true,
+            ..Default::default()
+        });
+        // Pre-select all files
+        for i in 0..file_count {
+            list.selected.insert(i);
+        }
 
         Self {
             files,
-            cursor: 0,
-            scroll: 0,
-            selection,
+            list,
             filter_input: TextInputState::new(),
             filter_active: false,
             filter_text: None,
@@ -141,8 +142,8 @@ impl BucketFileState {
         }
     }
 
-    pub fn current_file(&self) -> Option<&BucketedOobFile> {
-        self.files.get(self.cursor)
+    pub fn current_file(&self) -> Option<&OobFile> {
+        self.files.get(self.list.cursor)
     }
 
     /// Get indices of files that match the current filter.
@@ -184,8 +185,8 @@ impl BucketFileState {
     }
 
     fn navigate_up(&mut self) -> bool {
-        if self.cursor > 0 {
-            self.cursor -= 1;
+        if self.list.cursor > 0 {
+            self.list.cursor -= 1;
             true
         } else {
             false
@@ -193,8 +194,8 @@ impl BucketFileState {
     }
 
     fn navigate_down(&mut self) -> bool {
-        if self.cursor + 1 < self.files.len() {
-            self.cursor += 1;
+        if self.list.cursor + 1 < self.files.len() {
+            self.list.cursor += 1;
             true
         } else {
             false
@@ -202,15 +203,15 @@ impl BucketFileState {
     }
 
     fn page_up(&mut self) -> bool {
-        let old = self.cursor;
-        self.cursor = self.cursor.saturating_sub(20);
-        self.cursor != old
+        let old = self.list.cursor;
+        self.list.cursor = self.list.cursor.saturating_sub(20);
+        self.list.cursor != old
     }
 
     fn page_down(&mut self) -> bool {
-        let old = self.cursor;
-        self.cursor = (self.cursor + 20).min(self.files.len().saturating_sub(1));
-        self.cursor != old
+        let old = self.list.cursor;
+        self.list.cursor = (self.list.cursor + 20).min(self.files.len().saturating_sub(1));
+        self.list.cursor != old
     }
 }
 
@@ -255,7 +256,7 @@ impl OobConflictState {
             .map(|f| f.path.as_str())
     }
 
-    pub fn new(files: Vec<BucketedOobFile>) -> Self {
+    pub fn new(files: Vec<OobFile>) -> Self {
         // Partition files into buckets
         let mut b0 = Vec::new();
         let mut b1 = Vec::new();
@@ -363,7 +364,17 @@ impl OobConflictState {
             InputAction::TextHome => {
                 let bucket = self.active_bucket_state_mut();
                 let indices = bucket.get_filtered_indices();
-                bucket.selection.toggle_all_filtered(&indices);
+                // Toggle all filtered: if all are selected, deselect all; otherwise select all
+                let all_selected = indices.iter().all(|&i| bucket.list.selected.contains(&i));
+                if all_selected {
+                    for &i in &indices {
+                        bucket.list.selected.remove(&i);
+                    }
+                } else {
+                    for &i in &indices {
+                        bucket.list.selected.insert(i);
+                    }
+                }
                 return OobConflictAction::None;
             }
             InputAction::OpenFilter => {
@@ -375,8 +386,12 @@ impl OobConflictState {
             InputAction::Toggle => {
                 let bucket = self.active_bucket_state_mut();
                 if !bucket.files.is_empty() {
-                    let cursor = bucket.cursor;
-                    bucket.selection.toggle(cursor);
+                    let cursor = bucket.list.cursor;
+                    if bucket.list.selected.contains(&cursor) {
+                        bucket.list.selected.remove(&cursor);
+                    } else {
+                        bucket.list.selected.insert(cursor);
+                    }
                 }
                 return OobConflictAction::None;
             }

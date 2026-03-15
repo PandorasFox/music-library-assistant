@@ -114,8 +114,7 @@ pub enum InsightAction {
     LaunchTagCanonicityResolution,
     LaunchCompoundTagSplitSafe,
     LaunchCompoundTagSplitReview,
-    LaunchOobTagSync,
-    LaunchOobTagConflict,
+    LaunchOobResolution,
     LaunchMovedFileAcknowledge,
     LaunchCorruptFileResolution,
     LaunchShitFormatTranscode,
@@ -426,10 +425,11 @@ pub enum TagSearchMode {
 pub const SEARCHABLE_TAGS: &[&str] = &["artist", "album", "album_artist", "title", "genre"];
 
 // ============================================================================
-// Tag editor types
+// Tag editor types (DEPRECATED — use tag_set / tag_editor_state modules)
 // ============================================================================
 
 /// A single tag field (name + value pair) for editing.
+#[deprecated(note = "use tag_set::TagSet + tag_set::TagEntry instead")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct TagField {
     pub name: String,
@@ -439,6 +439,7 @@ pub struct TagField {
 }
 
 /// Tag editor mode (single-track or aggregated bulk view).
+#[deprecated(note = "use tag_editor_state::TagEditorMode instead")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TagEditorMode {
     #[default]
@@ -447,6 +448,7 @@ pub enum TagEditorMode {
 }
 
 /// Whether a field is currently being edited, and which part.
+#[deprecated(note = "use field_form::FieldEditMode instead")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldEditState {
     NonEditable,
@@ -455,6 +457,7 @@ pub enum FieldEditState {
 }
 
 /// Aggregated value across multiple tracks.
+#[deprecated(note = "use tag_set::AggregatedState instead")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AggregatedValue {
     /// All tracks have the same value.
@@ -468,6 +471,7 @@ pub enum AggregatedValue {
 }
 
 /// An aggregated tag field across multiple tracks.
+#[deprecated(note = "use tag_set::AggregatedEntry instead")]
 #[derive(Debug, Clone)]
 pub struct AggregatedTagField {
     pub name: String,
@@ -476,6 +480,7 @@ pub struct AggregatedTagField {
 }
 
 /// A detected change between original and current tag state for a single track.
+#[deprecated(note = "use tag_set::TagSet::diff() which produces TagOps directly")]
 #[derive(Debug, Clone)]
 pub struct TagChange {
     pub track_idx: usize,

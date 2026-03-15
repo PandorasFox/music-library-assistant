@@ -1,40 +1,13 @@
 //! OOB (Out-of-Band) Tag Resolution
 //!
-//! Handles OOB sync, OOB conflict inspection, and moved file acknowledgement modals.
+//! Handles OOB conflict inspection and moved file acknowledgement modals.
 
 use super::super::App;
 use super::witness;
 use super::HandleAction;
-use mm_meta::domain_queries;
 use mm_meta::decisions::DecisionKey;
-use crate::{moved_file_modal, oob_conflict_modal, oob_sync_modal, ActiveView};
-
-// ========================================================================
-// OOB Tag Sync
-// ========================================================================
-
-impl HandleAction for oob_sync_modal::OobSyncAction {
-    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
-        match self {
-            oob_sync_modal::OobSyncAction::None => {}
-            oob_sync_modal::OobSyncAction::AcceptDisk => {
-                let Some(w) = witness else { return };
-                app.stage_oob_sync_mutations(mm_meta::views::OobSyncDirection::DiskToIndex, w);
-                // Transition to review
-                app.after_staging_decisions();
-            }
-            oob_sync_modal::OobSyncAction::AcceptDb => {
-                let Some(w) = witness else { return };
-                app.stage_oob_sync_mutations(mm_meta::views::OobSyncDirection::IndexToDisk, w);
-                // Transition to review
-                app.after_staging_decisions();
-            }
-            oob_sync_modal::OobSyncAction::Cancel => {
-                app.cancel_and_return_to_source("OOB sync resolution cancelled");
-            }
-        }
-    }
-}
+use mm_meta::views::ConflictBucket;
+use crate::{moved_file_modal, oob_conflict_modal, ActiveView};
 
 // ========================================================================
 // OOB Conflict Inspection
@@ -45,7 +18,7 @@ impl HandleAction for oob_conflict_modal::OobConflictAction {
         match self {
             oob_conflict_modal::OobConflictAction::None => {}
             oob_conflict_modal::OobConflictAction::Navigate => {
-                // Mismatches are carried in BucketedOobFile — nothing to reload
+                // Mismatches are carried in OobFile — nothing to reload
             }
             oob_conflict_modal::OobConflictAction::Resolve => {
                 let Some(w) = witness else { return };
@@ -56,7 +29,7 @@ impl HandleAction for oob_conflict_modal::OobConflictAction {
                 app.stage_oob_mtime_acknowledgement(w);
             }
             oob_conflict_modal::OobConflictAction::Cancel => {
-                app.cancel_and_return_to_source("OOB conflict inspection closed");
+                app.cancel_and_return_to_source("OOB resolution closed");
             }
         }
     }
@@ -87,116 +60,12 @@ impl HandleAction for moved_file_modal::MovedFileAction {
 // ========================================================================
 
 impl App {
-    /// Start OOB tag sync resolution from Insights view.
-    pub(crate) fn start_oob_sync_resolution(&mut self) {
-        let files = self.query(domain_queries::GetOobSyncFiles);
-
-        // Start transaction for the sync resolution
-        let _ = self.start_transaction("OOB tag sync");
-
-        let state = oob_sync_modal::OobSyncState::new(files);
-        self.view = ActiveView::OobSyncResolution(state);
-    }
-
-    /// Stage mutations for OOB tag sync (accept one direction).
-    ///
-    /// If selection is active, only selected files are included.
-    /// Otherwise, all files matching the direction are included.
-    ///
-    /// Uses the dedicated batch mutations which properly handle multi-value tags:
-    /// - IndexToDisk: ApplyDbTagsToDisk (writes DB tags to disk files)
-    /// - DiskToIndex: AssimilateDiskTagsToDb (reads disk tags into DB index)
-    fn stage_oob_sync_mutations(
-        &mut self,
-        direction: mm_meta::views::OobSyncDirection,
-        gesture: &witness::ConfirmationGesture,
-    ) {
-        use mm_meta::db_types::Zone;
-        use mm_meta::mutations::indexing::{
-            ApplyDbTagsToDiskMutation, AssimilateDiskTagsToDbMutation,
-        };
-        use mm_meta::mutations::Mutation;
-        use mm_meta::views::OobSyncDirection;
-
-        let (selected_indices, files_ref) = match &self.view {
-            ActiveView::OobSyncResolution(ref state) => {
-                let indices = if state.selection.is_active() {
-                    state.selection.selected_indices()
-                } else {
-                    (0..state.files.len()).collect()
-                };
-                // Collect the data we need before dropping the borrow
-                let files: Vec<_> = indices
-                    .iter()
-                    .filter_map(|&idx| state.files.get(idx))
-                    .filter(|file| file.direction == direction)
-                    .map(|file| (file.inode, file.path.clone()))
-                    .collect();
-                (indices, files)
-            }
-            _ => return,
-        };
-        let _ = selected_indices; // used above for collecting
-
-        let resolver = &self.resolver;
-
-        let tracks: Vec<(i64, std::path::PathBuf)> = files_ref
-            .into_iter()
-            .map(|(inode, path)| {
-                let abs_path = resolver.resolve(std::path::Path::new(&path));
-                (inode, abs_path)
-            })
-            .collect();
-
-        if tracks.is_empty() {
-            self.status_message = Some("No files to sync".to_string());
-            return;
-        }
-
-        // Generate individual single-file mutations for each file
-        let (label, mutations): (&str, Vec<Mutation>) = match direction {
-            OobSyncDirection::IndexToDisk => (
-                "Sync index tags \u{2192} disk",
-                tracks
-                    .into_iter()
-                    .map(|(inode, path)| {
-                        Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation {
-                            inode,
-                            path,
-                            zone: Zone::Corpus,
-                        })
-                    })
-                    .collect(),
-            ),
-            OobSyncDirection::DiskToIndex => (
-                "Sync disk tags \u{2192} index",
-                tracks
-                    .into_iter()
-                    .map(|(inode, path)| {
-                        Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation {
-                            inode,
-                            path,
-                            zone: None,
-                        })
-                    })
-                    .collect(),
-            ),
-        };
-
-        let decision = gesture.decide(label, mutations);
-        let _ = super::super::operator_decisions::stage_decision(
-            self,
-            DecisionKey::OobSync,
-            decision,
-        );
-    }
-
     /// Start OOB tag conflict inspection from Insights view.
     ///
     /// Loads all OOB signal files classified into four buckets (with mismatch
     /// data from signals) and starts a transaction for potential resolution.
     pub(crate) fn start_oob_conflict_inspection(&mut self) {
-        let files = self.query(domain_queries::GetOobFilesBucketed);
+        let files = self.query(mm_meta::domain_queries::GetOobFiles { bucket: None });
 
         // Start transaction for potential resolution
         let _ = self.start_transaction("OOB tag resolution");
@@ -221,15 +90,14 @@ impl App {
         use mm_meta::mutations::Mutation;
         use crate::oob_conflict_modal::types::OobConflictButton;
 
-        let (files_data, button) = match &self.view {
+        let (files_data, button, active_bucket) = match &self.view {
             ActiveView::OobConflictInspection(ref state) => {
                 let bucket_state = state.active_bucket_state();
 
-                // Determine which indices to process
-                let indices: Vec<usize> = if bucket_state.selection.is_active() {
-                    bucket_state.selection.selected_indices()
+                // Use selected indices if any, otherwise all files
+                let indices: Vec<usize> = if !bucket_state.list.selected.is_empty() {
+                    bucket_state.list.selected.iter().copied().collect()
                 } else {
-                    // No selection - process all files in bucket
                     (0..bucket_state.files.len()).collect()
                 };
 
@@ -238,7 +106,7 @@ impl App {
                     .filter_map(|&idx| bucket_state.files.get(idx))
                     .map(|f| (f.inode, f.path.clone()))
                     .collect();
-                (files, state.frame.buttons.selected)
+                (files, state.frame.buttons.selected, state.active_bucket)
             }
             _ => return,
         };
@@ -294,7 +162,7 @@ impl App {
         let decision = gesture.decide(label, mutations);
         let _ = super::super::operator_decisions::stage_decision(
             self,
-            DecisionKey::OobConflict,
+            DecisionKey::OobResolution { bucket: active_bucket },
             decision,
         );
 
@@ -316,11 +184,10 @@ impl App {
             ActiveView::OobConflictInspection(ref state) => {
                 let bucket_state = state.active_bucket_state();
 
-                // Determine which indices to process
-                let indices: Vec<usize> = if bucket_state.selection.is_active() {
-                    bucket_state.selection.selected_indices()
+                // Use selected indices if any, otherwise all files
+                let indices: Vec<usize> = if !bucket_state.list.selected.is_empty() {
+                    bucket_state.list.selected.iter().copied().collect()
                 } else {
-                    // No selection - process all files in bucket
                     (0..bucket_state.files.len()).collect()
                 };
 
@@ -349,7 +216,7 @@ impl App {
         let decision = gesture.decide("Acknowledge mtime changes", mutations);
         let _ = super::super::operator_decisions::stage_decision(
             self,
-            DecisionKey::MtimeAck,
+            DecisionKey::OobResolution { bucket: ConflictBucket::MtimeOnly },
             decision,
         );
 
@@ -360,7 +227,7 @@ impl App {
     /// Start moved file acknowledgement modal.
     pub(crate) fn start_moved_file_acknowledge(&mut self) {
         // Query files with moved_file signals
-        let files = self.query(domain_queries::GetMovedFiles);
+        let files = self.query(mm_meta::domain_queries::GetMovedFiles);
 
         mm_meta::logging::log_general(format!(
             "Starting moved file acknowledgement: {} files",

@@ -9,7 +9,7 @@ use crate::{
     external_match_view, eye::Eye,
     history_view, inbox_corpus_match_modal, inbox_organize, inbox_view, insights_view,
     missing_directory_modal, missing_file_modal,
-    moved_file_modal, oob_conflict_modal, oob_sync_modal, progress_screen, progressive_worker,
+    moved_file_modal, oob_conflict_modal, progress_screen, progressive_worker,
     release_review, shit_format_modal, startup, subpar_duplicate_modal, tabbed_transaction_review,
     tag_editor, tag_search, transaction_review, tree_browser,
 };
@@ -80,7 +80,6 @@ pub(crate) enum ActiveView {
         focus: mm_ui::geometry::FocusPane,
     },
     MovedFileAcknowledge(moved_file_modal::MovedFileState),
-    OobSyncResolution(oob_sync_modal::OobSyncState),
     OobConflictInspection(oob_conflict_modal::OobConflictState),
     // Release packing browser (read-only)
     ReleasePackingBrowser(super::release_packing_browser::ReleasePackingBrowserState),
@@ -180,8 +179,7 @@ impl ActiveView {
             Self::InboxOrganize(_) => Some("Inbox Organize"),
             Self::DirectoryClusterResolution { .. } => Some("Directory Overlap Resolution"),
             Self::MovedFileAcknowledge(_) => Some("Moved Files"),
-            Self::OobSyncResolution(_) => Some("OOB Tag Sync"),
-            Self::OobConflictInspection(_) => Some("OOB Tag Conflicts"),
+            Self::OobConflictInspection(_) => Some("OOB Resolution"),
             Self::ReleasePackingBrowser(_) => Some("Release Packing Browser"),
             Self::KnotBrowser(_) => Some("Knot Browser"),
             Self::AcoustidBrowse(_) => Some("AcoustID Browse"),
@@ -228,7 +226,6 @@ impl ActiveView {
                     .map(|d| d.path_suffix.as_str())
             }
             Self::MovedFileAcknowledge(s) => s.selected_path(),
-            Self::OobSyncResolution(s) => s.selected_path(),
             Self::OobConflictInspection(s) => s.selected_path(),
             Self::AcoustidBrowse(s) => s.selected_path(),
             Self::ReleaseReview(s) => s.selected_path(),
@@ -320,7 +317,6 @@ pub(crate) enum ViewAction {
     InboxOrganize(inbox_organize::InboxOrganizeAction),
     DirectoryClusterResolution(mm_ui::resolutions::directory_cluster::DirectoryClusterAction),
     MovedFileAcknowledge(moved_file_modal::MovedFileAction),
-    OobSyncResolution(oob_sync_modal::OobSyncAction),
     OobConflictInspection(oob_conflict_modal::OobConflictAction),
     ReleasePackingBrowser(super::release_packing_browser::ReleasePackingBrowserAction),
     KnotBrowser(super::knot_browser::KnotBrowserAction),

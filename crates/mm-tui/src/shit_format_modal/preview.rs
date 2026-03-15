@@ -1,18 +1,8 @@
-//! Shit Format Resolution Preview UI
+//! Shit Format Resolution Preview — TUI rendering only.
 //!
-//! Shows non-Vorbis container format files split into:
-//! - Lossless (WAV, AIFF, APE, WV) → Remux to FLAC
-//! - Lossy (MP3, M4A, AAC, WMA) → Transcode to Opus
-//!
-//! - Shift+Up/Down: Switch focus between list and buttons
-//! - Up/Down: Navigate file list (when list focused)
-//! - Left/Right: Adjust Opus bitrate (when on lossy button) / button navigation
-//! - Tab: Cycle between buttons
-//! - Enter: Execute selected button action
-//! - Escape: Cancel
+//! State, input handling, and ModalFrameCore live in mm-ui.
+//! This module provides the ratatui ModalFrame impl.
 
-use crate::action_handlers::witness::ConfirmationGesture;
-use crate::input::InputAction;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -21,179 +11,98 @@ use ratatui::{
     Frame,
 };
 
-use super::types::{ShitFormatAction, ShitFormatButton, ShitFormatButtonCtx, ShitFormatModalData};
+use mm_meta::views::cluster_deploy::ShitFormatModalData;
+use mm_ui::resolutions::shit_format::{ShitFormatButton, ShitFormatPreviewState};
 use crate::helpers::{render_pane, truncate_right};
-use crate::widgets::FocusPane;
-use crate::widgets::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrame, ModalFrameCore};
+use crate::widgets::modal_frame::ModalFrame;
 use crate::widgets::selection_styles::{CURSOR_STYLE, LIST_ITEM_STYLE};
 
-// ============================================================================
-// State
-// ============================================================================
-
-/// State for the shit format resolution modal.
-#[derive(Debug)]
-pub struct ShitFormatPreviewState {
-    /// Cached modal data (loaded once on init).
-    pub cached_data: ShitFormatModalData,
-    /// Cursor position for the file list.
-    pub cursor: usize,
-    /// Shared frame state (focus, buttons, click targets).
-    pub frame: FrameState<ShitFormatButton>,
+/// Entry point for rendering this modal.
+pub fn render(f: &mut Frame, area: Rect, state: &mut ShitFormatPreviewState) {
+    state.render_frame(f, area);
 }
 
-impl ShitFormatPreviewState {
-    /// Path of the currently selected file (for status bar).
-    pub fn selected_path(&self) -> Option<&str> {
-        let lossless_len = self.cached_data.lossless_files.len();
-        if self.cursor < lossless_len {
-            self.cached_data
-                .lossless_files
-                .get(self.cursor)
-                .map(|f| f.corpus_path.as_str())
-        } else {
-            self.cached_data
-                .lossy_files
-                .get(self.cursor - lossless_len)
-                .map(|f| f.corpus_path.as_str())
-        }
+fn render_lossless_section(data: &ShitFormatModalData, f: &mut Frame, area: Rect) {
+    let has_files = data.has_lossless();
+    let color = if has_files { Color::Green } else { Color::DarkGray };
+
+    let block = Block::default()
+        .title(" Lossless \u{2192} FLAC ")
+        .title_style(Style::default().fg(color))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(color));
+
+    let inner = render_pane(f, area, block);
+
+    if !has_files {
+        f.render_widget(
+            Paragraph::new("No lossless files").style(Style::default().fg(Color::DarkGray)),
+            inner,
+        );
+        return;
     }
 
-    /// Create a new preview state with cached data.
-    pub fn new(cached_data: ShitFormatModalData) -> Self {
-        let mut frame = FrameState::new();
-        // Default to first available action button
-        if cached_data.has_lossless() {
-            frame.buttons.selected = ShitFormatButton::RemuxLossless;
-        } else if cached_data.has_lossy() {
-            frame.buttons.selected = ShitFormatButton::TranscodeLossy;
-        }
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(2)])
+        .split(inner);
 
-        Self {
-            cached_data,
-            cursor: 0,
-            frame,
-        }
+    f.render_widget(
+        Paragraph::new("Remux to FLAC (lossless)").style(Style::default().fg(Color::DarkGray)),
+        chunks[0],
+    );
+
+    let breakdown = data.lossless_breakdown();
+    let items: Vec<ListItem> = breakdown
+        .iter()
+        .map(|(ftype, count)| {
+            ListItem::new(format!("  {}: {}", ftype, count))
+                .style(Style::default().fg(Color::White))
+        })
+        .collect();
+    f.render_widget(List::new(items), chunks[1]);
+}
+
+fn render_lossy_section(data: &ShitFormatModalData, f: &mut Frame, area: Rect) {
+    let has_files = data.has_lossy();
+    let lossy_to_flac = data.lossy_to_flac;
+    let color = if has_files { Color::Cyan } else { Color::DarkGray };
+
+    let title = if lossy_to_flac {
+        " Lossy \u{2192} FLAC (lossy capture) "
+    } else {
+        " Lossy \u{2192} Opus "
+    };
+
+    let block = Block::default()
+        .title(title)
+        .title_style(Style::default().fg(color))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(color));
+
+    let inner = render_pane(f, area, block);
+
+    if !has_files {
+        f.render_widget(
+            Paragraph::new("No lossy files").style(Style::default().fg(Color::DarkGray)),
+            inner,
+        );
+        return;
     }
 
-    fn button_ctx(&self) -> ShitFormatButtonCtx {
-        ShitFormatButtonCtx {
-            lossless_count: self.cached_data.lossless_files.len(),
-            lossy_count: self.cached_data.lossy_files.len(),
-            has_lossless: self.cached_data.has_lossless(),
-            has_lossy: self.cached_data.has_lossy(),
-            lossy_to_flac: self.cached_data.lossy_to_flac,
-            opus_bitrate_kbps: self.cached_data.opus_bitrate_kbps,
-        }
-    }
-
-    /// Handle a mouse click at (x, y).
-    pub(crate) fn handle_click(
-        &mut self,
-        x: u16,
-        y: u16,
-        _gesture: &ConfirmationGesture,
-    ) -> Option<ShitFormatAction> {
-        let ctx = self.button_ctx();
-        if let Some(action) = self.frame.buttons.handle_click(x, y, &ctx) {
-            self.frame.focus_pane = FocusPane::Buttons;
-            return Some(action);
-        }
-        if let Some(id) = self.frame.click_targets.hit_test(x, y) {
-            if let Ok(idx) = id.parse::<usize>() {
-                if idx < self.cached_data.total_count() {
-                    self.frame.focus_pane = FocusPane::List;
-                    self.cursor = idx;
-                }
-            }
-        }
-        None
-    }
-
-    /// Handle input action.
-    pub fn handle_input(&mut self, action: &InputAction) -> ShitFormatAction {
-        // Tab cycles between buttons (works regardless of focus pane)
-        match action {
-            InputAction::CycleNext => {
-                let ctx = self.button_ctx();
-                self.frame.buttons.nav_right(&ctx);
-                return ShitFormatAction::None;
-            }
-            InputAction::CyclePrev => {
-                let ctx = self.button_ctx();
-                self.frame.buttons.nav_left(&ctx);
-                return ShitFormatAction::None;
-            }
-            _ => {}
-        }
-
-        // NavLeft/NavRight: bitrate adjustment when on lossy button in Buttons pane
-        if self.frame.focus_pane == FocusPane::Buttons {
-            let on_lossy = matches!(
-                self.frame.buttons.selected,
-                ShitFormatButton::TranscodeLossy | ShitFormatButton::ConvertAll
-            );
-            if on_lossy && !self.cached_data.lossy_to_flac {
-                match action {
-                    InputAction::NavLeft => {
-                        self.cached_data.decrease_bitrate();
-                        return ShitFormatAction::None;
-                    }
-                    InputAction::NavRight => {
-                        self.cached_data.increase_bitrate();
-                        return ShitFormatAction::None;
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        match self.handle_frame_input(action) {
-            FrameInputResult::Action(a) => a,
-            FrameInputResult::Consumed | FrameInputResult::Unhandled => {
-                ShitFormatAction::None
-            }
-        }
-    }
-
-    /// Render the shit format resolution modal.
-    pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        self.render_frame(f, area);
-    }
-
-    // === Private rendering helpers ===
-
-    fn render_lossless_section(&self, f: &mut Frame, area: Rect) {
-        let has_files = self.cached_data.has_lossless();
-        let color = if has_files { Color::Green } else { Color::DarkGray };
-
-        let block = Block::default()
-            .title(" Lossless \u{2192} FLAC ")
-            .title_style(Style::default().fg(color))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(color));
-
-        let inner = render_pane(f, area, block);
-
-        if !has_files {
-            f.render_widget(
-                Paragraph::new("No lossless files").style(Style::default().fg(Color::DarkGray)),
-                inner,
-            );
-            return;
-        }
-
+    if lossy_to_flac {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(2), Constraint::Min(2)])
             .split(inner);
 
         f.render_widget(
-            Paragraph::new("Remux to FLAC (lossless)").style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new("Capture decoded waveform to FLAC")
+                .style(Style::default().fg(Color::DarkGray)),
             chunks[0],
         );
 
-        let breakdown = self.cached_data.lossless_breakdown();
+        let breakdown = data.lossy_breakdown();
         let items: Vec<ListItem> = breakdown
             .iter()
             .map(|(ftype, count)| {
@@ -202,130 +111,34 @@ impl ShitFormatPreviewState {
             })
             .collect();
         f.render_widget(List::new(items), chunks[1]);
-    }
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(2)])
+            .split(inner);
 
-    fn render_lossy_section(&self, f: &mut Frame, area: Rect) {
-        let has_files = self.cached_data.has_lossy();
-        let lossy_to_flac = self.cached_data.lossy_to_flac;
-        let color = if has_files { Color::Cyan } else { Color::DarkGray };
+        let bitrate = data.opus_bitrate_kbps;
+        let ratio = (bitrate as f64 - 32.0) / (512.0 - 32.0);
+        let gauge = Gauge::default()
+            .block(
+                Block::default()
+                    .title("Opus Bitrate")
+                    .borders(Borders::NONE),
+            )
+            .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
+            .ratio(ratio)
+            .label(format!("{} kbps", bitrate));
+        f.render_widget(gauge, chunks[0]);
 
-        let title = if lossy_to_flac {
-            " Lossy \u{2192} FLAC (lossy capture) "
-        } else {
-            " Lossy \u{2192} Opus "
-        };
-
-        let block = Block::default()
-            .title(title)
-            .title_style(Style::default().fg(color))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(color));
-
-        let inner = render_pane(f, area, block);
-
-        if !has_files {
-            f.render_widget(
-                Paragraph::new("No lossy files").style(Style::default().fg(Color::DarkGray)),
-                inner,
-            );
-            return;
-        }
-
-        if lossy_to_flac {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(2), Constraint::Min(2)])
-                .split(inner);
-
-            f.render_widget(
-                Paragraph::new("Capture decoded waveform to FLAC")
-                    .style(Style::default().fg(Color::DarkGray)),
-                chunks[0],
-            );
-
-            let breakdown = self.cached_data.lossy_breakdown();
-            let items: Vec<ListItem> = breakdown
-                .iter()
-                .map(|(ftype, count)| {
-                    ListItem::new(format!("  {}: {}", ftype, count))
-                        .style(Style::default().fg(Color::White))
-                })
-                .collect();
-            f.render_widget(List::new(items), chunks[1]);
-        } else {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(3), Constraint::Min(2)])
-                .split(inner);
-
-            let bitrate = self.cached_data.opus_bitrate_kbps;
-            let ratio = (bitrate as f64 - 32.0) / (512.0 - 32.0);
-            let gauge = Gauge::default()
-                .block(
-                    Block::default()
-                        .title("Opus Bitrate")
-                        .borders(Borders::NONE),
-                )
-                .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
-                .ratio(ratio)
-                .label(format!("{} kbps", bitrate));
-            f.render_widget(gauge, chunks[0]);
-
-            let breakdown = self.cached_data.lossy_breakdown();
-            let items: Vec<ListItem> = breakdown
-                .iter()
-                .map(|(ftype, count)| {
-                    ListItem::new(format!("  {}: {}", ftype, count))
-                        .style(Style::default().fg(Color::White))
-                })
-                .collect();
-            f.render_widget(List::new(items), chunks[1]);
-        }
-    }
-}
-
-// ============================================================================
-// ModalFrame Implementation
-// ============================================================================
-
-impl ModalFrameCore for ShitFormatPreviewState {
-    type Button = ShitFormatButton;
-
-    fn content_layout(&self) -> ContentLayout {
-        ContentLayout::HorizontalSplit {
-            list_percent: 60,
-            info_height: 3,
-        }
-    }
-
-    fn list_title(&self) -> String {
-        format!(" Files ({}) ", self.cached_data.total_count())
-    }
-
-    fn empty_message(&self) -> &'static str {
-        "No shit format files found"
-    }
-
-    fn frame_state(&self) -> &FrameState<ShitFormatButton> {
-        &self.frame
-    }
-    fn frame_state_mut(&mut self) -> &mut FrameState<ShitFormatButton> {
-        &mut self.frame
-    }
-    fn cursor(&self) -> usize {
-        self.cursor
-    }
-    fn cursor_mut(&mut self) -> &mut usize {
-        &mut self.cursor
-    }
-    fn list_len(&self) -> usize {
-        self.cached_data.total_count()
-    }
-    fn button_ctx(&self) -> ShitFormatButtonCtx {
-        ShitFormatPreviewState::button_ctx(self)
-    }
-    fn escape_action(&self) -> ShitFormatAction {
-        ShitFormatAction::Cancel
+        let breakdown = data.lossy_breakdown();
+        let items: Vec<ListItem> = breakdown
+            .iter()
+            .map(|(ftype, count)| {
+                ListItem::new(format!("  {}: {}", ftype, count))
+                    .style(Style::default().fg(Color::White))
+            })
+            .collect();
+        f.render_widget(List::new(items), chunks[1]);
     }
 }
 
@@ -418,13 +231,12 @@ impl ModalFrame for ShitFormatPreviewState {
     }
 
     fn render_detail(&mut self, f: &mut Frame, area: Rect) {
-        // Config pane: lossless section + lossy section
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
 
-        self.render_lossless_section(f, chunks[0]);
-        self.render_lossy_section(f, chunks[1]);
+        render_lossless_section(&self.cached_data, f, chunks[0]);
+        render_lossy_section(&self.cached_data, f, chunks[1]);
     }
 }

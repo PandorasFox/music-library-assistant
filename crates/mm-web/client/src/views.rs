@@ -1786,36 +1786,7 @@ pub fn render_inbox_corpus_match(data: &serde_json::Value) -> Node {
     )
 }
 
-/// Render OOB sync resolution data.
-pub fn render_oob_sync(data: &serde_json::Value) -> Node {
-    let items: Vec<String> = data
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|entry| {
-                    let path = entry.get("path")?.as_str()?;
-                    let direction = entry.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
-                    let mismatch_count = entry.get("mismatches")
-                        .and_then(|v| v.as_array())
-                        .map_or(0, |a| a.len());
-                    Some(format!("{path}  [{direction}, {mismatch_count} tag(s)]"))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    render_resolution_view(
-        &format!("OOB Tag Sync ({})", items.len()),
-        &items,
-        &[
-            ("Accept Disk", "var(--c-green)", "window.__mm_resolve_cancel()"),
-            ("Accept DB", "var(--c-blue)", "window.__mm_resolve_cancel()"),
-            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
-        ],
-    )
-}
-
-/// Render OOB conflict files for a single bucket type.
+/// Render OOB resolution files for a single bucket type (or all).
 pub fn render_oob_conflict_bucket(title: &str, data: &serde_json::Value) -> Node {
     let items: Vec<String> = data
         .as_array()

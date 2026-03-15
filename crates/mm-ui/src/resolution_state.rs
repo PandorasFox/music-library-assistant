@@ -1,15 +1,16 @@
 //! Generic resolution modal state.
 //!
 //! [`ResolutionState<D, B>`] provides the shared skeleton for all resolution
-//! modals: cached data, cursor, focus pane, button row. It implements
-//! [`ModalFrameCore`] via blanket impl, so concrete modals only need to
-//! provide a data type (implementing [`ResolutionData`]), a button enum
-//! (implementing [`ModalButtons`]), and backend-specific rendering.
+//! modals: cached data, list navigation (with wizard support), focus pane,
+//! button row. It implements [`ModalFrameCore`] via blanket impl, so concrete
+//! modals only need to provide a data type (implementing [`ResolutionData`]),
+//! a button enum (implementing [`ModalButtons`]), and backend-specific rendering.
 
 use crate::geometry::FocusPane;
 use crate::input::InputAction;
 use crate::modal_buttons::ModalButtons;
 use crate::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrameCore};
+use crate::standard_list::{StandardListConfig, StandardListState};
 
 // ============================================================================
 // ResolutionData trait
@@ -54,14 +55,17 @@ pub trait ResolutionData {
 /// `D` is the data payload (loaded once when the modal opens).
 /// `B` is the button enum (resolution choices).
 ///
+/// Uses `StandardListState` for list navigation, giving every resolution
+/// modal wizard (Z-key) support, scroll management, and multi-select for free.
+///
 /// Implements [`ModalFrameCore`] automatically, so both TUI and web clients
 /// get input handling for free. Backend-specific rendering is provided by
 /// implementing mm-tui's `ModalFrame` trait on the concrete instantiation.
 pub struct ResolutionState<D: ResolutionData, B: ModalButtons<Context = D::ButtonCtx>> {
-    /// Data loaded once when the modal opens. Never mutated by UI.
+    /// Data loaded once when the modal opens.
     pub data: D,
-    /// Cursor within the primary list.
-    pub cursor: usize,
+    /// List navigation state (cursor, scroll, wizard, multi-select).
+    pub list: StandardListState,
     /// Shared frame state (focus pane, button row, click targets).
     pub frame: FrameState<B>,
 }
@@ -75,14 +79,14 @@ where
     pub fn new(data: D) -> Self {
         Self {
             data,
-            cursor: 0,
+            list: StandardListState::new(StandardListConfig::default()),
             frame: FrameState::new(),
         }
     }
 
     /// Path of the currently selected item (for status bar).
     pub fn selected_path(&self) -> Option<&str> {
-        self.data.selected_path(self.cursor)
+        self.data.selected_path(self.list.cursor)
     }
 
     /// Handle keyboard input. Returns `Some(action)` if a button was confirmed
@@ -106,11 +110,16 @@ where
             if let Ok(idx) = id.parse::<usize>() {
                 if idx < self.data.list_len() {
                     self.frame.focus_pane = FocusPane::List;
-                    self.cursor = idx;
+                    self.list.cursor = idx;
                 }
             }
         }
         None
+    }
+
+    /// Reset list state (cursor, scroll) — used when advancing groups.
+    pub fn reset_list(&mut self) {
+        self.list.reset();
     }
 }
 
@@ -146,11 +155,11 @@ where
     }
 
     fn cursor(&self) -> usize {
-        self.cursor
+        self.list.cursor
     }
 
     fn cursor_mut(&mut self) -> &mut usize {
-        &mut self.cursor
+        &mut self.list.cursor
     }
 
     fn list_len(&self) -> usize {
@@ -162,8 +171,6 @@ where
     }
 
     fn escape_action(&self) -> B::Action {
-        // Convention: the Default button is always Cancel, and its action
-        // is the cancel/escape action.
         let ctx = self.data.button_ctx();
         B::default().action(&ctx)
     }
@@ -180,7 +187,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolutionState")
-            .field("cursor", &self.cursor)
+            .field("cursor", &self.list.cursor)
             .finish_non_exhaustive()
     }
 }
@@ -289,7 +296,7 @@ mod tests {
         let state = TestState::new(TestData {
             items: vec!["a".into(), "b".into()],
         });
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.list.cursor, 0);
     }
 
     #[test]
@@ -298,7 +305,7 @@ mod tests {
             items: vec!["first".into(), "second".into()],
         });
         assert_eq!(state.selected_path(), Some("first"));
-        state.cursor = 1;
+        state.list.cursor = 1;
         assert_eq!(state.selected_path(), Some("second"));
     }
 
@@ -316,10 +323,10 @@ mod tests {
         let mut state = TestState::new(TestData {
             items: vec!["a".into(), "b".into(), "c".into()],
         });
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.list.cursor, 0);
         let result = state.handle_input(&InputAction::NavDown);
-        assert!(result.is_none()); // Navigation, not an action
-        assert_eq!(state.cursor, 1);
+        assert!(result.is_none());
+        assert_eq!(state.list.cursor, 1);
     }
 
     #[test]
@@ -329,7 +336,7 @@ mod tests {
         });
         let result = state.handle_input(&InputAction::NavUp);
         assert!(result.is_none());
-        assert_eq!(state.cursor, 0);
+        assert_eq!(state.list.cursor, 0);
     }
 
     #[test]

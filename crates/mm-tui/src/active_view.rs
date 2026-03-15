@@ -72,13 +72,7 @@ pub(crate) enum ActiveView {
     SubparDuplicateResolution(subpar_duplicate_modal::SubparDuplicateState),
     InboxCorpusMatchResolution(inbox_corpus_match_modal::InboxCorpusMatchState),
     InboxOrganize(inbox_organize::InboxOrganizeState),
-    DirectoryClusterResolution {
-        data: mm_meta::views::cluster_deploy::DirectoryClusterModalData,
-        current_cluster: usize,
-        list: mm_ui::standard_list::StandardListState,
-        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::directory_cluster::DirectoryClusterButton>,
-        focus: mm_ui::geometry::FocusPane,
-    },
+    DirectoryClusterResolution(mm_ui::resolutions::directory_cluster::DirectoryClusterState),
     MovedFileAcknowledge(moved_file_modal::MovedFileState),
     OobResolution(oob_conflict_modal::OobResolutionState),
     // Release packing browser (read-only)
@@ -177,7 +171,7 @@ impl ActiveView {
             Self::SubparDuplicateResolution(_) => Some("Subpar Duplicate Resolution"),
             Self::InboxCorpusMatchResolution(_) => Some("Inbox Corpus Match Resolution"),
             Self::InboxOrganize(_) => Some("Inbox Organize"),
-            Self::DirectoryClusterResolution { .. } => Some("Directory Overlap Resolution"),
+            Self::DirectoryClusterResolution(_) => Some("Directory Overlap Resolution"),
             Self::MovedFileAcknowledge(_) => Some("Moved Files"),
             Self::OobResolution(_) => Some("OOB Resolution"),
             Self::ReleasePackingBrowser(_) => Some("Release Packing Browser"),
@@ -220,11 +214,7 @@ impl ActiveView {
             Self::SubparDuplicateResolution(s) => s.selected_path(),
             Self::InboxCorpusMatchResolution(s) => s.selected_path(),
             Self::InboxOrganize(_) => None,
-            Self::DirectoryClusterResolution { ref data, current_cluster, ref list, .. } => {
-                data.clusters.get(*current_cluster)
-                    .and_then(|c| c.directories.get(list.cursor))
-                    .map(|d| d.path_suffix.as_str())
-            }
+            Self::DirectoryClusterResolution(ref s) => s.selected_path(),
             Self::MovedFileAcknowledge(s) => s.selected_path(),
             Self::OobResolution(s) => s.selected_path(),
             Self::AcoustidBrowse(s) => s.selected_path(),

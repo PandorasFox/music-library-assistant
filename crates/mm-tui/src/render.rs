@@ -233,13 +233,8 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::InboxOrganize(ref mut state) => {
             super::inbox_organize::render::render(f, area, state);
         }
-        ActiveView::DirectoryClusterResolution {
-            ref data, current_cluster, ref mut list, ref mut buttons,
-            focus, ..
-        } => {
-            super::directory_cluster_modal::render_v3::render_v3(
-                f, area, data, current_cluster, list, buttons, focus,
-            );
+        ActiveView::DirectoryClusterResolution(ref mut s) => {
+            super::directory_cluster_modal::render_v3::render_v3(f, area, s);
         }
         ActiveView::MissingAlbumSingleResolution {
             ref data, current_group, ref mut list, ref mut buttons,

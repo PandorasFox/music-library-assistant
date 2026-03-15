@@ -8,6 +8,8 @@
 //!
 //! Rendering stays in the client crates (mm-tui, mm-web).
 
+pub mod dispatch;
+
 pub mod compound_split;
 pub mod corrupt_file;
 pub mod deploy_conflicts;

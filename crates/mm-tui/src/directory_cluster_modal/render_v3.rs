@@ -13,7 +13,8 @@ use ratatui::{
     Frame,
 };
 
-use mm_meta::views::cluster_deploy::DirectoryClusterModalData;
+use mm_ui::resolution_state::ResolutionData;
+use mm_ui::resolutions::directory_cluster::DirectoryClusterState;
 use mm_ui::rich_text::{RichBlock, RichSpan};
 use mm_ui::standard_list::ListEntry;
 use mm_ui::wizard::{WizardItem, WizardOffer};
@@ -87,12 +88,11 @@ pub fn build_dir_items(cluster: &mm_meta::views::cluster_deploy::DirectoryCluste
 pub fn render_v3(
     f: &mut Frame,
     area: Rect,
-    data: &DirectoryClusterModalData,
-    current_cluster: usize,
-    list: &mut mm_ui::standard_list::StandardListState,
-    buttons: &mut mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::directory_cluster::DirectoryClusterButton>,
-    focus: mm_ui::geometry::FocusPane,
+    state: &mut DirectoryClusterState,
 ) {
+    let data = &state.data.inner;
+    let current_cluster = state.data.current_cluster;
+
     let padded = mm_ui::geometry::padded_rect(area);
     f.render_widget(Clear, padded);
 
@@ -114,7 +114,7 @@ pub fn render_v3(
         .map(build_dir_items)
         .unwrap_or_default();
 
-    let list_focused = focus == mm_ui::geometry::FocusPane::List;
+    let list_focused = state.frame.focus_pane == mm_ui::geometry::FocusPane::List;
 
     let list_title = {
         let current = current_cluster + 1;
@@ -130,7 +130,7 @@ pub fn render_v3(
     };
 
     crate::widgets::standard_list::render_standard_list(
-        list,
+        &mut state.list,
         f,
         vertical[1],
         &items,
@@ -140,18 +140,15 @@ pub fn render_v3(
     );
 
     // --- Buttons ---
-    let ctx = mm_ui::resolutions::directory_cluster::DirectoryClusterButtonCtx {
-        has_directories: !items.is_empty(),
-        cluster_index: current_cluster,
-    };
-    let button_focused = focus == mm_ui::geometry::FocusPane::Buttons;
-    crate::widgets::modal_buttons::render_buttons(buttons, f, vertical[2], &ctx, button_focused);
+    let ctx = state.data.button_ctx();
+    let button_focused = state.frame.focus_pane == mm_ui::geometry::FocusPane::Buttons;
+    crate::widgets::modal_buttons::render_buttons(&mut state.frame.buttons, f, vertical[2], &ctx, button_focused);
 }
 
 fn render_cluster_title(
     f: &mut Frame,
     area: Rect,
-    data: &DirectoryClusterModalData,
+    data: &mm_meta::views::cluster_deploy::DirectoryClusterModalData,
     current_cluster: usize,
 ) {
     let cluster = data.clusters.get(current_cluster);

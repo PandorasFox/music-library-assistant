@@ -6,10 +6,15 @@
 //! Mutations: StashFromZone + DropFromIndex per cluster, or MarkExpected
 
 use std::borrow::Cow;
+use std::path::PathBuf;
 
 use ratatui::style::Color;
 
 use mm_meta::decisions::DecisionKey;
+use mm_meta::mutations::file_ops::StashFromZoneMutation;
+use mm_meta::mutations::indexing::{DropFromIndexMutation, EmitExpectedOverlapMutation};
+use mm_meta::mutations::Mutation;
+use mm_meta::paths::PathResolver;
 use mm_meta::views::cluster_deploy::DirectoryClusterModalData;
 
 use crate::group_navigation::GroupNavigation;
@@ -106,6 +111,121 @@ impl GroupNavigation for DirectoryClusterData {
 
 /// Concrete resolution state for directory cluster modals.
 pub type DirectoryClusterState = ResolutionState<DirectoryClusterData, DirectoryClusterButton>;
+
+// ============================================================================
+// Dispatchable
+// ============================================================================
+
+impl super::dispatch::Dispatchable for DirectoryClusterState {
+    type Action = DirectoryClusterAction;
+
+    fn dispatch(
+        &self,
+        action: DirectoryClusterAction,
+        resolver: &PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use super::dispatch::DispatchResult;
+
+        match action {
+            DirectoryClusterAction::Stash => {
+                let cluster = match self.data.inner.clusters.get(self.data.current_cluster) {
+                    Some(c) => c,
+                    None => return DispatchResult::Handled,
+                };
+                let dir = match cluster.directories.get(self.list.cursor) {
+                    Some(d) => d,
+                    None => return DispatchResult::Handled,
+                };
+
+                let mutations = stash_directory_mutations(dir, resolver);
+                if mutations.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let ctx = self.data.button_ctx();
+                let key = DirectoryClusterButton::Stash
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: "Stash overlapping directory".into(),
+                    mutations,
+                }
+            }
+            DirectoryClusterAction::MarkExpected => {
+                let cluster = match self.data.inner.clusters.get(self.data.current_cluster) {
+                    Some(c) => c,
+                    None => return DispatchResult::Handled,
+                };
+
+                let parts: Vec<&str> = cluster.cluster_key.splitn(2, '|').collect();
+                let source_a = parts.first().unwrap_or(&"").to_string();
+                let source_b = parts.get(1).unwrap_or(&"").to_string();
+
+                let mutation =
+                    Mutation::EmitExpectedOverlap(EmitExpectedOverlapMutation { source_a, source_b });
+
+                let ctx = self.data.button_ctx();
+                let key = DirectoryClusterButton::MarkExpected
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: "Mark expected overlap".into(),
+                    mutations: vec![mutation],
+                }
+            }
+            DirectoryClusterAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn advance(&mut self) -> bool {
+        if self.data.current_cluster + 1 < self.data.inner.clusters.len() {
+            self.data.current_cluster += 1;
+            self.reset_list();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "Directory overlap cluster resolution cancelled"
+    }
+}
+
+/// Build stash + drop mutations for a directory.
+fn stash_directory_mutations(
+    dir: &mm_meta::views::cluster_deploy::DirectoryGroupEntry,
+    resolver: &PathResolver,
+) -> Vec<Mutation> {
+    if !dir.can_stash_dupes {
+        return Vec::new();
+    }
+
+    let mut mutations = Vec::new();
+    for (idx, corpus_path) in dir.paths.iter().enumerate() {
+        let abs_path = resolver.resolve(std::path::Path::new(corpus_path));
+        mutations.push(Mutation::StashFromZone(StashFromZoneMutation {
+            path: abs_path,
+            stash_name: "overlaps".to_string(),
+        }));
+
+        let inode = dir.inodes.get(idx).copied();
+        mutations.push(Mutation::DropFromIndex(DropFromIndexMutation {
+            path: PathBuf::from(corpus_path),
+            inode,
+            zone: Some("corpus".to_string()),
+        }));
+    }
+    mutations
+}
 
 // ============================================================================
 // Action enum

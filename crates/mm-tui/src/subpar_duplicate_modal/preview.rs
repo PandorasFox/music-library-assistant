@@ -14,7 +14,7 @@ use crate::widgets::{ModalFrame, PathField, CURSOR_STYLE};
 
 /// Build the detail lines for the currently selected pair.
 fn build_detail_lines(state: &SubparDuplicateState, width: u16) -> Vec<Line<'static>> {
-    match state.data.0.files.get(state.cursor) {
+    match state.data.0.files.get(state.list.cursor) {
             Some(file) => {
                 let mut lines = PathField::new(
                     Span::styled("Subpar: ", Style::default().fg(Color::Red)),

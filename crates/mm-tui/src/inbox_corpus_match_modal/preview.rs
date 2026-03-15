@@ -97,7 +97,7 @@ impl ModalFrame for InboxCorpusMatchState {
 
         let inner = render_pane(f, area, block);
 
-        let current = self.data.0.entries.get(self.cursor);
+        let current = self.data.0.entries.get(self.list.cursor);
 
         let lines = if let Some(entry) = current {
             let mut inbox_lines = PathField::new(

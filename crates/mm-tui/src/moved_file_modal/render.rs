@@ -77,7 +77,7 @@ impl ModalFrame for MovedFileState {
             return;
         }
 
-        let file = &self.data.files[self.cursor];
+        let file = &self.data.files[self.list.cursor];
 
         let mut lines = Vec::new();
         lines.extend(

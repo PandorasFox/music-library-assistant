@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! ┌──────────────────────────────────────────────┐┌──────────────┐
-//! │ Search | Files | Health | ... | History | ...  ││  mm beta 9  │
+//! │ Search | Files | Health | ... | History | ...  ││  mm beta 19  │
 //! └──────────────────────────────────────────────┘└──────────────┘
 //! ```
 
@@ -23,7 +23,7 @@ use ratatui::{
 };
 
 /// App title text displayed in the right pane
-const TITLE_TEXT: &str = "mm beta 9";
+const TITLE_TEXT: &str = "mm beta 19";
 
 /// Width of the title pane: text + 1 padding each side + 2 border
 const TITLE_PANE_WIDTH: u16 = TITLE_TEXT.len() as u16 + 4;

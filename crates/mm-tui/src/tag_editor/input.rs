@@ -1,15 +1,18 @@
 //! Tag Editor Input Handling
 //!
-//! Keyboard input handling for the unified tag editor.
-//! Dispatches key events to appropriate handlers based on focus state.
+//! Delegates field editing to FieldFormState, handles modals and button
+//! actions locally.
+
+use mm_ui::field_form::FieldEditMode;
+use mm_ui::tag_editor_state::FocusPane;
+
+use crate::input::InputAction;
 
 use super::state::UnifiedTagEditorState;
 use super::types::{
-    FieldEditState, NavigationDirection, StageChangesButton, TagEditorButton, TagEditorLaunchMode,
-    UnifiedTagEditorAction, UnifiedTagEditorFocus, UnifiedTagEditorModal, UnsavedChangesButton,
+    NavigationDirection, StageChangesButton, TagEditorLaunchMode,
+    UnifiedTagEditorAction, UnifiedTagEditorModal, UnsavedChangesButton,
 };
-use mm_meta::decisions::DecisionKey;
-use crate::input::InputAction;
 
 impl UnifiedTagEditorState {
     /// Handle a semantic input action.
@@ -19,18 +22,21 @@ impl UnifiedTagEditorState {
             return self.handle_modal_input(action);
         }
 
-        match self.focus {
-            UnifiedTagEditorFocus::TagFields => self.handle_tag_fields_input(action),
-            UnifiedTagEditorFocus::Actions => self.handle_actions_input(action),
+        match self.core.focus {
+            FocusPane::Content => self.handle_content_input(action),
+            FocusPane::Buttons => self.handle_buttons_input(action),
         }
     }
+
+    // ========================================================================
+    // Modal input
+    // ========================================================================
 
     fn handle_modal_input(&mut self, action: &InputAction) -> UnifiedTagEditorAction {
         match &mut self.modal {
             Some(UnifiedTagEditorModal::UnsavedChanges { selected_button }) => {
                 match action {
                     InputAction::Confirm => {
-                        // Execute selected button action
                         match selected_button {
                             UnsavedChangesButton::KeepEditing => {
                                 self.modal = None;
@@ -48,12 +54,10 @@ impl UnifiedTagEditorState {
                         }
                     }
                     InputAction::Cancel => {
-                        // Escape always cancels (keeps editing)
                         self.modal = None;
                         UnifiedTagEditorAction::CloseModal
                     }
                     InputAction::NavLeft | InputAction::NavRight | InputAction::CycleNext => {
-                        // Toggle button selection
                         *selected_button = match selected_button {
                             UnsavedChangesButton::KeepEditing => {
                                 UnsavedChangesButton::DiscardAndProceed
@@ -75,16 +79,15 @@ impl UnifiedTagEditorState {
                 edit_input,
             }) => {
                 let num_values = values.len();
-                let add_entry_idx = num_values; // "+ Add value" is at end
+                let add_entry_idx = num_values;
 
                 match action {
                     InputAction::Cancel => {
                         if *editing {
-                            // Cancel edit, revert input
                             *editing = false;
                             edit_input.clear();
                         } else {
-                            // Close modal, apply changes back to tag_fields
+                            // Close modal — apply changes to the TagSet
                             let field_idx_copy = *field_idx;
                             let values_copy = values.clone();
                             self.apply_multi_value_changes(field_idx_copy, values_copy);
@@ -94,22 +97,18 @@ impl UnifiedTagEditorState {
                     }
                     InputAction::Confirm => {
                         if *editing {
-                            // Commit edit
                             if *current_value_idx < num_values {
                                 values[*current_value_idx] = edit_input.value().to_string();
                             } else if *current_value_idx == add_entry_idx && !edit_input.is_empty()
                             {
-                                // Adding new value
                                 values.push(edit_input.value().to_string());
                             }
                             *editing = false;
                             edit_input.clear();
                         } else if *current_value_idx < num_values {
-                            // Start editing existing value
                             *editing = true;
                             edit_input.set_value(&values[*current_value_idx]);
                         } else if *current_value_idx == add_entry_idx {
-                            // Start adding new value
                             *editing = true;
                             edit_input.clear();
                         }
@@ -128,7 +127,6 @@ impl UnifiedTagEditorState {
                         UnifiedTagEditorAction::None
                     }
                     InputAction::Delete | InputAction::Backspace if !*editing => {
-                        // Delete current value (not the add entry)
                         if *current_value_idx < num_values && num_values > 0 {
                             values.remove(*current_value_idx);
                             if *current_value_idx >= values.len() && !values.is_empty() {
@@ -138,7 +136,6 @@ impl UnifiedTagEditorState {
                         UnifiedTagEditorAction::None
                     }
                     _ if *editing => {
-                        // Delegate all text editing to the TextInputState
                         edit_input.handle_input(action);
                         UnifiedTagEditorAction::None
                     }
@@ -154,18 +151,16 @@ impl UnifiedTagEditorState {
                         let direction = *direction;
                         match selected_button {
                             StageChangesButton::Yes => {
-                                // Stage decision via proper Enter keypress, then navigate
                                 let mutations = self.generate_mutations_for_current_item();
                                 let key_item = self.decision_key_item(&mutations);
                                 self.modal = None;
                                 UnifiedTagEditorAction::StageDecisionAndNavigate {
-                                    key: DecisionKey::TagEdit { key_item },
+                                    key: mm_ui::decision_keys::tag_edit(key_item),
                                     mutations,
                                     direction,
                                 }
                             }
                             StageChangesButton::No => {
-                                // Navigate without staging - edits remain in local state
                                 self.modal = None;
                                 match direction {
                                     NavigationDirection::Next => UnifiedTagEditorAction::NextItem,
@@ -173,7 +168,6 @@ impl UnifiedTagEditorState {
                                 }
                             }
                             StageChangesButton::Cancel => {
-                                // Stay on current file
                                 self.modal = None;
                                 UnifiedTagEditorAction::CloseModal
                             }
@@ -206,184 +200,120 @@ impl UnifiedTagEditorState {
         }
     }
 
-    fn handle_tag_fields_input(&mut self, action: &InputAction) -> UnifiedTagEditorAction {
-        match action {
-            InputAction::Cancel => {
-                if self.field_edit_state != FieldEditState::NonEditable {
-                    self.field_edit_state = FieldEditState::NonEditable;
-                    UnifiedTagEditorAction::None
-                } else if self.has_changes_for_current_item() {
-                    self.modal = Some(UnifiedTagEditorModal::UnsavedChanges {
-                        selected_button: UnsavedChangesButton::default(),
-                    });
-                    UnifiedTagEditorAction::None
-                } else if self.is_embedded() {
-                    UnifiedTagEditorAction::CloseEmbedded
-                } else {
-                    UnifiedTagEditorAction::DiscardTransaction
-                }
+    // ========================================================================
+    // Content pane input (field form)
+    // ========================================================================
+
+    fn handle_content_input(&mut self, action: &InputAction) -> UnifiedTagEditorAction {
+        // Cancel handling — needs to check for unsaved changes before delegating
+        if matches!(action, InputAction::Cancel) {
+            if self.core.form.edit_mode != FieldEditMode::Navigating {
+                self.core.form.edit_mode = FieldEditMode::Navigating;
+                return UnifiedTagEditorAction::None;
+            } else if self.has_changes_for_current_item() {
+                self.modal = Some(UnifiedTagEditorModal::UnsavedChanges {
+                    selected_button: UnsavedChangesButton::default(),
+                });
+                return UnifiedTagEditorAction::None;
+            } else if self.is_embedded() {
+                return UnifiedTagEditorAction::CloseEmbedded;
+            } else {
+                return UnifiedTagEditorAction::DiscardTransaction;
             }
-            InputAction::NavUp => {
-                if self.field_edit_state != FieldEditState::NonEditable {
-                    self.commit_field_buffer();
-                }
-                if self.current_field_idx > 0 {
-                    self.current_field_idx -= 1;
-                    if self.current_field_idx < self.field_scroll_offset {
-                        self.field_scroll_offset = self.current_field_idx;
-                    }
-                }
-                self.load_field_buffer();
-                UnifiedTagEditorAction::None
-            }
-            InputAction::NavDown => {
-                if self.field_edit_state != FieldEditState::NonEditable {
-                    self.commit_field_buffer();
-                }
-                let max_fields = if self.is_aggregated_mode() {
-                    self.aggregated_fields
-                        .as_ref()
-                        .map(|f| f.len())
-                        .unwrap_or(0)
-                } else {
-                    self.tag_fields
-                        .get(self.current_item_idx)
-                        .map(|f| f.len())
-                        .unwrap_or(0)
-                };
-                if self.current_field_idx < max_fields.saturating_sub(1) {
-                    self.current_field_idx += 1;
-                    let visible_end =
-                        self.field_scroll_offset + self.field_visible_height.saturating_sub(1);
-                    if self.current_field_idx >= visible_end {
-                        self.field_scroll_offset = self
-                            .current_field_idx
-                            .saturating_sub(self.field_visible_height.saturating_sub(2));
-                    }
-                }
-                self.load_field_buffer();
-                UnifiedTagEditorAction::None
-            }
-            InputAction::NavLeft => {
-                // Left arrow: move focus from value to name (ContextList is not focusable)
-                if self.field_edit_state == FieldEditState::NonEditable && self.focus_on_value {
-                    self.focus_on_value = false;
-                }
-                UnifiedTagEditorAction::None
-            }
-            InputAction::NavRight => {
-                if self.field_edit_state == FieldEditState::NonEditable {
-                    if self.focus_on_value {
-                        self.focus = UnifiedTagEditorFocus::Actions;
-                    } else {
-                        self.focus_on_value = true;
-                    }
-                }
-                UnifiedTagEditorAction::None
-            }
-            InputAction::CycleNext => {
-                // Tab: advance to next item (individual mode only)
-                // In aggregated mode, Tab does nothing - use ReviewAll button
-                if self.is_aggregated_mode() {
-                    UnifiedTagEditorAction::None
-                } else if self.has_changes_for_current_item() && !self.changes_match_staged() {
-                    // Unsaved changes - show confirmation modal (requires Enter to stage)
-                    self.modal = Some(UnifiedTagEditorModal::StageChangesConfirm {
-                        direction: NavigationDirection::Next,
-                        selected_button: StageChangesButton::default(),
-                    });
-                    UnifiedTagEditorAction::None
-                } else {
-                    UnifiedTagEditorAction::NextItem
-                }
-            }
-            InputAction::CyclePrev => {
-                // Shift-Tab: go to previous item (individual mode only)
-                // In aggregated mode, Shift-Tab does nothing - use ReviewAll button
-                if self.is_aggregated_mode() {
-                    UnifiedTagEditorAction::None
-                } else if self.has_changes_for_current_item() && !self.changes_match_staged() {
-                    // Unsaved changes - show confirmation modal (requires Enter to stage)
-                    self.modal = Some(UnifiedTagEditorModal::StageChangesConfirm {
-                        direction: NavigationDirection::Prev,
-                        selected_button: StageChangesButton::default(),
-                    });
-                    UnifiedTagEditorAction::None
-                } else {
-                    UnifiedTagEditorAction::PrevItem
-                }
-            }
-            InputAction::Confirm => {
-                self.handle_field_enter();
-                UnifiedTagEditorAction::None
-            }
-            InputAction::Shortcut('r') => {
-                if self.is_embedded() {
-                    // Ctrl+R disabled in embedded mode (parent owns transaction)
-                    UnifiedTagEditorAction::None
-                } else {
-                    // Ctrl+R: Request transaction review
-                    UnifiedTagEditorAction::RequestTransactionReview
-                }
-            }
-            InputAction::KillToStart if self.field_edit_state == FieldEditState::NonEditable => {
-                self.clear_current_field();
-                UnifiedTagEditorAction::None
-            }
-            InputAction::Char('n') if self.field_edit_state == FieldEditState::NonEditable => {
-                self.create_new_tag();
-                UnifiedTagEditorAction::None
-            }
-            InputAction::Backspace if self.field_edit_state == FieldEditState::NonEditable => {
-                // In navigation mode, toggle deletion mark on current field
-                self.toggle_current_field_deleted();
-                UnifiedTagEditorAction::None
-            }
-            InputAction::Delete if self.field_edit_state == FieldEditState::NonEditable => {
-                // In navigation mode, toggle deletion mark on current field
-                self.toggle_current_field_deleted();
-                UnifiedTagEditorAction::None
-            }
-            // When editing, delegate all text actions to the active TextInputState
-            action if self.field_edit_state != FieldEditState::NonEditable => {
-                if let Some(input) = self.active_input_mut() {
-                    input.handle_input(action);
-                }
-                UnifiedTagEditorAction::None
-            }
-            _ => UnifiedTagEditorAction::None,
         }
+
+        // Tab/Shift-Tab for item navigation (non-aggregated mode only)
+        if matches!(action, InputAction::CycleNext | InputAction::CyclePrev) {
+            if self.is_aggregated_mode() {
+                return UnifiedTagEditorAction::None;
+            }
+            let direction = if matches!(action, InputAction::CycleNext) {
+                NavigationDirection::Next
+            } else {
+                NavigationDirection::Prev
+            };
+            if self.has_changes_for_current_item() && !self.changes_match_staged() {
+                self.modal = Some(UnifiedTagEditorModal::StageChangesConfirm {
+                    direction,
+                    selected_button: StageChangesButton::default(),
+                });
+                return UnifiedTagEditorAction::None;
+            }
+            return match direction {
+                NavigationDirection::Next => UnifiedTagEditorAction::NextItem,
+                NavigationDirection::Prev => UnifiedTagEditorAction::PrevItem,
+            };
+        }
+
+        // Ctrl+R for review
+        if matches!(action, InputAction::Shortcut('r')) {
+            if self.is_embedded() {
+                return UnifiedTagEditorAction::None;
+            }
+            return UnifiedTagEditorAction::RequestTransactionReview;
+        }
+
+        // NavRight from content to buttons (only when navigating, not editing)
+        if matches!(action, InputAction::NavRight)
+            && self.core.form.edit_mode == FieldEditMode::Navigating
+        {
+            self.core.focus = FocusPane::Buttons;
+            return UnifiedTagEditorAction::None;
+        }
+
+        // Check for multi-value Enter (open modal for multi-value tags)
+        if matches!(action, InputAction::Confirm)
+            && self.core.form.edit_mode == FieldEditMode::Navigating
+        {
+            if let Some(entry) = self.current_tag_set().and_then(|ts| ts.get(self.core.form.cursor))
+            {
+                if entry.values.len() > 1 {
+                    self.open_multi_value_editor();
+                    return UnifiedTagEditorAction::None;
+                }
+            }
+        }
+
+        // Delegate to FieldFormState.
+        // Extract the tag set index, then borrow form and tag_sets separately
+        // to avoid double mutable borrow through self.
+        let idx = if self.is_aggregated_mode() {
+            0
+        } else {
+            self.core.current_file
+        };
+        if let Some(tag_set) = self.core.tag_sets.get_mut(idx) {
+            let _result = self.core.form.handle_input(action, tag_set);
+        }
+        UnifiedTagEditorAction::None
     }
 
-    fn handle_actions_input(&mut self, action: &InputAction) -> UnifiedTagEditorAction {
-        let buttons = self.available_buttons();
-        let current_idx = buttons
-            .iter()
-            .position(|b| *b == self.selected_button)
-            .unwrap_or(0);
+    // ========================================================================
+    // Buttons pane input
+    // ========================================================================
+
+    fn handle_buttons_input(&mut self, action: &InputAction) -> UnifiedTagEditorAction {
+        use mm_ui::tag_editor_state::TagEditorButtonAction;
+
+        let ctx = self.core.button_ctx();
 
         match action {
             InputAction::NavLeft | InputAction::Cancel => {
-                self.focus = UnifiedTagEditorFocus::TagFields;
+                self.core.focus = FocusPane::Content;
                 UnifiedTagEditorAction::None
             }
             InputAction::NavUp => {
-                if current_idx > 0 {
-                    self.selected_button = buttons[current_idx - 1];
-                }
+                self.core.buttons.nav_left(&ctx);
                 UnifiedTagEditorAction::None
             }
             InputAction::NavDown => {
-                if current_idx < buttons.len().saturating_sub(1) {
-                    self.selected_button = buttons[current_idx + 1];
-                }
+                self.core.buttons.nav_right(&ctx);
                 UnifiedTagEditorAction::None
             }
             InputAction::Confirm => {
-                match self.selected_button {
-                    TagEditorButton::ReviewAll => {
+                match self.core.buttons.confirm(&ctx) {
+                    Some(TagEditorButtonAction::ReviewAll) => {
                         if self.is_embedded() {
-                            // Embedded mode: collect all mutations and return to parent
                             let mutations = self.collect_all_mutations();
                             if mutations.is_empty() {
                                 UnifiedTagEditorAction::CloseEmbedded
@@ -403,18 +333,17 @@ impl UnifiedTagEditorState {
                         } else {
                             let current_unstaged =
                                 self.has_changes_for_current_item() && !self.changes_match_staged();
-                            let has_anything = current_unstaged || self.staged_decision_count > 0;
+                            let has_anything =
+                                current_unstaged || self.core.staged_decision_count > 0;
 
                             if current_unstaged {
-                                // Stage current file's changes, then open review
                                 let mutations = self.generate_mutations_for_current_item();
                                 let key_item = self.decision_key_item(&mutations);
                                 UnifiedTagEditorAction::StageDecisionAndReview {
-                                    key: DecisionKey::TagEdit { key_item },
+                                    key: mm_ui::decision_keys::tag_edit(key_item),
                                     mutations,
                                 }
                             } else if has_anything {
-                                // Already-staged decisions exist, go straight to review
                                 UnifiedTagEditorAction::RequestTransactionReview
                             } else {
                                 UnifiedTagEditorAction::StatusMessage(
@@ -423,21 +352,103 @@ impl UnifiedTagEditorState {
                             }
                         }
                     }
-                    TagEditorButton::RevertThisFile => {
+                    Some(TagEditorButtonAction::Revert) => {
                         self.drop_changes_for_current_item();
                         UnifiedTagEditorAction::StatusMessage("Changes reverted".to_string())
                     }
-                    TagEditorButton::FillFromDisk => {
-                        UnifiedTagEditorAction::RequestFillFromDisk
+                    Some(TagEditorButtonAction::Cancel) => {
+                        if self.has_changes_for_current_item() {
+                            self.modal = Some(UnifiedTagEditorModal::UnsavedChanges {
+                                selected_button: UnsavedChangesButton::default(),
+                            });
+                            UnifiedTagEditorAction::None
+                        } else if self.is_embedded() {
+                            UnifiedTagEditorAction::CloseEmbedded
+                        } else {
+                            UnifiedTagEditorAction::DiscardTransaction
+                        }
                     }
-                    TagEditorButton::FillFromDb => {
-                        // Return action for UI layer to handle (requires DB access)
-                        let inode = self.get_current_audio_file().map(|af| af.inode());
-                        UnifiedTagEditorAction::RequestFillFromDb { inode }
-                    }
+                    None => UnifiedTagEditorAction::None,
                 }
             }
             _ => UnifiedTagEditorAction::None,
+        }
+    }
+
+    // ========================================================================
+    // Multi-value helpers
+    // ========================================================================
+
+    /// Get current TagSet (for individual mode).
+    pub(crate) fn current_tag_set(&self) -> Option<&mm_ui::tag_set::TagSet> {
+        if self.is_aggregated_mode() {
+            // In aggregated mode, we don't have per-file tag sets for editing.
+            // The FieldForm operates on the first file's tag set.
+            // TODO: aggregated editing needs a different path.
+            self.core.tag_sets.first()
+        } else {
+            self.core.tag_sets.get(self.core.current_file)
+        }
+    }
+
+    /// Get current TagSet mutably.
+    pub(crate) fn current_tag_set_mut(&mut self) -> Option<&mut mm_ui::tag_set::TagSet> {
+        let idx = self.core.current_file;
+        if self.is_aggregated_mode() {
+            self.core.tag_sets.first_mut()
+        } else {
+            self.core.tag_sets.get_mut(idx)
+        }
+    }
+
+    /// Open multi-value editor modal for current field.
+    fn open_multi_value_editor(&mut self) {
+        let tag_set = match self.current_tag_set() {
+            Some(ts) => ts,
+            None => return,
+        };
+        let entry = match tag_set.get(self.core.form.cursor) {
+            Some(e) => e,
+            None => return,
+        };
+
+        let values = entry.values.clone();
+        self.modal = Some(UnifiedTagEditorModal::MultiValueEditor {
+            field_idx: self.core.form.cursor,
+            values,
+            current_value_idx: 0,
+            editing: false,
+            edit_input: crate::widgets::TextInputState::new(),
+        });
+    }
+
+    /// Apply multi-value changes back to the TagSet.
+    fn apply_multi_value_changes(&mut self, entry_idx: usize, new_values: Vec<String>) {
+        let tag_set = match self.current_tag_set_mut() {
+            Some(ts) => ts,
+            None => return,
+        };
+
+        let entry_name = match tag_set.get(entry_idx) {
+            Some(e) => e.name.clone(),
+            None => return,
+        };
+
+        // Remove the old entry and insert a new one with updated values
+        tag_set.drop_entry(entry_idx);
+
+        // Re-insert with new values at the same position
+        for (i, value) in new_values.into_iter().enumerate() {
+            if i == 0 {
+                // Insert entry at the original position
+                // add_entry appends, but we want positional insertion.
+                // Use the lower-level approach: we already dropped, so entries shifted.
+                // Add at end, then we'll fix position.
+                tag_set.add_entry(entry_name.clone(), value);
+            } else {
+                // Add additional values
+                tag_set.add_value(tag_set.entry_count() - 1, value);
+            }
         }
     }
 }

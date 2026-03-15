@@ -1,173 +1,76 @@
 //! Tag Editor State Management
 //!
-//! Core state structure for the unified tag editor.
-//!
-//! Contains `UnifiedTagEditorState` for transaction-based editing.
+//! Thin wrapper around `mm_ui::tag_editor_state::TagEditorState` that adds
+//! TUI-specific concerns: full audio file metadata for rendering, modal dialogs,
+//! click targets, OOB signal tracking.
 
 use std::path::Path;
 
 use mm_meta::db_types::AudioFile;
 use mm_meta::mutations::Mutation;
-use crate::widgets::TextInputState;
 
-use super::mutations::{
-    aggregate_tags_from_fields, changes_to_mutations, compute_changes,
-    load_tag_fields_batch, tag_pairs_to_tag_fields,
+use mm_ui::tag_editor_state::{
+    AudioFileInfo, TagEditorMode, TagEditorState,
 };
+use mm_ui::tag_set::TagSet;
+
+use super::mutations::load_tag_sets_batch;
 use super::types::{
-    AggregatedTagField, AggregatedValue, FieldEditState, GroupContext, TagChange, TagEditContext,
-    TagEditorButton, TagEditorLaunchMode, TagEditorMode, TagEditorSource, TagField,
-    UnifiedTagEditorFocus, UnifiedTagEditorModal,
+    GroupContext, TagEditorLaunchMode, TagEditorSource, UnifiedTagEditorModal,
 };
 
 // ============================================================================
-// Unified Tag Editor State (New)
+// UnifiedTagEditorState
 // ============================================================================
 
-/// Unified tag editor state that handles both single-file and bulk edit contexts.
-///
-/// This replaces the dual `TagEditorState` / `DirectoryTagEditorState` pattern
-/// with a single state machine that branches on `TagEditContext`.
+/// TUI tag editor state — wraps shared `TagEditorState` with TUI-specific fields.
 pub struct UnifiedTagEditorState {
-    // ========================================================================
-    // Context & Mode
-    // ========================================================================
-    /// The context (SingleFile or BulkEdit) determines behavior
-    pub context: TagEditContext,
+    /// Core shared state (tag data, form, buttons, file nav).
+    pub core: TagEditorState,
 
-    /// Editing mode: Individual (one track at a time) or Aggregated (unified view)
-    pub mode: TagEditorMode,
+    /// Full audio file data (for info pane rendering, art preview, fill queries).
+    pub audio_files: Vec<AudioFile>,
 
-    // ========================================================================
-    // Item Navigation (within current transaction)
-    // ========================================================================
-    /// Current item index (track in SingleFile, file in BulkEdit)
-    pub current_item_idx: usize,
+    /// Source context (where the editor was launched from).
+    pub source: TagEditorSource,
 
-    /// Total items count
-    pub total_items: usize,
+    /// Group context for multi-step workflows.
+    pub group_context: Option<GroupContext>,
 
-    // ========================================================================
-    // Field Navigation & Editing
-    // ========================================================================
-    /// Current field index
-    pub current_field_idx: usize,
-
-    /// Field scroll offset (for long tag lists)
-    pub field_scroll_offset: usize,
-
-    /// Visible height for tag field area
-    pub field_visible_height: usize,
-
-    /// Current edit mode
-    pub field_edit_state: FieldEditState,
-
-    /// Input state for editing tag name (SingleFile only)
-    pub name_input: TextInputState,
-
-    /// Input state for editing tag value
-    pub value_input: TextInputState,
-
-    /// Whether focus is on value (true) or name (false) in SingleFile mode
-    pub focus_on_value: bool,
-
-    // ========================================================================
-    // Tag Data
-    // ========================================================================
-    /// SingleFile: tag fields per track; BulkEdit: aggregated fields (single Vec)
-    ///
-    /// For SingleFile: outer Vec is tracks, inner Vec is fields per track
-    /// For BulkEdit: single inner Vec of aggregated fields, wrapped in outer Vec
-    pub tag_fields: Vec<Vec<TagField>>,
-
-    /// Original state for change detection
-    pub original_tag_fields: Vec<Vec<TagField>>,
-
-    /// BulkEdit: aggregated fields (alternative representation)
-    pub aggregated_fields: Option<Vec<AggregatedTagField>>,
-
-    // ========================================================================
-    // UI State
-    // ========================================================================
-    /// Which pane currently has focus
-    pub focus: UnifiedTagEditorFocus,
-
-    /// Currently selected action button
-    pub selected_button: TagEditorButton,
-
-    /// Currently active modal dialog (if any)
+    /// Active modal dialog (if any).
     pub modal: Option<UnifiedTagEditorModal>,
 
-    /// Whether OOB (out-of-band) tag change signal is present
+    /// Whether OOB (out-of-band) tag change signal is present.
     pub has_oob_signal: bool,
 
-    // ========================================================================
-    // Context List Scrolling (BulkEdit file list)
-    // ========================================================================
-    /// Scroll offset for the file list in BulkEdit mode
-    pub context_list_scroll_offset: usize,
-
-    /// Visible height for the file list (set during render)
-    pub context_list_visible_height: usize,
-
-    // ========================================================================
-    // Staged Mutations Tracking (for skipping redundant confirmations)
-    // ========================================================================
-    /// Number of decisions staged in the current transaction
-    pub staged_decision_count: usize,
-
-    /// Staged mutations for current item (set after StageDecision, cleared on item change)
-    /// Used to skip confirmation dialog when changes match what's already staged.
+    /// Staged mutations for current item (for skip-confirmation logic).
     pub staged_mutations_for_current: Option<Vec<Mutation>>,
 
-    // ========================================================================
-    // Launch Mode
-    // ========================================================================
-    /// Whether this editor is standalone (owns transaction) or embedded (parent owns transaction).
+    /// Launch mode (standalone vs embedded).
     pub launch_mode: TagEditorLaunchMode,
 
     // ========================================================================
-    // Click Targets (set during render)
+    // Click targets (TUI-specific, set during render)
     // ========================================================================
-    /// Click targets for tag field list items.
     pub field_click_targets: crate::widgets::ListClickTargets,
-    /// Click targets for action buttons.
     pub action_click_targets: crate::widgets::ListClickTargets,
-    /// Stored pane Rects for click focus detection.
     pub fields_pane_rect: Option<ratatui::layout::Rect>,
     pub actions_pane_rect: Option<ratatui::layout::Rect>,
 }
 
 impl UnifiedTagEditorState {
-    /// Path of the currently selected file (for status bar).
-    pub fn selected_path(&self) -> Option<&str> {
-        match &self.context {
-            TagEditContext::SingleFile { audio_file, .. } => Some(audio_file.path()),
-            TagEditContext::BulkEdit { audio_files, .. } => {
-                audio_files.get(self.current_item_idx).map(|af| af.path())
-            }
-        }
-    }
-
     // ========================================================================
     // Constructors
     // ========================================================================
 
-    /// Create a new unified tag editor state with pre-loaded tag fields.
-    ///
-    /// This is the primary constructor that handles both Individual and Aggregated modes.
-    /// Tag fields must be pre-loaded via `load_tag_fields_batch()` before calling this.
-    ///
-    /// - **Individual mode**: Edit audio files one at a time (Tab navigates between files)
-    /// - **Aggregated mode**: Edit unified view (changes apply to all files)
+    /// Create editor state with pre-loaded TagSets.
     pub fn new(
         mode: TagEditorMode,
         audio_files: Vec<AudioFile>,
         source: TagEditorSource,
         group_context: Option<GroupContext>,
-        tag_fields: Vec<Vec<TagField>>,
+        tag_sets: Vec<TagSet>,
     ) -> Self {
-        // All files must belong to the same zone — tag mutations are per-zone.
         debug_assert!(
             audio_files
                 .windows(2)
@@ -175,54 +78,24 @@ impl UnifiedTagEditorState {
             "Tag editor opened with files from mixed zones"
         );
 
-        let total_items = audio_files.len();
+        let file_infos: Vec<AudioFileInfo> = audio_files
+            .iter()
+            .map(|af| AudioFileInfo {
+                inode: af.inode(),
+                zone: af.entry.zone,
+                path: af.path().to_string(),
+            })
+            .collect();
 
-        let original_tag_fields = tag_fields.clone();
-
-        // For Aggregated mode, also build aggregated view
-        let aggregated_fields = if mode == TagEditorMode::Aggregated {
-            Some(aggregate_tags_from_fields(&tag_fields))
-        } else {
-            None
-        };
-
-        // Build context based on file count
-        let context = if audio_files.len() == 1 {
-            let audio_file = audio_files.into_iter().next().unwrap();
-            TagEditContext::SingleFile {
-                audio_file,
-                source,
-                group_context,
-            }
-        } else {
-            TagEditContext::BulkEdit {
-                audio_files,
-                source,
-            }
-        };
+        let core = TagEditorState::new(mode, file_infos, tag_sets);
 
         Self {
-            context,
-            mode,
-            current_item_idx: 0,
-            total_items,
-            current_field_idx: 0,
-            field_scroll_offset: 0,
-            field_visible_height: 10,
-            field_edit_state: FieldEditState::NonEditable,
-            name_input: TextInputState::new(),
-            value_input: TextInputState::new(),
-            focus_on_value: true,
-            tag_fields,
-            original_tag_fields,
-            aggregated_fields,
-            focus: UnifiedTagEditorFocus::TagFields,
-            selected_button: TagEditorButton::ReviewAll,
+            core,
+            audio_files,
+            source,
+            group_context,
             modal: None,
             has_oob_signal: false,
-            context_list_scroll_offset: 0,
-            context_list_visible_height: 0,
-            staged_decision_count: 0,
             staged_mutations_for_current: None,
             launch_mode: TagEditorLaunchMode::Standalone,
             field_click_targets: Default::default(),
@@ -232,7 +105,7 @@ impl UnifiedTagEditorState {
         }
     }
 
-    /// Create a new unified state for single-file editing (convenience wrapper).
+    /// Convenience: single file editor (loads tags from disk).
     pub(crate) fn single_file(
         audio_file: AudioFile,
         source: TagEditorSource,
@@ -240,52 +113,56 @@ impl UnifiedTagEditorState {
         app: &mut crate::App,
     ) -> Self {
         let files = vec![audio_file];
-        let tag_fields = load_tag_fields_batch(&files, app);
-        Self::new(TagEditorMode::Individual, files, source, group_context, tag_fields)
+        let tag_sets = load_tag_sets_batch(&files, app);
+        Self::new(TagEditorMode::Individual, files, source, group_context, tag_sets)
     }
 
-    /// Create a new unified state for bulk editing from pre-loaded audio files (convenience wrapper).
-    ///
-    /// Uses Individual mode - each file is edited separately, Tab navigates between them.
+    /// Convenience: bulk individual mode (loads tags from disk).
     pub(crate) fn bulk_from_audio_files(
         audio_files: Vec<AudioFile>,
         source: TagEditorSource,
         group_context: Option<GroupContext>,
         app: &mut crate::App,
     ) -> Self {
-        let tag_fields = load_tag_fields_batch(&audio_files, app);
-        Self::new(TagEditorMode::Individual, audio_files, source, group_context, tag_fields)
+        let tag_sets = load_tag_sets_batch(&audio_files, app);
+        Self::new(TagEditorMode::Individual, audio_files, source, group_context, tag_sets)
     }
 
-    /// Create a new unified state for aggregated bulk editing (convenience wrapper).
-    ///
-    /// Uses Aggregated mode - shows unified view, changes apply to all files at once.
+    /// Convenience: aggregated bulk mode (loads tags from disk).
     pub(crate) fn aggregated_bulk(
         audio_files: Vec<AudioFile>,
         source: TagEditorSource,
         app: &mut crate::App,
     ) -> Self {
-        let tag_fields = load_tag_fields_batch(&audio_files, app);
-        Self::new(TagEditorMode::Aggregated, audio_files, source, None, tag_fields)
+        let tag_sets = load_tag_sets_batch(&audio_files, app);
+        Self::new(TagEditorMode::Aggregated, audio_files, source, None, tag_sets)
     }
 
-    /// Create a new unified state for directory editing with aggregated tags (convenience wrapper).
-    ///
-    /// Uses Aggregated mode - shows unified view, changes apply to all files.
+    /// Convenience: directory aggregated mode (loads tags from disk).
     pub(crate) fn directory_aggregated(
         audio_files: Vec<AudioFile>,
         app: &mut crate::App,
     ) -> Self {
-        let tag_fields = load_tag_fields_batch(&audio_files, app);
-        Self::new(TagEditorMode::Aggregated, audio_files, TagEditorSource::DirectoryEdit, None, tag_fields)
+        let tag_sets = load_tag_sets_batch(&audio_files, app);
+        Self::new(
+            TagEditorMode::Aggregated,
+            audio_files,
+            TagEditorSource::DirectoryEdit,
+            None,
+            tag_sets,
+        )
     }
 
-    /// Builder method to set embedded mode (called after construction).
+    /// Builder: set embedded mode.
     pub fn with_embedded_mode(
         mut self,
         decision_key: mm_meta::decisions::DecisionKey,
         decision_label: String,
     ) -> Self {
+        self.core.launch_mode = mm_ui::tag_editor_state::TagEditorLaunchMode::Embedded {
+            decision_key: decision_key.clone(),
+            decision_label: decision_label.clone(),
+        };
         self.launch_mode = TagEditorLaunchMode::Embedded {
             decision_key,
             decision_label,
@@ -293,333 +170,198 @@ impl UnifiedTagEditorState {
         self
     }
 
-    /// Whether this editor is running in embedded mode (parent owns transaction).
+    // ========================================================================
+    // Forwarding: identity & navigation
+    // ========================================================================
+
+    /// Whether this editor is embedded (parent owns transaction).
     pub fn is_embedded(&self) -> bool {
         matches!(self.launch_mode, TagEditorLaunchMode::Embedded { .. })
     }
 
-    /// Check if using Aggregated mode (unified view across all tracks)
+    /// Whether using aggregated mode.
     pub fn is_aggregated_mode(&self) -> bool {
-        self.mode == TagEditorMode::Aggregated
+        self.core.mode == TagEditorMode::Aggregated
     }
 
-    // ========================================================================
-    // Query Methods
-    // ========================================================================
-
-    /// Build a stable decision key item from the mutations being staged.
-    ///
-    /// Derives the key from the mutation content itself (inodes + tag names),
-    /// so it's collision-free across editor sessions and works for individual,
-    /// aggregated, directory, and search-result editing contexts alike.
-    ///
-    /// Same inode + same tags = overwrites (re-editing the same thing).
-    /// Same inode + different tags = coexists (separate decisions pile up).
-    pub fn decision_key_item(&self, mutations: &[Mutation]) -> String {
-        use std::collections::BTreeSet;
-
-        let mut inodes = BTreeSet::new();
-        let mut tag_names = BTreeSet::new();
-
-        for m in mutations {
-            if let Mutation::ApplyTagOps(ref atm) = m {
-                for op in &atm.ops {
-                    inodes.insert(op.inode);
-                    tag_names.insert(op.tag_name.to_uppercase());
-                }
-            }
-        }
-
-        let inode_part: String = inodes
-            .iter()
-            .map(|i| i.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let tags_part: String = tag_names.into_iter().collect::<Vec<_>>().join(",");
-
-        if tags_part.is_empty() {
-            inode_part
-        } else {
-            format!("{}:{}", inode_part, tags_part)
-        }
+    /// Path of the currently selected file.
+    pub fn selected_path(&self) -> Option<&str> {
+        self.audio_files
+            .get(self.core.current_file)
+            .map(|af| af.path())
     }
 
-    /// Get a label for the current item (for transaction decision labels)
+    /// Total number of files/items.
+    pub fn total_items(&self) -> usize {
+        self.audio_files.len()
+    }
+
+    /// Current item index.
+    pub fn current_item_idx(&self) -> usize {
+        self.core.current_file
+    }
+
+    /// Set current item index.
+    pub fn set_current_item_idx(&mut self, idx: usize) {
+        self.core.current_file = idx;
+    }
+
+    /// Get the current audio file.
+    pub fn get_current_audio_file(&self) -> Option<&AudioFile> {
+        self.audio_files.get(self.core.current_file)
+    }
+
+    /// Get a label for the current item (for decision labels).
     pub fn current_item_label(&self) -> String {
-        match &self.context {
-            TagEditContext::SingleFile { audio_file, .. } => Path::new(audio_file.path())
+        if self.audio_files.len() == 1 {
+            Path::new(self.audio_files[0].path())
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Unknown".to_string()),
-            TagEditContext::BulkEdit { audio_files, .. } => {
-                if let Some(audio_file) = audio_files.first() {
-                    Path::new(audio_file.path())
-                        .parent()
-                        .and_then(|p| p.file_name())
-                        .map(|d| d.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "Unknown".to_string())
-                } else {
-                    "Unknown".to_string()
-                }
-            }
+                .unwrap_or_else(|| "Unknown".to_string())
+        } else if let Some(af) = self.audio_files.first() {
+            Path::new(af.path())
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|d| d.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Unknown".to_string())
+        } else {
+            "Unknown".to_string()
         }
     }
 
-    /// Check if there are any unsaved changes for the current item only
+    // ========================================================================
+    // Forwarding: mutation generation
+    // ========================================================================
+
+    /// Check if current file has unsaved changes.
     pub fn has_changes_for_current_item(&self) -> bool {
-        if self.is_aggregated_mode() {
-            // In aggregated mode, changes apply to all tracks
-            self.has_aggregated_changes()
-        } else {
-            compute_changes(&self.original_tag_fields, &self.tag_fields)
-                .iter()
-                .any(|c| c.track_idx == self.current_item_idx)
-        }
+        self.core.has_changes()
     }
 
-    /// Check if a specific item (by index) has unsaved changes
+    /// Check if a specific file has unsaved changes.
     pub fn item_has_changes(&self, idx: usize) -> bool {
-        match (self.tag_fields.get(idx), self.original_tag_fields.get(idx)) {
-            (Some(current), Some(original)) => current != original,
-            _ => false,
-        }
+        self.core.has_changes_for_file(idx)
     }
 
-    /// Check if any aggregated fields have been edited
-    fn has_aggregated_changes(&self) -> bool {
-        if let Some(ref agg_fields) = self.aggregated_fields {
-            agg_fields
-                .iter()
-                .any(|f| matches!(f.value, AggregatedValue::Edited(_)))
-        } else {
-            false
-        }
-    }
-
-    /// Compute changes from aggregated fields, applying to all tracks
-    fn compute_aggregated_changes(&self) -> Vec<TagChange> {
-        let agg_fields = match &self.aggregated_fields {
-            Some(f) => f,
-            None => return Vec::new(),
-        };
-
-        let num_tracks = self.tag_fields.len();
-        let mut changes = Vec::new();
-
-        for field in agg_fields {
-            if let AggregatedValue::Edited(new_value) = &field.value {
-                // This field was edited - create a change for each track
-                for track_idx in 0..num_tracks {
-                    // Get the original value for this track
-                    let old_value = self
-                        .original_tag_fields
-                        .get(track_idx)
-                        .and_then(|fields| {
-                            fields
-                                .iter()
-                                .find(|f| f.name.eq_ignore_ascii_case(&field.name))
-                                .map(|f| f.value.clone())
-                        })
-                        .unwrap_or_default();
-
-                    // Only add change if value actually differs
-                    if old_value != *new_value {
-                        changes.push(TagChange {
-                            track_idx,
-                            field_name: field.name.clone(),
-                            old_value,
-                            new_value: new_value.clone(),
-                        });
-                    }
-                }
-            }
-        }
-
-        changes
-    }
-
-    /// Generate mutations from current changes (all items)
-    pub fn generate_mutations(&self) -> Vec<Mutation> {
-        let changes = if self.is_aggregated_mode() {
-            self.compute_aggregated_changes()
-        } else {
-            compute_changes(&self.original_tag_fields, &self.tag_fields)
-        };
-
-        let audio_files = match &self.context {
-            TagEditContext::SingleFile { audio_file, .. } => vec![audio_file.clone()],
-            TagEditContext::BulkEdit { audio_files, .. } => audio_files.clone(),
-        };
-
-        changes_to_mutations(&changes, &audio_files)
-    }
-
-    /// Generate mutations for the current item only.
-    /// This is what should be used when staging a decision for one file.
+    /// Generate mutations for current item.
     pub fn generate_mutations_for_current_item(&self) -> Vec<Mutation> {
-        if self.is_aggregated_mode() {
-            // In aggregated mode, all changes apply to all files
-            return self.generate_mutations();
-        }
-
-        let all_changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
-
-        // Filter to only changes for current_item_idx
-        let current_changes: Vec<_> = all_changes
-            .into_iter()
-            .filter(|c| c.track_idx == self.current_item_idx)
-            .collect();
-
-        let audio_files = match &self.context {
-            TagEditContext::SingleFile { audio_file, .. } => vec![audio_file.clone()],
-            TagEditContext::BulkEdit { audio_files, .. } => audio_files.clone(),
-        };
-
-        changes_to_mutations(&current_changes, &audio_files)
+        self.core.mutations_for_current()
     }
 
-    /// Collect mutations across ALL items that have changes.
-    ///
-    /// Used by embedded mode to gather edits from all files the user confirmed
-    /// via Tab navigation, combined into a single mutation set for staging at
-    /// the parent's decision index.
+    /// Generate mutations for all items.
+    pub fn generate_mutations(&self) -> Vec<Mutation> {
+        self.core.mutations_for_all()
+    }
+
+    /// Collect all mutations (for embedded mode).
     pub fn collect_all_mutations(&self) -> Vec<Mutation> {
-        if self.is_aggregated_mode() {
-            return self.generate_mutations();
-        }
-
-        let audio_files = match &self.context {
-            TagEditContext::SingleFile { audio_file, .. } => vec![audio_file.clone()],
-            TagEditContext::BulkEdit { audio_files, .. } => audio_files.clone(),
-        };
-
-        let all_changes = compute_changes(&self.original_tag_fields, &self.tag_fields);
-        if all_changes.is_empty() {
-            return Vec::new();
-        }
-
-        changes_to_mutations(&all_changes, &audio_files)
+        self.core.mutations_for_all()
     }
 
-    /// Revert to original state for current item only
+    /// Decision key from mutations.
+    pub fn decision_key_item(&self, mutations: &[Mutation]) -> String {
+        self.core.decision_key_item(mutations)
+    }
+
+    // ========================================================================
+    // Forwarding: state management
+    // ========================================================================
+
+    /// Reset field navigation state (called when switching items).
+    pub fn reset_field_state(&mut self) {
+        self.core.form.reset();
+        self.clear_staged_mutations();
+    }
+
+    /// Revert current file to original tags.
     pub fn drop_changes_for_current_item(&mut self) {
-        if let (Some(orig), Some(current)) = (
-            self.original_tag_fields.get(self.current_item_idx),
-            self.tag_fields.get_mut(self.current_item_idx),
-        ) {
-            *current = orig.clone();
-        }
-        self.field_edit_state = FieldEditState::NonEditable;
+        self.core.revert_current();
     }
 
-    /// Check if current item's changes match what's already staged in the transaction.
-    /// Used to skip confirmation dialogs when the user hasn't made new changes.
+    /// Set staged mutations for skip-confirmation logic.
+    pub fn set_staged_mutations(&mut self, mutations: Vec<Mutation>) {
+        self.staged_mutations_for_current = Some(mutations);
+    }
+
+    /// Clear staged mutations.
+    pub fn clear_staged_mutations(&mut self) {
+        self.staged_mutations_for_current = None;
+    }
+
+    /// Check if current changes match what's already staged.
     pub fn changes_match_staged(&self) -> bool {
         match &self.staged_mutations_for_current {
-            None => false, // Nothing staged yet, so can't match
+            None => false,
             Some(staged) => {
                 let current = self.generate_mutations_for_current_item();
-                // Compare mutation sets - simple equality check
-                // (mutations should be generated in same order)
                 current == *staged
             }
         }
     }
 
-    /// Set the staged mutations for the current item (called after staging a decision)
-    pub fn set_staged_mutations(&mut self, mutations: Vec<Mutation>) {
-        self.staged_mutations_for_current = Some(mutations);
-    }
+    // ========================================================================
+    // Fill operations
+    // ========================================================================
 
-    /// Clear staged mutations (called when switching to a different item)
-    pub fn clear_staged_mutations(&mut self) {
-        self.staged_mutations_for_current = None;
-    }
-
-    /// Reset field navigation state (called when navigating between items)
-    ///
-    /// Combines the common pattern of resetting field_idx, scroll offset, and staged mutations.
-    pub fn reset_field_state(&mut self) {
-        self.current_field_idx = 0;
-        self.field_scroll_offset = 0;
-        self.clear_staged_mutations();
-    }
-
-    /// Get available action buttons based on context and signals
-    pub fn available_buttons(&self) -> Vec<TagEditorButton> {
-        let mut buttons = vec![TagEditorButton::ReviewAll, TagEditorButton::RevertThisFile];
-
-        // Add Fill from Disk / Fill from DB only when OOB signal present
-        if self.has_oob_signal {
-            buttons.push(TagEditorButton::FillFromDisk);
-            buttons.push(TagEditorButton::FillFromDb);
-        }
-
-        buttons
-    }
-
-    /// Get the current audio file being edited
-    pub fn get_current_audio_file(&self) -> Option<&AudioFile> {
-        match &self.context {
-            TagEditContext::SingleFile { audio_file, .. } => Some(audio_file),
-            TagEditContext::BulkEdit { audio_files, .. } => audio_files.get(self.current_item_idx),
-        }
-    }
-
-    /// Get the current audio file's inode and zone for a fill-from-disk query.
-    ///
-    /// Returns None if there's no current audio file.
+    /// Get current file's inode and zone for a fill-from-disk query.
     pub fn current_file_for_disk_query(&self) -> Option<(i64, mm_meta::db_types::Zone)> {
-        let audio_file = match &self.context {
-            TagEditContext::SingleFile { audio_file, .. } => audio_file,
-            TagEditContext::BulkEdit { audio_files, .. } => {
-                audio_files.get(self.current_item_idx)?
-            }
-        };
-        Some((audio_file.inode(), audio_file.entry.zone))
+        self.audio_files
+            .get(self.core.current_file)
+            .map(|af| (af.inode(), af.entry.zone))
     }
 
-    /// Apply re-read tags from disk for the current audio file.
-    ///
-    /// The caller is responsible for fetching the tags via `GetFileTagValues`
-    /// and passing them here, to avoid borrow conflicts with App.
+    /// Apply re-read tags from disk for the current file.
     pub fn fill_from_disk_with_tags(&mut self, tags: Vec<(String, String)>) {
-        let new_fields = tag_pairs_to_tag_fields(tags);
+        let new_set = TagSet::from_pairs(tags);
+        let idx = self.core.current_file;
 
-        // Update current item's tag fields
-        if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
-            *fields = new_fields.clone();
+        if let Some(current) = self.core.tag_sets.get_mut(idx) {
+            *current = new_set.clone();
+        }
+        if let Some(original) = self.core.original_tag_sets.get_mut(idx) {
+            *original = new_set;
         }
 
-        // Also update original to reflect new baseline
-        if let Some(orig_fields) = self.original_tag_fields.get_mut(self.current_item_idx) {
-            *orig_fields = new_fields;
-        }
-
-        // Reset field position
-        self.current_field_idx = 0;
-        self.field_scroll_offset = 0;
-        self.field_edit_state = FieldEditState::NonEditable;
-
-        // Clear OOB signal since we've resolved it
+        self.core.form.reset();
         self.has_oob_signal = false;
     }
 
+    /// Apply tags from database for the current file.
+    pub fn fill_from_db_result(&mut self, tags: Vec<(String, String)>) {
+        let new_set = TagSet::from_pairs(tags);
+        let idx = self.core.current_file;
+
+        if let Some(current) = self.core.tag_sets.get_mut(idx) {
+            *current = new_set.clone();
+        }
+        if let Some(original) = self.core.original_tag_sets.get_mut(idx) {
+            *original = new_set;
+        }
+
+        self.core.form.reset();
+        self.has_oob_signal = false;
+    }
+
+    // ========================================================================
+    // Click handling
+    // ========================================================================
+
     /// Handle mouse click for focus and cursor changes.
-    ///
-    /// Checks action button click targets, then field click targets,
-    /// then falls back to pane-level focus detection via rect_contains.
     pub fn handle_click(&mut self, x: u16, y: u16) {
         use crate::widgets::rect_contains;
+        use mm_ui::tag_editor_state::FocusPane;
 
-        // Check action button click targets first
+        // Check action button click targets
         if let Some(id) = self.action_click_targets.hit_test(x, y) {
-            self.focus = UnifiedTagEditorFocus::Actions;
-            let buttons = self.available_buttons();
+            self.core.focus = FocusPane::Buttons;
             if let Ok(idx) = id.parse::<usize>() {
-                if let Some(button) = buttons.get(idx) {
-                    self.selected_button = *button;
+                use mm_ui::modal_buttons::ModalButtons;
+                let ctx = self.core.button_ctx();
+                let all = mm_ui::tag_editor_state::TagEditorButton::all();
+                if let Some(&button) = all.get(idx) {
+                    if button.enabled(&ctx) {
+                        self.core.buttons.selected = button;
+                    }
                 }
             }
             return;
@@ -627,18 +369,24 @@ impl UnifiedTagEditorState {
 
         // Check field click targets
         if let Some(id) = self.field_click_targets.hit_test(x, y) {
-            self.focus = UnifiedTagEditorFocus::TagFields;
+            self.core.focus = FocusPane::Content;
             if let Ok(idx) = id.parse::<usize>() {
-                let total = if let Some(ref agg) = self.aggregated_fields {
-                    agg.len()
+                let total = if self.is_aggregated_mode() {
+                    self.core
+                        .aggregated
+                        .as_ref()
+                        .map(|a| a.entry_count())
+                        .unwrap_or(0)
                 } else {
-                    self.tag_fields
-                        .get(self.current_item_idx)
-                        .map(|f| f.len())
+                    self.core
+                        .tag_sets
+                        .get(self.core.current_file)
+                        .map(|ts| ts.entry_count())
                         .unwrap_or(0)
                 };
-                if idx < total {
-                    self.current_field_idx = idx;
+                // +1 for "New Tag" sentinel
+                if idx <= total {
+                    self.core.form.cursor = idx;
                 }
             }
             return;
@@ -647,72 +395,25 @@ impl UnifiedTagEditorState {
         // Pane-level focus detection
         if let Some(rect) = self.actions_pane_rect {
             if rect_contains(rect, x, y) {
-                self.focus = UnifiedTagEditorFocus::Actions;
+                self.core.focus = FocusPane::Buttons;
                 return;
             }
         }
         if let Some(rect) = self.fields_pane_rect {
             if rect_contains(rect, x, y) {
-                self.focus = UnifiedTagEditorFocus::TagFields;
+                self.core.focus = FocusPane::Content;
             }
         }
-    }
-
-    /// Update tags from database result (called by UI layer after DB query)
-    pub fn fill_from_db_result(&mut self, tags: Vec<(String, String)>) {
-        // Convert database tags to TagField format
-        let mut new_fields: Vec<TagField> = tags
-            .into_iter()
-            .map(|(name, value)| TagField {
-                name,
-                value,
-                editable: true,
-                deleted: false,
-            })
-            .collect();
-
-        // Sort alphabetically by name
-        new_fields.sort_by(|a, b| a.name.to_uppercase().cmp(&b.name.to_uppercase()));
-
-        // Add "New Tag" placeholder at the end
-        new_fields.push(TagField {
-            name: "New Tag".to_string(),
-            value: String::new(),
-            editable: false,
-            deleted: false,
-        });
-
-        // Update current item's tag fields
-        if let Some(fields) = self.tag_fields.get_mut(self.current_item_idx) {
-            *fields = new_fields.clone();
-        }
-
-        // Also update original to reflect new baseline
-        if let Some(orig_fields) = self.original_tag_fields.get_mut(self.current_item_idx) {
-            *orig_fields = new_fields;
-        }
-
-        // Reset field position
-        self.current_field_idx = 0;
-        self.field_scroll_offset = 0;
-        self.field_edit_state = FieldEditState::NonEditable;
-
-        // Clear OOB signal since we've resolved it
-        self.has_oob_signal = false;
     }
 }
 
 impl std::fmt::Debug for UnifiedTagEditorState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UnifiedTagEditorState")
-            .field("context", &self.context)
-            .field("current_item_idx", &self.current_item_idx)
-            .field("total_items", &self.total_items)
-            .field("current_field_idx", &self.current_field_idx)
-            .field("field_edit_state", &self.field_edit_state)
-            .field("focus", &self.focus)
-            .field("selected_button", &self.selected_button)
-            .field("tag_fields_len", &self.tag_fields.len())
+            .field("source", &self.source)
+            .field("current_file", &self.core.current_file)
+            .field("total_items", &self.audio_files.len())
+            .field("focus", &self.core.focus)
             .finish_non_exhaustive()
     }
 }

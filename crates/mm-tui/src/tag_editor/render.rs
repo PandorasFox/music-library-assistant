@@ -10,17 +10,19 @@ use ratatui::{
     Frame,
 };
 
+use mm_ui::field_form::FieldEditMode;
+use mm_ui::tag_editor_state::FocusPane;
+use mm_ui::tag_set::{AggregatedState, TagSet};
+
 use crate::widgets::{
     render_album_art_preview, render_no_art_placeholder, AlbumArtCache, AlbumArtPicker,
     ArtCacheKey, ConfirmationButton, ConfirmationModal, PaneConfig, PathField, ThreePaneLayout,
 };
 
-use super::mutations::compute_changes;
 use super::state::UnifiedTagEditorState;
 use super::types::{
-    AggregatedTagField, AggregatedValue, FieldEditState, NavigationDirection, StageChangesButton,
-    TagEditContext, TagEditorButton, TagEditorSource, UnifiedTagEditorFocus, UnifiedTagEditorModal,
-    UnsavedChangesButton,
+    NavigationDirection, StageChangesButton, TagEditorSource,
+    UnifiedTagEditorModal, UnsavedChangesButton,
 };
 
 impl UnifiedTagEditorState {
@@ -33,7 +35,6 @@ impl UnifiedTagEditorState {
         art_cache: &mut AlbumArtCache,
         resolver: &mm_meta::paths::PathResolver,
     ) {
-        // Layout: info pane | 3-column | status box
         let editor_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -45,53 +46,35 @@ impl UnifiedTagEditorState {
         self.render_info_pane(f, editor_layout[0]);
         self.render_three_column(f, editor_layout[1], art_picker, art_cache, resolver);
 
-        // Render modal overlay if active
         if let Some(modal) = &self.modal {
             self.render_modal(f, area, modal);
         }
     }
 
     fn render_info_pane(&self, f: &mut Frame, area: Rect) {
-        let (path, file_type, file_size, duration_ms, bitrate, sample_rate) = match &self.context {
-            TagEditContext::SingleFile { audio_file, .. } => (
-                audio_file.path().to_string(),
-                audio_file.audio.file_type.clone(),
-                audio_file.entry.file_size,
-                audio_file.audio.duration_ms,
-                audio_file.audio.bitrate_kbps,
-                audio_file.audio.sample_rate,
-            ),
-            TagEditContext::BulkEdit { audio_files, .. } => {
-                if let Some(audio_file) = audio_files.get(self.current_item_idx) {
-                    (
-                        audio_file.path().to_string(),
-                        audio_file.audio.file_type.clone(),
-                        audio_file.entry.file_size,
-                        audio_file.audio.duration_ms,
-                        audio_file.audio.bitrate_kbps,
-                        audio_file.audio.sample_rate,
-                    )
-                } else {
-                    return;
-                }
-            }
+        let audio_file = match self.audio_files.get(self.core.current_file) {
+            Some(af) => af,
+            None => return,
         };
+
+        let path = audio_file.path().to_string();
+        let file_type = audio_file.audio.file_type.clone();
+        let file_size = audio_file.entry.file_size;
+        let duration_ms = audio_file.audio.duration_ms;
+        let bitrate = audio_file.audio.bitrate_kbps;
+        let sample_rate = audio_file.audio.sample_rate;
 
         let duration_str = duration_ms
             .map(crate::helpers::format_duration_ms)
             .unwrap_or_else(|| "Unknown".to_string());
-
         let size_str = crate::helpers::format_bytes(file_size as u64);
-
         let bitrate_str = bitrate
             .map(crate::helpers::format_kbps)
             .unwrap_or_else(|| "Unknown".to_string());
-
         let sample_rate_str = sample_rate
             .map(crate::helpers::format_sample_rate)
             .unwrap_or_else(|| "Unknown".to_string());
 
-        // Borders take 2 chars; path wrapping uses inner width
         let inner_width = area.width.saturating_sub(2);
         let mut info_lines = PathField::new(Span::raw("Path: "), &path).render_lines(inner_width);
         info_lines.push(Line::from(format!(
@@ -103,21 +86,17 @@ impl UnifiedTagEditorState {
             sample_rate_str
         )));
 
-        // Add MP3 warning if applicable
-        let is_mp3 = file_type.to_lowercase() == "mp3";
-        if is_mp3 {
-            info_lines.push(Line::from(
-                Span::styled(
-                    "Warning: MP3 files use ID3v2.3 tags with limited field support. Some tag writes may fail.",
-                    Style::default().fg(Color::Rgb(255, 140, 0)) // Orange
-                )
-            ));
+        if file_type.to_lowercase() == "mp3" {
+            info_lines.push(Line::from(Span::styled(
+                "Warning: MP3 files use ID3v2.3 tags with limited field support. Some tag writes may fail.",
+                Style::default().fg(Color::Rgb(255, 140, 0)),
+            )));
         }
 
         let title = format!(
             "File Info [{}/{}]",
-            self.current_item_idx + 1,
-            self.total_items
+            self.core.current_file + 1,
+            self.audio_files.len()
         );
 
         let info_para =
@@ -142,13 +121,12 @@ impl UnifiedTagEditorState {
         self.render_context_list(f, layout.left.area);
         self.render_tag_fields_pane(f, layout.middle.area);
 
-        // Split right pane: art preview (top) + action buttons (bottom)
         let right_area = layout.right.area;
         let right_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(right_area.width.saturating_sub(2)), // square-ish art preview
-                Constraint::Min(8),                                     // action buttons
+                Constraint::Length(right_area.width.saturating_sub(2)),
+                Constraint::Min(8),
             ])
             .split(right_area);
 
@@ -156,12 +134,9 @@ impl UnifiedTagEditorState {
         self.render_action_panel(f, right_chunks[1]);
     }
 
-    fn render_context_list(&mut self, f: &mut Frame, area: Rect) {
-        // ContextList is display-only (not focusable), so border is never highlighted
-
+    fn render_context_list(&self, f: &mut Frame, area: Rect) {
         let (items, title): (Vec<Line>, &str) = if self.is_aggregated_mode() {
-            // Aggregated mode - show single summary entry (no individual track navigation)
-            let count = self.total_items;
+            let count = self.audio_files.len();
             let summary = format!(">> {} tracks", count);
             let lines = vec![
                 Line::from(summary).style(Style::default().bg(Color::DarkGray)),
@@ -169,95 +144,77 @@ impl UnifiedTagEditorState {
                 Line::from("(bulk edit)").style(Style::default().fg(Color::DarkGray)),
             ];
             (lines, "Selection")
+        } else if self.audio_files.len() == 1 {
+            let filename = std::path::Path::new(self.audio_files[0].path())
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Unknown");
+            let line = format!(">> {}", filename);
+            let mut lines = vec![Line::from(line).style(Style::default().bg(Color::DarkGray))];
+
+            if let Some(ref gc) = self.group_context {
+                lines.push(Line::from(""));
+                lines.push(
+                    Line::from(format!("Group {}/{}", gc.group_index + 1, gc.total_groups))
+                        .style(Style::default().fg(Color::DarkGray)),
+                );
+            }
+
+            let title = match self.source {
+                TagEditorSource::CorpusBrowser | TagEditorSource::DirectoryEdit => "File",
+                TagEditorSource::TagSearch => "Search Result",
+                TagEditorSource::HealthModal => "Health",
+            };
+            (lines, title)
         } else {
-            // Standard file-based rendering (Individual mode)
-            let items: Vec<Line> = match &self.context {
-                TagEditContext::SingleFile {
-                    audio_file,
-                    group_context,
-                    ..
-                } => {
-                    // Single file mode - show the filename
+            // Multi-file individual mode
+            let visible_height = area.height.saturating_sub(2) as usize;
+            let total = self.audio_files.len();
+            let current = self.core.current_file;
+
+            let ideal = current.saturating_sub(visible_height / 2);
+            let max_offset = total.saturating_sub(visible_height);
+            let scroll_offset = ideal.min(max_offset);
+
+            let items: Vec<Line> = self.audio_files
+                .iter()
+                .enumerate()
+                .skip(scroll_offset)
+                .take(visible_height)
+                .map(|(idx, audio_file)| {
+                    let has_changes = self.item_has_changes(idx);
+                    let is_current = idx == current;
+
+                    let prefix = if is_current {
+                        ">> "
+                    } else if has_changes {
+                        "✎ "
+                    } else {
+                        "   "
+                    };
+
                     let filename = std::path::Path::new(audio_file.path())
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("Unknown");
-                    let line = format!(">> {}", filename);
+                    let line = format!("{}{}", prefix, filename);
 
-                    let mut lines =
-                        vec![Line::from(line).style(Style::default().bg(Color::DarkGray))];
+                    let style = if is_current && has_changes {
+                        Style::default().bg(Color::DarkGray).fg(Color::Blue)
+                    } else if is_current {
+                        Style::default().bg(Color::DarkGray)
+                    } else if has_changes {
+                        Style::default().fg(Color::Blue)
+                    } else {
+                        Style::default()
+                    };
+                    Line::from(line).style(style)
+                })
+                .collect();
 
-                    // Show group context if present
-                    if let Some(gc) = group_context {
-                        lines.push(Line::from(""));
-                        lines.push(
-                            Line::from(format!("Group {}/{}", gc.group_index + 1, gc.total_groups))
-                                .style(Style::default().fg(Color::DarkGray)),
-                        );
-                    }
-
-                    lines
-                }
-                TagEditContext::BulkEdit { audio_files, .. } => {
-                    // Bulk mode with Individual editing - show all files by filename
-                    // Compute visible height and scroll offset for centered selection
-                    let visible_height = area.height.saturating_sub(2) as usize;
-                    self.context_list_visible_height = visible_height;
-                    let total = audio_files.len();
-
-                    let ideal = self.current_item_idx.saturating_sub(visible_height / 2);
-                    let max_offset = total.saturating_sub(visible_height);
-                    self.context_list_scroll_offset = ideal.min(max_offset);
-
-                    audio_files
-                        .iter()
-                        .enumerate()
-                        .skip(self.context_list_scroll_offset)
-                        .take(visible_height)
-                        .map(|(idx, audio_file)| {
-                            let has_changes = self.item_has_changes(idx);
-                            let is_current = idx == self.current_item_idx;
-
-                            let prefix = if is_current {
-                                ">> "
-                            } else if has_changes {
-                                "✎ "
-                            } else {
-                                "   "
-                            };
-
-                            let filename = std::path::Path::new(audio_file.path())
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("Unknown");
-                            let line = format!("{}{}", prefix, filename);
-
-                            let style = if is_current && has_changes {
-                                Style::default().bg(Color::DarkGray).fg(Color::Blue)
-                            } else if is_current {
-                                Style::default().bg(Color::DarkGray)
-                            } else if has_changes {
-                                Style::default().fg(Color::Blue)
-                            } else {
-                                Style::default()
-                            };
-                            Line::from(line).style(style)
-                        })
-                        .collect()
-                }
-            };
-
-            let title = match &self.context {
-                TagEditContext::SingleFile { source, .. } => match source {
-                    TagEditorSource::CorpusBrowser => "File",
-                    TagEditorSource::DirectoryEdit => "File",
-                    TagEditorSource::TagSearch => "Search Result",
-                    TagEditorSource::HealthModal => "Health",
-                },
-                TagEditContext::BulkEdit { source, .. } => match source {
-                    TagEditorSource::DirectoryEdit => "Directory",
-                    _ => "Files",
-                },
+            let title = match self.source {
+                TagEditorSource::DirectoryEdit => "Directory",
+                _ => "Files",
             };
             (items, title)
         };
@@ -268,27 +225,25 @@ impl UnifiedTagEditorState {
     }
 
     fn render_tag_fields_pane(&mut self, f: &mut Frame, area: Rect) {
-        let is_focused = matches!(self.focus, UnifiedTagEditorFocus::TagFields);
-
-        // Store pane rect for click focus detection
+        let is_focused = matches!(self.core.focus, FocusPane::Content);
         self.fields_pane_rect = Some(area);
 
-        // Check if we should render aggregated fields (directory edit mode)
-        if let Some(ref agg_fields) = self.aggregated_fields {
-            self.render_aggregated_fields_pane(f, area, is_focused, agg_fields.clone());
+        if self.is_aggregated_mode() {
+            if let Some(ref agg) = self.core.aggregated {
+                let agg = agg.clone();
+                self.render_aggregated_fields_pane(f, area, is_focused, &agg);
+            }
             return;
         }
 
-        let fields = match self.tag_fields.get(self.current_item_idx) {
-            Some(f) => f,
+        let tag_set = match self.core.tag_sets.get(self.core.current_file) {
+            Some(ts) => ts,
             None => return,
         };
+        let original_set = self.core.original_tag_sets.get(self.core.current_file);
 
-        let original_fields = self.original_tag_fields.get(self.current_item_idx);
-
-        // Calculate visible height
         let visible_height = area.height.saturating_sub(2) as usize;
-        self.field_visible_height = visible_height;
+        self.core.form.visible_height = visible_height;
 
         let inner_area = Rect {
             x: area.x + 1,
@@ -296,130 +251,24 @@ impl UnifiedTagEditorState {
             width: area.width.saturating_sub(2),
             height: area.height.saturating_sub(2),
         };
-        self.field_click_targets.populate(inner_area, self.field_scroll_offset, fields.len());
+        // +1 for "New Tag" sentinel
+        let total = tag_set.entry_count() + 1;
+        self.field_click_targets.populate(inner_area, self.core.form.scroll_offset, total);
 
-        // Build field lines
-        let field_lines: Vec<Line> = fields
-            .iter()
-            .enumerate()
-            .map(|(idx, field)| {
-                let is_current = idx == self.current_field_idx;
+        let field_lines = self.build_entry_lines(tag_set, original_set);
 
-                // Check if modified: field is unmodified if an original (name, value) pair exists
-                // This correctly handles multi-value tags (e.g., multiple Genre entries)
-                let is_modified = original_fields
-                    .map(|orig| {
-                        !orig.iter().any(|o| {
-                            o.name.eq_ignore_ascii_case(&field.name)
-                                && o.value == field.value
-                                && !o.deleted
-                        })
-                    })
-                    .unwrap_or(true);
-
-                let name_display =
-                    if is_current && matches!(self.field_edit_state, FieldEditState::EditingName) {
-                        let (before, cursor_ch, after) = self.name_input.cursor_splits();
-                        format!("{}{}{}", before, cursor_ch, after)
-                    } else {
-                        field.name.clone()
-                    };
-
-                // Show indicator: deleted (✗), modified (✎), or none
-                let name_with_indicator = if field.deleted {
-                    format!("✗ {}", name_display)
-                } else if is_modified {
-                    format!("✎ {}", name_display)
-                } else {
-                    format!("  {}", name_display)
-                };
-
-                // Check if this field is part of a multi-value group
-                let normalized_name = field.name.to_uppercase();
-                let value_count = fields
-                    .iter()
-                    .filter(|f| f.name.to_uppercase() == normalized_name && f.name != "New Tag")
-                    .count();
-                let is_first_of_group = fields
-                    .iter()
-                    .position(|f| f.name.to_uppercase() == normalized_name)
-                    .map(|pos| pos == idx)
-                    .unwrap_or(true);
-
-                let value_display = if is_current
-                    && matches!(self.field_edit_state, FieldEditState::EditingValue)
-                {
-                    let (before, cursor_ch, after) = self.value_input.cursor_splits();
-                    format!("{}{}{}", before, cursor_ch, after)
-                } else if value_count > 1 && is_first_of_group {
-                    // First occurrence of a multi-value tag - show count
-                    format!("[{} values]", value_count)
-                } else if value_count > 1 {
-                    // Subsequent occurrence - show value with indent
-                    format!("  └ {}", field.value)
-                } else {
-                    field.value.clone()
-                };
-
-                // Pad name to fixed width for alignment
-                let name_padded = format!("{:18}", name_with_indicator);
-
-                // Determine styles for name and value separately
-                let (mut name_style, mut value_style) = if is_current {
-                    // When current row, highlight the focused part (name or value)
-                    let base = Style::default().add_modifier(Modifier::BOLD);
-                    if self.focus_on_value {
-                        // Value is focused - highlight value, dim name
-                        (
-                            base.bg(Color::DarkGray),
-                            base.bg(Color::Cyan).fg(Color::Black),
-                        )
-                    } else {
-                        // Name is focused - highlight name, dim value
-                        (
-                            base.bg(Color::Cyan).fg(Color::Black),
-                            base.bg(Color::DarkGray),
-                        )
-                    }
-                } else if field.deleted {
-                    // Deleted fields shown in red
-                    let del_style = Style::default().fg(Color::Red);
-                    (del_style, del_style)
-                } else if is_modified {
-                    let mod_style = Style::default().fg(Color::Yellow);
-                    (mod_style, mod_style)
-                } else {
-                    (Style::default(), Style::default())
-                };
-
-                // Apply strikethrough for deleted fields
-                if field.deleted {
-                    name_style = name_style.add_modifier(Modifier::CROSSED_OUT);
-                    value_style = value_style.add_modifier(Modifier::CROSSED_OUT);
-                }
-
-                Line::from(vec![
-                    Span::styled(name_padded, name_style),
-                    Span::raw(" : "),
-                    Span::styled(value_display, value_style),
-                ])
-            })
-            .collect();
-
-        // Scroll indicator
         let total_fields = field_lines.len();
         let scroll_indicator = if total_fields > visible_height {
-            let pos = self.field_scroll_offset + 1;
+            let pos = self.core.form.scroll_offset + 1;
             let max = total_fields.saturating_sub(visible_height) + 1;
             format!(" [{}/{}]", pos, max)
         } else {
             String::new()
         };
 
-        // Apply scroll
         let visible_lines: Vec<Line> = field_lines
             .into_iter()
-            .skip(self.field_scroll_offset)
+            .skip(self.core.form.scroll_offset)
             .take(visible_height)
             .collect();
 
@@ -438,17 +287,101 @@ impl UnifiedTagEditorState {
         f.render_widget(tag_para, area);
     }
 
+    /// Build display lines from TagSet entries.
+    fn build_entry_lines<'a>(
+        &self,
+        tag_set: &TagSet,
+        original_set: Option<&TagSet>,
+    ) -> Vec<Line<'a>> {
+        let form = &self.core.form;
+        let mut lines = Vec::new();
+
+        for (idx, entry) in tag_set.entries().iter().enumerate() {
+            let is_current = idx == form.cursor;
+
+            // Check if modified vs original
+            let is_modified = original_set
+                .and_then(|orig| orig.get(idx))
+                .map(|orig_entry| orig_entry != entry)
+                .unwrap_or(true);
+
+            // Name display
+            let name_display =
+                if is_current && form.edit_mode == FieldEditMode::EditingName {
+                    let (before, cursor_ch, after) = form.name_input.cursor_splits();
+                    format!("{}{}{}", before, cursor_ch, after)
+                } else {
+                    entry.name.clone()
+                };
+
+            let name_with_indicator = if is_modified {
+                format!("✎ {}", name_display)
+            } else {
+                format!("  {}", name_display)
+            };
+
+            // Value display
+            let value_display =
+                if is_current && form.edit_mode == FieldEditMode::EditingValue {
+                    let (before, cursor_ch, after) = form.value_input.cursor_splits();
+                    format!("{}{}{}", before, cursor_ch, after)
+                } else if entry.values.len() > 1 {
+                    format!("[{} values]", entry.values.len())
+                } else {
+                    entry.values.first().cloned().unwrap_or_default()
+                };
+
+            let name_padded = format!("{:18}", name_with_indicator);
+
+            let (name_style, value_style) = if is_current {
+                let base = Style::default().add_modifier(Modifier::BOLD);
+                if form.edit_mode == FieldEditMode::EditingValue {
+                    (base.bg(Color::DarkGray), base.bg(Color::Cyan).fg(Color::Black))
+                } else if form.edit_mode == FieldEditMode::EditingName {
+                    (base.bg(Color::Cyan).fg(Color::Black), base.bg(Color::DarkGray))
+                } else {
+                    // Navigating — highlight the whole row
+                    (base.bg(Color::DarkGray), base.bg(Color::DarkGray))
+                }
+            } else if is_modified {
+                let mod_style = Style::default().fg(Color::Yellow);
+                (mod_style, mod_style)
+            } else {
+                (Style::default(), Style::default())
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(name_padded, name_style),
+                Span::raw(" : "),
+                Span::styled(value_display, value_style),
+            ]));
+        }
+
+        // "New Tag" sentinel
+        let is_sentinel_current = form.cursor == tag_set.entry_count();
+        let sentinel_style = if is_sentinel_current {
+            Style::default()
+                .fg(Color::Green)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+        lines.push(Line::from("  + New Tag").style(sentinel_style));
+
+        lines
+    }
+
     /// Render aggregated fields for directory-level editing.
-    /// Shows whether each tag is consistent across all files or varies.
     fn render_aggregated_fields_pane(
         &mut self,
         f: &mut Frame,
         area: Rect,
         is_focused: bool,
-        agg_fields: Vec<AggregatedTagField>,
+        agg: &mm_ui::tag_set::AggregatedTagSet,
     ) {
         let visible_height = area.height.saturating_sub(2) as usize;
-        self.field_visible_height = visible_height;
+        self.core.form.visible_height = visible_height;
 
         let inner_area = Rect {
             x: area.x + 1,
@@ -456,95 +389,92 @@ impl UnifiedTagEditorState {
             width: area.width.saturating_sub(2),
             height: area.height.saturating_sub(2),
         };
-        self.field_click_targets.populate(inner_area, self.field_scroll_offset, agg_fields.len());
+        let total = agg.entry_count() + 1; // +1 for sentinel
+        self.field_click_targets
+            .populate(inner_area, self.core.form.scroll_offset, total);
 
-        let field_lines: Vec<Line> = agg_fields
-            .iter()
-            .enumerate()
-            .map(|(idx, field)| {
-                let is_current = idx == self.current_field_idx;
+        let form = &self.core.form;
+        let mut field_lines: Vec<Line> = Vec::new();
 
-                // Check if modified
-                let is_modified = field.value != field.original_value;
+        for (idx, entry) in agg.entries().iter().enumerate() {
+            let is_current = idx == form.cursor;
+            let is_modified = matches!(entry.state, AggregatedState::Edited(_));
 
-                let name_display =
-                    if is_current && matches!(self.field_edit_state, FieldEditState::EditingName) {
-                        let (before, cursor_ch, after) = self.name_input.cursor_splits();
-                        format!("{}{}{}", before, cursor_ch, after)
-                    } else {
-                        field.name.clone()
-                    };
-
-                // Show indicator: modified (✎) or none
-                let name_with_indicator = if is_modified {
-                    format!("✎ {}", name_display)
-                } else {
-                    format!("  {}", name_display)
-                };
-
-                // Value display depends on AggregatedValue state
-                let value_display = if is_current
-                    && matches!(self.field_edit_state, FieldEditState::EditingValue)
-                {
-                    let (before, cursor_ch, after) = self.value_input.cursor_splits();
+            let name_display =
+                if is_current && form.edit_mode == FieldEditMode::EditingName {
+                    let (before, cursor_ch, after) = form.name_input.cursor_splits();
                     format!("{}{}{}", before, cursor_ch, after)
                 } else {
-                    match &field.value {
-                        AggregatedValue::Consistent(v) => {
-                            if v.is_empty() {
+                    entry.name.clone()
+                };
+
+            let name_with_indicator = if is_modified {
+                format!("✎ {}", name_display)
+            } else {
+                format!("  {}", name_display)
+            };
+
+            let value_display =
+                if is_current && form.edit_mode == FieldEditMode::EditingValue {
+                    let (before, cursor_ch, after) = form.value_input.cursor_splits();
+                    format!("{}{}{}", before, cursor_ch, after)
+                } else {
+                    match &entry.state {
+                        AggregatedState::Consistent(vals) => {
+                            if vals.is_empty() {
                                 "(empty)".to_string()
                             } else {
-                                v.clone()
+                                vals.join(", ")
                             }
                         }
-                        AggregatedValue::Various => "(various values)".to_string(),
-                        AggregatedValue::VariousConfirming => {
-                            "(press Enter to edit all)".to_string()
-                        }
-                        AggregatedValue::Edited(v) => format!("→ {}", v),
+                        AggregatedState::Various => "(various values)".to_string(),
+                        AggregatedState::Edited(vals) => format!("→ {}", vals.join(", ")),
                     }
                 };
 
-                // Pad name to fixed width for alignment
-                let name_padded = format!("{:18}", name_with_indicator);
+            let name_padded = format!("{:18}", name_with_indicator);
 
-                // Determine styles
-                let (name_style, value_style) = if is_current {
-                    let base = Style::default().add_modifier(Modifier::BOLD);
-                    if self.focus_on_value {
-                        (
-                            base.bg(Color::DarkGray),
-                            base.bg(Color::Cyan).fg(Color::Black),
-                        )
-                    } else {
-                        (
-                            base.bg(Color::Cyan).fg(Color::Black),
-                            base.bg(Color::DarkGray),
-                        )
-                    }
-                } else if is_modified {
-                    let mod_style = Style::default().fg(Color::Yellow);
-                    (mod_style, mod_style)
-                } else if matches!(field.value, AggregatedValue::Various) {
-                    // Various values shown in magenta to draw attention
-                    let var_style = Style::default().fg(Color::Magenta);
-                    (Style::default(), var_style)
+            let (name_style, value_style) = if is_current {
+                let base = Style::default().add_modifier(Modifier::BOLD);
+                if form.edit_mode == FieldEditMode::EditingValue {
+                    (base.bg(Color::DarkGray), base.bg(Color::Cyan).fg(Color::Black))
+                } else if form.edit_mode == FieldEditMode::EditingName {
+                    (base.bg(Color::Cyan).fg(Color::Black), base.bg(Color::DarkGray))
                 } else {
-                    (Style::default(), Style::default())
-                };
+                    (base.bg(Color::DarkGray), base.bg(Color::DarkGray))
+                }
+            } else if is_modified {
+                let mod_style = Style::default().fg(Color::Yellow);
+                (mod_style, mod_style)
+            } else if matches!(entry.state, AggregatedState::Various) {
+                let var_style = Style::default().fg(Color::Magenta);
+                (Style::default(), var_style)
+            } else {
+                (Style::default(), Style::default())
+            };
 
-                Line::from(vec![
-                    Span::styled(name_padded, name_style),
-                    Span::raw(" : "),
-                    Span::styled(value_display, value_style),
-                ])
-            })
-            .collect();
+            field_lines.push(Line::from(vec![
+                Span::styled(name_padded, name_style),
+                Span::raw(" : "),
+                Span::styled(value_display, value_style),
+            ]));
+        }
 
-        // Scroll indicator
+        // Sentinel
+        let is_sentinel_current = form.cursor == agg.entry_count();
+        let sentinel_style = if is_sentinel_current {
+            Style::default()
+                .fg(Color::Green)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+        field_lines.push(Line::from("  + New Tag").style(sentinel_style));
+
         let total_fields = field_lines.len();
         let scroll_indicator = if total_fields > visible_height {
-            let pos = self.field_scroll_offset + 1;
+            let pos = self.core.form.scroll_offset + 1;
             let max = total_fields.saturating_sub(visible_height) + 1;
             format!(" [{}/{}]", pos, max)
         } else {
@@ -553,7 +483,7 @@ impl UnifiedTagEditorState {
 
         let visible_lines: Vec<Line> = field_lines
             .into_iter()
-            .skip(self.field_scroll_offset)
+            .skip(self.core.form.scroll_offset)
             .take(visible_height)
             .collect();
 
@@ -563,10 +493,10 @@ impl UnifiedTagEditorState {
             Style::default()
         };
 
-        // Show track count in title for directory view
         let title = format!(
             "Directory Tags ({} files){}",
-            self.total_items, scroll_indicator
+            self.audio_files.len(),
+            scroll_indicator
         );
 
         let tag_para = Paragraph::new(visible_lines).block(
@@ -578,7 +508,6 @@ impl UnifiedTagEditorState {
         f.render_widget(tag_para, area);
     }
 
-    /// Render the album art preview in the top portion of the right pane.
     fn render_art_preview_pane(
         &self,
         f: &mut Frame,
@@ -598,7 +527,6 @@ impl UnifiedTagEditorState {
             return;
         }
 
-        // Resolve the current audio file to an absolute path
         let rel_path = match self.selected_path() {
             Some(p) => p.to_string(),
             None => {
@@ -608,7 +536,6 @@ impl UnifiedTagEditorState {
         };
         let abs_path = resolver.resolve(std::path::Path::new(&rel_path));
 
-        // Evict stale cache entries (keep only the current file)
         let key = ArtCacheKey::Embedded(abs_path.clone());
         art_cache.retain_only_keys(&[key]);
 
@@ -617,7 +544,6 @@ impl UnifiedTagEditorState {
         if cached.width == 0 {
             render_no_art_placeholder(f, inner);
         } else {
-            // Split inner into image area + metadata line
             if inner.height > 3 {
                 let split = Layout::default()
                     .direction(Direction::Vertical)
@@ -645,12 +571,12 @@ impl UnifiedTagEditorState {
     }
 
     fn render_action_panel(&mut self, f: &mut Frame, area: Rect) {
-        let is_focused = matches!(self.focus, UnifiedTagEditorFocus::Actions);
-        let buttons = self.available_buttons();
-        let has_current_changes = self.has_changes_for_current_item();
-        let has_anything = self.staged_decision_count > 0 || has_current_changes;
+        use mm_ui::modal_buttons::ModalButtons;
+        use mm_ui::tag_editor_state::TagEditorButton;
 
-        // Store pane rect and populate action click targets
+        let is_focused = matches!(self.core.focus, FocusPane::Buttons);
+        let ctx = self.core.button_ctx();
+
         self.actions_pane_rect = Some(area);
         self.action_click_targets.clear();
         let inner_area = Rect {
@@ -660,9 +586,10 @@ impl UnifiedTagEditorState {
             height: area.height.saturating_sub(2),
         };
         self.action_click_targets.set_list_area(inner_area);
-        // Buttons start at row 1 (after the blank line), one per row
+
+        let buttons = TagEditorButton::all();
         for (idx, _) in buttons.iter().enumerate() {
-            let row_y = inner_area.y + 1 + idx as u16; // +1 for blank line
+            let row_y = inner_area.y + 1 + idx as u16;
             if row_y < inner_area.y + inner_area.height {
                 self.action_click_targets.add_row(idx.to_string(), row_y);
             }
@@ -670,8 +597,9 @@ impl UnifiedTagEditorState {
 
         let mut lines = vec![Line::from("")];
 
-        for button in &buttons {
-            let is_selected = *button == self.selected_button;
+        for &button in buttons {
+            let is_selected = button == self.core.buttons.selected;
+
             let label = match button {
                 TagEditorButton::ReviewAll => {
                     if self.is_embedded() {
@@ -680,71 +608,33 @@ impl UnifiedTagEditorState {
                         "Review All"
                     }
                 }
-                TagEditorButton::RevertThisFile => "Revert This File",
-                TagEditorButton::FillFromDisk => "Fill from Disk",
-                TagEditorButton::FillFromDb => "Fill from DB",
+                TagEditorButton::Revert => "Revert",
+                TagEditorButton::Cancel => "Cancel",
             };
 
-            let style = match button {
-                TagEditorButton::ReviewAll => {
-                    if is_focused && is_selected {
-                        if has_anything {
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(Color::Green)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(Color::DarkGray)
-                                .add_modifier(Modifier::BOLD)
-                        }
-                    } else if is_selected {
-                        if has_anything {
-                            Style::default().fg(Color::Green)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        }
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    }
+            let enabled = button.enabled(&ctx);
+            let button_color = button.color(&ctx);
+
+            let style = if is_focused && is_selected {
+                if enabled {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(button_color)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD)
                 }
-                TagEditorButton::RevertThisFile => {
-                    if is_focused && is_selected {
-                        if has_current_changes {
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(Color::Red)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(Color::DarkGray)
-                                .add_modifier(Modifier::BOLD)
-                        }
-                    } else if is_selected {
-                        if has_current_changes {
-                            Style::default().fg(Color::Red)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        }
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    }
+            } else if is_selected {
+                if enabled {
+                    Style::default().fg(button_color)
+                } else {
+                    Style::default().fg(Color::DarkGray)
                 }
-                _ => {
-                    // FillFromDisk, FillFromDb: keep existing uniform style
-                    if is_focused && is_selected {
-                        Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Green)
-                            .add_modifier(Modifier::BOLD)
-                    } else if is_selected {
-                        Style::default().fg(Color::Green)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    }
-                }
+            } else {
+                Style::default().fg(Color::DarkGray)
             };
 
             let text = if is_selected {
@@ -756,13 +646,26 @@ impl UnifiedTagEditorState {
             lines.push(Line::from(text).style(style));
         }
 
-        // Change count
-        let change_count = compute_changes(&self.original_tag_fields, &self.tag_fields).len();
+        // Change count from staged decision count
+        let staged = self.core.staged_decision_count;
+        let has_current = self.has_changes_for_current_item();
         lines.push(Line::from(""));
-        lines.push(
-            Line::from(format!("{} changes", change_count))
-                .style(Style::default().fg(Color::DarkGray)),
-        );
+        if staged > 0 || has_current {
+            let count_text = if has_current && staged > 0 {
+                format!("{} staged + pending", staged)
+            } else if staged > 0 {
+                format!("{} staged", staged)
+            } else {
+                "pending changes".to_string()
+            };
+            lines.push(
+                Line::from(count_text).style(Style::default().fg(Color::Yellow)),
+            );
+        } else {
+            lines.push(
+                Line::from("no changes").style(Style::default().fg(Color::DarkGray)),
+            );
+        }
 
         let border_style = if is_focused {
             Style::default().fg(Color::Green)
@@ -848,16 +751,13 @@ impl UnifiedTagEditorState {
         editing: bool,
         edit_input: &crate::widgets::TextInputState,
     ) {
-        // Get the field name for the title
         let field_name = self
-            .tag_fields
-            .get(self.current_item_idx)
-            .and_then(|fields| fields.get(field_idx))
-            .map(|f| f.name.as_str())
+            .current_tag_set()
+            .and_then(|ts: &mm_ui::tag_set::TagSet| ts.get(field_idx))
+            .map(|e| e.name.as_str())
             .unwrap_or("Tag");
 
-        // Size modal based on content
-        let height = (values.len() + 5).min(15) as u16; // values + add entry + padding + controls
+        let height = (values.len() + 5).min(15) as u16;
         let width = 50u16;
         let modal_area = crate::widgets::centered_rect_fixed(width, height, area);
         f.render_widget(Clear, modal_area);
@@ -873,7 +773,6 @@ impl UnifiedTagEditorState {
 
         let mut lines = Vec::new();
 
-        // Render each value
         for (i, value) in values.iter().enumerate() {
             let is_current = i == current_value_idx;
             let display = if is_current && editing {
@@ -917,7 +816,6 @@ impl UnifiedTagEditorState {
         };
         lines.push(Line::from(add_display).style(add_style));
 
-        // Controls hint
         lines.push(Line::from(""));
         lines.push(
             Line::from("↑↓ Navigate | Enter Edit | Del Remove | Esc Close")

@@ -72,7 +72,7 @@ impl App {
             );
             // Position on the selected file
             if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
-                editor.current_item_idx = selected_idx;
+                editor.core.current_file = selected_idx;
             }
         }
         self.status_message = Some(format!("Editing tags for {}", path.display()));

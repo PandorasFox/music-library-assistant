@@ -81,7 +81,7 @@ impl App {
             ViewAction::InboxOrganize(a) => a.handle(self, witness.as_ref()),
             ViewAction::DirectoryClusterResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::MovedFileAcknowledge(a) => a.handle(self, witness.as_ref()),
-            ViewAction::OobConflictInspection(a) => a.handle(self, witness.as_ref()),
+            ViewAction::OobResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::ReleasePackingBrowser(a) => a.handle(self, witness.as_ref()),
             ViewAction::KnotBrowser(a) => a.handle(self, witness.as_ref()),
             ViewAction::AcoustidBrowse(a) => a.handle(self, witness.as_ref()),
@@ -120,7 +120,7 @@ impl App {
         );
         if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
             editor.set_staged_mutations(mutations);
-            editor.staged_decision_count += 1;
+            editor.core.staged_decision_count += 1;
         }
         // Transaction summary in status_line_2 already reflects the staged state.
     }
@@ -294,15 +294,7 @@ impl App {
             }
         }
 
-        let gesture = witness::ConfirmationGesture::new();
-
-        // Macro for the two common click dispatch patterns:
-        // - gesture: handle_click(x, y, &gesture) -> Option<Action>, wrapped in ViewAction
-        // - void: handle_click(x, y) -> (), always None
         macro_rules! click_dispatch {
-            (gesture $variant:ident, $state:expr) => {
-                $state.handle_click(x, y, &gesture).map(ViewAction::$variant)
-            };
             (void $state:expr) => {{
                 $state.handle_click(x, y);
                 None
@@ -331,7 +323,7 @@ impl App {
                     None
                 }
             }
-            ActiveView::OobConflictInspection(s) => click_dispatch!(gesture OobConflictInspection, s),
+            ActiveView::OobResolution(s) => s.handle_click(x, y).map(ViewAction::OobResolution),
             ActiveView::MovedFileAcknowledge(s) => s.handle_click(x, y).map(ViewAction::MovedFileAcknowledge),
             ActiveView::SubparDuplicateResolution(s) => s.handle_click(x, y).map(ViewAction::SubparDuplicateResolution),
             ActiveView::InboxCorpusMatchResolution(s) => s.handle_click(x, y).map(ViewAction::InboxCorpusMatchResolution),
@@ -417,7 +409,7 @@ impl HandleAction for super::config_editor::ConfigEditorAction {
                     let decision = g.decide("Apply config changes", vec![mutation]);
                     let _ = super::operator_decisions::stage_decision(
                         app,
-                        DecisionKey::ConfigEdit,
+                        mm_ui::decision_keys::config_edit(),
                         decision,
                     );
 

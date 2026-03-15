@@ -1,28 +1,21 @@
 //! Tag Editor UI Module
 //!
-//! Provides multi-track metadata editing workflows with:
-//! - 3-column layout: context list, tag editor, action panel
-//! - Support for single-file and bulk editing contexts
-//! - Transaction-based save with review before commit
-//! - Fill-to-all functionality for shared fields
-//! - Change preview before saving
+//! TUI wrapper around mm-ui's `TagEditorState` + `FieldFormState`.
 //!
 //! ## Module Structure
 //!
-//! - `types`: Core type definitions (TagField, TagChange, etc.)
-//! - `mutations`: Pure functions for change computation and mutation generation
-//! - `field_editing`: Buffer operations and field manipulation
-//! - `input`: Keyboard event handling
-//! - `render`: All rendering methods
-//! - `state`: UnifiedTagEditorState for transaction-based editing
+//! - `types`: TUI-specific type definitions (actions, modals, source context)
+//! - `mutations`: TUI query orchestration (load_tag_sets_batch)
+//! - `input`: Input handling (delegates field editing to FieldFormState)
+//! - `render`: ratatui rendering
+//! - `state`: UnifiedTagEditorState wrapping mm-ui's TagEditorState
 
-mod field_editing;
 mod input;
 pub mod mutations;
 mod render;
 pub mod state;
 pub mod types;
 
-// Unified tag editor exports (transaction-based API)
+// Unified tag editor exports
 pub use state::UnifiedTagEditorState;
-pub use types::{GroupContext, TagEditorMode, TagEditorSource, UnifiedTagEditorAction};
+pub use types::{GroupContext, TagEditorSource, UnifiedTagEditorAction};

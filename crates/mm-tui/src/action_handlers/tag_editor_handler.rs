@@ -24,29 +24,28 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
                     matches!(&app.view, ActiveView::UnifiedTagEditor(ref e) if e.is_embedded());
 
                 if is_embedded {
-                    // Embedded mode: track locally, don't stage to transaction
                     if let ActiveView::UnifiedTagEditor(ref mut editor) = app.view {
                         editor.set_staged_mutations(mutations);
-                        editor.staged_decision_count += 1;
+                        editor.core.staged_decision_count += 1;
                     }
                 } else {
-                    // Standalone mode: stage to transaction (requires witness)
                     let Some(w) = witness else { return };
                     app.stage_tag_editor_decision(key, mutations, w);
                 }
 
-                // Navigate in both modes
                 if let ActiveView::UnifiedTagEditor(ref mut editor) = app.view {
                     match direction {
                         NavigationDirection::Next => {
-                            if editor.current_item_idx < editor.total_items.saturating_sub(1) {
-                                editor.current_item_idx += 1;
+                            if editor.core.current_file
+                                < editor.audio_files.len().saturating_sub(1)
+                            {
+                                editor.core.current_file += 1;
                                 editor.reset_field_state();
                             }
                         }
                         NavigationDirection::Prev => {
-                            if editor.current_item_idx > 0 {
-                                editor.current_item_idx -= 1;
+                            if editor.core.current_file > 0 {
+                                editor.core.current_file -= 1;
                                 editor.reset_field_state();
                             }
                         }
@@ -56,22 +55,14 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
 
             UnifiedTagEditorAction::StageDecisionAndReview { key, mutations } => {
                 let Some(w) = witness else { return };
-                // Stage the decision AND immediately show transaction review
-                // Used for aggregated mode or single-item contexts
                 app.stage_tag_editor_decision(key, mutations, w);
-
-                // Transition to standardized review modal
-                // Note: tag editor state is preserved on the view stack for Cancel return
                 app.after_staging_decisions();
             }
 
             UnifiedTagEditorAction::DiscardTransaction => {
-                // In closed-txn mode, discard the transaction.
-                // In open-txn mode, leave the persistent transaction intact.
                 if !app.open_txn_mode() {
                     let _ = super::super::operator_decisions::discard_transaction(app);
                 }
-                // Return to the view that launched the tag editor (e.g., corpus browser)
                 if !app.pop_and_restore() {
                     app.start_health_view();
                 }
@@ -80,8 +71,8 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
 
             UnifiedTagEditorAction::NextItem => {
                 if let ActiveView::UnifiedTagEditor(ref mut editor) = app.view {
-                    if editor.current_item_idx < editor.total_items.saturating_sub(1) {
-                        editor.current_item_idx += 1;
+                    if editor.core.current_file < editor.audio_files.len().saturating_sub(1) {
+                        editor.core.current_file += 1;
                         editor.reset_field_state();
                     }
                 }
@@ -89,8 +80,8 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
 
             UnifiedTagEditorAction::PrevItem => {
                 if let ActiveView::UnifiedTagEditor(ref mut editor) = app.view {
-                    if editor.current_item_idx > 0 {
-                        editor.current_item_idx -= 1;
+                    if editor.core.current_file > 0 {
+                        editor.core.current_file -= 1;
                         editor.reset_field_state();
                     }
                 }
@@ -102,8 +93,7 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
 
             UnifiedTagEditorAction::RequestFillFromDb { inode } => match inode {
                 Some(inode) => {
-                    let tag_pairs = app
-                        .query(mm_meta::domain_queries::GetCorpusTags { inode });
+                    let tag_pairs = app.query(mm_meta::domain_queries::GetCorpusTags { inode });
 
                     if let ActiveView::UnifiedTagEditor(ref mut editor) = app.view {
                         editor.fill_from_db_result(tag_pairs);
@@ -117,8 +107,6 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
             },
 
             UnifiedTagEditorAction::RequestFillFromDisk => {
-                // Extract query params from editor state, then query, then apply.
-                // Two-phase to avoid borrow conflict (editor borrows app.view).
                 let query_params = if let ActiveView::UnifiedTagEditor(ref editor) = app.view {
                     editor.current_file_for_disk_query()
                 } else {
@@ -138,7 +126,6 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
             }
 
             UnifiedTagEditorAction::CloseEmbedded => {
-                // Return to parent health modal without staging
                 if !app.pop_and_restore() {
                     app.start_health_view();
                 }
@@ -150,22 +137,18 @@ impl HandleAction for tag_editor::UnifiedTagEditorAction {
                 mutations,
             } => {
                 let Some(g) = witness else { return };
-                // Stage collected mutations at parent's decision key
                 let decision = g.decide(&decision_label, mutations);
                 let _ = super::super::operator_decisions::stage_decision(
                     app,
                     decision_key,
                     decision,
                 );
-                // Return to parent health modal
                 if !app.pop_and_restore() {
                     app.start_health_view();
                 }
             }
 
             UnifiedTagEditorAction::RequestTransactionReview => {
-                // Transition to standardized review modal
-                // Note: tag editor state is preserved on the view stack for Cancel return
                 app.after_staging_decisions();
             }
         }

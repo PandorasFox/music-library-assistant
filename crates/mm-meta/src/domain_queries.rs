@@ -106,6 +106,12 @@ pub struct GetOobSyncFiles;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetOobFilesBucketed;
 
+/// OOB conflict files filtered by bucket type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetOobConflictByBucket {
+    pub bucket: crate::views::ConflictBucket,
+}
+
 /// Files with moved-file signals (same inode, different path).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMovedFiles;
@@ -450,6 +456,7 @@ domain_query_protocol! {
     // Detail queries (Wave 1)
     GetOobSyncFiles => Vec<crate::views::OobSyncFile>,
     GetOobFilesBucketed => Vec<crate::views::BucketedOobFile>,
+    GetOobConflictByBucket => Vec<crate::views::BucketedOobFile>,
     GetMovedFiles => Vec<crate::views::MovedFileInfo>,
     GetMissingAlbumSingleSignals => Vec<MissingAlbumSingleSignalWire>,
     GetEditHistoryExport => Vec<crate::views::EditHistoryExportRow>,

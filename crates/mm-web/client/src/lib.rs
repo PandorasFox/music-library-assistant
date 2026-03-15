@@ -576,13 +576,17 @@ async fn load_external_match_overlay(r: &route::ExternalMatchRoute) -> Result<No
             Ok(views::render_acoustid_matches(&data))
         }
         ExternalMatchRoute::ReleaseReview { filter, .. } => {
-            let data = api::get_query_with(
-                "release-review",
-                &format!("filter={}", serde_json::to_value(filter)
-                    .ok()
-                    .and_then(|v| v.as_str().map(String::from))
-                    .unwrap_or_else(|| format!("{filter:?}"))),
-            ).await?;
+            let data: mm_meta::views::external_matches::ReleaseReviewData = {
+                let raw = api::get_query_with(
+                    "release-review",
+                    &format!("filter={}", serde_json::to_value(filter)
+                        .ok()
+                        .and_then(|v| v.as_str().map(String::from))
+                        .unwrap_or_else(|| format!("{filter:?}"))),
+                ).await?;
+                serde_json::from_value(raw)
+                    .map_err(|e| JsValue::from_str(&format!("deserialize release-review: {e}")))?
+            };
             Ok(views::render_release_review(&data))
         }
         ExternalMatchRoute::ReleaseDetail { release_id, .. } => {
@@ -948,23 +952,23 @@ pub fn mm_queue_task(task: &str) {
     });
 }
 
-/// Execute a typed protocol binding and refresh the view.
+/// Stage a typed protocol binding as a decision and refresh the view.
 #[wasm_bindgen]
-pub fn mm_execute(binding_json: &str) {
+pub fn mm_stage_decision(binding_json: &str) {
     let json_str = binding_json.to_string();
     spawn_local(async move {
         let binding: serde_json::Value = match serde_json::from_str(&json_str) {
             Ok(v) => v,
             Err(e) => {
-                web_sys::console::error_1(&format!("mm_execute parse error: {e}").into());
+                web_sys::console::error_1(&format!("mm_stage_decision parse error: {e}").into());
                 return;
             }
         };
-        match api::execute_action(&binding).await {
+        match api::stage_action(&binding).await {
             Ok(_) => {
                 load_from_hash().await.ok();
             }
-            Err(e) => web_sys::console::error_1(&format!("mm_execute error: {e:?}").into()),
+            Err(e) => web_sys::console::error_1(&format!("mm_stage_decision error: {e:?}").into()),
         }
     });
 }
@@ -1010,6 +1014,136 @@ async fn do_index_now() -> Result<(), JsValue> {
     api::tx_start(label).await?;
     api::tx_add(&mm_ui::decision_keys::intake_index(), &decision).await?;
 
+    navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
+    load_from_hash().await?;
+    Ok(())
+}
+
+/// Approve releases: load staging data, build decisions, stage to transaction.
+#[wasm_bindgen]
+pub fn mm_approve_releases(release_ids_json: &str) {
+    let json_str = release_ids_json.to_string();
+    spawn_local(async move {
+        if let Err(e) = do_approve_releases(&json_str).await {
+            web_sys::console::error_1(&format!("approve releases error: {e:?}").into());
+        }
+    });
+}
+
+async fn do_approve_releases(release_ids_json: &str) -> Result<(), JsValue> {
+    use mm_meta::decisions::Decision;
+    use mm_meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation};
+    use mm_meta::views::external_matches::{ReleaseApprovalInput, ApprovalTrackInput};
+    use mm_ui::external_matches::approval::build_release_approval_decisions;
+
+    let release_ids: Vec<String> = serde_json::from_str(release_ids_json)
+        .map_err(|e| JsValue::from_str(&format!("parse release IDs: {e}")))?;
+
+    if release_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Re-fetch review data to get track details for the selected releases.
+    // We query "all" filter and then filter client-side to the selected IDs.
+    let raw = api::get_query_with("release-review", "filter=All").await?;
+    let review: mm_meta::views::external_matches::ReleaseReviewData =
+        serde_json::from_value(raw)
+            .map_err(|e| JsValue::from_str(&format!("deserialize review: {e}")))?;
+
+    // Build approval inputs from selected releases.
+    let approval_inputs: Vec<ReleaseApprovalInput> = review.releases.iter()
+        .filter(|r| release_ids.contains(&r.release_id))
+        .map(|r| ReleaseApprovalInput {
+            release_id: r.release_id.clone(),
+            tracks: r.tracks.iter()
+                .filter_map(|t| {
+                    let inode = t.matched_inode?;
+                    Some(ApprovalTrackInput {
+                        inode,
+                        recording_id: t.recording_id.clone(),
+                        track_title: t.mb_title.clone(),
+                        track_position: t.position as u32,
+                        medium_position: t.medium_position,
+                    })
+                })
+                .collect(),
+        })
+        .filter(|r: &ReleaseApprovalInput| !r.tracks.is_empty())
+        .collect();
+
+    if approval_inputs.is_empty() {
+        return Ok(());
+    }
+
+    // Collect unique IDs for batch staging data.
+    let mut all_release_ids = Vec::new();
+    let mut all_recording_ids = Vec::new();
+    let mut all_inodes = Vec::new();
+    let mut seen_r = std::collections::HashSet::new();
+    let mut seen_rec = std::collections::HashSet::new();
+
+    for rd in &approval_inputs {
+        if seen_r.insert(rd.release_id.clone()) {
+            all_release_ids.push(rd.release_id.clone());
+        }
+        for t in &rd.tracks {
+            all_inodes.push(t.inode);
+            if seen_rec.insert(t.recording_id.clone()) {
+                all_recording_ids.push(t.recording_id.clone());
+            }
+        }
+    }
+
+    // Load MB cache + current tags.
+    let staging_raw = api::post_query(
+        "release-staging-data",
+        &serde_json::json!({
+            "release_ids": all_release_ids,
+            "recording_ids": all_recording_ids,
+            "inodes": all_inodes,
+        }),
+    ).await?;
+    let staging: mm_meta::domain_query_types::ReleaseStagingData =
+        serde_json::from_value(staging_raw)
+            .map_err(|e| JsValue::from_str(&format!("deserialize staging: {e}")))?;
+
+    // Load config for locales and credit routing.
+    let config_raw = api::get_config_json().await?;
+    let config: mm_meta::config::Config = serde_json::from_value(config_raw)
+        .map_err(|e| JsValue::from_str(&format!("deserialize config: {e}")))?;
+    let locales = &config.opinions.external_matching.preferred_locales;
+    let routing = &config.opinions.external_matching.credit_routing;
+
+    // Build decisions using shared mm-ui logic.
+    let (decisions, _skipped) = build_release_approval_decisions(
+        &approval_inputs,
+        &staging.bundle,
+        &staging.inode_tags,
+        locales,
+        routing,
+    );
+
+    if decisions.is_empty() {
+        return Ok(());
+    }
+
+    // Stage: start transaction, add each decision.
+    let n = decisions.len();
+    api::tx_start(&format!("Approve {} release{}", n, if n == 1 { "" } else { "s" })).await?;
+
+    for ad in decisions {
+        let key = mm_ui::decision_keys::mb_release_approval(ad.release_id);
+        let decision = Decision {
+            label: ad.label,
+            mutations: vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                ops: ad.ops,
+                zone: mm_meta::db_types::Zone::Corpus,
+            })],
+        };
+        api::tx_add(&key, &decision).await?;
+    }
+
+    // Navigate to transaction review.
     navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
     load_from_hash().await?;
     Ok(())

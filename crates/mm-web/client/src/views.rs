@@ -1145,7 +1145,7 @@ pub fn render_acoustid_matches(data: &serde_json::Value) -> Node {
 }
 
 /// Render release review browse results.
-pub fn render_release_review(data: &serde_json::Value) -> Node {
+pub fn render_release_review(data: &mm_meta::views::external_matches::ReleaseReviewData) -> Node {
     let mut sections = Vec::new();
 
     sections.push(
@@ -1153,61 +1153,80 @@ pub fn render_release_review(data: &serde_json::Value) -> Node {
             .child(
                 html::a()
                     .class("mm-link")
-                    .attr("href", "#")
-                    .attr("onclick", "event.preventDefault();window.__mm_navigate('Ext. Matches')")
+                    .attr("href", "#/external-matches")
                     .text("\u{2190} Back to External Matches"),
             )
             .into(),
     );
 
-    let releases = data.get("releases").and_then(|v| v.as_array());
-    let count = releases.map_or(0, |r| r.len());
+    let count = data.releases.len();
 
-    if let Some(releases) = releases {
-        for release in releases {
-            let title = release.get("title").and_then(|v| v.as_str()).unwrap_or("?");
-            let artist = release.get("artist").and_then(|v| v.as_str()).unwrap_or("?");
-            let track_count = release.get("track_count").and_then(|v| v.as_u64()).unwrap_or(0);
-            let matched_count = release.get("matched_count").and_then(|v| v.as_u64()).unwrap_or(0);
-            let avg_confidence = release.get("avg_confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let avg_pct = (avg_confidence * 100.0) as u32;
-            let category = release.get("category").and_then(|v| v.as_str()).unwrap_or("?");
+    // "Approve All" button when there are releases to approve.
+    if count > 0 {
+        let all_ids: Vec<&str> = data.releases.iter().map(|r| r.release_id.as_str()).collect();
+        let ids_json = serde_json::to_string(&all_ids).unwrap_or_default();
+        sections.push(
+            div()
+                .class("mm-buttons")
+                .child(
+                    html::button()
+                        .class("mm-btn")
+                        .attr("onclick", &format!(
+                            "window.__mm_approve_releases('{}')",
+                            ids_json.replace('\'', "\\'"),
+                        ))
+                        .text(&format!("Approve All ({count})")),
+                )
+                .into(),
+        );
+    }
 
-            let mut track_items = Vec::new();
-            track_items.push(kv("Category", category));
-            track_items.push(kv("Tracks", &format!("{matched_count}/{track_count} matched")));
-            track_items.push(kv("Avg Confidence", &format!("{avg_pct}%")));
+    for release in &data.releases {
+        let avg_pct = (release.avg_confidence * 100.0) as u32;
 
-            if let Some(tracks) = release.get("tracks").and_then(|v| v.as_array()) {
-                for track in tracks {
-                    let position = track.get("position").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let mb_title = track.get("mb_title").and_then(|v| v.as_str()).unwrap_or("?");
-                    let matched_name = track.get("matched_display_name")
-                        .and_then(|v| v.as_str());
-                    let track_confidence = track.get("confidence")
-                        .and_then(|v| v.as_f64());
+        let mut track_items = Vec::new();
 
-                    let val = if let Some(name) = matched_name {
-                        let conf_str = track_confidence
-                            .map(|c| format!(" [{:.0}%]", c * 100.0))
-                            .unwrap_or_default();
-                        format!("{name}{conf_str}")
-                    } else {
-                        "(unmatched)".to_string()
-                    };
+        // Per-release approve button.
+        let rid_json = serde_json::to_string(&[&release.release_id]).unwrap_or_default();
+        track_items.push(
+            div()
+                .class("mm-buttons")
+                .child(
+                    html::button()
+                        .class("mm-btn mm-btn--sm")
+                        .attr("onclick", &format!(
+                            "window.__mm_approve_releases('{}')",
+                            rid_json.replace('\'', "\\'"),
+                        ))
+                        .text("Approve"),
+                )
+                .into(),
+        );
 
-                    track_items.push(kv(
-                        &format!("{position}. {mb_title}"),
-                        &val,
-                    ));
-                }
-            }
+        track_items.push(kv("Category", &release.category));
+        track_items.push(kv("Tracks", &format!("{}/{} matched", release.matched_count, release.track_count)));
+        track_items.push(kv("Avg Confidence", &format!("{avg_pct}%")));
 
-            sections.push(titled_section(
-                &format!("{artist} \u{2014} {title}"),
-                track_items,
+        for track in &release.tracks {
+            let val = if let Some(ref name) = track.matched_display_name {
+                let conf_str = track.confidence
+                    .map(|c| format!(" [{:.0}%]", c * 100.0))
+                    .unwrap_or_default();
+                format!("{name}{conf_str}")
+            } else {
+                "(unmatched)".to_string()
+            };
+
+            track_items.push(kv(
+                &format!("{}. {}", track.position, track.mb_title),
+                &val,
             ));
         }
+
+        sections.push(titled_section(
+            &format!("{} \u{2014} {}", release.artist, release.title),
+            track_items,
+        ));
     }
 
     if count == 0 {

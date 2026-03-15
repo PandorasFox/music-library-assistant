@@ -91,7 +91,7 @@
             mm_tx_confirm, mm_tx_discard, mm_tx_remove,
             mm_expand_session, mm_packing_browse, mm_setup,
             mm_queue_task, mm_search, mm_expand_dir,
-            mm_config_save, mm_execute,
+            mm_config_save, mm_stage_decision, mm_approve_releases,
             mm_index_now, mm_navigate_route
         } from '/static/pkg/mm_web_client.js';
         await init();
@@ -108,7 +108,8 @@
         window.__mm_search = mm_search;
         window.__mm_expand_dir = mm_expand_dir;
         window.__mm_config_save = mm_config_save;
-        window.__mm_execute = mm_execute;
+        window.__mm_stage_decision = mm_stage_decision;
+        window.__mm_approve_releases = mm_approve_releases;
         window.__mm_index_now = mm_index_now;
         window.__mm_navigate_route = mm_navigate_route;
     </script>

@@ -386,10 +386,21 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
     }
 }
 
+/// Map a Zone enum to the serde variant name expected by the server's `parse_enum`.
+fn zone_api_str(zone: &mm_meta::db_types::Zone) -> &'static str {
+    use mm_meta::db_types::Zone;
+    match zone {
+        Zone::Corpus => "Corpus",
+        Zone::Library => "Library",
+        Zone::Inbox => "Inbox",
+    }
+}
+
 /// Fetch data and render content for a resolution route.
 async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsValue> {
     use route::ResolutionRoute;
     match res {
+        // === Already wired ===
         ResolutionRoute::MissingDirectories { .. } => {
             let data = api::get_query("missing-directory-data").await?;
             Ok(views::render_missing_directories(&data))
@@ -402,7 +413,103 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             let data = api::get_query("moved-files").await?;
             Ok(views::render_moved_files(&data))
         }
-        // Other resolution types not yet wired — show placeholder.
+
+        // === Simple-batch routes ===
+        ResolutionRoute::SubparDuplicates { .. } => {
+            let data = api::get_query("subpar-duplicate-data").await?;
+            Ok(views::render_subpar_duplicates(&data))
+        }
+        ResolutionRoute::LosslessRemux { .. } => {
+            let data = api::get_query("shit-format-data").await?;
+            Ok(views::render_lossless_remux(&data))
+        }
+        ResolutionRoute::MissingFilesRestorable { .. } => {
+            let data = api::get_query("missing-file-data").await?;
+            Ok(views::render_missing_files_restorable(&data))
+        }
+        ResolutionRoute::MissingFilesPermanent { .. } => {
+            let data = api::get_query("missing-file-data").await?;
+            Ok(views::render_missing_files_permanent(&data))
+        }
+        ResolutionRoute::InboxCorpusMatch { .. } => {
+            let data = api::get_query_with(
+                "inbox-corpus-match-data",
+                "bitrate_fuzz_percent=5",
+            ).await?;
+            Ok(views::render_inbox_corpus_match(&data))
+        }
+        ResolutionRoute::OobSync { .. } => {
+            let data = api::get_query("oob-sync-files").await?;
+            Ok(views::render_oob_sync(&data))
+        }
+
+        // === Cluster-nav routes ===
+        ResolutionRoute::TagCanonicity { tag_name, zone, .. } => {
+            let data = api::get_query_with(
+                "tag-canonicity-resolution",
+                &format!(
+                    "tag_name={}&zone={}&filter_existing_canonicals=true",
+                    js_sys::encode_uri_component(tag_name),
+                    zone_api_str(zone),
+                ),
+            ).await?;
+            Ok(views::render_tag_canonicity(&data))
+        }
+        ResolutionRoute::CompoundSplit { tag_name, zone, safe_mode, .. } => {
+            let data = api::get_query_with(
+                "compound-split-resolution",
+                &format!(
+                    "tag_name={}&zone={}&safe_only={}",
+                    js_sys::encode_uri_component(tag_name),
+                    zone_api_str(zone),
+                    safe_mode,
+                ),
+            ).await?;
+            Ok(views::render_compound_split(&data))
+        }
+        ResolutionRoute::MissingAlbum { .. } => {
+            let data = api::get_query("missing-album-single-signals").await?;
+            Ok(views::render_missing_album(&data))
+        }
+        ResolutionRoute::DiscExtraction { .. } => {
+            let data = api::get_query_with(
+                "disc-extraction-data",
+                "map_letters_to_numbers=false",
+            ).await?;
+            Ok(views::render_disc_extraction(&data))
+        }
+
+        // === Group-review routes ===
+        ResolutionRoute::RedundantDuplicates { .. } => {
+            let data = api::get_query_with(
+                "manual-review-data",
+                "kind=RedundantDuplicate",
+            ).await?;
+            Ok(views::render_manual_review("Redundant Duplicates", &data))
+        }
+        ResolutionRoute::DeployConflicts { .. } => {
+            let data = api::get_query_with(
+                "manual-review-data",
+                "kind=DeployConflict",
+            ).await?;
+            Ok(views::render_manual_review("Deploy Conflicts", &data))
+        }
+        ResolutionRoute::MetadataDuplicates { .. } => {
+            let data = api::get_query_with(
+                "manual-review-data",
+                "kind=MetadataDuplicate",
+            ).await?;
+            Ok(views::render_manual_review("Metadata Duplicates", &data))
+        }
+        ResolutionRoute::SameRecording { .. } => {
+            let data = api::get_query_with(
+                "manual-review-data",
+                "kind=SameRecordingDifferentRelease",
+            ).await?;
+            Ok(views::render_manual_review("Same Recording", &data))
+        }
+
+        // Remaining unimplemented resolution types — show placeholder.
         _ => {
             Ok(views::render_resolution_view(
                 &format!("Resolution — {}", resolution_label(res)),

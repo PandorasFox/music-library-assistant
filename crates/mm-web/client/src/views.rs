@@ -1410,3 +1410,558 @@ pub fn render_moved_files(data: &serde_json::Value) -> Node {
         ],
     )
 }
+
+/// Render subpar duplicate resolution data.
+pub fn render_subpar_duplicates(data: &serde_json::Value) -> Node {
+    let items: Vec<String> = data
+        .get("files")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let path = entry.get("corpus_path")?.as_str()?;
+                    let reason = entry.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+                    let superior = entry.get("superior_path").and_then(|v| v.as_str()).unwrap_or("");
+                    let score = entry.get("similarity_score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    Some(format!("{path}  [{reason}, {score:.0}% match vs {superior}]"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    render_resolution_view(
+        &format!("Subpar Duplicates ({})", items.len()),
+        &items,
+        &[
+            ("Stash All", "var(--c-yellow)", "window.__mm_resolve_cancel()"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+        ],
+    )
+}
+
+/// Render lossless remux (shit-format) resolution data.
+pub fn render_lossless_remux(data: &serde_json::Value) -> Node {
+    let lossless: Vec<String> = data
+        .get("lossless_files")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let path = entry.get("corpus_path")?.as_str()?;
+                    let fmt = entry.get("file_type").and_then(|v| v.as_str()).unwrap_or("?");
+                    Some(format!("{path}  [{fmt}]"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let lossy: Vec<String> = data
+        .get("lossy_files")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let path = entry.get("corpus_path")?.as_str()?;
+                    let fmt = entry.get("file_type").and_then(|v| v.as_str()).unwrap_or("?");
+                    Some(format!("{path}  [{fmt}]"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut sections = Vec::new();
+    sections.push(
+        h3().class("mm-section__title")
+            .text(format!(
+                "Non-Vorbis Files ({} lossless, {} lossy)",
+                lossless.len(),
+                lossy.len(),
+            ))
+            .into(),
+    );
+
+    if !lossless.is_empty() {
+        let rows: Vec<Node> = lossless
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                div()
+                    .class("mm-kv")
+                    .child(span().class("mm-kv__key").text(format!("{}", i + 1)))
+                    .child(span().class("mm-kv__val").text(item))
+                    .into()
+            })
+            .collect();
+        sections.push(titled_section("Lossless (remux to FLAC)", rows));
+    }
+
+    if !lossy.is_empty() {
+        let rows: Vec<Node> = lossy
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                div()
+                    .class("mm-kv")
+                    .child(span().class("mm-kv__key").text(format!("{}", i + 1)))
+                    .child(span().class("mm-kv__val").text(item))
+                    .into()
+            })
+            .collect();
+        sections.push(titled_section("Lossy (transcode to Opus)", rows));
+    }
+
+    sections.push(
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-green)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Remux All Lossless"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-white)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Cancel"),
+            )
+            .into(),
+    );
+
+    div().class("mm-resolution").children(sections).into()
+}
+
+/// Render restorable missing files.
+pub fn render_missing_files_restorable(data: &serde_json::Value) -> Node {
+    let items: Vec<String> = data
+        .get("restorable")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let corpus = entry.get("corpus_path")?.as_str()?;
+                    let library = entry.get("library_path").and_then(|v| v.as_str()).unwrap_or("?");
+                    Some(format!("{corpus}  [restore from {library}]"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    render_resolution_view(
+        &format!("Missing Files — Restorable ({})", items.len()),
+        &items,
+        &[
+            ("Restore All", "var(--c-green)", "window.__mm_resolve_cancel()"),
+            ("Drop All", "var(--c-yellow)", "window.__mm_resolve_cancel()"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+        ],
+    )
+}
+
+/// Render non-restorable missing files.
+pub fn render_missing_files_permanent(data: &serde_json::Value) -> Node {
+    let items: Vec<String> = data
+        .get("non_restorable")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    entry.get("corpus_path").and_then(|v| v.as_str()).map(String::from)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    render_resolution_view(
+        &format!("Missing Files — Permanent ({})", items.len()),
+        &items,
+        &[
+            ("Drop All", "var(--c-red)", "window.__mm_resolve_cancel()"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+        ],
+    )
+}
+
+/// Render inbox/corpus match resolution data.
+pub fn render_inbox_corpus_match(data: &serde_json::Value) -> Node {
+    let items: Vec<String> = data
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let inbox_path = entry.get("inbox_path")?.as_str()?;
+                    let quality = entry.get("inbox_quality").and_then(|v| v.as_str()).unwrap_or("?");
+                    let class = entry.get("classification").and_then(|v| v.as_str()).unwrap_or("?");
+                    let matches = entry.get("corpus_matches")
+                        .and_then(|v| v.as_array())
+                        .map_or(0, |a| a.len());
+                    Some(format!("{inbox_path}  [{quality}, {class}, {matches} match(es)]"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    render_resolution_view(
+        &format!("Inbox/Corpus Matches ({})", items.len()),
+        &items,
+        &[
+            ("Stash Safe", "var(--c-green)", "window.__mm_resolve_cancel()"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+        ],
+    )
+}
+
+/// Render OOB sync resolution data.
+pub fn render_oob_sync(data: &serde_json::Value) -> Node {
+    let items: Vec<String> = data
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let path = entry.get("path")?.as_str()?;
+                    let direction = entry.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
+                    let mismatch_count = entry.get("mismatches")
+                        .and_then(|v| v.as_array())
+                        .map_or(0, |a| a.len());
+                    Some(format!("{path}  [{direction}, {mismatch_count} tag(s)]"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    render_resolution_view(
+        &format!("OOB Tag Sync ({})", items.len()),
+        &items,
+        &[
+            ("Accept Disk", "var(--c-green)", "window.__mm_resolve_cancel()"),
+            ("Accept DB", "var(--c-blue)", "window.__mm_resolve_cancel()"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+        ],
+    )
+}
+
+// ============================================================================
+// Cluster-nav resolution views
+// ============================================================================
+
+/// Render tag canonicity resolution data (all clusters as expandable sections).
+pub fn render_tag_canonicity(data: &serde_json::Value) -> Node {
+    let tag_name = data.get("tag_name").and_then(|v| v.as_str()).unwrap_or("?");
+    let clusters = data.get("clusters").and_then(|v| v.as_array());
+
+    let cluster_count = clusters.map_or(0, |c| c.len());
+    let mut sections = Vec::new();
+
+    sections.push(
+        h3().class("mm-section__title")
+            .text(format!("Tag Canonicity — {} ({} clusters)", tag_name, cluster_count))
+            .into(),
+    );
+
+    if let Some(clusters) = clusters {
+        for (idx, cluster) in clusters.iter().enumerate() {
+            let suggested = cluster.get("suggested_canonical")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let confirmed = cluster.get("confirmed_canonical")
+                .and_then(|v| v.as_str());
+
+            let mut variant_items = Vec::new();
+            if let Some(variants) = cluster.get("variants").and_then(|v| v.as_array()) {
+                for variant in variants {
+                    let value = variant.get("value").and_then(|v| v.as_str()).unwrap_or("?");
+                    let files = variant.get("files").and_then(|v| v.as_array());
+                    let file_count = files.map_or(0, |f| f.len());
+                    let file_names: Vec<&str> = files
+                        .map(|f| {
+                            f.iter()
+                                .filter_map(|file| file.get("display_name").and_then(|v| v.as_str()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let preview = if file_names.len() <= 3 {
+                        file_names.join(", ")
+                    } else {
+                        format!("{}, ... +{}", file_names[..3].join(", "), file_names.len() - 3)
+                    };
+                    variant_items.push(
+                        kv(
+                            &format!("\"{value}\" ({file_count} files)"),
+                            &preview,
+                        ),
+                    );
+                }
+            }
+
+            let heading = if let Some(canonical) = confirmed {
+                format!("Cluster {} — canonical: \"{}\"", idx + 1, canonical)
+            } else {
+                format!("Cluster {} — suggested: \"{}\"", idx + 1, suggested)
+            };
+            sections.push(titled_section(&heading, variant_items));
+        }
+    }
+
+    sections.push(
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-green)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Accept Suggestions"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-white)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Cancel"),
+            )
+            .into(),
+    );
+
+    div().class("mm-resolution").children(sections).into()
+}
+
+/// Render compound split resolution data (all groups as expandable sections).
+pub fn render_compound_split(data: &serde_json::Value) -> Node {
+    let groups = data.get("groups").and_then(|v| v.as_array());
+    let group_count = groups.map_or(0, |g| g.len());
+
+    let mut sections = Vec::new();
+    sections.push(
+        h3().class("mm-section__title")
+            .text(format!("Compound Split ({} groups)", group_count))
+            .into(),
+    );
+
+    if let Some(groups) = groups {
+        for (idx, group) in groups.iter().enumerate() {
+            let tag_name = group.get("tag_name").and_then(|v| v.as_str()).unwrap_or("?");
+            let compound = group.get("compound_value").and_then(|v| v.as_str()).unwrap_or("?");
+            let split_parts: Vec<&str> = group.get("split_parts")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+
+            let mut items = Vec::new();
+            items.push(kv("Compound value", compound));
+            items.push(kv("Split into", &split_parts.join(", ")));
+
+            if let Some(files) = group.get("files").and_then(|v| v.as_array()) {
+                for file in files {
+                    let name = file.get("display_name").and_then(|v| v.as_str()).unwrap_or("?");
+                    items.push(kv("", name));
+                }
+            }
+
+            sections.push(titled_section(
+                &format!("Group {} — {} \"{}\"", idx + 1, tag_name, compound),
+                items,
+            ));
+        }
+    }
+
+    sections.push(
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-green)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Split All"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-white)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Cancel"),
+            )
+            .into(),
+    );
+
+    div().class("mm-resolution").children(sections).into()
+}
+
+/// Render missing album (single signals) resolution data.
+pub fn render_missing_album(data: &serde_json::Value) -> Node {
+    let signals = data.as_array();
+    let signal_count = signals.map_or(0, |s| s.len());
+
+    let mut sections = Vec::new();
+    sections.push(
+        h3().class("mm-section__title")
+            .text(format!("Missing Album ({} groups)", signal_count))
+            .into(),
+    );
+
+    if let Some(signals) = signals {
+        for (idx, signal) in signals.iter().enumerate() {
+            let key = signal.get("key").and_then(|v| v.as_str()).unwrap_or("?");
+            let signal_data = signal.get("data");
+            let artist = signal_data
+                .and_then(|d| d.get("artist"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+
+            let mut items = Vec::new();
+            if let Some(tracks) = signal_data.and_then(|d| d.get("tracks")).and_then(|v| v.as_array()) {
+                for track in tracks {
+                    let title = track.get("title").and_then(|v| v.as_str()).unwrap_or("?");
+                    let path = track.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+                    items.push(kv(title, path));
+                }
+            }
+
+            sections.push(titled_section(
+                &format!("Group {} — {} ({})", idx + 1, artist, key),
+                items,
+            ));
+        }
+    }
+
+    sections.push(
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-green)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Set Album"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-white)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Cancel"),
+            )
+            .into(),
+    );
+
+    div().class("mm-resolution").children(sections).into()
+}
+
+/// Render disc extraction resolution data.
+pub fn render_disc_extraction(data: &serde_json::Value) -> Node {
+    let groups = data.get("groups").and_then(|v| v.as_array());
+    let group_count = groups.map_or(0, |g| g.len());
+
+    let mut sections = Vec::new();
+    sections.push(
+        h3().class("mm-section__title")
+            .text(format!("Disc Extraction ({} groups)", group_count))
+            .into(),
+    );
+
+    if let Some(groups) = groups {
+        for (idx, group) in groups.iter().enumerate() {
+            let description = group.get("description").and_then(|v| v.as_str()).unwrap_or("?");
+            let disc_value = group.get("disc_value").and_then(|v| v.as_str()).unwrap_or("?");
+
+            let mut items = Vec::new();
+            items.push(kv("Disc value", disc_value));
+
+            if let Some(files) = group.get("files").and_then(|v| v.as_array()) {
+                for file in files {
+                    let path = file.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+                    let original = file.get("original_value").and_then(|v| v.as_str()).unwrap_or("?");
+                    let cleaned = file.get("cleaned_value").and_then(|v| v.as_str()).unwrap_or("?");
+                    items.push(kv(path, &format!("{original} \u{2192} {cleaned}")));
+                }
+            }
+
+            sections.push(titled_section(
+                &format!("Group {} — {}", idx + 1, description),
+                items,
+            ));
+        }
+    }
+
+    sections.push(
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-green)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Extract All"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-white)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Cancel"),
+            )
+            .into(),
+    );
+
+    div().class("mm-resolution").children(sections).into()
+}
+
+// ============================================================================
+// Group-review resolution views
+// ============================================================================
+
+/// Render manual review resolution data (redundant duplicates, deploy conflicts,
+/// metadata duplicates, same recording).
+pub fn render_manual_review(title: &str, data: &serde_json::Value) -> Node {
+    let groups = data.get("groups").and_then(|v| v.as_array());
+    let group_count = groups.map_or(0, |g| g.len());
+
+    let mut sections = Vec::new();
+    sections.push(
+        h3().class("mm-section__title")
+            .text(format!("{title} ({group_count} groups)"))
+            .into(),
+    );
+
+    if let Some(groups) = groups {
+        for (idx, group) in groups.iter().enumerate() {
+            let label = group.get("label").and_then(|v| v.as_str()).unwrap_or("?");
+
+            let mut items = Vec::new();
+            if let Some(files) = group.get("files").and_then(|v| v.as_array()) {
+                for file in files {
+                    let path = file.get("corpus_path").and_then(|v| v.as_str()).unwrap_or("?");
+                    let context = file.get("context").and_then(|v| v.as_str()).unwrap_or("");
+                    if context.is_empty() {
+                        items.push(kv("", path));
+                    } else {
+                        items.push(kv(path, context));
+                    }
+                }
+            }
+
+            sections.push(titled_section(
+                &format!("Group {} — {}", idx + 1, label),
+                items,
+            ));
+        }
+    }
+
+    sections.push(
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-white)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Cancel"),
+            )
+            .into(),
+    );
+
+    div().class("mm-resolution").children(sections).into()
+}

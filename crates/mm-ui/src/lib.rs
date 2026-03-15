@@ -7,6 +7,7 @@
 pub mod click_targets;
 pub mod decision_field;
 pub mod directory_browser;
+pub mod external_matches;
 pub mod domain_types;
 pub mod group_navigation;
 pub mod html;

@@ -65,6 +65,7 @@ impl ResolutionData for TagCanonicityData {
             has_variants: self.list_len() > 0,
             current_cluster_index: self.current_cluster,
             mode: CanonicityMode::TagCanonicity,
+            tag_name: self.inner.tag_name.clone(),
         }
     }
 
@@ -140,6 +141,8 @@ pub struct CanonicityButtonCtx {
     pub current_cluster_index: usize,
     /// Which canonicity mode — controls button labels and semantics.
     pub mode: CanonicityMode,
+    /// Tag name for DecisionKey construction (e.g. "ARTIST", "ALBUMARTIST").
+    pub tag_name: String,
 }
 
 impl ModalButtons for CanonicityButton {
@@ -189,14 +192,14 @@ impl ModalButtons for CanonicityButton {
         match self {
             Self::Confirm => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::TagCanonicity {
-                    tag_name: String::new(),
+                    tag_name: ctx.tag_name.clone(),
                     cluster_index: ctx.current_cluster_index,
                 },
                 label: "Confirm tag canonicity".into(),
             },
             Self::FlagCanonical => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::TagCanonicity {
-                    tag_name: String::new(),
+                    tag_name: ctx.tag_name.clone(),
                     cluster_index: ctx.current_cluster_index,
                 },
                 label: "Flag as canonical".into(),
@@ -362,6 +365,7 @@ mod tests {
             has_variants: false,
             current_cluster_index: 0,
             mode: CanonicityMode::TagCanonicity,
+            tag_name: "artist".into(),
         };
         assert!(!CanonicityButton::Confirm.enabled(&ctx));
         assert!(CanonicityButton::FlagCanonical.enabled(&ctx));
@@ -374,6 +378,7 @@ mod tests {
             has_variants: true,
             current_cluster_index: 0,
             mode: CanonicityMode::TagCanonicity,
+            tag_name: "artist".into(),
         };
         assert!(CanonicityButton::Confirm.enabled(&ctx));
     }
@@ -389,6 +394,7 @@ mod tests {
             has_variants: true,
             current_cluster_index: 0,
             mode: CanonicityMode::TagCanonicity,
+            tag_name: "artist".into(),
         };
         assert_eq!(
             CanonicityButton::Confirm.action(&ctx),
@@ -410,6 +416,7 @@ mod tests {
             has_variants: true,
             current_cluster_index: 0,
             mode: CanonicityMode::TagCanonicity,
+            tag_name: "artist".into(),
         };
         for button in CanonicityButton::all() {
             assert!(!button.label(&ctx).is_empty());

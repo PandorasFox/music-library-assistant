@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use super::eye::Eye;
 use super::insights_view;
 use super::App;
-use mm_meta::decisions::DecisionKey;
+use mm_ui::modal_buttons::ModalButtons;
+use mm_ui::resolutions::compound_split::{CompoundSplitButton, CompoundSplitButtonCtx};
 use crate::{
     progress_screen::{ProgressPhase, ProgressScreen},
     progressive_worker::{OnComplete, ProgressiveWorkerState, WorkItem, WorkSummary},
@@ -268,24 +269,17 @@ impl App {
             parts.join(", ")
         );
 
-        let tag_name = data.compound.tag_name.clone();
-        let key = if is_safe_mode {
-            DecisionKey::CompoundSplitSafe {
-                tag_name,
-                cluster_index: idx,
-            }
-        } else {
-            DecisionKey::CompoundSplitReview {
-                tag_name,
-                cluster_index: idx,
-            }
+        let ctx = CompoundSplitButtonCtx {
+            has_files: true,
+            current_group_index: idx,
+            tag_name: data.compound.tag_name.clone(),
+            zone: mm_meta::db_types::Zone::Corpus,
+            safe_mode: is_safe_mode,
         };
+        let key = CompoundSplitButton::Confirm.protocol_binding(&ctx)
+            .decision_key().unwrap().clone();
         let decision = worker.gesture.decide(&description, mutations);
-        let _ = super::operator_decisions::stage_decision(
-            self,
-            key,
-            decision,
-        );
+        let _ = super::operator_decisions::stage_decision(self, key, decision);
         worker.mutations_generated += 1;
     }
 

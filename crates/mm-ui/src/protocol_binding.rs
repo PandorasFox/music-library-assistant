@@ -33,3 +33,15 @@ pub enum ProtocolBinding {
     /// Navigation only — no protocol message.
     Navigation,
 }
+
+impl ProtocolBinding {
+    /// Extract the `DecisionKey` from a `Transaction` binding.
+    ///
+    /// Returns `None` for `Command` and `Navigation` bindings.
+    pub fn decision_key(&self) -> Option<&DecisionKey> {
+        match self {
+            Self::Transaction { decision_key, .. } => Some(decision_key),
+            _ => None,
+        }
+    }
+}

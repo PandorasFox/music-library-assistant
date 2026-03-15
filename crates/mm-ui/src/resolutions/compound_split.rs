@@ -9,6 +9,7 @@ use std::borrow::Cow;
 
 use ratatui::style::Color;
 
+use mm_meta::db_types::Zone;
 use mm_meta::decisions::DecisionKey;
 use mm_meta::views::canonicity_compound::CompoundSplitResolutionData;
 
@@ -26,13 +27,17 @@ use crate::resolution_state::{ResolutionData, ResolutionState};
 pub struct CompoundSplitData {
     pub inner: CompoundSplitResolutionData,
     pub current_group: usize,
+    pub zone: Zone,
+    pub safe_mode: bool,
 }
 
 impl CompoundSplitData {
-    pub fn new(data: CompoundSplitResolutionData) -> Self {
+    pub fn new(data: CompoundSplitResolutionData, zone: Zone, safe_mode: bool) -> Self {
         Self {
             inner: data,
             current_group: 0,
+            zone,
+            safe_mode,
         }
     }
 }
@@ -48,9 +53,16 @@ impl ResolutionData for CompoundSplitData {
     }
 
     fn button_ctx(&self) -> CompoundSplitButtonCtx {
+        let tag_name = self.inner.groups
+            .get(self.current_group)
+            .map(|g| g.tag_name.clone())
+            .unwrap_or_default();
         CompoundSplitButtonCtx {
             has_files: self.list_len() > 0,
             current_group_index: self.current_group,
+            tag_name,
+            zone: self.zone,
+            safe_mode: self.safe_mode,
         }
     }
 
@@ -129,6 +141,12 @@ pub enum CompoundSplitButton {
 pub struct CompoundSplitButtonCtx {
     pub has_files: bool,
     pub current_group_index: usize,
+    /// Tag name for DecisionKey construction.
+    pub tag_name: String,
+    /// Zone determines which CompoundSplit variant to use.
+    pub zone: Zone,
+    /// Safe mode vs review mode (corpus only).
+    pub safe_mode: bool,
 }
 
 impl ModalButtons for CompoundSplitButton {
@@ -172,19 +190,22 @@ impl ModalButtons for CompoundSplitButton {
     }
 
     fn protocol_binding(&self, ctx: &Self::Context) -> ProtocolBinding {
+        let make_key = |tag_name: String, cluster_index: usize| -> DecisionKey {
+            if ctx.zone == Zone::Inbox {
+                DecisionKey::CompoundSplitInbox { tag_name, cluster_index }
+            } else if ctx.safe_mode {
+                DecisionKey::CompoundSplitSafe { tag_name, cluster_index }
+            } else {
+                DecisionKey::CompoundSplitReview { tag_name, cluster_index }
+            }
+        };
         match self {
             Self::Confirm => ProtocolBinding::Transaction {
-                decision_key: DecisionKey::CompoundSplitSafe {
-                    tag_name: String::new(),
-                    cluster_index: ctx.current_group_index,
-                },
+                decision_key: make_key(ctx.tag_name.clone(), ctx.current_group_index),
                 label: "Confirm compound split".into(),
             },
             Self::Canonicalize => ProtocolBinding::Transaction {
-                decision_key: DecisionKey::CompoundSplitSafe {
-                    tag_name: String::new(),
-                    cluster_index: ctx.current_group_index,
-                },
+                decision_key: make_key(ctx.tag_name.clone(), ctx.current_group_index),
                 label: "Mark as entity".into(),
             },
             Self::Cancel => ProtocolBinding::Navigation,
@@ -226,7 +247,7 @@ mod tests {
 
     #[test]
     fn group_nav_zero_groups() {
-        let data = CompoundSplitData::new(make_test_data(0));
+        let data = CompoundSplitData::new(make_test_data(0), Zone::Corpus, true);
         assert_eq!(data.group_count(), 0);
         assert!(!data.has_next());
         assert!(!data.has_prev());
@@ -234,7 +255,7 @@ mod tests {
 
     #[test]
     fn group_nav_three_groups_boundaries() {
-        let mut data = CompoundSplitData::new(make_test_data(3));
+        let mut data = CompoundSplitData::new(make_test_data(3), Zone::Corpus, true);
         // At start
         assert_eq!(data.group_count(), 3);
         assert_eq!(data.current_group(), 0);
@@ -256,14 +277,14 @@ mod tests {
 
     #[test]
     fn list_len_returns_file_count() {
-        let data = CompoundSplitData::new(make_test_data(1));
+        let data = CompoundSplitData::new(make_test_data(1), Zone::Corpus, true);
         // Each group has 4 files
         assert_eq!(data.list_len(), 4);
     }
 
     #[test]
     fn list_len_empty_groups() {
-        let data = CompoundSplitData::new(make_test_data(0));
+        let data = CompoundSplitData::new(make_test_data(0), Zone::Corpus, true);
         assert_eq!(data.list_len(), 0);
     }
 
@@ -272,7 +293,7 @@ mod tests {
         let mut inner = CompoundSplitResolutionData { groups: vec![] };
         inner.groups.push(make_group(2)); // group 0: 2 files
         inner.groups.push(make_group(7)); // group 1: 7 files
-        let mut data = CompoundSplitData::new(inner);
+        let mut data = CompoundSplitData::new(inner, Zone::Corpus, true);
         assert_eq!(data.list_len(), 2);
         data.current_group = 1;
         assert_eq!(data.list_len(), 7);
@@ -280,20 +301,20 @@ mod tests {
 
     #[test]
     fn selected_path_returns_file_display_name() {
-        let data = CompoundSplitData::new(make_test_data(1));
+        let data = CompoundSplitData::new(make_test_data(1), Zone::Corpus, true);
         assert_eq!(data.selected_path(0), Some("track_0.flac"));
         assert_eq!(data.selected_path(1), Some("track_1.flac"));
     }
 
     #[test]
     fn selected_path_out_of_bounds() {
-        let data = CompoundSplitData::new(make_test_data(1));
+        let data = CompoundSplitData::new(make_test_data(1), Zone::Corpus, true);
         assert_eq!(data.selected_path(999), None);
     }
 
     #[test]
     fn list_title_includes_compound_value_and_position() {
-        let data = CompoundSplitData::new(make_test_data(3));
+        let data = CompoundSplitData::new(make_test_data(3), Zone::Corpus, true);
         let title = data.list_title();
         assert!(title.contains("Rock; Metal"));
         assert!(title.contains("1/3"));
@@ -301,7 +322,7 @@ mod tests {
 
     #[test]
     fn content_layout_is_field_above_list() {
-        let data = CompoundSplitData::new(make_test_data(1));
+        let data = CompoundSplitData::new(make_test_data(1), Zone::Corpus, true);
         assert!(matches!(
             data.content_layout(),
             ContentLayout::FieldAboveList { .. }
@@ -310,12 +331,12 @@ mod tests {
 
     #[test]
     fn button_ctx_reflects_data_state() {
-        let data = CompoundSplitData::new(make_test_data(1));
+        let data = CompoundSplitData::new(make_test_data(1), Zone::Corpus, true);
         let ctx = data.button_ctx();
         assert!(ctx.has_files);
         assert_eq!(ctx.current_group_index, 0);
 
-        let empty = CompoundSplitData::new(make_test_data(0));
+        let empty = CompoundSplitData::new(make_test_data(0), Zone::Corpus, true);
         let ctx = empty.button_ctx();
         assert!(!ctx.has_files);
     }
@@ -336,6 +357,9 @@ mod tests {
         let ctx = CompoundSplitButtonCtx {
             has_files: false,
             current_group_index: 0,
+            tag_name: "GENRE".into(),
+            zone: Zone::Corpus,
+            safe_mode: true,
         };
         assert!(!CompoundSplitButton::Confirm.enabled(&ctx));
         assert!(CompoundSplitButton::Canonicalize.enabled(&ctx));
@@ -347,6 +371,9 @@ mod tests {
         let ctx = CompoundSplitButtonCtx {
             has_files: true,
             current_group_index: 0,
+            tag_name: "GENRE".into(),
+            zone: Zone::Corpus,
+            safe_mode: true,
         };
         assert!(CompoundSplitButton::Confirm.enabled(&ctx));
     }
@@ -361,6 +388,9 @@ mod tests {
         let ctx = CompoundSplitButtonCtx {
             has_files: true,
             current_group_index: 0,
+            tag_name: "GENRE".into(),
+            zone: Zone::Corpus,
+            safe_mode: true,
         };
         assert_eq!(
             CompoundSplitButton::Confirm.action(&ctx),
@@ -381,6 +411,9 @@ mod tests {
         let ctx = CompoundSplitButtonCtx {
             has_files: true,
             current_group_index: 0,
+            tag_name: "GENRE".into(),
+            zone: Zone::Corpus,
+            safe_mode: true,
         };
         for button in CompoundSplitButton::all() {
             assert!(!button.label(&ctx).is_empty());

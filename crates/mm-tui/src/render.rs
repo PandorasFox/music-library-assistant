@@ -191,10 +191,10 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         }
         ActiveView::CompoundTagSplitResolution {
             ref data, current_group, ref mut list, ref mut buttons,
-            ref field, focus, safe_mode, ..
+            ref field, focus, safe_mode, zone, ..
         } => {
             compound_split_v2::render_v3::render(
-                f, area, data, current_group, list, buttons, field, focus, safe_mode,
+                f, area, data, current_group, list, buttons, field, focus, safe_mode, zone,
             );
         }
         ActiveView::OobConflictInspection(ref mut state) => {

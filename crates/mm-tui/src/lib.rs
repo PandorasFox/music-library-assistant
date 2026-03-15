@@ -548,6 +548,7 @@ impl App {
                                 .map_or(false, |c| !c.variants.is_empty()),
                             current_cluster_index: *current_cluster,
                             mode: current_mode,
+                            tag_name: data.tag_name.clone(),
                         };
                         match focus {
                             mm_ui::geometry::FocusPane::Field => {
@@ -602,7 +603,7 @@ impl App {
             ActiveView::CompoundTagSplitResolution {
                 ref data, ref mut current_group, ref mut list,
                 ref mut buttons, ref mut field, ref mut focus,
-                ..
+                zone, safe_mode, ..
             } => {
                 use mm_ui::input::InputAction as IA;
                 use mm_ui::resolutions::compound_split::{CompoundSplitAction as CsAction, CompoundSplitButtonCtx};
@@ -649,6 +650,10 @@ impl App {
                             has_files: data.groups.get(*current_group)
                                 .map_or(false, |g| !g.files.is_empty()),
                             current_group_index: *current_group,
+                            tag_name: data.groups.get(*current_group)
+                                .map(|g| g.tag_name.clone()).unwrap_or_default(),
+                            zone: *zone,
+                            safe_mode: *safe_mode,
                         };
                         match focus {
                             mm_ui::geometry::FocusPane::Field => {

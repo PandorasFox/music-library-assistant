@@ -7,7 +7,8 @@ use super::super::App;
 use super::witness;
 use super::HandleAction;
 use mm_meta::db_types::Zone;
-use mm_meta::decisions::DecisionKey;
+use mm_ui::modal_buttons::ModalButtons;
+use mm_ui::resolutions::compound_split::{CompoundSplitButton, CompoundSplitButtonCtx};
 use crate::ActiveView;
 
 // =========================================================================
@@ -120,14 +121,36 @@ impl App {
         }
     }
 
+    /// Build a `CompoundSplitButtonCtx` from the current view state.
+    fn compound_split_ctx(&self) -> Option<CompoundSplitButtonCtx> {
+        match &self.view {
+            ActiveView::CompoundTagSplitResolution {
+                ref data, current_group, zone, safe_mode, ..
+            } => {
+                let tag_name = data.groups
+                    .get(*current_group)
+                    .map(|g| g.tag_name.clone())
+                    .unwrap_or_default();
+                Some(CompoundSplitButtonCtx {
+                    has_files: true,
+                    current_group_index: *current_group,
+                    tag_name,
+                    zone: *zone,
+                    safe_mode: *safe_mode,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// Stage compound split decision for current group (V3).
     ///
     /// Parses the DecisionField value as semicolon-separated split parts,
     /// then builds tag ops: replace compound value with first part, add remaining parts.
     fn stage_compound_split_v3(&mut self, gesture: &witness::ConfirmationGesture) {
-        let (mutations, key, description) = match &self.view {
+        let (mutations, description) = match &self.view {
             ActiveView::CompoundTagSplitResolution {
-                ref data, current_group, ref field, ref zone, safe_mode, ..
+                ref data, current_group, ref field, ref zone, ..
             } => {
                 use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
                 use mm_meta::mutations::{Mutation, TagOp};
@@ -185,12 +208,17 @@ impl App {
                     group.tag_name,
                     parts.join(", "),
                 );
-                let key = compound_split_key(*zone, *safe_mode, group.tag_name.clone(), *current_group);
-                (mutations, key, desc)
+                (mutations, desc)
             }
             _ => return,
         };
 
+        let ctx = match self.compound_split_ctx() {
+            Some(c) => c,
+            None => return,
+        };
+        let key = CompoundSplitButton::Confirm.protocol_binding(&ctx)
+            .decision_key().unwrap().clone();
         let decision = gesture.decide(&description, mutations);
         let _ = super::super::operator_decisions::stage_decision(self, key, decision);
     }
@@ -200,9 +228,9 @@ impl App {
     /// Emits an EmitCanonicalTag mutation to mark the compound value as a
     /// standalone entity, suppressing future compound detection for it.
     fn stage_compound_canonicalize_v3(&mut self, gesture: &witness::ConfirmationGesture) {
-        let (mutations, key, description) = match &self.view {
+        let (mutations, description) = match &self.view {
             ActiveView::CompoundTagSplitResolution {
-                ref data, current_group, ref zone, safe_mode, ..
+                ref data, current_group, ..
             } => {
                 use mm_meta::mutations::indexing::EmitCanonicalTagMutation;
                 use mm_meta::mutations::Mutation;
@@ -221,38 +249,18 @@ impl App {
                     "Keep \"{}\" in {} as canonical",
                     group.compound_value, group.tag_name,
                 );
-                let key = compound_split_key(*zone, *safe_mode, group.tag_name.clone(), *current_group);
-                (mutations, key, desc)
+                (mutations, desc)
             }
             _ => return,
         };
 
+        let ctx = match self.compound_split_ctx() {
+            Some(c) => c,
+            None => return,
+        };
+        let key = CompoundSplitButton::Canonicalize.protocol_binding(&ctx)
+            .decision_key().unwrap().clone();
         let decision = gesture.decide(&description, mutations);
         let _ = super::super::operator_decisions::stage_decision(self, key, decision);
-    }
-}
-
-/// Build the appropriate compound split DecisionKey from zone, safe_mode, tag_name, and cluster index.
-fn compound_split_key(
-    zone: Zone,
-    safe_mode: bool,
-    tag_name: String,
-    cluster_index: usize,
-) -> DecisionKey {
-    if zone == Zone::Inbox {
-        DecisionKey::CompoundSplitInbox {
-            tag_name,
-            cluster_index,
-        }
-    } else if safe_mode {
-        DecisionKey::CompoundSplitSafe {
-            tag_name,
-            cluster_index,
-        }
-    } else {
-        DecisionKey::CompoundSplitReview {
-            tag_name,
-            cluster_index,
-        }
     }
 }

@@ -7,8 +7,8 @@ use super::super::App;
 use super::witness;
 use super::HandleAction;
 use mm_meta::db_types::Zone;
-use mm_meta::decisions::DecisionKey;
-use mm_ui::resolutions::tag_canonicity::CanonicityAction;
+use mm_ui::modal_buttons::ModalButtons;
+use mm_ui::resolutions::tag_canonicity::{CanonicityAction, CanonicityButton, CanonicityButtonCtx};
 use crate::{
     insights_view, ActiveView,
 };
@@ -141,9 +141,25 @@ impl App {
         }
     }
 
+    /// Build a `CanonicityButtonCtx` from the current view state.
+    fn canonicity_ctx(&self) -> Option<CanonicityButtonCtx> {
+        match &self.view {
+            ActiveView::TagCanonicityResolution {
+                ref data, current_cluster, ref mode, ..
+            } => Some(CanonicityButtonCtx {
+                has_variants: !data.clusters.get(*current_cluster)
+                    .map_or(true, |c| c.variants.is_empty()),
+                current_cluster_index: *current_cluster,
+                mode: *mode,
+                tag_name: data.tag_name.clone(),
+            }),
+            _ => None,
+        }
+    }
+
     /// Stage canonicity squash decision for current cluster (V3).
     fn stage_canonicity_decision_v3(&mut self, gesture: &witness::ConfirmationGesture) {
-        let (mutations, cluster_idx, tag_name) = match &self.view {
+        let mutations = match &self.view {
             ActiveView::TagCanonicityResolution {
                 ref data, current_cluster, ref field, ref zone, ..
             } => {
@@ -182,26 +198,25 @@ impl App {
                     zone: *zone,
                 })];
 
-                (mutations, *current_cluster, data.tag_name.clone())
+                mutations
             }
             _ => return,
         };
 
-        let label = format!("Canonicalize {}", tag_name);
+        let ctx = match self.canonicity_ctx() {
+            Some(c) => c,
+            None => return,
+        };
+        let key = CanonicityButton::Confirm.protocol_binding(&ctx)
+            .decision_key().unwrap().clone();
+        let label = format!("Canonicalize {}", ctx.tag_name);
         let decision = gesture.decide(&label, mutations);
-        let _ = super::super::operator_decisions::stage_decision(
-            self,
-            DecisionKey::TagCanonicity {
-                tag_name,
-                cluster_index: cluster_idx,
-            },
-            decision,
-        );
+        let _ = super::super::operator_decisions::stage_decision(self, key, decision);
     }
 
     /// Stage flag-canonical decision for current cluster (V3).
     fn stage_flag_canonical_v3(&mut self, gesture: &witness::ConfirmationGesture) {
-        let (mutations, cluster_idx, tag_name) = match &self.view {
+        let mutations = match &self.view {
             ActiveView::TagCanonicityResolution {
                 ref data, current_cluster, ..
             } => {
@@ -235,20 +250,19 @@ impl App {
                     return;
                 }
 
-                (mutations, *current_cluster, data.tag_name.clone())
+                mutations
             }
             _ => return,
         };
 
+        let ctx = match self.canonicity_ctx() {
+            Some(c) => c,
+            None => return,
+        };
+        let key = CanonicityButton::FlagCanonical.protocol_binding(&ctx)
+            .decision_key().unwrap().clone();
         let decision = gesture.decide("Flag canonical", mutations);
-        let _ = super::super::operator_decisions::stage_decision(
-            self,
-            DecisionKey::TagCanonicity {
-                tag_name,
-                cluster_index: cluster_idx,
-            },
-            decision,
-        );
+        let _ = super::super::operator_decisions::stage_decision(self, key, decision);
     }
 
     /// Stage a "flag as non-compilation" decision for the current cluster (V3).
@@ -256,7 +270,7 @@ impl App {
     /// Adds COMPILATION=0 to all tracks in the current group, which will
     /// suppress this group in future inconsistent album artist detection runs.
     fn stage_flag_non_compilation_v3(&mut self, gesture: &witness::ConfirmationGesture) {
-        let (mutations, cluster_idx, tag_name) = match &self.view {
+        let mutations = match &self.view {
             ActiveView::TagCanonicityResolution {
                 ref data, current_cluster, ref zone, ..
             } => {
@@ -284,19 +298,18 @@ impl App {
                     ops,
                     zone: *zone,
                 })];
-                (mutations, *current_cluster, data.tag_name.clone())
+                mutations
             }
             _ => return,
         };
 
+        let ctx = match self.canonicity_ctx() {
+            Some(c) => c,
+            None => return,
+        };
+        let key = CanonicityButton::FlagCanonical.protocol_binding(&ctx)
+            .decision_key().unwrap().clone();
         let decision = gesture.decide("Flag non-compilation", mutations);
-        let _ = super::super::operator_decisions::stage_decision(
-            self,
-            DecisionKey::TagCanonicity {
-                tag_name,
-                cluster_index: cluster_idx,
-            },
-            decision,
-        );
+        let _ = super::super::operator_decisions::stage_decision(self, key, decision);
     }
 }

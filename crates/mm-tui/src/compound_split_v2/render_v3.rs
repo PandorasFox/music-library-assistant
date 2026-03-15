@@ -84,6 +84,7 @@ pub fn render(
     field: &mm_ui::decision_field::DecisionField,
     focus: FocusPane,
     safe_mode: bool,
+    zone: mm_meta::db_types::Zone,
 ) {
     let padded = mm_ui::geometry::padded_rect(area);
     f.render_widget(Clear, padded);
@@ -129,9 +130,14 @@ pub fn render(
     );
 
     // --- Buttons ---
+    let tag_name = data.groups.get(current_group)
+        .map(|g| g.tag_name.clone()).unwrap_or_default();
     let ctx = CompoundSplitButtonCtx {
         has_files: !items.is_empty(),
         current_group_index: current_group,
+        tag_name,
+        zone,
+        safe_mode,
     };
     let button_focused = focus == FocusPane::Buttons;
     render_buttons(buttons, f, vertical[3], &ctx, button_focused);

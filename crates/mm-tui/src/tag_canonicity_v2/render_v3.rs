@@ -142,6 +142,7 @@ pub fn render(
         has_variants: items.len() > 0,
         current_cluster_index: current_cluster,
         mode,
+        tag_name: data.tag_name.clone(),
     };
     let button_focused = focus == FocusPane::Buttons;
     render_buttons(buttons, f, vertical[3], &ctx, button_focused);

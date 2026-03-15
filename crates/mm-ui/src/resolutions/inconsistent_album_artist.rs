@@ -54,6 +54,7 @@ impl ResolutionData for AlbumArtistData {
         AlbumArtistButtonCtx {
             has_variants: self.list_len() > 0,
             current_cluster_index: self.current_cluster,
+            tag_name: self.inner.tag_name.clone(),
         }
     }
 
@@ -127,6 +128,8 @@ pub enum AlbumArtistButton {
 pub struct AlbumArtistButtonCtx {
     pub has_variants: bool,
     pub current_cluster_index: usize,
+    /// Tag name for DecisionKey construction.
+    pub tag_name: String,
 }
 
 impl ModalButtons for AlbumArtistButton {
@@ -173,14 +176,14 @@ impl ModalButtons for AlbumArtistButton {
         match self {
             Self::Confirm => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::TagCanonicity {
-                    tag_name: String::new(),
+                    tag_name: ctx.tag_name.clone(),
                     cluster_index: ctx.current_cluster_index,
                 },
                 label: "Confirm album artist".into(),
             },
             Self::FlagNonCompilation => ProtocolBinding::Transaction {
                 decision_key: DecisionKey::TagCanonicity {
-                    tag_name: String::new(),
+                    tag_name: ctx.tag_name.clone(),
                     cluster_index: ctx.current_cluster_index,
                 },
                 label: "Flag as non-compilation".into(),
@@ -342,6 +345,7 @@ mod tests {
         let ctx = AlbumArtistButtonCtx {
             has_variants: false,
             current_cluster_index: 0,
+            tag_name: "ALBUMARTIST".into(),
         };
         assert!(!AlbumArtistButton::Confirm.enabled(&ctx));
         assert!(AlbumArtistButton::FlagNonCompilation.enabled(&ctx));
@@ -353,6 +357,7 @@ mod tests {
         let ctx = AlbumArtistButtonCtx {
             has_variants: true,
             current_cluster_index: 0,
+            tag_name: "ALBUMARTIST".into(),
         };
         assert!(AlbumArtistButton::Confirm.enabled(&ctx));
     }
@@ -367,6 +372,7 @@ mod tests {
         let ctx = AlbumArtistButtonCtx {
             has_variants: true,
             current_cluster_index: 0,
+            tag_name: "ALBUMARTIST".into(),
         };
         assert_eq!(
             AlbumArtistButton::Confirm.action(&ctx),
@@ -387,6 +393,7 @@ mod tests {
         let ctx = AlbumArtistButtonCtx {
             has_variants: true,
             current_cluster_index: 0,
+            tag_name: "ALBUMARTIST".into(),
         };
         for button in AlbumArtistButton::all() {
             assert!(!button.label(&ctx).is_empty());

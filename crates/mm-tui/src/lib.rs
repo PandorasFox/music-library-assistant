@@ -409,6 +409,82 @@ impl App {
             ActiveView::InboxCorpusMatchResolution(s) => dispatch_input!(InboxCorpusMatchResolution, s),
             ActiveView::InboxOrganize(s) => dispatch_input_raw!(InboxOrganize, s),
             ActiveView::DirectoryClusterResolution(s) => dispatch_input_raw!(DirectoryClusterResolution, s),
+            ActiveView::DirectoryClusterResolutionV3 {
+                ref data, ref mut current_cluster, ref mut list,
+                ref mut buttons, ref mut focus, ..
+            } => {
+                use mm_ui::input::InputAction as IA;
+                use mm_ui::resolutions::directory_cluster::{DirectoryClusterAction as DcAction, DirectoryClusterButtonCtx};
+                use mm_ui::standard_list::ListInputResult;
+
+                match action {
+                    IA::CycleNext => {
+                        if *current_cluster + 1 < data.clusters.len() {
+                            *current_cluster += 1;
+                            list.reset();
+                        }
+                        ViewAction::None
+                    }
+                    IA::CyclePrev => {
+                        if *current_cluster > 0 {
+                            *current_cluster -= 1;
+                            list.reset();
+                        }
+                        ViewAction::None
+                    }
+                    IA::FocusUp => {
+                        *focus = focus.prev(false);
+                        ViewAction::None
+                    }
+                    IA::FocusDown => {
+                        *focus = focus.next(false);
+                        ViewAction::None
+                    }
+                    IA::Cancel => {
+                        ViewAction::DirectoryClusterResolutionV3(DcAction::Cancel)
+                    }
+                    _ => {
+                        let ctx = DirectoryClusterButtonCtx {
+                            has_directories: data.clusters.get(*current_cluster)
+                                .map_or(false, |c| !c.directories.is_empty()),
+                            cluster_index: *current_cluster,
+                        };
+                        match focus {
+                            mm_ui::geometry::FocusPane::List => {
+                                let items = data.clusters.get(*current_cluster)
+                                    .map(|c| crate::directory_cluster_modal::render_v3::build_dir_items(c))
+                                    .unwrap_or_default();
+                                match list.handle_input(&action, &items) {
+                                    ListInputResult::Consumed | ListInputResult::CursorMoved
+                                    | ListInputResult::Toggled => ViewAction::None,
+                                    ListInputResult::Confirm(()) => ViewAction::None,
+                                    ListInputResult::Unhandled => ViewAction::None,
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::Buttons => {
+                                match action {
+                                    IA::NavLeft => {
+                                        buttons.nav_left(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::NavRight => {
+                                        buttons.nav_right(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::Confirm => {
+                                        match buttons.confirm(&ctx) {
+                                            Some(a) => ViewAction::DirectoryClusterResolutionV3(a),
+                                            None => ViewAction::None,
+                                        }
+                                    }
+                                    _ => ViewAction::None,
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::Field => ViewAction::None,
+                        }
+                    }
+                }
+            }
             ActiveView::MovedFileAcknowledge(s) => dispatch_input!(MovedFileAcknowledge, s),
             ActiveView::OobSyncResolution(s) => dispatch_input_raw!(OobSyncResolution, s),
             ActiveView::OobConflictInspection(s) => dispatch_input_raw!(OobConflictInspection, s),
@@ -527,6 +603,107 @@ impl App {
                 }
             }
             ActiveView::CompoundTagSplit { state, .. } => dispatch_input_raw!(CompoundTagSplit, state),
+            ActiveView::CompoundTagSplitV3 {
+                ref data, ref mut current_group, ref mut list,
+                ref mut buttons, ref mut field, ref mut focus,
+                safe_mode, ..
+            } => {
+                use mm_ui::input::InputAction as IA;
+                use mm_ui::resolutions::compound_split::{CompoundSplitAction as CsAction, CompoundSplitButtonCtx};
+                use mm_ui::standard_list::ListInputResult;
+
+                // Group navigation first (Tab/Shift+Tab)
+                match action {
+                    IA::CycleNext => {
+                        if *current_group + 1 < data.groups.len() {
+                            *current_group += 1;
+                            list.reset();
+                            if let Some(group) = data.groups.get(*current_group) {
+                                field.set_value(&group.split_parts.join("; "));
+                            }
+                        }
+                        ViewAction::None
+                    }
+                    IA::CyclePrev => {
+                        if *current_group > 0 {
+                            *current_group -= 1;
+                            list.reset();
+                            if let Some(group) = data.groups.get(*current_group) {
+                                field.set_value(&group.split_parts.join("; "));
+                            }
+                        }
+                        ViewAction::None
+                    }
+                    // Focus cycling (Shift+Up/Down)
+                    IA::FocusUp => {
+                        *focus = focus.prev(true);
+                        ViewAction::None
+                    }
+                    IA::FocusDown => {
+                        *focus = focus.next(true);
+                        ViewAction::None
+                    }
+                    // Cancel always cancels
+                    IA::Cancel => {
+                        ViewAction::CompoundTagSplitV3(CsAction::Cancel)
+                    }
+                    // Route by focus pane
+                    _ => {
+                        let ctx = CompoundSplitButtonCtx {
+                            has_files: data.groups.get(*current_group)
+                                .map_or(false, |g| !g.files.is_empty()),
+                            current_group_index: *current_group,
+                        };
+                        match focus {
+                            mm_ui::geometry::FocusPane::Field => {
+                                match action {
+                                    IA::Confirm => {
+                                        // Confirm from field fires the selected button
+                                        match buttons.confirm(&ctx) {
+                                            Some(a) => ViewAction::CompoundTagSplitV3(a),
+                                            None => ViewAction::None,
+                                        }
+                                    }
+                                    ref other => {
+                                        field.handle_input(other);
+                                        ViewAction::None
+                                    }
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::List => {
+                                let items = data.groups.get(*current_group)
+                                    .map(|g| crate::compound_split_v2::render_v3::build_items(g))
+                                    .unwrap_or_default();
+                                match list.handle_input(&action, &items) {
+                                    ListInputResult::Consumed | ListInputResult::CursorMoved
+                                    | ListInputResult::Toggled => ViewAction::None,
+                                    ListInputResult::Confirm(()) => ViewAction::None,
+                                    ListInputResult::Unhandled => ViewAction::None,
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::Buttons => {
+                                match action {
+                                    IA::NavLeft => {
+                                        buttons.nav_left(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::NavRight => {
+                                        buttons.nav_right(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::Confirm => {
+                                        match buttons.confirm(&ctx) {
+                                            Some(a) => ViewAction::CompoundTagSplitV3(a),
+                                            None => ViewAction::None,
+                                        }
+                                    }
+                                    _ => ViewAction::None,
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             ActiveView::MissingAlbumSingleResolution(s) => dispatch_input_raw!(MissingAlbumSingleResolution, s),
             ActiveView::MissingAlbumSingleResolutionV3 {
                 ref data, ref mut current_group, ref mut list,

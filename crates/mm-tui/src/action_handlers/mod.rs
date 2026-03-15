@@ -80,6 +80,7 @@ impl App {
             ViewAction::InboxCorpusMatchResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::InboxOrganize(a) => a.handle(self, witness.as_ref()),
             ViewAction::DirectoryClusterResolution(a) => a.handle(self, witness.as_ref()),
+            ViewAction::DirectoryClusterResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::MovedFileAcknowledge(a) => a.handle(self, witness.as_ref()),
             ViewAction::OobSyncResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::OobConflictInspection(a) => a.handle(self, witness.as_ref()),
@@ -90,6 +91,7 @@ impl App {
             ViewAction::TagCanonicityResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::TagCanonicityResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::CompoundTagSplit(a) => a.handle(self, witness.as_ref()),
+            ViewAction::CompoundTagSplitV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::MissingAlbumSingleResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::MissingAlbumSingleResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::DiscExtractionResolution(a) => a.handle(self, witness.as_ref()),
@@ -502,7 +504,7 @@ impl HandleAction for insights_view::HealthAction {
                             }
                             _ => None,
                         });
-                        app.start_compound_split_resolution(true, tag_name.as_deref());
+                        app.start_compound_split_resolution_v3(true, tag_name.as_deref());
                     }
                     Some(insights_view::InsightAction::LaunchCompoundTagSplitReview) => {
                         let tag_name = insight_type.and_then(|t| match t {
@@ -511,7 +513,7 @@ impl HandleAction for insights_view::HealthAction {
                             }
                             _ => None,
                         });
-                        app.start_compound_split_resolution(false, tag_name.as_deref());
+                        app.start_compound_split_resolution_v3(false, tag_name.as_deref());
                     }
                     Some(insights_view::InsightAction::LaunchOobTagSync) => {
                         app.start_oob_sync_resolution();
@@ -532,7 +534,7 @@ impl HandleAction for insights_view::HealthAction {
                         app.start_intake_confirmation_from_health();
                     }
                     Some(insights_view::InsightAction::LaunchCrossSourceOverlapResolution) => {
-                        app.start_directory_overlap_resolution();
+                        app.start_directory_cluster_resolution_v3();
                     }
                     Some(insights_view::InsightAction::LaunchReleaseOverlapResolution) => {
                         app.start_release_overlap_resolution();

@@ -418,4 +418,135 @@ impl App {
             decision,
         );
     }
+
+    // =========================================================================
+    // V3: Directory Cluster Resolution
+    // =========================================================================
+
+    /// Start V3 directory cluster resolution.
+    pub(crate) fn start_directory_cluster_resolution_v3(&mut self) {
+        let data = self
+            .query(mm_meta::domain_queries::GetDirectoryClusterData);
+
+        if data.clusters.is_empty() {
+            self.status_message = Some("No directory overlap clusters found".to_string());
+            return;
+        }
+
+        let _ = self.start_transaction("Directory overlap resolution");
+
+        self.view = ActiveView::DirectoryClusterResolutionV3 {
+            data,
+            current_cluster: 0,
+            list: mm_ui::standard_list::StandardListState::new(
+                mm_ui::standard_list::StandardListConfig::default(),
+            ),
+            buttons: mm_ui::modal_buttons::ButtonRowState::new(),
+            focus: mm_ui::geometry::FocusPane::List,
+        };
+    }
+
+    /// Advance to next cluster or go to review (V3 directory cluster).
+    fn advance_directory_cluster_v3(&mut self) {
+        if let ActiveView::DirectoryClusterResolutionV3 {
+            ref data, ref mut current_cluster, ref mut list, ..
+        } = self.view
+        {
+            if *current_cluster + 1 < data.clusters.len() {
+                *current_cluster += 1;
+                list.reset();
+            } else {
+                self.after_staging_decisions();
+            }
+        } else {
+            self.after_staging_decisions();
+        }
+    }
+}
+
+// =========================================================================
+// V3: Directory Cluster HandleAction
+// =========================================================================
+
+impl HandleAction for mm_ui::resolutions::directory_cluster::DirectoryClusterAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        use mm_ui::resolutions::directory_cluster::DirectoryClusterAction;
+
+        match self {
+            DirectoryClusterAction::Stash => {
+                let Some(g) = witness else { return };
+
+                let (cluster_index, mutations) = match &app.view {
+                    ActiveView::DirectoryClusterResolutionV3 {
+                        ref data, current_cluster, ref list, ..
+                    } => {
+                        let cluster = match data.clusters.get(*current_cluster) {
+                            Some(c) => c,
+                            None => return,
+                        };
+                        use crate::directory_cluster_modal::types::DirectoryClusterModalDataExt;
+                        use crate::directory_cluster_modal::types::ClusterResolutionOption;
+
+                        // Stash the directory at the list cursor position
+                        let option = cluster.directories.get(list.cursor).map(|d| {
+                            ClusterResolutionOption::StashDirectory {
+                                stash_suffix: d.path_suffix.clone(),
+                            }
+                        });
+                        let mutations = if let Some(ref opt) = option {
+                            data.mutations_for_resolution(*current_cluster, opt, &app.resolver)
+                        } else {
+                            Vec::new()
+                        };
+                        (*current_cluster, mutations)
+                    }
+                    _ => return,
+                };
+                if !mutations.is_empty() {
+                    app.stage_directory_cluster_mutations(
+                        cluster_index,
+                        mutations,
+                        "Stash overlapping directory",
+                        g,
+                    );
+                }
+                app.advance_directory_cluster_v3();
+            }
+            DirectoryClusterAction::MarkExpected => {
+                let Some(g) = witness else { return };
+
+                let (cluster_index, mutation) = match &app.view {
+                    ActiveView::DirectoryClusterResolutionV3 {
+                        ref data, current_cluster, ..
+                    } => {
+                        let cluster = match data.clusters.get(*current_cluster) {
+                            Some(c) => c,
+                            None => return,
+                        };
+                        let parts: Vec<&str> = cluster.cluster_key.splitn(2, '|').collect();
+                        let source_a = parts.first().unwrap_or(&"").to_string();
+                        let source_b = parts.get(1).unwrap_or(&"").to_string();
+                        let mutation = mm_meta::mutations::Mutation::EmitExpectedOverlap(
+                            mm_meta::mutations::indexing::EmitExpectedOverlapMutation {
+                                source_a,
+                                source_b,
+                            },
+                        );
+                        (*current_cluster, mutation)
+                    }
+                    _ => return,
+                };
+                app.stage_directory_cluster_mutations(
+                    cluster_index,
+                    vec![mutation],
+                    "Mark expected overlap",
+                    g,
+                );
+                app.advance_directory_cluster_v3();
+            }
+            DirectoryClusterAction::Cancel => {
+                app.cancel_and_return_to_source("Directory overlap cluster resolution cancelled");
+            }
+        }
+    }
 }

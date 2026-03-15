@@ -195,6 +195,14 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::CompoundTagSplit { ref mut state, .. } => {
             compound_split_v2::render(f, area, state);
         }
+        ActiveView::CompoundTagSplitV3 {
+            ref data, current_group, ref mut list, ref mut buttons,
+            ref field, focus, safe_mode, ..
+        } => {
+            compound_split_v2::render_v3::render(
+                f, area, data, current_group, list, buttons, field, focus, safe_mode,
+            );
+        }
         ActiveView::OobSyncResolution(ref mut state) => {
             oob_sync_modal::render(f, area, state);
         }
@@ -233,6 +241,14 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         }
         ActiveView::DirectoryClusterResolution(ref mut preview) => {
             preview.render(f, area);
+        }
+        ActiveView::DirectoryClusterResolutionV3 {
+            ref data, current_cluster, ref mut list, ref mut buttons,
+            focus, ..
+        } => {
+            super::directory_cluster_modal::render_v3::render_v3(
+                f, area, data, current_cluster, list, buttons, focus,
+            );
         }
         ActiveView::MissingAlbumSingleResolution(ref mut state) => {
             state.render(f, area);

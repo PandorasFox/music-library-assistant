@@ -73,6 +73,13 @@ pub(crate) enum ActiveView {
     InboxCorpusMatchResolution(inbox_corpus_match_modal::InboxCorpusMatchState),
     InboxOrganize(inbox_organize::InboxOrganizeState),
     DirectoryClusterResolution(directory_cluster_modal::DirectoryClusterPreviewState),
+    DirectoryClusterResolutionV3 {
+        data: mm_meta::views::cluster_deploy::DirectoryClusterModalData,
+        current_cluster: usize,
+        list: mm_ui::standard_list::StandardListState,
+        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::directory_cluster::DirectoryClusterButton>,
+        focus: mm_ui::geometry::FocusPane,
+    },
     MovedFileAcknowledge(moved_file_modal::MovedFileState),
     OobSyncResolution(oob_sync_modal::OobSyncState),
     OobConflictInspection(oob_conflict_modal::OobConflictState),
@@ -107,6 +114,18 @@ pub(crate) enum ActiveView {
         clusters: compound_split_v2::CompoundSplitClustersV2,
         safe_mode: bool,
         zone: mm_meta::db_types::Zone,
+    },
+
+    // V3: single-load compound split with packed data + StandardList + DecisionField
+    CompoundTagSplitV3 {
+        data: mm_meta::views::canonicity_compound::CompoundSplitResolutionData,
+        current_group: usize,
+        list: mm_ui::standard_list::StandardListState,
+        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::compound_split::CompoundSplitButton>,
+        field: mm_ui::decision_field::DecisionField,
+        zone: mm_meta::db_types::Zone,
+        focus: mm_ui::geometry::FocusPane,
+        safe_mode: bool,
     },
 
     // Missing album singles resolution
@@ -169,6 +188,7 @@ impl ActiveView {
             Self::InboxCorpusMatchResolution(_) => Some("Inbox Corpus Match Resolution"),
             Self::InboxOrganize(_) => Some("Inbox Organize"),
             Self::DirectoryClusterResolution(_) => Some("Directory Overlap Resolution"),
+            Self::DirectoryClusterResolutionV3 { .. } => Some("Directory Overlap Resolution"),
             Self::MovedFileAcknowledge(_) => Some("Moved Files"),
             Self::OobSyncResolution(_) => Some("OOB Tag Sync"),
             Self::OobConflictInspection(_) => Some("OOB Tag Conflicts"),
@@ -179,6 +199,7 @@ impl ActiveView {
             Self::TagCanonicityResolutionV3 { is_album_artist: true, .. } => Some("Album Artist"),
             Self::TagCanonicityResolutionV3 { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
+            Self::CompoundTagSplitV3 { .. } => Some("Compound Tag Split"),
             Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),
             Self::MissingAlbumSingleResolutionV3 { .. } => Some("Missing Album Singles"),
             Self::DiscExtractionResolution(_) => Some("Disc Extraction"),
@@ -204,6 +225,11 @@ impl ActiveView {
                     .map(|f| f.display_name.as_str())
             }
             Self::CompoundTagSplit { state, .. } => state.selected_path(),
+            Self::CompoundTagSplitV3 { ref data, current_group, ref list, .. } => {
+                data.groups.get(*current_group)
+                    .and_then(|g| g.files.get(list.cursor))
+                    .map(|f| f.display_name.as_str())
+            }
             Self::MissingFileResolution(s) => s.selected_path(),
             Self::MissingDirectoryResolution(s) => s.selected_path(),
             Self::CorruptFileResolution(s) => s.selected_path(),
@@ -212,6 +238,11 @@ impl ActiveView {
             Self::InboxCorpusMatchResolution(s) => s.selected_path(),
             Self::InboxOrganize(_) => None,
             Self::DirectoryClusterResolution(s) => s.selected_path(),
+            Self::DirectoryClusterResolutionV3 { ref data, current_cluster, ref list, .. } => {
+                data.clusters.get(*current_cluster)
+                    .and_then(|c| c.directories.get(list.cursor))
+                    .map(|d| d.path_suffix.as_str())
+            }
             Self::MovedFileAcknowledge(s) => s.selected_path(),
             Self::OobSyncResolution(s) => s.selected_path(),
             Self::OobConflictInspection(s) => s.selected_path(),
@@ -309,6 +340,7 @@ pub(crate) enum ViewAction {
     InboxCorpusMatchResolution(inbox_corpus_match_modal::InboxCorpusMatchAction),
     InboxOrganize(inbox_organize::InboxOrganizeAction),
     DirectoryClusterResolution(directory_cluster_modal::DirectoryClusterPreviewAction),
+    DirectoryClusterResolutionV3(mm_ui::resolutions::directory_cluster::DirectoryClusterAction),
     MovedFileAcknowledge(moved_file_modal::MovedFileAction),
     OobSyncResolution(oob_sync_modal::OobSyncAction),
     OobConflictInspection(oob_conflict_modal::OobConflictAction),
@@ -319,6 +351,7 @@ pub(crate) enum ViewAction {
     TagCanonicityResolution(tag_canonicity_v2::TagCanonicalityActionV2),
     TagCanonicityResolutionV3(mm_ui::resolutions::tag_canonicity::CanonicityAction),
     CompoundTagSplit(compound_split_v2::CompoundSplitActionV2),
+    CompoundTagSplitV3(mm_ui::resolutions::compound_split::CompoundSplitAction),
     MissingAlbumSingleResolution(missing_album_modal::MissingAlbumAction),
     MissingAlbumSingleResolutionV3(mm_ui::resolutions::missing_album::MissingAlbumAction),
     DiscExtractionResolution(disc_extraction_modal::DiscExtractionAction),

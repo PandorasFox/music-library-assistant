@@ -821,6 +821,207 @@ impl_domain_query! {
     }
 }
 
+// ============================================================================
+// External Match Browse Queries
+// ============================================================================
+
+impl_domain_query! {
+    GetAcoustidMatches => Vec<mm_meta::views::external_matches::AcoustidMatchEntry>, |s, db| {
+        load_acoustid_matches(s.confidence, db)
+    }
+}
+
+impl_domain_query! {
+    GetReleaseReview => mm_meta::views::external_matches::ReleaseReviewData, |s, db| {
+        load_release_review(s.filter, db)
+    }
+}
+
+/// Load AcoustID matches filtered by confidence tier, with inline MB recording summaries.
+fn load_acoustid_matches(
+    confidence: mm_meta::views::external_matches::AcoustidConfidence,
+    db: &ReadOnlyDb,
+) -> Vec<mm_meta::views::external_matches::AcoustidMatchEntry> {
+    use crate::external::musicbrainz;
+    use mm_meta::views::external_matches::AcoustidMatchEntry;
+
+    let raw = db.get_external_match_entries_filtered(confidence).unwrap_or_default();
+
+    raw.into_iter()
+        .map(|(inode, path, conf, recording_id)| {
+            let rec_cache = db.get_mb_recording_cache(&recording_id).ok().flatten();
+            let recording =
+                rec_cache.and_then(|(json, _)| musicbrainz::parse_recording(&json).ok());
+
+            let (recording_title, recording_artist, recording_length_ms) =
+                if let Some(ref rec) = recording {
+                    let artist_str: String = rec
+                        .artist_credit
+                        .iter()
+                        .map(|c| c.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    (
+                        Some(rec.title.clone()),
+                        if artist_str.is_empty() { None } else { Some(artist_str) },
+                        rec.length,
+                    )
+                } else {
+                    (None, None, None)
+                };
+
+            AcoustidMatchEntry {
+                inode,
+                display_name: path,
+                confidence: conf,
+                recording_id,
+                recording_title,
+                recording_artist,
+                recording_length_ms,
+            }
+        })
+        .collect()
+}
+
+/// Load packed releases filtered by review category, with inline track data.
+fn load_release_review(
+    filter: mm_meta::views::external_matches::ReleaseReviewFilter,
+    db: &ReadOnlyDb,
+) -> mm_meta::views::external_matches::ReleaseReviewData {
+    use mm_meta::signals::data::{PackedReleaseCategory, PackedReleaseData, ReleasePackingData};
+    use mm_meta::views::external_matches::{
+        ReleaseReviewData, ReleaseReviewFilter, ReviewableRelease, ReviewableTrack,
+    };
+    use std::collections::HashMap;
+
+    // Determine which category prefixes to load
+    let prefixes: Vec<&str> = match filter {
+        ReleaseReviewFilter::Perfect => vec![PackedReleaseCategory::Perfect.key_prefix()],
+        ReleaseReviewFilter::FullMatch => vec![PackedReleaseCategory::FullMatch.key_prefix()],
+        ReleaseReviewFilter::Singles => vec![PackedReleaseCategory::Single.key_prefix()],
+        ReleaseReviewFilter::Incomplete => vec![PackedReleaseCategory::Incomplete.key_prefix()],
+        ReleaseReviewFilter::LowConfidence => {
+            vec![PackedReleaseCategory::LowConfidence.key_prefix()]
+        }
+        ReleaseReviewFilter::All => vec![
+            PackedReleaseCategory::Perfect.key_prefix(),
+            PackedReleaseCategory::FullMatch.key_prefix(),
+            PackedReleaseCategory::Single.key_prefix(),
+            PackedReleaseCategory::Incomplete.key_prefix(),
+            PackedReleaseCategory::LowConfidence.key_prefix(),
+        ],
+    };
+
+    // Load packed releases for all matching prefixes
+    let mut packed: Vec<PackedReleaseData> = Vec::new();
+    for prefix in &prefixes {
+        packed.extend(
+            db.get_packed_releases_by_category(prefix)
+                .unwrap_or_default(),
+        );
+    }
+
+    if packed.is_empty() {
+        return ReleaseReviewData::default();
+    }
+
+    // Load per-inode packing assignments
+    let packing_rows: Vec<(i64, String, ReleasePackingData)> =
+        db.get_release_packing_signal_data().unwrap_or_default();
+
+    // Group packing rows by release_id
+    let mut track_map: HashMap<String, Vec<(i64, String, ReleasePackingData)>> = HashMap::new();
+    for row in packing_rows {
+        track_map
+            .entry(row.2.release_id.clone())
+            .or_default()
+            .push(row);
+    }
+
+    // Determine category label for each prefix
+    let category_for_prefix = |prefix: &str| -> &str {
+        match prefix {
+            "perfect" => "Perfect",
+            "full_match" => "Full Match",
+            "single" => "Single",
+            "incomplete" => "Incomplete",
+            "low_confidence" => "Low Confidence",
+            _ => "Unknown",
+        }
+    };
+
+    // Build reviewable releases
+    let mut releases: Vec<ReviewableRelease> = Vec::new();
+
+    for pr in packed {
+        let mut tracks_data = track_map
+            .get(&pr.release_id)
+            .cloned()
+            .unwrap_or_default();
+        tracks_data.sort_by(|a, b| {
+            a.2.medium_position
+                .cmp(&b.2.medium_position)
+                .then(a.2.track_position.cmp(&b.2.track_position))
+        });
+
+        let matched_count = tracks_data.len();
+        let avg_confidence = if matched_count > 0 {
+            tracks_data.iter().map(|t| t.2.score).sum::<f64>() / matched_count as f64
+        } else {
+            0.0
+        };
+
+        // Determine category from the key prefix
+        let category = category_for_prefix(&pr.category.key_prefix()).to_string();
+
+        let tracks: Vec<ReviewableTrack> = tracks_data
+            .iter()
+            .enumerate()
+            .map(|(_, (inode, path, data))| ReviewableTrack {
+                position: data.track_position as usize,
+                medium_position: data.medium_position,
+                mb_title: data.track_title.clone(),
+                mb_artist: pr.release_artist.clone(),
+                recording_id: data.recording_id.clone(),
+                matched_inode: Some(*inode),
+                matched_display_name: Some(path.clone()),
+                confidence: Some(data.score),
+            })
+            .collect();
+
+        releases.push(ReviewableRelease {
+            release_id: pr.release_id,
+            title: pr.release_title,
+            artist: pr.release_artist,
+            track_count: pr.total_tracks as usize,
+            matched_count,
+            avg_confidence,
+            category,
+            tracks,
+        });
+    }
+
+    // Sort: coverage desc, then total tracks desc
+    releases.sort_by(|a, b| {
+        let cov_a = if a.track_count > 0 {
+            a.matched_count as f64 / a.track_count as f64
+        } else {
+            0.0
+        };
+        let cov_b = if b.track_count > 0 {
+            b.matched_count as f64 / b.track_count as f64
+        } else {
+            0.0
+        };
+        cov_b
+            .partial_cmp(&cov_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.track_count.cmp(&a.track_count))
+    });
+
+    ReleaseReviewData { releases }
+}
+
 /// Read tags from disk for a batch of audio files.
 fn load_file_tag_values(
     inodes: &[i64],
@@ -925,6 +1126,8 @@ dispatch_domain_query_impl! {
     SearchWithConditions,
     GetTagCanonicityResolution,
     GetCompoundSplitResolution,
+    GetAcoustidMatches,
+    GetReleaseReview,
 }
 
 // ============================================================================

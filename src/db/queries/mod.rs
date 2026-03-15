@@ -592,6 +592,7 @@ impl<'a> ReadOnlyDb<'a> {
 
     delegate_read! {
         fn get_external_matches_data() -> Result<crate::meta::views::ExternalMatchesData>;
+        fn get_external_match_entries_filtered(confidence: crate::meta::views::external_matches::AcoustidConfidence) -> Result<Vec<(i64, String, f64, String)>>;
         fn get_external_matches_for_derivation(source_key: i64) -> Result<Vec<external::ExternalMatchRow>>;
         fn get_mb_recording_cache(recording_id: &str) -> Result<Option<(Vec<u8>, i64)>>;
         fn get_mb_artist_cache(artist_id: &str) -> Result<Option<(Vec<u8>, i64)>>;

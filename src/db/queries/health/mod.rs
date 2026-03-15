@@ -508,4 +508,48 @@ impl Database {
         })
     }
 
+    /// Load external match signal entries filtered by confidence tier.
+    ///
+    /// Returns `(inode, path, confidence, recording_id)` tuples for all
+    /// non-ExactMatch signals whose confidence passes the filter.
+    /// MB cache enrichment is done by the caller.
+    pub fn get_external_match_entries_filtered(
+        &self,
+        confidence: crate::meta::views::external_matches::AcoustidConfidence,
+    ) -> Result<Vec<(i64, String, f64, String)>> {
+        use crate::meta::signals::data::{ExternalMatchData, MatchClassification};
+
+        let mut stmt = self.conn.prepare(
+            "SELECT inode, path, data FROM signal_external_match ORDER BY path",
+        )?;
+
+        let rows = stmt.query_map(params![], |row| {
+            let inode: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            let blob: Vec<u8> = row.get(2)?;
+            Ok((inode, path, blob))
+        })?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            let (inode, path, blob) = row?;
+            let data: ExternalMatchData = match bincode::deserialize(&blob) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            if data.classification == MatchClassification::ExactMatch {
+                continue;
+            }
+
+            if !confidence.matches(data.confidence) {
+                continue;
+            }
+
+            entries.push((inode, path, data.confidence, data.recording_id));
+        }
+
+        Ok(entries)
+    }
+
 }

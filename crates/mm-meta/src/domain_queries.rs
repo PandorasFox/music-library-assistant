@@ -362,6 +362,24 @@ pub struct GetCompoundSplitResolution {
 }
 
 // ============================================================================
+// External Match Browse Queries
+// ============================================================================
+
+/// Browse AcoustID matches filtered by confidence tier.
+/// Server joins ExternalMatchSignal data with MB recording cache inline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetAcoustidMatches {
+    pub confidence: crate::views::external_matches::AcoustidConfidence,
+}
+
+/// Browse packed releases filtered by review category.
+/// Returns fully-joined release + track data in a single query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetReleaseReview {
+    pub filter: crate::views::external_matches::ReleaseReviewFilter,
+}
+
+// ============================================================================
 // Web File Browser & Search
 // ============================================================================
 
@@ -406,7 +424,7 @@ pub struct SearchWithConditions {
 /// Does NOT generate `dispatch_domain_query()` or `DomainQuery` impls — those
 /// stay in mm where `ReadOnlyDb` lives.
 macro_rules! domain_query_protocol {
-    ( $( $query:ident => $response:ty ),+ $(,)? ) => {
+    ( $( $query:ident ($route:literal) => $response:ty ),+ $(,)? ) => {
         /// Wire enum carrying a domain query payload.
         /// One variant per registered domain query type.
         #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -421,7 +439,41 @@ macro_rules! domain_query_protocol {
             $( $query($response), )+
         }
 
+        /// Fieldless mirror of `DomainQueryPayload` for route-level dispatch.
+        ///
+        /// Generated from the same macro invocation as the payload/result enums,
+        /// so adding a new query forces updating all exhaustive matches downstream
+        /// (including the web API dispatch in mm-web).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum DomainQueryRoute {
+            $( $query, )+
+        }
+
+        impl DomainQueryRoute {
+            /// Parse a kebab-case HTTP route segment into the corresponding route.
+            pub fn from_route_name(name: &str) -> Option<Self> {
+                match name {
+                    $( $route => Some(Self::$query), )+
+                    _ => None,
+                }
+            }
+
+            /// The kebab-case HTTP route segment for this query.
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    $( Self::$query => $route, )+
+                }
+            }
+        }
+
         $(
+            #[allow(deprecated)]
+            impl $query {
+                /// HTTP route name (kebab-case path segment) for this query type.
+                pub const ROUTE: &'static str = $route;
+            }
+
+            #[allow(deprecated)]
             impl crate::protocol::ProtocolQuery for $query {
                 type Response = $response;
 
@@ -446,67 +498,71 @@ macro_rules! domain_query_protocol {
 
 domain_query_protocol! {
     // Summary queries
-    GetInsights => crate::views::InsightsData,
-    GetInboxOverview => crate::views::InboxOverviewData,
-    GetDeployStatus => crate::views::DeployStatus,
-    GetEditHistory => crate::views::EditHistoryData,
-    GetExternalMatches => crate::views::ExternalMatchesData,
-    GetPackingDirs => crate::domain_query_types::PackingDirsData,
+    GetInsights("insights") => crate::views::InsightsData,
+    GetInboxOverview("inbox-overview") => crate::views::InboxOverviewData,
+    GetDeployStatus("deploy-status") => crate::views::DeployStatus,
+    GetEditHistory("edit-history") => crate::views::EditHistoryData,
+    GetExternalMatches("external-matches") => crate::views::ExternalMatchesData,
+    GetPackingDirs("packing-dirs") => crate::domain_query_types::PackingDirsData,
 
     // Detail queries (Wave 1)
-    GetOobSyncFiles => Vec<crate::views::OobSyncFile>,
-    GetOobFilesBucketed => Vec<crate::views::BucketedOobFile>,
-    GetOobConflictByBucket => Vec<crate::views::BucketedOobFile>,
-    GetMovedFiles => Vec<crate::views::MovedFileInfo>,
-    GetMissingAlbumSingleSignals => Vec<MissingAlbumSingleSignalWire>,
-    GetEditHistoryExport => Vec<crate::views::EditHistoryExportRow>,
-    GetCompoundSignalGroups => Vec<crate::signals::data::CompoundGroup>,
-    GetPackingKnots => Vec<crate::signals::data::PackingKnotData>,
-    GetPackingInodePaths => Vec<(i64, String)>,
+    GetOobSyncFiles("oob-sync-files") => Vec<crate::views::OobSyncFile>,
+    GetOobFilesBucketed("oob-files-bucketed") => Vec<crate::views::BucketedOobFile>,
+    GetOobConflictByBucket("oob-conflict-by-bucket") => Vec<crate::views::BucketedOobFile>,
+    GetMovedFiles("moved-files") => Vec<crate::views::MovedFileInfo>,
+    GetMissingAlbumSingleSignals("missing-album-single-signals") => Vec<MissingAlbumSingleSignalWire>,
+    GetEditHistoryExport("edit-history-export") => Vec<crate::views::EditHistoryExportRow>,
+    GetCompoundSignalGroups("compound-signal-groups") => Vec<crate::signals::data::CompoundGroup>,
+    GetPackingKnots("packing-knots") => Vec<crate::signals::data::PackingKnotData>,
+    GetPackingInodePaths("packing-inode-paths") => Vec<(i64, String)>,
 
     // Detail queries (Wave 2)
-    GetInconsistentAlbumArtistKeys => Vec<String>,
-    GetTagCanonicityKeys => Vec<String>,
-    GetDiscExtractionData => DiscExtractionModalData,
+    GetInconsistentAlbumArtistKeys("inconsistent-album-artist-keys") => Vec<String>,
+    GetTagCanonicityKeys("tag-canonicity-keys") => Vec<String>,
+    GetDiscExtractionData("disc-extraction-data") => DiscExtractionModalData,
 
     // Detail queries (Wave 3: modal init loaders)
-    GetMissingFileData => crate::views::health_modals::MissingFileModalData,
-    GetMissingDirectoryData => crate::views::health_modals::MissingDirectoryModalData,
-    GetCorruptFileData => crate::views::health_modals::CorruptFileModalData,
-    GetSubparDuplicateData => crate::views::health_modals::SubparDuplicateModalData,
-    GetDirectoryClusterData => crate::views::cluster_deploy::DirectoryClusterModalData,
-    GetReleaseOverlapData => crate::views::cluster_deploy::DirectoryClusterModalData,
-    GetShitFormatData => crate::views::cluster_deploy::ShitFormatModalData,
-    GetInboxCorpusMatchData => crate::views::review_match::InboxCorpusMatchModalData,
-    GetDeployData => crate::views::cluster_deploy::DeployModalData,
-    GetManualReviewData => crate::views::review_match::ManualReviewData,
-    GetCorpusTags => Vec<(String, String)>,
-    GetPackingBrowserData => crate::domain_query_types::PackingBrowserData,
-    GetUnsolvedPackingData => Vec<(i64, String, crate::signals::data::UnmatchedCorpusTrackData)>,
+    GetMissingFileData("missing-file-data") => crate::views::health_modals::MissingFileModalData,
+    GetMissingDirectoryData("missing-directory-data") => crate::views::health_modals::MissingDirectoryModalData,
+    GetCorruptFileData("corrupt-file-data") => crate::views::health_modals::CorruptFileModalData,
+    GetSubparDuplicateData("subpar-duplicate-data") => crate::views::health_modals::SubparDuplicateModalData,
+    GetDirectoryClusterData("directory-cluster-data") => crate::views::cluster_deploy::DirectoryClusterModalData,
+    GetReleaseOverlapData("release-overlap-data") => crate::views::cluster_deploy::DirectoryClusterModalData,
+    GetShitFormatData("shit-format-data") => crate::views::cluster_deploy::ShitFormatModalData,
+    GetInboxCorpusMatchData("inbox-corpus-match-data") => crate::views::review_match::InboxCorpusMatchModalData,
+    GetDeployData("deploy-data") => crate::views::cluster_deploy::DeployModalData,
+    GetManualReviewData("manual-review-data") => crate::views::review_match::ManualReviewData,
+    GetCorpusTags("corpus-tags") => Vec<(String, String)>,
+    GetPackingBrowserData("packing-browser-data") => crate::domain_query_types::PackingBrowserData,
+    GetUnsolvedPackingData("unsolved-packing-data") => Vec<(i64, String, crate::signals::data::UnmatchedCorpusTrackData)>,
 
     // Detail queries (Wave 4: composite)
-    GetAudioFilesByInodes => Vec<crate::db_types::AudioFile>,
-    GetMissingTagAudioFiles => Vec<crate::db_types::AudioFile>,
-    GetAllAudioFilesWithTags => Vec<crate::domain_query_types::AudioFileWithTags>,
-    GetSessionEditDetail => crate::domain_query_types::SessionEditDetail,
-    GetCurrentTagValues => Vec<Option<String>>,
+    GetAudioFilesByInodes("audio-files-by-inodes") => Vec<crate::db_types::AudioFile>,
+    GetMissingTagAudioFiles("missing-tag-audio-files") => Vec<crate::db_types::AudioFile>,
+    GetAllAudioFilesWithTags("all-audio-files-with-tags") => Vec<crate::domain_query_types::AudioFileWithTags>,
+    GetSessionEditDetail("session-edit-detail") => crate::domain_query_types::SessionEditDetail,
+    GetCurrentTagValues("current-tag-values") => Vec<Option<String>>,
 
     // Wave 5
-    GetIntakeConfirmation => Option<crate::views::startup_organize::IntakeConfirmationState>,
-    GetCompoundSplitGroupData => Option<crate::views::canonicity_compound::CompoundSplitDataV2>,
-    GetTagCanonicitySignalData => Option<crate::views::canonicity_compound::TagCanonicalityModalDataV2>,
-    GetRecordingBatchData => crate::domain_query_types::RecordingBatchResult,
-    GetReleaseStagingData => crate::domain_query_types::ReleaseStagingData,
-    GetTagEditorFiles => (Vec<crate::db_types::AudioFile>, usize),
-    GetInboxOrganizeData => Vec<crate::views::startup_organize::InboxDirectory>,
-    GetFileTagValues => Vec<(i64, Vec<(String, String)>)>,
+    GetIntakeConfirmation("intake-confirmation") => Option<crate::views::startup_organize::IntakeConfirmationState>,
+    GetCompoundSplitGroupData("compound-split-group-data") => Option<crate::views::canonicity_compound::CompoundSplitDataV2>,
+    GetTagCanonicitySignalData("tag-canonicity-signal-data") => Option<crate::views::canonicity_compound::TagCanonicalityModalDataV2>,
+    GetRecordingBatchData("recording-batch-data") => crate::domain_query_types::RecordingBatchResult,
+    GetReleaseStagingData("release-staging-data") => crate::domain_query_types::ReleaseStagingData,
+    GetTagEditorFiles("tag-editor-files") => (Vec<crate::db_types::AudioFile>, usize),
+    GetInboxOrganizeData("inbox-organize-data") => Vec<crate::views::startup_organize::InboxDirectory>,
+    GetFileTagValues("file-tag-values") => Vec<(i64, Vec<(String, String)>)>,
 
     // Web file browser & search
-    GetDirectoryListing => Vec<crate::domain_query_types::DirectoryListingEntry>,
-    SearchCorpusFiles => Vec<crate::domain_query_types::SearchResult>,
-    SearchWithConditions => Vec<crate::domain_query_types::SearchResult>,
+    GetDirectoryListing("directory-listing") => Vec<crate::domain_query_types::DirectoryListingEntry>,
+    SearchCorpusFiles("search-corpus") => Vec<crate::domain_query_types::SearchResult>,
+    SearchWithConditions("search-with-conditions") => Vec<crate::domain_query_types::SearchResult>,
 
     // Packed resolution queries (cluster-nav)
-    GetTagCanonicityResolution => crate::views::canonicity_compound::TagCanonicityResolutionData,
-    GetCompoundSplitResolution => crate::views::canonicity_compound::CompoundSplitResolutionData,
+    GetTagCanonicityResolution("tag-canonicity-resolution") => crate::views::canonicity_compound::TagCanonicityResolutionData,
+    GetCompoundSplitResolution("compound-split-resolution") => crate::views::canonicity_compound::CompoundSplitResolutionData,
+
+    // External match browse queries
+    GetAcoustidMatches("acoustid-matches") => Vec<crate::views::external_matches::AcoustidMatchEntry>,
+    GetReleaseReview("release-review") => crate::views::external_matches::ReleaseReviewData,
 }

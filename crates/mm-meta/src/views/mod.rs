@@ -6,6 +6,7 @@
 
 pub mod canonicity_compound;
 pub mod cluster_deploy;
+pub mod external_matches;
 pub mod health_modals;
 pub mod review_match;
 pub mod startup_organize;

@@ -34,7 +34,6 @@ pub mod corrupt_file_modal;
 pub mod deploy_modal;
 pub mod directory_cluster_modal;
 pub mod disc_extraction_modal;
-pub mod external_match_modal;
 pub mod external_match_view;
 pub mod eye;
 pub mod helpers;

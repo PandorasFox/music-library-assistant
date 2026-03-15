@@ -452,7 +452,7 @@ impl UnifiedTagEditorState {
             TagEditContext::BulkEdit { audio_files, .. } => audio_files.clone(),
         };
 
-        changes_to_mutations(&changes, &audio_files, &self.tag_fields)
+        changes_to_mutations(&changes, &audio_files)
     }
 
     /// Generate mutations for the current item only.
@@ -476,7 +476,7 @@ impl UnifiedTagEditorState {
             TagEditContext::BulkEdit { audio_files, .. } => audio_files.clone(),
         };
 
-        changes_to_mutations(&current_changes, &audio_files, &self.tag_fields)
+        changes_to_mutations(&current_changes, &audio_files)
     }
 
     /// Collect mutations across ALL items that have changes.
@@ -499,7 +499,7 @@ impl UnifiedTagEditorState {
             return Vec::new();
         }
 
-        changes_to_mutations(&all_changes, &audio_files, &self.tag_fields)
+        changes_to_mutations(&all_changes, &audio_files)
     }
 
     /// Revert to original state for current item only

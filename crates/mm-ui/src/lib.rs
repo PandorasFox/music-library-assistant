@@ -24,6 +24,7 @@ pub mod rich_text;
 pub mod route;
 pub mod search_widget;
 pub mod standard_list;
+pub mod tag_mutations;
 pub mod text_input;
 pub mod view_state;
 pub mod wizard;

@@ -474,3 +474,12 @@ pub struct AggregatedTagField {
     pub value: AggregatedValue,
     pub original_value: AggregatedValue,
 }
+
+/// A detected change between original and current tag state for a single track.
+#[derive(Debug, Clone)]
+pub struct TagChange {
+    pub track_idx: usize,
+    pub field_name: String,
+    pub old_value: String,
+    pub new_value: String,
+}

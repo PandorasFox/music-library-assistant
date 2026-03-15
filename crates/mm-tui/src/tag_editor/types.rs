@@ -194,14 +194,5 @@ pub enum StageChangesButton {
 
 // Re-export shared types from mm-ui.
 pub use mm_ui::domain_types::{
-    AggregatedTagField, AggregatedValue, FieldEditState, TagEditorMode, TagField,
+    AggregatedTagField, AggregatedValue, FieldEditState, TagChange, TagEditorMode, TagField,
 };
-
-/// A single change to a tag field.
-#[derive(Debug, Clone)]
-pub struct TagChange {
-    pub track_idx: usize,
-    pub field_name: String,
-    pub old_value: String,
-    pub new_value: String,
-}

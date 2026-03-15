@@ -10,7 +10,7 @@
 
 use super::App;
 use crate::{
-    active_view::SuspendedView, insights_view, progressive_worker, tag_editor, transaction_review,
+    active_view::SuspendedView, insights_view, transaction_review,
     ActiveView,
 };
 
@@ -18,16 +18,12 @@ use crate::{
 /// state struct that becomes the new `ActiveView`.
 pub(crate) enum SuspendTarget {
     TransactionReview(transaction_review::TransactionReviewState),
-    ProgressiveWork(progressive_worker::ProgressiveWorkerState),
-    EmbeddedTagEditor(Box<tag_editor::UnifiedTagEditorState>),
 }
 
 impl SuspendTarget {
     fn into_active_view(self) -> ActiveView {
         match self {
             Self::TransactionReview(s) => ActiveView::TransactionReview(s),
-            Self::ProgressiveWork(s) => ActiveView::ProgressiveWork(s),
-            Self::EmbeddedTagEditor(s) => ActiveView::UnifiedTagEditor(*s),
         }
     }
 }
@@ -63,8 +59,7 @@ impl App {
 
     /// Take the current view and wrap it as a SuspendedView for later restoration.
     ///
-    /// TagCanonicityResolution and CompoundTagSplit need DB reload on restore,
-    /// so they get special SuspendedView variants. Everything else restores directly.
+    /// V3 views restore directly (all data is already in the view).
     fn suspend_current_view(&mut self) -> SuspendedView {
         let old_view = std::mem::replace(
             &mut self.view,
@@ -73,25 +68,10 @@ impl App {
                 interaction: insights_view::HealthInteraction::new(),
             },
         );
-        match old_view {
-            ActiveView::TagCanonicityResolution { clusters, .. } => {
-                SuspendedView::TagCanonicityReload { clusters }
-            }
-            ActiveView::CompoundTagSplit {
-                clusters,
-                safe_mode,
-                zone,
-                ..
-            } => SuspendedView::CompoundTagSplitReload {
-                clusters,
-                safe_mode,
-                zone,
-            },
-            view => SuspendedView::Direct(view),
-        }
+        SuspendedView::Direct(old_view)
     }
 
-    /// Restore a suspended view, handling DB-reload variants.
+    /// Restore a suspended view.
     /// Returns true if restoration succeeded, false if it failed (caller
     /// should navigate to health).
     fn restore_suspended_view(&mut self, suspended: SuspendedView) -> bool {
@@ -100,14 +80,6 @@ impl App {
                 self.view = view;
                 true
             }
-            SuspendedView::TagCanonicityReload { clusters } => {
-                self.load_current_cluster_signal_with_clusters(clusters)
-            }
-            SuspendedView::CompoundTagSplitReload {
-                clusters,
-                safe_mode,
-                zone,
-            } => self.load_current_compound_split_signal_with_clusters(clusters, safe_mode, zone),
         }
     }
 }

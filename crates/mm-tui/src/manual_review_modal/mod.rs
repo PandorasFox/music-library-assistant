@@ -1,14 +1,8 @@
-//! Manual Review Modal
+//! Manual Review Modal (V3)
 //!
-//! Provides the interactive workflow for resolving groups of files that
-//! require manual operator intervention. Supports three review kinds:
-//! - RedundantDuplicate: equal-quality duplicates needing operator choice
-//! - DeployConflict: multiple files mapping to the same deploy path
-//! - MetadataDuplicate: files with identical tag signatures
+//! Single-load layout with StandardList + ButtonRow.
 
-pub mod preview;
 pub mod render_v3;
 pub mod types;
 
-pub use preview::{render, ManualReviewAction, ManualReviewState};
 pub use types::ReviewKind;

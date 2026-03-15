@@ -57,55 +57,6 @@ pub struct ProgressiveWorkerState {
 }
 
 impl ProgressiveWorkerState {
-    /// Create a new progressive worker state.
-    ///
-    /// # Arguments
-    /// * `label` - Title shown in the progress modal
-    /// * `items` - Work items to process
-    /// * `on_complete` - Callback identifier for completion handling
-    pub(crate) fn new(
-        label: String,
-        items: Vec<WorkItem>,
-        on_complete: OnComplete,
-        gesture: ConfirmationGesture,
-    ) -> Self {
-        let total = items.len();
-        Self {
-            label,
-            work_queue: VecDeque::from(items),
-            processed: 0,
-            total,
-            current_label: None,
-            mutations_generated: 0,
-            nops_elided: 0,
-            on_complete,
-            is_safe_mode: false,
-            gesture,
-        }
-    }
-
-    /// Create a new progressive worker for compound splits.
-    pub(crate) fn for_compound_splits(
-        groups: Vec<CompoundGroup>,
-        is_safe_mode: bool,
-        gesture: ConfirmationGesture,
-    ) -> Self {
-        let items: Vec<WorkItem> = groups
-            .into_iter()
-            .enumerate()
-            .map(|(idx, group)| WorkItem::StageCompoundSplit { group, idx })
-            .collect();
-
-        let mut state = Self::new(
-            "Staging compound splits...".to_string(),
-            items,
-            OnComplete::CompoundSplitStaging,
-            gesture,
-        );
-        state.is_safe_mode = is_safe_mode;
-        state
-    }
-
     /// Progress ratio for the gauge (0.0 to 1.0).
     pub fn progress_ratio(&self) -> f64 {
         if self.total == 0 {

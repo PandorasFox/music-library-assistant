@@ -13,7 +13,6 @@ use crate::active_view::ActiveView;
 use crate::inbox_corpus_match_modal;
 use crate::inbox_organize;
 use crate::startup;
-use crate::{CanonicitySignalKind, TagCanonicityClusters};
 use mm_ui::domain_types::InboxInsightAction;
 
 impl HandleAction for InboxInsightAction {
@@ -41,11 +40,8 @@ impl HandleAction for InboxInsightAction {
                 app.start_inbox_organize();
             }
             InboxInsightAction::LaunchInboxCompoundSplit => {
-                app.start_compound_split_resolution_for_zone(
-                    false,
-                    None,
-                    mm_meta::db_types::Zone::Inbox,
-                );
+                // TODO: V3 compound split doesn't yet support inbox zone
+                app.status_message = Some("Inbox compound split not yet implemented in V3".to_string());
             }
             InboxInsightAction::Informational => {
                 // No action — informational entries can't be confirmed
@@ -110,28 +106,44 @@ impl HandleAction for inbox_organize::InboxOrganizeAction {
 }
 
 impl App {
-    /// Start inbox tag canonicity resolution using the shared tag canonicity modal.
+    /// Start inbox tag canonicity resolution using the V3 packed query.
     fn start_inbox_tag_canonicity_resolution(&mut self) {
-        let signal_keys = self
-            .query(mm_meta::domain_queries::GetTagCanonicityKeys {
-                zone: mm_meta::db_types::Zone::Inbox,
-                tag_filter: None,
-            });
+        use mm_ui::resolutions::tag_canonicity::CanonicityMode;
 
-        if signal_keys.is_empty() {
+        let zone = mm_meta::db_types::Zone::Inbox;
+
+        // Single packed query — all clusters at once
+        let data = self.query(mm_meta::domain_queries::GetTagCanonicityResolution {
+            tag_name: String::new(), // empty = all tag names
+            zone,
+            filter_existing_canonicals: true,
+        });
+
+        if data.clusters.is_empty() {
             self.status_message = Some("No inbox tag canonicity signals to resolve".to_string());
             return;
         }
 
-        let kind = CanonicitySignalKind::InboxTagCanonicity;
-        let clusters = TagCanonicityClusters::new(signal_keys, kind);
-
         let _ = self.start_transaction("Inbox tag canonicalization");
 
-        if !self.start_async_cluster_load(clusters) {
-            self.status_message = Some("Failed to load inbox tag canonicity data".to_string());
-            let _ = super::super::operator_decisions::discard_transaction(self);
-        }
+        let prefill = data.clusters.first()
+            .map(|c| c.suggested_canonical.as_deref().unwrap_or(""))
+            .unwrap_or("");
+        let field = mm_ui::decision_field::DecisionField::new("Squash to:")
+            .with_value(prefill);
+
+        self.view = ActiveView::TagCanonicityResolution {
+            data,
+            current_cluster: 0,
+            list: mm_ui::standard_list::StandardListState::new(
+                mm_ui::standard_list::StandardListConfig::default(),
+            ),
+            buttons: mm_ui::modal_buttons::ButtonRowState::new(),
+            field,
+            zone,
+            focus: mm_ui::geometry::FocusPane::List,
+            mode: CanonicityMode::TagCanonicity,
+        };
     }
 
     /// Start inbox corpus match resolution modal.

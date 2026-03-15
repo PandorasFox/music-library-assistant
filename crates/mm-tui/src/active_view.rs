@@ -5,13 +5,13 @@
 //! mode and state are always consistent.
 
 use crate::{
-    compound_split_v2, config_editor, corrupt_file_modal, deploy_modal, directory_cluster_modal,
-    disc_extraction_modal, external_match_modal, external_match_view, eye::Eye,
+    config_editor, corrupt_file_modal, deploy_modal,
+    external_match_modal, external_match_view, eye::Eye,
     history_view, inbox_corpus_match_modal, inbox_organize, inbox_view, insights_view,
-    manual_review_modal, missing_album_modal, missing_directory_modal, missing_file_modal,
+    missing_directory_modal, missing_file_modal,
     moved_file_modal, oob_conflict_modal, oob_sync_modal, progress_screen, progressive_worker,
     shit_format_modal, startup, subpar_duplicate_modal, tabbed_transaction_review,
-    tag_canonicity_v2, tag_editor, tag_search, transaction_review, tree_browser,
+    tag_editor, tag_search, transaction_review, tree_browser,
 };
 
 // ============================================================================
@@ -72,8 +72,7 @@ pub(crate) enum ActiveView {
     SubparDuplicateResolution(subpar_duplicate_modal::SubparDuplicateState),
     InboxCorpusMatchResolution(inbox_corpus_match_modal::InboxCorpusMatchState),
     InboxOrganize(inbox_organize::InboxOrganizeState),
-    DirectoryClusterResolution(directory_cluster_modal::DirectoryClusterPreviewState),
-    DirectoryClusterResolutionV3 {
+    DirectoryClusterResolution {
         data: mm_meta::views::cluster_deploy::DirectoryClusterModalData,
         current_cluster: usize,
         list: mm_ui::standard_list::StandardListState,
@@ -91,14 +90,8 @@ pub(crate) enum ActiveView {
     // Knot browser (read-only)
     KnotBrowser(super::knot_browser::KnotBrowserState),
 
-    // Resolution flows (companion state bundled)
+    // Tag canonicity resolution with packed data + StandardList + DecisionField
     TagCanonicityResolution {
-        state: tag_canonicity_v2::TagCanonicalityStateV2,
-        clusters: TagCanonicityClusters,
-    },
-
-    // V3: single-load canonicity with packed data + StandardList + DecisionField
-    TagCanonicityResolutionV3 {
         data: mm_meta::views::canonicity_compound::TagCanonicityResolutionData,
         current_cluster: usize,
         list: mm_ui::standard_list::StandardListState,
@@ -109,15 +102,8 @@ pub(crate) enum ActiveView {
         /// Which canonicity mode — controls button labels/semantics.
         mode: mm_ui::resolutions::tag_canonicity::CanonicityMode,
     },
+    // Compound tag split with packed data + StandardList + DecisionField
     CompoundTagSplit {
-        state: compound_split_v2::CompoundSplitStateV2,
-        clusters: compound_split_v2::CompoundSplitClustersV2,
-        safe_mode: bool,
-        zone: mm_meta::db_types::Zone,
-    },
-
-    // V3: single-load compound split with packed data + StandardList + DecisionField
-    CompoundTagSplitV3 {
         data: mm_meta::views::canonicity_compound::CompoundSplitResolutionData,
         current_group: usize,
         list: mm_ui::standard_list::StandardListState,
@@ -128,11 +114,8 @@ pub(crate) enum ActiveView {
         safe_mode: bool,
     },
 
-    // Missing album singles resolution
-    MissingAlbumSingleResolution(missing_album_modal::MissingAlbumState),
-
-    // V3: single-load missing album singles with StandardList + buttons
-    MissingAlbumSingleResolutionV3 {
+    // Missing album singles resolution with StandardList + buttons
+    MissingAlbumSingleResolution {
         data: Vec<mm_meta::domain_queries::MissingAlbumSingleSignalWire>,
         current_group: usize,
         list: mm_ui::standard_list::StandardListState,
@@ -141,11 +124,8 @@ pub(crate) enum ActiveView {
         suffix: String,
     },
 
-    // Disc extraction resolution (ALBUM or TRACKNUMBER → DISCNUMBER)
-    DiscExtractionResolution(disc_extraction_modal::DiscExtractionState),
-
-    // V3: single-load disc extraction with StandardList + buttons
-    DiscExtractionResolutionV3 {
+    // Disc extraction resolution with StandardList + buttons
+    DiscExtractionResolution {
         data: mm_meta::domain_queries::DiscExtractionModalData,
         current_group: usize,
         list: mm_ui::standard_list::StandardListState,
@@ -154,11 +134,8 @@ pub(crate) enum ActiveView {
         disc_tag_name: String,
     },
 
-    // Manual review (iterate through groups, stash/edit files)
-    ManualReview(manual_review_modal::ManualReviewState),
-
-    // V3: single-load manual review with StandardList + buttons
-    ManualReviewV3 {
+    // Manual review with StandardList + buttons
+    ManualReview {
         data: mm_meta::views::review_match::ManualReviewData,
         review_kind: mm_meta::views::review_match::ReviewKind,
         current_group: usize,
@@ -197,25 +174,19 @@ impl ActiveView {
             Self::SubparDuplicateResolution(_) => Some("Subpar Duplicate Resolution"),
             Self::InboxCorpusMatchResolution(_) => Some("Inbox Corpus Match Resolution"),
             Self::InboxOrganize(_) => Some("Inbox Organize"),
-            Self::DirectoryClusterResolution(_) => Some("Directory Overlap Resolution"),
-            Self::DirectoryClusterResolutionV3 { .. } => Some("Directory Overlap Resolution"),
+            Self::DirectoryClusterResolution { .. } => Some("Directory Overlap Resolution"),
             Self::MovedFileAcknowledge(_) => Some("Moved Files"),
             Self::OobSyncResolution(_) => Some("OOB Tag Sync"),
             Self::OobConflictInspection(_) => Some("OOB Tag Conflicts"),
             Self::ExternalMatchReview(_) => Some("External Match Review"),
             Self::ReleasePackingBrowser(_) => Some("Release Packing Browser"),
             Self::KnotBrowser(_) => Some("Knot Browser"),
+            Self::TagCanonicityResolution { mode: mm_ui::resolutions::tag_canonicity::CanonicityMode::InconsistentAlbumArtist, .. } => Some("Album Artist"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
-            Self::TagCanonicityResolutionV3 { mode: mm_ui::resolutions::tag_canonicity::CanonicityMode::InconsistentAlbumArtist, .. } => Some("Album Artist"),
-            Self::TagCanonicityResolutionV3 { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
-            Self::CompoundTagSplitV3 { .. } => Some("Compound Tag Split"),
-            Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),
-            Self::MissingAlbumSingleResolutionV3 { .. } => Some("Missing Album Singles"),
-            Self::DiscExtractionResolution(_) => Some("Disc Extraction"),
-            Self::DiscExtractionResolutionV3 { .. } => Some("Disc Extraction"),
-            Self::ManualReview(s) => Some(s.header_suffix()),
-            Self::ManualReviewV3 { review_kind, .. } => Some(review_kind.title()),
+            Self::MissingAlbumSingleResolution { .. } => Some("Missing Album Singles"),
+            Self::DiscExtractionResolution { .. } => Some("Disc Extraction"),
+            Self::ManualReview { review_kind, .. } => Some(review_kind.title()),
             Self::TransactionReview(_) => Some("Transaction Review"),
         }
     }
@@ -228,15 +199,13 @@ impl ActiveView {
         match self {
             Self::StartupMaintenance => None,
             Self::CorpusBrowser(browser) => browser.selected_path(),
-            Self::TagCanonicityResolution { state, .. } => state.selected_path(),
-            Self::TagCanonicityResolutionV3 { ref data, current_cluster, ref list, .. } => {
+            Self::TagCanonicityResolution { ref data, current_cluster, ref list, .. } => {
                 data.clusters.get(*current_cluster)
                     .and_then(|c| c.variants.get(list.cursor))
                     .and_then(|v| v.files.first())
                     .map(|f| f.display_name.as_str())
             }
-            Self::CompoundTagSplit { state, .. } => state.selected_path(),
-            Self::CompoundTagSplitV3 { ref data, current_group, ref list, .. } => {
+            Self::CompoundTagSplit { ref data, current_group, ref list, .. } => {
                 data.groups.get(*current_group)
                     .and_then(|g| g.files.get(list.cursor))
                     .map(|f| f.display_name.as_str())
@@ -248,8 +217,7 @@ impl ActiveView {
             Self::SubparDuplicateResolution(s) => s.selected_path(),
             Self::InboxCorpusMatchResolution(s) => s.selected_path(),
             Self::InboxOrganize(_) => None,
-            Self::DirectoryClusterResolution(s) => s.selected_path(),
-            Self::DirectoryClusterResolutionV3 { ref data, current_cluster, ref list, .. } => {
+            Self::DirectoryClusterResolution { ref data, current_cluster, ref list, .. } => {
                 data.clusters.get(*current_cluster)
                     .and_then(|c| c.directories.get(list.cursor))
                     .map(|d| d.path_suffix.as_str())
@@ -260,20 +228,17 @@ impl ActiveView {
             Self::ExternalMatchReview(s) => s.selected_path(),
             Self::Deploy { ref data, ref interaction } => data.selected_path(interaction),
             Self::UnifiedTagEditor(s) => s.selected_path(),
-            Self::MissingAlbumSingleResolution(s) => s.selected_path(),
-            Self::MissingAlbumSingleResolutionV3 { ref data, current_group, ref list, .. } => {
+            Self::MissingAlbumSingleResolution { ref data, current_group, ref list, .. } => {
                 data.get(*current_group)
                     .and_then(|s| s.data.tracks.get(list.cursor))
                     .map(|t| t.path.as_str())
             }
-            Self::DiscExtractionResolution(s) => s.selected_path(),
-            Self::DiscExtractionResolutionV3 { ref data, current_group, ref list, .. } => {
+            Self::DiscExtractionResolution { ref data, current_group, ref list, .. } => {
                 data.groups.get(*current_group)
                     .and_then(|g| g.files.get(list.cursor))
                     .map(|f| f.path.as_str())
             }
-            Self::ManualReview(s) => s.selected_path(),
-            Self::ManualReviewV3 { ref data, current_group, ref list, .. } => {
+            Self::ManualReview { ref data, current_group, ref list, .. } => {
                 data.groups.get(*current_group)
                     .and_then(|g| g.files.get(list.cursor))
                     .map(|f| f.corpus_path.as_str())
@@ -319,14 +284,6 @@ impl ActiveView {
 pub(crate) enum SuspendedView {
     /// Restore view directly (most modals).
     Direct(ActiveView),
-    /// TagCanonicityResolution needs DB reload on restore.
-    TagCanonicityReload { clusters: TagCanonicityClusters },
-    /// CompoundTagSplit needs DB reload on restore.
-    CompoundTagSplitReload {
-        clusters: compound_split_v2::CompoundSplitClustersV2,
-        safe_mode: bool,
-        zone: mm_meta::db_types::Zone,
-    },
 }
 
 // ============================================================================
@@ -355,8 +312,7 @@ pub(crate) enum ViewAction {
     SubparDuplicateResolution(subpar_duplicate_modal::SubparDuplicateAction),
     InboxCorpusMatchResolution(inbox_corpus_match_modal::InboxCorpusMatchAction),
     InboxOrganize(inbox_organize::InboxOrganizeAction),
-    DirectoryClusterResolution(directory_cluster_modal::DirectoryClusterPreviewAction),
-    DirectoryClusterResolutionV3(mm_ui::resolutions::directory_cluster::DirectoryClusterAction),
+    DirectoryClusterResolution(mm_ui::resolutions::directory_cluster::DirectoryClusterAction),
     MovedFileAcknowledge(moved_file_modal::MovedFileAction),
     OobSyncResolution(oob_sync_modal::OobSyncAction),
     OobConflictInspection(oob_conflict_modal::OobConflictAction),
@@ -364,16 +320,11 @@ pub(crate) enum ViewAction {
     ReleasePackingBrowser(super::release_packing_browser::ReleasePackingBrowserAction),
     KnotBrowser(super::knot_browser::KnotBrowserAction),
     History(history_view::HistoryAction),
-    TagCanonicityResolution(tag_canonicity_v2::TagCanonicalityActionV2),
-    TagCanonicityResolutionV3(mm_ui::resolutions::tag_canonicity::CanonicityAction),
-    CompoundTagSplit(compound_split_v2::CompoundSplitActionV2),
-    CompoundTagSplitV3(mm_ui::resolutions::compound_split::CompoundSplitAction),
-    MissingAlbumSingleResolution(missing_album_modal::MissingAlbumAction),
-    MissingAlbumSingleResolutionV3(mm_ui::resolutions::missing_album::MissingAlbumAction),
-    DiscExtractionResolution(disc_extraction_modal::DiscExtractionAction),
-    DiscExtractionResolutionV3(mm_ui::resolutions::disc_extraction::DiscExtractionAction),
-    ManualReview(manual_review_modal::ManualReviewAction),
-    ManualReviewV3(mm_ui::resolutions::manual_review::ReviewAction),
+    TagCanonicityResolution(mm_ui::resolutions::tag_canonicity::CanonicityAction),
+    CompoundTagSplit(mm_ui::resolutions::compound_split::CompoundSplitAction),
+    MissingAlbumSingleResolution(mm_ui::resolutions::missing_album::MissingAlbumAction),
+    DiscExtractionResolution(mm_ui::resolutions::disc_extraction::DiscExtractionAction),
+    ManualReview(mm_ui::resolutions::manual_review::ReviewAction),
     TransactionReview(transaction_review::TransactionReviewAction),
 }
 
@@ -414,64 +365,4 @@ impl Default for ExitConfirmModalState {
     }
 }
 
-// ============================================================================
-// TagCanonicityClusters - signal navigation
-// ============================================================================
-
-pub(crate) use mm_meta::views::canonicity_compound::CanonicitySignalKind;
-
-/// Tracks the list of signals for Tab/Shift-Tab navigation in tag canonicity modal.
-#[derive(Debug, Clone)]
-pub(crate) struct TagCanonicityClusters {
-    /// Signal keys in navigation order
-    pub signal_keys: Vec<String>,
-    /// Current index into signal_keys
-    pub current_index: usize,
-    /// Which typed signal table these keys belong to
-    pub kind: CanonicitySignalKind,
-}
-
-impl TagCanonicityClusters {
-    pub fn new(signal_keys: Vec<String>, kind: CanonicitySignalKind) -> Self {
-        Self {
-            signal_keys,
-            current_index: 0,
-            kind,
-        }
-    }
-
-    /// Whether the canonical value text field should be pre-filled.
-    pub fn pre_fill(&self) -> bool {
-        matches!(
-            self.kind,
-            CanonicitySignalKind::TagCanonicity | CanonicitySignalKind::InboxTagCanonicity
-        )
-    }
-
-    pub fn current_signal_key(&self) -> Option<&str> {
-        self.signal_keys.get(self.current_index).map(|s| s.as_str())
-    }
-
-    pub fn next(&mut self) -> bool {
-        if self.current_index + 1 < self.signal_keys.len() {
-            self.current_index += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn prev(&mut self) -> bool {
-        if self.current_index > 0 {
-            self.current_index -= 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn is_last(&self) -> bool {
-        self.current_index + 1 >= self.signal_keys.len()
-    }
-}
 

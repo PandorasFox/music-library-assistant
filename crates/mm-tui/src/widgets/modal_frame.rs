@@ -6,7 +6,7 @@
 pub use mm_ui::modal_frame::{ContentLayout, FrameInputResult, FrameState, ModalFrameCore};
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;

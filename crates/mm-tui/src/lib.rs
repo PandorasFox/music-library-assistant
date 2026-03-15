@@ -66,8 +66,8 @@ pub mod widgets;
 
 // Re-export for convenience
 pub(crate) use active_view::{
-    ActiveView, CanonicitySignalKind, ExitConfirmAction, ExitConfirmModalState,
-    SuspendedView, TagCanonicityClusters, ViewAction,
+    ActiveView, ExitConfirmAction, ExitConfirmModalState,
+    SuspendedView, ViewAction,
 };
 use types::ProgressStatsUpdater;
 
@@ -408,8 +408,7 @@ impl App {
             ActiveView::SubparDuplicateResolution(s) => dispatch_input!(SubparDuplicateResolution, s),
             ActiveView::InboxCorpusMatchResolution(s) => dispatch_input!(InboxCorpusMatchResolution, s),
             ActiveView::InboxOrganize(s) => dispatch_input_raw!(InboxOrganize, s),
-            ActiveView::DirectoryClusterResolution(s) => dispatch_input_raw!(DirectoryClusterResolution, s),
-            ActiveView::DirectoryClusterResolutionV3 {
+            ActiveView::DirectoryClusterResolution {
                 ref data, ref mut current_cluster, ref mut list,
                 ref mut buttons, ref mut focus, ..
             } => {
@@ -441,7 +440,7 @@ impl App {
                         ViewAction::None
                     }
                     IA::Cancel => {
-                        ViewAction::DirectoryClusterResolutionV3(DcAction::Cancel)
+                        ViewAction::DirectoryClusterResolution(DcAction::Cancel)
                     }
                     _ => {
                         let ctx = DirectoryClusterButtonCtx {
@@ -473,7 +472,7 @@ impl App {
                                     }
                                     IA::Confirm => {
                                         match buttons.confirm(&ctx) {
-                                            Some(a) => ViewAction::DirectoryClusterResolutionV3(a),
+                                            Some(a) => ViewAction::DirectoryClusterResolution(a),
                                             None => ViewAction::None,
                                         }
                                     }
@@ -497,8 +496,7 @@ impl App {
                     None => ViewAction::None,
                 }
             }
-            ActiveView::TagCanonicityResolution { state, .. } => dispatch_input_raw!(TagCanonicityResolution, state),
-            ActiveView::TagCanonicityResolutionV3 {
+            ActiveView::TagCanonicityResolution {
                 ref data, ref mut current_cluster, ref mut list,
                 ref mut buttons, ref mut field, ref mut focus,
                 mode, ..
@@ -542,7 +540,7 @@ impl App {
                     }
                     // Cancel always cancels
                     IA::Cancel => {
-                        ViewAction::TagCanonicityResolutionV3(CanonicityAction::Cancel)
+                        ViewAction::TagCanonicityResolution(CanonicityAction::Cancel)
                     }
                     // Route by focus pane
                     _ => {
@@ -558,7 +556,7 @@ impl App {
                                     IA::Confirm => {
                                         // Confirm from field fires the selected button
                                         match buttons.confirm(&ctx) {
-                                            Some(a) => ViewAction::TagCanonicityResolutionV3(a),
+                                            Some(a) => ViewAction::TagCanonicityResolution(a),
                                             None => ViewAction::None,
                                         }
                                     }
@@ -591,7 +589,7 @@ impl App {
                                     }
                                     IA::Confirm => {
                                         match buttons.confirm(&ctx) {
-                                            Some(a) => ViewAction::TagCanonicityResolutionV3(a),
+                                            Some(a) => ViewAction::TagCanonicityResolution(a),
                                             None => ViewAction::None,
                                         }
                                     }
@@ -602,11 +600,10 @@ impl App {
                     }
                 }
             }
-            ActiveView::CompoundTagSplit { state, .. } => dispatch_input_raw!(CompoundTagSplit, state),
-            ActiveView::CompoundTagSplitV3 {
+            ActiveView::CompoundTagSplit {
                 ref data, ref mut current_group, ref mut list,
                 ref mut buttons, ref mut field, ref mut focus,
-                safe_mode, ..
+                ..
             } => {
                 use mm_ui::input::InputAction as IA;
                 use mm_ui::resolutions::compound_split::{CompoundSplitAction as CsAction, CompoundSplitButtonCtx};
@@ -645,7 +642,7 @@ impl App {
                     }
                     // Cancel always cancels
                     IA::Cancel => {
-                        ViewAction::CompoundTagSplitV3(CsAction::Cancel)
+                        ViewAction::CompoundTagSplit(CsAction::Cancel)
                     }
                     // Route by focus pane
                     _ => {
@@ -660,7 +657,7 @@ impl App {
                                     IA::Confirm => {
                                         // Confirm from field fires the selected button
                                         match buttons.confirm(&ctx) {
-                                            Some(a) => ViewAction::CompoundTagSplitV3(a),
+                                            Some(a) => ViewAction::CompoundTagSplit(a),
                                             None => ViewAction::None,
                                         }
                                     }
@@ -693,7 +690,7 @@ impl App {
                                     }
                                     IA::Confirm => {
                                         match buttons.confirm(&ctx) {
-                                            Some(a) => ViewAction::CompoundTagSplitV3(a),
+                                            Some(a) => ViewAction::CompoundTagSplit(a),
                                             None => ViewAction::None,
                                         }
                                     }
@@ -704,8 +701,7 @@ impl App {
                     }
                 }
             }
-            ActiveView::MissingAlbumSingleResolution(s) => dispatch_input_raw!(MissingAlbumSingleResolution, s),
-            ActiveView::MissingAlbumSingleResolutionV3 {
+            ActiveView::MissingAlbumSingleResolution {
                 ref data, ref mut current_group, ref mut list,
                 ref mut buttons, ref mut focus, ..
             } => {
@@ -737,7 +733,7 @@ impl App {
                         ViewAction::None
                     }
                     IA::Cancel => {
-                        ViewAction::MissingAlbumSingleResolutionV3(MaAction::Cancel)
+                        ViewAction::MissingAlbumSingleResolution(MaAction::Cancel)
                     }
                     _ => {
                         let ctx = MissingAlbumButtonCtx {
@@ -769,7 +765,7 @@ impl App {
                                     }
                                     IA::Confirm => {
                                         match buttons.confirm(&ctx) {
-                                            Some(a) => ViewAction::MissingAlbumSingleResolutionV3(a),
+                                            Some(a) => ViewAction::MissingAlbumSingleResolution(a),
                                             None => ViewAction::None,
                                         }
                                     }
@@ -781,8 +777,7 @@ impl App {
                     }
                 }
             }
-            ActiveView::DiscExtractionResolution(s) => dispatch_input_raw!(DiscExtractionResolution, s),
-            ActiveView::DiscExtractionResolutionV3 {
+            ActiveView::DiscExtractionResolution {
                 ref data, ref mut current_group, ref mut list,
                 ref mut buttons, ref mut focus, ..
             } => {
@@ -814,7 +809,7 @@ impl App {
                         ViewAction::None
                     }
                     IA::Cancel => {
-                        ViewAction::DiscExtractionResolutionV3(DeAction::Cancel)
+                        ViewAction::DiscExtractionResolution(DeAction::Cancel)
                     }
                     _ => {
                         let ctx = DiscExtractionButtonCtx {
@@ -846,7 +841,7 @@ impl App {
                                     }
                                     IA::Confirm => {
                                         match buttons.confirm(&ctx) {
-                                            Some(a) => ViewAction::DiscExtractionResolutionV3(a),
+                                            Some(a) => ViewAction::DiscExtractionResolution(a),
                                             None => ViewAction::None,
                                         }
                                     }
@@ -858,8 +853,7 @@ impl App {
                     }
                 }
             }
-            ActiveView::ManualReview(s) => dispatch_input_raw!(ManualReview, s),
-            ActiveView::ManualReviewV3 {
+            ActiveView::ManualReview {
                 ref data, ref mut current_group, ref mut list,
                 ref mut buttons, ref mut focus, ref review_kind, ..
             } => {
@@ -891,7 +885,7 @@ impl App {
                         ViewAction::None
                     }
                     IA::Cancel => {
-                        ViewAction::ManualReviewV3(ReviewAction::Cancel)
+                        ViewAction::ManualReview(ReviewAction::Cancel)
                     }
                     _ => {
                         let ctx = ReviewButtonCtx {
@@ -924,7 +918,7 @@ impl App {
                                     }
                                     IA::Confirm => {
                                         match buttons.confirm(&ctx) {
-                                            Some(a) => ViewAction::ManualReviewV3(a),
+                                            Some(a) => ViewAction::ManualReview(a),
                                             None => ViewAction::None,
                                         }
                                     }

@@ -18,7 +18,7 @@ use super::widgets::{status_bar, Modal, ModalButton, ModalFrame, ModalStyle, Uni
 use super::{
     compound_split_v2, config_editor, disc_extraction_modal, external_match_modal, inbox_view,
     insights_view, manual_review_modal, missing_album_modal, oob_conflict_modal, oob_sync_modal,
-    progressive_worker, tabbed_transaction_review, tag_canonicity_v2, transaction_review,
+    progressive_worker, tabbed_transaction_review, tag_canonicity_v2,  transaction_review,
 };
 
 /// Main render entry point - dispatches to sub-renderers based on ActiveView.
@@ -181,10 +181,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::MissingDirectoryResolution(ref mut preview) => {
             preview.render_frame(f, area);
         }
-        ActiveView::TagCanonicityResolution { ref mut state, .. } => {
-            tag_canonicity_v2::render(f, area, state);
-        }
-        ActiveView::TagCanonicityResolutionV3 {
+        ActiveView::TagCanonicityResolution {
             ref data, current_cluster, ref mut list, ref mut buttons,
             ref field, focus, mode, ..
         } => {
@@ -192,10 +189,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
                 f, area, data, current_cluster, list, buttons, field, focus, mode,
             );
         }
-        ActiveView::CompoundTagSplit { ref mut state, .. } => {
-            compound_split_v2::render(f, area, state);
-        }
-        ActiveView::CompoundTagSplitV3 {
+        ActiveView::CompoundTagSplit {
             ref data, current_group, ref mut list, ref mut buttons,
             ref field, focus, safe_mode, ..
         } => {
@@ -239,10 +233,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::InboxOrganize(ref mut state) => {
             super::inbox_organize::render::render(f, area, state);
         }
-        ActiveView::DirectoryClusterResolution(ref mut preview) => {
-            preview.render(f, area);
-        }
-        ActiveView::DirectoryClusterResolutionV3 {
+        ActiveView::DirectoryClusterResolution {
             ref data, current_cluster, ref mut list, ref mut buttons,
             focus, ..
         } => {
@@ -250,10 +241,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
                 f, area, data, current_cluster, list, buttons, focus,
             );
         }
-        ActiveView::MissingAlbumSingleResolution(ref mut state) => {
-            state.render(f, area);
-        }
-        ActiveView::MissingAlbumSingleResolutionV3 {
+        ActiveView::MissingAlbumSingleResolution {
             ref data, current_group, ref mut list, ref mut buttons,
             focus, ref suffix, ..
         } => {
@@ -261,10 +249,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
                 f, area, data, current_group, list, buttons, focus, suffix,
             );
         }
-        ActiveView::DiscExtractionResolution(ref mut state) => {
-            state.render(f, area);
-        }
-        ActiveView::DiscExtractionResolutionV3 {
+        ActiveView::DiscExtractionResolution {
             ref data, current_group, ref mut list, ref mut buttons,
             focus, ref disc_tag_name, ..
         } => {
@@ -272,10 +257,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
                 f, area, data, current_group, list, buttons, focus, disc_tag_name,
             );
         }
-        ActiveView::ManualReview(ref state) => {
-            manual_review_modal::render(f, area, state);
-        }
-        ActiveView::ManualReviewV3 {
+        ActiveView::ManualReview {
             ref data, review_kind, current_group, ref mut list, ref mut buttons,
             focus, ..
         } => {

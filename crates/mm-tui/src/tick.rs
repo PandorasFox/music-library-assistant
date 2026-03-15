@@ -11,7 +11,6 @@ use super::insights_view;
 use super::App;
 use mm_meta::decisions::DecisionKey;
 use crate::{
-    compound_split_v2,
     progress_screen::{ProgressPhase, ProgressScreen},
     progressive_worker::{OnComplete, ProgressiveWorkerState, WorkItem, WorkSummary},
     startup, transaction_review, ActiveView,
@@ -199,11 +198,11 @@ impl App {
         idx: usize,
         worker: &mut ProgressiveWorkerState,
     ) {
+        use mm_meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation, TagOp};
+
         let is_safe_mode = worker.is_safe_mode;
-        let total = worker.total;
 
         // Load compound split data from the group via cache thread
-        // Progressive worker only used for corpus compound splits (Ctrl+A in safe mode)
         let data = match self
             .query(mm_meta::domain_queries::GetCompoundSplitGroupData {
                 group: group.clone(),
@@ -223,27 +222,50 @@ impl App {
             data.compound.compound_value, data.compound.tag_name,
         ));
 
-        // Create temporary state to generate mutations
-        let state = compound_split_v2::CompoundSplitStateV2::new(
-            data.clone(),
-            is_safe_mode,
-            idx,
-            total,
-            mm_meta::db_types::Zone::Corpus,
-        );
-        let mutations = state.mutations();
-
-        if mutations.is_empty() {
+        // Build mutations directly from compound data
+        let parts = &data.compound.split_parts;
+        if parts.is_empty() {
             worker.nops_elided += 1;
             return;
         }
+
+        let mut ops = Vec::new();
+        for file in &data.files {
+            // Replace compound value with first part
+            if let Some(first_part) = parts.first() {
+                ops.push(TagOp::replace_tag(
+                    file.inode,
+                    &data.compound.tag_name,
+                    &data.compound.compound_value,
+                    first_part,
+                ));
+            }
+            // Add remaining parts
+            for part in parts.iter().skip(1) {
+                ops.push(TagOp::add_tag(
+                    file.inode,
+                    &data.compound.tag_name,
+                    part,
+                ));
+            }
+        }
+
+        if ops.is_empty() {
+            worker.nops_elided += 1;
+            return;
+        }
+
+        let mutations = vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+            ops,
+            zone: mm_meta::db_types::Zone::Corpus,
+        })];
 
         // Stage via operator_decisions
         let description = format!(
             "Split \"{}\" in {} \u{2192} [{}]",
             data.compound.compound_value,
             data.compound.tag_name,
-            data.compound.split_parts.join(", ")
+            parts.join(", ")
         );
 
         let tag_name = data.compound.tag_name.clone();

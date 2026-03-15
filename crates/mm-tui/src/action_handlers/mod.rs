@@ -80,7 +80,6 @@ impl App {
             ViewAction::InboxCorpusMatchResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::InboxOrganize(a) => a.handle(self, witness.as_ref()),
             ViewAction::DirectoryClusterResolution(a) => a.handle(self, witness.as_ref()),
-            ViewAction::DirectoryClusterResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::MovedFileAcknowledge(a) => a.handle(self, witness.as_ref()),
             ViewAction::OobSyncResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::OobConflictInspection(a) => a.handle(self, witness.as_ref()),
@@ -89,15 +88,10 @@ impl App {
             ViewAction::KnotBrowser(a) => a.handle(self, witness.as_ref()),
             ViewAction::History(a) => a.handle(self, witness.as_ref()),
             ViewAction::TagCanonicityResolution(a) => a.handle(self, witness.as_ref()),
-            ViewAction::TagCanonicityResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::CompoundTagSplit(a) => a.handle(self, witness.as_ref()),
-            ViewAction::CompoundTagSplitV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::MissingAlbumSingleResolution(a) => a.handle(self, witness.as_ref()),
-            ViewAction::MissingAlbumSingleResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::DiscExtractionResolution(a) => a.handle(self, witness.as_ref()),
-            ViewAction::DiscExtractionResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::ManualReview(a) => a.handle(self, witness.as_ref()),
-            ViewAction::ManualReviewV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::TransactionReview(a) => a.handle(self, witness.as_ref()),
         }
     }
@@ -214,41 +208,6 @@ impl App {
     /// Open an embedded tag editor for a set of inodes.
     ///
     /// Common helper for EditTracks/EditTracksAggregated actions across modals.
-    fn open_tag_editor_for_inodes(
-        &mut self,
-        inodes: Vec<i64>,
-        zone: mm_meta::db_types::Zone,
-        key: DecisionKey,
-        label: String,
-        mode: tag_editor::TagEditorMode,
-    ) {
-        if inodes.is_empty() {
-            return;
-        }
-        let audio_files = self
-            .query(mm_meta::domain_queries::GetAudioFilesByInodes { inodes, zone });
-        if !audio_files.is_empty() {
-            self.open_embedded_tag_editor(mode, audio_files, key, label);
-        }
-    }
-
-    /// Position the tag editor cursor on a specific inode after opening.
-    fn position_editor_cursor(&mut self, target_inode: Option<i64>) {
-        if let Some(target_inode) = target_inode {
-            if let ActiveView::UnifiedTagEditor(ref mut editor) = self.view {
-                if let tag_editor::types::TagEditContext::BulkEdit {
-                    ref audio_files, ..
-                } = editor.context
-                {
-                    if let Some(idx) = audio_files.iter().position(|af| af.inode() == target_inode)
-                    {
-                        editor.current_item_idx = idx;
-                    }
-                }
-            }
-        }
-    }
-
     /// Handle CycleNext/CyclePrev for a lateral view.
     pub(crate) fn handle_lateral_cycle(
         &mut self,
@@ -378,19 +337,14 @@ impl App {
             ActiveView::MovedFileAcknowledge(s) => s.handle_click(x, y).map(ViewAction::MovedFileAcknowledge),
             ActiveView::SubparDuplicateResolution(s) => s.handle_click(x, y).map(ViewAction::SubparDuplicateResolution),
             ActiveView::InboxCorpusMatchResolution(s) => s.handle_click(x, y).map(ViewAction::InboxCorpusMatchResolution),
-            ActiveView::MissingAlbumSingleResolution(s) => click_dispatch!(gesture MissingAlbumSingleResolution, s),
-            ActiveView::DiscExtractionResolution(s) => click_dispatch!(gesture DiscExtractionResolution, s),
             ActiveView::CorruptFileResolution(s) => s.handle_click(x, y).map(ViewAction::CorruptFileResolution),
             ActiveView::MissingDirectoryResolution(s) => s.handle_click(x, y).map(ViewAction::MissingDirectoryResolution),
             ActiveView::MissingFileResolution(s) => click_dispatch!(gesture MissingFileResolution, s),
             ActiveView::ShitFormatResolution(s) => click_dispatch!(gesture ShitFormatResolution, s),
-            ActiveView::DirectoryClusterResolution(s) => click_dispatch!(gesture DirectoryClusterResolution, s),
             ActiveView::Insights { ref data, ref mut interaction } => {
                 interaction.list.handle_click(x, y, &data.flat_items);
                 None
             }
-            ActiveView::TagCanonicityResolution { ref mut state, .. } => click_dispatch!(void state),
-            ActiveView::CompoundTagSplit { ref mut state, .. } => click_dispatch!(void state),
             ActiveView::UnifiedTagEditor(ref mut s) => click_dispatch!(void s),
             ActiveView::CorpusBrowser(ref mut s) => click_dispatch!(void s),
             ActiveView::History { ref mut data, ref mut interaction } => {

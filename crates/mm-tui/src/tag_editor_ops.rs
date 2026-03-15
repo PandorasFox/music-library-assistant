@@ -7,7 +7,6 @@ use crossterm::event;
 
 use super::App;
 use mm_meta::db_types::AudioFile;
-use crate::suspended_views::SuspendTarget;
 use crate::tag_editor;
 use crate::ActiveView;
 
@@ -181,33 +180,6 @@ impl App {
             tag_editor::TagEditorSource::TagSearch,
             None,
         );
-    }
-
-    /// Open an embedded tag editor from a health modal.
-    ///
-    /// Unlike standalone launch, this does NOT start a transaction — the parent
-    /// health modal's transaction is already active. Changes are collected locally
-    /// and staged at the parent's decision index when the user saves.
-    pub(super) fn open_embedded_tag_editor(
-        &mut self,
-        mode: tag_editor::TagEditorMode,
-        audio_files: Vec<AudioFile>,
-        decision_key: mm_meta::decisions::DecisionKey,
-        decision_label: String,
-    ) {
-        let tag_fields = tag_editor::mutations::load_tag_fields_batch(&audio_files, self);
-        let editor = tag_editor::UnifiedTagEditorState::new(
-            mode,
-            audio_files,
-            tag_editor::TagEditorSource::HealthModal,
-            None,
-            tag_fields,
-        )
-        .with_embedded_mode(decision_key, decision_label);
-
-        drain_input_buffer();
-
-        self.push_and_switch(SuspendTarget::EmbeddedTagEditor(Box::new(editor)));
     }
 
     /// Start unified tag editor for aggregated bulk editing from tag search results

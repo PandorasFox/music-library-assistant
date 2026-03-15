@@ -8,7 +8,6 @@ use super::super::App;
 use super::witness;
 use super::HandleAction;
 use mm_meta::decisions::DecisionKey;
-use crate::directory_cluster_modal::types::DirectoryClusterModalDataExt;
 use crate::{
     corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal,
     subpar_duplicate_modal, ActiveView,
@@ -178,161 +177,6 @@ impl HandleAction for subpar_duplicate_modal::SubparDuplicateAction {
     }
 }
 
-// ========================================================================
-// Directory Overlap Cluster Resolution
-// ========================================================================
-
-impl HandleAction for super::super::directory_cluster_modal::DirectoryClusterPreviewAction {
-    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
-        use super::super::directory_cluster_modal::DirectoryClusterPreviewAction;
-
-        match self {
-            DirectoryClusterPreviewAction::None => {}
-            DirectoryClusterPreviewAction::ConfirmCurrent => {
-                let Some(w) = witness else { return };
-
-                // Check if selected option is MarkExpected — handle via dedicated path
-                let is_mark_expected = matches!(
-                    &app.view,
-                    ActiveView::DirectoryClusterResolution(ref preview)
-                        if matches!(preview.selected_option(), Some(crate::directory_cluster_modal::types::ClusterResolutionOption::MarkExpected))
-                );
-
-                if is_mark_expected {
-                    // Delegate to MarkExpected handler
-                    DirectoryClusterPreviewAction::MarkExpected.handle(app, Some(w));
-                    return;
-                }
-
-                // Check if selected option is EditTags — launch tag editor
-                let edit_tags_inodes = match &app.view {
-                    ActiveView::DirectoryClusterResolution(ref preview) => {
-                        match preview.selected_option() {
-                            Some(crate::directory_cluster_modal::types::ClusterResolutionOption::EditTags { inodes, .. }) => {
-                                Some(inodes)
-                            }
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                };
-
-                if let Some(inodes) = edit_tags_inodes {
-                    if !inodes.is_empty() {
-                        let audio_files = app
-                            .query(mm_meta::domain_queries::GetAudioFilesByInodes {
-                                inodes,
-                                zone: mm_meta::db_types::Zone::Corpus,
-                            });
-                        if !audio_files.is_empty() {
-                            app.open_unified_tag_editor_bulk(
-                                audio_files,
-                                super::super::tag_editor::TagEditorSource::HealthModal,
-                                None,
-                            );
-                        }
-                    }
-                    return;
-                }
-
-                // Stage mutations for current cluster's selected option and advance
-                let (cluster_index, mutations) = match &app.view {
-                    ActiveView::DirectoryClusterResolution(ref preview) => {
-                        if let Some(option) = preview.selected_option() {
-                            let mutations = preview
-                                .cached_data
-                                .mutations_for_resolution(preview.current_cluster_index, &option, &app.resolver);
-                            (preview.current_cluster_index, mutations)
-                        } else {
-                            (0, Vec::new())
-                        }
-                    }
-                    _ => (0, Vec::new()),
-                };
-                if !mutations.is_empty() {
-                    app.stage_directory_cluster_mutations(
-                        cluster_index,
-                        mutations,
-                        "Resolve directory overlap",
-                        w,
-                    );
-                }
-                // Navigate to next cluster
-                let at_last =
-                    if let ActiveView::DirectoryClusterResolution(ref mut preview) = app.view {
-                        !preview.navigate_next()
-                    } else {
-                        true
-                    };
-                if at_last {
-                    // Last cluster - go to review
-                    app.after_staging_decisions();
-                }
-            }
-            DirectoryClusterPreviewAction::MarkExpected => {
-                let Some(w) = witness else { return };
-                // Extract source_a/source_b from current cluster's key and stage EmitExpectedOverlap
-                let mutation = match &app.view {
-                    ActiveView::DirectoryClusterResolution(ref preview) => {
-                        preview.current_cluster().map(|cluster| {
-                            let parts: Vec<&str> = cluster.cluster_key.splitn(2, '|').collect();
-                            let source_a = parts.first().unwrap_or(&"").to_string();
-                            let source_b = parts.get(1).unwrap_or(&"").to_string();
-                            mm_meta::mutations::Mutation::EmitExpectedOverlap(
-                                mm_meta::mutations::indexing::EmitExpectedOverlapMutation {
-                                    source_a,
-                                    source_b,
-                                },
-                            )
-                        })
-                    }
-                    _ => None,
-                };
-                if let Some(mutation) = mutation {
-                    app.stage_directory_cluster_mutations(
-                        match &app.view {
-                            ActiveView::DirectoryClusterResolution(ref preview) => {
-                                preview.current_cluster_index
-                            }
-                            _ => 0,
-                        },
-                        vec![mutation],
-                        "Mark expected overlap",
-                        w,
-                    );
-                }
-                // Navigate to next cluster
-                let at_last =
-                    if let ActiveView::DirectoryClusterResolution(ref mut preview) = app.view {
-                        !preview.navigate_next()
-                    } else {
-                        true
-                    };
-                if at_last {
-                    app.after_staging_decisions();
-                }
-            }
-            DirectoryClusterPreviewAction::NavigateNext => {
-                if let ActiveView::DirectoryClusterResolution(ref mut preview) = app.view {
-                    preview.navigate_next();
-                }
-            }
-            DirectoryClusterPreviewAction::NavigatePrev => {
-                if let ActiveView::DirectoryClusterResolution(ref mut preview) = app.view {
-                    preview.navigate_prev();
-                }
-            }
-            DirectoryClusterPreviewAction::ShowReview => {
-                // Jump directly to transaction review
-                app.after_staging_decisions();
-            }
-            DirectoryClusterPreviewAction::Cancel => {
-                app.cancel_and_return_to_source("Directory overlap cluster resolution cancelled");
-            }
-        }
-    }
-}
-
 impl App {
     // =========================================================================
     // Start Resolution Methods
@@ -378,25 +222,31 @@ impl App {
         self.view = ActiveView::SubparDuplicateResolution(preview);
     }
 
-    pub(crate) fn start_directory_overlap_resolution(&mut self) {
-        start_resolution!(self,
-            mm_meta::domain_queries::GetDirectoryClusterData,
-            super::super::directory_cluster_modal::DirectoryClusterPreviewState,
-            DirectoryClusterResolution
-        );
-    }
-
     // =========================================================================
     // Release Overlap Resolution
     // =========================================================================
 
-    /// Start release overlap resolution (reuses DirectoryClusterResolution view).
+    /// Start release overlap resolution (reuses V3 DirectoryClusterResolution).
     pub(crate) fn start_release_overlap_resolution(&mut self) {
-        use super::super::directory_cluster_modal;
         let data = self
             .query(mm_meta::domain_queries::GetReleaseOverlapData);
-        let preview = directory_cluster_modal::DirectoryClusterPreviewState::new(data);
-        self.view = ActiveView::DirectoryClusterResolution(preview);
+
+        if data.clusters.is_empty() {
+            self.status_message = Some("No release overlap clusters found".to_string());
+            return;
+        }
+
+        let _ = self.start_transaction("Release overlap resolution");
+
+        self.view = ActiveView::DirectoryClusterResolution {
+            data,
+            current_cluster: 0,
+            list: mm_ui::standard_list::StandardListState::new(
+                mm_ui::standard_list::StandardListConfig::default(),
+            ),
+            buttons: mm_ui::modal_buttons::ButtonRowState::new(),
+            focus: mm_ui::geometry::FocusPane::List,
+        };
     }
 
     /// Stage directory cluster mutations for transaction review.
@@ -435,7 +285,7 @@ impl App {
 
         let _ = self.start_transaction("Directory overlap resolution");
 
-        self.view = ActiveView::DirectoryClusterResolutionV3 {
+        self.view = ActiveView::DirectoryClusterResolution {
             data,
             current_cluster: 0,
             list: mm_ui::standard_list::StandardListState::new(
@@ -448,7 +298,7 @@ impl App {
 
     /// Advance to next cluster or go to review (V3 directory cluster).
     fn advance_directory_cluster_v3(&mut self) {
-        if let ActiveView::DirectoryClusterResolutionV3 {
+        if let ActiveView::DirectoryClusterResolution {
             ref data, ref mut current_cluster, ref mut list, ..
         } = self.view
         {
@@ -477,7 +327,7 @@ impl HandleAction for mm_ui::resolutions::directory_cluster::DirectoryClusterAct
                 let Some(g) = witness else { return };
 
                 let (cluster_index, mutations) = match &app.view {
-                    ActiveView::DirectoryClusterResolutionV3 {
+                    ActiveView::DirectoryClusterResolution {
                         ref data, current_cluster, ref list, ..
                     } => {
                         let cluster = match data.clusters.get(*current_cluster) {
@@ -516,7 +366,7 @@ impl HandleAction for mm_ui::resolutions::directory_cluster::DirectoryClusterAct
                 let Some(g) = witness else { return };
 
                 let (cluster_index, mutation) = match &app.view {
-                    ActiveView::DirectoryClusterResolutionV3 {
+                    ActiveView::DirectoryClusterResolution {
                         ref data, current_cluster, ..
                     } => {
                         let cluster = match data.clusters.get(*current_cluster) {

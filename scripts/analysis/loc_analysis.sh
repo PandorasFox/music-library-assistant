@@ -11,9 +11,12 @@ cd "$PROJECT_ROOT"
 CRATES=(
     "mm:src"
     "mm-tui:crates/mm-tui/src"
+    "mm-ui:crates/mm-ui/src"
     "mm-meta:crates/mm-meta/src"
     "mm-utils:crates/mm-utils/src"
     "mm-derive:crates/mm-derive/src"
+    "mm-web:crates/mm-web/src"
+    "mm-web-client:crates/mm-web/client/src"
 )
 
 TEMP_FILE=$(mktemp)

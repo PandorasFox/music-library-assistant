@@ -137,356 +137,286 @@ pub async fn domain_query(
     }
 }
 
-/// Map a kebab-case path segment to a `DomainQueryPayload`.
-///
-/// Simple queries parse scalar params from the query string.
-/// Complex queries (Vec params, nested structs) deserialize from the JSON body.
+// ============================================================================
+// WebQuery — typed parameter extraction per query struct
+// ============================================================================
+
+/// Each domain query struct implements this to parse itself from HTTP request
+/// parameters. The dispatch below matches on `DomainQueryRoute` (the typed
+/// route enum from mm-meta) and delegates to each struct's `from_web`.
+trait WebQuery: Sized {
+    fn from_web(params: &HashMap<String, String>, body: &[u8]) -> Result<Self, ApiError>;
+}
+
+/// Unit query structs: no parameters, just construct Self.
+macro_rules! unit_web_query {
+    ($($ty:ty),+ $(,)?) => {
+        $(impl WebQuery for $ty {
+            fn from_web(_: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+                Ok(Self)
+            }
+        })+
+    };
+}
+
+/// Body-deserialized query structs: parse entire struct from JSON body.
+macro_rules! body_web_query {
+    ($($ty:ty),+ $(,)?) => {
+        $(impl WebQuery for $ty {
+            fn from_web(_: &HashMap<String, String>, body: &[u8]) -> Result<Self, ApiError> {
+                from_body(body)
+            }
+        })+
+    };
+}
+
+/// Exhaustive dispatch on `DomainQueryRoute`: each variant delegates to the
+/// corresponding query struct's `WebQuery::from_web` implementation.
+/// Adding a new query to `domain_query_protocol!` forces a new arm here.
+macro_rules! dispatch_route {
+    ($route:expr, $params:expr, $body:expr; $( $variant:ident ),+ $(,)?) => {
+        match $route {
+            $( DomainQueryRoute::$variant => Ok(DomainQueryPayload::$variant(
+                <$variant as WebQuery>::from_web($params, $body)?
+            )), )+
+        }
+    };
+}
+
+// -- Unit queries (no parameters) --
+
+unit_web_query!(
+    GetInsights, GetInboxOverview, GetDeployStatus, GetEditHistory,
+    GetExternalMatches, GetPackingDirs,
+    GetOobSyncFiles, GetOobFilesBucketed, GetMovedFiles,
+    GetMissingAlbumSingleSignals, GetPackingKnots, GetPackingInodePaths,
+    GetMissingFileData, GetMissingDirectoryData, GetCorruptFileData,
+    GetSubparDuplicateData, GetDirectoryClusterData, GetReleaseOverlapData,
+    GetShitFormatData, GetMissingTagAudioFiles,
+);
+
+#[allow(deprecated)]
+unit_web_query!(GetInconsistentAlbumArtistKeys);
+
+// -- Body-deserialized queries --
+
+body_web_query!(
+    GetAudioFilesByInodes, GetCurrentTagValues, GetRecordingBatchData,
+    GetReleaseStagingData, GetInboxOrganizeData, GetFileTagValues,
+    SearchWithConditions,
+);
+
+#[allow(deprecated)]
+body_web_query!(GetCompoundSplitGroupData);
+
+// -- Param-parsed queries (custom extraction per struct) --
+
+impl WebQuery for GetOobConflictByBucket {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { bucket: parse_enum(params, "bucket")? })
+    }
+}
+
+impl WebQuery for GetEditHistoryExport {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { session_id: params.get("session_id").cloned() })
+    }
+}
+
+#[allow(deprecated)]
+impl WebQuery for GetCompoundSignalGroups {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self {
+            zone: parse_enum(params, "zone")?,
+            safe_only: parse_bool(params, "safe_only"),
+            tag_filter: params.get("tag_filter").cloned(),
+        })
+    }
+}
+
+#[allow(deprecated)]
+impl WebQuery for GetTagCanonicityKeys {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self {
+            zone: parse_enum(params, "zone")?,
+            tag_filter: params.get("tag_filter").cloned(),
+        })
+    }
+}
+
+impl WebQuery for GetDiscExtractionData {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { map_letters_to_numbers: parse_bool(params, "map_letters_to_numbers") })
+    }
+}
+
+impl WebQuery for GetInboxCorpusMatchData {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { bitrate_fuzz_percent: parse_param(params, "bitrate_fuzz_percent")? })
+    }
+}
+
+impl WebQuery for GetDeployData {
+    fn from_web(_: &HashMap<String, String>, body: &[u8]) -> Result<Self, ApiError> {
+        let config = if body.is_empty() { None } else { Some(from_body(body)?) };
+        Ok(Self { config })
+    }
+}
+
+impl WebQuery for GetManualReviewData {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { kind: parse_enum(params, "kind")? })
+    }
+}
+
+impl WebQuery for GetCorpusTags {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { inode: parse_param(params, "inode")? })
+    }
+}
+
+impl WebQuery for GetPackingBrowserData {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { category_prefix: require_param(params, "category_prefix")? })
+    }
+}
+
+impl WebQuery for GetUnsolvedPackingData {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { category: require_param(params, "category")? })
+    }
+}
+
+impl WebQuery for GetAllAudioFilesWithTags {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self {
+            zone: parse_enum(params, "zone")?,
+            include_library: parse_bool(params, "include_library"),
+        })
+    }
+}
+
+impl WebQuery for GetSessionEditDetail {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { session_id: require_param(params, "session_id")? })
+    }
+}
+
+impl WebQuery for GetIntakeConfirmation {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self {
+            source: parse_enum(params, "source")?,
+            zone: parse_optional_enum(params, "zone")?,
+        })
+    }
+}
+
+#[allow(deprecated)]
+impl WebQuery for GetTagCanonicitySignalData {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self {
+            signal_key: require_param(params, "signal_key")?,
+            kind: parse_enum(params, "kind")?,
+        })
+    }
+}
+
+impl WebQuery for GetTagEditorFiles {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self {
+            rel_path: require_param(params, "rel_path")?.into(),
+            mode: parse_enum(params, "mode")?,
+        })
+    }
+}
+
+impl WebQuery for GetDirectoryListing {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self {
+            zone: parse_enum(params, "zone")?,
+            parent: params.get("parent").cloned(),
+        })
+    }
+}
+
+impl WebQuery for SearchCorpusFiles {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self {
+            query: require_param(params, "query")?,
+            limit: params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(200),
+        })
+    }
+}
+
+impl WebQuery for GetTagCanonicityResolution {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self {
+            tag_name: require_param(params, "tag_name")?,
+            zone: parse_enum(params, "zone")?,
+            filter_existing_canonicals: parse_bool(params, "filter_existing_canonicals"),
+        })
+    }
+}
+
+impl WebQuery for GetCompoundSplitResolution {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self {
+            tag_name: require_param(params, "tag_name")?,
+            zone: parse_enum(params, "zone")?,
+            safe_only: parse_bool(params, "safe_only"),
+        })
+    }
+}
+
+impl WebQuery for GetAcoustidMatches {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { confidence: parse_enum(params, "confidence")? })
+    }
+}
+
+impl WebQuery for GetReleaseReview {
+    fn from_web(params: &HashMap<String, String>, _: &[u8]) -> Result<Self, ApiError> {
+        Ok(Self { filter: parse_enum(params, "filter")? })
+    }
+}
+
+// ============================================================================
+// Route dispatch
+// ============================================================================
+
+/// Parse kebab-case path segment via `DomainQueryRoute` (typed, from mm-meta),
+/// then exhaustive-match to build the `DomainQueryPayload`. Adding a query to
+/// `domain_query_protocol!` without handling it here is a compile error.
+#[allow(deprecated)]
 fn build_domain_payload(
     name: &str,
     params: &HashMap<String, String>,
     body: &[u8],
 ) -> Result<DomainQueryPayload, ApiError> {
-    match name {
-        // ================================================================
-        // Summary queries (unit structs)
-        // ================================================================
-        "insights" => Ok(DomainQueryPayload::GetInsights(GetInsights)),
-        "inbox-overview" => Ok(DomainQueryPayload::GetInboxOverview(GetInboxOverview)),
-        "deploy-status" => Ok(DomainQueryPayload::GetDeployStatus(GetDeployStatus)),
-        "edit-history" => Ok(DomainQueryPayload::GetEditHistory(GetEditHistory)),
-        "external-matches" => {
-            Ok(DomainQueryPayload::GetExternalMatches(GetExternalMatches))
-        }
-        "packing-dirs" => Ok(DomainQueryPayload::GetPackingDirs(GetPackingDirs)),
+    let route = DomainQueryRoute::from_route_name(name)
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown query: '{name}'")))?;
 
-        // ================================================================
-        // Wave 1: detail queries
-        // ================================================================
-        "oob-sync-files" => Ok(DomainQueryPayload::GetOobSyncFiles(GetOobSyncFiles)),
-        "oob-files-bucketed" => {
-            Ok(DomainQueryPayload::GetOobFilesBucketed(GetOobFilesBucketed))
-        }
-        // oob-conflict-by-bucket?bucket=MtimeOnly
-        "oob-conflict-by-bucket" => {
-            let bucket = parse_enum(params, "bucket")?;
-            Ok(DomainQueryPayload::GetOobConflictByBucket(
-                GetOobConflictByBucket { bucket },
-            ))
-        }
-        "moved-files" => Ok(DomainQueryPayload::GetMovedFiles(GetMovedFiles)),
-        "missing-album-single-signals" => Ok(
-            DomainQueryPayload::GetMissingAlbumSingleSignals(GetMissingAlbumSingleSignals),
-        ),
-        "packing-knots" => Ok(DomainQueryPayload::GetPackingKnots(GetPackingKnots)),
-        "packing-inode-paths" => {
-            Ok(DomainQueryPayload::GetPackingInodePaths(GetPackingInodePaths))
-        }
-
-        // edit-history-export?session_id=... (optional)
-        "edit-history-export" => {
-            let session_id = params.get("session_id").cloned();
-            Ok(DomainQueryPayload::GetEditHistoryExport(
-                GetEditHistoryExport { session_id },
-            ))
-        }
-
-        // compound-signal-groups?zone=Corpus&safe_only=true&tag_filter=ARTIST
-        "compound-signal-groups" => {
-            let zone = parse_enum(params, "zone")?;
-            let safe_only = params
-                .get("safe_only")
-                .map(|v| v == "true")
-                .unwrap_or(false);
-            let tag_filter = params.get("tag_filter").cloned();
-            Ok(DomainQueryPayload::GetCompoundSignalGroups(
-                GetCompoundSignalGroups {
-                    zone,
-                    safe_only,
-                    tag_filter,
-                },
-            ))
-        }
-
-        // ================================================================
-        // Wave 2: signal key queries
-        // ================================================================
-        "inconsistent-album-artist-keys" => Ok(
-            DomainQueryPayload::GetInconsistentAlbumArtistKeys(
-                GetInconsistentAlbumArtistKeys,
-            ),
-        ),
-
-        // tag-canonicity-keys?zone=Corpus&tag_filter=ARTIST
-        "tag-canonicity-keys" => {
-            let zone = parse_enum(params, "zone")?;
-            let tag_filter = params.get("tag_filter").cloned();
-            Ok(DomainQueryPayload::GetTagCanonicityKeys(
-                GetTagCanonicityKeys { zone, tag_filter },
-            ))
-        }
-
-        // disc-extraction-data?map_letters_to_numbers=true
-        "disc-extraction-data" => {
-            let map_letters_to_numbers = params
-                .get("map_letters_to_numbers")
-                .map(|v| v == "true")
-                .unwrap_or(false);
-            Ok(DomainQueryPayload::GetDiscExtractionData(
-                GetDiscExtractionData {
-                    map_letters_to_numbers,
-                },
-            ))
-        }
-
-        // ================================================================
-        // Wave 3: modal init loaders
-        // ================================================================
-        "missing-file-data" => {
-            Ok(DomainQueryPayload::GetMissingFileData(GetMissingFileData))
-        }
-        "missing-directory-data" => Ok(DomainQueryPayload::GetMissingDirectoryData(
-            GetMissingDirectoryData,
-        )),
-        "corrupt-file-data" => {
-            Ok(DomainQueryPayload::GetCorruptFileData(GetCorruptFileData))
-        }
-        "subpar-duplicate-data" => Ok(DomainQueryPayload::GetSubparDuplicateData(
-            GetSubparDuplicateData,
-        )),
-        "directory-cluster-data" => Ok(DomainQueryPayload::GetDirectoryClusterData(
-            GetDirectoryClusterData,
-        )),
-        "release-overlap-data" => Ok(DomainQueryPayload::GetReleaseOverlapData(
-            GetReleaseOverlapData,
-        )),
-        "shit-format-data" => {
-            Ok(DomainQueryPayload::GetShitFormatData(GetShitFormatData))
-        }
-
-        // inbox-corpus-match-data?bitrate_fuzz_percent=5.0
-        "inbox-corpus-match-data" => {
-            let bitrate_fuzz_percent = parse_param(params, "bitrate_fuzz_percent")?;
-            Ok(DomainQueryPayload::GetInboxCorpusMatchData(
-                GetInboxCorpusMatchData {
-                    bitrate_fuzz_percent,
-                },
-            ))
-        }
-
-        // deploy-data (GET with no body = config None, POST with JSON body = config Some)
-        "deploy-data" => {
-            let config = if body.is_empty() {
-                None
-            } else {
-                Some(from_body(body)?)
-            };
-            Ok(DomainQueryPayload::GetDeployData(GetDeployData { config }))
-        }
-
-        // manual-review-data?kind=RedundantDuplicate
-        "manual-review-data" => {
-            let kind = parse_enum(params, "kind")?;
-            Ok(DomainQueryPayload::GetManualReviewData(
-                GetManualReviewData { kind },
-            ))
-        }
-
-        // corpus-tags?inode=N
-        "corpus-tags" => {
-            let inode = parse_param(params, "inode")?;
-            Ok(DomainQueryPayload::GetCorpusTags(GetCorpusTags { inode }))
-        }
-
-        // packing-browser-data?category_prefix=...
-        "packing-browser-data" => {
-            let category_prefix = require_param(params, "category_prefix")?;
-            Ok(DomainQueryPayload::GetPackingBrowserData(
-                GetPackingBrowserData { category_prefix },
-            ))
-        }
-
-        // unsolved-packing-data?category=...
-        "unsolved-packing-data" => {
-            let category = require_param(params, "category")?;
-            Ok(DomainQueryPayload::GetUnsolvedPackingData(
-                GetUnsolvedPackingData { category },
-            ))
-        }
-
-        // ================================================================
-        // Wave 4: composite queries
-        // ================================================================
-
-        // POST body: { "inodes": [1, 2, 3], "zone": "Corpus" }
-        "audio-files-by-inodes" => {
-            let q: GetAudioFilesByInodes = from_body(body)?;
-            Ok(DomainQueryPayload::GetAudioFilesByInodes(q))
-        }
-
-        "missing-tag-audio-files" => Ok(DomainQueryPayload::GetMissingTagAudioFiles(
-            GetMissingTagAudioFiles,
-        )),
-
-        // all-audio-files-with-tags?zone=Corpus&include_library=false
-        "all-audio-files-with-tags" => {
-            let zone = parse_enum(params, "zone")?;
-            let include_library = params
-                .get("include_library")
-                .map(|v| v == "true")
-                .unwrap_or(false);
-            Ok(DomainQueryPayload::GetAllAudioFilesWithTags(
-                GetAllAudioFilesWithTags {
-                    zone,
-                    include_library,
-                },
-            ))
-        }
-
-        // session-edit-detail?session_id=...
-        "session-edit-detail" => {
-            let session_id = require_param(params, "session_id")?;
-            Ok(DomainQueryPayload::GetSessionEditDetail(
-                GetSessionEditDetail { session_id },
-            ))
-        }
-
-        // POST body: { "queries": [[123, "ARTIST"], [456, "ALBUM"]] }
-        "current-tag-values" => {
-            let q: GetCurrentTagValues = from_body(body)?;
-            Ok(DomainQueryPayload::GetCurrentTagValues(q))
-        }
-
-        // ================================================================
-        // Wave 5
-        // ================================================================
-
-        // intake-confirmation?source=Startup&zone=Corpus (zone optional)
-        "intake-confirmation" => {
-            let source = parse_enum(params, "source")?;
-            let zone = parse_optional_enum(params, "zone")?;
-            Ok(DomainQueryPayload::GetIntakeConfirmation(
-                GetIntakeConfirmation { source, zone },
-            ))
-        }
-
-        // POST body: { "group": { "tag_name": "...", "compound_value": "...", "inodes": [...] }, "zone": "Corpus" }
-        "compound-split-group-data" => {
-            let q: GetCompoundSplitGroupData = from_body(body)?;
-            Ok(DomainQueryPayload::GetCompoundSplitGroupData(q))
-        }
-
-        // tag-canonicity-signal-data?signal_key=...&kind=TagCanonicity
-        "tag-canonicity-signal-data" => {
-            let signal_key = require_param(params, "signal_key")?;
-            let kind = parse_enum(params, "kind")?;
-            Ok(DomainQueryPayload::GetTagCanonicitySignalData(
-                GetTagCanonicitySignalData { signal_key, kind },
-            ))
-        }
-
-        // POST body: { "recording_ids": ["...", "..."], "preferred_locales": ["en"] }
-        "recording-batch-data" => {
-            let q: GetRecordingBatchData = from_body(body)?;
-            Ok(DomainQueryPayload::GetRecordingBatchData(q))
-        }
-
-        // POST body: { "release_ids": [...], "recording_ids": [...], "inodes": [...] }
-        "release-staging-data" => {
-            let q: GetReleaseStagingData = from_body(body)?;
-            Ok(DomainQueryPayload::GetReleaseStagingData(q))
-        }
-
-        // tag-editor-files?rel_path=/some/path&mode=Directory
-        "tag-editor-files" => {
-            let rel_path = require_param(params, "rel_path")?.into();
-            let mode = parse_enum(params, "mode")?;
-            Ok(DomainQueryPayload::GetTagEditorFiles(GetTagEditorFiles {
-                rel_path,
-                mode,
-            }))
-        }
-
-        // POST body: { full Config object }
-        "inbox-organize-data" => {
-            let config = from_body(body)?;
-            Ok(DomainQueryPayload::GetInboxOrganizeData(
-                GetInboxOrganizeData { config },
-            ))
-        }
-
-        // POST body: { "inodes": [1, 2, 3], "zone": "Corpus" }
-        "file-tag-values" => {
-            let q: GetFileTagValues = from_body(body)?;
-            Ok(DomainQueryPayload::GetFileTagValues(q))
-        }
-
-        // ================================================================
-        // Web file browser & search
-        // ================================================================
-
-        // directory-listing?zone=Corpus&parent=some/path (parent optional)
-        "directory-listing" => {
-            let zone = parse_enum(params, "zone")?;
-            let parent = params.get("parent").cloned();
-            Ok(DomainQueryPayload::GetDirectoryListing(
-                GetDirectoryListing { zone, parent },
-            ))
-        }
-
-        // search-corpus?query=radiohead&limit=200 (limit optional, default 200)
-        "search-corpus" => {
-            let query = require_param(params, "query")?;
-            let limit = params
-                .get("limit")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(200);
-            Ok(DomainQueryPayload::SearchCorpusFiles(
-                SearchCorpusFiles { query, limit },
-            ))
-        }
-
-        // ================================================================
-        // Packed resolution queries (cluster-nav)
-        // ================================================================
-
-        // tag-canonicity-resolution?tag_name=ARTIST&zone=Corpus&filter_existing_canonicals=true
-        "tag-canonicity-resolution" => {
-            let tag_name = require_param(params, "tag_name")?;
-            let zone = parse_enum(params, "zone")?;
-            let filter_existing_canonicals = params
-                .get("filter_existing_canonicals")
-                .map(|v| v == "true")
-                .unwrap_or(false);
-            Ok(DomainQueryPayload::GetTagCanonicityResolution(
-                GetTagCanonicityResolution {
-                    tag_name,
-                    zone,
-                    filter_existing_canonicals,
-                },
-            ))
-        }
-
-        // compound-split-resolution?tag_name=GENRE&zone=Corpus&safe_only=true
-        "compound-split-resolution" => {
-            let tag_name = require_param(params, "tag_name")?;
-            let zone = parse_enum(params, "zone")?;
-            let safe_only = params
-                .get("safe_only")
-                .map(|v| v == "true")
-                .unwrap_or(false);
-            Ok(DomainQueryPayload::GetCompoundSplitResolution(
-                GetCompoundSplitResolution {
-                    tag_name,
-                    zone,
-                    safe_only,
-                },
-            ))
-        }
-
-        _ => Err(ApiError::BadRequest(format!(
-            "unknown query: '{name}'"
-        ))),
-    }
+    dispatch_route!(route, params, body;
+        GetInsights, GetInboxOverview, GetDeployStatus, GetEditHistory,
+        GetExternalMatches, GetPackingDirs,
+        GetOobSyncFiles, GetOobFilesBucketed, GetOobConflictByBucket,
+        GetMovedFiles, GetMissingAlbumSingleSignals, GetEditHistoryExport,
+        GetCompoundSignalGroups, GetPackingKnots, GetPackingInodePaths,
+        GetInconsistentAlbumArtistKeys, GetTagCanonicityKeys, GetDiscExtractionData,
+        GetMissingFileData, GetMissingDirectoryData, GetCorruptFileData,
+        GetSubparDuplicateData, GetDirectoryClusterData, GetReleaseOverlapData,
+        GetShitFormatData, GetInboxCorpusMatchData, GetDeployData,
+        GetManualReviewData, GetCorpusTags, GetPackingBrowserData,
+        GetUnsolvedPackingData,
+        GetAudioFilesByInodes, GetMissingTagAudioFiles, GetAllAudioFilesWithTags,
+        GetSessionEditDetail, GetCurrentTagValues,
+        GetIntakeConfirmation, GetCompoundSplitGroupData,
+        GetTagCanonicitySignalData, GetRecordingBatchData, GetReleaseStagingData,
+        GetTagEditorFiles, GetInboxOrganizeData, GetFileTagValues,
+        GetDirectoryListing, SearchCorpusFiles, SearchWithConditions,
+        GetTagCanonicityResolution, GetCompoundSplitResolution,
+        GetAcoustidMatches, GetReleaseReview,
+    )
 }
 
 // ============================================================================
@@ -509,6 +439,10 @@ fn require_param(params: &HashMap<String, String>, key: &str) -> Result<String, 
         .get(key)
         .cloned()
         .ok_or_else(|| ApiError::BadRequest(format!("missing '{key}' parameter")))
+}
+
+fn parse_bool(params: &HashMap<String, String>, key: &str) -> bool {
+    params.get(key).map(|v| v == "true").unwrap_or(false)
 }
 
 /// Parse a serde enum variant name from a query string parameter.

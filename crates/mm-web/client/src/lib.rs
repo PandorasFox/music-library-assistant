@@ -442,6 +442,34 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             let data = api::get_query("oob-sync-files").await?;
             Ok(views::render_oob_sync(&data))
         }
+        ResolutionRoute::OobConflictMtimeOnly { .. } => {
+            let data = api::get_query_with(
+                "oob-conflict-by-bucket",
+                "bucket=MtimeOnly",
+            ).await?;
+            Ok(views::render_oob_conflict_bucket("OOB Conflict — Mtime Only", &data))
+        }
+        ResolutionRoute::OobConflictDbOnly { .. } => {
+            let data = api::get_query_with(
+                "oob-conflict-by-bucket",
+                "bucket=DbOnly",
+            ).await?;
+            Ok(views::render_oob_conflict_bucket("OOB Conflict — DB Only", &data))
+        }
+        ResolutionRoute::OobConflictDiskOnly { .. } => {
+            let data = api::get_query_with(
+                "oob-conflict-by-bucket",
+                "bucket=DiskOnly",
+            ).await?;
+            Ok(views::render_oob_conflict_bucket("OOB Conflict — Disk Only", &data))
+        }
+        ResolutionRoute::OobConflictTwoWay { .. } => {
+            let data = api::get_query_with(
+                "oob-conflict-by-bucket",
+                "bucket=Conflict",
+            ).await?;
+            Ok(views::render_oob_conflict_bucket("OOB Conflict — Two-Way", &data))
+        }
 
         // === Cluster-nav routes ===
         ResolutionRoute::TagCanonicity { tag_name, zone, .. } => {
@@ -470,6 +498,21 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
         ResolutionRoute::MissingAlbum { .. } => {
             let data = api::get_query("missing-album-single-signals").await?;
             Ok(views::render_missing_album(&data))
+        }
+        ResolutionRoute::DirectoryCluster { .. } => {
+            let data = api::get_query("directory-cluster-data").await?;
+            Ok(views::render_directory_clusters(&data))
+        }
+        ResolutionRoute::InconsistentAlbumArtist { tag_name, .. } => {
+            let data = api::get_query_with(
+                "tag-canonicity-resolution",
+                &format!(
+                    "tag_name={}&zone={}&filter_existing_canonicals=true",
+                    js_sys::encode_uri_component(tag_name),
+                    zone_api_str(&mm_meta::db_types::Zone::Corpus),
+                ),
+            ).await?;
+            Ok(views::render_tag_canonicity_titled("Inconsistent Album Artist", &data))
         }
         ResolutionRoute::DiscExtraction { .. } => {
             let data = api::get_query_with(

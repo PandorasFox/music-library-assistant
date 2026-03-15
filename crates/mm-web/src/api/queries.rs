@@ -166,6 +166,13 @@ fn build_domain_payload(
         "oob-files-bucketed" => {
             Ok(DomainQueryPayload::GetOobFilesBucketed(GetOobFilesBucketed))
         }
+        // oob-conflict-by-bucket?bucket=MtimeOnly
+        "oob-conflict-by-bucket" => {
+            let bucket = parse_enum(params, "bucket")?;
+            Ok(DomainQueryPayload::GetOobConflictByBucket(
+                GetOobConflictByBucket { bucket },
+            ))
+        }
         "moved-files" => Ok(DomainQueryPayload::GetMovedFiles(GetMovedFiles)),
         "missing-album-single-signals" => Ok(
             DomainQueryPayload::GetMissingAlbumSingleSignals(GetMissingAlbumSingleSignals),

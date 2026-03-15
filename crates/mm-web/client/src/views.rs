@@ -1643,12 +1643,116 @@ pub fn render_oob_sync(data: &serde_json::Value) -> Node {
     )
 }
 
+/// Render OOB conflict files for a single bucket type.
+pub fn render_oob_conflict_bucket(title: &str, data: &serde_json::Value) -> Node {
+    let items: Vec<String> = data
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let path = entry.get("path")?.as_str()?;
+                    let mismatch_count = entry.get("mismatches")
+                        .and_then(|v| v.as_array())
+                        .map_or(0, |a| a.len());
+                    if mismatch_count > 0 {
+                        Some(format!("{path}  [{mismatch_count} tag(s)]"))
+                    } else {
+                        Some(path.to_string())
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    render_resolution_view(
+        &format!("{title} ({})", items.len()),
+        &items,
+        &[("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()")],
+    )
+}
+
+/// Render directory cluster resolution data.
+pub fn render_directory_clusters(data: &serde_json::Value) -> Node {
+    let clusters = data.get("clusters").and_then(|v| v.as_array());
+    let cluster_count = clusters.map_or(0, |c| c.len());
+
+    let mut sections = Vec::new();
+    sections.push(
+        h3().class("mm-section__title")
+            .text(format!("Directory Clusters ({} clusters)", cluster_count))
+            .into(),
+    );
+
+    if let Some(clusters) = clusters {
+        for (idx, cluster) in clusters.iter().enumerate() {
+            let cluster_key = cluster.get("cluster_key").and_then(|v| v.as_str()).unwrap_or("?");
+            let overlap = cluster.get("overlap_count").and_then(|v| v.as_u64()).unwrap_or(0);
+
+            let mut items = Vec::new();
+            items.push(kv("Overlap", &format!("{} track pairs", overlap)));
+
+            if let Some(dirs) = cluster.get("directories").and_then(|v| v.as_array()) {
+                for dir in dirs {
+                    let path_suffix = dir.get("path_suffix").and_then(|v| v.as_str()).unwrap_or("?");
+                    let format_summary = dir.get("format_summary").and_then(|v| v.as_str()).unwrap_or("?");
+                    let file_count = dir.get("inodes").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+                    items.push(kv(
+                        path_suffix,
+                        &format!("{} files, {}", file_count, format_summary),
+                    ));
+                }
+            }
+
+            sections.push(titled_section(
+                &format!("Cluster {} — {}", idx + 1, cluster_key),
+                items,
+            ));
+        }
+    }
+
+    sections.push(
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-yellow)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Stash"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-blue)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Mark Expected"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-white)")
+                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .text("Cancel"),
+            )
+            .into(),
+    );
+
+    div().class("mm-resolution").children(sections).into()
+}
+
 // ============================================================================
 // Cluster-nav resolution views
 // ============================================================================
 
 /// Render tag canonicity resolution data (all clusters as expandable sections).
 pub fn render_tag_canonicity(data: &serde_json::Value) -> Node {
+    render_tag_canonicity_titled("Tag Canonicity", data)
+}
+
+/// Render tag canonicity data with a custom title prefix.
+/// Used by both TagCanonicity and InconsistentAlbumArtist routes
+/// (same data shape, different heading).
+pub fn render_tag_canonicity_titled(title_prefix: &str, data: &serde_json::Value) -> Node {
     let tag_name = data.get("tag_name").and_then(|v| v.as_str()).unwrap_or("?");
     let clusters = data.get("clusters").and_then(|v| v.as_array());
 
@@ -1657,7 +1761,7 @@ pub fn render_tag_canonicity(data: &serde_json::Value) -> Node {
 
     sections.push(
         h3().class("mm-section__title")
-            .text(format!("Tag Canonicity — {} ({} clusters)", tag_name, cluster_count))
+            .text(format!("{} — {} ({} clusters)", title_prefix, tag_name, cluster_count))
             .into(),
     );
 

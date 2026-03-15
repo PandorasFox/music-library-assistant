@@ -111,6 +111,104 @@ impl GroupNavigation for ManualReviewResolutionData {
 pub type ManualReviewState = ResolutionState<ManualReviewResolutionData, ReviewButton>;
 
 // ============================================================================
+// Dispatchable
+// ============================================================================
+
+impl super::dispatch::Dispatchable for ManualReviewState {
+    type Action = ReviewAction;
+
+    fn dispatch(
+        &self,
+        action: ReviewAction,
+        resolver: &mm_meta::paths::PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use super::dispatch::DispatchResult;
+
+        match action {
+            ReviewAction::Stash => {
+                let group = match self.data.inner.groups.get(self.data.current_group) {
+                    Some(g) => g,
+                    None => return DispatchResult::Handled,
+                };
+                let file = match group.files.get(self.list.cursor) {
+                    Some(f) => f,
+                    None => return DispatchResult::Handled,
+                };
+                if file.stashed {
+                    return DispatchResult::Handled;
+                }
+
+                let stash_name = self.data.review_kind.stash_name();
+                let mutations = mm_meta::mutations::builders::stash_file_mutations(
+                    &file.corpus_path,
+                    file.inode,
+                    stash_name,
+                    resolver,
+                );
+
+                let ctx = self.data.button_ctx();
+                let key = ReviewButton::Stash
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::StageKeep {
+                    key,
+                    label: format!("Stash {}", file.corpus_path),
+                    mutations,
+                }
+            }
+            ReviewAction::MarkExpected => {
+                if self.data.review_kind != ReviewKind::RedundantDuplicate {
+                    return DispatchResult::Handled;
+                }
+                let group = match self.data.inner.groups.get(self.data.current_group) {
+                    Some(g) => g,
+                    None => return DispatchResult::Handled,
+                };
+                let fingerprint_key = match group.signal_key {
+                    Some(ref k) => k.clone(),
+                    None => return DispatchResult::Handled,
+                };
+
+                let ctx = self.data.button_ctx();
+                let key = ReviewButton::MarkExpected
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: format!("Mark expected duplicate: {}", group.label),
+                    mutations: vec![mm_meta::mutations::Mutation::EmitExpectedDuplicate(
+                        mm_meta::mutations::indexing::EmitExpectedDuplicateMutation {
+                            fingerprint_key,
+                        },
+                    )],
+                }
+            }
+            ReviewAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn advance(&mut self) -> bool {
+        if self.data.current_group + 1 < self.data.inner.groups.len() {
+            self.data.current_group += 1;
+            self.reset_list();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "Manual review cancelled"
+    }
+}
+
+// ============================================================================
 // Action enum
 // ============================================================================
 

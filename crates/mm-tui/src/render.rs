@@ -236,29 +236,14 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::DirectoryClusterResolution(ref mut s) => {
             super::directory_cluster_modal::render_v3::render_v3(f, area, s);
         }
-        ActiveView::MissingAlbumSingleResolution {
-            ref data, current_group, ref mut list, ref mut buttons,
-            focus, ref suffix, ..
-        } => {
-            missing_album_modal::render_v3(
-                f, area, data, current_group, list, buttons, focus, suffix,
-            );
+        ActiveView::MissingAlbumSingleResolution(ref mut s) => {
+            missing_album_modal::render_v3(f, area, s);
         }
-        ActiveView::DiscExtractionResolution {
-            ref data, current_group, ref mut list, ref mut buttons,
-            focus, ref disc_tag_name, ..
-        } => {
-            disc_extraction_modal::render_v3(
-                f, area, data, current_group, list, buttons, focus, disc_tag_name,
-            );
+        ActiveView::DiscExtractionResolution(ref mut s) => {
+            disc_extraction_modal::render_v3(f, area, s);
         }
-        ActiveView::ManualReviewResolution {
-            ref data, review_kind, current_group, ref mut list, ref mut buttons,
-            focus, ..
-        } => {
-            manual_review_modal::render_v3::render_v3(
-                f, area, data, review_kind, current_group, list, buttons, focus,
-            );
+        ActiveView::ManualReviewResolution(ref mut s) => {
+            manual_review_modal::render_v3::render_v3(f, area, s);
         }
     }
 

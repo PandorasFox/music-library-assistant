@@ -14,6 +14,8 @@ use ratatui::{
 };
 
 use mm_meta::views::review_match::{ManualReviewData, ReviewFileEntry, ReviewKind};
+use mm_ui::resolution_state::ResolutionData;
+use mm_ui::resolutions::manual_review::ManualReviewState;
 use mm_ui::rich_text::{RichBlock, RichSpan};
 use mm_ui::standard_list::ListEntry;
 use mm_ui::wizard::{WizardItem, WizardOffer};
@@ -203,15 +205,12 @@ pub fn build_review_items(group: &mm_meta::views::review_match::ReviewGroup) -> 
 pub fn render_v3(
     f: &mut Frame,
     area: Rect,
-    data: &ManualReviewData,
-    review_kind: ReviewKind,
-    current_group: usize,
-    list: &mut mm_ui::standard_list::StandardListState,
-    buttons: &mut mm_ui::modal_buttons::ButtonRowState<
-        mm_ui::resolutions::manual_review::ReviewButton,
-    >,
-    focus: mm_ui::geometry::FocusPane,
+    state: &mut ManualReviewState,
 ) {
+    let data = &state.data.inner;
+    let review_kind = state.data.review_kind;
+    let current_group = state.data.current_group;
+
     let padded = mm_ui::geometry::padded_rect(area);
     f.render_widget(Clear, padded);
 
@@ -231,7 +230,7 @@ pub fn render_v3(
     let group = data.groups.get(current_group);
     let items: Vec<ReviewFileItem> = group.map(build_review_items).unwrap_or_default();
 
-    let list_focused = focus == mm_ui::geometry::FocusPane::List;
+    let list_focused = state.frame.focus_pane == mm_ui::geometry::FocusPane::List;
 
     let list_title = {
         let current = current_group + 1;
@@ -248,7 +247,7 @@ pub fn render_v3(
     };
 
     crate::widgets::standard_list::render_standard_list(
-        list,
+        &mut state.list,
         f,
         vertical[1],
         &items,
@@ -258,13 +257,9 @@ pub fn render_v3(
     );
 
     // --- Buttons ---
-    let ctx = mm_ui::resolutions::manual_review::ReviewButtonCtx {
-        has_files: !items.is_empty(),
-        review_kind,
-        current_group_index: current_group,
-    };
-    let button_focused = focus == mm_ui::geometry::FocusPane::Buttons;
-    crate::widgets::modal_buttons::render_buttons(buttons, f, vertical[2], &ctx, button_focused);
+    let ctx = state.data.button_ctx();
+    let button_focused = state.frame.focus_pane == mm_ui::geometry::FocusPane::Buttons;
+    crate::widgets::modal_buttons::render_buttons(&mut state.frame.buttons, f, vertical[2], &ctx, button_focused);
 }
 
 fn render_title(

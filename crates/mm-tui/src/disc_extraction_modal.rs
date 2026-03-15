@@ -12,6 +12,8 @@ use ratatui::{
     Frame,
 };
 use mm_meta::domain_queries::{DiscExtractionGroup, DiscExtractionModalData};
+use mm_ui::resolution_state::ResolutionData;
+use mm_ui::resolutions::disc_extraction::DiscExtractionState;
 use mm_ui::rich_text::{RichBlock, RichSpan};
 use mm_ui::standard_list::ListEntry;
 use mm_ui::wizard::{WizardItem, WizardOffer};
@@ -77,13 +79,11 @@ pub fn build_file_items(group: &DiscExtractionGroup) -> Vec<DiscFileListItem> {
 pub fn render_v3(
     f: &mut Frame,
     area: Rect,
-    data: &DiscExtractionModalData,
-    current_group: usize,
-    list: &mut mm_ui::standard_list::StandardListState,
-    buttons: &mut mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::disc_extraction::DiscExtractionButton>,
-    focus: mm_ui::geometry::FocusPane,
-    disc_tag_name: &str,
+    state: &mut DiscExtractionState,
 ) {
+    let data = &state.data.inner;
+    let current_group = state.data.current_group;
+
     let padded = mm_ui::geometry::padded_rect(area);
     f.render_widget(Clear, padded);
 
@@ -97,7 +97,7 @@ pub fn render_v3(
         .split(padded);
 
     // --- Title bar ---
-    render_disc_extraction_title(f, vertical[0], data, current_group, disc_tag_name);
+    render_disc_extraction_title(f, vertical[0], data, current_group, &state.data.disc_tag_name);
 
     // --- StandardList ---
     let group = data.groups.get(current_group);
@@ -105,7 +105,7 @@ pub fn render_v3(
         .map(build_file_items)
         .unwrap_or_default();
 
-    let list_focused = focus == mm_ui::geometry::FocusPane::List;
+    let list_focused = state.frame.focus_pane == mm_ui::geometry::FocusPane::List;
 
     let list_title = {
         let current = current_group + 1;
@@ -116,7 +116,7 @@ pub fn render_v3(
     };
 
     crate::widgets::standard_list::render_standard_list(
-        list,
+        &mut state.list,
         f,
         vertical[1],
         &items,
@@ -126,12 +126,9 @@ pub fn render_v3(
     );
 
     // --- Buttons ---
-    let ctx = mm_ui::resolutions::disc_extraction::DiscExtractionButtonCtx {
-        has_files: !items.is_empty(),
-        group_index: current_group,
-    };
-    let button_focused = focus == mm_ui::geometry::FocusPane::Buttons;
-    crate::widgets::modal_buttons::render_buttons(buttons, f, vertical[2], &ctx, button_focused);
+    let ctx = state.data.button_ctx();
+    let button_focused = state.frame.focus_pane == mm_ui::geometry::FocusPane::Buttons;
+    crate::widgets::modal_buttons::render_buttons(&mut state.frame.buttons, f, vertical[2], &ctx, button_focused);
 }
 
 fn render_disc_extraction_title(

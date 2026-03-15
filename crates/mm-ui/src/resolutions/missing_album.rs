@@ -26,14 +26,23 @@ use crate::resolution_state::{ResolutionData, ResolutionState};
 pub struct MissingAlbumData {
     pub signals: Vec<MissingAlbumSingleSignalWire>,
     pub current_group: usize,
+    /// Suffix for single-track album names (from config).
+    pub suffix: String,
 }
 
 impl MissingAlbumData {
-    pub fn new(signals: Vec<MissingAlbumSingleSignalWire>) -> Self {
+    pub fn new(signals: Vec<MissingAlbumSingleSignalWire>, suffix: String) -> Self {
         Self {
             signals,
             current_group: 0,
+            suffix,
         }
+    }
+
+    /// Test helper with default suffix.
+    #[cfg(test)]
+    fn test_new(signals: Vec<MissingAlbumSingleSignalWire>) -> Self {
+        Self::new(signals, String::new())
     }
 }
 
@@ -103,6 +112,124 @@ impl GroupNavigation for MissingAlbumData {
 
 /// Concrete resolution state for missing album modals.
 pub type MissingAlbumState = ResolutionState<MissingAlbumData, MissingAlbumButton>;
+
+// ============================================================================
+// Dispatchable
+// ============================================================================
+
+impl super::dispatch::Dispatchable for MissingAlbumState {
+    type Action = MissingAlbumAction;
+
+    fn dispatch(
+        &self,
+        action: MissingAlbumAction,
+        _resolver: &mm_meta::paths::PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use super::dispatch::DispatchResult;
+        use mm_meta::db_types::Zone;
+        use mm_meta::mutations::{
+            indexing::EmitExpectedMissingTagMutation, tag_edit::ApplyTagOpsMutation, Mutation, TagOp,
+        };
+
+        let signal = match self.data.signals.get(self.data.current_group) {
+            Some(s) => s,
+            None => return DispatchResult::Handled,
+        };
+
+        let ctx = self.data.button_ctx();
+
+        match action {
+            MissingAlbumAction::PerTrackTitle => {
+                let ops: Vec<TagOp> = signal
+                    .data
+                    .tracks
+                    .iter()
+                    .map(|t| {
+                        TagOp::add_tag(
+                            t.inode,
+                            "ALBUM",
+                            format!("{}{}", t.title, self.data.suffix),
+                        )
+                    })
+                    .collect();
+                if ops.is_empty() {
+                    return DispatchResult::Handled;
+                }
+                let key = MissingAlbumButton::PerTrackTitle
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+                DispatchResult::Stage {
+                    key,
+                    label: "Tag as singles".into(),
+                    mutations: vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                        ops,
+                        zone: Zone::Corpus,
+                    })],
+                }
+            }
+            MissingAlbumAction::AllSingles => {
+                let ops: Vec<TagOp> = signal
+                    .data
+                    .tracks
+                    .iter()
+                    .map(|t| TagOp::add_tag(t.inode, "ALBUM", "Singles"))
+                    .collect();
+                if ops.is_empty() {
+                    return DispatchResult::Handled;
+                }
+                let key = MissingAlbumButton::AllSingles
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+                DispatchResult::Stage {
+                    key,
+                    label: "Tag all as Singles".into(),
+                    mutations: vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                        ops,
+                        zone: Zone::Corpus,
+                    })],
+                }
+            }
+            MissingAlbumAction::Suppress => {
+                let inodes: Vec<i64> =
+                    signal.data.tracks.iter().map(|t| t.inode).collect();
+                if inodes.is_empty() {
+                    return DispatchResult::Handled;
+                }
+                let key = MissingAlbumButton::Suppress
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+                DispatchResult::Stage {
+                    key,
+                    label: "Suppress missing album".into(),
+                    mutations: vec![Mutation::EmitExpectedMissingTag(
+                        EmitExpectedMissingTagMutation { inodes },
+                    )],
+                }
+            }
+            MissingAlbumAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn advance(&mut self) -> bool {
+        if self.data.current_group + 1 < self.data.signals.len() {
+            self.data.current_group += 1;
+            self.reset_list();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "Missing album single resolution cancelled"
+    }
+}
 
 // ============================================================================
 // Action enum
@@ -238,7 +365,7 @@ mod tests {
 
     #[test]
     fn zero_groups_navigation() {
-        let data = MissingAlbumData::new(vec![]);
+        let data = MissingAlbumData::test_new(vec![]);
         assert_eq!(data.group_count(), 0);
         assert!(!data.has_next());
         assert!(!data.has_prev());
@@ -246,7 +373,7 @@ mod tests {
 
     #[test]
     fn three_groups_navigation() {
-        let mut data = MissingAlbumData::new(make_signals(3, 2));
+        let mut data = MissingAlbumData::test_new(make_signals(3, 2));
         assert_eq!(data.group_count(), 3);
         assert!(data.has_next());
         assert!(!data.has_prev());
@@ -264,20 +391,20 @@ mod tests {
 
     #[test]
     fn list_len_returns_track_count() {
-        let data = MissingAlbumData::new(vec![make_signal("Foo", 4)]);
+        let data = MissingAlbumData::test_new(vec![make_signal("Foo", 4)]);
         assert_eq!(data.list_len(), 4);
     }
 
     #[test]
     fn list_len_zero_when_empty() {
-        let data = MissingAlbumData::new(vec![]);
+        let data = MissingAlbumData::test_new(vec![]);
         assert_eq!(data.list_len(), 0);
     }
 
     #[test]
     fn list_len_changes_with_current_group() {
         let signals = vec![make_signal("A", 2), make_signal("B", 5)];
-        let mut data = MissingAlbumData::new(signals);
+        let mut data = MissingAlbumData::test_new(signals);
         assert_eq!(data.list_len(), 2);
         data.current_group = 1;
         assert_eq!(data.list_len(), 5);
@@ -285,20 +412,20 @@ mod tests {
 
     #[test]
     fn selected_path_valid_cursor() {
-        let data = MissingAlbumData::new(vec![make_signal("X", 3)]);
+        let data = MissingAlbumData::test_new(vec![make_signal("X", 3)]);
         assert_eq!(data.selected_path(0), Some("corpus/artist/track_0.flac"));
         assert_eq!(data.selected_path(2), Some("corpus/artist/track_2.flac"));
     }
 
     #[test]
     fn selected_path_out_of_bounds() {
-        let data = MissingAlbumData::new(vec![make_signal("X", 1)]);
+        let data = MissingAlbumData::test_new(vec![make_signal("X", 1)]);
         assert!(data.selected_path(99).is_none());
     }
 
     #[test]
     fn list_title_includes_artist_and_position() {
-        let data = MissingAlbumData::new(make_signals(3, 2));
+        let data = MissingAlbumData::test_new(make_signals(3, 2));
         let title = data.list_title();
         assert!(
             title.contains("Artist 0"),

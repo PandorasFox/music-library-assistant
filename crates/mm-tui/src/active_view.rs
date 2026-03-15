@@ -111,35 +111,9 @@ pub(crate) enum ActiveView {
         safe_mode: bool,
     },
 
-    // Missing album singles resolution with StandardList + buttons
-    MissingAlbumSingleResolution {
-        data: Vec<mm_meta::domain_queries::MissingAlbumSingleSignalWire>,
-        current_group: usize,
-        list: mm_ui::standard_list::StandardListState,
-        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::missing_album::MissingAlbumButton>,
-        focus: mm_ui::geometry::FocusPane,
-        suffix: String,
-    },
-
-    // Disc extraction resolution with StandardList + buttons
-    DiscExtractionResolution {
-        data: mm_meta::domain_queries::DiscExtractionModalData,
-        current_group: usize,
-        list: mm_ui::standard_list::StandardListState,
-        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::disc_extraction::DiscExtractionButton>,
-        focus: mm_ui::geometry::FocusPane,
-        disc_tag_name: String,
-    },
-
-    // Manual review with StandardList + buttons
-    ManualReviewResolution {
-        data: mm_meta::views::review_match::ManualReviewData,
-        review_kind: mm_meta::views::review_match::ReviewKind,
-        current_group: usize,
-        list: mm_ui::standard_list::StandardListState,
-        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::manual_review::ReviewButton>,
-        focus: mm_ui::geometry::FocusPane,
-    },
+    MissingAlbumSingleResolution(mm_ui::resolutions::missing_album::MissingAlbumState),
+    DiscExtractionResolution(mm_ui::resolutions::disc_extraction::DiscExtractionState),
+    ManualReviewResolution(mm_ui::resolutions::manual_review::ManualReviewState),
 
     // Transaction review (view stack holds suspended views)
     TransactionReview(transaction_review::TransactionReviewState),
@@ -181,9 +155,9 @@ impl ActiveView {
             Self::TagCanonicityResolution { mode: mm_ui::resolutions::tag_canonicity::CanonicityMode::InconsistentAlbumArtist, .. } => Some("Album Artist"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplitResolution { .. } => Some("Compound Tag Split"),
-            Self::MissingAlbumSingleResolution { .. } => Some("Missing Album Singles"),
-            Self::DiscExtractionResolution { .. } => Some("Disc Extraction"),
-            Self::ManualReviewResolution { review_kind, .. } => Some(review_kind.title()),
+            Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),
+            Self::DiscExtractionResolution(_) => Some("Disc Extraction"),
+            Self::ManualReviewResolution(ref s) => Some(s.data.review_kind.title()),
             Self::TransactionReview(_) => Some("Transaction Review"),
         }
     }
@@ -221,21 +195,9 @@ impl ActiveView {
             Self::ReleaseReview(s) => s.selected_path(),
             Self::Deploy { ref data, ref interaction } => data.selected_path(interaction),
             Self::UnifiedTagEditor(s) => s.selected_path(),
-            Self::MissingAlbumSingleResolution { ref data, current_group, ref list, .. } => {
-                data.get(*current_group)
-                    .and_then(|s| s.data.tracks.get(list.cursor))
-                    .map(|t| t.path.as_str())
-            }
-            Self::DiscExtractionResolution { ref data, current_group, ref list, .. } => {
-                data.groups.get(*current_group)
-                    .and_then(|g| g.files.get(list.cursor))
-                    .map(|f| f.path.as_str())
-            }
-            Self::ManualReviewResolution { ref data, current_group, ref list, .. } => {
-                data.groups.get(*current_group)
-                    .and_then(|g| g.files.get(list.cursor))
-                    .map(|f| f.corpus_path.as_str())
-            }
+            Self::MissingAlbumSingleResolution(ref s) => s.selected_path(),
+            Self::DiscExtractionResolution(ref s) => s.selected_path(),
+            Self::ManualReviewResolution(ref s) => s.selected_path(),
             Self::Inbox { ref data, ref interaction } => data.selected_entry(interaction.list.cursor).map(|e| e.label.as_str()),
             _ => None,
         }

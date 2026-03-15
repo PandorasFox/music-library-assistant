@@ -26,14 +26,23 @@ use crate::resolution_state::{ResolutionData, ResolutionState};
 pub struct DiscExtractionData {
     pub inner: DiscExtractionModalData,
     pub current_group: usize,
+    /// Tag name for the disc number tag (from config).
+    pub disc_tag_name: String,
 }
 
 impl DiscExtractionData {
-    pub fn new(data: DiscExtractionModalData) -> Self {
+    pub fn new(data: DiscExtractionModalData, disc_tag_name: String) -> Self {
         Self {
             inner: data,
             current_group: 0,
+            disc_tag_name,
         }
+    }
+
+    /// Test helper with default disc tag name.
+    #[cfg(test)]
+    fn test_new(data: DiscExtractionModalData) -> Self {
+        Self::new(data, "DISCNUMBER".to_string())
     }
 }
 
@@ -97,6 +106,84 @@ impl GroupNavigation for DiscExtractionData {
 
 /// Concrete resolution state for disc extraction modals.
 pub type DiscExtractionState = ResolutionState<DiscExtractionData, DiscExtractionButton>;
+
+// ============================================================================
+// Dispatchable
+// ============================================================================
+
+impl super::dispatch::Dispatchable for DiscExtractionState {
+    type Action = DiscExtractionAction;
+
+    fn dispatch(
+        &self,
+        action: DiscExtractionAction,
+        _resolver: &mm_meta::paths::PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use super::dispatch::DispatchResult;
+        use mm_meta::db_types::Zone;
+        use mm_meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation, TagOp};
+
+        match action {
+            DiscExtractionAction::Apply => {
+                let group = match self.data.inner.groups.get(self.data.current_group) {
+                    Some(g) => g,
+                    None => return DispatchResult::Handled,
+                };
+
+                let mut ops = Vec::new();
+                for file in &group.files {
+                    ops.push(TagOp::replace_tag(
+                        file.inode,
+                        &file.source_tag,
+                        &file.original_value,
+                        &file.cleaned_value,
+                    ));
+                    ops.push(TagOp::add_tag(
+                        file.inode,
+                        &self.data.disc_tag_name,
+                        &group.disc_value,
+                    ));
+                }
+
+                if ops.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let ctx = self.data.button_ctx();
+                let key = DiscExtractionButton::Apply
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: "Extract disc value".into(),
+                    mutations: vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                        ops,
+                        zone: Zone::Corpus,
+                    })],
+                }
+            }
+            DiscExtractionAction::Skip => DispatchResult::Skip,
+            DiscExtractionAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn advance(&mut self) -> bool {
+        if self.data.current_group + 1 < self.data.inner.groups.len() {
+            self.data.current_group += 1;
+            self.reset_list();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "Disc extraction resolution cancelled"
+    }
+}
 
 // ============================================================================
 // Action enum
@@ -218,7 +305,7 @@ mod tests {
 
     #[test]
     fn zero_groups_navigation() {
-        let data = DiscExtractionData::new(make_disc_data(0, 0));
+        let data = DiscExtractionData::test_new(make_disc_data(0, 0));
         assert_eq!(data.group_count(), 0);
         assert!(!data.has_next());
         assert!(!data.has_prev());
@@ -226,7 +313,7 @@ mod tests {
 
     #[test]
     fn three_groups_navigation() {
-        let mut data = DiscExtractionData::new(make_disc_data(3, 2));
+        let mut data = DiscExtractionData::test_new(make_disc_data(3, 2));
         assert_eq!(data.group_count(), 3);
         assert!(data.has_next());
         assert!(!data.has_prev());
@@ -247,13 +334,13 @@ mod tests {
         let mut inner = DiscExtractionModalData::default();
         inner.groups.push(make_group("a", 3));
         inner.groups.push(make_group("b", 7));
-        let data = DiscExtractionData::new(inner);
+        let data = DiscExtractionData::test_new(inner);
         assert_eq!(data.list_len(), 3);
     }
 
     #[test]
     fn list_len_zero_when_empty() {
-        let data = DiscExtractionData::new(make_disc_data(0, 0));
+        let data = DiscExtractionData::test_new(make_disc_data(0, 0));
         assert_eq!(data.list_len(), 0);
     }
 
@@ -262,7 +349,7 @@ mod tests {
         let mut inner = DiscExtractionModalData::default();
         inner.groups.push(make_group("small", 2));
         inner.groups.push(make_group("big", 6));
-        let mut data = DiscExtractionData::new(inner);
+        let mut data = DiscExtractionData::test_new(inner);
         assert_eq!(data.list_len(), 2);
         data.current_group = 1;
         assert_eq!(data.list_len(), 6);
@@ -270,7 +357,7 @@ mod tests {
 
     #[test]
     fn selected_path_valid_cursor() {
-        let data = DiscExtractionData::new(make_disc_data(1, 3));
+        let data = DiscExtractionData::test_new(make_disc_data(1, 3));
         assert_eq!(
             data.selected_path(0),
             Some("corpus/disc_0/track_0.flac")
@@ -283,13 +370,13 @@ mod tests {
 
     #[test]
     fn selected_path_out_of_bounds() {
-        let data = DiscExtractionData::new(make_disc_data(1, 1));
+        let data = DiscExtractionData::test_new(make_disc_data(1, 1));
         assert!(data.selected_path(99).is_none());
     }
 
     #[test]
     fn list_title_includes_group_position() {
-        let data = DiscExtractionData::new(make_disc_data(3, 4));
+        let data = DiscExtractionData::test_new(make_disc_data(3, 4));
         let title = data.list_title();
         assert!(title.contains("1/3"), "expected '1/3' in: {title}");
         assert!(title.contains("4"), "expected file count '4' in: {title}");

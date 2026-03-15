@@ -24,6 +24,18 @@ pub fn kv(key: &str, val: &str) -> Node {
         .into()
 }
 
+/// Clickable key-value row that navigates to a resolution route.
+fn kv_resolve(key: &str, val: &str, route: &str) -> Node {
+    div()
+        .class("mm-kv mm-kv--clickable")
+        .attr("onclick", &format!("window.__mm_navigate_route('{}')", route))
+        .attr("style", "cursor: pointer;")
+        .child(span().class("mm-kv__key").text(key))
+        .child(span().class("mm-kv__val").text(val))
+        .child(span().class("mm-kv__action").text("\u{2192}"))
+        .into()
+}
+
 /// Section with a title and children.
 pub fn titled_section(title: &str, items: Vec<Node>) -> Node {
     section()
@@ -164,7 +176,7 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
                 .child(
                     html::button()
                         .class("mm-btn mm-alert__action")
-                        .attr("onclick", "window.__mm_navigate_route('resolve/missing-files')")
+                        .attr("onclick", "window.__mm_navigate_route('resolve/missing-files/restorable')")
                         .text("Resolve"),
                 )
                 .into(),
@@ -210,22 +222,22 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
         kv("unindexed", &corpus.files_unindexed.to_string()),
     ];
     if corpus.files_missing > 0 {
-        corpus_items.push(kv("missing", &corpus.files_missing.to_string()));
+        corpus_items.push(kv_resolve("missing", &corpus.files_missing.to_string(), "resolve/missing-files/restorable"));
     }
     if corpus.directories_missing > 0 {
-        corpus_items.push(kv("dirs missing", &corpus.directories_missing.to_string()));
+        corpus_items.push(kv_resolve("dirs missing", &corpus.directories_missing.to_string(), "resolve/missing-directories"));
     }
     if corpus.corrupt_files > 0 {
-        corpus_items.push(kv("corrupt", &corpus.corrupt_files.to_string()));
+        corpus_items.push(kv_resolve("corrupt", &corpus.corrupt_files.to_string(), "resolve/corrupt-files"));
     }
     if corpus.shit_format_files > 0 {
-        corpus_items.push(kv("non-vorbis", &corpus.shit_format_files.to_string()));
+        corpus_items.push(kv_resolve("non-vorbis", &corpus.shit_format_files.to_string(), "resolve/lossless-remux"));
     }
     if corpus.oob_tag_sync > 0 {
-        corpus_items.push(kv("OOB tag sync", &corpus.oob_tag_sync.to_string()));
+        corpus_items.push(kv_resolve("OOB tag sync", &corpus.oob_tag_sync.to_string(), "resolve/oob-sync"));
     }
     if corpus.oob_tag_conflict > 0 {
-        corpus_items.push(kv("OOB tag conflict", &corpus.oob_tag_conflict.to_string()));
+        corpus_items.push(kv_resolve("OOB tag conflict", &corpus.oob_tag_conflict.to_string(), "resolve/oob-conflict/two-way"));
     }
     sections.push(titled_section("Corpus Files", corpus_items));
 
@@ -233,32 +245,42 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
     let ph = &insights.bucket_placeholder;
     let mut tag_items = Vec::new();
     if ph.cross_source_overlap_count > 0 {
-        tag_items.push(kv("source overlaps", &ph.cross_source_overlap_count.to_string()));
+        tag_items.push(kv_resolve("source overlaps", &ph.cross_source_overlap_count.to_string(), "resolve/directory-cluster"));
     }
     if ph.release_overlap_count > 0 {
-        tag_items.push(kv("release overlaps", &ph.release_overlap_count.to_string()));
+        tag_items.push(kv_resolve("release overlaps", &ph.release_overlap_count.to_string(), "resolve/directory-cluster"));
     }
     if ph.subpar_duplicate_count > 0 {
-        tag_items.push(kv("subpar duplicates", &ph.subpar_duplicate_count.to_string()));
+        tag_items.push(kv_resolve("subpar duplicates", &ph.subpar_duplicate_count.to_string(), "resolve/subpar-duplicates"));
     }
     if ph.redundant_duplicate_count > 0 {
-        tag_items.push(kv("redundant duplicates", &ph.redundant_duplicate_count.to_string()));
+        tag_items.push(kv_resolve("redundant duplicates", &ph.redundant_duplicate_count.to_string(), "resolve/redundant-duplicates"));
     }
     for entry in &ph.tag_canonicity {
-        tag_items.push(kv(&format!("{} canonicity", entry.tag_name), &entry.cluster_count.to_string()));
+        let encoded_tag = js_sys::encode_uri_component(&entry.tag_name);
+        tag_items.push(kv_resolve(
+            &format!("{} canonicity", entry.tag_name),
+            &entry.cluster_count.to_string(),
+            &format!("resolve/tag-canonicity/{}?zone=corpus&filter_existing_canonicals=true", encoded_tag),
+        ));
     }
     if ph.inconsistent_album_artist_count > 0 {
-        tag_items.push(kv("album artist issues", &ph.inconsistent_album_artist_count.to_string()));
+        tag_items.push(kv_resolve("album artist issues", &ph.inconsistent_album_artist_count.to_string(), "resolve/inconsistent-album-artist/ALBUMARTIST"));
     }
     for entry in &ph.compound_tags {
         let total = entry.safe_count + entry.review_count;
-        tag_items.push(kv(&format!("{} compound", entry.tag_name), &total.to_string()));
+        let encoded_tag = js_sys::encode_uri_component(&entry.tag_name);
+        tag_items.push(kv_resolve(
+            &format!("{} compound", entry.tag_name),
+            &total.to_string(),
+            &format!("resolve/compound-split/{}?zone=corpus&safe=true", encoded_tag),
+        ));
     }
     if ph.missing_album_single_count > 0 {
-        tag_items.push(kv("missing album singles", &ph.missing_album_single_count.to_string()));
+        tag_items.push(kv_resolve("missing album singles", &ph.missing_album_single_count.to_string(), "resolve/missing-album"));
     }
     if ph.disc_extraction_count > 0 {
-        tag_items.push(kv("disc extraction", &ph.disc_extraction_count.to_string()));
+        tag_items.push(kv_resolve("disc extraction", &ph.disc_extraction_count.to_string(), "resolve/disc-extraction"));
     }
     if ph.path_tag_mismatch_count > 0 {
         tag_items.push(kv("path/tag mismatch", &ph.path_tag_mismatch_count.to_string()));

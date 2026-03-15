@@ -27,7 +27,6 @@ pub mod route;
 pub mod search_widget;
 pub mod standard_list;
 pub mod tag_editor_state;
-pub mod tag_mutations;
 pub mod tag_set;
 pub mod text_input;
 pub mod view_state;

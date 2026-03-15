@@ -468,14 +468,17 @@ impl HandleAction for CanonicityAction {
             CanonicityAction::FlagCanonical => {
                 let Some(w) = witness else { return };
                 // In album artist mode, FlagCanonical means "flag as non-compilation"
-                let is_album_artist = matches!(
-                    &app.view,
-                    ActiveView::TagCanonicityResolutionV3 { is_album_artist: true, .. }
-                );
-                if is_album_artist {
-                    app.stage_flag_non_compilation_v3(w);
-                } else {
-                    app.stage_flag_canonical_v3(w);
+                let mode = match &app.view {
+                    ActiveView::TagCanonicityResolutionV3 { mode, .. } => *mode,
+                    _ => return,
+                };
+                match mode {
+                    mm_ui::resolutions::tag_canonicity::CanonicityMode::InconsistentAlbumArtist => {
+                        app.stage_flag_non_compilation_v3(w);
+                    }
+                    mm_ui::resolutions::tag_canonicity::CanonicityMode::TagCanonicity => {
+                        app.stage_flag_canonical_v3(w);
+                    }
                 }
                 app.advance_canonicity_v3();
             }
@@ -501,13 +504,14 @@ impl App {
             }
         };
 
-        // Determine tag_name, zone, and whether this is album artist mode
-        let (tag_name, zone, is_album_artist) = match &insight_type {
+        // Determine tag_name, zone, and canonicity mode
+        use mm_ui::resolutions::tag_canonicity::CanonicityMode;
+        let (tag_name, zone, mode) = match &insight_type {
             insights_view::InsightType::InconsistentAlbumArtist => {
-                ("ALBUMARTIST".to_string(), Zone::Corpus, true)
+                ("ALBUMARTIST".to_string(), Zone::Corpus, CanonicityMode::InconsistentAlbumArtist)
             }
             insights_view::InsightType::TagCanonicity { tag_name } => {
-                (tag_name.clone(), Zone::Corpus, false)
+                (tag_name.clone(), Zone::Corpus, CanonicityMode::TagCanonicity)
             }
             _ => {
                 self.status_message = Some("Invalid insight type for tag resolution".to_string());
@@ -534,7 +538,10 @@ impl App {
         let prefill = data.clusters.first()
             .map(|c| c.suggested_canonical.as_deref().unwrap_or(""))
             .unwrap_or("");
-        let field_label = if is_album_artist { "Album artist:" } else { "Squash to:" };
+        let field_label = match mode {
+            CanonicityMode::InconsistentAlbumArtist => "Album artist:",
+            CanonicityMode::TagCanonicity => "Squash to:",
+        };
         let field = mm_ui::decision_field::DecisionField::new(field_label)
             .with_value(prefill);
 
@@ -548,7 +555,7 @@ impl App {
             field,
             zone,
             focus: mm_ui::geometry::FocusPane::List,
-            is_album_artist,
+            mode,
         };
     }
 

@@ -106,8 +106,8 @@ pub(crate) enum ActiveView {
         field: mm_ui::decision_field::DecisionField,
         zone: mm_meta::db_types::Zone,
         focus: mm_ui::geometry::FocusPane,
-        /// When true, this is an inconsistent album artist resolution (different button labels/semantics).
-        is_album_artist: bool,
+        /// Which canonicity mode — controls button labels/semantics.
+        mode: mm_ui::resolutions::tag_canonicity::CanonicityMode,
     },
     CompoundTagSplit {
         state: compound_split_v2::CompoundSplitStateV2,
@@ -157,6 +157,16 @@ pub(crate) enum ActiveView {
     // Manual review (iterate through groups, stash/edit files)
     ManualReview(manual_review_modal::ManualReviewState),
 
+    // V3: single-load manual review with StandardList + buttons
+    ManualReviewV3 {
+        data: mm_meta::views::review_match::ManualReviewData,
+        review_kind: mm_meta::views::review_match::ReviewKind,
+        current_group: usize,
+        list: mm_ui::standard_list::StandardListState,
+        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::manual_review::ReviewButton>,
+        focus: mm_ui::geometry::FocusPane,
+    },
+
     // Transaction review (view stack holds suspended views)
     TransactionReview(transaction_review::TransactionReviewState),
 }
@@ -196,7 +206,7 @@ impl ActiveView {
             Self::ReleasePackingBrowser(_) => Some("Release Packing Browser"),
             Self::KnotBrowser(_) => Some("Knot Browser"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
-            Self::TagCanonicityResolutionV3 { is_album_artist: true, .. } => Some("Album Artist"),
+            Self::TagCanonicityResolutionV3 { mode: mm_ui::resolutions::tag_canonicity::CanonicityMode::InconsistentAlbumArtist, .. } => Some("Album Artist"),
             Self::TagCanonicityResolutionV3 { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
             Self::CompoundTagSplitV3 { .. } => Some("Compound Tag Split"),
@@ -205,6 +215,7 @@ impl ActiveView {
             Self::DiscExtractionResolution(_) => Some("Disc Extraction"),
             Self::DiscExtractionResolutionV3 { .. } => Some("Disc Extraction"),
             Self::ManualReview(s) => Some(s.header_suffix()),
+            Self::ManualReviewV3 { review_kind, .. } => Some(review_kind.title()),
             Self::TransactionReview(_) => Some("Transaction Review"),
         }
     }
@@ -262,6 +273,11 @@ impl ActiveView {
                     .map(|f| f.path.as_str())
             }
             Self::ManualReview(s) => s.selected_path(),
+            Self::ManualReviewV3 { ref data, current_group, ref list, .. } => {
+                data.groups.get(*current_group)
+                    .and_then(|g| g.files.get(list.cursor))
+                    .map(|f| f.corpus_path.as_str())
+            }
             Self::Inbox { ref data, ref interaction } => data.selected_entry(interaction.list.cursor).map(|e| e.label.as_str()),
             _ => None,
         }
@@ -357,6 +373,7 @@ pub(crate) enum ViewAction {
     DiscExtractionResolution(disc_extraction_modal::DiscExtractionAction),
     DiscExtractionResolutionV3(mm_ui::resolutions::disc_extraction::DiscExtractionAction),
     ManualReview(manual_review_modal::ManualReviewAction),
+    ManualReviewV3(mm_ui::resolutions::manual_review::ReviewAction),
     TransactionReview(transaction_review::TransactionReviewAction),
 }
 

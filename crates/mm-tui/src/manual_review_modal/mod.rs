@@ -7,6 +7,7 @@
 //! - MetadataDuplicate: files with identical tag signatures
 
 pub mod preview;
+pub mod render_v3;
 pub mod types;
 
 pub use preview::{render, ManualReviewAction, ManualReviewState};

@@ -501,13 +501,13 @@ impl App {
             ActiveView::TagCanonicityResolutionV3 {
                 ref data, ref mut current_cluster, ref mut list,
                 ref mut buttons, ref mut field, ref mut focus,
-                is_album_artist, ..
+                mode, ..
             } => {
                 use mm_ui::input::InputAction as IA;
                 use mm_ui::resolutions::tag_canonicity::{CanonicityAction, CanonicityButtonCtx};
                 use mm_ui::standard_list::ListInputResult;
 
-                let is_aa = *is_album_artist;
+                let current_mode = *mode;
 
                 // Group navigation first (Tab/Shift+Tab)
                 match action {
@@ -550,7 +550,7 @@ impl App {
                             has_variants: data.clusters.get(*current_cluster)
                                 .map_or(false, |c| !c.variants.is_empty()),
                             current_cluster_index: *current_cluster,
-                            is_album_artist: is_aa,
+                            mode: current_mode,
                         };
                         match focus {
                             mm_ui::geometry::FocusPane::Field => {
@@ -859,6 +859,83 @@ impl App {
                 }
             }
             ActiveView::ManualReview(s) => dispatch_input_raw!(ManualReview, s),
+            ActiveView::ManualReviewV3 {
+                ref data, ref mut current_group, ref mut list,
+                ref mut buttons, ref mut focus, ref review_kind, ..
+            } => {
+                use mm_ui::input::InputAction as IA;
+                use mm_ui::resolutions::manual_review::{ReviewAction, ReviewButtonCtx};
+                use mm_ui::standard_list::ListInputResult;
+
+                match action {
+                    IA::CycleNext => {
+                        if *current_group + 1 < data.groups.len() {
+                            *current_group += 1;
+                            list.reset();
+                        }
+                        ViewAction::None
+                    }
+                    IA::CyclePrev => {
+                        if *current_group > 0 {
+                            *current_group -= 1;
+                            list.reset();
+                        }
+                        ViewAction::None
+                    }
+                    IA::FocusUp => {
+                        *focus = focus.prev(false);
+                        ViewAction::None
+                    }
+                    IA::FocusDown => {
+                        *focus = focus.next(false);
+                        ViewAction::None
+                    }
+                    IA::Cancel => {
+                        ViewAction::ManualReviewV3(ReviewAction::Cancel)
+                    }
+                    _ => {
+                        let ctx = ReviewButtonCtx {
+                            has_files: data.groups.get(*current_group)
+                                .map_or(false, |g| !g.files.is_empty()),
+                            review_kind: *review_kind,
+                            current_group_index: *current_group,
+                        };
+                        match focus {
+                            mm_ui::geometry::FocusPane::List => {
+                                let items = data.groups.get(*current_group)
+                                    .map(|g| crate::manual_review_modal::render_v3::build_review_items(g))
+                                    .unwrap_or_default();
+                                match list.handle_input(&action, &items) {
+                                    ListInputResult::Consumed | ListInputResult::CursorMoved
+                                    | ListInputResult::Toggled => ViewAction::None,
+                                    ListInputResult::Confirm(_) => ViewAction::None,
+                                    ListInputResult::Unhandled => ViewAction::None,
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::Buttons => {
+                                match action {
+                                    IA::NavLeft => {
+                                        buttons.nav_left(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::NavRight => {
+                                        buttons.nav_right(&ctx);
+                                        ViewAction::None
+                                    }
+                                    IA::Confirm => {
+                                        match buttons.confirm(&ctx) {
+                                            Some(a) => ViewAction::ManualReviewV3(a),
+                                            None => ViewAction::None,
+                                        }
+                                    }
+                                    _ => ViewAction::None,
+                                }
+                            }
+                            mm_ui::geometry::FocusPane::Field => ViewAction::None,
+                        }
+                    }
+                }
+            }
             ActiveView::TransactionReview(s) => dispatch_input_raw!(TransactionReview, s),
         };
 

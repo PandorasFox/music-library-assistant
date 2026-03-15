@@ -97,6 +97,7 @@ impl App {
             ViewAction::DiscExtractionResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::DiscExtractionResolutionV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::ManualReview(a) => a.handle(self, witness.as_ref()),
+            ViewAction::ManualReviewV3(a) => a.handle(self, witness.as_ref()),
             ViewAction::TransactionReview(a) => a.handle(self, witness.as_ref()),
         }
     }
@@ -546,7 +547,7 @@ impl HandleAction for insights_view::HealthAction {
                         app.start_missing_directory_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchManualReview(kind)) => {
-                        app.start_manual_review(kind);
+                        app.start_manual_review_v3(kind);
                     }
                     Some(insights_view::InsightAction::LaunchMissingTagResolution) => {
                         app.start_missing_tag_resolution();

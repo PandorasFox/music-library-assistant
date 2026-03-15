@@ -19,6 +19,19 @@ use crate::protocol_binding::ProtocolBinding;
 use crate::resolution_state::{ResolutionData, ResolutionState};
 
 // ============================================================================
+// CanonicityMode — distinguishes shared UI skeleton modes
+// ============================================================================
+
+/// Distinguishes tag canonicity modes that share the same UI skeleton.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanonicityMode {
+    /// Squashing tag variants to a canonical spelling (e.g., DragonForce vs Dragonforce)
+    TagCanonicity,
+    /// Resolving inconsistent album artist across a release
+    InconsistentAlbumArtist,
+}
+
+// ============================================================================
 // Data wrapper
 // ============================================================================
 
@@ -51,7 +64,7 @@ impl ResolutionData for TagCanonicityData {
         CanonicityButtonCtx {
             has_variants: self.list_len() > 0,
             current_cluster_index: self.current_cluster,
-            is_album_artist: false,
+            mode: CanonicityMode::TagCanonicity,
         }
     }
 
@@ -125,8 +138,8 @@ pub enum CanonicityButton {
 pub struct CanonicityButtonCtx {
     pub has_variants: bool,
     pub current_cluster_index: usize,
-    /// When true, FlagCanonical shows as "Not a Compilation" (album artist mode).
-    pub is_album_artist: bool,
+    /// Which canonicity mode — controls button labels and semantics.
+    pub mode: CanonicityMode,
 }
 
 impl ModalButtons for CanonicityButton {
@@ -140,8 +153,10 @@ impl ModalButtons for CanonicityButton {
     fn label(&self, ctx: &Self::Context) -> Cow<'static, str> {
         match self {
             Self::Confirm => "Confirm".into(),
-            Self::FlagCanonical if ctx.is_album_artist => "Not a Compilation".into(),
-            Self::FlagCanonical => "Flag Canonical".into(),
+            Self::FlagCanonical => match ctx.mode {
+                CanonicityMode::InconsistentAlbumArtist => "Not a Compilation".into(),
+                CanonicityMode::TagCanonicity => "Flag Canonical".into(),
+            },
             Self::Cancel => "Cancel".into(),
         }
     }
@@ -346,7 +361,7 @@ mod tests {
         let ctx = CanonicityButtonCtx {
             has_variants: false,
             current_cluster_index: 0,
-            is_album_artist: false,
+            mode: CanonicityMode::TagCanonicity,
         };
         assert!(!CanonicityButton::Confirm.enabled(&ctx));
         assert!(CanonicityButton::FlagCanonical.enabled(&ctx));
@@ -358,7 +373,7 @@ mod tests {
         let ctx = CanonicityButtonCtx {
             has_variants: true,
             current_cluster_index: 0,
-            is_album_artist: false,
+            mode: CanonicityMode::TagCanonicity,
         };
         assert!(CanonicityButton::Confirm.enabled(&ctx));
     }
@@ -373,7 +388,7 @@ mod tests {
         let ctx = CanonicityButtonCtx {
             has_variants: true,
             current_cluster_index: 0,
-            is_album_artist: false,
+            mode: CanonicityMode::TagCanonicity,
         };
         assert_eq!(
             CanonicityButton::Confirm.action(&ctx),
@@ -394,7 +409,7 @@ mod tests {
         let ctx = CanonicityButtonCtx {
             has_variants: true,
             current_cluster_index: 0,
-            is_album_artist: false,
+            mode: CanonicityMode::TagCanonicity,
         };
         for button in CanonicityButton::all() {
             assert!(!button.label(&ctx).is_empty());

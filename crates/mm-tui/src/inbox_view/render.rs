@@ -12,24 +12,23 @@ use ratatui::{
 
 use crate::widgets::standard_list::render_standard_list;
 
-use super::{InboxInsightAction, InboxViewData, InboxInteraction};
+use super::{InboxInsightAction, InboxViewState};
 
 /// Render the full inbox view (titlebar is rendered by render_app).
 pub fn render_inbox_view(
     f: &mut Frame,
     area: Rect,
-    data: &InboxViewData,
-    interaction: &mut InboxInteraction,
+    state: &mut InboxViewState,
 ) {
-    let busy = data.busy;
+    let busy = state.data.busy;
 
     render_standard_list(
-        &mut interaction.list,
+        &mut state.interaction.list,
         f,
         area,
-        &data.entries,
+        &state.data.entries,
         |idx, is_cursor, _is_selected, _width| {
-            render_item(&data.entries, idx, is_cursor, busy)
+            render_item(&state.data.entries, idx, is_cursor, busy)
         },
         "Inbox Overview",
         true, // always focused (only pane)

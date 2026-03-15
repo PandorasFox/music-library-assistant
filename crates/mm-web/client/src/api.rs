@@ -11,6 +11,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Headers, Request, RequestInit, RequestMode, Response};
 
+use mm_meta::domain_query_types::SessionEditDetail;
+use mm_meta::views::cluster_deploy::DeployModalData;
 use mm_meta::views::{
     DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
 };
@@ -202,9 +204,25 @@ pub async fn get_deploy_status() -> Result<DeployStatus, JsValue> {
     from_json(get("/queries/deploy-status").await?)
 }
 
+/// GET /queries/deploy-data → DeployModalData (full tabbed preview data)
+pub async fn get_deploy_data() -> Result<DeployModalData, JsValue> {
+    from_json(get("/queries/deploy-data").await?)
+}
+
 /// GET /queries/edit-history → EditHistoryData
 pub async fn get_edit_history() -> Result<EditHistoryData, JsValue> {
     from_json(get("/queries/edit-history").await?)
+}
+
+/// GET /queries/session-edit-detail?session_id=X → SessionEditDetail
+pub async fn get_session_detail(session_id: &str) -> Result<SessionEditDetail, JsValue> {
+    from_json(
+        get(&format!(
+            "/queries/session-edit-detail?session_id={}",
+            js_sys::encode_uri_component(session_id)
+        ))
+        .await?,
+    )
 }
 
 /// GET /queries/external-matches → ExternalMatchesData

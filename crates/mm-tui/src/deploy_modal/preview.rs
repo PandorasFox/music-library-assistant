@@ -21,91 +21,42 @@ use ratatui::{
 use super::types::DeployModalData;
 use crate::widgets::{DeployTab, SidecarSummary, SignalInfo, SignalInfoPane, TabbedSignalList};
 
-/// State for the deployment preview modal.
-///
-/// After the data/interaction split, this type is retained only for
-/// its static helper methods that render and query cached data.
-/// `active_tab` and `tab_scroll` live in `DeployInteraction` (mm-ui).
-#[derive(Debug)]
-pub struct DeploymentPreviewState;
+/// Render the deployment preview with externally-owned tab/scroll state.
+pub fn render_preview(
+    cached_data: &DeployModalData,
+    active_tab: DeployTab,
+    tab_scroll: [usize; 5],
+    f: &mut Frame,
+    area: Rect,
+) {
+    // Clear background
+    f.render_widget(Clear, area);
 
-impl DeploymentPreviewState {
-    /// Determine which tab to start on based on data content.
-    pub fn initial_tab(cached_data: &DeployModalData) -> DeployTab {
-        if !cached_data.new.is_empty() {
-            DeployTab::New
-        } else {
-            DeployTab::Healthy
-        }
-    }
+    // Title height: 3 normally, 4 with per-library subtitle
+    let title_height = if cached_data.per_library.is_empty() {
+        3
+    } else {
+        4
+    };
 
-    /// Path of the currently selected item (for status bar).
-    pub fn selected_path_static(
-        cached_data: &DeployModalData,
-        active_tab: DeployTab,
-        scroll: usize,
-    ) -> Option<&str> {
-        match active_tab {
-            DeployTab::Healthy => cached_data
-                .healthy
-                .get(scroll)
-                .map(|f| f.corpus_path.as_str()),
-            DeployTab::New => cached_data
-                .new_by_dir
-                .get(scroll)
-                .map(|d| d.directory.as_str()),
-            DeployTab::Conflicts => cached_data
-                .conflicts
-                .get(scroll)
-                .map(|c| c.deploy_path.as_str()),
-            DeployTab::Leftover => cached_data
-                .leftover_by_dir
-                .get(scroll)
-                .map(|d| d.directory.as_str()),
-            DeployTab::Stale => cached_data
-                .stale
-                .get(scroll)
-                .map(|f| f.library_path.as_str()),
-        }
-    }
+    // Layout: title + main content + controls
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(title_height),
+            Constraint::Min(10),   // Content
+            Constraint::Length(2), // Controls hint
+        ])
+        .split(area);
 
-    /// Render the deployment preview with externally-owned tab/scroll state.
-    pub fn render_static(
-        cached_data: &DeployModalData,
-        active_tab: DeployTab,
-        tab_scroll: [usize; 5],
-        f: &mut Frame,
-        area: Rect,
-    ) {
-        // Clear background
-        f.render_widget(Clear, area);
+    // Render title
+    render_title(cached_data, f, main_chunks[0]);
 
-        // Title height: 3 normally, 4 with per-library subtitle
-        let title_height = if cached_data.per_library.is_empty() {
-            3
-        } else {
-            4
-        };
+    // Render main content (tabbed list + info pane)
+    render_content(cached_data, active_tab, tab_scroll, f, main_chunks[1]);
 
-        // Layout: title + main content + controls
-        let main_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(title_height),
-                Constraint::Min(10),   // Content
-                Constraint::Length(2), // Controls hint
-            ])
-            .split(area);
-
-        // Render title
-        render_title(cached_data, f, main_chunks[0]);
-
-        // Render main content (tabbed list + info pane)
-        render_content(cached_data, active_tab, tab_scroll, f, main_chunks[1]);
-
-        // Render controls hint
-        render_controls(f, main_chunks[2]);
-    }
+    // Render controls hint
+    render_controls(f, main_chunks[2]);
 }
 
 fn render_title(data: &DeployModalData, f: &mut Frame, area: Rect) {

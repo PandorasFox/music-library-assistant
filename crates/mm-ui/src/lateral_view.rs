@@ -72,6 +72,22 @@ impl LateralView {
         }
     }
 
+    /// Convert to a default Route (no cursor/scroll position).
+    pub fn to_default_route(&self) -> crate::route::Route {
+        use crate::route::*;
+        match self {
+            LateralView::Config => Route::Config(ConfigRoute::default()),
+            LateralView::Search => Route::Search(SearchRoute::default()),
+            LateralView::Files => Route::Files(FilesRoute::default()),
+            LateralView::Health => Route::Health(HealthRoute::default()),
+            LateralView::History => Route::History(HistoryRoute::default()),
+            LateralView::Transaction => Route::Transaction(TransactionRoute::default()),
+            LateralView::Inbox => Route::Inbox(InboxRoute::default()),
+            LateralView::Deploy => Route::Deploy(DeployRoute::default()),
+            LateralView::ExternalMatches => Route::ExternalMatches(ExternalMatchesRoute::default()),
+        }
+    }
+
     /// All views in order
     pub fn all(transactions_open: bool) -> Vec<LateralView> {
         let mut views = vec![

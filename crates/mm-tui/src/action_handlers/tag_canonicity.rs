@@ -46,7 +46,7 @@ impl App {
     /// Start tag canonicity resolution using the packed query (V3).
     pub(crate) fn start_tag_canonicity_resolution_v3(&mut self) {
         let insight_type = match &self.view {
-            ActiveView::Insights { ref data, ref interaction } => data.insight_type_at(interaction.list.cursor),
+            ActiveView::Insights(ref s) => s.data.insight_type_at(s.interaction.list.cursor),
             _ => None,
         };
         let insight_type = match insight_type {

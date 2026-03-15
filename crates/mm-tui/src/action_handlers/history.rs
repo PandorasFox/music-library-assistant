@@ -34,8 +34,8 @@ impl HandleAction for HistoryAction {
             }
 
             HistoryAction::ToggleConflictDisposition(idx) => {
-                if let ActiveView::History { ref mut data, .. } = app.view {
-                    if let HistoryPhase::ConflictResolution(ref mut cr) = data.phase {
+                if let ActiveView::History(ref mut s) = app.view {
+                    if let HistoryPhase::ConflictResolution(ref mut cr) = s.data.phase {
                         if let Some(conflict) = cr.conflicts.get_mut(idx) {
                             conflict.disposition = match conflict.disposition {
                                 ConflictDisposition::RevertAnyway => ConflictDisposition::Skip,
@@ -53,8 +53,8 @@ impl HandleAction for HistoryAction {
             }
 
             HistoryAction::CancelConflictResolution => {
-                if let ActiveView::History { ref mut data, .. } = app.view {
-                    data.phase = HistoryPhase::SessionDetail;
+                if let ActiveView::History(ref mut s) = app.view {
+                    s.data.phase = HistoryPhase::SessionDetail;
                 }
             }
 
@@ -70,11 +70,11 @@ impl HandleAction for HistoryAction {
                 app.enter_jettison_all();
             }
             HistoryAction::AdvanceJettisonAll => {
-                if let ActiveView::History { ref mut data, .. } = app.view {
+                if let ActiveView::History(ref mut s) = app.view {
                     if let HistoryPhase::ConfirmJettisonAll(ja) =
-                        std::mem::replace(&mut data.phase, HistoryPhase::SessionList)
+                        std::mem::replace(&mut s.data.phase, HistoryPhase::SessionList)
                     {
-                        data.phase = HistoryPhase::ConfirmJettisonAllFinal(ja);
+                        s.data.phase = HistoryPhase::ConfirmJettisonAllFinal(ja);
                     }
                 }
             }
@@ -84,8 +84,8 @@ impl HandleAction for HistoryAction {
                 }
             }
             HistoryAction::CancelJettison => {
-                if let ActiveView::History { ref mut data, .. } = app.view {
-                    data.phase = HistoryPhase::SessionList;
+                if let ActiveView::History(ref mut s) = app.view {
+                    s.data.phase = HistoryPhase::SessionList;
                 }
             }
         }
@@ -100,8 +100,8 @@ impl App {
                 session_id: session_id.clone(),
             });
 
-        if let ActiveView::History { ref mut data, .. } = self.view {
-            data.set_detail(session_id, result.edits, result.inode_paths);
+        if let ActiveView::History(ref mut s) = self.view {
+            s.data.set_detail(session_id, result.edits, result.inode_paths);
         }
     }
 
@@ -110,7 +110,7 @@ impl App {
         // Collect selected edits from the detail view
         let selected_edits = {
             let data = match self.view {
-                ActiveView::History { ref data, .. } => data,
+                ActiveView::History(ref s) => &s.data,
                 _ => return,
             };
             let detail = match data.detail {
@@ -163,8 +163,8 @@ impl App {
             }
         }
 
-        if let ActiveView::History { ref mut data, .. } = self.view {
-            data.set_conflict_resolution(clean, conflicts);
+        if let ActiveView::History(ref mut s) = self.view {
+            s.data.set_conflict_resolution(clean, conflicts);
         }
     }
 
@@ -172,7 +172,7 @@ impl App {
     fn confirm_history_reversal(&mut self, gesture: &witness::ConfirmationGesture) {
         let ops = {
             let data = match self.view {
-                ActiveView::History { ref data, .. } => data,
+                ActiveView::History(ref s) => &s.data,
                 _ => return,
             };
             let cr = match data.phase {
@@ -204,8 +204,8 @@ impl App {
 
         if ops.is_empty() {
             // Nothing to revert (all conflicts skipped and no clean reversals)
-            if let ActiveView::History { ref mut data, .. } = self.view {
-                data.phase = HistoryPhase::SessionDetail;
+            if let ActiveView::History(ref mut s) = self.view {
+                s.data.phase = HistoryPhase::SessionDetail;
             }
             self.status_message = Some("No reversals to apply".to_string());
             return;
@@ -218,7 +218,7 @@ impl App {
 
         let session_label = {
             let data = match self.view {
-                ActiveView::History { ref data, .. } => data,
+                ActiveView::History(ref s) => &s.data,
                 _ => return,
             };
             data
@@ -242,9 +242,9 @@ impl App {
     /// Enter confirm-jettison-session phase for the currently selected session.
     fn enter_jettison_session(&mut self) {
         let (session_id, edit_count) = match self.view {
-            ActiveView::History { ref data, ref interaction } => {
-                let cursor = interaction.session_list.cursor;
-                match data.sessions.get(cursor) {
+            ActiveView::History(ref s) => {
+                let cursor = s.interaction.session_list.cursor;
+                match s.data.sessions.get(cursor) {
                     Some(entry) => (entry.summary.session_id.clone(), entry.summary.edit_count),
                     None => return,
                 }
@@ -252,8 +252,8 @@ impl App {
             _ => return,
         };
 
-        if let ActiveView::History { ref mut data, .. } = self.view {
-            data.phase = HistoryPhase::ConfirmJettisonSession(JettisonSessionState {
+        if let ActiveView::History(ref mut s) = self.view {
+            s.data.phase = HistoryPhase::ConfirmJettisonSession(JettisonSessionState {
                 session_id,
                 edit_count,
             });
@@ -263,15 +263,15 @@ impl App {
     /// Enter first jettison-all confirmation phase.
     fn enter_jettison_all(&mut self) {
         let (total_records, session_count) = match self.view {
-            ActiveView::History { ref data, .. } => {
-                let total: usize = data.sessions.iter().map(|e| e.summary.edit_count).sum();
-                (total, data.sessions.len())
+            ActiveView::History(ref s) => {
+                let total: usize = s.data.sessions.iter().map(|e| e.summary.edit_count).sum();
+                (total, s.data.sessions.len())
             }
             _ => return,
         };
 
-        if let ActiveView::History { ref mut data, .. } = self.view {
-            data.phase = HistoryPhase::ConfirmJettisonAll(JettisonAllState {
+        if let ActiveView::History(ref mut s) = self.view {
+            s.data.phase = HistoryPhase::ConfirmJettisonAll(JettisonAllState {
                 total_records,
                 session_count,
             });
@@ -281,7 +281,7 @@ impl App {
     /// Stage jettison for a single session via the transaction system.
     fn execute_jettison_session(&mut self, gesture: &witness::ConfirmationGesture) {
         let session_id = match self.view {
-            ActiveView::History { ref data, .. } => match data.phase {
+            ActiveView::History(ref s) => match s.data.phase {
                 HistoryPhase::ConfirmJettisonSession(ref js) => js.session_id.clone(),
                 _ => return,
             },
@@ -301,8 +301,8 @@ impl App {
         );
 
         // Return to session list and navigate to transaction review
-        if let ActiveView::History { ref mut data, .. } = self.view {
-            data.phase = HistoryPhase::SessionList;
+        if let ActiveView::History(ref mut s) = self.view {
+            s.data.phase = HistoryPhase::SessionList;
         }
         self.after_staging_decisions();
     }
@@ -322,8 +322,8 @@ impl App {
         );
 
         // Return to session list and navigate to transaction review
-        if let ActiveView::History { ref mut data, .. } = self.view {
-            data.phase = HistoryPhase::SessionList;
+        if let ActiveView::History(ref mut s) = self.view {
+            s.data.phase = HistoryPhase::SessionList;
         }
         self.after_staging_decisions();
     }

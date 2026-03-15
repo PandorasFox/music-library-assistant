@@ -9,8 +9,8 @@ use ratatui::{
 };
 
 use super::{
-    ConflictDisposition, EditDetailState, HistoryPhase, HistoryViewData, JettisonAllState,
-    JettisonSessionState,
+    ConflictDisposition, EditDetailState, HistoryPhase, HistoryViewData, HistoryViewState,
+    JettisonAllState, JettisonSessionState,
 };
 use crate::helpers::truncate_right;
 use crate::widgets::control_colors as cc;
@@ -20,9 +20,10 @@ use crate::widgets::{ConfirmationButton, ConfirmationModal};
 pub(crate) fn render(
     f: &mut Frame,
     area: Rect,
-    data: &mut HistoryViewData,
-    session_list: &mut StandardListState,
+    state: &mut HistoryViewState,
 ) {
+    let data = &mut state.data;
+    let session_list = &mut state.interaction.session_list;
     match data.phase {
         HistoryPhase::SessionList
         | HistoryPhase::ConfirmJettisonSession(_)

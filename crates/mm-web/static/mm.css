@@ -107,6 +107,13 @@ html, body {
     border-bottom-color: var(--c-yellow);
 }
 
+.mm-tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--c-fg-muted);
+    margin-bottom: 0.5rem;
+}
+
 /* ============================================================
  * Content Area
  * ============================================================ */
@@ -536,6 +543,28 @@ html, body {
 
 .mm-edit-new {
     color: var(--c-green);
+}
+
+.mm-edit-row--common {
+    background: rgba(255, 255, 255, 0.03);
+    padding: 0.2rem 0.3rem;
+    border-radius: 2px;
+}
+
+.mm-edit-file-header {
+    margin-top: 0.3rem;
+    padding: 0.1rem 0;
+    border-bottom: 1px solid var(--c-fg-muted);
+}
+
+.mm-separator {
+    border: none;
+    border-top: 1px solid var(--c-fg-muted);
+    margin: 0.4rem 0;
+}
+
+.mm-deploy-panel {
+    padding: 0.3rem 0;
 }
 
 /* ============================================================

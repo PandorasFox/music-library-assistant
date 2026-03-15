@@ -13,24 +13,23 @@ use ratatui::{
 
 use crate::widgets::standard_list::render_standard_list;
 
-use super::{InsightListItem, InsightsViewData, HealthInteraction};
+use super::{InsightListItem, InsightsViewState};
 
 /// Render the full insights view (titlebar is rendered by render_app).
 pub fn render_insights_view(
     f: &mut Frame,
     area: Rect,
-    data: &InsightsViewData,
-    interaction: &mut HealthInteraction,
+    state: &mut InsightsViewState,
 ) {
-    let busy = data.witch_busy;
+    let busy = state.data.witch_busy;
 
     render_standard_list(
-        &mut interaction.list,
+        &mut state.interaction.list,
         f,
         area,
-        &data.flat_items,
+        &state.data.flat_items,
         |idx, is_cursor, _is_selected, _width| {
-            render_item(&data.flat_items, idx, is_cursor, busy)
+            render_item(&state.data.flat_items, idx, is_cursor, busy)
         },
         "Insights",
         true, // always focused (it's the only pane)

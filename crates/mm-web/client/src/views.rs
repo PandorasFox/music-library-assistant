@@ -4,12 +4,23 @@
 //! mismatches. Functions that remain on `&serde_json::Value` are generic
 //! display utilities or use composite responses without a single mm-meta type.
 
+use mm_meta::domain_query_types::SessionEditDetail;
 use mm_meta::protocol::DecisionDetail;
+use mm_meta::views::cluster_deploy::DeployModalData;
 use mm_meta::views::{
     DeployStatus, EditHistoryData, ExternalMatchesData, InboxOverviewData, InsightsData,
 };
 use mm_meta::witch_types::{WitchStatus, WorkStateSnapshot};
+use mm_ui::domain_types::DeployTab;
+use mm_ui::view_state::lateral::deploy::{DeployViewData, initial_tab};
+use mm_ui::view_state::lateral::history::{
+    EditDetailEntry, SessionListEntry, group_edits, relative_timestamp,
+};
+use mm_ui::domain_types::InboxInsightAction;
+use mm_ui::html::style::color_to_css;
 use mm_ui::html::{self, div, h3, section, span, Node};
+use mm_ui::view_state::lateral::health::{BucketEntry, CachedBucketEntries, InsightType};
+use mm_ui::view_state::lateral::inbox::{InboxBucketEntry, InboxViewData};
 
 // ============================================================================
 // Shared helpers
@@ -21,18 +32,6 @@ pub fn kv(key: &str, val: &str) -> Node {
         .class("mm-kv")
         .child(span().class("mm-kv__key").text(key))
         .child(span().class("mm-kv__val").text(val))
-        .into()
-}
-
-/// Clickable key-value row that navigates to a resolution route.
-fn kv_resolve(key: &str, val: &str, route: &str) -> Node {
-    div()
-        .class("mm-kv mm-kv--clickable")
-        .attr("onclick", &format!("window.__mm_navigate_route('{}')", route))
-        .attr("style", "cursor: pointer;")
-        .child(span().class("mm-kv__key").text(key))
-        .child(span().class("mm-kv__val").text(val))
-        .child(span().class("mm-kv__action").text("\u{2192}"))
         .into()
 }
 
@@ -57,6 +56,144 @@ pub fn titled_section(title: &str, items: Vec<Node>) -> Node {
         .into()
 }
 
+
+// ============================================================================
+// Bucket entry rendering (shared by Insights + Inbox)
+// ============================================================================
+
+/// Render a single `BucketEntry` (from insights) as a colored kv row.
+/// Actionable entries become clickable links to resolution routes.
+fn render_bucket_entry(entry: &BucketEntry) -> Node {
+    let count_str = match entry.count {
+        Some(c) => c.to_string(),
+        None => "-".to_string(),
+    };
+    let css_color = color_to_css(entry.color);
+    let style = format!("color:{css_color}");
+
+    match insight_route(&entry.insight_type) {
+        Some(route) => {
+            div()
+                .class("mm-kv mm-kv--clickable")
+                .attr("onclick", &format!("window.__mm_navigate_route('{route}')"))
+                .attr("style", &format!("{style};cursor:pointer"))
+                .child(span().class("mm-kv__key").text(&entry.label))
+                .child(span().class("mm-kv__val").text(&count_str))
+                .child(span().class("mm-kv__action").text("\u{2192}"))
+                .into()
+        }
+        None => {
+            div()
+                .class("mm-kv")
+                .attr("style", &style)
+                .child(span().class("mm-kv__key").text(&entry.label))
+                .child(span().class("mm-kv__val").text(&count_str))
+                .into()
+        }
+    }
+}
+
+/// Render a single `InboxBucketEntry` as a colored kv row.
+fn render_inbox_entry(entry: &InboxBucketEntry) -> Node {
+    let count_str = entry.count.to_string();
+    let css_color = color_to_css(entry.color);
+    let style = format!("color:{css_color}");
+
+    match inbox_route(&entry.action) {
+        Some(route) => {
+            div()
+                .class("mm-kv mm-kv--clickable")
+                .attr("onclick", &format!("window.__mm_navigate_route('{route}')"))
+                .attr("style", &format!("{style};cursor:pointer"))
+                .child(span().class("mm-kv__key").text(&entry.label))
+                .child(span().class("mm-kv__val").text(&count_str))
+                .child(span().class("mm-kv__action").text("\u{2192}"))
+                .into()
+        }
+        None => {
+            div()
+                .class("mm-kv")
+                .attr("style", &style)
+                .child(span().class("mm-kv__key").text(&entry.label))
+                .child(span().class("mm-kv__val").text(&count_str))
+                .into()
+        }
+    }
+}
+
+/// Map an `InsightType` to its web resolution route.
+///
+/// Returns `None` for informational entries that have no resolution workflow.
+/// The route strings match the hash-based routing used by the web client.
+fn insight_route(ty: &InsightType) -> Option<String> {
+    match ty {
+        InsightType::CorpusMtimeOnly | InsightType::CorpusOobTagSync => {
+            Some("resolve/oob-sync".into())
+        }
+        InsightType::CorpusOobTagConflict => Some("resolve/oob-conflict/two-way".into()),
+        InsightType::CorpusFilesUnindexed => None, // handled via __mm_index_now()
+        InsightType::CorpusFilesMissing => Some("resolve/missing-files/restorable".into()),
+        InsightType::CorpusDirectoriesMissing => Some("resolve/missing-directories".into()),
+        InsightType::CorpusFilesRelocated => Some("resolve/moved-files".into()),
+        InsightType::CorpusCorruptFiles => Some("resolve/corrupt-files".into()),
+        InsightType::CorpusShitFormatFiles => Some("resolve/lossless-remux".into()),
+        InsightType::CrossSourceOverlaps | InsightType::ReleaseOverlaps => {
+            Some("resolve/directory-cluster".into())
+        }
+        InsightType::SubparDuplicates => Some("resolve/subpar-duplicates".into()),
+        InsightType::RedundantDuplicates => Some("resolve/redundant-duplicates".into()),
+        InsightType::SameRecordingDifferentRelease => None, // informational
+        InsightType::InconsistentAlbumArtist => {
+            Some("resolve/inconsistent-album-artist/ALBUMARTIST".into())
+        }
+        InsightType::TagCanonicity { ref tag_name } => {
+            let encoded = js_sys::encode_uri_component(tag_name);
+            Some(format!(
+                "resolve/tag-canonicity/{encoded}?zone=corpus&filter_existing_canonicals=true"
+            ))
+        }
+        InsightType::CompoundTagValueSafe { ref tag_name } => {
+            let encoded = js_sys::encode_uri_component(tag_name);
+            Some(format!(
+                "resolve/compound-split/{encoded}?zone=corpus&safe=true"
+            ))
+        }
+        InsightType::CompoundTagValueReview { ref tag_name } => {
+            let encoded = js_sys::encode_uri_component(tag_name);
+            Some(format!(
+                "resolve/compound-split/{encoded}?zone=corpus&safe=false"
+            ))
+        }
+        InsightType::MissingAlbumSingle => Some("resolve/missing-album".into()),
+        InsightType::DiscExtraction => Some("resolve/disc-extraction".into()),
+        InsightType::PathTagMismatch => Some("resolve/path-tag-mismatch".into()),
+        InsightType::OtherSignal { .. } => None,
+        // Informational entries
+        InsightType::CorpusFilesInCorpus
+        | InsightType::CorpusFilesIndexed
+        | InsightType::CorpusImagesInCorpus => None,
+    }
+}
+
+/// Map an `InboxInsightAction` to its web resolution route.
+///
+/// Returns `None` for informational entries.
+fn inbox_route(action: &InboxInsightAction) -> Option<String> {
+    match action {
+        InboxInsightAction::LaunchIntake => Some("resolve/inbox-intake".into()),
+        InboxInsightAction::LaunchCorpusMatchResolution => {
+            Some("resolve/inbox-corpus-match".into())
+        }
+        InboxInsightAction::LaunchInboxTagCanonicity => {
+            Some("resolve/inbox-tag-canonicity".into())
+        }
+        InboxInsightAction::LaunchOrganize => Some("resolve/inbox-organize".into()),
+        InboxInsightAction::LaunchInboxCompoundSplit => {
+            Some("resolve/inbox-compound-split".into())
+        }
+        InboxInsightAction::Informational => None,
+    }
+}
 
 // ============================================================================
 // Health view — typed
@@ -158,156 +295,63 @@ pub fn render_status_content(status: &WitchStatus) -> Node {
 }
 
 pub fn render_insights_content(insights: &InsightsData) -> Node {
+    let entries = CachedBucketEntries::from_insights_data(insights);
     let mut sections = Vec::new();
-    let corpus = &insights.bucket_corpus;
 
-    // Intake alert banners.
-    if corpus.files_unindexed > 0 {
-        sections.push(
-            div()
-                .class("mm-alert")
-                .child(span().class("mm-alert__text").text(
-                    format!("{} unindexed files", corpus.files_unindexed),
-                ))
-                .child(
-                    html::button()
-                        .class("mm-btn mm-alert__action")
-                        .attr("onclick", "window.__mm_index_now()")
-                        .text("Index Now"),
-                )
-                .into(),
-        );
-    }
-    if corpus.files_missing > 0 {
-        sections.push(
-            div()
-                .class("mm-alert mm-alert--warning")
-                .child(span().class("mm-alert__text").text(
-                    format!("{} missing files", corpus.files_missing),
-                ))
-                .child(
-                    html::button()
-                        .class("mm-btn mm-alert__action")
-                        .attr("onclick", "window.__mm_navigate_route('resolve/missing-files/restorable')")
-                        .text("Resolve"),
-                )
-                .into(),
-        );
-    }
-    if corpus.corrupt_files > 0 {
-        sections.push(
-            div()
-                .class("mm-alert mm-alert--warning")
-                .child(span().class("mm-alert__text").text(
-                    format!("{} corrupt files", corpus.corrupt_files),
-                ))
-                .child(
-                    html::button()
-                        .class("mm-btn mm-alert__action")
-                        .attr("onclick", "window.__mm_navigate_route('resolve/corrupt-files')")
-                        .text("Resolve"),
-                )
-                .into(),
-        );
-    }
-    if corpus.files_relocated > 0 {
-        sections.push(
-            div()
-                .class("mm-alert mm-alert--info")
-                .child(span().class("mm-alert__text").text(
-                    format!("{} relocated files", corpus.files_relocated),
-                ))
-                .child(
-                    html::button()
-                        .class("mm-btn mm-alert__action")
-                        .attr("onclick", "window.__mm_navigate_route('resolve/moved-files')")
-                        .text("Resolve"),
-                )
-                .into(),
-        );
+    // Alert banners for high-priority corpus issues (web-specific affordance).
+    for entry in &entries.corpus {
+        let count = entry.count.unwrap_or(0);
+        if count == 0 {
+            continue;
+        }
+        let (alert_class, button_label) = match entry.insight_type {
+            InsightType::CorpusFilesUnindexed => ("mm-alert", "Index Now"),
+            InsightType::CorpusFilesMissing | InsightType::CorpusCorruptFiles => {
+                ("mm-alert mm-alert--warning", "Resolve")
+            }
+            InsightType::CorpusFilesRelocated => ("mm-alert mm-alert--info", "Resolve"),
+            _ => continue,
+        };
+        let mut alert = div()
+            .class(alert_class)
+            .child(span().class("mm-alert__text").text(
+                format!("{} {}", count, entry.label.to_lowercase()),
+            ));
+        // Unindexed uses a special JS action; others navigate to resolution routes.
+        if matches!(entry.insight_type, InsightType::CorpusFilesUnindexed) {
+            alert = alert.child(
+                html::button()
+                    .class("mm-btn mm-alert__action")
+                    .attr("onclick", "window.__mm_index_now()")
+                    .text(button_label),
+            );
+        } else if let Some(route) = insight_route(&entry.insight_type) {
+            alert = alert.child(
+                html::button()
+                    .class("mm-btn mm-alert__action")
+                    .attr("onclick", &format!("window.__mm_navigate_route('{route}')"))
+                    .text(button_label),
+            );
+        }
+        sections.push(alert.into());
     }
 
     // Corpus file stats.
-    let mut corpus_items = vec![
-        kv("files in corpus", &corpus.files_in_corpus.to_string()),
-        kv("indexed", &corpus.files_indexed.to_string()),
-        kv("unindexed", &corpus.files_unindexed.to_string()),
-    ];
-    if corpus.files_missing > 0 {
-        corpus_items.push(kv_resolve("missing", &corpus.files_missing.to_string(), "resolve/missing-files/restorable"));
-    }
-    if corpus.directories_missing > 0 {
-        corpus_items.push(kv_resolve("dirs missing", &corpus.directories_missing.to_string(), "resolve/missing-directories"));
-    }
-    if corpus.corrupt_files > 0 {
-        corpus_items.push(kv_resolve("corrupt", &corpus.corrupt_files.to_string(), "resolve/corrupt-files"));
-    }
-    if corpus.shit_format_files > 0 {
-        corpus_items.push(kv_resolve("non-vorbis", &corpus.shit_format_files.to_string(), "resolve/lossless-remux"));
-    }
-    if corpus.oob_tag_sync > 0 {
-        corpus_items.push(kv_resolve("OOB tag sync", &corpus.oob_tag_sync.to_string(), "resolve/oob-sync"));
-    }
-    if corpus.oob_tag_conflict > 0 {
-        corpus_items.push(kv_resolve("OOB tag conflict", &corpus.oob_tag_conflict.to_string(), "resolve/oob-conflict/two-way"));
-    }
+    let corpus_items: Vec<Node> = entries.corpus.iter().map(|e| render_bucket_entry(e)).collect();
     sections.push(titled_section("Corpus Files", corpus_items));
 
-    // Tag health (placeholder/squash bucket).
-    let ph = &insights.bucket_placeholder;
-    let mut tag_items = Vec::new();
-    if ph.cross_source_overlap_count > 0 {
-        tag_items.push(kv_resolve("source overlaps", &ph.cross_source_overlap_count.to_string(), "resolve/directory-cluster"));
-    }
-    if ph.release_overlap_count > 0 {
-        tag_items.push(kv_resolve("release overlaps", &ph.release_overlap_count.to_string(), "resolve/directory-cluster"));
-    }
-    if ph.subpar_duplicate_count > 0 {
-        tag_items.push(kv_resolve("subpar duplicates", &ph.subpar_duplicate_count.to_string(), "resolve/subpar-duplicates"));
-    }
-    if ph.redundant_duplicate_count > 0 {
-        tag_items.push(kv_resolve("redundant duplicates", &ph.redundant_duplicate_count.to_string(), "resolve/redundant-duplicates"));
-    }
-    for entry in &ph.tag_canonicity {
-        let encoded_tag = js_sys::encode_uri_component(&entry.tag_name);
-        tag_items.push(kv_resolve(
-            &format!("{} canonicity", entry.tag_name),
-            &entry.cluster_count.to_string(),
-            &format!("resolve/tag-canonicity/{}?zone=corpus&filter_existing_canonicals=true", encoded_tag),
-        ));
-    }
-    if ph.inconsistent_album_artist_count > 0 {
-        tag_items.push(kv_resolve("album artist issues", &ph.inconsistent_album_artist_count.to_string(), "resolve/inconsistent-album-artist/ALBUMARTIST"));
-    }
-    for entry in &ph.compound_tags {
-        let total = entry.safe_count + entry.review_count;
-        let encoded_tag = js_sys::encode_uri_component(&entry.tag_name);
-        tag_items.push(kv_resolve(
-            &format!("{} compound", entry.tag_name),
-            &total.to_string(),
-            &format!("resolve/compound-split/{}?zone=corpus&safe=true", encoded_tag),
-        ));
-    }
-    if ph.missing_album_single_count > 0 {
-        tag_items.push(kv_resolve("missing album singles", &ph.missing_album_single_count.to_string(), "resolve/missing-album"));
-    }
-    if ph.disc_extraction_count > 0 {
-        tag_items.push(kv_resolve("disc extraction", &ph.disc_extraction_count.to_string(), "resolve/disc-extraction"));
-    }
-    if ph.path_tag_mismatch_count > 0 {
-        tag_items.push(kv("path/tag mismatch", &ph.path_tag_mismatch_count.to_string()));
-    }
-    if !tag_items.is_empty() {
+    // Tag health bucket.
+    if !entries.placeholder.is_empty() {
+        let tag_items: Vec<Node> = entries.placeholder.iter().map(|e| render_bucket_entry(e)).collect();
         sections.push(titled_section("Tag Health", tag_items));
     }
 
-    // Other signals.
-    let other_items: Vec<Node> = insights
-        .bucket_other
-        .entries
+    // Other signals bucket.
+    let other_items: Vec<Node> = entries
+        .other
         .iter()
-        .filter(|e| e.count > 0)
-        .map(|e| kv(&e.display_label, &e.count.to_string()))
+        .filter(|e| e.count.unwrap_or(0) > 0)
+        .map(|e| render_bucket_entry(e))
         .collect();
     if !other_items.is_empty() {
         sections.push(titled_section("Signals", other_items));
@@ -321,10 +365,14 @@ pub fn render_insights_content(insights: &InsightsData) -> Node {
 }
 
 // ============================================================================
-// External Matches view — typed
+// External Matches view — structured to match TUI sections
 // ============================================================================
 
-/// Full External Matches page: progress + data sections with stable IDs for polling.
+/// Full External Matches page using the same three-section layout as the TUI:
+/// Actions, Matches (untagged + confidence tiers), Release Packing.
+///
+/// Structure preserves `mm-fetch-progress` and `mm-external-data` div IDs
+/// for the polling refresh to update independently.
 pub fn render_external_matches_page(data: &ExternalMatchesData, status: Option<&WitchStatus>) -> Node {
     let progress = if let Some(s) = status {
         render_fetch_progress_section(s)
@@ -389,57 +437,79 @@ pub fn render_fetch_progress_section(status: &WitchStatus) -> Node {
     }
 }
 
-/// Render external matches data (counts, tiers, packing — polled section).
+/// Render external matches data section (for polling refresh).
+///
+/// Rebuilds the Matches + Release Packing sections with current data,
+/// maintaining the same structure as the full page render.
 pub fn render_external_matches_data(data: &ExternalMatchesData) -> Node {
+    use mm_meta::signals::packing_category::PackingCategory;
     let mut sections = Vec::new();
 
-    // Confidence tiers with navigation links.
-    let bucket_items: Vec<Node> = data
-        .confidence_buckets
-        .iter()
-        .map(|b| {
-            let label = format!("{:?} ({})", b.tier, b.tier.label());
+    // Matches section.
+    let has_matches = !data.untagged_entries.is_empty() || !data.confidence_buckets.is_empty();
+    if has_matches {
+        let mut match_items: Vec<Node> = Vec::new();
+
+        if !data.untagged_entries.is_empty() {
+            match_items.push(kv(
+                "Untagged matches",
+                &data.untagged_entries.len().to_string(),
+            ));
+        }
+
+        for b in &data.confidence_buckets {
+            let label = format!("{} ({})", b.tier.label(), b.total);
             let href = format!("#/external-matches/acoustid/{}", tier_to_route_str(b.tier));
-            nav_kv(&label, &b.total.to_string(), &href)
-        })
-        .collect();
-    if !bucket_items.is_empty() {
-        sections.push(titled_section("Confidence Tiers", bucket_items));
+            match_items.push(nav_kv(&label, &b.total.to_string(), &href));
+        }
+
+        sections.push(titled_section("Matches", match_items));
     }
 
-    // Packing categories with navigation links.
-    let packing_items = vec![
-        nav_kv("Perfect", &data.packing_perfect_count.to_string(), "#/external-matches/review/perfect"),
-        nav_kv("Full match", &data.packing_full_match_count.to_string(), "#/external-matches/review/full-match"),
-        nav_kv("Singles", &data.packing_singles_count.to_string(), "#/external-matches/review/singles"),
-        nav_kv("Incomplete", &data.packing_incomplete_count.to_string(), "#/external-matches/review/incomplete"),
-        nav_kv("Low confidence", &data.packing_low_confidence_count.to_string(), "#/external-matches/review/low-confidence"),
-        kv("Knots", &data.packing_knots_count.to_string()),
+    // Release Packing section.
+    let packing_order: Vec<(PackingCategory, usize, Option<&str>)> = vec![
+        (PackingCategory::Perfect, data.packing_perfect_count, Some("perfect")),
+        (PackingCategory::FullMatches, data.packing_full_match_count, Some("full-match")),
+        (PackingCategory::Singles, data.packing_singles_count, Some("singles")),
+        (PackingCategory::Incomplete, data.packing_incomplete_count, Some("incomplete")),
+        (PackingCategory::LowConfidence, data.packing_low_confidence_count, Some("low-confidence")),
+        (PackingCategory::Knots, data.packing_knots_count, None),
+        (PackingCategory::UnsolvedConflict, data.unsolved_conflict_count, None),
+        (PackingCategory::UnsolvedNoRelease, data.unsolved_no_release_count, None),
+        (PackingCategory::UnsolvedNoMatch, data.unsolved_no_match_count, None),
     ];
-    sections.push(titled_section("Release Packing", packing_items));
 
-    // Unsolved.
-    let unsolved_fields = [
-        (data.unsolved_conflict_count, "Conflicts"),
-        (data.unsolved_no_release_count, "No release"),
-        (data.unsolved_no_match_count, "No match"),
-        (data.va_override_count, "VA overrides"),
-        (data.pinned_conflict_count, "Pinned conflicts"),
-    ];
-    let unsolved_items: Vec<Node> = unsolved_fields
-        .iter()
-        .filter(|(n, _)| *n > 0)
-        .map(|(n, label)| kv(label, &n.to_string()))
-        .collect();
-    if !unsolved_items.is_empty() {
-        sections.push(titled_section("Unsolved", unsolved_items));
+    let mut packing_items: Vec<Node> = Vec::new();
+    for (cat, count, route) in &packing_order {
+        if *count > 0 {
+            match route {
+                Some(r) => {
+                    let href = format!("#/external-matches/review/{r}");
+                    packing_items.push(nav_kv(cat.label(), &count.to_string(), &href));
+                }
+                None => {
+                    packing_items.push(kv(cat.label(), &count.to_string()));
+                }
+            }
+        }
+    }
+
+    if data.pinned_conflict_count > 0 {
+        packing_items.push(kv("Pinned conflicts", &data.pinned_conflict_count.to_string()));
+    }
+    if data.va_override_count > 0 {
+        packing_items.push(kv("VA overrides", &data.va_override_count.to_string()));
+    }
+
+    if !packing_items.is_empty() {
+        sections.push(titled_section("Release Packing", packing_items));
     }
 
     div().children(sections).into()
 }
 
 /// Map display-level ConfidenceTier to the AcoustidConfidence route segment.
-/// Perfect/VeryHigh/High all map to "high", Medium→"medium", Low→"low".
+/// Perfect/VeryHigh/High all map to "high", Medium -> "medium", Low -> "low".
 fn tier_to_route_str(tier: mm_meta::views::ConfidenceTier) -> &'static str {
     use mm_meta::views::ConfidenceTier;
     match tier {
@@ -450,18 +520,35 @@ fn tier_to_route_str(tier: mm_meta::views::ConfidenceTier) -> &'static str {
 }
 
 // ============================================================================
-// Edit History view — typed
+// Edit History view — typed using SessionListEntry + EditDetailEntry
 // ============================================================================
 
+/// Render session list using typed `SessionListEntry` from mm-ui.
+///
+/// Wraps each `EditSessionSummary` in a `SessionListEntry` to get consistent
+/// rendering with the TUI (relative timestamps via `relative_timestamp()`).
 pub fn render_edit_history_content(data: &EditHistoryData) -> Node {
     if data.sessions.is_empty() {
         return span().class("mm-kv__val").text("No edit sessions").into();
     }
 
-    let items: Vec<Node> = data
+    let entries: Vec<SessionListEntry> = data
         .sessions
         .iter()
-        .map(|s| {
+        .map(|s| SessionListEntry { summary: s.clone() })
+        .collect();
+
+    let items: Vec<Node> = entries
+        .iter()
+        .map(|entry| {
+            let s = &entry.summary;
+            let relative = relative_timestamp(&s.earliest_at);
+            let label = if s.session_id.len() > 30 {
+                format!("{}...", &s.session_id.chars().take(27).collect::<String>())
+            } else {
+                s.session_id.clone()
+            };
+
             div()
                 .class("mm-history-session")
                 .child(
@@ -478,11 +565,15 @@ pub fn render_edit_history_content(data: &EditHistoryData) -> Node {
                                         s.session_id
                                     ),
                                 )
-                                .text(&s.session_id),
+                                .text(&label),
                         )
                         .child(span().class("mm-kv__val").text(format!(
-                            "{} edits, {} files — {}",
-                            s.edit_count, s.inode_count, s.earliest_at
+                            "{} edit{}, {} file{} \u{2014} {}",
+                            s.edit_count,
+                            if s.edit_count == 1 { "" } else { "s" },
+                            s.inode_count,
+                            if s.inode_count == 1 { "" } else { "s" },
+                            relative,
                         ))),
                 )
                 .child(
@@ -496,43 +587,74 @@ pub fn render_edit_history_content(data: &EditHistoryData) -> Node {
     titled_section("Edit Sessions", items)
 }
 
-/// Session detail remains untyped (lazy-loaded via separate fetch).
-pub fn render_session_detail(detail: &serde_json::Value) -> Node {
-    let edits = match detail.get("edits").and_then(|v| v.as_array()) {
-        Some(e) => e,
-        None => return span().class("mm-kv__val").text("No edits").into(),
-    };
-    let inode_paths = detail
-        .get("inode_paths")
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
+/// Render session detail using typed `SessionEditDetail` and `EditDetailEntry`.
+///
+/// Groups edits via the shared `group_edits()` from mm-ui, producing the same
+/// CommonEdit / FileHeader / FileEdit structure as the TUI.
+pub fn render_session_detail_typed(detail: &SessionEditDetail) -> Node {
+    if detail.edits.is_empty() {
+        return span().class("mm-kv__val").text("No edits").into();
+    }
 
-    let rows: Vec<Node> = edits
+    let entries = group_edits(detail.edits.clone(), &detail.inode_paths);
+
+    let rows: Vec<Node> = entries
         .iter()
-        .filter_map(|edit| {
-            let inode = edit.get("inode")?.as_i64()?;
-            let field = edit.get("field_name")?.as_str()?;
-            let old = edit.get("old_value").and_then(|v| v.as_str()).unwrap_or("∅");
-            let new = edit.get("new_value").and_then(|v| v.as_str()).unwrap_or("∅");
-            let path = inode_paths
-                .get(&inode.to_string())
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            Some(
+        .filter_map(|entry| match entry {
+            EditDetailEntry::CommonEdit {
+                field_name,
+                old_value,
+                new_value,
+                paths,
+                ..
+            } => {
+                let old = old_value.as_deref().unwrap_or("\u{2205}");
+                let new = new_value.as_deref().unwrap_or("\u{2205}");
+                Some(
+                    div()
+                        .class("mm-edit-row mm-edit-row--common")
+                        .child(
+                            span()
+                                .class("mm-edit-field")
+                                .text(format!("{} ({} files)", field_name, paths.len())),
+                        )
+                        .child(
+                            span()
+                                .class("mm-edit-diff")
+                                .child(span().class("mm-edit-old").text(old))
+                                .child(span().class("mm-edit-arrow").text(" \u{2192} "))
+                                .child(span().class("mm-edit-new").text(new)),
+                        )
+                        .into(),
+                )
+            }
+            EditDetailEntry::PerFileSeparator => Some(
+                html::hr().class("mm-separator").into(),
+            ),
+            EditDetailEntry::FileHeader { path } => Some(
                 div()
-                    .class("mm-edit-row")
+                    .class("mm-edit-file-header")
                     .child(span().class("mm-edit-path").text(path))
-                    .child(span().class("mm-edit-field").text(field))
-                    .child(
-                        span()
-                            .class("mm-edit-diff")
-                            .child(span().class("mm-edit-old").text(old))
-                            .child(span().class("mm-edit-arrow").text(" → "))
-                            .child(span().class("mm-edit-new").text(new)),
-                    )
                     .into(),
-            )
+            ),
+            EditDetailEntry::FileEdit { edit, path } => {
+                let old = edit.old_value.as_deref().unwrap_or("\u{2205}");
+                let new = edit.new_value.as_deref().unwrap_or("\u{2205}");
+                Some(
+                    div()
+                        .class("mm-edit-row")
+                        .child(span().class("mm-edit-path").text(path))
+                        .child(span().class("mm-edit-field").text(&edit.field_name))
+                        .child(
+                            span()
+                                .class("mm-edit-diff")
+                                .child(span().class("mm-edit-old").text(old))
+                                .child(span().class("mm-edit-arrow").text(" \u{2192} "))
+                                .child(span().class("mm-edit-new").text(new)),
+                        )
+                        .into(),
+                )
+            }
         })
         .collect();
     div().class("mm-session-edits").children(rows).into()
@@ -543,31 +665,213 @@ pub fn render_session_detail(detail: &serde_json::Value) -> Node {
 // ============================================================================
 
 pub fn render_inbox_content(data: &InboxOverviewData) -> Node {
-    let items = vec![
-        kv("Files in inbox", &data.file_in_inbox.to_string()),
-        kv("Unindexed", &data.unindexed.to_string()),
-        kv("Corpus matches", &data.corpus_match.to_string()),
-        kv("Organizable", &data.organizable.to_string()),
-        kv("Tag canonicity", &data.tag_canonicity.to_string()),
-        kv("Missing tags", &data.missing_tags.to_string()),
-        kv("Compound tags", &data.compound_tags.to_string()),
-    ];
-    titled_section("Inbox", items)
+    let mut view_data = InboxViewData::new();
+    view_data.update(Some(data.clone()));
+
+    let items: Vec<Node> = view_data
+        .entries
+        .iter()
+        .map(|e| render_inbox_entry(e))
+        .collect();
+
+    if items.is_empty() {
+        titled_section("Inbox", vec![kv("Status", "No inbox signals")])
+    } else {
+        titled_section("Inbox", items)
+    }
 }
 
 // ============================================================================
-// Deploy view — typed
+// Deploy view — typed using DeployViewData + DeployTab
 // ============================================================================
 
-pub fn render_deploy_content(data: &DeployStatus) -> Node {
-    let mut items = vec![kv(
-        "Needs action",
-        if data.needs_action { "yes" } else { "no" },
-    )];
-    for (name, count) in &data.library_file_counts {
-        items.push(kv(name, &count.to_string()));
+/// Render deploy content using the shared `DeployViewData` enum.
+///
+/// Fetches `DeployModalData` from the server, then branches:
+/// - `UpToDate` → simple library file counts
+/// - `Preview`  → tabbed display matching the TUI (Healthy/New/Conflicts/Leftover/Stale)
+pub fn render_deploy_content(status: &DeployStatus, modal: Option<&DeployModalData>) -> Node {
+    let view_data = match modal {
+        Some(data) if status.needs_action => DeployViewData::Preview {
+            cached_data: data.clone(),
+        },
+        _ => DeployViewData::UpToDate {
+            library_file_counts: status.library_file_counts.clone(),
+        },
+    };
+
+    match view_data {
+        DeployViewData::UpToDate { library_file_counts } => {
+            let mut items = vec![kv("Status", "Up to date")];
+            for (name, count) in &library_file_counts {
+                items.push(kv(name, &count.to_string()));
+            }
+            titled_section("Deploy", items)
+        }
+        DeployViewData::Preview { cached_data } => {
+            render_deploy_preview(&cached_data)
+        }
     }
-    titled_section("Deploy Status", items)
+}
+
+/// Render the tabbed deploy preview with per-tab content.
+fn render_deploy_preview(data: &DeployModalData) -> Node {
+    let counts = data.tab_counts();
+    let active = initial_tab(data);
+    let mut sections = Vec::new();
+
+    // Summary line.
+    let total_ops = data.total_operations();
+    sections.push(kv("Operations", &format!("{} total", total_ops)));
+
+    // Tab bar — clickable tabs that switch content via JS.
+    let tab_bar = div()
+        .class("mm-tab-bar")
+        .children(DeployTab::all().iter().map(|tab| {
+            let label = format!("{} ({})", tab.label(), counts[tab.index()]);
+            let is_active = *tab == active;
+            div()
+                .class("mm-tab")
+                .class_if("mm-tab--active", is_active)
+                .attr(
+                    "onclick",
+                    format!("window.__mm_deploy_tab('{}')", tab.label().to_lowercase()),
+                )
+                .text(label)
+                .into()
+        }));
+    sections.push(tab_bar.into());
+
+    // Per-tab content panels (all rendered, only active shown via CSS/JS).
+    for tab in DeployTab::all() {
+        let panel_id = format!("deploy-tab-{}", tab.label().to_lowercase());
+        let display = if *tab == active { "" } else { "display:none" };
+        let content = render_deploy_tab_content(data, *tab);
+        sections.push(
+            div()
+                .attr("id", &panel_id)
+                .attr("style", display)
+                .class("mm-deploy-panel")
+                .child(content)
+                .into(),
+        );
+    }
+
+    div().children(sections).into()
+}
+
+/// Render content for a single deploy tab.
+fn render_deploy_tab_content(data: &DeployModalData, tab: DeployTab) -> Node {
+    match tab {
+        DeployTab::Healthy => {
+            if data.healthy.is_empty() {
+                return span().class("mm-kv__val").text("No healthy files").into();
+            }
+            let items: Vec<Node> = data
+                .healthy
+                .iter()
+                .take(200)
+                .map(|f| kv(&f.library_name, &f.deploy_path))
+                .collect();
+            let mut result = vec![titled_section(
+                &format!("Healthy ({})", data.healthy.len()),
+                items,
+            )];
+            if data.healthy.len() > 200 {
+                result.push(
+                    span()
+                        .class("mm-kv__val")
+                        .text(format!("...and {} more", data.healthy.len() - 200))
+                        .into(),
+                );
+            }
+            div().children(result).into()
+        }
+        DeployTab::New => {
+            if data.new_by_dir.is_empty() {
+                return span().class("mm-kv__val").text("No new files to deploy").into();
+            }
+            let items: Vec<Node> = data
+                .new_by_dir
+                .iter()
+                .map(|d| {
+                    let label = if d.sidecar_count > 0 {
+                        format!("{} files + {} sidecars", d.count, d.sidecar_count)
+                    } else {
+                        format!("{} files", d.count)
+                    };
+                    kv(&d.directory, &label)
+                })
+                .collect();
+            titled_section(&format!("New ({})", data.new.len()), items)
+        }
+        DeployTab::Conflicts => {
+            if data.conflicts.is_empty() {
+                return span().class("mm-kv__val").text("No conflicts").into();
+            }
+            let items: Vec<Node> = data
+                .conflicts
+                .iter()
+                .map(|c| {
+                    let files: Vec<&str> = c
+                        .conflicting_files
+                        .iter()
+                        .map(|(path, _)| path.as_str())
+                        .collect();
+                    kv(&c.deploy_path, &files.join(", "))
+                })
+                .collect();
+            titled_section(
+                &format!("Conflicts ({})", data.conflicts.len()),
+                items,
+            )
+        }
+        DeployTab::Leftover => {
+            if data.leftover_by_dir.is_empty() {
+                return span().class("mm-kv__val").text("No leftover files").into();
+            }
+            let items: Vec<Node> = data
+                .leftover_by_dir
+                .iter()
+                .map(|d| kv(&d.directory, &format!("{} files", d.count)))
+                .collect();
+            titled_section(
+                &format!("Leftover ({})", data.leftover.len()),
+                items,
+            )
+        }
+        DeployTab::Stale => {
+            if data.stale.is_empty() {
+                return span().class("mm-kv__val").text("No stale files").into();
+            }
+            let items: Vec<Node> = data
+                .stale
+                .iter()
+                .take(200)
+                .map(|f| {
+                    div()
+                        .class("mm-edit-row")
+                        .child(span().class("mm-edit-old").text(&f.library_path))
+                        .child(span().class("mm-edit-arrow").text(" \u{2192} "))
+                        .child(span().class("mm-edit-new").text(&f.expected_path))
+                        .into()
+                })
+                .collect();
+            let mut result = vec![titled_section(
+                &format!("Stale ({})", data.stale.len()),
+                items,
+            )];
+            if data.stale.len() > 200 {
+                result.push(
+                    span()
+                        .class("mm-kv__val")
+                        .text(format!("...and {} more", data.stale.len() - 200))
+                        .into(),
+                );
+            }
+            div().children(result).into()
+        }
+    }
 }
 
 // ============================================================================

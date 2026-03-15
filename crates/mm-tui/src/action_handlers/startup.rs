@@ -53,10 +53,7 @@ impl HandleAction for crate::startup::IntakeConfirmationAction {
                     // No files to index (all deleted since detection?)
                     mm_meta::logging::log_general("IntakeConfirmation: no mutations to queue");
                     if is_inbox_source {
-                        app.view = ActiveView::Inbox {
-                            data: super::super::inbox_view::InboxViewData::new(),
-                            interaction: super::super::inbox_view::InboxInteraction::new(),
-                        };
+                        app.view = ActiveView::Inbox(super::super::inbox_view::InboxViewState::empty());
                     } else {
                         app.start_health_view();
                     }
@@ -102,10 +99,7 @@ impl HandleAction for crate::startup::IntakeConfirmationAction {
                 }
 
                 if is_inbox_source {
-                    app.view = ActiveView::Inbox {
-                            data: super::super::inbox_view::InboxViewData::new(),
-                            interaction: super::super::inbox_view::InboxInteraction::new(),
-                        };
+                    app.view = ActiveView::Inbox(super::super::inbox_view::InboxViewState::empty());
                 } else {
                     app.start_health_view();
                 }

@@ -26,29 +26,14 @@ pub(crate) enum ActiveView {
 
     // Lateral view ring
     ConfigEditor(config_editor::ConfigEditorState),
-    Insights {
-        data: insights_view::InsightsViewData,
-        interaction: insights_view::HealthInteraction,
-    },
-    History {
-        data: history_view::HistoryViewData,
-        interaction: history_view::HistoryInteraction,
-    },
+    Insights(insights_view::InsightsViewState),
+    History(history_view::HistoryViewState),
     CorpusBrowser(tree_browser::TreeBrowserState),
     TagSearch(tag_search::TagSearchState),
-    Inbox {
-        data: inbox_view::InboxViewData,
-        interaction: inbox_view::InboxInteraction,
-    },
+    Inbox(inbox_view::InboxViewState),
     TabbedTransactionReview(tabbed_transaction_review::TabbedTransactionReviewState),
-    Deploy {
-        data: deploy_modal::DeployViewData,
-        interaction: deploy_modal::DeployInteraction,
-    },
-    ExternalMatches {
-        data: external_match_view::ExternalMatchesViewData,
-        interaction: external_match_view::ExternalMatchesInteraction,
-    },
+    Deploy(deploy_modal::DeployViewState),
+    ExternalMatches(external_match_view::ExternalMatchesViewState),
 
     // Progress (non-interactive, owns eye animation)
     Progress {
@@ -106,14 +91,14 @@ impl ActiveView {
         match self {
             Self::StartupMaintenance => Some("Startup"),
             Self::ConfigEditor(_) => Some("Config Editor"),
-            Self::Insights { .. } => Some("Corpus Insights"),
-            Self::History { .. } => Some("Edit History"),
+            Self::Insights(_) => Some("Corpus Insights"),
+            Self::History(_) => Some("Edit History"),
             Self::CorpusBrowser(_) => Some("Corpus Browser"),
             Self::TagSearch(_) => Some("Tag Search"),
-            Self::Inbox { .. } => Some("Inbox"),
+            Self::Inbox(_) => Some("Inbox"),
             Self::TabbedTransactionReview(_) => Some("Transaction"),
-            Self::Deploy { .. } => Some("Deploy"),
-            Self::ExternalMatches { .. } => Some("External Matches"),
+            Self::Deploy(_) => Some("Deploy"),
+            Self::ExternalMatches(_) => Some("External Matches"),
             Self::Progress { .. } => None,
             Self::ProgressiveWork(_) => Some("Processing"),
             Self::ExitConfirm(_) => Some("Exit Confirmation"),
@@ -167,12 +152,12 @@ impl ActiveView {
             Self::OobResolution(s) => s.selected_path(),
             Self::AcoustidBrowse(s) => s.selected_path(),
             Self::ReleaseReview(s) => s.selected_path(),
-            Self::Deploy { ref data, ref interaction } => data.selected_path(interaction),
+            Self::Deploy(ref s) => s.data.selected_path(&s.interaction),
             Self::UnifiedTagEditor(s) => s.selected_path(),
             Self::MissingAlbumSingleResolution(ref s) => s.selected_path(),
             Self::DiscExtractionResolution(ref s) => s.selected_path(),
             Self::ManualReviewResolution(ref s) => s.selected_path(),
-            Self::Inbox { ref data, ref interaction } => data.selected_entry(interaction.list.cursor).map(|e| e.label.as_str()),
+            Self::Inbox(ref s) => s.data.selected_entry(s.interaction.list.cursor).map(|e| e.label.as_str()),
             _ => None,
         }
     }
@@ -184,12 +169,12 @@ impl ActiveView {
             Self::ConfigEditor(_) => Some(LateralView::Config),
             Self::TagSearch(_) => Some(LateralView::Search),
             Self::CorpusBrowser(_) => Some(LateralView::Files),
-            Self::Insights { .. } => Some(LateralView::Health),
-            Self::History { .. } => Some(LateralView::History),
-            Self::Inbox { .. } => Some(LateralView::Inbox),
+            Self::Insights(_) => Some(LateralView::Health),
+            Self::History(_) => Some(LateralView::History),
+            Self::Inbox(_) => Some(LateralView::Inbox),
             Self::TabbedTransactionReview(_) => Some(LateralView::Transaction),
-            Self::Deploy { .. } => Some(LateralView::Deploy),
-            Self::ExternalMatches { .. } => Some(LateralView::ExternalMatches),
+            Self::Deploy(_) => Some(LateralView::Deploy),
+            Self::ExternalMatches(_) => Some(LateralView::ExternalMatches),
             _ => None,
         }
     }
@@ -202,17 +187,28 @@ impl ActiveView {
     pub(crate) fn wants_raw_cycle(&self) -> bool {
         matches!(self, Self::ConfigEditor(_) | Self::CorpusBrowser(_))
     }
-}
 
-// ============================================================================
-// SuspendedView - for view stack push/pop navigation
-// ============================================================================
-
-/// Captures enough context to restore a suspended view from the view stack.
-#[allow(clippy::large_enum_variant)]
-pub(crate) enum SuspendedView {
-    /// Restore view directly (most modals).
-    Direct(ActiveView),
+    /// Extract the current Route for this view, if representable.
+    ///
+    /// Lateral views always produce a Route. Overlay views (resolution modals,
+    /// tag editor, transaction review) return None for now — they carry
+    /// in-flight state that isn't URL-encodable yet.
+    pub(crate) fn to_route(&self) -> Option<mm_ui::route::Route> {
+        use mm_ui::route::Route;
+        match self {
+            Self::Insights(s) => Some(Route::Health(s.to_route())),
+            Self::History(s) => Some(Route::History(s.to_route())),
+            Self::Inbox(s) => Some(Route::Inbox(s.to_route())),
+            Self::Deploy(s) => Some(Route::Deploy(s.to_route())),
+            Self::ExternalMatches(s) => Some(Route::ExternalMatches(s.to_route())),
+            Self::ConfigEditor(_) => Some(Route::Config(Default::default())),
+            Self::TagSearch(_) => Some(Route::Search(Default::default())),
+            Self::CorpusBrowser(_) => Some(Route::Files(Default::default())),
+            Self::TabbedTransactionReview(_) => Some(Route::Transaction(Default::default())),
+            // Overlay and non-interactive views don't have URL-encodable routes yet
+            _ => None,
+        }
+    }
 }
 
 // ============================================================================

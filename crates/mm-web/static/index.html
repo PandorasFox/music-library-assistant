@@ -92,7 +92,7 @@
             mm_expand_session, mm_packing_browse, mm_setup,
             mm_queue_task, mm_search, mm_expand_dir,
             mm_config_save, mm_stage_decision, mm_approve_releases,
-            mm_index_now, mm_navigate_route
+            mm_index_now, mm_navigate_route, mm_deploy_tab
         } from '/static/pkg/mm_web_client.js';
         await init();
         window.__mm_login = mm_login;
@@ -112,6 +112,7 @@
         window.__mm_approve_releases = mm_approve_releases;
         window.__mm_index_now = mm_index_now;
         window.__mm_navigate_route = mm_navigate_route;
+        window.__mm_deploy_tab = mm_deploy_tab;
     </script>
 </body>
 </html>

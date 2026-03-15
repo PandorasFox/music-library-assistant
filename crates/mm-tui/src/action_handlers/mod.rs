@@ -331,22 +331,22 @@ impl App {
             ActiveView::MissingDirectoryResolution(s) => s.handle_click(x, y).map(ViewAction::MissingDirectoryResolution),
             ActiveView::MissingFileResolution(s) => s.handle_click(x, y).map(ViewAction::MissingFileResolution),
             ActiveView::ShitFormatResolution(s) => s.handle_click(x, y).map(ViewAction::ShitFormatResolution),
-            ActiveView::Insights { ref data, ref mut interaction } => {
-                interaction.list.handle_click(x, y, &data.flat_items);
+            ActiveView::Insights(ref mut s) => {
+                s.interaction.list.handle_click(x, y, &s.data.flat_items);
                 None
             }
             ActiveView::UnifiedTagEditor(ref mut s) => click_dispatch!(void s),
             ActiveView::CorpusBrowser(ref mut s) => click_dispatch!(void s),
-            ActiveView::History { ref mut data, ref mut interaction } => {
-                data.handle_click(&mut interaction.session_list, x, y);
+            ActiveView::History(ref mut s) => {
+                s.handle_click(x, y);
                 None
             }
-            ActiveView::ExternalMatches { ref data, ref mut interaction } => {
-                interaction.list.handle_click(x, y, &data.flat_items);
+            ActiveView::ExternalMatches(ref mut s) => {
+                s.interaction.list.handle_click(x, y, &s.data.flat_items);
                 None
             }
-            ActiveView::Inbox { ref data, ref mut interaction } => {
-                interaction.list.handle_click(x, y, &data.entries);
+            ActiveView::Inbox(ref mut s) => {
+                s.interaction.list.handle_click(x, y, &s.data.entries);
                 None
             }
             ActiveView::TagSearch(ref mut s) => click_dispatch!(void s),
@@ -437,9 +437,9 @@ impl HandleAction for insights_view::HealthAction {
         match self {
             insights_view::HealthAction::Launch => {
                 // Extract cursor and data to dispatch to appropriate modal
-                let (selected, insight_type) = if let ActiveView::Insights { ref data, ref interaction } = app.view {
-                    let cursor = interaction.list.cursor;
-                    (data.action_at(cursor), data.insight_type_at(cursor))
+                let (selected, insight_type) = if let ActiveView::Insights(ref s) = app.view {
+                    let cursor = s.interaction.list.cursor;
+                    (s.data.action_at(cursor), s.data.insight_type_at(cursor))
                 } else {
                     (None, None)
                 };

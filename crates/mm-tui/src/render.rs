@@ -142,8 +142,8 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::ProgressiveWork(ref worker) => {
             progressive_worker::render(f, area, worker);
         }
-        ActiveView::Deploy { ref data, ref interaction } => {
-            data.render(f, area, interaction);
+        ActiveView::Deploy(ref state) => {
+            super::deploy_modal::render_deploy_view(f, area, state);
         }
         ActiveView::ExitConfirm(ref mut state) => {
             render_exit_confirm_modal(f, area, state);
@@ -151,17 +151,17 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::CorpusBrowser(ref mut browser) => {
             browser.render(f, area, &mut app.art_picker, &mut app.art_cache, &app.resolver);
         }
-        ActiveView::Insights { ref data, ref mut interaction } => {
-            insights_view::render_insights_view(f, area, data, interaction);
+        ActiveView::Insights(ref mut state) => {
+            insights_view::render_insights_view(f, area, state);
         }
-        ActiveView::History { ref mut data, ref mut interaction } => {
-            super::history_view::render::render(f, area, data, &mut interaction.session_list);
+        ActiveView::History(ref mut state) => {
+            super::history_view::render::render(f, area, state);
         }
-        ActiveView::ExternalMatches { ref data, ref mut interaction } => {
-            super::external_match_view::render::render(f, area, data, interaction);
+        ActiveView::ExternalMatches(ref mut state) => {
+            super::external_match_view::render::render(f, area, state);
         }
-        ActiveView::Inbox { ref data, ref mut interaction } => {
-            inbox_view::render_inbox_view(f, area, data, interaction);
+        ActiveView::Inbox(ref mut state) => {
+            inbox_view::render_inbox_view(f, area, state);
         }
         ActiveView::TabbedTransactionReview(ref mut state) => {
             tabbed_transaction_review::render(f, area, state);

@@ -24,8 +24,8 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
                 let _ = app.queue_task(mm_meta::protocol::BackgroundTask::ExternalFetch);
                 app.status_message = Some("External fetch requested".to_string());
                 let fetch_active = app.witch_status().is_external_fetch_active;
-                if let ActiveView::ExternalMatches { ref mut data, .. } = app.view {
-                    data.fetch_active = fetch_active;
+                if let ActiveView::ExternalMatches(ref mut s) = app.view {
+                    s.data.fetch_active = fetch_active;
                 }
             }
             external_match_view::ExternalMatchesAction::RequestReleasePacking => {

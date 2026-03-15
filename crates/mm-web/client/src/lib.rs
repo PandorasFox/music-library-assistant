@@ -311,7 +311,12 @@ async fn load_view_for_route(route: &Route) -> Result<Node, JsValue> {
         }
         Route::Deploy(_) => {
             let data = api::get_deploy_status().await?;
-            Ok(views::render_deploy_content(&data))
+            let modal = if data.needs_action {
+                api::get_deploy_data().await.ok()
+            } else {
+                None
+            };
+            Ok(views::render_deploy_content(&data, modal.as_ref()))
         }
         Route::Inbox(_) => {
             let data = api::get_inbox_overview().await?;
@@ -550,14 +555,6 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             Ok(views::render_manual_review("Same Recording", &data))
         }
 
-        // Remaining unimplemented resolution types — show placeholder.
-        _ => {
-            Ok(views::render_resolution_view(
-                &format!("Resolution — {}", res.display_label()),
-                &[],
-                &[("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()")],
-            ))
-        }
     }
 }
 
@@ -759,9 +756,9 @@ pub fn mm_expand_session(session_id: &str) {
             container.set_inner_html("");
             return;
         }
-        match api::get_query_with("session-edit-detail", &format!("session_id={sid}")).await {
-            Ok(detail) => {
-                let node = views::render_session_detail(&detail);
+        match api::get_session_detail(&sid).await {
+            Ok(typed) => {
+                let node = views::render_session_detail_typed(&typed);
                 container.set_inner_html(&node.to_html());
             }
             Err(e) => {
@@ -769,6 +766,48 @@ pub fn mm_expand_session(session_id: &str) {
             }
         }
     });
+}
+
+/// Switch active deploy tab (called from tab bar onclick).
+///
+/// Shows/hides panels by ID and updates tab active classes.
+#[wasm_bindgen]
+pub fn mm_deploy_tab(tab_name: &str) {
+    let doc = web_sys::window().unwrap().document().unwrap();
+    // Show/hide content panels.
+    for tab in mm_ui::domain_types::DeployTab::all() {
+        let panel_id = format!("deploy-tab-{}", tab.label().to_lowercase());
+        if let Some(el) = doc.get_element_by_id(&panel_id) {
+            let display = if tab.label().to_lowercase() == tab_name {
+                ""
+            } else {
+                "display:none"
+            };
+            el.set_attribute("style", display).ok();
+        }
+    }
+    // Update active class on tab buttons via className replacement.
+    if let Ok(tabs) = doc.query_selector_all(".mm-tab") {
+        for i in 0..tabs.length() {
+            if let Some(el) = tabs.item(i) {
+                if let Some(html_el) = el.dyn_ref::<web_sys::HtmlElement>() {
+                    let text = html_el.inner_text().to_lowercase();
+                    let is_active = text.starts_with(tab_name);
+                    let current = html_el.class_name();
+                    let new_class = if is_active {
+                        if !current.contains("mm-tab--active") {
+                            format!("{current} mm-tab--active")
+                        } else {
+                            current
+                        }
+                    } else {
+                        current.replace("mm-tab--active", "").trim().to_string()
+                    };
+                    html_el.set_class_name(&new_class);
+                }
+            }
+        }
+    }
 }
 
 /// Complete first-time setup.

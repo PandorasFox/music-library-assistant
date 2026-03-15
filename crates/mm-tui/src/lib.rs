@@ -66,7 +66,7 @@ pub mod widgets;
 // Re-export for convenience
 pub(crate) use active_view::{
     ActiveView, ExitConfirmAction, ExitConfirmModalState,
-    SuspendedView, ViewAction,
+    ViewAction,
 };
 use types::ProgressStatsUpdater;
 
@@ -114,8 +114,8 @@ pub(crate) struct App {
     /// Constructed from config after login.
     pub(crate) resolver: PathResolver,
 
-    // View stack for push/pop navigation (TransactionReview, ProgressiveWork, etc.)
-    pub(crate) view_stack: Vec<SuspendedView>,
+    // View stack for push/pop navigation — stores Routes, pop navigates fresh.
+    pub(crate) view_stack: Vec<mm_ui::route::Route>,
 
     /// Last lateral view the user was on. Used for returning after modal flows.
     pub(crate) last_lateral_view: widgets::LateralView,
@@ -142,6 +142,9 @@ pub(crate) struct App {
     /// Click targets for titlebar tabs, populated during render.
     pub(crate) tab_click_rects: Vec<(widgets::LateralView, ratatui::layout::Rect)>,
 
+    /// Current route — synchronized after every view transition and state mutation.
+    /// Used for Route-driven navigation and URL display.
+    pub(crate) current_route: Option<mm_ui::route::Route>,
 }
 
 impl App {
@@ -209,10 +212,9 @@ impl App {
         Self {
             should_quit: false,
             status_message: None,
-            view: ActiveView::Insights {
-                data: insights_view::InsightsViewData::new(),
-                interaction: insights_view::HealthInteraction::new(),
-            },
+            view: ActiveView::Insights(insights_view::InsightsViewState::new(
+                insights_view::InsightsViewData::new(),
+            )),
             socket,
             session_token: Some(session_token),
             cached_config,
@@ -230,6 +232,7 @@ impl App {
             art_picker,
             art_cache: widgets::AlbumArtCache::new(),
             tab_click_rects: Vec::new(),
+            current_route: None,
         }
     }
 
@@ -311,24 +314,10 @@ impl App {
             ActiveView::Progress { .. } => ViewAction::None,
             ActiveView::ProgressiveWork(_) => ViewAction::None,
             ActiveView::ConfigEditor(s) => dispatch_input!(ConfigEditor, s),
-            ActiveView::Insights { ref data, ref mut interaction } => {
-                use mm_ui::view_state::lateral::health::HealthInputCtx;
-                let ctx = HealthInputCtx { items: &data.flat_items, busy: data.witch_busy };
-                match interaction.handle_input_with(&action, &ctx) {
-                    Some(a) => ViewAction::Insights(a),
-                    None => ViewAction::None,
-                }
-            }
+            ActiveView::Insights(ref mut s) => dispatch_input!(Insights, s),
             ActiveView::CorpusBrowser(s) => dispatch_input!(CorpusBrowser, s),
             ActiveView::TagSearch(s) => dispatch_input!(TagSearch, s),
-            ActiveView::Inbox { ref data, ref mut interaction } => {
-                use mm_ui::view_state::lateral::inbox::InboxInputCtx;
-                let ctx = InboxInputCtx { items: &data.entries, busy: data.busy };
-                match interaction.handle_input_with(&action, &ctx) {
-                    Some(a) => ViewAction::Inbox(a),
-                    None => ViewAction::None,
-                }
-            }
+            ActiveView::Inbox(ref mut s) => dispatch_input!(Inbox, s),
             ActiveView::TabbedTransactionReview(ref mut s) => dispatch_input!(TabbedTransactionReview, s),
             ActiveView::ExitConfirm(state) => {
                 let a = match action {
@@ -375,31 +364,8 @@ impl App {
                 ViewAction::IntakeConfirmation(startup::intake_confirmation::handle_input(state, &action, visible_height))
             }
             ActiveView::UnifiedTagEditor(s) => dispatch_input_raw!(UnifiedTagEditor, s),
-            ActiveView::Deploy { ref data, ref mut interaction } => {
-                match data {
-                    deploy_modal::DeployViewData::UpToDate { .. } => ViewAction::None,
-                    deploy_modal::DeployViewData::Preview { .. } => {
-                        let ctx = deploy_modal::DeployInputCtx {
-                            max_scroll: data.max_scroll_for_tab(interaction.active_tab),
-                        };
-                        match interaction.handle_input_preview(&action, &ctx) {
-                            Some(a) => ViewAction::Deploy(a),
-                            None => ViewAction::None,
-                        }
-                    }
-                }
-            }
-            ActiveView::ExternalMatches { ref data, ref mut interaction } => {
-                match interaction.list.handle_input(&action, &data.flat_items) {
-                    crate::widgets::standard_list::ListInputResult::Confirm(nav) => {
-                        match data.map_confirm(nav) {
-                            Some(a) => ViewAction::ExternalMatches(a),
-                            None => ViewAction::None,
-                        }
-                    }
-                    _ => ViewAction::None,
-                }
-            }
+            ActiveView::Deploy(ref mut s) => dispatch_input!(Deploy, s),
+            ActiveView::ExternalMatches(ref mut s) => dispatch_input!(ExternalMatches, s),
             ActiveView::MissingFileResolution(s) => dispatch_input_raw!(MissingFileResolution, s),
             ActiveView::MissingDirectoryResolution(s) => dispatch_input!(MissingDirectoryResolution, s),
             ActiveView::CorruptFileResolution(s) => dispatch_input!(CorruptFileResolution, s),
@@ -414,8 +380,8 @@ impl App {
             ActiveView::KnotBrowser(s) => dispatch_input_raw!(KnotBrowser, s),
             ActiveView::AcoustidBrowse(s) => dispatch_input_raw!(AcoustidBrowse, s),
             ActiveView::ReleaseReview(s) => dispatch_input_raw!(ReleaseReview, s),
-            ActiveView::History { ref mut data, ref mut interaction } => {
-                match data.handle_input(&mut interaction.session_list, &action) {
+            ActiveView::History(ref mut s) => {
+                match s.handle_input(&action) {
                     Some(a) => ViewAction::History(a),
                     None => ViewAction::None,
                 }
@@ -445,6 +411,9 @@ impl App {
 
         // Phase 3: handle pending DirectoryBrowser actions (expand, search)
         self.handle_pending_browser_action();
+
+        // Phase 4: sync route from view state
+        self.sync_route();
     }
 
     /// Dispatch any pending DirectoryBrowser action (RequestExpand, RequestSearch).
@@ -495,54 +464,50 @@ impl App {
     /// to refresh the active view's data without a full view restart.
     fn refresh_active_view_data(&mut self) {
         match &self.view {
-            ActiveView::Insights { .. } => {
+            ActiveView::Insights(_) => {
                 let insights_data = self.query(mm_meta::domain_queries::GetInsights);
-                if let ActiveView::Insights { ref mut data, ref mut interaction } = self.view {
-                    let rebuilt = data.update(
+                if let ActiveView::Insights(ref mut s) = self.view {
+                    let rebuilt = s.data.update(
                         Some(&self.cached_status.work),
                         Some(insights_data),
                         &self.cached_status.handled_decision_kinds,
                     );
                     if rebuilt {
-                        interaction.list.clamp_cursor(&data.flat_items);
+                        s.interaction.list.clamp_cursor(&s.data.flat_items);
                     }
                 }
             }
-            ActiveView::Inbox { .. } => {
+            ActiveView::Inbox(_) => {
                 let inbox_data = self.query(mm_meta::domain_queries::GetInboxOverview);
                 let busy = self.cached_status.work.pending > 0;
-                if let ActiveView::Inbox { ref mut data, ref mut interaction } = self.view {
-                    data.busy = busy;
-                    if data.update(Some(inbox_data)) {
-                        interaction.clamp_to_data(&data.entries);
+                if let ActiveView::Inbox(ref mut s) = self.view {
+                    s.data.busy = busy;
+                    if s.data.update(Some(inbox_data)) {
+                        s.interaction.clamp_to_data(&s.data.entries);
                     }
                 }
             }
-            ActiveView::History { .. } => {
+            ActiveView::History(_) => {
                 let history_data = self.query(mm_meta::domain_queries::GetEditHistory);
-                if let ActiveView::History { ref mut data, ref mut interaction } = self.view {
-                    data.update(&mut interaction.session_list, Some(history_data));
+                if let ActiveView::History(ref mut s) = self.view {
+                    s.update(Some(history_data));
                 }
             }
-            ActiveView::ExternalMatches { .. } => {
+            ActiveView::ExternalMatches(_) => {
                 let ext_data = self.query(mm_meta::domain_queries::GetExternalMatches);
-                if let ActiveView::ExternalMatches { ref mut data, ref mut interaction } = self.view {
-                    data.update(ext_data);
-                    interaction.clamp_to_data(&data.flat_items);
-                    data.rebuild_items();
-                    interaction.clamp_to_data(&data.flat_items);
+                if let ActiveView::ExternalMatches(ref mut s) = self.view {
+                    s.data.update(ext_data);
+                    s.interaction.clamp_to_data(&s.data.flat_items);
+                    s.data.rebuild_items();
+                    s.interaction.clamp_to_data(&s.data.flat_items);
                 }
             }
-            ActiveView::Deploy { data: deploy_modal::DeployViewData::UpToDate { .. }, .. } => {
+            ActiveView::Deploy(ref s) if matches!(s.data, deploy_modal::DeployViewData::UpToDate { .. }) => {
                 let status = self.query(mm_meta::domain_queries::GetDeployStatus);
-                if let ActiveView::Deploy {
-                    data: deploy_modal::DeployViewData::UpToDate {
-                        ref mut library_file_counts,
-                    },
-                    ..
-                } = self.view
-                {
-                    *library_file_counts = status.library_file_counts;
+                if let ActiveView::Deploy(ref mut s) = self.view {
+                    if let deploy_modal::DeployViewData::UpToDate { ref mut library_file_counts } = s.data {
+                        *library_file_counts = status.library_file_counts;
+                    }
                 }
             }
             ActiveView::CorpusBrowser(_) => {
@@ -572,14 +537,13 @@ impl App {
         self.last_lateral_view = widgets::LateralView::Health;
         let insights_data = self.query(mm_meta::domain_queries::GetInsights);
         let mut data = insights_view::InsightsViewData::new();
-        let mut interaction = insights_view::HealthInteraction::new();
         data.update(
             Some(&self.cached_status.work),
             Some(insights_data),
             &self.cached_status.handled_decision_kinds,
         );
-        interaction.list.clamp_cursor(&data.flat_items);
-        self.view = ActiveView::Insights { data, interaction };
+        self.view = ActiveView::Insights(insights_view::InsightsViewState::new(data));
+        self.sync_route();
     }
 
     /// Start the configured default view (post-startup landing screen).
@@ -612,6 +576,7 @@ impl App {
     pub(crate) fn start_tag_search(&mut self) {
         self.last_lateral_view = widgets::LateralView::Search;
         self.view = ActiveView::TagSearch(tag_search::TagSearchState::new());
+        self.sync_route();
     }
 
     pub(crate) fn start_inbox_view(&mut self) {
@@ -629,22 +594,19 @@ impl App {
             let inbox_data = self.query(mm_meta::domain_queries::GetInboxOverview);
             let busy = self.cached_status.work.pending > 0;
             let mut data = inbox_view::InboxViewData::new();
-            let mut interaction = inbox_view::InboxInteraction::new();
             data.busy = busy;
             data.update(Some(inbox_data));
-            interaction.clamp_to_data(&data.entries);
-            self.view = ActiveView::Inbox { data, interaction };
+            self.view = ActiveView::Inbox(inbox_view::InboxViewState::new(data));
         }
+        self.sync_route();
     }
 
     /// Start the history lateral view.
     pub(crate) fn start_history_view(&mut self) {
         self.last_lateral_view = widgets::LateralView::History;
         let history_data = self.query(mm_meta::domain_queries::GetEditHistory);
-        let mut data = history_view::HistoryViewData::new();
-        let mut interaction = history_view::HistoryInteraction::new();
-        data.update(&mut interaction.session_list, Some(history_data));
-        self.view = ActiveView::History { data, interaction };
+        self.view = ActiveView::History(history_view::HistoryViewState::with_data(history_data));
+        self.sync_route();
     }
 
     /// Start the external matches lateral view.
@@ -661,26 +623,57 @@ impl App {
             has_api_key,
             singles_before_incompletes,
         );
-        let mut interaction = external_match_view::ExternalMatchesInteraction::new();
         let ext_data = self.query(mm_meta::domain_queries::GetExternalMatches);
         data.update(ext_data);
-        interaction.clamp_to_data(&data.flat_items);
-        self.view = ActiveView::ExternalMatches { data, interaction };
+        self.view = ActiveView::ExternalMatches(external_match_view::ExternalMatchesViewState::new(data));
+        self.sync_route();
     }
 
     /// Start the lateral view identified by the given variant.
     pub(crate) fn start_lateral_view(&mut self, view: widgets::LateralView) {
-        match view {
-            widgets::LateralView::Config => self.start_config_editor(),
-            widgets::LateralView::Search => self.start_tag_search(),
-            widgets::LateralView::Files => self.start_corpus_browser(),
-            widgets::LateralView::Health => self.start_health_view(),
-            widgets::LateralView::History => self.start_history_view(),
-            widgets::LateralView::Inbox => self.start_inbox_view(),
-            widgets::LateralView::Transaction => self.start_tabbed_transaction_review(),
-            widgets::LateralView::Deploy => self.start_deploy_view(),
-            widgets::LateralView::ExternalMatches => self.start_external_matches_view(),
+        self.navigate_to(view.to_default_route());
+    }
+
+    /// Route-driven navigation: construct the appropriate view from a Route.
+    ///
+    /// For lateral routes, this queries data, constructs the view state,
+    /// then restores cursor/scroll/tab position from the Route parameters.
+    pub(crate) fn navigate_to(&mut self, route: mm_ui::route::Route) {
+        use mm_ui::route::Route;
+        match route {
+            Route::Health(ref r) => {
+                self.start_health_view();
+                if let ActiveView::Insights(ref mut s) = self.view { s.apply_route(r); }
+            }
+            Route::History(ref r) => {
+                self.start_history_view();
+                if let ActiveView::History(ref mut s) = self.view { s.apply_route(r); }
+            }
+            Route::Inbox(ref r) => {
+                self.start_inbox_view();
+                if let ActiveView::Inbox(ref mut s) = self.view { s.apply_route(r); }
+            }
+            Route::Deploy(ref r) => {
+                self.start_deploy_view();
+                if let ActiveView::Deploy(ref mut s) = self.view { s.apply_route(r); }
+            }
+            Route::ExternalMatches(ref r) => {
+                self.start_external_matches_view();
+                if let ActiveView::ExternalMatches(ref mut s) = self.view { s.apply_route(r); }
+            }
+            Route::Config(_) => self.start_config_editor(),
+            Route::Search(_) => self.start_tag_search(),
+            Route::Files(_) => self.start_corpus_browser(),
+            Route::Transaction(_) => self.start_tabbed_transaction_review(),
+            // Overlay routes are not yet navigable via navigate_to
+            _ => {}
         }
+        self.sync_route();
+    }
+
+    /// Synchronize `current_route` from the active view's state.
+    fn sync_route(&mut self) {
+        self.current_route = self.view.to_route();
     }
 
     /// Start the tabbed transaction review lateral view.
@@ -690,6 +683,7 @@ impl App {
         let details = self.transaction_decision_details().unwrap_or_default();
         state.review.refresh_decisions_from_details(details);
         self.view = ActiveView::TabbedTransactionReview(state);
+        self.sync_route();
     }
 
     /// Start the config editor view.
@@ -700,6 +694,7 @@ impl App {
         let kdl_content = if kdl_content.is_empty() { None } else { Some(kdl_content) };
         self.view =
             ActiveView::ConfigEditor(config_editor::ConfigEditorState::new(&config, kdl_content));
+        self.sync_route();
     }
 
     /// Start the deploy lateral view.
@@ -717,19 +712,13 @@ impl App {
                 .query(mm_meta::domain_queries::GetDeployData {
                     config: Some((*config).clone()),
                 });
-            let initial_tab = deploy_modal::DeploymentPreviewState::initial_tab(&cached_data);
-            self.view = ActiveView::Deploy {
-                data: deploy_modal::DeployViewData::Preview { cached_data },
-                interaction: deploy_modal::DeployInteraction::new_with_tab(initial_tab),
-            };
+            self.view = ActiveView::Deploy(deploy_modal::DeployViewState::preview(cached_data));
         } else {
-            self.view = ActiveView::Deploy {
-                data: deploy_modal::DeployViewData::UpToDate {
-                    library_file_counts: deploy_status.library_file_counts,
-                },
-                interaction: deploy_modal::DeployInteraction::new(),
-            };
+            self.view = ActiveView::Deploy(deploy_modal::DeployViewState::up_to_date(
+                deploy_status.library_file_counts,
+            ));
         }
+        self.sync_route();
     }
 
     pub(crate) fn start_corpus_browser(&mut self) {
@@ -779,6 +768,7 @@ impl App {
         v.set_packing_markers(file_paths, dir_categories);
 
         self.view = ActiveView::CorpusBrowser(browser_state);
+        self.sync_route();
     }
 
     // =========================================================================
@@ -1239,16 +1229,16 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         // ExternalMatches: poll fetch status each tick when active (progress display)
-        if matches!(app.view, ActiveView::ExternalMatches { .. }) {
+        if matches!(app.view, ActiveView::ExternalMatches(_)) {
             let new_fetch_active = app.cached_status.is_external_fetch_active;
             let fetch_progress = app.cached_status.external_fetch_progress.clone();
             let mut fetch_changed = false;
-            if let ActiveView::ExternalMatches { ref mut data, ref mut interaction } = app.view {
-                fetch_changed = data.fetch_active != new_fetch_active;
-                data.fetch_active = new_fetch_active;
-                data.fetch_progress = fetch_progress;
-                if data.fetch_active {
-                    interaction.tick_count = interaction.tick_count.wrapping_add(1);
+            if let ActiveView::ExternalMatches(ref mut s) = app.view {
+                fetch_changed = s.data.fetch_active != new_fetch_active;
+                s.data.fetch_active = new_fetch_active;
+                s.data.fetch_progress = fetch_progress;
+                if s.data.fetch_active {
+                    s.interaction.tick_count = s.interaction.tick_count.wrapping_add(1);
                 }
             }
             if fetch_changed {

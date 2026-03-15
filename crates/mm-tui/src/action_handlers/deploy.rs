@@ -16,10 +16,10 @@ impl HandleAction for deploy_modal::DeployAction {
                 let Some(w) = witness else { return };
                 // Extract cached data from Preview state
                 let cached_data = match &app.view {
-                    ActiveView::Deploy {
-                        data: deploy_modal::DeployViewData::Preview { ref cached_data },
-                        ..
-                    } => Some(cached_data.clone()),
+                    ActiveView::Deploy(ref s) => match &s.data {
+                        deploy_modal::DeployViewData::Preview { ref cached_data } => Some(cached_data.clone()),
+                        _ => None,
+                    },
                     _ => None,
                 };
                 if let Some(data) = cached_data {

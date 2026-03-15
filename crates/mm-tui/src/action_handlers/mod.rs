@@ -88,10 +88,10 @@ impl App {
             ViewAction::KnotBrowser(a) => a.handle(self, witness.as_ref()),
             ViewAction::History(a) => a.handle(self, witness.as_ref()),
             ViewAction::TagCanonicityResolution(a) => a.handle(self, witness.as_ref()),
-            ViewAction::CompoundTagSplit(a) => a.handle(self, witness.as_ref()),
+            ViewAction::CompoundTagSplitResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::MissingAlbumSingleResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::DiscExtractionResolution(a) => a.handle(self, witness.as_ref()),
-            ViewAction::ManualReview(a) => a.handle(self, witness.as_ref()),
+            ViewAction::ManualReviewResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::TransactionReview(a) => a.handle(self, witness.as_ref()),
         }
     }

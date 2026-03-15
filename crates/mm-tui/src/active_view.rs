@@ -103,7 +103,7 @@ pub(crate) enum ActiveView {
         mode: mm_ui::resolutions::tag_canonicity::CanonicityMode,
     },
     // Compound tag split with packed data + StandardList + DecisionField
-    CompoundTagSplit {
+    CompoundTagSplitResolution {
         data: mm_meta::views::canonicity_compound::CompoundSplitResolutionData,
         current_group: usize,
         list: mm_ui::standard_list::StandardListState,
@@ -135,7 +135,7 @@ pub(crate) enum ActiveView {
     },
 
     // Manual review with StandardList + buttons
-    ManualReview {
+    ManualReviewResolution {
         data: mm_meta::views::review_match::ManualReviewData,
         review_kind: mm_meta::views::review_match::ReviewKind,
         current_group: usize,
@@ -183,10 +183,10 @@ impl ActiveView {
             Self::KnotBrowser(_) => Some("Knot Browser"),
             Self::TagCanonicityResolution { mode: mm_ui::resolutions::tag_canonicity::CanonicityMode::InconsistentAlbumArtist, .. } => Some("Album Artist"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
-            Self::CompoundTagSplit { .. } => Some("Compound Tag Split"),
+            Self::CompoundTagSplitResolution { .. } => Some("Compound Tag Split"),
             Self::MissingAlbumSingleResolution { .. } => Some("Missing Album Singles"),
             Self::DiscExtractionResolution { .. } => Some("Disc Extraction"),
-            Self::ManualReview { review_kind, .. } => Some(review_kind.title()),
+            Self::ManualReviewResolution { review_kind, .. } => Some(review_kind.title()),
             Self::TransactionReview(_) => Some("Transaction Review"),
         }
     }
@@ -205,7 +205,7 @@ impl ActiveView {
                     .and_then(|v| v.files.first())
                     .map(|f| f.display_name.as_str())
             }
-            Self::CompoundTagSplit { ref data, current_group, ref list, .. } => {
+            Self::CompoundTagSplitResolution { ref data, current_group, ref list, .. } => {
                 data.groups.get(*current_group)
                     .and_then(|g| g.files.get(list.cursor))
                     .map(|f| f.display_name.as_str())
@@ -238,7 +238,7 @@ impl ActiveView {
                     .and_then(|g| g.files.get(list.cursor))
                     .map(|f| f.path.as_str())
             }
-            Self::ManualReview { ref data, current_group, ref list, .. } => {
+            Self::ManualReviewResolution { ref data, current_group, ref list, .. } => {
                 data.groups.get(*current_group)
                     .and_then(|g| g.files.get(list.cursor))
                     .map(|f| f.corpus_path.as_str())
@@ -321,10 +321,10 @@ pub(crate) enum ViewAction {
     KnotBrowser(super::knot_browser::KnotBrowserAction),
     History(history_view::HistoryAction),
     TagCanonicityResolution(mm_ui::resolutions::tag_canonicity::CanonicityAction),
-    CompoundTagSplit(mm_ui::resolutions::compound_split::CompoundSplitAction),
+    CompoundTagSplitResolution(mm_ui::resolutions::compound_split::CompoundSplitAction),
     MissingAlbumSingleResolution(mm_ui::resolutions::missing_album::MissingAlbumAction),
     DiscExtractionResolution(mm_ui::resolutions::disc_extraction::DiscExtractionAction),
-    ManualReview(mm_ui::resolutions::manual_review::ReviewAction),
+    ManualReviewResolution(mm_ui::resolutions::manual_review::ReviewAction),
     TransactionReview(transaction_review::TransactionReviewAction),
 }
 

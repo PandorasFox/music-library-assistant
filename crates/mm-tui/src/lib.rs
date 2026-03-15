@@ -600,7 +600,7 @@ impl App {
                     }
                 }
             }
-            ActiveView::CompoundTagSplit {
+            ActiveView::CompoundTagSplitResolution {
                 ref data, ref mut current_group, ref mut list,
                 ref mut buttons, ref mut field, ref mut focus,
                 ..
@@ -642,7 +642,7 @@ impl App {
                     }
                     // Cancel always cancels
                     IA::Cancel => {
-                        ViewAction::CompoundTagSplit(CsAction::Cancel)
+                        ViewAction::CompoundTagSplitResolution(CsAction::Cancel)
                     }
                     // Route by focus pane
                     _ => {
@@ -657,7 +657,7 @@ impl App {
                                     IA::Confirm => {
                                         // Confirm from field fires the selected button
                                         match buttons.confirm(&ctx) {
-                                            Some(a) => ViewAction::CompoundTagSplit(a),
+                                            Some(a) => ViewAction::CompoundTagSplitResolution(a),
                                             None => ViewAction::None,
                                         }
                                     }
@@ -690,7 +690,7 @@ impl App {
                                     }
                                     IA::Confirm => {
                                         match buttons.confirm(&ctx) {
-                                            Some(a) => ViewAction::CompoundTagSplit(a),
+                                            Some(a) => ViewAction::CompoundTagSplitResolution(a),
                                             None => ViewAction::None,
                                         }
                                     }
@@ -853,7 +853,7 @@ impl App {
                     }
                 }
             }
-            ActiveView::ManualReview {
+            ActiveView::ManualReviewResolution {
                 ref data, ref mut current_group, ref mut list,
                 ref mut buttons, ref mut focus, ref review_kind, ..
             } => {
@@ -885,7 +885,7 @@ impl App {
                         ViewAction::None
                     }
                     IA::Cancel => {
-                        ViewAction::ManualReview(ReviewAction::Cancel)
+                        ViewAction::ManualReviewResolution(ReviewAction::Cancel)
                     }
                     _ => {
                         let ctx = ReviewButtonCtx {
@@ -918,7 +918,7 @@ impl App {
                                     }
                                     IA::Confirm => {
                                         match buttons.confirm(&ctx) {
-                                            Some(a) => ViewAction::ManualReview(a),
+                                            Some(a) => ViewAction::ManualReviewResolution(a),
                                             None => ViewAction::None,
                                         }
                                     }

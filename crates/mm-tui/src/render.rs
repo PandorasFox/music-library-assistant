@@ -189,7 +189,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
                 f, area, data, current_cluster, list, buttons, field, focus, mode,
             );
         }
-        ActiveView::CompoundTagSplit {
+        ActiveView::CompoundTagSplitResolution {
             ref data, current_group, ref mut list, ref mut buttons,
             ref field, focus, safe_mode, ..
         } => {
@@ -257,7 +257,7 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
                 f, area, data, current_group, list, buttons, focus, disc_tag_name,
             );
         }
-        ActiveView::ManualReview {
+        ActiveView::ManualReviewResolution {
             ref data, review_kind, current_group, ref mut list, ref mut buttons,
             focus, ..
         } => {

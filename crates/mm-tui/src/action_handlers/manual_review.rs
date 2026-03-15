@@ -47,7 +47,7 @@ impl App {
 
         let _ = self.start_transaction(kind.transaction_label());
 
-        self.view = ActiveView::ManualReview {
+        self.view = ActiveView::ManualReviewResolution {
             data,
             review_kind: kind,
             current_group: 0,
@@ -64,7 +64,7 @@ impl App {
     /// Stash is per-file (cursor position), not per-group.
     fn stage_stash_for_selected_file_v3(&mut self, gesture: &witness::ConfirmationGesture) {
         let (group_idx, file_idx, corpus_path, inode, stash_name) = {
-            let ActiveView::ManualReview {
+            let ActiveView::ManualReviewResolution {
                 ref data, review_kind, current_group, ref list, ..
             } = self.view
             else {
@@ -102,7 +102,7 @@ impl App {
         );
 
         // Mark file as stashed in the UI state — stay on the same group
-        if let ActiveView::ManualReview {
+        if let ActiveView::ManualReviewResolution {
             ref mut data, ..
         } = self.view
         {
@@ -119,7 +119,7 @@ impl App {
     /// Only valid for RedundantDuplicate review kind.
     fn stage_mark_expected_duplicate_v3(&mut self, gesture: &witness::ConfirmationGesture) {
         let (group_idx, fingerprint_key, group_label) = {
-            let ActiveView::ManualReview {
+            let ActiveView::ManualReviewResolution {
                 ref data, review_kind, current_group, ..
             } = self.view
             else {
@@ -152,7 +152,7 @@ impl App {
         );
 
         // Advance to next group or show review
-        if let ActiveView::ManualReview {
+        if let ActiveView::ManualReviewResolution {
             ref data,
             ref mut current_group,
             ref mut list,

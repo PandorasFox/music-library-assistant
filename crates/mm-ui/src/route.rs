@@ -8,6 +8,7 @@
 //! Query parameters carry position (cursor, scroll, focus, filter text).
 
 use mm_meta::db_types::Zone;
+use mm_meta::views::external_matches::{AcoustidConfidence, ReleaseReviewFilter};
 use std::fmt;
 
 // ============================================================================
@@ -34,6 +35,7 @@ pub enum Route {
     TransactionReview(TransactionReviewRoute),
     PackingBrowser(PackingBrowserRoute),
     KnotBrowser(KnotBrowserRoute),
+    ExternalMatchOverlay(ExternalMatchRoute),
 }
 
 // ============================================================================
@@ -142,6 +144,22 @@ pub struct KnotBrowserRoute {
 }
 
 // ============================================================================
+// External match overlay routes
+// ============================================================================
+
+/// Sub-routes under `/external-matches/` for AcoustID browse and release review.
+/// These are overlay views launched from the external matches lateral view.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExternalMatchRoute {
+    /// Browse AcoustID matches filtered by confidence tier.
+    AcoustidBrowse { confidence: AcoustidConfidence, cursor: Option<usize> },
+    /// Browse packed releases filtered by review category.
+    ReleaseReview { filter: ReleaseReviewFilter, cursor: Option<usize> },
+    /// Single release detail view for approval.
+    ReleaseDetail { release_id: String, cursor: Option<usize> },
+}
+
+// ============================================================================
 // Resolution routes
 // ============================================================================
 
@@ -177,6 +195,38 @@ pub enum ResolutionRoute {
     DeployConflicts { group: Option<usize> },
     MetadataDuplicates { group: Option<usize> },
     SameRecording { group: Option<usize> },
+}
+
+impl ResolutionRoute {
+    /// Canonical human-readable label for this resolution type.
+    pub fn display_label(&self) -> &'static str {
+        match self {
+            Self::MissingFilesRestorable { .. } => "Missing Files (Restorable)",
+            Self::MissingFilesPermanent { .. } => "Missing Files (Permanent)",
+            Self::MissingDirectories { .. } => "Missing Directories",
+            Self::CorruptFiles { .. } => "Corrupt Files",
+            Self::LosslessRemux { .. } => "Lossless Remux",
+            Self::SubparDuplicates { .. } => "Subpar Duplicates",
+            Self::InboxCorpusMatch { .. } => "Inbox/Corpus Match",
+            Self::DirectoryCluster { .. } => "Directory Cluster",
+            Self::MovedFiles { .. } => "Moved Files",
+            Self::OobSync { .. } => "OOB Tag Sync",
+            Self::OobConflictMtimeOnly { .. } => "OOB Conflict (mtime)",
+            Self::OobConflictDbOnly { .. } => "OOB Conflict (DB only)",
+            Self::OobConflictDiskOnly { .. } => "OOB Conflict (disk only)",
+            Self::OobConflictTwoWay { .. } => "OOB Conflict (two-way)",
+            Self::ExternalMatchReview { .. } => "External Match Review",
+            Self::TagCanonicity { .. } => "Tag Canonicity",
+            Self::InconsistentAlbumArtist { .. } => "Inconsistent Album Artist",
+            Self::CompoundSplit { .. } => "Compound Split",
+            Self::MissingAlbum { .. } => "Missing Album",
+            Self::DiscExtraction { .. } => "Disc Extraction",
+            Self::RedundantDuplicates { .. } => "Redundant Duplicates",
+            Self::DeployConflicts { .. } => "Deploy Conflicts",
+            Self::MetadataDuplicates { .. } => "Metadata Duplicates",
+            Self::SameRecording { .. } => "Same Recording",
+        }
+    }
 }
 
 // ============================================================================
@@ -310,6 +360,9 @@ impl Route {
                 path.push_str(&r.id);
                 params.set_usize("cursor", r.cursor);
             }
+            Route::ExternalMatchOverlay(r) => {
+                external_match_overlay_to_url(r, &mut path, &mut params);
+            }
         }
 
         let query = params.to_query_string();
@@ -382,9 +435,59 @@ impl Route {
                 tab: params.get_string("tab").and_then(|s| crate::domain_types::DeployTab::from_str(&s)),
                 scroll: params.get_usize("scroll"),
             })),
-            "external-matches" => Ok(Route::ExternalMatches(ExternalMatchesRoute {
-                cursor: params.get_usize("cursor"),
-            })),
+            "external-matches" => {
+                // Sub-routes: /external-matches/acoustid/{confidence}
+                //             /external-matches/review/{filter}
+                //             /external-matches/review/release/{id}
+                if let Some(sub) = segments.get(1) {
+                    match *sub {
+                        "acoustid" => {
+                            let confidence_str = segments.get(2).ok_or_else(|| RouteParseError {
+                                message: "acoustid browse requires a confidence tier".into(),
+                            })?;
+                            let confidence = AcoustidConfidence::from_str(confidence_str)
+                                .ok_or_else(|| RouteParseError {
+                                    message: format!("unknown confidence tier: {confidence_str}"),
+                                })?;
+                            Ok(Route::ExternalMatchOverlay(ExternalMatchRoute::AcoustidBrowse {
+                                confidence,
+                                cursor: params.get_usize("cursor"),
+                            }))
+                        }
+                        "review" => {
+                            // /external-matches/review/release/{id} OR /external-matches/review/{filter}
+                            let next = segments.get(2).ok_or_else(|| RouteParseError {
+                                message: "review requires a filter or 'release'".into(),
+                            })?;
+                            if *next == "release" {
+                                let release_id = segments.get(3).ok_or_else(|| RouteParseError {
+                                    message: "release detail requires a release_id".into(),
+                                })?;
+                                Ok(Route::ExternalMatchOverlay(ExternalMatchRoute::ReleaseDetail {
+                                    release_id: (*release_id).to_string(),
+                                    cursor: params.get_usize("cursor"),
+                                }))
+                            } else {
+                                let filter = ReleaseReviewFilter::from_str(next)
+                                    .ok_or_else(|| RouteParseError {
+                                        message: format!("unknown release review filter: {next}"),
+                                    })?;
+                                Ok(Route::ExternalMatchOverlay(ExternalMatchRoute::ReleaseReview {
+                                    filter,
+                                    cursor: params.get_usize("cursor"),
+                                }))
+                            }
+                        }
+                        _ => Err(RouteParseError {
+                            message: format!("unknown external-matches sub-route: {sub}"),
+                        }),
+                    }
+                } else {
+                    Ok(Route::ExternalMatches(ExternalMatchesRoute {
+                        cursor: params.get_usize("cursor"),
+                    }))
+                }
+            }
             "tags" => {
                 let (inodes, mode) = if segments.len() > 1 {
                     // /tags/{inode} — single file
@@ -459,6 +562,23 @@ impl Route {
             Route::ExternalMatches(_) => Some(LateralView::ExternalMatches),
             _ => None,
         }
+    }
+
+    /// The lateral view to highlight in the titlebar for any route.
+    ///
+    /// For lateral views, returns that view directly.
+    /// For overlays, returns the parent lateral view they're associated with.
+    pub fn parent_lateral(&self) -> crate::lateral_view::LateralView {
+        use crate::lateral_view::LateralView;
+        self.lateral_view().unwrap_or_else(|| match self {
+            Route::PackingBrowser(_) | Route::KnotBrowser(_) => LateralView::ExternalMatches,
+            Route::ExternalMatchOverlay(_) => LateralView::ExternalMatches,
+            Route::TagEditor(_) => LateralView::Search,
+            Route::Resolution(_) => LateralView::Health,
+            Route::TransactionReview(_) => LateralView::Transaction,
+            // Lateral views already handled by lateral_view() above.
+            _ => LateralView::Health,
+        })
     }
 }
 
@@ -726,6 +846,31 @@ fn resolution_from_url(
         }
     };
     Ok(Route::Resolution(route))
+}
+
+// ============================================================================
+// External match overlay URL helpers
+// ============================================================================
+
+fn external_match_overlay_to_url(r: &ExternalMatchRoute, path: &mut String, params: &mut QueryParams) {
+    path.push_str("/external-matches/");
+    match r {
+        ExternalMatchRoute::AcoustidBrowse { confidence, cursor } => {
+            path.push_str("acoustid/");
+            path.push_str(confidence.as_str());
+            params.set_usize("cursor", *cursor);
+        }
+        ExternalMatchRoute::ReleaseReview { filter, cursor } => {
+            path.push_str("review/");
+            path.push_str(filter.as_str());
+            params.set_usize("cursor", *cursor);
+        }
+        ExternalMatchRoute::ReleaseDetail { release_id, cursor } => {
+            path.push_str("review/release/");
+            path.push_str(release_id);
+            params.set_usize("cursor", *cursor);
+        }
+    }
 }
 
 // ============================================================================
@@ -1060,6 +1205,78 @@ mod tests {
         for r in cases {
             assert_round_trip(&Route::Resolution(r));
         }
+    }
+
+    // -- External match overlays --
+
+    #[test]
+    fn round_trip_external_match_acoustid_browse() {
+        assert_round_trip(&Route::ExternalMatchOverlay(ExternalMatchRoute::AcoustidBrowse {
+            confidence: AcoustidConfidence::High,
+            cursor: Some(3),
+        }));
+    }
+
+    #[test]
+    fn round_trip_external_match_acoustid_all() {
+        assert_round_trip(&Route::ExternalMatchOverlay(ExternalMatchRoute::AcoustidBrowse {
+            confidence: AcoustidConfidence::All,
+            cursor: None,
+        }));
+    }
+
+    #[test]
+    fn round_trip_external_match_release_review() {
+        assert_round_trip(&Route::ExternalMatchOverlay(ExternalMatchRoute::ReleaseReview {
+            filter: ReleaseReviewFilter::Perfect,
+            cursor: Some(0),
+        }));
+    }
+
+    #[test]
+    fn round_trip_external_match_release_review_all() {
+        assert_round_trip(&Route::ExternalMatchOverlay(ExternalMatchRoute::ReleaseReview {
+            filter: ReleaseReviewFilter::All,
+            cursor: None,
+        }));
+    }
+
+    #[test]
+    fn round_trip_external_match_release_detail() {
+        assert_round_trip(&Route::ExternalMatchOverlay(ExternalMatchRoute::ReleaseDetail {
+            release_id: "abc12345-6789-0123-4567-890abcdef012".into(),
+            cursor: Some(2),
+        }));
+    }
+
+    #[test]
+    fn url_shape_external_match_acoustid() {
+        let url = Route::ExternalMatchOverlay(ExternalMatchRoute::AcoustidBrowse {
+            confidence: AcoustidConfidence::High,
+            cursor: Some(3),
+        })
+        .to_url();
+        assert_eq!(url, "/external-matches/acoustid/high?cursor=3");
+    }
+
+    #[test]
+    fn url_shape_external_match_release_review() {
+        let url = Route::ExternalMatchOverlay(ExternalMatchRoute::ReleaseReview {
+            filter: ReleaseReviewFilter::FullMatch,
+            cursor: None,
+        })
+        .to_url();
+        assert_eq!(url, "/external-matches/review/full-match");
+    }
+
+    #[test]
+    fn url_shape_external_match_release_detail() {
+        let url = Route::ExternalMatchOverlay(ExternalMatchRoute::ReleaseDetail {
+            release_id: "abc123".into(),
+            cursor: Some(0),
+        })
+        .to_url();
+        assert_eq!(url, "/external-matches/review/release/abc123?cursor=0");
     }
 
     // -- Edge cases --

@@ -84,7 +84,7 @@ impl App {
         let field = mm_ui::decision_field::DecisionField::new("Split parts:")
             .with_value(&prefill);
 
-        self.view = ActiveView::CompoundTagSplit {
+        self.view = ActiveView::CompoundTagSplitResolution {
             data,
             current_group: 0,
             list: mm_ui::standard_list::StandardListState::new(
@@ -100,7 +100,7 @@ impl App {
 
     /// Advance to next group or go to review (V3).
     fn advance_compound_split_v3(&mut self) {
-        if let ActiveView::CompoundTagSplit {
+        if let ActiveView::CompoundTagSplitResolution {
             ref data, ref mut current_group, ref mut list, ref mut field, ..
         } = self.view
         {
@@ -126,7 +126,7 @@ impl App {
     /// then builds tag ops: replace compound value with first part, add remaining parts.
     fn stage_compound_split_v3(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, key, description) = match &self.view {
-            ActiveView::CompoundTagSplit {
+            ActiveView::CompoundTagSplitResolution {
                 ref data, current_group, ref field, ref zone, safe_mode, ..
             } => {
                 use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
@@ -201,7 +201,7 @@ impl App {
     /// standalone entity, suppressing future compound detection for it.
     fn stage_compound_canonicalize_v3(&mut self, gesture: &witness::ConfirmationGesture) {
         let (mutations, key, description) = match &self.view {
-            ActiveView::CompoundTagSplit {
+            ActiveView::CompoundTagSplitResolution {
                 ref data, current_group, ref zone, safe_mode, ..
             } => {
                 use mm_meta::mutations::indexing::EmitCanonicalTagMutation;

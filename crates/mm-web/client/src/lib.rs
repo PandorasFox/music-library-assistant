@@ -97,13 +97,7 @@ fn current_route() -> Route {
 /// Determine the LateralView for titlebar highlighting.
 /// Overlay routes map to their parent lateral view.
 fn lateral_view_for_route(route: &Route) -> LateralView {
-    route.lateral_view().unwrap_or_else(|| match route {
-        Route::PackingBrowser(_) | Route::KnotBrowser(_) => LateralView::ExternalMatches,
-        Route::TagEditor(_) => LateralView::Search,
-        Route::Resolution(_) => LateralView::Health,
-        Route::TransactionReview(_) => LateralView::Transaction,
-        _ => LateralView::Health,
-    })
+    route.parent_lateral()
 }
 
 /// Navigate to a route by updating the URL hash.
@@ -555,42 +549,11 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
         // Remaining unimplemented resolution types — show placeholder.
         _ => {
             Ok(views::render_resolution_view(
-                &format!("Resolution — {}", resolution_label(res)),
+                &format!("Resolution — {}", res.display_label()),
                 &[],
                 &[("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()")],
             ))
         }
-    }
-}
-
-/// Human-readable label for a resolution route variant.
-fn resolution_label(res: &route::ResolutionRoute) -> &'static str {
-    use route::ResolutionRoute;
-    match res {
-        ResolutionRoute::MissingFilesRestorable { .. } => "Missing Files (Restorable)",
-        ResolutionRoute::MissingFilesPermanent { .. } => "Missing Files (Permanent)",
-        ResolutionRoute::MissingDirectories { .. } => "Missing Directories",
-        ResolutionRoute::CorruptFiles { .. } => "Corrupt Files",
-        ResolutionRoute::LosslessRemux { .. } => "Lossless Remux",
-        ResolutionRoute::SubparDuplicates { .. } => "Subpar Duplicates",
-        ResolutionRoute::InboxCorpusMatch { .. } => "Inbox/Corpus Match",
-        ResolutionRoute::DirectoryCluster { .. } => "Directory Cluster",
-        ResolutionRoute::MovedFiles { .. } => "Moved Files",
-        ResolutionRoute::OobSync { .. } => "OOB Tag Sync",
-        ResolutionRoute::OobConflictMtimeOnly { .. } => "OOB Conflict (mtime)",
-        ResolutionRoute::OobConflictDbOnly { .. } => "OOB Conflict (DB only)",
-        ResolutionRoute::OobConflictDiskOnly { .. } => "OOB Conflict (disk only)",
-        ResolutionRoute::OobConflictTwoWay { .. } => "OOB Conflict (two-way)",
-        ResolutionRoute::ExternalMatchReview { .. } => "External Match Review",
-        ResolutionRoute::TagCanonicity { .. } => "Tag Canonicity",
-        ResolutionRoute::InconsistentAlbumArtist { .. } => "Inconsistent Album Artist",
-        ResolutionRoute::CompoundSplit { .. } => "Compound Split",
-        ResolutionRoute::MissingAlbum { .. } => "Missing Album",
-        ResolutionRoute::DiscExtraction { .. } => "Disc Extraction",
-        ResolutionRoute::RedundantDuplicates { .. } => "Redundant Duplicates",
-        ResolutionRoute::DeployConflicts { .. } => "Deploy Conflicts",
-        ResolutionRoute::MetadataDuplicates { .. } => "Metadata Duplicates",
-        ResolutionRoute::SameRecording { .. } => "Same Recording",
     }
 }
 

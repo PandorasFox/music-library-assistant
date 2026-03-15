@@ -181,21 +181,11 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::MissingDirectoryResolution(ref mut preview) => {
             preview.render_frame(f, area);
         }
-        ActiveView::TagCanonicityResolution {
-            ref data, current_cluster, ref mut list, ref mut buttons,
-            ref field, focus, mode, ..
-        } => {
-            tag_canonicity_v2::render_v3::render(
-                f, area, data, current_cluster, list, buttons, field, focus, mode,
-            );
+        ActiveView::TagCanonicityResolution(ref mut s) => {
+            tag_canonicity_v2::render_v3::render_v3(f, area, s);
         }
-        ActiveView::CompoundTagSplitResolution {
-            ref data, current_group, ref mut list, ref mut buttons,
-            ref field, focus, safe_mode, zone, ..
-        } => {
-            compound_split_v2::render_v3::render(
-                f, area, data, current_group, list, buttons, field, focus, safe_mode, zone,
-            );
+        ActiveView::CompoundTagSplitResolution(ref mut s) => {
+            compound_split_v2::render_v3::render_v3(f, area, s);
         }
         ActiveView::OobResolution(ref mut state) => {
             oob_conflict_modal::render(f, area, state);

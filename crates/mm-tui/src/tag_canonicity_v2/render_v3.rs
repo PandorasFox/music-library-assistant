@@ -13,13 +13,13 @@ use ratatui::widgets::{Block, Borders, Clear};
 use ratatui::Frame;
 
 use mm_meta::views::canonicity_compound::{
-    CanonicityCluster, ResolutionFileInfo, TagCanonicityResolutionData,
+    CanonicityCluster, ResolutionFileInfo,
 };
 use mm_ui::geometry::FocusPane;
-use mm_ui::modal_buttons::ButtonRowState;
+use mm_ui::resolution_state::ResolutionData;
+use mm_ui::resolutions::tag_canonicity::TagCanonicityViewState;
 use mm_ui::rich_text::{RichBlock, RichSpan};
-use mm_ui::resolutions::tag_canonicity::{CanonicityButton, CanonicityButtonCtx};
-use mm_ui::standard_list::{ListEntry, StandardListState};
+use mm_ui::standard_list::ListEntry;
 use mm_ui::wizard::{WizardItem, WizardOffer};
 
 use crate::helpers::truncate_right;
@@ -84,17 +84,16 @@ pub fn build_items(cluster: &CanonicityCluster) -> Vec<VariantListItem> {
 /// Render the Tag Canonicity V3 resolution view.
 ///
 /// Layout: Title (3) + DecisionField (3) + StandardList with wizard (min) + Buttons (3)
-pub fn render(
+pub fn render_v3(
     f: &mut Frame,
     area: Rect,
-    data: &TagCanonicityResolutionData,
-    current_cluster: usize,
-    list: &mut StandardListState,
-    buttons: &mut ButtonRowState<CanonicityButton>,
-    field: &mm_ui::decision_field::DecisionField,
-    focus: FocusPane,
-    mode: mm_ui::resolutions::tag_canonicity::CanonicityMode,
+    state: &mut TagCanonicityViewState,
 ) {
+    let data = &state.state.data.inner;
+    let current_cluster = state.state.data.current_cluster;
+    let mode = state.state.data.mode;
+    let focus = state.state.frame.focus_pane;
+
     let padded = mm_ui::geometry::padded_rect(area);
     f.render_widget(Clear, padded);
 
@@ -113,7 +112,7 @@ pub fn render(
     render_title_bar(f, vertical[0], data, current_cluster, mode);
 
     // --- Decision field ---
-    render_decision_field_widget(f, vertical[1], field, focus);
+    render_decision_field_widget(f, vertical[1], &state.field, focus);
 
     // --- StandardList ---
     let cluster = data.clusters.get(current_cluster);
@@ -128,7 +127,7 @@ pub fn render(
     };
 
     render_standard_list(
-        list,
+        &mut state.state.list,
         f,
         vertical[2],
         &items,
@@ -138,20 +137,15 @@ pub fn render(
     );
 
     // --- Buttons ---
-    let ctx = CanonicityButtonCtx {
-        has_variants: items.len() > 0,
-        current_cluster_index: current_cluster,
-        mode,
-        tag_name: data.tag_name.clone(),
-    };
+    let ctx = state.state.data.button_ctx();
     let button_focused = focus == FocusPane::Buttons;
-    render_buttons(buttons, f, vertical[3], &ctx, button_focused);
+    render_buttons(&mut state.state.frame.buttons, f, vertical[3], &ctx, button_focused);
 }
 
 fn render_title_bar(
     f: &mut Frame,
     area: Rect,
-    data: &TagCanonicityResolutionData,
+    data: &mm_meta::views::canonicity_compound::TagCanonicityResolutionData,
     current_cluster: usize,
     mode: mm_ui::resolutions::tag_canonicity::CanonicityMode,
 ) {

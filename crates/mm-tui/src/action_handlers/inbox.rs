@@ -108,7 +108,7 @@ impl HandleAction for inbox_organize::InboxOrganizeAction {
 impl App {
     /// Start inbox tag canonicity resolution using the V3 packed query.
     fn start_inbox_tag_canonicity_resolution(&mut self) {
-        use mm_ui::resolutions::tag_canonicity::CanonicityMode;
+        use mm_ui::resolutions::tag_canonicity::{CanonicityMode, TagCanonicityData, TagCanonicityViewState};
 
         let zone = mm_meta::db_types::Zone::Inbox;
 
@@ -126,24 +126,14 @@ impl App {
 
         let _ = self.start_transaction("Inbox tag canonicalization");
 
-        let prefill = data.clusters.first()
-            .map(|c| c.suggested_canonical.as_deref().unwrap_or(""))
-            .unwrap_or("");
-        let field = mm_ui::decision_field::DecisionField::new("Squash to:")
-            .with_value(prefill);
+        let prefill: String = data.clusters.first()
+            .and_then(|c| c.suggested_canonical.as_deref())
+            .unwrap_or("")
+            .to_string();
 
-        self.view = ActiveView::TagCanonicityResolution {
-            data,
-            current_cluster: 0,
-            list: mm_ui::standard_list::StandardListState::new(
-                mm_ui::standard_list::StandardListConfig::default(),
-            ),
-            buttons: mm_ui::modal_buttons::ButtonRowState::new(),
-            field,
-            zone,
-            focus: mm_ui::geometry::FocusPane::List,
-            mode: CanonicityMode::TagCanonicity,
-        };
+        let tc_data = TagCanonicityData::new(data, zone, CanonicityMode::TagCanonicity);
+        let state = TagCanonicityViewState::new(tc_data, "Squash to:", &prefill);
+        self.view = ActiveView::TagCanonicityResolution(state);
     }
 
     /// Start inbox corpus match resolution modal.

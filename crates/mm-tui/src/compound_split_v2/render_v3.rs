@@ -12,12 +12,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear};
 use ratatui::Frame;
 
-use mm_meta::views::canonicity_compound::{CompoundSplitCluster, CompoundSplitResolutionData};
+use mm_meta::views::canonicity_compound::CompoundSplitCluster;
 use mm_ui::geometry::FocusPane;
-use mm_ui::modal_buttons::ButtonRowState;
+use mm_ui::resolution_state::ResolutionData;
+use mm_ui::resolutions::compound_split::CompoundSplitViewState;
 use mm_ui::rich_text::{RichBlock, RichSpan};
-use mm_ui::resolutions::compound_split::{CompoundSplitButton, CompoundSplitButtonCtx};
-use mm_ui::standard_list::{ListEntry, StandardListState};
+use mm_ui::standard_list::ListEntry;
 use mm_ui::wizard::{WizardItem, WizardOffer};
 
 use crate::helpers::truncate_right;
@@ -74,18 +74,16 @@ pub fn build_items(group: &CompoundSplitCluster) -> Vec<CompoundFileItem> {
 /// Render the Compound Split V3 resolution view.
 ///
 /// Layout: Title (3) + DecisionField (3) + StandardList with wizard (min) + Buttons (3)
-pub fn render(
+pub fn render_v3(
     f: &mut Frame,
     area: Rect,
-    data: &CompoundSplitResolutionData,
-    current_group: usize,
-    list: &mut StandardListState,
-    buttons: &mut ButtonRowState<CompoundSplitButton>,
-    field: &mm_ui::decision_field::DecisionField,
-    focus: FocusPane,
-    safe_mode: bool,
-    zone: mm_meta::db_types::Zone,
+    state: &mut CompoundSplitViewState,
 ) {
+    let data = &state.state.data.inner;
+    let current_group = state.state.data.current_group;
+    let safe_mode = state.state.data.safe_mode;
+    let focus = state.state.frame.focus_pane;
+
     let padded = mm_ui::geometry::padded_rect(area);
     f.render_widget(Clear, padded);
 
@@ -104,7 +102,7 @@ pub fn render(
     render_title_bar(f, vertical[0], data, current_group, safe_mode);
 
     // --- Decision field ---
-    render_decision_field_widget(f, vertical[1], field, focus);
+    render_decision_field_widget(f, vertical[1], &state.field, focus);
 
     // --- StandardList ---
     let group = data.groups.get(current_group);
@@ -120,7 +118,7 @@ pub fn render(
     };
 
     render_standard_list(
-        list,
+        &mut state.state.list,
         f,
         vertical[2],
         &items,
@@ -130,23 +128,15 @@ pub fn render(
     );
 
     // --- Buttons ---
-    let tag_name = data.groups.get(current_group)
-        .map(|g| g.tag_name.clone()).unwrap_or_default();
-    let ctx = CompoundSplitButtonCtx {
-        has_files: !items.is_empty(),
-        current_group_index: current_group,
-        tag_name,
-        zone,
-        safe_mode,
-    };
+    let ctx = state.state.data.button_ctx();
     let button_focused = focus == FocusPane::Buttons;
-    render_buttons(buttons, f, vertical[3], &ctx, button_focused);
+    render_buttons(&mut state.state.frame.buttons, f, vertical[3], &ctx, button_focused);
 }
 
 fn render_title_bar(
     f: &mut Frame,
     area: Rect,
-    data: &CompoundSplitResolutionData,
+    data: &mm_meta::views::canonicity_compound::CompoundSplitResolutionData,
     current_group: usize,
     safe_mode: bool,
 ) {

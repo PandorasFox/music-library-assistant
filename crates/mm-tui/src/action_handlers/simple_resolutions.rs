@@ -7,7 +7,6 @@
 use super::super::App;
 use super::witness;
 use super::HandleAction;
-use mm_ui::modal_buttons::ModalButtons;
 use crate::{
     corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal,
     subpar_duplicate_modal, ActiveView,

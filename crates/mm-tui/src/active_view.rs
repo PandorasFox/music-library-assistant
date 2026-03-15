@@ -88,28 +88,9 @@ pub(crate) enum ActiveView {
     ReleaseReview(release_review::ReleaseReviewState),
 
     // Tag canonicity resolution with packed data + StandardList + DecisionField
-    TagCanonicityResolution {
-        data: mm_meta::views::canonicity_compound::TagCanonicityResolutionData,
-        current_cluster: usize,
-        list: mm_ui::standard_list::StandardListState,
-        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::tag_canonicity::CanonicityButton>,
-        field: mm_ui::decision_field::DecisionField,
-        zone: mm_meta::db_types::Zone,
-        focus: mm_ui::geometry::FocusPane,
-        /// Which canonicity mode — controls button labels/semantics.
-        mode: mm_ui::resolutions::tag_canonicity::CanonicityMode,
-    },
+    TagCanonicityResolution(mm_ui::resolutions::tag_canonicity::TagCanonicityViewState),
     // Compound tag split with packed data + StandardList + DecisionField
-    CompoundTagSplitResolution {
-        data: mm_meta::views::canonicity_compound::CompoundSplitResolutionData,
-        current_group: usize,
-        list: mm_ui::standard_list::StandardListState,
-        buttons: mm_ui::modal_buttons::ButtonRowState<mm_ui::resolutions::compound_split::CompoundSplitButton>,
-        field: mm_ui::decision_field::DecisionField,
-        zone: mm_meta::db_types::Zone,
-        focus: mm_ui::geometry::FocusPane,
-        safe_mode: bool,
-    },
+    CompoundTagSplitResolution(mm_ui::resolutions::compound_split::CompoundSplitViewState),
 
     MissingAlbumSingleResolution(mm_ui::resolutions::missing_album::MissingAlbumState),
     DiscExtractionResolution(mm_ui::resolutions::disc_extraction::DiscExtractionState),
@@ -152,9 +133,11 @@ impl ActiveView {
             Self::KnotBrowser(_) => Some("Knot Browser"),
             Self::AcoustidBrowse(_) => Some("AcoustID Browse"),
             Self::ReleaseReview(_) => Some("Release Review"),
-            Self::TagCanonicityResolution { mode: mm_ui::resolutions::tag_canonicity::CanonicityMode::InconsistentAlbumArtist, .. } => Some("Album Artist"),
-            Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
-            Self::CompoundTagSplitResolution { .. } => Some("Compound Tag Split"),
+            Self::TagCanonicityResolution(ref s) => match s.state.data.mode {
+                mm_ui::resolutions::tag_canonicity::CanonicityMode::InconsistentAlbumArtist => Some("Album Artist"),
+                mm_ui::resolutions::tag_canonicity::CanonicityMode::TagCanonicity => Some("Tag Canonicity"),
+            },
+            Self::CompoundTagSplitResolution(_) => Some("Compound Tag Split"),
             Self::MissingAlbumSingleResolution(_) => Some("Missing Album Singles"),
             Self::DiscExtractionResolution(_) => Some("Disc Extraction"),
             Self::ManualReviewResolution(ref s) => Some(s.data.review_kind.title()),
@@ -170,17 +153,8 @@ impl ActiveView {
         match self {
             Self::StartupMaintenance => None,
             Self::CorpusBrowser(browser) => browser.selected_path(),
-            Self::TagCanonicityResolution { ref data, current_cluster, ref list, .. } => {
-                data.clusters.get(*current_cluster)
-                    .and_then(|c| c.variants.get(list.cursor))
-                    .and_then(|v| v.files.first())
-                    .map(|f| f.display_name.as_str())
-            }
-            Self::CompoundTagSplitResolution { ref data, current_group, ref list, .. } => {
-                data.groups.get(*current_group)
-                    .and_then(|g| g.files.get(list.cursor))
-                    .map(|f| f.display_name.as_str())
-            }
+            Self::TagCanonicityResolution(ref s) => s.selected_path(),
+            Self::CompoundTagSplitResolution(ref s) => s.selected_path(),
             Self::MissingFileResolution(s) => s.selected_path(),
             Self::MissingDirectoryResolution(s) => s.selected_path(),
             Self::CorruptFileResolution(s) => s.selected_path(),

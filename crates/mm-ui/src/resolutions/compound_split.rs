@@ -116,6 +116,205 @@ impl GroupNavigation for CompoundSplitData {
 pub type CompoundSplitState = ResolutionState<CompoundSplitData, CompoundSplitButton>;
 
 // ============================================================================
+// ViewState (ResolutionState + DecisionField)
+// ============================================================================
+
+/// Bundled view state for compound split — composes ResolutionState with DecisionField.
+pub struct CompoundSplitViewState {
+    pub state: CompoundSplitState,
+    pub field: crate::decision_field::DecisionField,
+}
+
+impl CompoundSplitViewState {
+    pub fn new(data: CompoundSplitData, prefill: &str) -> Self {
+        Self {
+            state: CompoundSplitState::new(data),
+            field: crate::decision_field::DecisionField::new("Split parts:").with_value(prefill),
+        }
+    }
+
+    /// Handle input via WithDecisionField composition.
+    pub fn handle_input(
+        &mut self,
+        action: &crate::input::InputAction,
+    ) -> Option<CompoundSplitAction> {
+        use crate::decision_field::WithDecisionField;
+        use crate::group_navigation::{try_group_navigate, GroupInputResult};
+        use crate::modal_frame::{FrameInputResult, ModalFrameCore};
+
+        // Group navigation first
+        if let Some(result) = try_group_navigate(&self.state.data, action) {
+            return match result {
+                GroupInputResult::NavigateNext => {
+                    self.navigate_group(1);
+                    None
+                }
+                GroupInputResult::NavigatePrev => {
+                    self.navigate_group(-1);
+                    None
+                }
+                GroupInputResult::Consumed => None,
+                GroupInputResult::Action(_) | GroupInputResult::Unhandled => None,
+            };
+        }
+
+        let mut composed = WithDecisionField::new(&mut self.state, &mut self.field);
+        match composed.handle_frame_input(action) {
+            FrameInputResult::Action(a) => Some(a),
+            FrameInputResult::Consumed | FrameInputResult::Unhandled => None,
+        }
+    }
+
+    /// Navigate to a different group (for Tab/Shift-Tab group cycling).
+    fn navigate_group(&mut self, delta: isize) {
+        let new_idx = self.state.data.current_group as isize + delta;
+        let total = self.state.data.inner.groups.len();
+        if new_idx >= 0 && (new_idx as usize) < total {
+            self.state.data.current_group = new_idx as usize;
+            self.state.reset_list();
+            let prefill = self.state.data.inner.groups
+                .get(self.state.data.current_group)
+                .map(|g| g.split_parts.join("; "))
+                .unwrap_or_default();
+            self.field.set_value(&prefill);
+        }
+    }
+
+    /// Handle mouse click.
+    pub fn handle_click(&mut self, x: u16, y: u16) -> Option<CompoundSplitAction> {
+        self.state.handle_click(x, y)
+    }
+
+    /// Selected path for status bar.
+    pub fn selected_path(&self) -> Option<&str> {
+        self.state.selected_path()
+    }
+}
+
+impl super::dispatch::Dispatchable for CompoundSplitViewState {
+    type Action = CompoundSplitAction;
+
+    fn dispatch(
+        &self,
+        action: CompoundSplitAction,
+        _resolver: &mm_meta::paths::PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use super::dispatch::DispatchResult;
+        use mm_meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation, TagOp};
+
+        let data = &self.state.data;
+
+        match action {
+            CompoundSplitAction::Confirm => {
+                let group = match data.inner.groups.get(data.current_group) {
+                    Some(g) => g,
+                    None => return DispatchResult::Handled,
+                };
+
+                let parts: Vec<String> = self
+                    .field
+                    .value()
+                    .split(';')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                if parts.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let mut ops = Vec::new();
+                for file in &group.files {
+                    if let Some(first_part) = parts.first() {
+                        ops.push(TagOp::replace_tag(
+                            file.inode,
+                            &group.tag_name,
+                            &group.compound_value,
+                            first_part,
+                        ));
+                    }
+                    for part in parts.iter().skip(1) {
+                        ops.push(TagOp::add_tag(file.inode, &group.tag_name, part));
+                    }
+                }
+
+                if ops.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let ctx = data.button_ctx();
+                let key = CompoundSplitButton::Confirm
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: format!(
+                        "Split \"{}\" in {} \u{2192} [{}]",
+                        group.compound_value,
+                        group.tag_name,
+                        parts.join(", "),
+                    ),
+                    mutations: vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                        ops,
+                        zone: data.zone,
+                    })],
+                }
+            }
+            CompoundSplitAction::Canonicalize => {
+                use mm_meta::mutations::indexing::EmitCanonicalTagMutation;
+
+                let group = match data.inner.groups.get(data.current_group) {
+                    Some(g) => g,
+                    None => return DispatchResult::Handled,
+                };
+
+                let ctx = data.button_ctx();
+                let key = CompoundSplitButton::Canonicalize
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: format!(
+                        "Keep \"{}\" in {} as canonical",
+                        group.compound_value, group.tag_name,
+                    ),
+                    mutations: vec![Mutation::EmitCanonicalTag(EmitCanonicalTagMutation {
+                        tag_name: group.tag_name.clone(),
+                        canonical_value: group.compound_value.clone(),
+                    })],
+                }
+            }
+            CompoundSplitAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn advance(&mut self) -> bool {
+        if self.state.data.current_group + 1 < self.state.data.inner.groups.len() {
+            self.state.data.current_group += 1;
+            self.state.reset_list();
+            let prefill = self.state.data.inner.groups
+                .get(self.state.data.current_group)
+                .map(|g| g.split_parts.join("; "))
+                .unwrap_or_default();
+            self.field.set_value(&prefill);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "Compound tag split cancelled"
+    }
+}
+
+// ============================================================================
 // Action enum
 // ============================================================================
 

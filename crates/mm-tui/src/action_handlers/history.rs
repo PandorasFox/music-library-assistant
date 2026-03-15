@@ -7,7 +7,7 @@ use super::super::App;
 use super::witness;
 use super::HandleAction;
 use mm_meta::db_types::Zone;
-use mm_meta::decisions::DecisionKey;
+use mm_ui::decision_keys;
 use mm_meta::mutations::jettison::ExportEditHistoryMutation;
 use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
 use mm_meta::mutations::Mutation;
@@ -228,9 +228,7 @@ impl App {
                 .unwrap_or_else(|| "unknown".to_string())
         };
 
-        let key = DecisionKey::EditReversal {
-            session_label: session_label.clone(),
-        };
+        let key = decision_keys::edit_reversal(session_label.clone());
         let label = format!("Reverse edits from session {}", session_label);
 
         self.stage_mutations_with_transaction(vec![mutation], &label, key, gesture);
@@ -298,7 +296,7 @@ impl App {
         self.stage_mutations_with_transaction(
             vec![mutation],
             &label,
-            DecisionKey::JettisonEditHistory,
+            decision_keys::jettison_edit_history(),
             gesture,
         );
 
@@ -319,7 +317,7 @@ impl App {
         self.stage_mutations_with_transaction(
             vec![mutation],
             &label,
-            DecisionKey::JettisonEditHistory,
+            decision_keys::jettison_edit_history(),
             gesture,
         );
 

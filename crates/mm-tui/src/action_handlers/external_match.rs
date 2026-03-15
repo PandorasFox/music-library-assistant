@@ -322,8 +322,6 @@ impl App {
         track_paths: Vec<String>,
         gesture: &witness::ConfirmationGesture,
     ) {
-        use mm_meta::decisions::DecisionKey;
-
         let config = self.config();
 
         // Resolve unique source dirs from track paths
@@ -392,9 +390,7 @@ impl App {
                 },
             ));
 
-            let key = DecisionKey::DirConfigEdit {
-                source_path: source_path.clone(),
-            };
+            let key = mm_ui::decision_keys::dir_config_edit(source_path.clone());
             let dir_label = format!("Pin release: {}", source_path.display());
             let decision = gesture.decide(&dir_label, vec![mutation]);
             let _ = crate::operator_decisions::stage_decision(
@@ -502,7 +498,6 @@ impl App {
         approval_inputs: Vec<mm_meta::views::external_matches::ReleaseApprovalInput>,
         gesture: &witness::ConfirmationGesture,
     ) {
-        use mm_meta::decisions::DecisionKey;
         use mm_meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation};
         use mm_ui::external_matches::approval::build_release_approval_decisions;
 
@@ -571,9 +566,7 @@ impl App {
 
         let approved = decisions.len();
         for ad in decisions {
-            let key = DecisionKey::MbReleaseApproval {
-                release_id: ad.release_id,
-            };
+            let key = mm_ui::decision_keys::mb_release_approval(ad.release_id);
             let decision = gesture.decide(&ad.label, vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
                 ops: ad.ops,
                 zone: mm_meta::db_types::Zone::Corpus,

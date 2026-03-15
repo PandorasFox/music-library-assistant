@@ -75,7 +75,7 @@ impl HandleAction for crate::startup::IntakeConfirmationAction {
                     let decision = g.decide("Index unindexed files", mutations);
                     let _ = operator_decisions::stage_decision(
                         app,
-                        mm_meta::decisions::DecisionKey::IntakeIndex,
+                        mm_ui::decision_keys::intake_index(),
                         decision,
                     );
 

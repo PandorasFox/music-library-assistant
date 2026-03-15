@@ -8,7 +8,7 @@
 use super::witness;
 use super::HandleAction;
 use super::App;
-use mm_meta::decisions::DecisionKey;
+use mm_ui::decision_keys;
 use crate::active_view::ActiveView;
 use crate::inbox_corpus_match_modal;
 use crate::inbox_organize;
@@ -61,7 +61,7 @@ impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchAction {
                     }
                     _ => Vec::new(),
                 };
-                app.stage_resolution(mutations, "Stash inbox corpus matches", DecisionKey::InboxCorpusMatch, "No files to stash", w);
+                app.stage_resolution(mutations, "Stash inbox corpus matches", decision_keys::inbox_corpus_match(), "No files to stash", w);
             }
             inbox_corpus_match_modal::InboxCorpusMatchAction::ConfirmStashAll => {
                 let Some(w) = witness else { return };
@@ -71,7 +71,7 @@ impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchAction {
                     }
                     _ => Vec::new(),
                 };
-                app.stage_resolution(mutations, "Stash all inbox duplicates", DecisionKey::InboxCorpusMatch, "No files to stash", w);
+                app.stage_resolution(mutations, "Stash all inbox duplicates", decision_keys::inbox_corpus_match(), "No files to stash", w);
             }
             inbox_corpus_match_modal::InboxCorpusMatchAction::Cancel => {
                 app.cancel_and_return_to_source("Inbox corpus match resolution cancelled");
@@ -90,7 +90,7 @@ impl HandleAction for inbox_organize::InboxOrganizeAction {
                     app.stage_mutations_with_transaction(
                         mutations,
                         "Organize inbox into corpus",
-                        DecisionKey::InboxOrganize,
+                        decision_keys::inbox_organize(),
                         w,
                     );
                     app.after_staging_decisions();

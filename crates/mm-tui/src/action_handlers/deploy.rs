@@ -6,7 +6,7 @@
 use super::super::App;
 use super::witness;
 use super::HandleAction;
-use mm_meta::decisions::DecisionKey;
+use mm_ui::decision_keys;
 use crate::{deploy_modal, ActiveView};
 
 impl HandleAction for deploy_modal::DeployAction {
@@ -67,7 +67,7 @@ impl App {
             let decision = gesture.decide("Deploy operations", mutation_set.deploy);
             let _ = super::super::operator_decisions::stage_decision(
                 self,
-                DecisionKey::Deploy,
+                decision_keys::deploy(),
                 decision,
             );
         }
@@ -76,7 +76,7 @@ impl App {
             let decision = gesture.decide(&sidecar_label, mutation_set.sidecars);
             let _ = super::super::operator_decisions::stage_decision(
                 self,
-                DecisionKey::DeploySidecars,
+                decision_keys::deploy_sidecars(),
                 decision,
             );
         }

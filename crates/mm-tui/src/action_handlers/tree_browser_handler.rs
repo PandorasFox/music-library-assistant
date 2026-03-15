@@ -171,9 +171,7 @@ impl App {
             },
         ));
 
-        let key = DecisionKey::DirConfigEdit {
-            source_path: source_path.clone(),
-        };
+        let key = mm_ui::decision_keys::dir_config_edit(source_path.clone());
         let label = format!("Dir config: {}", source_path.display());
 
         let open_txn = self.open_txn_mode();

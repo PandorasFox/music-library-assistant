@@ -7,7 +7,6 @@
 use super::super::App;
 use super::witness;
 use super::HandleAction;
-use mm_meta::decisions::DecisionKey;
 use mm_ui::modal_buttons::ModalButtons;
 use crate::{
     corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal,
@@ -54,12 +53,12 @@ impl HandleAction for missing_file_modal::MissingFileAction {
                     ActiveView::MissingFileResolution(ref p) => missing_file_modal::restore_mutations(&p.cached_data, &app.resolver),
                     _ => Vec::new(),
                 };
-                app.stage_resolution(mutations, "Restore missing files", DecisionKey::MissingFile, "No files to restore", w);
+                app.stage_resolution(mutations, "Restore missing files", mm_ui::decision_keys::missing_file(), "No files to restore", w);
             }
             missing_file_modal::MissingFileAction::ConfirmDrop => {
                 let Some(w) = witness else { return };
                 let mutations = extract_mutations!(app, MissingFileResolution, drop_all_missing);
-                app.stage_resolution(mutations, "Drop missing files", DecisionKey::MissingFile, "No files to drop", w);
+                app.stage_resolution(mutations, "Drop missing files", mm_ui::decision_keys::missing_file(), "No files to drop", w);
             }
             missing_file_modal::MissingFileAction::Cancel => {
                 app.cancel_and_return_to_source("Missing file resolution cancelled");
@@ -81,7 +80,7 @@ impl HandleAction for missing_directory_modal::MissingDirectoryAction {
                     ActiveView::MissingDirectoryResolution(ref p) => p.data.0.drop_mutations(),
                     _ => Vec::new(),
                 };
-                app.stage_resolution(mutations, "Drop missing directories", DecisionKey::MissingDirectory, "No directories to drop", w);
+                app.stage_resolution(mutations, "Drop missing directories", mm_ui::decision_keys::missing_directory(), "No directories to drop", w);
             }
             missing_directory_modal::MissingDirectoryAction::Cancel => {
                 app.cancel_and_return_to_source("Missing directory resolution cancelled");
@@ -103,7 +102,7 @@ impl HandleAction for corrupt_file_modal::CorruptFileAction {
                     ActiveView::CorruptFileResolution(ref p) => corrupt_file_modal::stash_and_drop_mutations(&p.data.0, &app.resolver),
                     _ => Vec::new(),
                 };
-                app.stage_resolution(mutations, "Stash corrupt files", DecisionKey::CorruptFile, "No files to stash", w);
+                app.stage_resolution(mutations, "Stash corrupt files", mm_ui::decision_keys::corrupt_file(), "No files to stash", w);
             }
             corrupt_file_modal::CorruptFileAction::Cancel => {
                 app.cancel_and_return_to_source("Corrupt file resolution cancelled");
@@ -123,7 +122,7 @@ impl HandleAction for shit_format_modal::ShitFormatAction {
             shit_format_modal::ShitFormatAction::ConfirmRemuxLossless => {
                 let Some(w) = witness else { return };
                 let mutations = extract_mutations!(app, ShitFormatResolution, lossless_mutations, &app.resolver);
-                app.stage_resolution(mutations, "Remux to FLAC", DecisionKey::ShitFormat, "No lossless files to remux", w);
+                app.stage_resolution(mutations, "Remux to FLAC", mm_ui::decision_keys::shit_format(), "No lossless files to remux", w);
             }
             shit_format_modal::ShitFormatAction::ConfirmTranscodeLossy => {
                 let Some(w) = witness else { return };
@@ -135,7 +134,7 @@ impl HandleAction for shit_format_modal::ShitFormatAction {
                     _ => (Vec::new(), false),
                 };
                 let label = if lossy_to_flac { "Capture lossy to FLAC" } else { "Transcode to Opus" };
-                app.stage_resolution(mutations, label, DecisionKey::ShitFormat, "No lossy files to transcode", w);
+                app.stage_resolution(mutations, label, mm_ui::decision_keys::shit_format(), "No lossy files to transcode", w);
             }
             shit_format_modal::ShitFormatAction::ConfirmConvertAll => {
                 let Some(w) = witness else { return };
@@ -147,7 +146,7 @@ impl HandleAction for shit_format_modal::ShitFormatAction {
                     _ => (Vec::new(), false),
                 };
                 let label = if lossy_to_flac { "Remux and capture all to FLAC" } else { "Convert all formats" };
-                app.stage_resolution(mutations, label, DecisionKey::ShitFormat, "No files to convert", w);
+                app.stage_resolution(mutations, label, mm_ui::decision_keys::shit_format(), "No files to convert", w);
             }
             shit_format_modal::ShitFormatAction::Cancel => {
                 app.cancel_and_return_to_source("Shit format resolution cancelled");
@@ -169,7 +168,7 @@ impl HandleAction for subpar_duplicate_modal::SubparDuplicateAction {
                     ActiveView::SubparDuplicateResolution(ref p) => subpar_duplicate_modal::stash_and_drop_mutations(&p.data.0, &app.resolver),
                     _ => Vec::new(),
                 };
-                app.stage_resolution(mutations, "Stash subpar duplicates", DecisionKey::SubparDuplicate, "No files to stash", w);
+                app.stage_resolution(mutations, "Stash subpar duplicates", mm_ui::decision_keys::subpar_duplicate(), "No files to stash", w);
             }
             subpar_duplicate_modal::SubparDuplicateAction::Cancel => {
                 app.cancel_and_return_to_source("Subpar duplicate resolution cancelled");

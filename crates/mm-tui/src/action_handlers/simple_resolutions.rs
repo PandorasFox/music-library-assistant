@@ -8,6 +8,7 @@ use super::super::App;
 use super::witness;
 use super::HandleAction;
 use mm_meta::decisions::DecisionKey;
+use mm_ui::modal_buttons::ModalButtons;
 use crate::{
     corrupt_file_modal, missing_directory_modal, missing_file_modal, shit_format_modal,
     subpar_duplicate_modal, ActiveView,
@@ -256,17 +257,20 @@ impl App {
         mutations: Vec<mm_meta::mutations::Mutation>,
         label: &str,
         gesture: &witness::ConfirmationGesture,
+        button: mm_ui::resolutions::directory_cluster::DirectoryClusterButton,
     ) {
         // Start transaction if not already started
         if self.witch_status().transaction.is_none() {
             let _ = self.start_transaction("Directory overlap resolution");
         }
+        let ctx = mm_ui::resolutions::directory_cluster::DirectoryClusterButtonCtx {
+            has_directories: true,
+            cluster_index,
+        };
+        let key = button.protocol_binding(&ctx)
+            .decision_key().unwrap().clone();
         let decision = gesture.decide(label, mutations);
-        let _ = super::super::operator_decisions::stage_decision(
-            self,
-            DecisionKey::DirectoryCluster { cluster_index },
-            decision,
-        );
+        let _ = super::super::operator_decisions::stage_decision(self, key, decision);
     }
 
     // =========================================================================
@@ -353,11 +357,13 @@ impl HandleAction for mm_ui::resolutions::directory_cluster::DirectoryClusterAct
                     _ => return,
                 };
                 if !mutations.is_empty() {
+                    use mm_ui::resolutions::directory_cluster::DirectoryClusterButton;
                     app.stage_directory_cluster_mutations(
                         cluster_index,
                         mutations,
                         "Stash overlapping directory",
                         g,
+                        DirectoryClusterButton::Stash,
                     );
                 }
                 app.advance_directory_cluster_v3();
@@ -386,11 +392,13 @@ impl HandleAction for mm_ui::resolutions::directory_cluster::DirectoryClusterAct
                     }
                     _ => return,
                 };
+                use mm_ui::resolutions::directory_cluster::DirectoryClusterButton;
                 app.stage_directory_cluster_mutations(
                     cluster_index,
                     vec![mutation],
                     "Mark expected overlap",
                     g,
+                    DirectoryClusterButton::MarkExpected,
                 );
                 app.advance_directory_cluster_v3();
             }

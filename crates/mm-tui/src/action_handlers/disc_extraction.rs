@@ -3,7 +3,7 @@
 use super::super::App;
 use super::witness;
 use super::HandleAction;
-use mm_meta::decisions::DecisionKey;
+use mm_ui::modal_buttons::ModalButtons;
 use crate::active_view::ActiveView;
 
 // =========================================================================
@@ -48,16 +48,19 @@ impl HandleAction for mm_ui::resolutions::disc_extraction::DiscExtractionAction 
                 };
 
                 if !ops.is_empty() {
+                    use mm_ui::resolutions::disc_extraction::{DiscExtractionButton, DiscExtractionButtonCtx};
+                    let ctx = DiscExtractionButtonCtx {
+                        has_files: true,
+                        group_index: group_idx,
+                    };
+                    let key = DiscExtractionButton::Apply.protocol_binding(&ctx)
+                        .decision_key().unwrap().clone();
                     let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation {
                         ops,
                         zone: Zone::Corpus,
                     });
                     let decision = g.decide("Extract disc value", vec![mutation]);
-                    let _ = super::super::operator_decisions::stage_decision(
-                        app,
-                        DecisionKey::DiscExtraction { group_index: group_idx },
-                        decision,
-                    );
+                    let _ = super::super::operator_decisions::stage_decision(app, key, decision);
                 }
                 app.advance_disc_extraction_v3();
             }

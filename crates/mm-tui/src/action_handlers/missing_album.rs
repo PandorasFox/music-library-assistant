@@ -3,7 +3,8 @@
 use super::super::App;
 use super::witness;
 use super::HandleAction;
-use mm_meta::decisions::DecisionKey;
+use mm_ui::modal_buttons::ModalButtons;
+use mm_ui::resolutions::missing_album::{MissingAlbumButton, MissingAlbumButtonCtx};
 use crate::active_view::ActiveView;
 
 // =========================================================================
@@ -51,15 +52,14 @@ impl HandleAction for mm_ui::resolutions::missing_album::MissingAlbumAction {
                     _ => return,
                 };
                 if !inodes.is_empty() {
+                    let ctx = MissingAlbumButtonCtx { has_tracks: true, group_index: group_idx };
+                    let key = MissingAlbumButton::Suppress.protocol_binding(&ctx)
+                        .decision_key().unwrap().clone();
                     let mutation = Mutation::EmitExpectedMissingTag(EmitExpectedMissingTagMutation {
                         inodes,
                     });
                     let decision = g.decide("Suppress missing album", vec![mutation]);
-                    let _ = super::super::operator_decisions::stage_decision(
-                        app,
-                        DecisionKey::MissingAlbum { group_index: group_idx },
-                        decision,
-                    );
+                    let _ = super::super::operator_decisions::stage_decision(app, key, decision);
                 }
                 app.advance_missing_album_v3();
             }
@@ -126,16 +126,15 @@ impl App {
         };
 
         if !ops.is_empty() {
+            let ctx = MissingAlbumButtonCtx { has_tracks: true, group_index: group_idx };
+            let key = MissingAlbumButton::PerTrackTitle.protocol_binding(&ctx)
+                .decision_key().unwrap().clone();
             let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation {
                 ops,
                 zone: Zone::Corpus,
             });
             let decision = gesture.decide(label, vec![mutation]);
-            let _ = super::super::operator_decisions::stage_decision(
-                self,
-                DecisionKey::MissingAlbum { group_index: group_idx },
-                decision,
-            );
+            let _ = super::super::operator_decisions::stage_decision(self, key, decision);
         }
     }
 

@@ -930,7 +930,7 @@ pub fn mm_index_now() {
 }
 
 async fn do_index_now() -> Result<(), JsValue> {
-    use mm_meta::decisions::{Decision, DecisionKey};
+    use mm_meta::decisions::Decision;
     use mm_meta::views::startup_organize::IntakeConfirmationState;
 
     // Fetch intake confirmation data.
@@ -958,7 +958,7 @@ async fn do_index_now() -> Result<(), JsValue> {
 
     // Start transaction, add decision, navigate to review.
     api::tx_start(label).await?;
-    api::tx_add(&DecisionKey::IntakeIndex, &decision).await?;
+    api::tx_add(&mm_ui::decision_keys::intake_index(), &decision).await?;
 
     navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
     load_from_hash().await?;
@@ -1054,7 +1054,7 @@ fn find_config_slot<'a>(
 
 async fn do_config_save() -> Result<(), JsValue> {
     use mm_meta::config::Config;
-    use mm_meta::decisions::{Decision, DecisionKey};
+    use mm_meta::decisions::Decision;
     use mm_meta::mutations::config_edit::ApplyConfigEditsMutation;
     use mm_meta::mutations::Mutation;
 
@@ -1138,7 +1138,7 @@ async fn do_config_save() -> Result<(), JsValue> {
 
     // Auto-confirm: start transaction, add decision, confirm immediately.
     api::tx_start("Config edit").await?;
-    api::tx_add(&DecisionKey::ConfigEdit, &decision).await?;
+    api::tx_add(&mm_ui::decision_keys::config_edit(), &decision).await?;
     api::tx_confirm().await?;
 
     // Reload config view to show saved state.

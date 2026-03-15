@@ -26,6 +26,7 @@ pub mod operator_decisions;
 pub mod tabbed_transaction_review;
 pub mod transaction_review;
 
+pub mod acoustid_browse;
 pub mod bulk_selection;
 pub mod compound_split_v2;
 pub mod config_editor;
@@ -53,6 +54,7 @@ pub mod oob_sync_modal;
 pub mod progress_screen;
 pub mod progressive_worker;
 pub mod release_packing_browser;
+pub mod release_review;
 pub mod render;
 pub mod shit_format_modal;
 pub mod startup;
@@ -487,9 +489,10 @@ impl App {
             ActiveView::MovedFileAcknowledge(s) => dispatch_input!(MovedFileAcknowledge, s),
             ActiveView::OobSyncResolution(s) => dispatch_input_raw!(OobSyncResolution, s),
             ActiveView::OobConflictInspection(s) => dispatch_input_raw!(OobConflictInspection, s),
-            ActiveView::ExternalMatchReview(s) => dispatch_input_raw!(ExternalMatchReview, s),
             ActiveView::ReleasePackingBrowser(s) => dispatch_input_raw!(ReleasePackingBrowser, s),
             ActiveView::KnotBrowser(s) => dispatch_input_raw!(KnotBrowser, s),
+            ActiveView::AcoustidBrowse(s) => dispatch_input_raw!(AcoustidBrowse, s),
+            ActiveView::ReleaseReview(s) => dispatch_input_raw!(ReleaseReview, s),
             ActiveView::History { ref mut data, ref mut interaction } => {
                 match data.handle_input(&mut interaction.session_list, &action) {
                     Some(a) => ViewAction::History(a),

@@ -83,9 +83,10 @@ impl App {
             ViewAction::MovedFileAcknowledge(a) => a.handle(self, witness.as_ref()),
             ViewAction::OobSyncResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::OobConflictInspection(a) => a.handle(self, witness.as_ref()),
-            ViewAction::ExternalMatchReview(a) => a.handle(self, witness.as_ref()),
             ViewAction::ReleasePackingBrowser(a) => a.handle(self, witness.as_ref()),
             ViewAction::KnotBrowser(a) => a.handle(self, witness.as_ref()),
+            ViewAction::AcoustidBrowse(a) => a.handle(self, witness.as_ref()),
+            ViewAction::ReleaseReview(a) => a.handle(self, witness.as_ref()),
             ViewAction::History(a) => a.handle(self, witness.as_ref()),
             ViewAction::TagCanonicityResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::CompoundTagSplitResolution(a) => a.handle(self, witness.as_ref()),
@@ -333,7 +334,6 @@ impl App {
             }
             ActiveView::OobSyncResolution(s) => click_dispatch!(gesture OobSyncResolution, s),
             ActiveView::OobConflictInspection(s) => click_dispatch!(gesture OobConflictInspection, s),
-            ActiveView::ExternalMatchReview(state) => state.handle_click(x, y).map(ViewAction::ExternalMatchReview),
             ActiveView::MovedFileAcknowledge(s) => s.handle_click(x, y).map(ViewAction::MovedFileAcknowledge),
             ActiveView::SubparDuplicateResolution(s) => s.handle_click(x, y).map(ViewAction::SubparDuplicateResolution),
             ActiveView::InboxCorpusMatchResolution(s) => s.handle_click(x, y).map(ViewAction::InboxCorpusMatchResolution),
@@ -361,6 +361,14 @@ impl App {
             }
             ActiveView::TagSearch(ref mut s) => click_dispatch!(void s),
             ActiveView::KnotBrowser(ref mut s) => click_dispatch!(void s),
+            ActiveView::AcoustidBrowse(ref mut s) => {
+                s.handle_click(x, y);
+                None
+            }
+            ActiveView::ReleaseReview(ref mut s) => {
+                s.handle_click(x, y);
+                None
+            }
             _ => None,
         };
 

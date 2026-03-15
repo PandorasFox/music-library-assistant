@@ -1,14 +1,17 @@
 //! External Match action handlers.
 //!
-//! Handles both:
+//! Handles:
 //! - The External Matches lateral view (browse/fetch/launch)
 //! - The External Match Review modal (read-only browser)
+//! - AcoustID Browse view (read-only, by confidence tier)
+//! - Release Review view (multi-select approval)
+//! - Knot Browser (read-only)
+//! - Release Packing Browser (multi-select approval + pin)
 
 use super::super::App;
 use super::witness;
 use super::HandleAction;
-use mm_meta::views::ExternalMatchReviewEntry;
-use crate::{external_match_modal, external_match_view, ActiveView};
+use crate::{external_match_view, ActiveView};
 
 // =========================================================================
 // External Matches Lateral View Actions
@@ -32,59 +35,83 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
                 );
             }
             external_match_view::ExternalMatchesAction::LaunchPackingCategory(cat) => {
-                app.launch_release_packing_browser(cat);
+                use crate::release_packing_browser::types::PackingCategory;
+                match cat {
+                    PackingCategory::Perfect
+                    | PackingCategory::FullMatches
+                    | PackingCategory::Singles
+                    | PackingCategory::Incomplete
+                    | PackingCategory::LowConfidence => {
+                        app.launch_release_review(cat);
+                    }
+                    PackingCategory::UnsolvedConflict
+                    | PackingCategory::UnsolvedNoRelease
+                    | PackingCategory::UnsolvedNoMatch
+                    | PackingCategory::Knots => {
+                        app.launch_release_packing_browser(cat);
+                    }
+                }
             }
             external_match_view::ExternalMatchesAction::LaunchUntaggedReview => {
-                let entries = if let ActiveView::ExternalMatches { ref data, .. } = app.view {
-                    data
-                        .cached_data
-                        .as_ref()
-                        .map(|d| d.untagged_entries.clone())
-                        .unwrap_or_default()
-                } else {
-                    vec![]
-                };
-                app.start_external_match_review_with(entries);
+                app.launch_acoustid_browse(mm_meta::views::external_matches::AcoustidConfidence::All);
             }
             external_match_view::ExternalMatchesAction::LaunchTierReview(tier) => {
-                let entries = if let ActiveView::ExternalMatches { ref data, .. } = app.view {
-                    data
-                        .cached_data
-                        .as_ref()
-                        .and_then(|d| {
-                            d.confidence_buckets
-                                .iter()
-                                .find(|b| b.tier == tier)
-                                .map(|b| b.entries.clone())
-                        })
-                        .unwrap_or_default()
-                } else {
-                    vec![]
+                use mm_meta::views::ConfidenceTier;
+                use mm_meta::views::external_matches::AcoustidConfidence;
+
+                let confidence = match tier {
+                    ConfidenceTier::Perfect
+                    | ConfidenceTier::VeryHigh
+                    | ConfidenceTier::High => AcoustidConfidence::High,
+                    ConfidenceTier::Medium => AcoustidConfidence::Medium,
+                    ConfidenceTier::Low => AcoustidConfidence::Low,
                 };
-                app.start_external_match_review_with(entries);
+                app.launch_acoustid_browse(confidence);
             }
         }
     }
 }
 
 // =========================================================================
-// External Match Review Modal Actions (read-only)
+// AcoustID Browse Actions
 // =========================================================================
 
-impl HandleAction for external_match_modal::ExternalMatchReviewAction {
+impl HandleAction for crate::acoustid_browse::AcoustidBrowseAction {
     fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
         match self {
-            external_match_modal::ExternalMatchReviewAction::None => {}
-            external_match_modal::ExternalMatchReviewAction::Cancel => {
-                app.cancel_and_return_to_source("External match browser closed");
+            crate::acoustid_browse::AcoustidBrowseAction::None => {}
+            crate::acoustid_browse::AcoustidBrowseAction::Cancel => {
+                app.cancel_and_return_to_source("AcoustID browse closed");
             }
-            external_match_modal::ExternalMatchReviewAction::OpenRecordingUrl(url) => {
+            crate::acoustid_browse::AcoustidBrowseAction::OpenRecordingUrl(url) => {
                 let _ = std::process::Command::new("xdg-open")
                     .arg(&url)
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .spawn();
+            }
+        }
+    }
+}
+
+// =========================================================================
+// Release Review Actions
+// =========================================================================
+
+impl HandleAction for crate::release_review::ReleaseReviewAction {
+    fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
+        match self {
+            crate::release_review::ReleaseReviewAction::None => {}
+            crate::release_review::ReleaseReviewAction::Cancel => {
+                app.cancel_and_return_to_source("Release review closed");
+            }
+            crate::release_review::ReleaseReviewAction::ApproveSelected {
+                selected_indices,
+            } => {
+                if let Some(gesture) = witness {
+                    app.approve_reviewed_releases(selected_indices, gesture);
+                }
             }
         }
     }
@@ -140,37 +167,48 @@ impl HandleAction for crate::release_packing_browser::ReleasePackingBrowserActio
 // =========================================================================
 
 impl App {
-    /// Start external match review (read-only browser) with pre-filtered entries.
-    /// Batch-loads both recording summaries and full detail data from cache.
-    fn start_external_match_review_with(&mut self, entries: Vec<ExternalMatchReviewEntry>) {
+    /// Launch the AcoustID browse view, querying matches by confidence tier.
+    fn launch_acoustid_browse(
+        &mut self,
+        confidence: mm_meta::views::external_matches::AcoustidConfidence,
+    ) {
+        let entries = self.query(mm_meta::domain_queries::GetAcoustidMatches { confidence });
+
         if entries.is_empty() {
-            self.status_message = Some("No external matches to review".to_string());
+            self.status_message = Some("No AcoustID matches for this tier".to_string());
             return;
         }
 
-        // Collect unique recording IDs
-        let mut recording_ids: Vec<String> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for entry in &entries {
-            if seen.insert(entry.recording_id.clone()) {
-                recording_ids.push(entry.recording_id.clone());
-            }
+        let state = crate::acoustid_browse::AcoustidBrowseState::new(entries);
+        self.view = ActiveView::AcoustidBrowse(state);
+    }
+
+    /// Launch the release review view, querying releases by packing category.
+    fn launch_release_review(
+        &mut self,
+        category: crate::release_packing_browser::types::PackingCategory,
+    ) {
+        use crate::release_packing_browser::types::PackingCategory;
+        use mm_meta::views::external_matches::ReleaseReviewFilter;
+
+        let filter = match category {
+            PackingCategory::Perfect => ReleaseReviewFilter::Perfect,
+            PackingCategory::FullMatches => ReleaseReviewFilter::FullMatch,
+            PackingCategory::Singles => ReleaseReviewFilter::Singles,
+            PackingCategory::Incomplete => ReleaseReviewFilter::Incomplete,
+            PackingCategory::LowConfidence => ReleaseReviewFilter::LowConfidence,
+            _ => return,
+        };
+
+        let data = self.query(mm_meta::domain_queries::GetReleaseReview { filter });
+
+        if data.releases.is_empty() {
+            self.status_message = Some("No releases in this category".to_string());
+            return;
         }
 
-        // Load preferred locales from config.
-        let preferred_locales = self.config().opinions.external_matching.preferred_locales.clone();
-
-        // Batch query: load summaries + full detail for all recordings at once
-        let batch = self
-            .query(mm_meta::domain_queries::GetRecordingBatchData {
-                recording_ids,
-                preferred_locales,
-            });
-
-        let state =
-            external_match_modal::ExternalMatchReviewState::new(entries, batch.summaries, batch.details);
-
-        self.view = ActiveView::ExternalMatchReview(state);
+        let state = crate::release_review::ReleaseReviewState::new(data.releases);
+        self.view = ActiveView::ReleaseReview(state);
     }
 
     /// Load packing signal data and launch the browser for a specific category.
@@ -388,20 +426,87 @@ impl App {
         selected_indices: std::collections::BTreeSet<usize>,
         gesture: &witness::ConfirmationGesture,
     ) {
-        use mm_meta::external::tag_generation::{generate_tag_ops, MbTagInput};
-        use mm_meta::decisions::DecisionKey;
-        use mm_meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation};
-        use crate::release_packing_browser::SelectedReleaseData;
+        use mm_meta::views::external_matches::{ReleaseApprovalInput, ApprovalTrackInput};
 
-        // Extract release data from browser state
-        let release_data: Vec<SelectedReleaseData> =
+        // Extract release data from browser state -> shared approval inputs
+        let approval_inputs: Vec<ReleaseApprovalInput> =
             if let ActiveView::ReleasePackingBrowser(ref state) = self.view {
                 state.collect_selected_releases(&selected_indices)
+                    .into_iter()
+                    .map(|rd| ReleaseApprovalInput {
+                        release_id: rd.release_id,
+                        tracks: rd.tracks.into_iter().map(|t| ApprovalTrackInput {
+                            inode: t.inode,
+                            recording_id: t.recording_id,
+                            track_title: t.track_title,
+                            track_position: t.track_position,
+                            medium_position: t.medium_position,
+                        }).collect(),
+                    })
+                    .collect()
             } else {
                 return;
             };
 
-        if release_data.is_empty() {
+        self.run_approval(approval_inputs, gesture);
+    }
+
+    /// Approve selected releases from the release review view.
+    fn approve_reviewed_releases(
+        &mut self,
+        selected_indices: std::collections::BTreeSet<usize>,
+        gesture: &witness::ConfirmationGesture,
+    ) {
+        use mm_meta::views::external_matches::{ReleaseApprovalInput, ApprovalTrackInput};
+
+        let approval_inputs: Vec<ReleaseApprovalInput> =
+            if let ActiveView::ReleaseReview(ref state) = self.view {
+                selected_indices
+                    .iter()
+                    .filter_map(|&idx| {
+                        let entry = state.entries.get(idx)?;
+                        let release = &entry.release;
+                        let tracks: Vec<ApprovalTrackInput> = release
+                            .tracks
+                            .iter()
+                            .filter_map(|t| {
+                                let inode = t.matched_inode?;
+                                Some(ApprovalTrackInput {
+                                    inode,
+                                    recording_id: t.recording_id.clone(),
+                                    track_title: t.mb_title.clone(),
+                                    track_position: t.position as u32,
+                                    medium_position: t.medium_position,
+                                })
+                            })
+                            .collect();
+                        if tracks.is_empty() {
+                            return None;
+                        }
+                        Some(ReleaseApprovalInput {
+                            release_id: release.release_id.clone(),
+                            tracks,
+                        })
+                    })
+                    .collect()
+            } else {
+                return;
+            };
+
+        self.run_approval(approval_inputs, gesture);
+    }
+
+    /// Shared approval logic: load staging data, build decisions, stage them.
+    fn run_approval(
+        &mut self,
+        approval_inputs: Vec<mm_meta::views::external_matches::ReleaseApprovalInput>,
+        gesture: &witness::ConfirmationGesture,
+    ) {
+        use mm_meta::decisions::DecisionKey;
+        use mm_meta::mutations::{tag_edit::ApplyTagOpsMutation, Mutation};
+        use mm_ui::external_matches::approval::build_release_approval_decisions;
+
+        if approval_inputs.is_empty() {
             self.status_message = Some("No releases selected".to_string());
             return;
         }
@@ -418,7 +523,7 @@ impl App {
         let mut seen_r = std::collections::HashSet::new();
         let mut seen_rec = std::collections::HashSet::new();
 
-        for rd in &release_data {
+        for rd in &approval_inputs {
             if seen_r.insert(rd.release_id.clone()) {
                 release_ids.push(rd.release_id.clone());
             }
@@ -437,13 +542,26 @@ impl App {
                 recording_ids,
                 inodes: all_inodes,
             });
-        let bundle = staging.bundle;
-        let inode_tags = staging.inode_tags;
+
+        // Use shared approval builder (same logic for TUI and web)
+        let (decisions, skipped) = build_release_approval_decisions(
+            &approval_inputs,
+            &staging.bundle,
+            &staging.inode_tags,
+            &locales,
+            &routing,
+        );
+
+        if decisions.is_empty() {
+            self.status_message =
+                Some("No releases could be approved (missing MB cache)".to_string());
+            return;
+        }
 
         // Stage one decision per release
         let open_txn = self.open_txn_mode();
         if !open_txn {
-            let n = release_data.len();
+            let n = decisions.len();
             let _ = self.start_transaction(&format!(
                 "Approve {} release{}",
                 n,
@@ -451,55 +569,13 @@ impl App {
             ));
         }
 
-        let mut approved = 0usize;
-        let mut skipped = 0usize;
-
-        for rd in &release_data {
-            let Some(release) = bundle.releases.get(&rd.release_id) else {
-                skipped += rd.tracks.len();
-                continue;
-            };
-            let total_media = release.media.len() as u32;
-
-            let mut ops = Vec::new();
-            for t in &rd.tracks {
-                let Some(recording) = bundle.recordings.get(&t.recording_id) else {
-                    skipped += 1;
-                    continue;
-                };
-                let input = MbTagInput {
-                    inode: t.inode,
-                    recording_id: t.recording_id.clone(),
-                    release_id: rd.release_id.clone(),
-                    track_title: t.track_title.clone(),
-                    track_position: t.track_position,
-                    medium_position: t.medium_position,
-                    total_media,
-                    current_tags: inode_tags.get(&t.inode).cloned().unwrap_or_default(),
-                };
-                ops.extend(generate_tag_ops(
-                    &input,
-                    recording,
-                    release,
-                    &bundle.artists,
-                    &locales,
-                    &routing,
-                ));
-            }
-
-            if ops.is_empty() {
-                continue;
-            }
-
+        let approved = decisions.len();
+        for ad in decisions {
             let key = DecisionKey::MbReleaseApproval {
-                release_id: rd.release_id.clone(),
+                release_id: ad.release_id,
             };
-            let label = format!(
-                "Approve MB release: {}",
-                &rd.release_id[..8.min(rd.release_id.len())]
-            );
-            let decision = gesture.decide(&label, vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
-                ops,
+            let decision = gesture.decide(&ad.label, vec![Mutation::ApplyTagOps(ApplyTagOpsMutation {
+                ops: ad.ops,
                 zone: mm_meta::db_types::Zone::Corpus,
             })]);
             let _ = crate::operator_decisions::stage_decision(
@@ -507,13 +583,6 @@ impl App {
                 key,
                 decision,
             );
-            approved += 1;
-        }
-
-        if approved == 0 {
-            self.status_message =
-                Some("No releases could be approved (missing MB cache)".to_string());
-            return;
         }
 
         self.status_message = Some(if skipped > 0 {

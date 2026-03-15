@@ -5,12 +5,12 @@
 //! mode and state are always consistent.
 
 use crate::{
-    config_editor, corrupt_file_modal, deploy_modal,
-    external_match_modal, external_match_view, eye::Eye,
+    acoustid_browse, config_editor, corrupt_file_modal, deploy_modal,
+    external_match_view, eye::Eye,
     history_view, inbox_corpus_match_modal, inbox_organize, inbox_view, insights_view,
     missing_directory_modal, missing_file_modal,
     moved_file_modal, oob_conflict_modal, oob_sync_modal, progress_screen, progressive_worker,
-    shit_format_modal, startup, subpar_duplicate_modal, tabbed_transaction_review,
+    release_review, shit_format_modal, startup, subpar_duplicate_modal, tabbed_transaction_review,
     tag_editor, tag_search, transaction_review, tree_browser,
 };
 
@@ -82,13 +82,17 @@ pub(crate) enum ActiveView {
     MovedFileAcknowledge(moved_file_modal::MovedFileState),
     OobSyncResolution(oob_sync_modal::OobSyncState),
     OobConflictInspection(oob_conflict_modal::OobConflictState),
-    ExternalMatchReview(external_match_modal::ExternalMatchReviewState),
-
     // Release packing browser (read-only)
     ReleasePackingBrowser(super::release_packing_browser::ReleasePackingBrowserState),
 
     // Knot browser (read-only)
     KnotBrowser(super::knot_browser::KnotBrowserState),
+
+    // AcoustID browse (read-only, by confidence tier)
+    AcoustidBrowse(acoustid_browse::AcoustidBrowseState),
+
+    // Release review (multi-select approval)
+    ReleaseReview(release_review::ReleaseReviewState),
 
     // Tag canonicity resolution with packed data + StandardList + DecisionField
     TagCanonicityResolution {
@@ -178,9 +182,10 @@ impl ActiveView {
             Self::MovedFileAcknowledge(_) => Some("Moved Files"),
             Self::OobSyncResolution(_) => Some("OOB Tag Sync"),
             Self::OobConflictInspection(_) => Some("OOB Tag Conflicts"),
-            Self::ExternalMatchReview(_) => Some("External Match Review"),
             Self::ReleasePackingBrowser(_) => Some("Release Packing Browser"),
             Self::KnotBrowser(_) => Some("Knot Browser"),
+            Self::AcoustidBrowse(_) => Some("AcoustID Browse"),
+            Self::ReleaseReview(_) => Some("Release Review"),
             Self::TagCanonicityResolution { mode: mm_ui::resolutions::tag_canonicity::CanonicityMode::InconsistentAlbumArtist, .. } => Some("Album Artist"),
             Self::TagCanonicityResolution { .. } => Some("Tag Canonicity"),
             Self::CompoundTagSplitResolution { .. } => Some("Compound Tag Split"),
@@ -225,7 +230,8 @@ impl ActiveView {
             Self::MovedFileAcknowledge(s) => s.selected_path(),
             Self::OobSyncResolution(s) => s.selected_path(),
             Self::OobConflictInspection(s) => s.selected_path(),
-            Self::ExternalMatchReview(s) => s.selected_path(),
+            Self::AcoustidBrowse(s) => s.selected_path(),
+            Self::ReleaseReview(s) => s.selected_path(),
             Self::Deploy { ref data, ref interaction } => data.selected_path(interaction),
             Self::UnifiedTagEditor(s) => s.selected_path(),
             Self::MissingAlbumSingleResolution { ref data, current_group, ref list, .. } => {
@@ -316,9 +322,10 @@ pub(crate) enum ViewAction {
     MovedFileAcknowledge(moved_file_modal::MovedFileAction),
     OobSyncResolution(oob_sync_modal::OobSyncAction),
     OobConflictInspection(oob_conflict_modal::OobConflictAction),
-    ExternalMatchReview(external_match_modal::ExternalMatchReviewAction),
     ReleasePackingBrowser(super::release_packing_browser::ReleasePackingBrowserAction),
     KnotBrowser(super::knot_browser::KnotBrowserAction),
+    AcoustidBrowse(acoustid_browse::AcoustidBrowseAction),
+    ReleaseReview(release_review::ReleaseReviewAction),
     History(history_view::HistoryAction),
     TagCanonicityResolution(mm_ui::resolutions::tag_canonicity::CanonicityAction),
     CompoundTagSplitResolution(mm_ui::resolutions::compound_split::CompoundSplitAction),

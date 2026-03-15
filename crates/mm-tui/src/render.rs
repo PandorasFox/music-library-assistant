@@ -16,7 +16,7 @@ use super::eye::{EyeFrame, EYE_CLOSED, EYE_CLOSING, EYE_OPEN};
 use super::startup;
 use super::widgets::{status_bar, Modal, ModalButton, ModalFrame, ModalStyle, UnifiedTitleBar};
 use super::{
-    compound_split_v2, config_editor, disc_extraction_modal, external_match_modal, inbox_view,
+    compound_split_v2, config_editor, disc_extraction_modal, inbox_view,
     insights_view, manual_review_modal, missing_album_modal, oob_conflict_modal, oob_sync_modal,
     progressive_worker, tabbed_transaction_review, tag_canonicity_v2,  transaction_review,
 };
@@ -203,14 +203,17 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::OobConflictInspection(ref mut state) => {
             oob_conflict_modal::render(f, area, state);
         }
-        ActiveView::ExternalMatchReview(ref mut state) => {
-            external_match_modal::render(f, area, state);
-        }
         ActiveView::ReleasePackingBrowser(ref mut state) => {
             super::release_packing_browser::render::render(f, area, state);
         }
         ActiveView::KnotBrowser(ref mut state) => {
             super::knot_browser::render::render(f, area, state);
+        }
+        ActiveView::AcoustidBrowse(ref mut state) => {
+            super::acoustid_browse::render::render(f, area, state);
+        }
+        ActiveView::ReleaseReview(ref mut state) => {
+            super::release_review::render::render(f, area, state);
         }
         ActiveView::MovedFileAcknowledge(ref mut state) => {
             super::moved_file_modal::render(state, f, area);

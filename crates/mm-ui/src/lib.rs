@@ -6,9 +6,11 @@
 
 pub mod click_targets;
 pub mod decision_field;
+pub mod decision_keys;
 pub mod directory_browser;
-pub mod external_matches;
 pub mod domain_types;
+pub mod external_matches;
+pub mod field_form;
 pub mod group_navigation;
 pub mod html;
 pub mod geometry;
@@ -24,7 +26,9 @@ pub mod rich_text;
 pub mod route;
 pub mod search_widget;
 pub mod standard_list;
+pub mod tag_editor_state;
 pub mod tag_mutations;
+pub mod tag_set;
 pub mod text_input;
 pub mod view_state;
 pub mod wizard;

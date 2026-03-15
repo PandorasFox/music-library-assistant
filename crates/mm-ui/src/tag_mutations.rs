@@ -1,7 +1,8 @@
-//! Pure tag mutation functions.
+//! Pure tag mutation functions (DEPRECATED).
 //!
-//! Stateless functions for computing tag changes and generating mutations.
-//! Shared between TUI and web clients. No database or protocol access.
+//! These functions operate on the old `TagField`/`TagChange` types.
+//! New code should use `tag_set::TagSet::diff()` which produces `Vec<TagOp>` directly,
+//! and `tag_set::AggregatedTagSet::from_tag_sets()` for aggregation.
 
 use std::collections::{HashMap, HashSet};
 
@@ -9,6 +10,7 @@ use mm_meta::db_types::{AudioFile, Zone};
 use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
 use mm_meta::mutations::{Mutation, TagOp};
 
+#[allow(deprecated)]
 use crate::domain_types::{AggregatedTagField, AggregatedValue, TagChange, TagField};
 
 // ============================================================================
@@ -19,6 +21,8 @@ use crate::domain_types::{AggregatedTagField, AggregatedValue, TagChange, TagFie
 ///
 /// The tag pairs come from `GetFileTagValues` which reads tags from disk
 /// on the server side. This function just wraps them as editable fields.
+#[deprecated(note = "use tag_set::TagSet::from_pairs() instead")]
+#[allow(deprecated)]
 pub fn tag_pairs_to_tag_fields(tags: Vec<(String, String)>) -> Vec<TagField> {
     let mut tag_fields: Vec<TagField> = tags
         .into_iter()
@@ -50,6 +54,8 @@ pub fn tag_pairs_to_tag_fields(tags: Vec<(String, String)>) -> Vec<TagField> {
 /// Handles multi-value tags by comparing values semantically
 /// rather than by position. Detects added, removed, and modified values
 /// for each tag name.
+#[deprecated(note = "use tag_set::TagSet::diff() which produces TagOps directly")]
+#[allow(deprecated)]
 pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) -> Vec<TagChange> {
     let mut changes = Vec::new();
 
@@ -167,6 +173,8 @@ pub fn compute_changes(original: &[Vec<TagField>], current: &[Vec<TagField>]) ->
 ///
 /// For each change, generates an add/drop/replace TagOp with the expected
 /// old value for validation. Returns a single `ApplyTagOps` mutation.
+#[deprecated(note = "use tag_set::TagSet::diff() which produces TagOps directly")]
+#[allow(deprecated)]
 pub fn changes_to_mutations(
     changes: &[TagChange],
     audio_files: &[AudioFile],
@@ -218,6 +226,8 @@ pub fn changes_to_mutations(
 /// For each tag name (case-insensitive):
 /// - If all files have the same value → `AggregatedValue::Consistent(value)`
 /// - If values differ across files → `AggregatedValue::Various`
+#[deprecated(note = "use tag_set::AggregatedTagSet::from_tag_sets() instead")]
+#[allow(deprecated)]
 pub fn aggregate_tags_from_fields(all_fields: &[Vec<TagField>]) -> Vec<AggregatedTagField> {
     if all_fields.is_empty() {
         return Vec::new();

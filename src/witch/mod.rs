@@ -683,12 +683,25 @@ impl Witch {
                             let response = match *payload {
                                 CommandPayload::QueueTask(task) => {
                                     match task {
-                                        BackgroundTask::ExternalFetch => w.request_external_fetch(),
-                                        BackgroundTask::ReleasePacking => w.request_release_packing(),
-                                        BackgroundTask::SchemaReconciliation => w.queue_schema_reconciliation(),
-                                        BackgroundTask::Vacuum => w.queue_vacuum(),
+                                        BackgroundTask::ExternalFetch => {
+                                            match w.request_external_fetch() {
+                                                Ok(()) => CommandResponse::Ok,
+                                                Err(reason) => CommandResponse::Failed(reason),
+                                            }
+                                        }
+                                        BackgroundTask::ReleasePacking => {
+                                            w.request_release_packing();
+                                            CommandResponse::Ok
+                                        }
+                                        BackgroundTask::SchemaReconciliation => {
+                                            w.queue_schema_reconciliation();
+                                            CommandResponse::Ok
+                                        }
+                                        BackgroundTask::Vacuum => {
+                                            w.queue_vacuum();
+                                            CommandResponse::Ok
+                                        }
                                     }
-                                    CommandResponse::Ok
                                 }
                                 CommandPayload::Shutdown => {
                                     CommandResponse::Goodbye
@@ -1614,35 +1627,22 @@ impl Witch {
 
     /// Trigger an external fetch (operator-initiated).
     ///
-    /// Requires an API key, eligible dirs, and no active batch.
-    pub fn request_external_fetch(&mut self) {
+    /// Requires an API key and no active batch. Directory eligibility is
+    /// resolved by the scheduler thread from config (exclusion-based).
+    /// Returns `Err(reason)` if the fetch cannot start.
+    pub fn request_external_fetch(&mut self) -> Result<(), String> {
         let shared_config = match self.shared_config {
             Some(ref sc) => sc.clone(),
             None => {
-                crate::logging::log_general("[WITCH] External fetch: no config available");
-                return;
+                return Err("Server config not yet available".to_string());
             }
         };
 
-        let (api_key, eligible_dirs) = {
+        {
             let config = shared_config.read().expect("SharedConfig lock poisoned");
-            let key = config.opinions.external_matching.acoustid_api_key.clone();
-            let dirs: Vec<std::path::PathBuf> = config
-                .source_dirs
-                .iter()
-                .filter(|sd| sd.enable_acoustid.unwrap_or(true))
-                .map(|sd| sd.path.clone())
-                .collect();
-            (key, dirs)
-        };
-
-        if api_key.is_empty() {
-            crate::logging::log_general("[WITCH] External fetch: no API key configured");
-            return;
-        }
-        if eligible_dirs.is_empty() {
-            crate::logging::log_general("[WITCH] External fetch: no eligible directories");
-            return;
+            if config.opinions.external_matching.acoustid_api_key.is_empty() {
+                return Err("No AcoustID API key configured".to_string());
+            }
         }
 
         // Lazy-spawn the fetch thread if needed
@@ -1656,19 +1656,15 @@ impl Witch {
         let handle = self.external_fetch.as_mut().unwrap();
 
         if handle.is_batch_active() {
-            crate::logging::log_general("[WITCH] External fetch: batch already active");
-            return;
+            return Err("Fetch already in progress".to_string());
         }
 
         // Clear stale progress from last batch
         self.fetch_progress = None;
 
-        crate::logging::log_general(format!(
-            "[WITCH] Manual external fetch requested for {} eligible dirs",
-            eligible_dirs.len()
-        ));
-
-        handle.request_fetch(eligible_dirs);
+        crate::logging::log_general("[WITCH] Manual external fetch requested");
+        handle.request_fetch();
+        Ok(())
     }
 
     /// Whether an external AcoustID fetch batch is currently active.

@@ -95,5 +95,9 @@ pub fn load_config() -> Result<Config> {
     // Layer environment variable overrides on top of file-based config
     env_override::apply_env_overrides(&mut config);
 
+    // Clamp root dir None values to system defaults — None means "inherit
+    // from parent" but root has no parent.
+    config.clamp_root_defaults();
+
     Ok(config)
 }

@@ -62,9 +62,8 @@ pub(in crate::witch) enum SchedulerMessage {
 
 /// Command from Witch to scheduler.
 pub(super) enum FetchCommand {
-    /// Scan eligible dirs for inodes needing AcoustID fingerprint lookup.
-    /// Also populates MB queue for existing matches needing enrichment.
-    Start { eligible_dirs: Vec<std::path::PathBuf> },
+    /// Populate AcoustID + MB queues and start fetching.
+    Start,
     /// Shut down the scheduler thread.
     Shutdown,
 }

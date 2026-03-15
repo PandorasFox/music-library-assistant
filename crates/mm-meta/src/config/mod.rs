@@ -612,6 +612,7 @@ pub struct ResolvedSourceConfig {
     pub can_stash_dupes: bool,
     pub interior_dupes: bool,
     pub path_schema: Option<PathTagSchema>,
+    pub enable_acoustid: bool,
 }
 
 /// Shared config wrapped in `Arc<RwLock<Config>>` for thread-safe read/write access.
@@ -707,12 +708,18 @@ impl Config {
 
         let path_schema = matching.iter().find_map(|sd| sd.path_schema.clone());
 
+        let enable_acoustid = matching
+            .iter()
+            .find_map(|sd| sd.enable_acoustid)
+            .unwrap_or(true);
+
         Some(ResolvedSourceConfig {
             source_path,
             libraries,
             can_stash_dupes,
             interior_dupes,
             path_schema,
+            enable_acoustid,
         })
     }
 
@@ -728,5 +735,46 @@ impl Config {
     /// Get the raw SourceDir for an exact path match (for config editing).
     pub fn get_raw_source_dir(&self, relative_path: &Path) -> Option<&SourceDir> {
         self.source_dirs.iter().find(|sd| sd.path == relative_path)
+    }
+
+    /// Clamp root source dir `None` values to system defaults.
+    ///
+    /// `None` means "inherit from parent" — the root dir has no parent, so
+    /// `None` on root is a logic error. This replaces `None` with the concrete
+    /// system defaults so all downstream code sees resolved values.
+    pub fn clamp_root_defaults(&mut self) {
+        if let Some(root) = self.source_dirs.iter_mut().find(|sd| sd.path == Path::new("")) {
+            if root.can_stash_dupes.is_none() {
+                root.can_stash_dupes = Some(true);
+            }
+            if root.interior_dupes.is_none() {
+                root.interior_dupes = Some(true);
+            }
+            if root.enable_acoustid.is_none() {
+                root.enable_acoustid = Some(true);
+            }
+        }
+    }
+
+    /// Compute db-path prefixes for source dirs where AcoustID is disabled.
+    ///
+    /// Returns empty vec when no dirs are excluded (the common case).
+    /// Used by the fetch scheduler to build SQL `NOT LIKE` exclusion clauses.
+    pub fn acoustid_excluded_db_prefixes(&self) -> Vec<String> {
+        self.source_dirs
+            .iter()
+            .filter(|sd| {
+                let resolved = self.resolve_source_config(&sd.path);
+                resolved.is_some_and(|r| !r.enable_acoustid)
+            })
+            .map(|sd| {
+                let p = sd.path.display().to_string();
+                if p.is_empty() {
+                    "corpus".to_string()
+                } else {
+                    format!("corpus/{}", p)
+                }
+            })
+            .collect()
     }
 }

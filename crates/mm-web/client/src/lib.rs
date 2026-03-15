@@ -8,15 +8,45 @@
 mod api;
 mod views;
 
+use std::cell::Cell;
 use std::cell::RefCell;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+use mm_meta::decisions::{Decision, DecisionKey};
+use mm_meta::paths::PathResolver;
 use mm_ui::html::widgets::{render_status_bar, render_titlebar};
 use mm_ui::html::{self, div, Node};
 use mm_ui::lateral_view::LateralView;
+use mm_ui::resolutions::dispatch::{DispatchResult, Dispatchable};
 use mm_ui::route::{self, Route};
+
+// ============================================================================
+// Active Resolution State
+// ============================================================================
+
+/// Holds the in-flight resolution state for Dispatchable resolution types.
+///
+/// Stored in a thread_local so that `mm_resolve_action()` can dispatch typed
+/// actions against the held state without re-fetching data from the server.
+enum ActiveResolution {
+    // -- Cluster-nav (V3) modals --
+    TagCanonicity(mm_ui::resolutions::tag_canonicity::TagCanonicityViewState),
+    CompoundSplit(mm_ui::resolutions::compound_split::CompoundSplitViewState),
+    DirectoryCluster(mm_ui::resolutions::directory_cluster::DirectoryClusterState),
+    ManualReview(mm_ui::resolutions::manual_review::ManualReviewState),
+    MissingAlbum(mm_ui::resolutions::missing_album::MissingAlbumState),
+    DiscExtraction(mm_ui::resolutions::disc_extraction::DiscExtractionState),
+    // -- Simple-batch modals --
+    MissingDirectory(mm_ui::resolutions::missing_directory::MissingDirectoryState),
+    CorruptFile(mm_ui::resolutions::corrupt_file::CorruptFileState),
+    MovedFile(mm_ui::resolutions::moved_file::MovedFileState),
+    SubparDuplicate(mm_ui::resolutions::subpar_duplicate::SubparDuplicateState),
+    MissingFile(mm_ui::resolutions::missing_file::MissingFilePreviewState),
+    InboxCorpusMatch(mm_ui::resolutions::inbox_corpus_match::InboxCorpusMatchState),
+    ShitFormat(mm_ui::resolutions::shit_format::ShitFormatPreviewState),
+}
 
 thread_local! {
     static CONFIG_DATA: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
@@ -24,6 +54,13 @@ thread_local! {
     static POLL_HANDLE: RefCell<Option<i32>> = const { RefCell::new(None) };
     /// JS timeout handle for search debounce. Cleared on new keystrokes.
     static SEARCH_DEBOUNCE: RefCell<Option<i32>> = const { RefCell::new(None) };
+    /// Guard flag: when true, the hashchange listener skips its load because
+    /// the programmatic caller (navigate_to / mm_navigate_route) already
+    /// handles it.  Set before set_hash(), cleared by the hashchange handler.
+    static PROGRAMMATIC_NAV: Cell<bool> = const { Cell::new(false) };
+    /// Active resolution state for Dispatchable resolution types.
+    /// Set by `load_resolution_view()`, consumed by `mm_resolve_action()`.
+    static ACTIVE_RESOLUTION: RefCell<Option<ActiveResolution>> = const { RefCell::new(None) };
 }
 
 // ============================================================================
@@ -50,6 +87,10 @@ async fn init() -> Result<(), JsValue> {
         mount(&render_setup_form(None, status.suggested_root.as_deref()));
         return Ok(());
     }
+
+    // Listen for browser-initiated hash changes (back/forward, anchor clicks).
+    // Programmatic navigations set PROGRAMMATIC_NAV so we skip the redundant load.
+    register_hashchange_listener();
 
     if api::has_token() {
         match load_from_hash().await {
@@ -101,10 +142,15 @@ fn lateral_view_for_route(route: &Route) -> LateralView {
 }
 
 /// Navigate to a route by updating the URL hash.
+///
+/// Sets [`PROGRAMMATIC_NAV`] so the hashchange listener knows to skip
+/// its redundant load — the caller is expected to call `load_from_hash()`
+/// itself.
 fn navigate_to(route: &Route) {
     let url = route.to_url();
     // Strip leading '/' for hash — browser prepends '#'.
     let hash = url.strip_prefix('/').unwrap_or(&url);
+    PROGRAMMATIC_NAV.with(|flag| flag.set(true));
     web_sys::window()
         .unwrap()
         .location()
@@ -407,46 +453,106 @@ fn zone_api_str(zone: &mm_meta::db_types::Zone) -> &'static str {
 }
 
 /// Fetch data and render content for a resolution route.
+///
+/// For Dispatchable resolution types, also constructs the typed mm-ui state
+/// and stores it in [`ACTIVE_RESOLUTION`] so that [`mm_resolve_action`] can
+/// dispatch typed actions without re-fetching data.
 async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsValue> {
     use route::ResolutionRoute;
+
+    // Clear any previously held resolution state. Non-Dispatchable routes
+    // don't set it, so this prevents stale state from lingering.
+    ACTIVE_RESOLUTION.with(|cell| cell.borrow_mut().take());
+
     match res {
-        // === Already wired ===
+        // === Simple-batch routes (Dispatchable) ===
         ResolutionRoute::MissingDirectories { .. } => {
-            let data = api::get_query("missing-directory-data").await?;
-            Ok(views::render_missing_directories(&data))
+            let raw = api::get_query("missing-directory-data").await?;
+            let typed: mm_meta::views::health_modals::MissingDirectoryModalData =
+                api_deserialize(&raw, "MissingDirectoryModalData")?;
+            let data = mm_ui::resolutions::missing_directory::MissingDirectoryData(typed);
+            let state = mm_ui::resolutions::missing_directory::MissingDirectoryState::new(data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::MissingDirectory(state));
+            });
+            Ok(views::render_missing_directories(&raw))
         }
         ResolutionRoute::CorruptFiles { .. } => {
-            let data = api::get_query("corrupt-file-data").await?;
-            Ok(views::render_corrupt_files(&data))
+            let raw = api::get_query("corrupt-file-data").await?;
+            let typed: mm_meta::views::health_modals::CorruptFileModalData =
+                api_deserialize(&raw, "CorruptFileModalData")?;
+            let data = mm_ui::resolutions::corrupt_file::CorruptFileData(typed);
+            let state = mm_ui::resolutions::corrupt_file::CorruptFileState::new(data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::CorruptFile(state));
+            });
+            Ok(views::render_corrupt_files(&raw))
         }
         ResolutionRoute::MovedFiles { .. } => {
-            let data = api::get_query("moved-files").await?;
-            Ok(views::render_moved_files(&data))
+            let raw = api::get_query("moved-files").await?;
+            let typed: Vec<mm_meta::views::MovedFileInfo> =
+                api_deserialize(&raw, "Vec<MovedFileInfo>")?;
+            let data = mm_ui::resolutions::moved_file::MovedFileData { files: typed };
+            let state = mm_ui::resolutions::moved_file::MovedFileState::new(data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::MovedFile(state));
+            });
+            Ok(views::render_moved_files(&raw))
         }
-
-        // === Simple-batch routes ===
         ResolutionRoute::SubparDuplicates { .. } => {
-            let data = api::get_query("subpar-duplicate-data").await?;
-            Ok(views::render_subpar_duplicates(&data))
+            let raw = api::get_query("subpar-duplicate-data").await?;
+            let typed: mm_meta::views::health_modals::SubparDuplicateModalData =
+                api_deserialize(&raw, "SubparDuplicateModalData")?;
+            let data = mm_ui::resolutions::subpar_duplicate::SubparDuplicateData(typed);
+            let state = mm_ui::resolutions::subpar_duplicate::SubparDuplicateState::new(data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::SubparDuplicate(state));
+            });
+            Ok(views::render_subpar_duplicates(&raw))
         }
         ResolutionRoute::LosslessRemux { .. } => {
-            let data = api::get_query("shit-format-data").await?;
-            Ok(views::render_lossless_remux(&data))
+            let raw = api::get_query("shit-format-data").await?;
+            let typed: mm_meta::views::cluster_deploy::ShitFormatModalData =
+                api_deserialize(&raw, "ShitFormatModalData")?;
+            let state = mm_ui::resolutions::shit_format::ShitFormatPreviewState::new(typed);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::ShitFormat(state));
+            });
+            Ok(views::render_lossless_remux(&raw))
         }
         ResolutionRoute::MissingFilesRestorable { .. } => {
-            let data = api::get_query("missing-file-data").await?;
-            Ok(views::render_missing_files_restorable(&data))
+            let raw = api::get_query("missing-file-data").await?;
+            let typed: mm_meta::views::health_modals::MissingFileModalData =
+                api_deserialize(&raw, "MissingFileModalData")?;
+            let state = mm_ui::resolutions::missing_file::MissingFilePreviewState::new(typed);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::MissingFile(state));
+            });
+            Ok(views::render_missing_files_restorable(&raw))
         }
         ResolutionRoute::MissingFilesPermanent { .. } => {
-            let data = api::get_query("missing-file-data").await?;
-            Ok(views::render_missing_files_permanent(&data))
+            let raw = api::get_query("missing-file-data").await?;
+            let typed: mm_meta::views::health_modals::MissingFileModalData =
+                api_deserialize(&raw, "MissingFileModalData")?;
+            let state = mm_ui::resolutions::missing_file::MissingFilePreviewState::new(typed);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::MissingFile(state));
+            });
+            Ok(views::render_missing_files_permanent(&raw))
         }
         ResolutionRoute::InboxCorpusMatch { .. } => {
-            let data = api::get_query_with(
+            let raw = api::get_query_with(
                 "inbox-corpus-match-data",
                 "bitrate_fuzz_percent=5",
             ).await?;
-            Ok(views::render_inbox_corpus_match(&data))
+            let typed: mm_meta::views::review_match::InboxCorpusMatchModalData =
+                api_deserialize(&raw, "InboxCorpusMatchModalData")?;
+            let data = mm_ui::resolutions::inbox_corpus_match::InboxCorpusMatchData(typed);
+            let state = mm_ui::resolutions::inbox_corpus_match::InboxCorpusMatchState::new(data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::InboxCorpusMatch(state));
+            });
+            Ok(views::render_inbox_corpus_match(&raw))
         }
         ResolutionRoute::OobResolution { bucket, .. } => {
             let data = match bucket {
@@ -474,9 +580,9 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             Ok(views::render_oob_conflict_bucket(title, &data))
         }
 
-        // === Cluster-nav routes ===
+        // === Cluster-nav routes (Dispatchable) ===
         ResolutionRoute::TagCanonicity { tag_name, zone, .. } => {
-            let data = api::get_query_with(
+            let raw = api::get_query_with(
                 "tag-canonicity-resolution",
                 &format!(
                     "tag_name={}&zone={}&filter_existing_canonicals=true",
@@ -484,10 +590,26 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
                     zone_api_str(zone),
                 ),
             ).await?;
-            Ok(views::render_tag_canonicity(&data))
+            let typed: mm_meta::views::canonicity_compound::TagCanonicityResolutionData =
+                api_deserialize(&raw, "TagCanonicityResolutionData")?;
+            let prefill: String = typed.clusters.first()
+                .and_then(|c| c.suggested_canonical.clone())
+                .unwrap_or_default();
+            let ui_data = mm_ui::resolutions::tag_canonicity::TagCanonicityData::new(
+                typed,
+                *zone,
+                mm_ui::resolutions::tag_canonicity::CanonicityMode::TagCanonicity,
+            );
+            let state = mm_ui::resolutions::tag_canonicity::TagCanonicityViewState::new(
+                ui_data, "Squash to:", &prefill,
+            );
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::TagCanonicity(state));
+            });
+            Ok(views::render_tag_canonicity(&raw))
         }
         ResolutionRoute::CompoundSplit { tag_name, zone, safe_mode, .. } => {
-            let data = api::get_query_with(
+            let raw = api::get_query_with(
                 "compound-split-resolution",
                 &format!(
                     "tag_name={}&zone={}&safe_only={}",
@@ -496,18 +618,50 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
                     safe_mode,
                 ),
             ).await?;
-            Ok(views::render_compound_split(&data))
+            let typed: mm_meta::views::canonicity_compound::CompoundSplitResolutionData =
+                api_deserialize(&raw, "CompoundSplitResolutionData")?;
+            let prefill = typed.groups.first()
+                .map(|g| g.split_parts.join("; "))
+                .unwrap_or_default();
+            let ui_data = mm_ui::resolutions::compound_split::CompoundSplitData::new(
+                typed, *zone, *safe_mode,
+            );
+            let state = mm_ui::resolutions::compound_split::CompoundSplitViewState::new(
+                ui_data, &prefill,
+            );
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::CompoundSplit(state));
+            });
+            Ok(views::render_compound_split(&raw))
         }
         ResolutionRoute::MissingAlbum { .. } => {
-            let data = api::get_query("missing-album-single-signals").await?;
-            Ok(views::render_missing_album(&data))
+            let raw = api::get_query("missing-album-single-signals").await?;
+            let typed: Vec<mm_meta::domain_queries::MissingAlbumSingleSignalWire> =
+                api_deserialize(&raw, "Vec<MissingAlbumSingleSignalWire>")?;
+            let config = fetch_config().await?;
+            let suffix = config.opinions.health_detection.single_album_suffix.clone();
+            let ui_data = mm_ui::resolutions::missing_album::MissingAlbumData::new(
+                typed, suffix,
+            );
+            let state = mm_ui::resolutions::missing_album::MissingAlbumState::new(ui_data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::MissingAlbum(state));
+            });
+            Ok(views::render_missing_album(&raw))
         }
         ResolutionRoute::DirectoryCluster { .. } => {
-            let data = api::get_query("directory-cluster-data").await?;
-            Ok(views::render_directory_clusters(&data))
+            let raw = api::get_query("directory-cluster-data").await?;
+            let typed: mm_meta::views::cluster_deploy::DirectoryClusterModalData =
+                api_deserialize(&raw, "DirectoryClusterModalData")?;
+            let ui_data = mm_ui::resolutions::directory_cluster::DirectoryClusterData::new(typed);
+            let state = mm_ui::resolutions::directory_cluster::DirectoryClusterState::new(ui_data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::DirectoryCluster(state));
+            });
+            Ok(views::render_directory_clusters(&raw))
         }
         ResolutionRoute::InconsistentAlbumArtist { tag_name, .. } => {
-            let data = api::get_query_with(
+            let raw = api::get_query_with(
                 "tag-canonicity-resolution",
                 &format!(
                     "tag_name={}&zone={}&filter_existing_canonicals=true",
@@ -515,47 +669,139 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
                     zone_api_str(&mm_meta::db_types::Zone::Corpus),
                 ),
             ).await?;
-            Ok(views::render_tag_canonicity_titled("Inconsistent Album Artist", &data))
+            let typed: mm_meta::views::canonicity_compound::TagCanonicityResolutionData =
+                api_deserialize(&raw, "TagCanonicityResolutionData")?;
+            let prefill: String = typed.clusters.first()
+                .and_then(|c| c.suggested_canonical.clone())
+                .unwrap_or_default();
+            let ui_data = mm_ui::resolutions::tag_canonicity::TagCanonicityData::new(
+                typed,
+                mm_meta::db_types::Zone::Corpus,
+                mm_ui::resolutions::tag_canonicity::CanonicityMode::InconsistentAlbumArtist,
+            );
+            let state = mm_ui::resolutions::tag_canonicity::TagCanonicityViewState::new(
+                ui_data, "Album artist:", &prefill,
+            );
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::TagCanonicity(state));
+            });
+            Ok(views::render_tag_canonicity_titled("Inconsistent Album Artist", &raw))
         }
         ResolutionRoute::DiscExtraction { .. } => {
-            let data = api::get_query_with(
+            let raw = api::get_query_with(
                 "disc-extraction-data",
                 "map_letters_to_numbers=false",
             ).await?;
-            Ok(views::render_disc_extraction(&data))
+            let typed: mm_meta::domain_queries::DiscExtractionModalData =
+                api_deserialize(&raw, "DiscExtractionModalData")?;
+            let config = fetch_config().await?;
+            let disc_tag = config.opinions.disc_extraction.disc_tag_name.clone();
+            let ui_data = mm_ui::resolutions::disc_extraction::DiscExtractionData::new(
+                typed, disc_tag,
+            );
+            let state = mm_ui::resolutions::disc_extraction::DiscExtractionState::new(ui_data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::DiscExtraction(state));
+            });
+            Ok(views::render_disc_extraction(&raw))
         }
 
-        // === Group-review routes ===
+        // === Group-review routes (Dispatchable) ===
         ResolutionRoute::RedundantDuplicates { .. } => {
-            let data = api::get_query_with(
+            let raw = api::get_query_with(
                 "manual-review-data",
                 "kind=RedundantDuplicate",
             ).await?;
-            Ok(views::render_manual_review("Redundant Duplicates", &data))
+            let typed: mm_meta::views::review_match::ManualReviewData =
+                api_deserialize(&raw, "ManualReviewData")?;
+            let ui_data = mm_ui::resolutions::manual_review::ManualReviewResolutionData::new(
+                typed,
+                mm_meta::views::review_match::ReviewKind::RedundantDuplicate,
+            );
+            let state = mm_ui::resolutions::manual_review::ManualReviewState::new(ui_data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::ManualReview(state));
+            });
+            Ok(views::render_manual_review("Redundant Duplicates", &raw))
         }
         ResolutionRoute::DeployConflicts { .. } => {
-            let data = api::get_query_with(
+            let raw = api::get_query_with(
                 "manual-review-data",
                 "kind=DeployConflict",
             ).await?;
-            Ok(views::render_manual_review("Deploy Conflicts", &data))
+            let typed: mm_meta::views::review_match::ManualReviewData =
+                api_deserialize(&raw, "ManualReviewData")?;
+            let ui_data = mm_ui::resolutions::manual_review::ManualReviewResolutionData::new(
+                typed,
+                mm_meta::views::review_match::ReviewKind::DeployConflict,
+            );
+            let state = mm_ui::resolutions::manual_review::ManualReviewState::new(ui_data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::ManualReview(state));
+            });
+            Ok(views::render_manual_review("Deploy Conflicts", &raw))
         }
         ResolutionRoute::MetadataDuplicates { .. } => {
-            let data = api::get_query_with(
+            let raw = api::get_query_with(
                 "manual-review-data",
                 "kind=MetadataDuplicate",
             ).await?;
-            Ok(views::render_manual_review("Metadata Duplicates", &data))
+            let typed: mm_meta::views::review_match::ManualReviewData =
+                api_deserialize(&raw, "ManualReviewData")?;
+            let ui_data = mm_ui::resolutions::manual_review::ManualReviewResolutionData::new(
+                typed,
+                mm_meta::views::review_match::ReviewKind::MetadataDuplicate,
+            );
+            let state = mm_ui::resolutions::manual_review::ManualReviewState::new(ui_data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::ManualReview(state));
+            });
+            Ok(views::render_manual_review("Metadata Duplicates", &raw))
         }
         ResolutionRoute::SameRecording { .. } => {
-            let data = api::get_query_with(
+            let raw = api::get_query_with(
                 "manual-review-data",
                 "kind=SameRecordingDifferentRelease",
             ).await?;
-            Ok(views::render_manual_review("Same Recording", &data))
+            let typed: mm_meta::views::review_match::ManualReviewData =
+                api_deserialize(&raw, "ManualReviewData")?;
+            let ui_data = mm_ui::resolutions::manual_review::ManualReviewResolutionData::new(
+                typed,
+                mm_meta::views::review_match::ReviewKind::SameRecordingDifferentRelease,
+            );
+            let state = mm_ui::resolutions::manual_review::ManualReviewState::new(ui_data);
+            ACTIVE_RESOLUTION.with(|cell| {
+                *cell.borrow_mut() = Some(ActiveResolution::ManualReview(state));
+            });
+            Ok(views::render_manual_review("Same Recording", &raw))
         }
 
     }
+}
+
+/// Deserialize a serde_json::Value into a typed struct, with a readable error.
+fn api_deserialize<T: serde::de::DeserializeOwned>(
+    val: &serde_json::Value,
+    type_name: &str,
+) -> Result<T, JsValue> {
+    serde_json::from_value(val.clone())
+        .map_err(|e| JsValue::from_str(&format!("deserialize {type_name}: {e}")))
+}
+
+/// Fetch and deserialize the server config. Uses the cached CONFIG_DATA if
+/// available, otherwise fetches from the server and caches the result.
+async fn fetch_config() -> Result<mm_meta::config::Config, JsValue> {
+    let cached = CONFIG_DATA.with(|cell| cell.borrow().clone());
+    let json = match cached {
+        Some(v) => v,
+        None => {
+            let v = api::get_config_json().await?;
+            CONFIG_DATA.with(|cell| *cell.borrow_mut() = Some(v.clone()));
+            v
+        }
+    };
+    serde_json::from_value(json)
+        .map_err(|e| JsValue::from_str(&format!("deserialize Config: {e}")))
 }
 
 /// Fetch data and render content for an external match overlay route.
@@ -679,12 +925,268 @@ pub fn mm_logout() {
 #[wasm_bindgen]
 pub fn mm_resolve_cancel() {
     stop_poll();
+    ACTIVE_RESOLUTION.with(|cell| cell.borrow_mut().take());
     navigate_to(&Route::Health(Default::default()));
     spawn_local(async move {
         if let Err(e) = load_from_hash().await {
             web_sys::console::error_1(&format!("resolve cancel error: {e:?}").into());
         }
     });
+}
+
+/// Dispatch a resolution action against the held `ACTIVE_RESOLUTION` state.
+///
+/// `action_name` is the string name of the action variant (e.g. "Confirm",
+/// "FlagCanonical", "Stash", "Skip", "Cancel", etc.). Each resolution type
+/// maps these strings to its typed action enum.
+///
+/// On `Stage`/`StageKeep`: starts a transaction (if needed), adds the decision,
+/// then either advances to the next group or navigates to transaction review.
+/// On `Skip`: advances without staging. On `Cancel`: navigates to Health.
+#[wasm_bindgen]
+pub fn mm_resolve_action(action_name: &str) {
+    let action = action_name.to_string();
+    spawn_local(async move {
+        if let Err(e) = do_resolve_action(&action).await {
+            web_sys::console::error_1(&format!("resolve action error: {e:?}").into());
+        }
+    });
+}
+
+/// Inner async handler for `mm_resolve_action`.
+async fn do_resolve_action(action_name: &str) -> Result<(), JsValue> {
+    // Take the state out of the thread_local so we can mutate it (for advance).
+    let state = ACTIVE_RESOLUTION.with(|cell| cell.borrow_mut().take());
+    let Some(mut state) = state else {
+        return Err(JsValue::from_str("no active resolution state"));
+    };
+
+    // Build a PathResolver from config for dispatch calls that need path resolution.
+    let config = fetch_config().await?;
+    let resolver = PathResolver::from_root(config.root.clone());
+
+    // Dispatch the action and get the result.
+    let result = dispatch_active_resolution(&state, action_name, &resolver)?;
+
+    match result {
+        DispatchResult::Stage { key, label, mutations } => {
+            stage_resolution_decision(&key, &label, &mutations).await?;
+            let has_more = advance_active_resolution(&mut state);
+            if has_more {
+                // Put state back and re-render current view.
+                ACTIVE_RESOLUTION.with(|cell| *cell.borrow_mut() = Some(state));
+                load_from_hash().await?;
+            } else {
+                // Last group processed — navigate to transaction review.
+                navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
+                load_from_hash().await?;
+            }
+        }
+        DispatchResult::StageKeep { key, label, mutations } => {
+            stage_resolution_decision(&key, &label, &mutations).await?;
+            // Don't advance — put state back and re-render.
+            ACTIVE_RESOLUTION.with(|cell| *cell.borrow_mut() = Some(state));
+            load_from_hash().await?;
+        }
+        DispatchResult::Skip => {
+            let has_more = advance_active_resolution(&mut state);
+            if has_more {
+                ACTIVE_RESOLUTION.with(|cell| *cell.borrow_mut() = Some(state));
+                load_from_hash().await?;
+            } else {
+                navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
+                load_from_hash().await?;
+            }
+        }
+        DispatchResult::Cancel => {
+            navigate_to(&Route::Health(Default::default()));
+            load_from_hash().await?;
+        }
+        DispatchResult::Handled => {
+            // No-op — put state back unchanged.
+            ACTIVE_RESOLUTION.with(|cell| *cell.borrow_mut() = Some(state));
+        }
+    }
+    Ok(())
+}
+
+/// Map an action name string to a typed action and dispatch it on the active resolution.
+fn dispatch_active_resolution(
+    state: &ActiveResolution,
+    action_name: &str,
+    resolver: &PathResolver,
+) -> Result<DispatchResult, JsValue> {
+    match state {
+        ActiveResolution::TagCanonicity(s) => {
+            use mm_ui::resolutions::tag_canonicity::CanonicityAction;
+            let action = match action_name {
+                "Confirm" => CanonicityAction::Confirm,
+                "FlagCanonical" => CanonicityAction::FlagCanonical,
+                "Cancel" => CanonicityAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown TagCanonicity action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::CompoundSplit(s) => {
+            use mm_ui::resolutions::compound_split::CompoundSplitAction;
+            let action = match action_name {
+                "Confirm" => CompoundSplitAction::Confirm,
+                "Canonicalize" => CompoundSplitAction::Canonicalize,
+                "Cancel" => CompoundSplitAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown CompoundSplit action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::DirectoryCluster(s) => {
+            use mm_ui::resolutions::directory_cluster::DirectoryClusterAction;
+            let action = match action_name {
+                "Stash" => DirectoryClusterAction::Stash,
+                "MarkExpected" => DirectoryClusterAction::MarkExpected,
+                "Cancel" => DirectoryClusterAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown DirectoryCluster action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::ManualReview(s) => {
+            use mm_ui::resolutions::manual_review::ReviewAction;
+            let action = match action_name {
+                "Stash" => ReviewAction::Stash,
+                "MarkExpected" => ReviewAction::MarkExpected,
+                "Cancel" => ReviewAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown ManualReview action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::MissingAlbum(s) => {
+            use mm_ui::resolutions::missing_album::MissingAlbumAction;
+            let action = match action_name {
+                "PerTrackTitle" => MissingAlbumAction::PerTrackTitle,
+                "AllSingles" => MissingAlbumAction::AllSingles,
+                "Suppress" => MissingAlbumAction::Suppress,
+                "Cancel" => MissingAlbumAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown MissingAlbum action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::DiscExtraction(s) => {
+            use mm_ui::resolutions::disc_extraction::DiscExtractionAction;
+            let action = match action_name {
+                "Apply" => DiscExtractionAction::Apply,
+                "Skip" => DiscExtractionAction::Skip,
+                "Cancel" => DiscExtractionAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown DiscExtraction action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::MissingDirectory(s) => {
+            use mm_ui::resolutions::missing_directory::MissingDirectoryAction;
+            let action = match action_name {
+                "ConfirmDrop" => MissingDirectoryAction::ConfirmDrop,
+                "Cancel" => MissingDirectoryAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown MissingDirectory action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::CorruptFile(s) => {
+            use mm_ui::resolutions::corrupt_file::CorruptFileAction;
+            let action = match action_name {
+                "ConfirmStashAll" => CorruptFileAction::ConfirmStashAll,
+                "Cancel" => CorruptFileAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown CorruptFile action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::MovedFile(s) => {
+            use mm_ui::resolutions::moved_file::MovedFileAction;
+            let action = match action_name {
+                "Acknowledge" => MovedFileAction::Acknowledge,
+                "Cancel" => MovedFileAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown MovedFile action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::SubparDuplicate(s) => {
+            use mm_ui::resolutions::subpar_duplicate::SubparDuplicateAction;
+            let action = match action_name {
+                "ConfirmStashAll" => SubparDuplicateAction::ConfirmStashAll,
+                "Cancel" => SubparDuplicateAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown SubparDuplicate action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::MissingFile(s) => {
+            use mm_ui::resolutions::missing_file::MissingFileAction;
+            let action = match action_name {
+                "ConfirmRestore" => MissingFileAction::ConfirmRestore,
+                "ConfirmDrop" => MissingFileAction::ConfirmDrop,
+                "Cancel" => MissingFileAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown MissingFile action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::InboxCorpusMatch(s) => {
+            use mm_ui::resolutions::inbox_corpus_match::InboxCorpusMatchAction;
+            let action = match action_name {
+                "ConfirmStash" => InboxCorpusMatchAction::ConfirmStash,
+                "ConfirmStashAll" => InboxCorpusMatchAction::ConfirmStashAll,
+                "Cancel" => InboxCorpusMatchAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown InboxCorpusMatch action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+        ActiveResolution::ShitFormat(s) => {
+            use mm_ui::resolutions::shit_format::ShitFormatAction;
+            let action = match action_name {
+                "ConfirmRemuxLossless" => ShitFormatAction::ConfirmRemuxLossless,
+                "ConfirmTranscodeLossy" => ShitFormatAction::ConfirmTranscodeLossy,
+                "ConfirmConvertAll" => ShitFormatAction::ConfirmConvertAll,
+                "Cancel" => ShitFormatAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown ShitFormat action: {action_name}"))),
+            };
+            Ok(s.dispatch(action, resolver))
+        }
+    }
+}
+
+/// Advance the active resolution state to the next group.
+/// Returns `true` if there are more groups, `false` if the last group was processed.
+fn advance_active_resolution(state: &mut ActiveResolution) -> bool {
+    match state {
+        ActiveResolution::TagCanonicity(s) => s.advance(),
+        ActiveResolution::CompoundSplit(s) => s.advance(),
+        ActiveResolution::DirectoryCluster(s) => s.advance(),
+        ActiveResolution::ManualReview(s) => s.advance(),
+        ActiveResolution::MissingAlbum(s) => s.advance(),
+        ActiveResolution::DiscExtraction(s) => s.advance(),
+        // Simple-batch modals are single-shot — no group advancement.
+        ActiveResolution::MissingDirectory(_)
+        | ActiveResolution::CorruptFile(_)
+        | ActiveResolution::MovedFile(_)
+        | ActiveResolution::SubparDuplicate(_)
+        | ActiveResolution::MissingFile(_)
+        | ActiveResolution::InboxCorpusMatch(_)
+        | ActiveResolution::ShitFormat(_) => false,
+    }
+}
+
+/// Stage a resolution decision: ensure a transaction is active, then add the decision.
+async fn stage_resolution_decision(
+    key: &DecisionKey,
+    label: &str,
+    mutations: &[mm_meta::mutations::Mutation],
+) -> Result<(), JsValue> {
+    // Check if a transaction is already active.
+    let status = api::get_status().await?;
+    if status.transaction.is_none() {
+        api::tx_start(label).await?;
+    }
+
+    let decision = Decision {
+        label: label.to_string(),
+        mutations: mutations.to_vec(),
+    };
+    api::tx_add(key, &decision).await?;
+    Ok(())
 }
 
 #[wasm_bindgen]
@@ -730,6 +1232,7 @@ pub fn mm_tx_remove(key_json: &str) {
 pub fn mm_navigate_route(hash: &str) {
     stop_poll();
     let hash = hash.to_string();
+    PROGRAMMATIC_NAV.with(|flag| flag.set(true));
     web_sys::window()
         .unwrap()
         .location()
@@ -881,6 +1384,39 @@ pub fn mm_packing_browse(category: &str) {
     });
 }
 
+/// Register a one-time `hashchange` listener on `window`.
+///
+/// Fires when the user clicks an `<a href="#...">` link or uses browser
+/// back/forward.  Programmatic navigations (via [`navigate_to`] /
+/// [`mm_navigate_route`]) set [`PROGRAMMATIC_NAV`] so this listener
+/// skips the redundant load.
+fn register_hashchange_listener() {
+    let window = web_sys::window().unwrap();
+    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(|| {
+        let dominated = PROGRAMMATIC_NAV.with(|flag| {
+            let was = flag.get();
+            flag.set(false);
+            was
+        });
+        if dominated {
+            return;
+        }
+        if !api::has_token() {
+            return;
+        }
+        stop_poll();
+        spawn_local(async {
+            if let Err(e) = load_from_hash().await {
+                web_sys::console::error_1(&format!("hashchange error: {e:?}").into());
+            }
+        });
+    }) as Box<dyn Fn()>);
+    window
+        .add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref())
+        .expect("failed to add hashchange listener");
+    cb.forget(); // Lives for the lifetime of the page.
+}
+
 /// Start polling status + insights for the Health view (~3s interval).
 fn start_health_poll() {
     stop_poll();
@@ -982,9 +1518,17 @@ pub fn mm_queue_task(task: &str) {
     let task = task.to_string();
     spawn_local(async move {
         match api::queue_task(&task).await {
-            Ok(_) => {
-                // Refresh current view to update counts.
-                load_from_hash().await.ok();
+            Ok(resp) => {
+                if resp.get("ok").and_then(|v| v.as_bool()) == Some(false) {
+                    let reason = resp.get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown error");
+                    let window = web_sys::window().unwrap();
+                    let _ = window.alert_with_message(&format!("Task failed: {}", reason));
+                } else {
+                    // Refresh current view to update counts.
+                    load_from_hash().await.ok();
+                }
             }
             Err(e) => web_sys::console::error_1(&format!("queue-task error: {e:?}").into()),
         }
@@ -1365,6 +1909,240 @@ async fn do_config_save() -> Result<(), JsValue> {
     api::tx_confirm().await?;
 
     // Reload config view to show saved state.
+    load_from_hash().await?;
+    Ok(())
+}
+
+// ============================================================================
+// Tag Editor Actions
+// ============================================================================
+
+/// Save tag edits — collects changed/added/deleted tags, builds mutations, auto-confirms.
+#[wasm_bindgen]
+pub fn mm_tag_save() {
+    spawn_local(async {
+        if let Err(e) = do_tag_save().await {
+            show_tag_status(&format!("Save failed: {e:?}"), true);
+        }
+    });
+}
+
+/// Add a new empty tag row to the editor DOM.
+#[wasm_bindgen]
+pub fn mm_tag_add() {
+    let doc = web_sys::window().unwrap().document().unwrap();
+    let container = match doc.get_element_by_id("mm-tag-rows") {
+        Some(el) => el,
+        None => return,
+    };
+
+    // Count existing rows for unique IDs.
+    let existing = doc
+        .query_selector_all("#mm-tag-rows .mm-tag-row")
+        .map(|nl| nl.length())
+        .unwrap_or(0);
+    let idx = existing;
+
+    let row_html = format!(
+        r#"<div class="mm-tag-row">
+  <input type="text" id="tag-name-{idx}" class="mm-tag-name mm-tag-name--editable" data-new="true" placeholder="TAG_NAME">
+  <input type="text" id="tag-val-{idx}" class="mm-tag-value" data-new="true" placeholder="value">
+  <button type="button" class="mm-btn mm-tag-delete" onclick="this.parentElement.remove()">&times;</button>
+</div>"#,
+    );
+
+    // Append using innerHTML on a temporary wrapper to parse the HTML.
+    let wrapper = doc.create_element("div").unwrap();
+    wrapper.set_inner_html(&row_html);
+    if let Some(child) = wrapper.first_element_child() {
+        container.append_child(&child).ok();
+        // Focus the new name input.
+        if let Ok(Some(name_input)) = doc.query_selector(&format!("#tag-name-{idx}")) {
+            if let Ok(el) = name_input.dyn_into::<web_sys::HtmlElement>() {
+                el.focus().ok();
+            }
+        }
+    }
+}
+
+/// Delete a tag row from the editor DOM and track it for save-time removal.
+#[wasm_bindgen]
+pub fn mm_tag_delete(tag_name: &str, button: &web_sys::HtmlElement) {
+    let doc = web_sys::window().unwrap().document().unwrap();
+
+    // Walk up to the .mm-tag-row parent.
+    let row: web_sys::Element = match button.closest(".mm-tag-row") {
+        Ok(Some(el)) => el,
+        _ => return,
+    };
+
+    // Read the original value from the value input (for building the drop mutation at save time).
+    let value_input = row.query_selector("input.mm-tag-value").ok().flatten();
+    let original = value_input
+        .as_ref()
+        .and_then(|el| el.get_attribute("data-original"))
+        .unwrap_or_default();
+    let is_new = value_input
+        .as_ref()
+        .and_then(|el| el.get_attribute("data-new"))
+        .is_some();
+
+    // New (unsaved) rows just get removed from the DOM.
+    if is_new {
+        row.remove();
+        return;
+    }
+
+    // For existing tags, record the deletion in a hidden container so save can find it.
+    let deletions = match doc.get_element_by_id("mm-tag-deletions") {
+        Some(el) => el,
+        None => {
+            let el = doc.create_element("div").unwrap();
+            el.set_id("mm-tag-deletions");
+            el.set_attribute("style", "display:none").ok();
+            if let Some(editor) = doc.query_selector(".mm-tag-editor").ok().flatten() {
+                editor.append_child(&el).ok();
+            }
+            el
+        }
+    };
+
+    let marker = doc.create_element("span").unwrap();
+    marker.set_attribute("data-deleted-tag", tag_name).ok();
+    marker.set_attribute("data-deleted-value", &original).ok();
+    deletions.append_child(&marker).ok();
+
+    row.remove();
+}
+
+fn show_tag_status(msg: &str, is_error: bool) {
+    let doc = web_sys::window().unwrap().document().unwrap();
+    if let Some(el) = doc.get_element_by_id("mm-tag-status") {
+        el.set_text_content(Some(msg));
+        let class = if is_error {
+            "mm-tag-status mm-tag-status--error"
+        } else {
+            "mm-tag-status mm-tag-status--ok"
+        };
+        el.set_attribute("class", class).ok();
+        el.set_attribute("style", "").ok();
+    }
+}
+
+async fn do_tag_save() -> Result<(), JsValue> {
+    use mm_meta::db_types::Zone;
+    use mm_meta::decisions::Decision;
+    use mm_meta::mutations::tag_edit::ApplyTagOpsMutation;
+    use mm_meta::mutations::{Mutation, TagOp};
+
+    let doc = web_sys::window().unwrap().document().unwrap();
+
+    // Read inode from the editor container.
+    let inode: i64 = doc
+        .query_selector(".mm-tag-editor[data-inode]")
+        .ok()
+        .flatten()
+        .and_then(|el| el.get_attribute("data-inode"))
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| JsValue::from_str("cannot determine inode"))?;
+
+    let mut ops = Vec::new();
+
+    // 1. Collect edits and additions from visible rows.
+    let rows = doc
+        .query_selector_all("#mm-tag-rows .mm-tag-row")
+        .map_err(|e| JsValue::from_str(&format!("querySelectorAll: {e:?}")))?;
+
+    for i in 0..rows.length() {
+        let row = rows.get(i).unwrap();
+        let row_el: web_sys::Element = row.dyn_into()?;
+
+        let name_input = row_el
+            .query_selector("input.mm-tag-name")
+            .ok()
+            .flatten()
+            .and_then(|el| el.dyn_into::<web_sys::HtmlInputElement>().ok());
+        let val_input = row_el
+            .query_selector("input.mm-tag-value")
+            .ok()
+            .flatten()
+            .and_then(|el| el.dyn_into::<web_sys::HtmlInputElement>().ok());
+
+        let (Some(name_el), Some(val_el)) = (name_input, val_input) else {
+            continue;
+        };
+
+        let is_new = val_el.get_attribute("data-new").is_some()
+            || name_el.get_attribute("data-new").is_some();
+        let tag_name = if is_new {
+            name_el.value()
+        } else {
+            val_el.get_attribute("data-tag").unwrap_or_default()
+        };
+        let new_value = val_el.value();
+
+        if tag_name.is_empty() {
+            continue;
+        }
+
+        if is_new {
+            // Add new tag (skip if value is empty).
+            if !new_value.is_empty() {
+                ops.push(TagOp::add_tag(inode, &tag_name, &new_value));
+            }
+        } else {
+            // Existing tag — check for value change.
+            let original = val_el.get_attribute("data-original").unwrap_or_default();
+            if new_value != original {
+                ops.push(TagOp::replace_tag(inode, &tag_name, &original, &new_value));
+            }
+        }
+    }
+
+    // 2. Collect deletions from the hidden deletion tracker.
+    if let Some(deletions) = doc.get_element_by_id("mm-tag-deletions") {
+        let markers = deletions
+            .query_selector_all("span[data-deleted-tag]")
+            .map_err(|e| JsValue::from_str(&format!("querySelectorAll: {e:?}")))?;
+        for i in 0..markers.length() {
+            let marker = markers.get(i).unwrap();
+            let el: web_sys::Element = marker.dyn_into()?;
+            let tag = el.get_attribute("data-deleted-tag").unwrap_or_default();
+            let val = el.get_attribute("data-deleted-value").unwrap_or_default();
+            if !tag.is_empty() {
+                ops.push(TagOp::drop_tag(inode, &tag, &val));
+            }
+        }
+    }
+
+    // Filter no-ops.
+    ops.retain(|op| !op.is_nop());
+
+    if ops.is_empty() {
+        show_tag_status("No changes to save.", false);
+        return Ok(());
+    }
+
+    let mutation = Mutation::ApplyTagOps(ApplyTagOpsMutation {
+        ops,
+        zone: Zone::Corpus,
+    });
+
+    let mutations = vec![mutation];
+    let key_item = format!("{inode}");
+    let decision = Decision {
+        label: format!("Tag edit (inode {inode})"),
+        mutations,
+    };
+
+    // Auto-confirm: start transaction, add decision, confirm immediately.
+    api::tx_start("Tag edit").await?;
+    api::tx_add(&mm_ui::decision_keys::tag_edit(key_item), &decision).await?;
+    api::tx_confirm().await?;
+
+    show_tag_status("Tags saved.", false);
+
+    // Reload the tag editor to reflect the committed state.
     load_from_hash().await?;
     Ok(())
 }

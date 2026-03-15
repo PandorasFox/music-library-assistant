@@ -293,6 +293,8 @@ pub enum CommandPayload {
 pub enum CommandResponse {
     /// Command executed successfully.
     Ok,
+    /// Command received but could not execute (configuration issue, etc).
+    Failed(String),
     /// Server is shutting down. This is the last response the client will receive.
     Goodbye,
 }

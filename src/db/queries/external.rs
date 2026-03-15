@@ -6,7 +6,6 @@
 
 use anyhow::Result;
 use rusqlite::params;
-use std::path::Path;
 
 use super::Database;
 
@@ -147,30 +146,20 @@ impl Database {
     pub fn get_inodes_needing_lookup(
         &self,
         source_key: i64,
-        eligible_dirs: &[&Path],
+        excluded_prefixes: &[String],
         limit: usize,
     ) -> Result<Vec<ExternalLookupCandidate>> {
-        if eligible_dirs.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Build LIKE patterns for eligible directories
-        let patterns: Vec<String> = eligible_dirs
-            .iter()
-            .map(|d| {
-                let dir_str = format!("corpus/{}", d.display());
-                let escaped = super::escape_like_wildcards(&dir_str);
-                format!("{}/%", escaped)
-            })
-            .collect();
-
-        // Build OR clause for directory matching
-        let dir_conditions: Vec<String> = patterns
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("f.path LIKE ?{} ESCAPE '\\'", i + 3))
-            .collect();
-        let dir_clause = dir_conditions.join(" OR ");
+        // Build exclusion clause (empty when no dirs are disabled — the common case)
+        let exclusion_clause = if excluded_prefixes.is_empty() {
+            String::new()
+        } else {
+            let conditions: Vec<String> = excluded_prefixes
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("f.path NOT LIKE ?{} ESCAPE '\\'", i + 3))
+                .collect();
+            format!("AND {}", conditions.join(" AND "))
+        };
 
         let sql = format!(
             r#"SELECT a.inode, a.fingerprint, a.duration_ms
@@ -179,7 +168,7 @@ impl Database {
                WHERE f.zone = 'corpus'
                  AND a.fingerprint IS NOT NULL
                  AND a.duration_ms IS NOT NULL
-                 AND ({dir_clause})
+                 {exclusion_clause}
                  AND NOT EXISTS (
                      SELECT 1 FROM external_matches em
                      WHERE em.inode = a.inode AND em.source = ?1
@@ -197,12 +186,12 @@ impl Database {
 
         let mut stmt = self.conn().prepare(&sql)?;
 
-        // Bind source key and limit first, then directory patterns
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         param_values.push(Box::new(source_key));
         param_values.push(Box::new(limit as i64));
-        for pattern in &patterns {
-            param_values.push(Box::new(pattern.clone()));
+        for prefix in excluded_prefixes {
+            let escaped = super::escape_like_wildcards(prefix);
+            param_values.push(Box::new(format!("{}/%", escaped)));
         }
 
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
@@ -620,19 +609,47 @@ impl Database {
     pub fn get_retry_candidates(
         &self,
         source_key: i64,
+        excluded_prefixes: &[String],
         limit: usize,
     ) -> Result<Vec<ExternalLookupCandidate>> {
-        let mut stmt = self.conn().prepare(
+        let exclusion_clause = if excluded_prefixes.is_empty() {
+            String::new()
+        } else {
+            let conditions: Vec<String> = excluded_prefixes
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("f.path NOT LIKE ?{} ESCAPE '\\'", i + 3))
+                .collect();
+            format!("AND {}", conditions.join(" AND "))
+        };
+
+        let sql = format!(
             r#"SELECT er.inode, er.fingerprint, a.duration_ms
                FROM external_retry er
                JOIN audio_info a ON er.inode = a.inode
+               JOIN files f ON er.inode = f.inode
                WHERE er.source = ?1
+                 AND f.zone = 'corpus'
                  AND a.duration_ms IS NOT NULL
+                 {exclusion_clause}
                ORDER BY er.retry_count ASC, er.failed_at ASC
-               LIMIT ?2"#,
-        )?;
+               LIMIT ?2"#
+        );
 
-        let rows = stmt.query_map(params![source_key, limit as i64], |row| {
+        let mut stmt = self.conn().prepare(&sql)?;
+
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        param_values.push(Box::new(source_key));
+        param_values.push(Box::new(limit as i64));
+        for prefix in excluded_prefixes {
+            let escaped = super::escape_like_wildcards(prefix);
+            param_values.push(Box::new(format!("{}/%", escaped)));
+        }
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
             let inode: i64 = row.get(0)?;
             let fp_blob: Vec<u8> = row.get(1)?;
             let duration_ms: i64 = row.get(2)?;

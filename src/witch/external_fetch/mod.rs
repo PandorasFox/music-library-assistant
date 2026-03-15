@@ -29,7 +29,6 @@ pub use types::{
 pub(super) use types::SchedulerMessage;
 
 use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
 use std::time::Duration;
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -88,15 +87,15 @@ async fn scheduler_loop(
         tokio::select! {
             cmd = command_rx.recv() => {
                 match cmd {
-                    Some(FetchCommand::Start { eligible_dirs }) => {
+                    Some(FetchCommand::Start) => {
                         match batch.as_mut() {
                             Some(b) => {
                                 // Extend existing batch with new AcoustID work
-                                extend_acoustid_queue(&db, &shared_config, &eligible_dirs, b);
+                                extend_acoustid_queue(&db, &shared_config, b);
                             }
                             None => {
                                 // Initialize new batch
-                                batch = Some(init_batch(&db, &shared_config, eligible_dirs));
+                                batch = Some(init_batch(&db, &shared_config));
                                 let b = batch.as_ref().unwrap();
 
                                 if b.acoustid_queue.is_empty() && b.mb_queue.is_empty() {
@@ -357,9 +356,8 @@ struct BatchState {
 fn init_batch(
     db: &Database,
     shared_config: &SharedConfig,
-    eligible_dirs: Vec<PathBuf>,
 ) -> BatchState {
-    let (api_key, rps, mb_rps, mb_base_url, auto_enrich, ttl_secs) = {
+    let (api_key, rps, mb_rps, mb_base_url, auto_enrich, ttl_secs, excluded) = {
         let config = shared_config.read().expect("SharedConfig lock poisoned");
         let em = &config.opinions.external_matching;
         (
@@ -369,6 +367,7 @@ fn init_batch(
             em.mb_base_url.clone(),
             em.auto_enrich_on_match,
             (em.mb_cache_ttl_days as i64) * 86400,
+            config.acoustid_excluded_db_prefixes(),
         )
     };
 
@@ -394,7 +393,7 @@ fn init_batch(
         crate::logging::log_general("[FETCH] No AcoustID API key configured, skipping");
         acoustid_done = true;
     } else {
-        populate_acoustid_queue(db, &eligible_dirs, &mut acoustid_queue);
+        populate_acoustid_queue(db, &excluded, &mut acoustid_queue);
         acoustid_stats.total = acoustid_queue.len();
     }
 
@@ -433,19 +432,21 @@ fn init_batch(
     }
 }
 
-/// Extend an existing batch with new AcoustID work from additional directories.
+/// Extend an existing batch with new AcoustID work.
 fn extend_acoustid_queue(
     db: &Database,
     shared_config: &SharedConfig,
-    eligible_dirs: &[PathBuf],
     batch: &mut BatchState,
 ) {
-    let api_key = {
+    let (api_key, excluded) = {
         let config = shared_config.read().expect("SharedConfig lock poisoned");
-        config.opinions.external_matching.acoustid_api_key.clone()
+        (
+            config.opinions.external_matching.acoustid_api_key.clone(),
+            config.acoustid_excluded_db_prefixes(),
+        )
     };
     if !api_key.is_empty() {
-        populate_acoustid_queue(db, eligible_dirs, &mut batch.acoustid_queue);
+        populate_acoustid_queue(db, &excluded, &mut batch.acoustid_queue);
         batch.acoustid_stats.total += batch.acoustid_queue.len();
         batch.acoustid_done = false;
     }
@@ -664,14 +665,13 @@ struct MbQueueItem {
 /// Populate the AcoustID work queue from DB (inodes needing lookup + retries).
 fn populate_acoustid_queue(
     db: &Database,
-    eligible_dirs: &[PathBuf],
+    excluded_prefixes: &[String],
     queue: &mut VecDeque<AcoustIdQueueItem>,
 ) {
     let source_key = ExternalSource::AcoustID.to_key();
-    let dir_refs: Vec<&std::path::Path> = eligible_dirs.iter().map(|p| p.as_path()).collect();
 
     // Fresh lookup candidates
-    match db.get_inodes_needing_lookup(source_key, &dir_refs, i64::MAX as usize) {
+    match db.get_inodes_needing_lookup(source_key, excluded_prefixes, i64::MAX as usize) {
         Ok(candidates) => {
             for c in candidates {
                 let blob = fingerprint_to_blob(&c.fingerprint);
@@ -692,7 +692,7 @@ fn populate_acoustid_queue(
     }
 
     // Retry candidates
-    match db.get_retry_candidates(source_key, i64::MAX as usize) {
+    match db.get_retry_candidates(source_key, excluded_prefixes, i64::MAX as usize) {
         Ok(retries) => {
             for c in retries {
                 let blob = fingerprint_to_blob(&c.fingerprint);

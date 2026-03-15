@@ -1,6 +1,5 @@
 //! ExternalFetchHandle -- Witch-side API for the scheduler thread.
 
-use std::path::PathBuf;
 use std::thread::{self, JoinHandle};
 
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -41,16 +40,17 @@ impl ExternalFetchHandle {
         }, message_rx)
     }
 
-    /// Request an external metadata fetch for the given directories.
+    /// Request an external metadata fetch.
     ///
-    /// Populates both the AcoustID queue (fingerprint lookups) and
-    /// the MB queue (recording/artist/release enrichment) upfront.
-    pub fn request_fetch(&mut self, eligible_dirs: Vec<PathBuf>) {
+    /// The scheduler reads config to determine eligible dirs and populates
+    /// both the AcoustID queue (fingerprint lookups) and the MB queue
+    /// (recording/artist/release enrichment).
+    pub fn request_fetch(&mut self) {
         if self.batch_active {
             return; // Don't stack requests
         }
         self.batch_active = true;
-        let _ = self.command_tx.send(FetchCommand::Start { eligible_dirs });
+        let _ = self.command_tx.send(FetchCommand::Start);
     }
 
     /// Mark the current batch as done (called by Witch when it sees AllDone).

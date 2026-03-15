@@ -237,6 +237,28 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         }
     }
 
+    // Error popup overlay — renders on top of any view, dismissed on any key
+    if let Some(ref message) = app.error_popup {
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                message.clone(),
+                Style::default().fg(Color::Red),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Press any key to dismiss",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        Modal::new()
+            .title("Error")
+            .fixed_size(60, 7)
+            .style(ModalStyle { border_color: Color::Red, ..ModalStyle::default() })
+            .centered()
+            .content(lines)
+            .render(f, f.area());
+    }
 }
 
 fn render_exit_confirm_modal(

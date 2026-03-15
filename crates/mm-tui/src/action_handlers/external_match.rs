@@ -21,18 +21,33 @@ impl HandleAction for external_match_view::ExternalMatchesAction {
     fn handle(self, app: &mut App, _witness: Option<&witness::ConfirmationGesture>) {
         match self {
             external_match_view::ExternalMatchesAction::RequestFetch => {
-                let _ = app.queue_task(mm_meta::protocol::BackgroundTask::ExternalFetch);
-                app.status_message = Some("External fetch requested".to_string());
-                let fetch_active = app.witch_status().is_external_fetch_active;
-                if let ActiveView::ExternalMatches(ref mut s) = app.view {
-                    s.data.fetch_active = fetch_active;
+                match app.queue_task(mm_meta::protocol::BackgroundTask::ExternalFetch) {
+                    Ok(None) => {
+                        app.status_message = Some("External fetch requested".to_string());
+                        let fetch_active = app.witch_status().is_external_fetch_active;
+                        if let ActiveView::ExternalMatches(ref mut s) = app.view {
+                            s.data.fetch_active = fetch_active;
+                        }
+                    }
+                    Ok(Some(reason)) => {
+                        app.error_popup = Some(reason);
+                    }
+                    Err(e) => {
+                        app.error_popup = Some(format!("Protocol error: {}", e));
+                    }
                 }
             }
             external_match_view::ExternalMatchesAction::RequestReleasePacking => {
-                let _ = app.queue_task(mm_meta::protocol::BackgroundTask::ReleasePacking);
-                app.transition_to_progress_after_mutations(
-                    super::super::progress_screen::ProgressPhase::ContentAnalysis,
-                );
+                match app.queue_task(mm_meta::protocol::BackgroundTask::ReleasePacking) {
+                    Ok(Some(reason)) => {
+                        app.error_popup = Some(reason);
+                    }
+                    _ => {
+                        app.transition_to_progress_after_mutations(
+                            super::super::progress_screen::ProgressPhase::ContentAnalysis,
+                        );
+                    }
+                }
             }
             external_match_view::ExternalMatchesAction::LaunchPackingCategory(cat) => {
                 use crate::release_packing_browser::types::PackingCategory;

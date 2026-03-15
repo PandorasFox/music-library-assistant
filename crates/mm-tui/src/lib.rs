@@ -101,6 +101,9 @@ pub(crate) struct App {
     should_quit: bool,
     pub(crate) status_message: Option<String>,
 
+    /// Error popup overlay — dismissed on any key press.
+    pub(crate) error_popup: Option<String>,
+
     /// The active view and its state. One variant is active at a time.
     pub(crate) view: ActiveView,
 
@@ -212,6 +215,7 @@ impl App {
         Self {
             should_quit: false,
             status_message: None,
+            error_popup: None,
             view: ActiveView::Insights(insights_view::InsightsViewState::new(
                 insights_view::InsightsViewData::new(),
             )),
@@ -277,6 +281,12 @@ impl App {
     }
 
     fn handle_input(&mut self, action: InputAction) {
+        // Error popup eats any key to dismiss
+        if self.error_popup.is_some() {
+            self.error_popup = None;
+            return;
+        }
+
         // Pre-dispatch: intercept CycleNext/CyclePrev for lateral views that
         // don't need to handle them as domain actions (7 of 9 views).
         if let Some(lv) = self.view.lateral_view() {
@@ -942,15 +952,23 @@ impl App {
         }
     }
 
-    pub(crate) fn queue_task(&mut self, task: mm_meta::protocol::BackgroundTask) -> Result<(), mm_meta::protocol::ProtocolError> {
-        self.send_command(mm_meta::protocol::CommandPayload::QueueTask(task))?;
-        Ok(())
+    /// Queue a background task. Returns `Ok(None)` on success, `Ok(Some(reason))` if
+    /// the server rejected the command, or `Err` on protocol failure.
+    pub(crate) fn queue_task(&mut self, task: mm_meta::protocol::BackgroundTask) -> Result<Option<String>, mm_meta::protocol::ProtocolError> {
+        match self.send_command(mm_meta::protocol::CommandPayload::QueueTask(task))? {
+            mm_meta::protocol::CommandResponse::Ok => Ok(None),
+            mm_meta::protocol::CommandResponse::Failed(reason) => Ok(Some(reason)),
+            mm_meta::protocol::CommandResponse::Goodbye => Err(mm_meta::protocol::ProtocolError::Internal(
+                "unexpected Goodbye for QueueTask".to_string(),
+            )),
+        }
     }
 
     pub(crate) fn shutdown(&mut self) -> Result<(), mm_meta::protocol::ProtocolError> {
         match self.send_command(mm_meta::protocol::CommandPayload::Shutdown)? {
             mm_meta::protocol::CommandResponse::Goodbye => Ok(()),
-            mm_meta::protocol::CommandResponse::Ok => Err(mm_meta::protocol::ProtocolError::Internal(
+            mm_meta::protocol::CommandResponse::Ok
+            | mm_meta::protocol::CommandResponse::Failed(_) => Err(mm_meta::protocol::ProtocolError::Internal(
                 "expected Goodbye, got Ok".to_string(),
             )),
         }

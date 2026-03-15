@@ -41,6 +41,7 @@ pub(crate) async fn send_cmd(
 pub(crate) fn cmd_to_json(cr: CommandResponse) -> Result<Json<serde_json::Value>, ApiError> {
     match cr {
         CommandResponse::Ok => Ok(Json(serde_json::json!({"ok": true}))),
+        CommandResponse::Failed(reason) => Ok(Json(serde_json::json!({"ok": false, "error": reason}))),
         CommandResponse::Goodbye => Ok(Json(serde_json::json!({"goodbye": true}))),
     }
 }

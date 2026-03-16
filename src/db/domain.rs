@@ -422,6 +422,31 @@ impl_domain_query! {
 }
 
 impl_domain_query! {
+    GetInodeDetails => Vec<mm_meta::views::inode_detail::InodeDetail>, |s, db| {
+        let files = db.get_audio_files_by_inodes(&s.inodes, s.zone)
+            .unwrap_or_default();
+        files.into_iter().map(|f| {
+            let inode = f.entry.inode;
+            let tags = db.get_tags_for_zone(inode, s.zone)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|t| (t.tag_name, t.tag_value))
+                .collect();
+            mm_meta::views::inode_detail::InodeDetail {
+                inode,
+                path: f.entry.path,
+                file_type: f.audio.file_type,
+                duration_ms: f.audio.duration_ms,
+                bitrate_kbps: f.audio.bitrate_kbps,
+                sample_rate: f.audio.sample_rate,
+                file_size: f.entry.file_size,
+                tags,
+            }
+        }).collect()
+    }
+}
+
+impl_domain_query! {
     GetMissingTagAudioFiles => Vec<crate::db::types::AudioFile>, |db| {
         use std::collections::BTreeSet;
         let signals = db.get_missing_tag_signals().unwrap_or_default();
@@ -1017,6 +1042,7 @@ dispatch_domain_query_impl! {
     GetPackingBrowserData,
     GetUnsolvedPackingData,
     GetAudioFilesByInodes,
+    GetInodeDetails,
     GetMissingTagAudioFiles,
     GetAllAudioFilesWithTags,
     GetSessionEditDetail,
@@ -1296,6 +1322,17 @@ mod tests {
     }
 
     #[test]
+    fn get_inode_details_empty_db() {
+        let db = test_db();
+        let read_db = ReadOnlyDb::new(&db);
+        let result = GetInodeDetails {
+            inodes: vec![1, 2, 3],
+            zone: crate::db::types::Zone::Corpus,
+        }.execute(&read_db);
+        assert!(result.is_empty());
+    }
+
+    #[test]
     fn get_missing_tag_audio_files_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
@@ -1376,6 +1413,10 @@ mod tests {
         t!(serde_json::to_string(&GetUnsolvedPackingData { category: "x".to_string() }.execute(&read_db)));
 
         // Composite queries
+        t!(serde_json::to_string(&GetInodeDetails {
+            inodes: vec![1],
+            zone: crate::db::types::Zone::Corpus,
+        }.execute(&read_db)));
         t!(serde_json::to_string(&GetMissingTagAudioFiles.execute(&read_db)));
         t!(serde_json::to_string(&GetSessionEditDetail { session_id: "x".to_string() }.execute(&read_db)));
         t!(serde_json::to_string(&GetCurrentTagValues { queries: vec![] }.execute(&read_db)));

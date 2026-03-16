@@ -41,6 +41,7 @@ pub struct TagCanonicityData {
     pub current_cluster: usize,
     pub zone: mm_meta::db_types::Zone,
     pub mode: CanonicityMode,
+    pub wizard_cache: crate::wizard_detail::WizardDetailCache,
 }
 
 impl TagCanonicityData {
@@ -54,6 +55,7 @@ impl TagCanonicityData {
             current_cluster: 0,
             zone,
             mode,
+            wizard_cache: crate::wizard_detail::WizardDetailCache::new(zone),
         }
     }
 

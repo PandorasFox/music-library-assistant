@@ -215,6 +215,14 @@ pub struct GetAudioFilesByInodes {
     pub zone: crate::db_types::Zone,
 }
 
+/// Composite file + audio metadata + DB-cached tags for a set of inodes.
+/// Used by wizard panes to show expanded file details on demand.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetInodeDetails {
+    pub inodes: Vec<i64>,
+    pub zone: crate::db_types::Zone,
+}
+
 /// Missing tag resolution: collect unique inodes from MissingTag signals, return audio files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetMissingTagAudioFiles;
@@ -485,6 +493,7 @@ domain_query_protocol! {
 
     // Detail queries (Wave 4: composite)
     GetAudioFilesByInodes("audio-files-by-inodes") => Vec<crate::db_types::AudioFile>,
+    GetInodeDetails("inode-details") => Vec<crate::views::inode_detail::InodeDetail>,
     GetMissingTagAudioFiles("missing-tag-audio-files") => Vec<crate::db_types::AudioFile>,
     GetAllAudioFilesWithTags("all-audio-files-with-tags") => Vec<crate::domain_query_types::AudioFileWithTags>,
     GetSessionEditDetail("session-edit-detail") => crate::domain_query_types::SessionEditDetail,

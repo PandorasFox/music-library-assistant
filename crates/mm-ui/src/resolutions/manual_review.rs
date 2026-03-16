@@ -31,6 +31,7 @@ pub struct ManualReviewResolutionData {
     pub inner: ManualReviewData,
     pub current_group: usize,
     pub review_kind: ReviewKind,
+    pub wizard_cache: crate::wizard_detail::WizardDetailCache,
 }
 
 impl ManualReviewResolutionData {
@@ -39,6 +40,9 @@ impl ManualReviewResolutionData {
             inner: data,
             current_group: 0,
             review_kind,
+            wizard_cache: crate::wizard_detail::WizardDetailCache::new(
+                mm_meta::db_types::Zone::Corpus,
+            ),
         }
     }
 }

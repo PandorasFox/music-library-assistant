@@ -31,6 +31,7 @@ use crate::resolution_state::{ResolutionData, ResolutionState};
 pub struct DirectoryClusterData {
     pub inner: DirectoryClusterModalData,
     pub current_cluster: usize,
+    pub wizard_cache: crate::wizard_detail::WizardDetailCache,
 }
 
 impl DirectoryClusterData {
@@ -38,6 +39,9 @@ impl DirectoryClusterData {
         Self {
             inner: data,
             current_cluster: 0,
+            wizard_cache: crate::wizard_detail::WizardDetailCache::new(
+                mm_meta::db_types::Zone::Corpus,
+            ),
         }
     }
 }

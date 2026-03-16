@@ -28,6 +28,7 @@ pub struct DiscExtractionData {
     pub current_group: usize,
     /// Tag name for the disc number tag (from config).
     pub disc_tag_name: String,
+    pub wizard_cache: crate::wizard_detail::WizardDetailCache,
 }
 
 impl DiscExtractionData {
@@ -36,6 +37,9 @@ impl DiscExtractionData {
             inner: data,
             current_group: 0,
             disc_tag_name,
+            wizard_cache: crate::wizard_detail::WizardDetailCache::new(
+                mm_meta::db_types::Zone::Corpus,
+            ),
         }
     }
 

@@ -28,6 +28,7 @@ pub struct MissingAlbumData {
     pub current_group: usize,
     /// Suffix for single-track album names (from config).
     pub suffix: String,
+    pub wizard_cache: crate::wizard_detail::WizardDetailCache,
 }
 
 impl MissingAlbumData {
@@ -36,6 +37,9 @@ impl MissingAlbumData {
             signals,
             current_group: 0,
             suffix,
+            wizard_cache: crate::wizard_detail::WizardDetailCache::new(
+                mm_meta::db_types::Zone::Corpus,
+            ),
         }
     }
 

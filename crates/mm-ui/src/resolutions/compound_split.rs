@@ -29,6 +29,7 @@ pub struct CompoundSplitData {
     pub current_group: usize,
     pub zone: Zone,
     pub safe_mode: bool,
+    pub wizard_cache: crate::wizard_detail::WizardDetailCache,
 }
 
 impl CompoundSplitData {
@@ -38,6 +39,7 @@ impl CompoundSplitData {
             current_group: 0,
             zone,
             safe_mode,
+            wizard_cache: crate::wizard_detail::WizardDetailCache::new(zone),
         }
     }
 }

@@ -198,9 +198,9 @@ unit_web_query!(
 // -- Body-deserialized queries --
 
 body_web_query!(
-    GetAudioFilesByInodes, GetCurrentTagValues, GetRecordingBatchData,
-    GetReleaseStagingData, GetInboxOrganizeData, GetFileTagValues,
-    SearchWithConditions,
+    GetAudioFilesByInodes, GetInodeDetails, GetCurrentTagValues,
+    GetRecordingBatchData, GetReleaseStagingData, GetInboxOrganizeData,
+    GetFileTagValues, SearchWithConditions,
 );
 
 // -- Param-parsed queries (custom extraction per struct) --
@@ -371,7 +371,8 @@ fn build_domain_payload(
         GetLosslessRemuxData, GetInboxCorpusMatchData, GetDeployData,
         GetManualReviewData, GetCorpusTags, GetPackingBrowserData,
         GetUnsolvedPackingData,
-        GetAudioFilesByInodes, GetMissingTagAudioFiles, GetAllAudioFilesWithTags,
+        GetAudioFilesByInodes, GetInodeDetails,
+        GetMissingTagAudioFiles, GetAllAudioFilesWithTags,
         GetSessionEditDetail, GetCurrentTagValues,
         GetIntakeConfirmation, GetRecordingBatchData, GetReleaseStagingData,
         GetTagEditorFiles, GetInboxOrganizeData, GetFileTagValues,

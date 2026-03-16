@@ -31,4 +31,5 @@ pub mod tag_set;
 pub mod text_input;
 pub mod view_state;
 pub mod wizard;
+pub mod wizard_detail;
 pub mod wizard_pane;

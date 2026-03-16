@@ -96,7 +96,6 @@ opinions {
 
 | KDL Name | Rust Field | Type | Default | Description |
 |----------|-----------|------|---------|-------------|
-| `lossy-shit-formats-to-flac` | `lossy_shit_formats_to_flac` | bool | `false` | Capture lossy formats to FLAC containers instead of transcoding to Opus |
 | `leave-transactions-open` | `leave_transactions_open` | bool | `false` | Keep one persistent transaction open across modal interactions |
 | `watcher-poll-interval-secs` | `watcher_poll_interval_secs` | u64 | `900` | Filesystem watcher polling fallback interval (seconds) |
 

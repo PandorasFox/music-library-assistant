@@ -526,8 +526,8 @@ impl<'a> ReadOnlyDb<'a> {
         fn get_sidecar_conflict_groups() -> Result<Vec<crate::meta::views::SidecarConflictGroup>>;
         fn get_missing_file_paths() -> Result<Vec<String>>;
         fn get_corrupt_file_paths() -> Result<Vec<String>>;
-        fn get_shit_format_files() -> Result<Vec<(i64, String, String)>>;
-        fn get_shit_format_counts_by_type() -> Result<Vec<(String, i64)>>;
+        fn get_lossless_remux_files() -> Result<Vec<(i64, String, String)>>;
+        fn get_lossless_remux_counts_by_type() -> Result<Vec<(String, i64)>>;
         fn get_subpar_duplicate_files() -> Result<Vec<crate::meta::views::SubparDuplicateEntry>>;
         fn get_inbox_corpus_match_entries(bitrate_fuzz_percent: f64) -> Result<Vec<crate::meta::views::InboxCorpusMatchEntry>>;
         fn get_organizable_inbox_files() -> Result<Vec<(i64, String)>>;

@@ -89,16 +89,15 @@ macro_rules! impl_mutation_executor {
     };
 }
 
-/// File types that should trigger ShitFormat signal (non-Vorbis containers).
-/// Includes lossy formats with poor metadata and lossless needing remux.
-const SHIT_FORMAT_TYPES: &[&str] = &[
-    "mp3", "m4a", "aac", "wma", "wav", "aiff", "aif", "ape", "wv",
+/// Lossless file types that should be remuxed to FLAC.
+const LOSSLESS_REMUX_TYPES: &[&str] = &[
+    "wav", "aiff", "aif", "ape", "wv",
 ];
 
-/// Check if a file type is a "shit format" (non-Vorbis container).
-fn is_shit_format(file_type: &str) -> bool {
+/// Check if a file type is a lossless remux candidate (non-Vorbis lossless container).
+fn is_lossless_remux_candidate(file_type: &str) -> bool {
     let file_type_lower = file_type.to_lowercase();
-    SHIT_FORMAT_TYPES.contains(&file_type_lower.as_str())
+    LOSSLESS_REMUX_TYPES.contains(&file_type_lower.as_str())
 }
 
 
@@ -400,9 +399,9 @@ pub fn execute_index_file_from_path(
         // VerifyTags catches tag-level corruption; VerifyAudio catches stream-
         // level corruption but only runs on force_check startup scans.
 
-        // ShitFormat if non-Vorbis container
-        if is_shit_format(&extracted.file_type) {
-            pending_signals.push(TypedSignalWrite::ShitFormat(ShitFormatSignal {
+        // LosslessRemux if non-Vorbis lossless container
+        if is_lossless_remux_candidate(&extracted.file_type) {
+            pending_signals.push(TypedSignalWrite::LosslessRemux(LosslessRemuxSignal {
                 inode: extracted.inode,
                 path: rel_str,
                 file_type: extracted.file_type.clone(),

@@ -75,7 +75,7 @@ impl App {
             ViewAction::MissingFileResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::MissingDirectoryResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::CorruptFileResolution(a) => a.handle(self, witness.as_ref()),
-            ViewAction::ShitFormatResolution(a) => a.handle(self, witness.as_ref()),
+            ViewAction::LosslessRemuxResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::SubparDuplicateResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::InboxCorpusMatchResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::InboxOrganize(a) => a.handle(self, witness.as_ref()),
@@ -182,25 +182,6 @@ impl App {
             self.status_message = Some("Decision staged".into());
         } else {
             self.start_transaction_review();
-        }
-    }
-
-    /// Stage mutations for a simple resolution modal and transition to review.
-    ///
-    /// Returns early if `mutations` is empty (setting a status message instead).
-    fn stage_resolution(
-        &mut self,
-        mutations: Vec<mm_meta::mutations::Mutation>,
-        label: &str,
-        key: DecisionKey,
-        empty_msg: &str,
-        gesture: &witness::ConfirmationGesture,
-    ) {
-        if mutations.is_empty() {
-            self.status_message = Some(empty_msg.to_string());
-        } else {
-            self.stage_mutations_with_transaction(mutations, label, key, gesture);
-            self.after_staging_decisions();
         }
     }
 
@@ -338,7 +319,7 @@ impl App {
             ActiveView::CorruptFileResolution(s) => s.handle_click(x, y).map(ViewAction::CorruptFileResolution),
             ActiveView::MissingDirectoryResolution(s) => s.handle_click(x, y).map(ViewAction::MissingDirectoryResolution),
             ActiveView::MissingFileResolution(s) => s.handle_click(x, y).map(ViewAction::MissingFileResolution),
-            ActiveView::ShitFormatResolution(s) => s.handle_click(x, y).map(ViewAction::ShitFormatResolution),
+            ActiveView::LosslessRemuxResolution(s) => s.handle_click(x, y).map(ViewAction::LosslessRemuxResolution),
             ActiveView::Insights(ref mut s) => {
                 s.interaction.list.handle_click(x, y, &s.data.flat_items);
                 None
@@ -485,8 +466,8 @@ impl HandleAction for insights_view::HealthAction {
                     Some(insights_view::InsightAction::LaunchCorruptFileResolution) => {
                         app.start_corrupt_file_resolution();
                     }
-                    Some(insights_view::InsightAction::LaunchShitFormatTranscode) => {
-                        app.start_shit_format_resolution();
+                    Some(insights_view::InsightAction::LaunchLosslessRemuxResolution) => {
+                        app.start_lossless_remux_resolution();
                     }
                     Some(insights_view::InsightAction::LaunchIntakeConfirmation) => {
                         app.start_intake_confirmation_from_health();

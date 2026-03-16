@@ -207,11 +207,6 @@ pub fn build_groups_from_config(config: &Config, kdl_content: Option<&str>) -> V
     }
 
     vec![
-        ConfigGroup { name: "General", collapsed: false, fields: vec![
-            cf!(bool, lossy_shit_formats_to_flac, "Lossy shit formats to FLAC",
-                "Capture lossy formats to FLAC instead of transcoding to Opus",
-                &["TODO"], Opinions::KDL_LOSSY_SHIT),
-        ]},
         ConfigGroup { name: "Startup", collapsed: false, fields: vec![
             cf!(bool, startup.force_check_all_files_at_startup, "Force check all files at startup",
                 "Bypass mtime optimization, verify all indexed files",
@@ -486,7 +481,7 @@ mod tests {
         // If the KDL content mentions StartupOpinions::KDL_VACUUM_THRESHOLD, that field should be Loaded
         let groups = build_groups_from_config(&config, Some("vacuum-threshold 0.1"));
 
-        let startup_group = &groups[1];
+        let startup_group = &groups[0];
         assert_eq!(startup_group.name, "Startup");
         let vacuum_field = &startup_group.fields[1];
         assert_eq!(vacuum_field.label, "Vacuum threshold");

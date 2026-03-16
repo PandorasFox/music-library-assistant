@@ -61,10 +61,10 @@ impl SignalWriteSender {
         let _ = self.tx.send(DbWriteOp::ClearAllCorpusSignals { inode });
     }
 
-    /// Clear mutable corpus signals for an inode (preserves CorruptFile, ShitFormat).
+    /// Clear mutable corpus signals for an inode (preserves CorruptFile, LosslessRemux).
     ///
     /// Used post-mutation when the file still exists but its state changed.
-    /// File-inherent signals (CorruptFile, ShitFormat) are preserved because
+    /// File-inherent signals (CorruptFile, LosslessRemux) are preserved because
     /// they represent intrinsic file properties, not computed state.
     pub fn clear_mutable_corpus_signals(&self, inode: i64, _witness: &impl SignalWitness) {
         self.mark_enqueued();

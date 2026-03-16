@@ -110,9 +110,7 @@ fn config_recomputation_scope(old: &Config, new: &Config) -> RecomputationScope 
     }
 
     // FILES: fields that affect file/fingerprint/duplicate detection
-    if o.duplicate_analysis != n.duplicate_analysis
-        || o.lossy_shit_formats_to_flac != n.lossy_shit_formats_to_flac
-    {
+    if o.duplicate_analysis != n.duplicate_analysis {
         scope |= RecomputationScope::FILES;
     }
 

@@ -192,7 +192,7 @@ unit_web_query!(
     GetMissingAlbumSingleSignals, GetPackingKnots, GetPackingInodePaths,
     GetMissingFileData, GetMissingDirectoryData, GetCorruptFileData,
     GetSubparDuplicateData, GetDirectoryClusterData, GetReleaseOverlapData,
-    GetShitFormatData, GetMissingTagAudioFiles,
+    GetLosslessRemuxData, GetMissingTagAudioFiles,
 );
 
 // -- Body-deserialized queries --
@@ -368,7 +368,7 @@ fn build_domain_payload(
         GetDiscExtractionData,
         GetMissingFileData, GetMissingDirectoryData, GetCorruptFileData,
         GetSubparDuplicateData, GetDirectoryClusterData, GetReleaseOverlapData,
-        GetShitFormatData, GetInboxCorpusMatchData, GetDeployData,
+        GetLosslessRemuxData, GetInboxCorpusMatchData, GetDeployData,
         GetManualReviewData, GetCorpusTags, GetPackingBrowserData,
         GetUnsolvedPackingData,
         GetAudioFilesByInodes, GetMissingTagAudioFiles, GetAllAudioFilesWithTags,

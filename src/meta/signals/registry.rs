@@ -24,7 +24,7 @@ pub trait SignalContentHash {
 ///
 /// Corpus signals are sub-categorized into three groups:
 /// - `mutable`: signals that should be cleared when a file's state changes
-/// - `inherent`: signals discovered from intrinsic file properties (CorruptFile, ShitFormat)
+/// - `inherent`: signals discovered from intrinsic file properties (CorruptFile, LosslessRemux)
 /// - `inbox`: signals specific to inbox-zone files
 ///
 /// The macro generates three clearing functions:
@@ -165,7 +165,7 @@ macro_rules! signal_registry {
         /// Clear mutable corpus signals for an inode.
         ///
         /// Clears signals that represent mutable file state (tags, paths, deploy status).
-        /// Does NOT clear inherent signals (CorruptFile, ShitFormat) which represent
+        /// Does NOT clear inherent signals (CorruptFile, LosslessRemux) which represent
         /// intrinsic file properties discovered during indexing.
         pub fn clear_mutable_corpus_signals(conn: &rusqlite::Connection, inode: i64) {
             use crate::meta::signals::store::CorpusSignalStore;
@@ -175,7 +175,7 @@ macro_rules! signal_registry {
         /// Clear all corpus signals for an inode (mutable + inherent).
         ///
         /// Used when a file is being fully re-indexed or removed — clears everything
-        /// including file-inherent signals like CorruptFile and ShitFormat.
+        /// including file-inherent signals like CorruptFile and LosslessRemux.
         pub fn clear_all_corpus_signals(conn: &rusqlite::Connection, inode: i64) {
             use crate::meta::signals::store::CorpusSignalStore;
             $(let _ = <$m_type>::clear_by_inode(conn, inode);)*
@@ -256,7 +256,7 @@ signal_registry! {
         }
         inherent {
             CorruptFile(CorruptFileSignal, "corrupt_file"),
-            ShitFormat(ShitFormatSignal, "shit_format"),
+            LosslessRemux(LosslessRemuxSignal, "lossless_remux"),
         }
         inbox {
             FileInInbox(FileInInboxSignal, "file_in_inbox"),

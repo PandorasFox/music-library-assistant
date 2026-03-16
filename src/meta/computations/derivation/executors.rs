@@ -455,7 +455,7 @@ impl DeriveZoneSignals for CorpusZone {
             MovedFileSignal,
             HealthyFileSignal,
             CorruptFileSignal,
-            ShitFormatSignal,
+            LosslessRemuxSignal,
             MtimeOnlyMismatchSignal,
             OutOfBandTagSyncSignal,
             OutOfBandTagConflictSignal,

@@ -267,7 +267,7 @@ impl Diffable for DebugOpinions {
 }
 
 impl_diffable_struct!(Opinions {
-    lossy_shit_formats_to_flac, quality_resolution, canonicalization, startup,
+    quality_resolution, canonicalization, startup,
     health_detection, performance, tag_splitting, duplicate_analysis, release_packing,
     inbox_organize, leave_transactions_open, external_matching, disc_extraction,
     album_art, debug, watcher_poll_interval_secs, session_lifetime_days,

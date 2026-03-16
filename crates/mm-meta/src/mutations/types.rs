@@ -138,7 +138,7 @@ pub fn path_filename(path: &Path) -> String {
 /// Determines which signals are cleared for affected paths after a mutation executes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalClearScope {
-    /// Clear only mutable signals (preserve CorruptFile, ShitFormat).
+    /// Clear only mutable signals (preserve CorruptFile, LosslessRemux).
     MutableOnly,
     /// Clear ALL signals including file-inherent ones.
     All,

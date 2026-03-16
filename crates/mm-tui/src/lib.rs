@@ -53,7 +53,7 @@ pub mod progressive_worker;
 pub mod release_packing_browser;
 pub mod release_review;
 pub mod render;
-pub mod shit_format_modal;
+pub mod lossless_remux_modal;
 pub mod startup;
 pub mod subpar_duplicate_modal;
 pub mod tag_canonicity_v2;
@@ -400,7 +400,7 @@ impl App {
             ActiveView::MissingFileResolution(s) => dispatch_input_raw!(MissingFileResolution, s),
             ActiveView::MissingDirectoryResolution(s) => dispatch_input!(MissingDirectoryResolution, s),
             ActiveView::CorruptFileResolution(s) => dispatch_input!(CorruptFileResolution, s),
-            ActiveView::ShitFormatResolution(s) => dispatch_input_raw!(ShitFormatResolution, s),
+            ActiveView::LosslessRemuxResolution(s) => dispatch_input_raw!(LosslessRemuxResolution, s),
             ActiveView::SubparDuplicateResolution(s) => dispatch_input!(SubparDuplicateResolution, s),
             ActiveView::InboxCorpusMatchResolution(s) => dispatch_input!(InboxCorpusMatchResolution, s),
             ActiveView::InboxOrganize(s) => dispatch_input_raw!(InboxOrganize, s),

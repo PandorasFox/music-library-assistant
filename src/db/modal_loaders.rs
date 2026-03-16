@@ -180,51 +180,40 @@ pub fn load_subpar_duplicate_data(
 }
 
 // ============================================================================
-// Shit Format Modal
+// Lossless Remux Modal
 // ============================================================================
 
-/// Load shit format files from the database.
-pub fn load_shit_format_data(
+/// Load lossless remux candidate files from the database.
+pub fn load_lossless_remux_data(
     read_db: &ReadOnlyDb<'_>,
-) -> Result<mm_meta::views::cluster_deploy::ShitFormatModalData> {
-    use mm_meta::views::cluster_deploy::{ShitFormatEntry, ShitFormatModalData};
+) -> Result<mm_meta::views::cluster_deploy::LosslessRemuxModalData> {
+    use mm_meta::views::cluster_deploy::{RemuxCandidateEntry, LosslessRemuxModalData};
 
-    let shit_format_files = read_db.get_shit_format_files()?;
-    let file_counts_raw = read_db.get_shit_format_counts_by_type()?;
+    let remux_files = read_db.get_lossless_remux_files()?;
+    let file_counts_raw = read_db.get_lossless_remux_counts_by_type()?;
 
-    if shit_format_files.is_empty() {
-        return Ok(ShitFormatModalData::default());
+    if remux_files.is_empty() {
+        return Ok(LosslessRemuxModalData::default());
     }
 
-    let mut lossless_files = Vec::new();
-    let mut lossy_files = Vec::new();
+    let mut files = Vec::new();
 
-    for (inode, _signal_path, file_type) in shit_format_files {
+    for (inode, _signal_path, file_type) in remux_files {
         let corpus_path = match read_db.get_audio_file_by_inode(inode, Zone::Corpus)? {
             Some(af) => af.path().to_string(),
             None => continue,
         };
 
-        let entry = ShitFormatEntry {
+        files.push(RemuxCandidateEntry {
             corpus_path,
             inode,
             file_type,
-        };
-
-        if entry.is_lossless() {
-            lossless_files.push(entry);
-        } else if entry.is_lossy() {
-            lossy_files.push(entry);
-        }
+        });
     }
 
     let file_counts: HashMap<String, i64> = file_counts_raw.into_iter().collect();
 
-    Ok(ShitFormatModalData::new_from_loaded(
-        lossless_files,
-        lossy_files,
-        file_counts,
-    ))
+    Ok(LosslessRemuxModalData::new_from_loaded(files, file_counts))
 }
 
 // ============================================================================

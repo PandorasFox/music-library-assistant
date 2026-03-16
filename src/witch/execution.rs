@@ -21,7 +21,7 @@
 //! 1. **Signal clearing** - Clear corpus signals by inode (scope from `signal_clear_scope()`)
 //!    1b. **Stash cleanup** - Drop files table entry for stash mutations
 //!    1c. **Dirty inode marking** - Mark affected inodes dirty for per-inode computations (when scope includes TAGS)
-//! 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via pending_signals
+//! 2. **File-inherent signals** - Emit CorruptFile/LosslessRemux via pending_signals
 //! 3. **Signal update spawning** - Spawn UpdateFileSignals (from `paths_for_signal_updates()`)
 //! 4. **Additional computations** - Spawn extra computations (from `additional_computations()`)
 //! 5. **Specific signal clearing** - Clear signals by type+key (from `specific_signals_to_clear()`)
@@ -300,7 +300,7 @@ pub(super) fn execute_maintenance(
 ///
 /// 1. **Inode signal clearing** - Clear corpus signals by inode based on `signal_clear_scope()`
 ///    1c. **Dirty inode marking** - Mark affected inodes dirty for per-inode computations (TAGS scope)
-/// 2. **File-inherent signals** - Emit CorruptFile/ShitFormat via pending_signals
+/// 2. **File-inherent signals** - Emit CorruptFile/LosslessRemux via pending_signals
 /// 3. **Signal update spawning** - Spawn UpdateFileSignals for `paths_for_signal_updates()`
 /// 4. **Additional computations** - Spawn extra computations from `additional_computations()`
 /// 5. **Specific signal clearing** - Clear aggregate signals by type+key from `specific_signals_to_clear()`
@@ -324,7 +324,7 @@ fn apply_post_execution(
     // Combine pre-known inodes (from trait) with inodes discovered at execution time.
     // Signal clearing scope determines which signals are cleared:
     //   - All: clear everything (file gone/replaced)
-    //   - MutableOnly: preserve CorruptFile/ShitFormat (file still exists)
+    //   - MutableOnly: preserve CorruptFile/LosslessRemux (file still exists)
     //   - None: skip clearing (DB-only operations)
     {
         let executor = mutation.as_executor();
@@ -399,7 +399,7 @@ fn apply_post_execution(
         }
     }
 
-    // Phase 2: File-inherent signal emission (CorruptFile, ShitFormat)
+    // Phase 2: File-inherent signal emission (CorruptFile, LosslessRemux)
     // For IndexFileFromPath, use pending_signals (avoids race with async DB writes).
     // For other mutations, use the checks_* methods.
     emit_file_inherent_signals(mutation, pending_signals, witness);
@@ -464,7 +464,7 @@ fn emit_pending_signals(
     }
 }
 
-/// Emit CorruptFile/ShitFormat signals based on mutation type.
+/// Emit CorruptFile/LosslessRemux signals based on mutation type.
 ///
 /// For IndexFileFromPath, uses pending_signals (determined at execution time)
 /// to avoid race conditions with async DB writes.

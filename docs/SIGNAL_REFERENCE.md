@@ -31,7 +31,7 @@ Signals are atomic facts about corpus state. They follow these principles:
 | MissingDirectory | ScheduleSecondLevelDerivations | ScheduleSecondLevelDerivations, DropDirectoryFromIndex | Indexed directory no longer on disk |
 | HealthyFile | DeriveDirectorySignals | DeriveDirectorySignals, mutations | In corpus, indexed, mtime matches, no OOB signals |
 | CorruptFile | VerifyTags, VerifyAudio, Transcode | VerifyAudio (if valid), MoveToStash, DropFromIndex | Tag read or audio decode failed |
-| ShitFormat | IndexFileFromPath, DetectShitFormats | Transcode (to Opus/FLAC), DetectShitFormats | Non-Vorbis container (MP3, M4A, WAV, etc.) |
+| LosslessRemux | IndexFileFromPath, DetectLosslessRemux | Transcode (to FLAC), DetectLosslessRemux | Lossless non-Vorbis container (WAV, AIFF, APE, WV) |
 | SubparDuplicate | AnalyzeFingerprintOverlaps | AnalyzeFingerprintOverlaps, MoveToStash | Track is outranked by a better version in its duplicate group (SubparFormat, SubparBitrate, or SubparSampleRate). Never emitted for equivalent-tier ties |
 | OutOfBandTagSync | VerifyTags | VerifyTags, resolution mutations | One-way tag difference (syncable) |
 | OutOfBandTagConflict | VerifyTags | VerifyTags, resolution mutations | Two-way tag conflict |
@@ -181,7 +181,7 @@ From `CLAUDE.md`:
 
 `DeriveCorpusSignals` includes a GC pass that clears orphaned corpus signals. After computing the known inode universe (disk inodes ∪ indexed inodes), it scans each corpus signal table for inodes outside that universe and deletes them. This catches signals that persist due to mutations that previously failed to return their affected inodes, or any future bugs in the post-mutation signal clearing pipeline.
 
-Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, CorruptFile, ShitFormat, MtimeOnlyMismatch, OutOfBandTagSync, OutOfBandTagConflict, SubparDuplicate, CompoundTag, DeployReady, DeployedHealthy, SidecarDeployReady, MissingDirectory, ExternalMatch, ExpectedMissingTag, PathTagMismatch, ReleasePacking, UnmatchedCorpusTrack. FileInCorpus is excluded (it IS the disk observation). Note: UnfilledReleaseSlot is an aggregate signal (not inode-keyed) and is not subject to corpus GC backstop.
+Signal tables scanned: UnindexedFile, MissingFile, MovedFile, HealthyFile, CorruptFile, LosslessRemux, MtimeOnlyMismatch, OutOfBandTagSync, OutOfBandTagConflict, SubparDuplicate, CompoundTag, DeployReady, DeployedHealthy, SidecarDeployReady, MissingDirectory, ExternalMatch, ExpectedMissingTag, PathTagMismatch, ReleasePacking, UnmatchedCorpusTrack. FileInCorpus is excluded (it IS the disk observation). Note: UnfilledReleaseSlot is an aggregate signal (not inode-keyed) and is not subject to corpus GC backstop.
 
 ### Good Signals
 - `UnindexedFile` for path X (one file)

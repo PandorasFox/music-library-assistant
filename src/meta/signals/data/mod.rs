@@ -201,9 +201,9 @@ pub struct MovedFileSignal {
     pub new_zone: String,
 }
 
-/// File is in a non-Vorbis container format.
+/// File is a lossless non-Vorbis format (WAV, AIFF, APE, WV) — remux candidate.
 #[derive(Debug, Clone)]
-pub struct ShitFormatSignal {
+pub struct LosslessRemuxSignal {
     pub inode: i64,
     pub path: String,
     pub file_type: String,
@@ -418,7 +418,7 @@ impl_content_hash!(MtimeOnlyMismatchSignal => [path]);
 impl_content_hash!(MissingDirectorySignal => [path]);
 impl_content_hash!(MissingFileSignal => [path, replaced_by_inode]);
 impl_content_hash!(MovedFileSignal => [path, old_path, old_zone, new_zone]);
-impl_content_hash!(ShitFormatSignal => [path, file_type]);
+impl_content_hash!(LosslessRemuxSignal => [path, file_type]);
 impl_content_hash!(ExpectedMissingTagSignal => []);
 
 // Corpus signals — blob

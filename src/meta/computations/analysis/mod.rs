@@ -122,11 +122,10 @@ pub enum Computation {
     /// per-file CompoundTag signals for files with compound values.
     DetectCompoundTagsForInode { inode: i64 },
 
-    /// Detect files with non-Vorbis container formats (MP3, M4A, WAV, etc).
+    /// Detect lossless files in non-Vorbis containers (WAV, AIFF, APE, WV).
     ///
-    /// These files have poor metadata support or inefficient containers and
-    /// should be transcoded to Opus (lossy) or FLAC (lossless).
-    DetectShitFormats,
+    /// These files can be losslessly remuxed to FLAC.
+    DetectLosslessRemux,
 
     /// Analyze fingerprint overlaps for similarity, variants, and quality.
     ///
@@ -331,7 +330,7 @@ impl Computation {
             Computation::DetectInconsistentAlbumArtist => "Detecting inconsistent album_artist",
             Computation::DetectCompoundTagValues => "Scheduling compound tag detection",
             Computation::DetectCompoundTagsForInode { .. } => "Detecting compound tags",
-            Computation::DetectShitFormats => "Detecting shit format files",
+            Computation::DetectLosslessRemux => "Detecting lossless remux candidates",
             Computation::AnalyzeFingerprintOverlaps => "Analyzing fingerprint overlaps",
             Computation::DetectCrossSourceOverlaps => "Detecting cross-source overlaps",
             Computation::DetectDeployConflicts => "Detecting deploy conflicts",
@@ -390,8 +389,8 @@ impl Computation {
             Computation::DetectCompoundTagsForInode { inode } => {
                 execute_detect_compound_tags_for_inode(ctx, *inode)
             }
-            Computation::DetectShitFormats => {
-                execute_detect_shit_formats(ctx)
+            Computation::DetectLosslessRemux => {
+                execute_detect_lossless_remux(ctx)
             }
             Computation::AnalyzeFingerprintOverlaps => {
                 execute_analyze_fingerprint_overlaps(ctx)

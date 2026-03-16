@@ -211,8 +211,8 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::CorruptFileResolution(ref mut preview) => {
             preview.render_frame(f, area);
         }
-        ActiveView::ShitFormatResolution(ref mut preview) => {
-            super::shit_format_modal::preview::render(f, area, preview);
+        ActiveView::LosslessRemuxResolution(ref mut preview) => {
+            super::lossless_remux_modal::preview::render(f, area, preview);
         }
         ActiveView::SubparDuplicateResolution(ref mut preview) => {
             preview.render_frame(f, area);

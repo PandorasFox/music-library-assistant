@@ -426,7 +426,7 @@ fn seed_dirty_inodes_all(conn: &Connection) -> Result<()> {
         "unindexed_file",
         "healthy_file",
         "corrupt_file",
-        "shit_format",
+        "lossless_remux",
         "compound_tag",
         "missing_tag",
         "path_tag_mismatch",

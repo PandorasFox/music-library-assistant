@@ -31,17 +31,6 @@ pub fn apply_config_edits_to_kdl(
         .context("'opinions' block should exist after creation")?;
     let opinions_doc = opinions_node.ensure_children();
 
-    // --- General opinions (direct children of "opinions") ---
-    if new_config.opinions.lossy_shit_formats_to_flac
-        != old_config.opinions.lossy_shit_formats_to_flac
-    {
-        set_or_create_bool_node(
-            opinions_doc,
-            Opinions::KDL_LOSSY_SHIT,
-            new_config.opinions.lossy_shit_formats_to_flac,
-        );
-    }
-
     // --- Startup ---
     let old_s = &old_config.opinions.startup;
     let new_s = &new_config.opinions.startup;

@@ -117,7 +117,7 @@ pub enum InsightAction {
     LaunchOobResolution,
     LaunchMovedFileAcknowledge,
     LaunchCorruptFileResolution,
-    LaunchShitFormatTranscode,
+    LaunchLosslessRemuxResolution,
     LaunchIntakeConfirmation,
     LaunchCrossSourceOverlapResolution,
     LaunchReleaseOverlapResolution,

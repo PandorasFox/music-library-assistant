@@ -148,7 +148,7 @@ pub enum InsightType {
     CorpusDirectoriesMissing,
     CorpusFilesRelocated,
     CorpusCorruptFiles,
-    CorpusShitFormatFiles,
+    CorpusLosslessRemuxCandidates,
     // Tag resolution bucket entries (duplicates at top for easy resolution)
     CrossSourceOverlaps,
     ReleaseOverlaps,
@@ -180,7 +180,7 @@ impl InsightType {
             InsightType::CorpusDirectoriesMissing => Some(DecisionKeyKind::MissingDirectory),
             InsightType::CorpusFilesRelocated => Some(DecisionKeyKind::MovedFile),
             InsightType::CorpusCorruptFiles => Some(DecisionKeyKind::CorruptFile),
-            InsightType::CorpusShitFormatFiles => Some(DecisionKeyKind::ShitFormat),
+            InsightType::CorpusLosslessRemuxCandidates => Some(DecisionKeyKind::LosslessRemux),
             InsightType::SubparDuplicates => Some(DecisionKeyKind::SubparDuplicate),
             // Informational entries
             InsightType::CorpusFilesInCorpus
@@ -313,7 +313,7 @@ impl CachedBucketEntries {
             BucketEntry::problem(InsightType::CorpusDirectoriesMissing, "Directories missing", c.directories_missing, Color::Red, InsightAction::LaunchMissingDirectoryResolution),
             BucketEntry::problem(InsightType::CorpusFilesRelocated, "Files relocated (moved)", c.files_relocated, Color::Yellow, InsightAction::LaunchMovedFileAcknowledge),
             BucketEntry::problem(InsightType::CorpusCorruptFiles, "Corrupt files", c.corrupt_files, Color::Red, InsightAction::LaunchCorruptFileResolution),
-            BucketEntry::problem(InsightType::CorpusShitFormatFiles, "Shit format files", c.shit_format_files, Color::Yellow, InsightAction::LaunchShitFormatTranscode),
+            BucketEntry::problem(InsightType::CorpusLosslessRemuxCandidates, "Lossless remux candidates", c.lossless_remux_candidates, Color::Yellow, InsightAction::LaunchLosslessRemuxResolution),
         ];
         entries.sort_by_key(|e| e.rank);
         entries
@@ -510,10 +510,10 @@ fn detail_lines_for_entry(
             "Files that failed to read during",
             "tag verification or waveform decoding.",
         ], Some(("Press Enter to stash and drop.", Color::Cyan)), tc, hc),
-        InsightType::CorpusShitFormatFiles => detail_popup("Shit Format Files", &[
-            "Non-Vorbis container files (MP3, M4A,",
-            "WAV, etc.) with poor metadata support.",
-        ], Some(("Press Enter to transcode to Opus.", Color::Cyan)), tc, hc),
+        InsightType::CorpusLosslessRemuxCandidates => detail_popup("Lossless Remux Candidates", &[
+            "Non-Vorbis lossless files (WAV, AIFF,",
+            "APE, WV) that can be remuxed to FLAC.",
+        ], Some(("Press Enter to remux to FLAC.", Color::Cyan)), tc, hc),
         InsightType::CorpusFilesInCorpus => {
             let mut lines = vec![
                 Line::from(Span::styled("Files in Corpus".to_string(), Style::default().fg(hc).add_modifier(Modifier::BOLD))),
@@ -920,7 +920,7 @@ mod tests {
                 directories_missing: 0,
                 files_relocated: 2,
                 corrupt_files: 0,
-                shit_format_files: 0,
+                lossless_remux_candidates: 0,
                 images_in_corpus: 10,
                 file_type_breakdown: vec![],
                 _directory_breakdown: Default::default(),
@@ -1081,7 +1081,7 @@ mod tests {
         handled.insert(DecisionKeyKind::MissingDirectory);
         handled.insert(DecisionKeyKind::MovedFile);
         handled.insert(DecisionKeyKind::CorruptFile);
-        handled.insert(DecisionKeyKind::ShitFormat);
+        handled.insert(DecisionKeyKind::LosslessRemux);
         handled.insert(DecisionKeyKind::IntakeIndex);
 
         state.data.update(None, None, &handled);

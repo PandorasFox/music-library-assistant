@@ -21,10 +21,6 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Opinions {
-    /// When true, lossy shit formats (MP3, M4A, etc.) are captured to FLAC
-    /// instead of transcoded to Opus. The decoded PCM waveform is losslessly
-    /// stored in a FLAC container with extension `.mp3.LOSSY.flac`.
-    pub lossy_shit_formats_to_flac: bool,
     pub quality_resolution: QualityResolutionOpinions,
     pub canonicalization: CanonicalizationOpinions,
     pub startup: StartupOpinions,
@@ -58,7 +54,6 @@ pub struct Opinions {
 /// KDL field names — single source of truth for parse/edit/source-detection.
 impl Opinions {
     // Direct children of the "opinions" block
-    pub const KDL_LOSSY_SHIT: &str = "lossy-shit-formats-to-flac";
     pub const KDL_LEAVE_TXN_OPEN: &str = "leave-transactions-open";
 
     pub const KDL_WATCHER_POLL_INTERVAL: &str = "watcher-poll-interval-secs";
@@ -554,7 +549,6 @@ pub struct DebugOpinions {}
 impl Default for Opinions {
     fn default() -> Self {
         Self {
-            lossy_shit_formats_to_flac: false,
             quality_resolution: QualityResolutionOpinions::default(),
             canonicalization: CanonicalizationOpinions::default(),
             startup: StartupOpinions::default(),

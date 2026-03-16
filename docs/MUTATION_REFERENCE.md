@@ -94,8 +94,8 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 
 | Mutation | Spawns Computations | Signals Emitted | Signals Cleared | Notes |
 |----------|---------------------|-----------------|-----------------|-------|
-| IndexTrack | UpdateCorpusFileSignals | CorruptFile (if no fingerprint), ShitFormat | (per-file signals wiped) | Add track to index |
-| IndexFileFromPath | UpdateCorpusFileSignals | CorruptFile (on success if no fingerprint, **on failure**), ShitFormat | (per-file signals wiped) | Index by path |
+| IndexTrack | UpdateCorpusFileSignals | CorruptFile (if no fingerprint), LosslessRemux | (per-file signals wiped) | Add track to index |
+| IndexFileFromPath | UpdateCorpusFileSignals | CorruptFile (on success if no fingerprint, **on failure**), LosslessRemux | (per-file signals wiped) | Index by path |
 | DropFromIndex | UpdateCorpusFileSignals | — | All scope signals for inode (when inode known) | Remove from index |
 | DropDirectoryFromIndex | — | — | MissingFile × N, MissingDirectory | Drop directory and all contained files from index |
 
@@ -116,7 +116,7 @@ Recovery process: Query `SELECT * FROM tracks WHERE needs_disk_flush = 1`, queue
 | StashFromZone | UpdateCorpusFileSignals | — | All scope signals for discovered inode | Operator-driven stash of corpus/inbox files; discovers inode before move |
 | StashLeftovers | UpdateCorpusFileSignals | — | All scope signals for discovered inode; LibraryLeftoverSignal by path key | Automated cleanup of orphaned library files during deploy |
 | UpdateTrackPath | UpdateCorpusFileSignals × 2 | — | (signals for both paths wiped) | Update path in index |
-| Transcode | UpdateCorpusFileSignals × 2 | WaveformReadError | (signals for both paths wiped) | Transcode to new format |
+| Transcode | UpdateCorpusFileSignals × 2 | WaveformReadError | (signals for both paths wiped) | Transcode lossless non-Vorbis file to FLAC |
 | InboxToCorpus | (via dirty inodes) | — | MutableOnly scope signals for inode | Move inbox file to corpus; updates zone from inbox→corpus, migrates inbox_tags→corpus_tags |
 | InboxDirToCorpus | (via dirty inodes) | — | MutableOnly scope signals for all tracked inodes | Move entire inbox directory to corpus via fs::rename; updates zone + migrates tags for each tracked audio file. Non-audio content (covers, booklets) travels with the directory. |
 

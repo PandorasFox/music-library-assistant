@@ -37,7 +37,7 @@ impl Database {
 
         // Error/format signals
         let corrupt_files = self.count_signal_type("corrupt_file")?;
-        let shit_format_files = self.count_signal_type("shit_format")?;
+        let lossless_remux_candidates = self.count_signal_type("lossless_remux")?;
 
         // Image files
         let images_in_corpus = self.get_image_file_count(Some("corpus")).unwrap_or(0);
@@ -59,7 +59,7 @@ impl Database {
             directories_missing,
             files_relocated,
             corrupt_files,
-            shit_format_files,
+            lossless_remux_candidates,
             images_in_corpus,
             file_type_breakdown,
             _directory_breakdown: directory_breakdown,

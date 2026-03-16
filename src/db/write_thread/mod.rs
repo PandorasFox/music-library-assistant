@@ -159,7 +159,7 @@ enum DbWriteOp {
     ClearAllCorpusSignals {
         inode: i64,
     },
-    /// Clear mutable corpus signals for an inode (preserves CorruptFile, ShitFormat).
+    /// Clear mutable corpus signals for an inode (preserves CorruptFile, LosslessRemux).
     ClearMutableCorpusSignals {
         inode: i64,
     },

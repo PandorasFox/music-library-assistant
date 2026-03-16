@@ -27,6 +27,6 @@ pub mod moved_file;
 pub mod oob_resolution;
 pub mod redundant_duplicates;
 pub mod same_recording;
-pub mod shit_format;
+pub mod lossless_remux;
 pub mod subpar_duplicate;
 pub mod tag_canonicity;

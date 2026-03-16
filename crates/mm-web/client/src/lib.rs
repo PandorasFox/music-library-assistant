@@ -32,10 +32,16 @@ use mm_ui::route::{self, Route};
 /// actions against the held state without re-fetching data from the server.
 enum ActiveResolution {
     // -- Cluster-nav (V3) modals --
-    TagCanonicity(mm_ui::resolutions::tag_canonicity::TagCanonicityViewState),
+    TagCanonicity {
+        state: mm_ui::resolutions::tag_canonicity::TagCanonicityViewState,
+        title_prefix: String,
+    },
     CompoundSplit(mm_ui::resolutions::compound_split::CompoundSplitViewState),
     DirectoryCluster(mm_ui::resolutions::directory_cluster::DirectoryClusterState),
-    ManualReview(mm_ui::resolutions::manual_review::ManualReviewState),
+    ManualReview {
+        state: mm_ui::resolutions::manual_review::ManualReviewState,
+        title: String,
+    },
     MissingAlbum(mm_ui::resolutions::missing_album::MissingAlbumState),
     DiscExtraction(mm_ui::resolutions::disc_extraction::DiscExtractionState),
     // -- Simple-batch modals --
@@ -45,7 +51,7 @@ enum ActiveResolution {
     SubparDuplicate(mm_ui::resolutions::subpar_duplicate::SubparDuplicateState),
     MissingFile(mm_ui::resolutions::missing_file::MissingFilePreviewState),
     InboxCorpusMatch(mm_ui::resolutions::inbox_corpus_match::InboxCorpusMatchState),
-    ShitFormat(mm_ui::resolutions::shit_format::ShitFormatPreviewState),
+    LosslessRemux(mm_ui::resolutions::lossless_remux::LosslessRemuxPreviewState),
 }
 
 thread_local! {
@@ -518,12 +524,12 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             Ok(views::render_subpar_duplicates(&raw))
         }
         ResolutionRoute::LosslessRemux { .. } => {
-            let raw = api::get_query("shit-format-data").await?;
-            let typed: mm_meta::views::cluster_deploy::ShitFormatModalData =
-                api_deserialize(&raw, "ShitFormatModalData")?;
-            let state = mm_ui::resolutions::shit_format::ShitFormatPreviewState::new(typed);
+            let raw = api::get_query("lossless-remux-data").await?;
+            let typed: mm_meta::views::cluster_deploy::LosslessRemuxModalData =
+                api_deserialize(&raw, "LosslessRemuxModalData")?;
+            let state = mm_ui::resolutions::lossless_remux::LosslessRemuxPreviewState::new(typed);
             ACTIVE_RESOLUTION.with(|cell| {
-                *cell.borrow_mut() = Some(ActiveResolution::ShitFormat(state));
+                *cell.borrow_mut() = Some(ActiveResolution::LosslessRemux(state));
             });
             Ok(views::render_lossless_remux(&raw))
         }
@@ -611,9 +617,12 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
                 ui_data, "Squash to:", &prefill,
             );
             ACTIVE_RESOLUTION.with(|cell| {
-                *cell.borrow_mut() = Some(ActiveResolution::TagCanonicity(state));
+                *cell.borrow_mut() = Some(ActiveResolution::TagCanonicity {
+                    state,
+                    title_prefix: "Tag Canonicity".into(),
+                });
             });
-            Ok(views::render_tag_canonicity(&raw))
+            Ok(render_active_resolution_node())
         }
         ResolutionRoute::CompoundSplit { tag_name, zone, safe_mode, .. } => {
             let raw = api::get_query_with(
@@ -639,7 +648,7 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             ACTIVE_RESOLUTION.with(|cell| {
                 *cell.borrow_mut() = Some(ActiveResolution::CompoundSplit(state));
             });
-            Ok(views::render_compound_split(&raw))
+            Ok(render_active_resolution_node())
         }
         ResolutionRoute::MissingAlbum { .. } => {
             let raw = api::get_query("missing-album-single-signals").await?;
@@ -654,7 +663,7 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             ACTIVE_RESOLUTION.with(|cell| {
                 *cell.borrow_mut() = Some(ActiveResolution::MissingAlbum(state));
             });
-            Ok(views::render_missing_album(&raw))
+            Ok(render_active_resolution_node())
         }
         ResolutionRoute::DirectoryCluster { .. } => {
             let raw = api::get_query("directory-cluster-data").await?;
@@ -665,7 +674,7 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             ACTIVE_RESOLUTION.with(|cell| {
                 *cell.borrow_mut() = Some(ActiveResolution::DirectoryCluster(state));
             });
-            Ok(views::render_directory_clusters(&raw))
+            Ok(render_active_resolution_node())
         }
         ResolutionRoute::InconsistentAlbumArtist { tag_name, .. } => {
             let raw = api::get_query_with(
@@ -690,9 +699,12 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
                 ui_data, "Album artist:", &prefill,
             );
             ACTIVE_RESOLUTION.with(|cell| {
-                *cell.borrow_mut() = Some(ActiveResolution::TagCanonicity(state));
+                *cell.borrow_mut() = Some(ActiveResolution::TagCanonicity {
+                    state,
+                    title_prefix: "Inconsistent Album Artist".into(),
+                });
             });
-            Ok(views::render_tag_canonicity_titled("Inconsistent Album Artist", &raw))
+            Ok(render_active_resolution_node())
         }
         ResolutionRoute::DiscExtraction { .. } => {
             let raw = api::get_query_with(
@@ -710,7 +722,7 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             ACTIVE_RESOLUTION.with(|cell| {
                 *cell.borrow_mut() = Some(ActiveResolution::DiscExtraction(state));
             });
-            Ok(views::render_disc_extraction(&raw))
+            Ok(render_active_resolution_node())
         }
 
         // === Group-review routes (Dispatchable) ===
@@ -727,9 +739,12 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             );
             let state = mm_ui::resolutions::manual_review::ManualReviewState::new(ui_data);
             ACTIVE_RESOLUTION.with(|cell| {
-                *cell.borrow_mut() = Some(ActiveResolution::ManualReview(state));
+                *cell.borrow_mut() = Some(ActiveResolution::ManualReview {
+                    state,
+                    title: "Redundant Duplicates".into(),
+                });
             });
-            Ok(views::render_manual_review("Redundant Duplicates", &raw))
+            Ok(render_active_resolution_node())
         }
         ResolutionRoute::DeployConflicts { .. } => {
             let raw = api::get_query_with(
@@ -744,9 +759,12 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             );
             let state = mm_ui::resolutions::manual_review::ManualReviewState::new(ui_data);
             ACTIVE_RESOLUTION.with(|cell| {
-                *cell.borrow_mut() = Some(ActiveResolution::ManualReview(state));
+                *cell.borrow_mut() = Some(ActiveResolution::ManualReview {
+                    state,
+                    title: "Deploy Conflicts".into(),
+                });
             });
-            Ok(views::render_manual_review("Deploy Conflicts", &raw))
+            Ok(render_active_resolution_node())
         }
         ResolutionRoute::MetadataDuplicates { .. } => {
             let raw = api::get_query_with(
@@ -761,9 +779,12 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             );
             let state = mm_ui::resolutions::manual_review::ManualReviewState::new(ui_data);
             ACTIVE_RESOLUTION.with(|cell| {
-                *cell.borrow_mut() = Some(ActiveResolution::ManualReview(state));
+                *cell.borrow_mut() = Some(ActiveResolution::ManualReview {
+                    state,
+                    title: "Metadata Duplicates".into(),
+                });
             });
-            Ok(views::render_manual_review("Metadata Duplicates", &raw))
+            Ok(render_active_resolution_node())
         }
         ResolutionRoute::SameRecording { .. } => {
             let raw = api::get_query_with(
@@ -778,9 +799,12 @@ async fn load_resolution_view(res: &route::ResolutionRoute) -> Result<Node, JsVa
             );
             let state = mm_ui::resolutions::manual_review::ManualReviewState::new(ui_data);
             ACTIVE_RESOLUTION.with(|cell| {
-                *cell.borrow_mut() = Some(ActiveResolution::ManualReview(state));
+                *cell.borrow_mut() = Some(ActiveResolution::ManualReview {
+                    state,
+                    title: "Same Recording".into(),
+                });
             });
-            Ok(views::render_manual_review("Same Recording", &raw))
+            Ok(render_active_resolution_node())
         }
 
     }
@@ -980,9 +1004,9 @@ async fn do_resolve_action(action_name: &str) -> Result<(), JsValue> {
             stage_resolution_decision(&key, &label, &mutations).await?;
             let has_more = advance_active_resolution(&mut state);
             if has_more {
-                // Put state back and re-render current view.
+                // Put state back and re-render from held state (no re-fetch).
                 ACTIVE_RESOLUTION.with(|cell| *cell.borrow_mut() = Some(state));
-                load_from_hash().await?;
+                render_active_resolution();
             } else {
                 // Last group processed — navigate to transaction review.
                 navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
@@ -991,15 +1015,15 @@ async fn do_resolve_action(action_name: &str) -> Result<(), JsValue> {
         }
         DispatchResult::StageKeep { key, label, mutations } => {
             stage_resolution_decision(&key, &label, &mutations).await?;
-            // Don't advance — put state back and re-render.
+            // Don't advance — put state back and re-render from held state.
             ACTIVE_RESOLUTION.with(|cell| *cell.borrow_mut() = Some(state));
-            load_from_hash().await?;
+            render_active_resolution();
         }
         DispatchResult::Skip => {
             let has_more = advance_active_resolution(&mut state);
             if has_more {
                 ACTIVE_RESOLUTION.with(|cell| *cell.borrow_mut() = Some(state));
-                load_from_hash().await?;
+                render_active_resolution();
             } else {
                 navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
                 load_from_hash().await?;
@@ -1024,7 +1048,7 @@ fn dispatch_active_resolution(
     resolver: &PathResolver,
 ) -> Result<DispatchResult, JsValue> {
     match state {
-        ActiveResolution::TagCanonicity(s) => {
+        ActiveResolution::TagCanonicity { state: s, .. } => {
             use mm_ui::resolutions::tag_canonicity::CanonicityAction;
             let action = match action_name {
                 "Confirm" => CanonicityAction::Confirm,
@@ -1054,7 +1078,7 @@ fn dispatch_active_resolution(
             };
             Ok(s.dispatch(action, resolver))
         }
-        ActiveResolution::ManualReview(s) => {
+        ActiveResolution::ManualReview { state: s, .. } => {
             use mm_ui::resolutions::manual_review::ReviewAction;
             let action = match action_name {
                 "Stash" => ReviewAction::Stash,
@@ -1141,14 +1165,12 @@ fn dispatch_active_resolution(
             };
             Ok(s.dispatch(action, resolver))
         }
-        ActiveResolution::ShitFormat(s) => {
-            use mm_ui::resolutions::shit_format::ShitFormatAction;
+        ActiveResolution::LosslessRemux(s) => {
+            use mm_ui::resolutions::lossless_remux::LosslessRemuxAction;
             let action = match action_name {
-                "ConfirmRemuxLossless" => ShitFormatAction::ConfirmRemuxLossless,
-                "ConfirmTranscodeLossy" => ShitFormatAction::ConfirmTranscodeLossy,
-                "ConfirmConvertAll" => ShitFormatAction::ConfirmConvertAll,
-                "Cancel" => ShitFormatAction::Cancel,
-                _ => return Err(JsValue::from_str(&format!("unknown ShitFormat action: {action_name}"))),
+                "Confirm" => LosslessRemuxAction::Confirm,
+                "Cancel" => LosslessRemuxAction::Cancel,
+                _ => return Err(JsValue::from_str(&format!("unknown LosslessRemux action: {action_name}"))),
             };
             Ok(s.dispatch(action, resolver))
         }
@@ -1159,10 +1181,10 @@ fn dispatch_active_resolution(
 /// Returns `true` if there are more groups, `false` if the last group was processed.
 fn advance_active_resolution(state: &mut ActiveResolution) -> bool {
     match state {
-        ActiveResolution::TagCanonicity(s) => s.advance(),
+        ActiveResolution::TagCanonicity { state: s, .. } => s.advance(),
         ActiveResolution::CompoundSplit(s) => s.advance(),
         ActiveResolution::DirectoryCluster(s) => s.advance(),
-        ActiveResolution::ManualReview(s) => s.advance(),
+        ActiveResolution::ManualReview { state: s, .. } => s.advance(),
         ActiveResolution::MissingAlbum(s) => s.advance(),
         ActiveResolution::DiscExtraction(s) => s.advance(),
         // Simple-batch modals are single-shot — no group advancement.
@@ -1172,8 +1194,222 @@ fn advance_active_resolution(state: &mut ActiveResolution) -> bool {
         | ActiveResolution::SubparDuplicate(_)
         | ActiveResolution::MissingFile(_)
         | ActiveResolution::InboxCorpusMatch(_)
-        | ActiveResolution::ShitFormat(_) => false,
+        | ActiveResolution::LosslessRemux(_) => false,
     }
+}
+
+/// Render the current group of the active resolution as a Node.
+///
+/// Called from `load_resolution_view()` when building the initial page content.
+/// Borrows `ACTIVE_RESOLUTION` and matches the variant to call the appropriate
+/// per-group renderer from views.rs.
+fn render_active_resolution_node() -> Node {
+    ACTIVE_RESOLUTION.with(|cell| {
+        let borrow = cell.borrow();
+        match borrow.as_ref() {
+            Some(ActiveResolution::TagCanonicity { state, title_prefix }) => {
+                views::render_canonicity_group_titled(title_prefix, state)
+            }
+            Some(ActiveResolution::CompoundSplit(state)) => {
+                views::render_compound_split_group(state)
+            }
+            Some(ActiveResolution::DirectoryCluster(state)) => {
+                views::render_directory_cluster_group(state)
+            }
+            Some(ActiveResolution::ManualReview { state, title }) => {
+                views::render_manual_review_group(title, state)
+            }
+            Some(ActiveResolution::MissingAlbum(state)) => {
+                views::render_missing_album_group(state)
+            }
+            Some(ActiveResolution::DiscExtraction(state)) => {
+                views::render_disc_extraction_group(state)
+            }
+            // Simple-batch modals don't use per-group rendering.
+            _ => html::span().class("mm-kv__val").text("No active resolution").into(),
+        }
+    })
+}
+
+/// Re-render the active resolution into the DOM content area.
+///
+/// Used after advance/skip to update the display without re-fetching data
+/// from the server. Replaces the content inside `.mm-content`.
+fn render_active_resolution() {
+    let node = render_active_resolution_node();
+    let doc = web_sys::window().unwrap().document().unwrap();
+    if let Ok(Some(el)) = doc.query_selector(".mm-content") {
+        el.set_inner_html(&node.to_html());
+    }
+}
+
+/// Navigate between groups in the active resolution (prev/next pagination).
+///
+/// Purely navigational — no mutations. Adjusts the current group index on the
+/// held state and re-renders.
+#[wasm_bindgen]
+pub fn mm_resolve_page(direction: &str) {
+    ACTIVE_RESOLUTION.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let Some(state) = borrow.as_mut() else { return };
+
+        match state {
+            ActiveResolution::TagCanonicity { state: s, .. } => {
+                let total = s.state.data.inner.clusters.len();
+                let cur = s.state.data.current_cluster;
+                match direction {
+                    "prev" if cur > 0 => {
+                        s.state.data.current_cluster -= 1;
+                        s.state.reset_list();
+                        let prefill = s.state.data.inner.clusters
+                            .get(s.state.data.current_cluster)
+                            .and_then(|c| c.suggested_canonical.as_deref())
+                            .unwrap_or("");
+                        s.field.set_value(prefill);
+                    }
+                    "next" if cur + 1 < total => {
+                        s.state.data.current_cluster += 1;
+                        s.state.reset_list();
+                        let prefill = s.state.data.inner.clusters
+                            .get(s.state.data.current_cluster)
+                            .and_then(|c| c.suggested_canonical.as_deref())
+                            .unwrap_or("");
+                        s.field.set_value(prefill);
+                    }
+                    _ => {}
+                }
+            }
+            ActiveResolution::CompoundSplit(s) => {
+                let total = s.state.data.inner.groups.len();
+                let cur = s.state.data.current_group;
+                match direction {
+                    "prev" if cur > 0 => {
+                        s.state.data.current_group -= 1;
+                        s.state.reset_list();
+                        let prefill = s.state.data.inner.groups
+                            .get(s.state.data.current_group)
+                            .map(|g| g.split_parts.join("; "))
+                            .unwrap_or_default();
+                        s.field.set_value(&prefill);
+                    }
+                    "next" if cur + 1 < total => {
+                        s.state.data.current_group += 1;
+                        s.state.reset_list();
+                        let prefill = s.state.data.inner.groups
+                            .get(s.state.data.current_group)
+                            .map(|g| g.split_parts.join("; "))
+                            .unwrap_or_default();
+                        s.field.set_value(&prefill);
+                    }
+                    _ => {}
+                }
+            }
+            ActiveResolution::DirectoryCluster(s) => {
+                let total = s.data.inner.clusters.len();
+                let cur = s.data.current_cluster;
+                match direction {
+                    "prev" if cur > 0 => {
+                        s.data.current_cluster -= 1;
+                        s.reset_list();
+                    }
+                    "next" if cur + 1 < total => {
+                        s.data.current_cluster += 1;
+                        s.reset_list();
+                    }
+                    _ => {}
+                }
+            }
+            ActiveResolution::ManualReview { state: s, .. } => {
+                let total = s.data.inner.groups.len();
+                let cur = s.data.current_group;
+                match direction {
+                    "prev" if cur > 0 => {
+                        s.data.current_group -= 1;
+                        s.reset_list();
+                    }
+                    "next" if cur + 1 < total => {
+                        s.data.current_group += 1;
+                        s.reset_list();
+                    }
+                    _ => {}
+                }
+            }
+            ActiveResolution::MissingAlbum(s) => {
+                let total = s.data.signals.len();
+                let cur = s.data.current_group;
+                match direction {
+                    "prev" if cur > 0 => {
+                        s.data.current_group -= 1;
+                        s.reset_list();
+                    }
+                    "next" if cur + 1 < total => {
+                        s.data.current_group += 1;
+                        s.reset_list();
+                    }
+                    _ => {}
+                }
+            }
+            ActiveResolution::DiscExtraction(s) => {
+                let total = s.data.inner.groups.len();
+                let cur = s.data.current_group;
+                match direction {
+                    "prev" if cur > 0 => {
+                        s.data.current_group -= 1;
+                        s.reset_list();
+                    }
+                    "next" if cur + 1 < total => {
+                        s.data.current_group += 1;
+                        s.reset_list();
+                    }
+                    _ => {}
+                }
+            }
+            // Simple-batch modals have no pagination.
+            _ => {}
+        }
+    });
+    render_active_resolution();
+}
+
+/// Confirm action for resolutions that need a text field value
+/// (TagCanonicity and CompoundSplit).
+///
+/// Reads the value from `#mm-decision-field` DOM input, sets it on the held
+/// state's DecisionField, then dispatches a Confirm action.
+#[wasm_bindgen]
+pub fn mm_resolve_confirm_with_field() {
+    // Read the field value from the DOM input.
+    let field_value = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .get_element_by_id("mm-decision-field")
+        .and_then(|el| el.dyn_into::<web_sys::HtmlInputElement>().ok())
+        .map(|input| input.value())
+        .unwrap_or_default();
+
+    // Set the value on the held state's DecisionField.
+    ACTIVE_RESOLUTION.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if let Some(state) = borrow.as_mut() {
+            match state {
+                ActiveResolution::TagCanonicity { state: s, .. } => {
+                    s.field.set_value(&field_value);
+                }
+                ActiveResolution::CompoundSplit(s) => {
+                    s.field.set_value(&field_value);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // Now dispatch the Confirm action through the normal path.
+    spawn_local(async move {
+        if let Err(e) = do_resolve_action("Confirm").await {
+            web_sys::console::error_1(&format!("resolve confirm_with_field error: {e:?}").into());
+        }
+    });
 }
 
 /// Stage a resolution decision: ensure a transaction is active, then add the decision.

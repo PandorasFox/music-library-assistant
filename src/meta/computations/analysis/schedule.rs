@@ -50,7 +50,7 @@ pub fn execute_schedule_content_analysis(
         spawn.extend([
             Computation::DetectFingerprintOverlaps,
             Computation::DetectDuplicateInodes,
-            Computation::DetectShitFormats,
+            Computation::DetectLosslessRemux,
         ]);
     }
 

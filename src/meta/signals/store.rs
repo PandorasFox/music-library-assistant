@@ -629,14 +629,14 @@ impl_corpus_signal!(MovedFileSignal, "signal_moved_file",
     fields: [inode, path, old_path, old_zone, new_zone],
 );
 
-impl_corpus_signal!(ShitFormatSignal, "signal_shit_format",
-    "CREATE TABLE IF NOT EXISTS signal_shit_format (
+impl_corpus_signal!(LosslessRemuxSignal, "signal_lossless_remux",
+    "CREATE TABLE IF NOT EXISTS signal_lossless_remux (
         inode INTEGER PRIMARY KEY,
         path TEXT NOT NULL,
         file_type TEXT NOT NULL,
         discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )",
-    insert_sql: "INSERT OR REPLACE INTO signal_shit_format (inode, path, file_type) VALUES (?1, ?2, ?3)",
+    insert_sql: "INSERT OR REPLACE INTO signal_lossless_remux (inode, path, file_type) VALUES (?1, ?2, ?3)",
     fields: [inode, path, file_type],
 );
 

@@ -105,7 +105,7 @@ pub use mm_meta::computations::PipelineStage;
 /// Used by:
 /// - Post-execution pipeline (dirty marking after mutations)
 /// - Migration seeding (re-seed dirty inodes after schema changes)
-pub const PER_INODE_COMPUTATIONS: &[&str] = &["compound_tag", "shit_format", "sidecar_deploy"];
+pub const PER_INODE_COMPUTATIONS: &[&str] = &["compound_tag", "lossless_remux", "sidecar_deploy"];
 
 // ============================================================================
 // Unified Computation Enum (for daemon's queue)

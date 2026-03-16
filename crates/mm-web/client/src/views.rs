@@ -22,6 +22,13 @@ use mm_ui::html::{self, div, h3, section, span, Node};
 use mm_ui::view_state::lateral::health::{BucketEntry, CachedBucketEntries, InsightType};
 use mm_ui::view_state::lateral::inbox::{InboxBucketEntry, InboxViewData};
 
+use mm_ui::resolutions::tag_canonicity::TagCanonicityViewState;
+use mm_ui::resolutions::compound_split::CompoundSplitViewState;
+use mm_ui::resolutions::directory_cluster::DirectoryClusterState;
+use mm_ui::resolutions::manual_review::ManualReviewState;
+use mm_ui::resolutions::missing_album::MissingAlbumState;
+use mm_ui::resolutions::disc_extraction::DiscExtractionState;
+
 // ============================================================================
 // Shared helpers
 // ============================================================================
@@ -34,6 +41,32 @@ pub fn kv(key: &str, val: &str) -> Node {
         .child(span().class("mm-kv__val").text(val))
         .into()
 }
+
+/// Key-value row with a wizard detail toggle (🪄).
+/// Clicking the wand opens a centered overlay with detail content.
+/// `title` is shown as a heading in the overlay pane.
+pub fn kv_wizard(key: &str, val: &str, wizard_id: &str, title: &str, detail_items: Vec<Node>) -> Node {
+    div()
+        .class("mm-kv mm-kv--wizard")
+        .child(span().class("mm-kv__key").text(key))
+        .child(span().class("mm-kv__val").text(val))
+        .child(
+            span()
+                .class("mm-wizard__toggle")
+                .attr("data-wizard-id", wizard_id)
+                .attr("data-wizard-title", title)
+                .attr("onclick", "window.__mm_wizard_toggle(this)")
+                .text("\u{1FA84}"),
+        )
+        .child(
+            div()
+                .class("mm-wizard__data mm-hidden")
+                .attr("id", format!("mm-wd-{wizard_id}"))
+                .children(detail_items),
+        )
+        .into()
+}
+
 
 /// Key-value row with navigation link (hash-based routing).
 fn nav_kv(key: &str, val: &str, href: &str) -> Node {
@@ -136,7 +169,7 @@ fn insight_route(ty: &InsightType) -> Option<String> {
         InsightType::CorpusDirectoriesMissing => Some("resolve/missing-directories".into()),
         InsightType::CorpusFilesRelocated => Some("resolve/moved-files".into()),
         InsightType::CorpusCorruptFiles => Some("resolve/corrupt-files".into()),
-        InsightType::CorpusShitFormatFiles => Some("resolve/lossless-remux".into()),
+        InsightType::CorpusLosslessRemuxCandidates => Some("resolve/lossless-remux".into()),
         InsightType::CrossSourceOverlaps | InsightType::ReleaseOverlaps => {
             Some("resolve/directory-cluster".into())
         }
@@ -1788,21 +1821,71 @@ pub fn render_tag_editor(inode: i64, path: &str, tags: &serde_json::Value) -> No
                             .attr("data-original", tag_val)
                             .class("mm-tag-value"),
                     )
+                    .child(
+                        html::button()
+                            .class("mm-btn mm-tag-delete")
+                            .attr("type", "button")
+                            .attr("data-tag-name", tag_name)
+                            .attr(
+                                "onclick",
+                                "window.__mm_tag_delete(this.dataset.tagName, this)",
+                            )
+                            .text("\u{00d7}"),
+                    )
                     .into(),
             );
         }
     }
 
+    // Status message area (hidden by default, shown by JS on save/error).
+    let status = div()
+        .attr("id", "mm-tag-status")
+        .class("mm-tag-status")
+        .attr("style", "display:none");
+
+    // Toolbar: Back, Add Tag, Save Changes.
+    let toolbar = div()
+        .class("mm-buttons mm-tag-toolbar")
+        .child(
+            html::button()
+                .class("mm-btn")
+                .attr("type", "button")
+                .attr("onclick", "history.back()")
+                .text("Back"),
+        )
+        .child(
+            html::button()
+                .class("mm-btn")
+                .attr("type", "button")
+                .attr("onclick", "window.__mm_tag_add()")
+                .text("+ Add Tag"),
+        )
+        .child(
+            html::button()
+                .class("mm-btn mm-tag-save-btn")
+                .attr("type", "button")
+                .attr("onclick", "window.__mm_tag_save()")
+                .text("Save Changes"),
+        );
+
     div()
         .class("mm-tag-editor")
-        .child(h3().class("mm-section__title").text(&format!("Tags — {path}")))
+        .attr("data-inode", inode.to_string())
+        .child(h3().class("mm-section__title").text(&format!("Tags \u{2014} {path}")))
+        .child(toolbar)
+        .child(status)
         .child(
             div()
                 .class("mm-tag-editor__header")
                 .child(span().class("mm-tag-header-name").text("Tag"))
-                .child(span().class("mm-tag-header-value").text("Value")),
+                .child(span().class("mm-tag-header-value").text("Value"))
+                .child(span().class("mm-tag-header-action").text("")),
         )
-        .children(rows)
+        .child(
+            div()
+                .attr("id", "mm-tag-rows")
+                .children(rows),
+        )
         .into()
 }
 
@@ -1885,8 +1968,8 @@ pub fn render_missing_directories(data: &serde_json::Value) -> Node {
         &format!("Missing Directories ({})", items.len()),
         &items,
         &[
-            ("Drop All", "var(--c-yellow)", "window.__mm_resolve_cancel()"),
-            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+            ("Drop All", "var(--c-yellow)", "window.__mm_resolve_action('ConfirmDrop')"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_action('Cancel')"),
         ],
     )
 }
@@ -1909,8 +1992,8 @@ pub fn render_corrupt_files(data: &serde_json::Value) -> Node {
         &format!("Corrupt Files ({})", items.len()),
         &items,
         &[
-            ("Stash All", "var(--c-yellow)", "window.__mm_resolve_cancel()"),
-            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+            ("Stash All", "var(--c-yellow)", "window.__mm_resolve_action('ConfirmStashAll')"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_action('Cancel')"),
         ],
     )
 }
@@ -1934,8 +2017,8 @@ pub fn render_moved_files(data: &serde_json::Value) -> Node {
         &format!("Moved Files ({})", items.len()),
         &items,
         &[
-            ("Accept All", "var(--c-green)", "window.__mm_resolve_cancel()"),
-            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+            ("Accept All", "var(--c-green)", "window.__mm_resolve_action('Acknowledge')"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_action('Cancel')"),
         ],
     )
 }
@@ -1962,30 +2045,16 @@ pub fn render_subpar_duplicates(data: &serde_json::Value) -> Node {
         &format!("Subpar Duplicates ({})", items.len()),
         &items,
         &[
-            ("Stash All", "var(--c-yellow)", "window.__mm_resolve_cancel()"),
-            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+            ("Stash All", "var(--c-yellow)", "window.__mm_resolve_action('ConfirmStashAll')"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_action('Cancel')"),
         ],
     )
 }
 
-/// Render lossless remux (shit-format) resolution data.
+/// Render lossless remux resolution data.
 pub fn render_lossless_remux(data: &serde_json::Value) -> Node {
-    let lossless: Vec<String> = data
-        .get("lossless_files")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|entry| {
-                    let path = entry.get("corpus_path")?.as_str()?;
-                    let fmt = entry.get("file_type").and_then(|v| v.as_str()).unwrap_or("?");
-                    Some(format!("{path}  [{fmt}]"))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let lossy: Vec<String> = data
-        .get("lossy_files")
+    let files: Vec<String> = data
+        .get("files")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
@@ -2002,15 +2071,14 @@ pub fn render_lossless_remux(data: &serde_json::Value) -> Node {
     sections.push(
         h3().class("mm-section__title")
             .text(format!(
-                "Non-Vorbis Files ({} lossless, {} lossy)",
-                lossless.len(),
-                lossy.len(),
+                "Lossless Remux Candidates ({} files)",
+                files.len(),
             ))
             .into(),
     );
 
-    if !lossless.is_empty() {
-        let rows: Vec<Node> = lossless
+    if !files.is_empty() {
+        let rows: Vec<Node> = files
             .iter()
             .enumerate()
             .map(|(i, item)| {
@@ -2021,43 +2089,27 @@ pub fn render_lossless_remux(data: &serde_json::Value) -> Node {
                     .into()
             })
             .collect();
-        sections.push(titled_section("Lossless (remux to FLAC)", rows));
+        sections.push(titled_section("Remux to FLAC", rows));
     }
 
-    if !lossy.is_empty() {
-        let rows: Vec<Node> = lossy
-            .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                div()
-                    .class("mm-kv")
-                    .child(span().class("mm-kv__key").text(format!("{}", i + 1)))
-                    .child(span().class("mm-kv__val").text(item))
-                    .into()
-            })
-            .collect();
-        sections.push(titled_section("Lossy (transcode to Opus)", rows));
+    let mut btn_row = div().class("mm-buttons");
+    if !files.is_empty() {
+        btn_row = btn_row.child(
+            html::button()
+                .class("mm-btn")
+                .attr("style", "border-color:var(--c-green)")
+                .attr("onclick", "window.__mm_resolve_action('Confirm')")
+                .text("Remux to FLAC"),
+        );
     }
-
-    sections.push(
-        div()
-            .class("mm-buttons")
-            .child(
-                html::button()
-                    .class("mm-btn")
-                    .attr("style", "border-color:var(--c-green)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
-                    .text("Remux All Lossless"),
-            )
-            .child(
-                html::button()
-                    .class("mm-btn")
-                    .attr("style", "border-color:var(--c-white)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
-                    .text("Cancel"),
-            )
-            .into(),
+    btn_row = btn_row.child(
+        html::button()
+            .class("mm-btn")
+            .attr("style", "border-color:var(--c-white)")
+            .attr("onclick", "window.__mm_resolve_action('Cancel')")
+            .text("Cancel"),
     );
+    sections.push(btn_row.into());
 
     div().class("mm-resolution").children(sections).into()
 }
@@ -2082,9 +2134,9 @@ pub fn render_missing_files_restorable(data: &serde_json::Value) -> Node {
         &format!("Missing Files — Restorable ({})", items.len()),
         &items,
         &[
-            ("Restore All", "var(--c-green)", "window.__mm_resolve_cancel()"),
-            ("Drop All", "var(--c-yellow)", "window.__mm_resolve_cancel()"),
-            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+            ("Restore All", "var(--c-green)", "window.__mm_resolve_action('ConfirmRestore')"),
+            ("Drop All", "var(--c-yellow)", "window.__mm_resolve_action('ConfirmDrop')"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_action('Cancel')"),
         ],
     )
 }
@@ -2107,8 +2159,8 @@ pub fn render_missing_files_permanent(data: &serde_json::Value) -> Node {
         &format!("Missing Files — Permanent ({})", items.len()),
         &items,
         &[
-            ("Drop All", "var(--c-red)", "window.__mm_resolve_cancel()"),
-            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+            ("Drop All", "var(--c-red)", "window.__mm_resolve_action('ConfirmDrop')"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_action('Cancel')"),
         ],
     )
 }
@@ -2137,8 +2189,8 @@ pub fn render_inbox_corpus_match(data: &serde_json::Value) -> Node {
         &format!("Inbox/Corpus Matches ({})", items.len()),
         &items,
         &[
-            ("Stash Safe", "var(--c-green)", "window.__mm_resolve_cancel()"),
-            ("Cancel", "var(--c-white)", "window.__mm_resolve_cancel()"),
+            ("Stash Safe", "var(--c-green)", "window.__mm_resolve_action('ConfirmStash')"),
+            ("Cancel", "var(--c-white)", "window.__mm_resolve_action('Cancel')"),
         ],
     )
 }
@@ -2172,43 +2224,268 @@ pub fn render_oob_conflict_bucket(title: &str, data: &serde_json::Value) -> Node
 }
 
 /// Render directory cluster resolution data.
-pub fn render_directory_clusters(data: &serde_json::Value) -> Node {
-    let clusters = data.get("clusters").and_then(|v| v.as_array());
-    let cluster_count = clusters.map_or(0, |c| c.len());
+// Old dump-all renderers for V3 resolution types removed — replaced by
+// per-group renderers below (render_*_group functions).
 
-    let mut sections = Vec::new();
+// ============================================================================
+// Per-group renderers for V3 (paginated) resolution modals
+// ============================================================================
+
+/// Shared pagination header: title + prev/next buttons with position indicator.
+fn render_pagination_header(title: &str, current_1indexed: usize, total: usize) -> Node {
+    let prev_disabled = current_1indexed <= 1;
+    let next_disabled = current_1indexed >= total;
+
+    let mut prev_btn = html::button()
+        .class("mm-btn mm-pagination__btn")
+        .attr("onclick", "window.__mm_resolve_page('prev')")
+        .text("\u{2039} Prev");
+    if prev_disabled {
+        prev_btn = prev_btn.class("mm-btn--disabled").attr("disabled", "true");
+    }
+
+    let mut next_btn = html::button()
+        .class("mm-btn mm-pagination__btn")
+        .attr("onclick", "window.__mm_resolve_page('next')")
+        .text("Next \u{203a}");
+    if next_disabled {
+        next_btn = next_btn.class("mm-btn--disabled").attr("disabled", "true");
+    }
+
+    div()
+        .class("mm-pagination")
+        .child(h3().class("mm-pagination__title").text(title))
+        .child(
+            div()
+                .class("mm-pagination__nav")
+                .child(prev_btn)
+                .child(span().class("mm-pagination__pos").text(format!("{} of {}", current_1indexed, total)))
+                .child(next_btn),
+        )
+        .into()
+}
+
+/// Render the current group of a TagCanonicityViewState with a custom title prefix.
+pub fn render_canonicity_group_titled(title_prefix: &str, state: &TagCanonicityViewState) -> Node {
+    let data = &state.state.data;
+    let inner = &data.inner;
+    let idx = data.current_cluster;
+    let total = inner.clusters.len();
+
+    if total == 0 {
+        return span().class("mm-kv__val").text("No canonicity clusters").into();
+    }
+
+    let cluster = match inner.clusters.get(idx) {
+        Some(c) => c,
+        None => return span().class("mm-kv__val").text("Cluster index out of bounds").into(),
+    };
+
+    let title = format!("{} \u{2014} {}", title_prefix, inner.tag_name);
+    let mut sections = vec![render_pagination_header(&title, idx + 1, total)];
+
+    // Decision field input
+    let suggested = state.field.value();
     sections.push(
-        h3().class("mm-section__title")
-            .text(format!("Directory Clusters ({} clusters)", cluster_count))
+        div()
+            .class("mm-decision-field")
+            .child(html::label().class("mm-decision-field__label").text(&state.field.label))
+            .child(
+                html::input()
+                    .attr("type", "text")
+                    .attr("id", "mm-decision-field")
+                    .attr("value", suggested)
+                    .class("mm-decision-field__input"),
+            )
             .into(),
     );
 
-    if let Some(clusters) = clusters {
-        for (idx, cluster) in clusters.iter().enumerate() {
-            let cluster_key = cluster.get("cluster_key").and_then(|v| v.as_str()).unwrap_or("?");
-            let overlap = cluster.get("overlap_count").and_then(|v| v.as_u64()).unwrap_or(0);
-
-            let mut items = Vec::new();
-            items.push(kv("Overlap", &format!("{} track pairs", overlap)));
-
-            if let Some(dirs) = cluster.get("directories").and_then(|v| v.as_array()) {
-                for dir in dirs {
-                    let path_suffix = dir.get("path_suffix").and_then(|v| v.as_str()).unwrap_or("?");
-                    let format_summary = dir.get("format_summary").and_then(|v| v.as_str()).unwrap_or("?");
-                    let file_count = dir.get("inodes").and_then(|v| v.as_array()).map_or(0, |a| a.len());
-                    items.push(kv(
-                        path_suffix,
-                        &format!("{} files, {}", file_count, format_summary),
-                    ));
-                }
-            }
-
-            sections.push(titled_section(
-                &format!("Cluster {} — {}", idx + 1, cluster_key),
-                items,
-            ));
-        }
+    // Variant list — each variant gets a wizard toggle showing all files
+    let mut variant_items = Vec::new();
+    for (vi, variant) in cluster.variants.iter().enumerate() {
+        let file_count = variant.files.len();
+        let file_names: Vec<&str> = variant.files.iter().map(|f| f.display_name.as_str()).collect();
+        let preview = if file_names.len() <= 3 {
+            file_names.join(", ")
+        } else {
+            format!("{}, ... +{}", file_names[..3].join(", "), file_names.len() - 3)
+        };
+        let detail: Vec<Node> = variant
+            .files
+            .iter()
+            .map(|f| div().class("mm-wizard__item").text(&f.display_name).into())
+            .collect();
+        variant_items.push(kv_wizard(
+            &format!("\u{201c}{}\u{201d} ({} files)", variant.value, file_count),
+            &preview,
+            &format!("v{vi}"),
+            &format!("Track list for \u{201c}{}\u{201d}", variant.value),
+            detail,
+        ));
     }
+
+    let heading = match &cluster.confirmed_canonical {
+        Some(canonical) => format!("Canonical: \"{}\"", canonical),
+        None => match &cluster.suggested_canonical {
+            Some(suggested_val) => format!("Suggested: \"{}\"", suggested_val),
+            None => "No suggestion".to_string(),
+        },
+    };
+    sections.push(titled_section(&heading, variant_items));
+
+    // Buttons
+    sections.push(
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-green)")
+                    .attr("onclick", "window.__mm_resolve_confirm_with_field()")
+                    .text("Confirm"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-yellow)")
+                    .attr("onclick", "window.__mm_resolve_action('FlagCanonical')")
+                    .text("Flag Canonical"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-white)")
+                    .attr("onclick", "window.__mm_resolve_action('Cancel')")
+                    .text("Cancel"),
+            )
+            .into(),
+    );
+
+    div().class("mm-resolution").children(sections).into()
+}
+
+/// Render the current group of a CompoundSplitViewState.
+pub fn render_compound_split_group(state: &CompoundSplitViewState) -> Node {
+    let data = &state.state.data;
+    let inner = &data.inner;
+    let idx = data.current_group;
+    let total = inner.groups.len();
+
+    if total == 0 {
+        return span().class("mm-kv__val").text("No compound split groups").into();
+    }
+
+    let group = match inner.groups.get(idx) {
+        Some(g) => g,
+        None => return span().class("mm-kv__val").text("Group index out of bounds").into(),
+    };
+
+    let title = format!("Compound Split \u{2014} {} \"{}\"", group.tag_name, group.compound_value);
+    let mut sections = vec![render_pagination_header(&title, idx + 1, total)];
+
+    // Decision field input
+    let current_value = state.field.value();
+    sections.push(
+        div()
+            .class("mm-decision-field")
+            .child(html::label().class("mm-decision-field__label").text(&state.field.label))
+            .child(
+                html::input()
+                    .attr("type", "text")
+                    .attr("id", "mm-decision-field")
+                    .attr("value", current_value)
+                    .class("mm-decision-field__input"),
+            )
+            .into(),
+    );
+
+    // File list
+    let mut file_items = Vec::new();
+    if !group.matching_parts.is_empty() {
+        file_items.push(kv("Matching parts", &group.matching_parts.join(", ")));
+    }
+    for file in &group.files {
+        file_items.push(kv("", &file.display_name));
+    }
+
+    sections.push(titled_section(
+        &format!("{} files", group.files.len()),
+        file_items,
+    ));
+
+    // Buttons
+    sections.push(
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-green)")
+                    .attr("onclick", "window.__mm_resolve_confirm_with_field()")
+                    .text("Confirm Split"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-yellow)")
+                    .attr("onclick", "window.__mm_resolve_action('Canonicalize')")
+                    .text("Mark as Entity"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-white)")
+                    .attr("onclick", "window.__mm_resolve_action('Cancel')")
+                    .text("Cancel"),
+            )
+            .into(),
+    );
+
+    div().class("mm-resolution").children(sections).into()
+}
+
+/// Render the current group of a DirectoryClusterState.
+pub fn render_directory_cluster_group(state: &DirectoryClusterState) -> Node {
+    let data = &state.data;
+    let inner = &data.inner;
+    let idx = data.current_cluster;
+    let total = inner.clusters.len();
+
+    if total == 0 {
+        return span().class("mm-kv__val").text("No directory clusters").into();
+    }
+
+    let cluster = match inner.clusters.get(idx) {
+        Some(c) => c,
+        None => return span().class("mm-kv__val").text("Cluster index out of bounds").into(),
+    };
+
+    let title = format!("Directory Cluster \u{2014} {}", cluster.cluster_key);
+    let mut sections = vec![render_pagination_header(&title, idx + 1, total)];
+
+    let mut items = Vec::new();
+    items.push(kv("Overlap", &format!("{} track pairs", cluster.overlap_count)));
+
+    for (di, dir) in cluster.directories.iter().enumerate() {
+        let file_count = dir.inodes.len();
+        let detail: Vec<Node> = dir
+            .paths
+            .iter()
+            .map(|p| div().class("mm-wizard__item").text(p).into())
+            .collect();
+        items.push(kv_wizard(
+            &dir.path_suffix,
+            &format!("{} files, {}", file_count, dir.format_summary),
+            &format!("d{di}"),
+            &format!("Files in {}", dir.path_suffix),
+            detail,
+        ));
+    }
+
+    sections.push(titled_section(
+        &format!("{} directories", cluster.directories.len()),
+        items,
+    ));
 
     sections.push(
         div()
@@ -2217,21 +2494,21 @@ pub fn render_directory_clusters(data: &serde_json::Value) -> Node {
                 html::button()
                     .class("mm-btn")
                     .attr("style", "border-color:var(--c-yellow)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .attr("onclick", "window.__mm_resolve_action('Stash')")
                     .text("Stash"),
             )
             .child(
                 html::button()
                     .class("mm-btn")
-                    .attr("style", "border-color:var(--c-blue)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .attr("style", "border-color:var(--c-magenta)")
+                    .attr("onclick", "window.__mm_resolve_action('MarkExpected')")
                     .text("Mark Expected"),
             )
             .child(
                 html::button()
                     .class("mm-btn")
                     .attr("style", "border-color:var(--c-white)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .attr("onclick", "window.__mm_resolve_action('Cancel')")
                     .text("Cancel"),
             )
             .into(),
@@ -2240,74 +2517,157 @@ pub fn render_directory_clusters(data: &serde_json::Value) -> Node {
     div().class("mm-resolution").children(sections).into()
 }
 
-// ============================================================================
-// Cluster-nav resolution views
-// ============================================================================
+/// Render the current group of a ManualReviewState.
+pub fn render_manual_review_group(title_prefix: &str, state: &ManualReviewState) -> Node {
+    let data = &state.data;
+    let inner = &data.inner;
+    let idx = data.current_group;
+    let total = inner.groups.len();
 
-/// Render tag canonicity resolution data (all clusters as expandable sections).
-pub fn render_tag_canonicity(data: &serde_json::Value) -> Node {
-    render_tag_canonicity_titled("Tag Canonicity", data)
-}
+    if total == 0 {
+        return span().class("mm-kv__val").text("No review groups").into();
+    }
 
-/// Render tag canonicity data with a custom title prefix.
-/// Used by both TagCanonicity and InconsistentAlbumArtist routes
-/// (same data shape, different heading).
-pub fn render_tag_canonicity_titled(title_prefix: &str, data: &serde_json::Value) -> Node {
-    let tag_name = data.get("tag_name").and_then(|v| v.as_str()).unwrap_or("?");
-    let clusters = data.get("clusters").and_then(|v| v.as_array());
+    let group = match inner.groups.get(idx) {
+        Some(g) => g,
+        None => return span().class("mm-kv__val").text("Group index out of bounds").into(),
+    };
 
-    let cluster_count = clusters.map_or(0, |c| c.len());
-    let mut sections = Vec::new();
+    let title = format!("{} \u{2014} {}", title_prefix, group.label);
+    let mut sections = vec![render_pagination_header(&title, idx + 1, total)];
+
+    let mut items = Vec::new();
+    for (fi, file) in group.files.iter().enumerate() {
+        let key = if file.context.is_empty() {
+            String::new()
+        } else {
+            file.corpus_path.clone()
+        };
+        let val = if file.context.is_empty() {
+            &file.corpus_path
+        } else {
+            &file.context
+        };
+
+        if let Some(ref meta) = file.meta {
+            let mut detail = Vec::new();
+            detail.push(
+                div()
+                    .class("mm-wizard__item")
+                    .text(format!("Format: {}", meta.file_type))
+                    .into(),
+            );
+            if let Some(dur) = meta.duration_ms {
+                let secs = dur / 1000;
+                detail.push(
+                    div()
+                        .class("mm-wizard__item")
+                        .text(format!("Duration: {}:{:02}", secs / 60, secs % 60))
+                        .into(),
+                );
+            }
+            if let Some(br) = meta.bitrate_kbps {
+                detail.push(
+                    div()
+                        .class("mm-wizard__item")
+                        .text(format!("Bitrate: {} kbps", br))
+                        .into(),
+                );
+            }
+            if let Some(sr) = meta.sample_rate {
+                detail.push(
+                    div()
+                        .class("mm-wizard__item")
+                        .text(format!("Sample rate: {} Hz", sr))
+                        .into(),
+                );
+            }
+            detail.push(
+                div()
+                    .class("mm-wizard__item")
+                    .text(format!(
+                        "Size: {:.1} MB{}",
+                        meta.file_size as f64 / 1_048_576.0,
+                        if meta.has_pictures { " \u{1f5bc}" } else { "" },
+                    ))
+                    .into(),
+            );
+            for (tag_name, tag_val) in &meta.tags {
+                detail.push(
+                    div()
+                        .class("mm-wizard__item mm-wizard__item--tag")
+                        .text(format!("{}: {}", tag_name, tag_val))
+                        .into(),
+                );
+            }
+            items.push(kv_wizard(&key, val, &format!("f{fi}"), &format!("Details \u{2014} {}", file.corpus_path), detail));
+        } else {
+            items.push(kv(&key, val));
+        }
+    }
+
+    sections.push(titled_section(
+        &format!("{} files", group.files.len()),
+        items,
+    ));
 
     sections.push(
-        h3().class("mm-section__title")
-            .text(format!("{} — {} ({} clusters)", title_prefix, tag_name, cluster_count))
+        div()
+            .class("mm-buttons")
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-yellow)")
+                    .attr("onclick", "window.__mm_resolve_action('Stash')")
+                    .text("Stash Selected"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-blue)")
+                    .attr("onclick", "window.__mm_resolve_action('MarkExpected')")
+                    .text("Mark Expected"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-white)")
+                    .attr("onclick", "window.__mm_resolve_action('Cancel')")
+                    .text("Cancel"),
+            )
             .into(),
     );
 
-    if let Some(clusters) = clusters {
-        for (idx, cluster) in clusters.iter().enumerate() {
-            let suggested = cluster.get("suggested_canonical")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            let confirmed = cluster.get("confirmed_canonical")
-                .and_then(|v| v.as_str());
+    div().class("mm-resolution").children(sections).into()
+}
 
-            let mut variant_items = Vec::new();
-            if let Some(variants) = cluster.get("variants").and_then(|v| v.as_array()) {
-                for variant in variants {
-                    let value = variant.get("value").and_then(|v| v.as_str()).unwrap_or("?");
-                    let files = variant.get("files").and_then(|v| v.as_array());
-                    let file_count = files.map_or(0, |f| f.len());
-                    let file_names: Vec<&str> = files
-                        .map(|f| {
-                            f.iter()
-                                .filter_map(|file| file.get("display_name").and_then(|v| v.as_str()))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let preview = if file_names.len() <= 3 {
-                        file_names.join(", ")
-                    } else {
-                        format!("{}, ... +{}", file_names[..3].join(", "), file_names.len() - 3)
-                    };
-                    variant_items.push(
-                        kv(
-                            &format!("\"{value}\" ({file_count} files)"),
-                            &preview,
-                        ),
-                    );
-                }
-            }
+/// Render the current group of a MissingAlbumState.
+pub fn render_missing_album_group(state: &MissingAlbumState) -> Node {
+    let data = &state.data;
+    let idx = data.current_group;
+    let total = data.signals.len();
 
-            let heading = if let Some(canonical) = confirmed {
-                format!("Cluster {} — canonical: \"{}\"", idx + 1, canonical)
-            } else {
-                format!("Cluster {} — suggested: \"{}\"", idx + 1, suggested)
-            };
-            sections.push(titled_section(&heading, variant_items));
-        }
+    if total == 0 {
+        return span().class("mm-kv__val").text("No missing album groups").into();
     }
+
+    let signal = match data.signals.get(idx) {
+        Some(s) => s,
+        None => return span().class("mm-kv__val").text("Signal index out of bounds").into(),
+    };
+
+    let title = format!("Missing Album \u{2014} {}", signal.data.artist);
+    let mut sections = vec![render_pagination_header(&title, idx + 1, total)];
+
+    let mut items = Vec::new();
+    for track in &signal.data.tracks {
+        items.push(kv(&track.title, &track.path));
+    }
+
+    sections.push(titled_section(
+        &format!("{} tracks", signal.data.tracks.len()),
+        items,
+    ));
 
     sections.push(
         div()
@@ -2316,14 +2676,28 @@ pub fn render_tag_canonicity_titled(title_prefix: &str, data: &serde_json::Value
                 html::button()
                     .class("mm-btn")
                     .attr("style", "border-color:var(--c-green)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
-                    .text("Accept Suggestions"),
+                    .attr("onclick", "window.__mm_resolve_action('PerTrackTitle')")
+                    .text("Per-Track Title"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-cyan)")
+                    .attr("onclick", "window.__mm_resolve_action('AllSingles')")
+                    .text("All Singles"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-yellow)")
+                    .attr("onclick", "window.__mm_resolve_action('Suppress')")
+                    .text("Suppress"),
             )
             .child(
                 html::button()
                     .class("mm-btn")
                     .attr("style", "border-color:var(--c-white)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .attr("onclick", "window.__mm_resolve_action('Cancel')")
                     .text("Cancel"),
             )
             .into(),
@@ -2332,44 +2706,39 @@ pub fn render_tag_canonicity_titled(title_prefix: &str, data: &serde_json::Value
     div().class("mm-resolution").children(sections).into()
 }
 
-/// Render compound split resolution data (all groups as expandable sections).
-pub fn render_compound_split(data: &serde_json::Value) -> Node {
-    let groups = data.get("groups").and_then(|v| v.as_array());
-    let group_count = groups.map_or(0, |g| g.len());
+/// Render the current group of a DiscExtractionState.
+pub fn render_disc_extraction_group(state: &DiscExtractionState) -> Node {
+    let data = &state.data;
+    let inner = &data.inner;
+    let idx = data.current_group;
+    let total = inner.groups.len();
 
-    let mut sections = Vec::new();
-    sections.push(
-        h3().class("mm-section__title")
-            .text(format!("Compound Split ({} groups)", group_count))
-            .into(),
-    );
-
-    if let Some(groups) = groups {
-        for (idx, group) in groups.iter().enumerate() {
-            let tag_name = group.get("tag_name").and_then(|v| v.as_str()).unwrap_or("?");
-            let compound = group.get("compound_value").and_then(|v| v.as_str()).unwrap_or("?");
-            let split_parts: Vec<&str> = group.get("split_parts")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-                .unwrap_or_default();
-
-            let mut items = Vec::new();
-            items.push(kv("Compound value", compound));
-            items.push(kv("Split into", &split_parts.join(", ")));
-
-            if let Some(files) = group.get("files").and_then(|v| v.as_array()) {
-                for file in files {
-                    let name = file.get("display_name").and_then(|v| v.as_str()).unwrap_or("?");
-                    items.push(kv("", name));
-                }
-            }
-
-            sections.push(titled_section(
-                &format!("Group {} — {} \"{}\"", idx + 1, tag_name, compound),
-                items,
-            ));
-        }
+    if total == 0 {
+        return span().class("mm-kv__val").text("No disc extraction groups").into();
     }
+
+    let group = match inner.groups.get(idx) {
+        Some(g) => g,
+        None => return span().class("mm-kv__val").text("Group index out of bounds").into(),
+    };
+
+    let title = format!("Disc Extraction \u{2014} {}", group.description);
+    let mut sections = vec![render_pagination_header(&title, idx + 1, total)];
+
+    let mut items = Vec::new();
+    items.push(kv("Disc value", &group.disc_value));
+
+    for file in &group.files {
+        items.push(kv(
+            &file.path,
+            &format!("{} \u{2192} {}", file.original_value, file.cleaned_value),
+        ));
+    }
+
+    sections.push(titled_section(
+        &format!("{} files", group.files.len()),
+        items,
+    ));
 
     sections.push(
         div()
@@ -2377,191 +2746,22 @@ pub fn render_compound_split(data: &serde_json::Value) -> Node {
             .child(
                 html::button()
                     .class("mm-btn")
-                    .attr("style", "border-color:var(--c-green)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
-                    .text("Split All"),
+                    .attr("style", "border-color:var(--c-cyan)")
+                    .attr("onclick", "window.__mm_resolve_action('Apply')")
+                    .text("Apply"),
+            )
+            .child(
+                html::button()
+                    .class("mm-btn")
+                    .attr("style", "border-color:var(--c-yellow)")
+                    .attr("onclick", "window.__mm_resolve_action('Skip')")
+                    .text("Skip"),
             )
             .child(
                 html::button()
                     .class("mm-btn")
                     .attr("style", "border-color:var(--c-white)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
-                    .text("Cancel"),
-            )
-            .into(),
-    );
-
-    div().class("mm-resolution").children(sections).into()
-}
-
-/// Render missing album (single signals) resolution data.
-pub fn render_missing_album(data: &serde_json::Value) -> Node {
-    let signals = data.as_array();
-    let signal_count = signals.map_or(0, |s| s.len());
-
-    let mut sections = Vec::new();
-    sections.push(
-        h3().class("mm-section__title")
-            .text(format!("Missing Album ({} groups)", signal_count))
-            .into(),
-    );
-
-    if let Some(signals) = signals {
-        for (idx, signal) in signals.iter().enumerate() {
-            let key = signal.get("key").and_then(|v| v.as_str()).unwrap_or("?");
-            let signal_data = signal.get("data");
-            let artist = signal_data
-                .and_then(|d| d.get("artist"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-
-            let mut items = Vec::new();
-            if let Some(tracks) = signal_data.and_then(|d| d.get("tracks")).and_then(|v| v.as_array()) {
-                for track in tracks {
-                    let title = track.get("title").and_then(|v| v.as_str()).unwrap_or("?");
-                    let path = track.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-                    items.push(kv(title, path));
-                }
-            }
-
-            sections.push(titled_section(
-                &format!("Group {} — {} ({})", idx + 1, artist, key),
-                items,
-            ));
-        }
-    }
-
-    sections.push(
-        div()
-            .class("mm-buttons")
-            .child(
-                html::button()
-                    .class("mm-btn")
-                    .attr("style", "border-color:var(--c-green)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
-                    .text("Set Album"),
-            )
-            .child(
-                html::button()
-                    .class("mm-btn")
-                    .attr("style", "border-color:var(--c-white)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
-                    .text("Cancel"),
-            )
-            .into(),
-    );
-
-    div().class("mm-resolution").children(sections).into()
-}
-
-/// Render disc extraction resolution data.
-pub fn render_disc_extraction(data: &serde_json::Value) -> Node {
-    let groups = data.get("groups").and_then(|v| v.as_array());
-    let group_count = groups.map_or(0, |g| g.len());
-
-    let mut sections = Vec::new();
-    sections.push(
-        h3().class("mm-section__title")
-            .text(format!("Disc Extraction ({} groups)", group_count))
-            .into(),
-    );
-
-    if let Some(groups) = groups {
-        for (idx, group) in groups.iter().enumerate() {
-            let description = group.get("description").and_then(|v| v.as_str()).unwrap_or("?");
-            let disc_value = group.get("disc_value").and_then(|v| v.as_str()).unwrap_or("?");
-
-            let mut items = Vec::new();
-            items.push(kv("Disc value", disc_value));
-
-            if let Some(files) = group.get("files").and_then(|v| v.as_array()) {
-                for file in files {
-                    let path = file.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-                    let original = file.get("original_value").and_then(|v| v.as_str()).unwrap_or("?");
-                    let cleaned = file.get("cleaned_value").and_then(|v| v.as_str()).unwrap_or("?");
-                    items.push(kv(path, &format!("{original} \u{2192} {cleaned}")));
-                }
-            }
-
-            sections.push(titled_section(
-                &format!("Group {} — {}", idx + 1, description),
-                items,
-            ));
-        }
-    }
-
-    sections.push(
-        div()
-            .class("mm-buttons")
-            .child(
-                html::button()
-                    .class("mm-btn")
-                    .attr("style", "border-color:var(--c-green)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
-                    .text("Extract All"),
-            )
-            .child(
-                html::button()
-                    .class("mm-btn")
-                    .attr("style", "border-color:var(--c-white)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
-                    .text("Cancel"),
-            )
-            .into(),
-    );
-
-    div().class("mm-resolution").children(sections).into()
-}
-
-// ============================================================================
-// Group-review resolution views
-// ============================================================================
-
-/// Render manual review resolution data (redundant duplicates, deploy conflicts,
-/// metadata duplicates, same recording).
-pub fn render_manual_review(title: &str, data: &serde_json::Value) -> Node {
-    let groups = data.get("groups").and_then(|v| v.as_array());
-    let group_count = groups.map_or(0, |g| g.len());
-
-    let mut sections = Vec::new();
-    sections.push(
-        h3().class("mm-section__title")
-            .text(format!("{title} ({group_count} groups)"))
-            .into(),
-    );
-
-    if let Some(groups) = groups {
-        for (idx, group) in groups.iter().enumerate() {
-            let label = group.get("label").and_then(|v| v.as_str()).unwrap_or("?");
-
-            let mut items = Vec::new();
-            if let Some(files) = group.get("files").and_then(|v| v.as_array()) {
-                for file in files {
-                    let path = file.get("corpus_path").and_then(|v| v.as_str()).unwrap_or("?");
-                    let context = file.get("context").and_then(|v| v.as_str()).unwrap_or("");
-                    if context.is_empty() {
-                        items.push(kv("", path));
-                    } else {
-                        items.push(kv(path, context));
-                    }
-                }
-            }
-
-            sections.push(titled_section(
-                &format!("Group {} — {}", idx + 1, label),
-                items,
-            ));
-        }
-    }
-
-    sections.push(
-        div()
-            .class("mm-buttons")
-            .child(
-                html::button()
-                    .class("mm-btn")
-                    .attr("style", "border-color:var(--c-white)")
-                    .attr("onclick", "window.__mm_resolve_cancel()")
+                    .attr("onclick", "window.__mm_resolve_action('Cancel')")
                     .text("Cancel"),
             )
             .into(),

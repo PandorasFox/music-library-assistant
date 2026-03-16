@@ -567,13 +567,6 @@ pub(crate) fn parse_kdl_config(content: &str) -> Result<Config> {
                 if let Some(children) = node.children() {
                     for child in children.nodes() {
                         match child.name().value() {
-                            Opinions::KDL_LOSSY_SHIT => {
-                                if let Some(entry) = child.entries().first() {
-                                    if let Some(val) = entry.value().as_bool() {
-                                        config.opinions.lossy_shit_formats_to_flac = val;
-                                    }
-                                }
-                            }
                             Opinions::KDL_BLOCK_QUALITY_RESOLUTION => {
                                 parse_quality_resolution_opinions(
                                     child,
@@ -772,7 +765,6 @@ root "/archive"
 
         let config = t!(parse_kdl_config(kdl));
 
-        assert!(!config.opinions.lossy_shit_formats_to_flac);
         assert_eq!(
             config
                 .opinions
@@ -781,31 +773,6 @@ root "/archive"
             5.0
         );
         assert!(!config.opinions.canonicalization.strip_album_format_suffixes);
-    }
-
-    #[test]
-    fn test_lossy_shit_formats_to_flac_opinion() {
-        let kdl = r#"
-root "/archive"
-
-opinions {
-    lossy-shit-formats-to-flac true
-}
-"#;
-
-        let config = t!(parse_kdl_config(kdl));
-        assert!(config.opinions.lossy_shit_formats_to_flac);
-
-        // Explicit false
-        let kdl_false = r#"
-root "/archive"
-
-opinions {
-    lossy-shit-formats-to-flac false
-}
-"#;
-        let config_false = t!(parse_kdl_config(kdl_false));
-        assert!(!config_false.opinions.lossy_shit_formats_to_flac);
     }
 
     #[test]

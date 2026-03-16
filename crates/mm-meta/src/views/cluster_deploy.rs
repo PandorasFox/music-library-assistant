@@ -64,156 +64,64 @@ impl DirectoryClusterModalData {
 }
 
 // ============================================================================
-// Shit Format Modal Types
+// Lossless Remux Modal Types
 // ============================================================================
 
-/// Default Opus bitrate in kbps.
-const DEFAULT_OPUS_BITRATE: u32 = 128;
-
-/// Minimum Opus bitrate.
-const MIN_OPUS_BITRATE: u32 = 32;
-
-/// Maximum Opus bitrate.
-const MAX_OPUS_BITRATE: u32 = 512;
-
-/// Bitrate adjustment step.
-const BITRATE_STEP: u32 = 8;
-
-/// Lossless formats that can be remuxed to FLAC without quality loss.
-const LOSSLESS_FORMATS: &[&str] = &["wav", "aiff", "aif", "ape", "wv"];
-
-/// Lossy formats that need transcoding to Opus.
-const LOSSY_FORMATS: &[&str] = &["mp3", "m4a", "aac", "wma"];
-
-/// A file with ShitFormat signal (non-Vorbis container).
+/// A lossless non-Vorbis file that can be remuxed to FLAC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShitFormatEntry {
+pub struct RemuxCandidateEntry {
     /// Corpus path (relative)
     pub corpus_path: String,
     /// Inode of the file
     pub inode: i64,
-    /// File type (mp3, m4a, etc.)
+    /// File type (wav, aiff, ape, wv)
     pub file_type: String,
 }
 
-impl ShitFormatEntry {
-    /// Check if this file is a lossless format.
-    pub fn is_lossless(&self) -> bool {
-        LOSSLESS_FORMATS.contains(&self.file_type.to_lowercase().as_str())
-    }
-
-    /// Check if this file is a lossy format.
-    pub fn is_lossy(&self) -> bool {
-        LOSSY_FORMATS.contains(&self.file_type.to_lowercase().as_str())
-    }
-}
-
-/// Cached data for the shit format resolution modal.
+/// Cached data for the lossless remux resolution modal.
 ///
 /// Loaded once when the modal opens. All renders use this cached data.
-/// Separates files into lossless (remux) and lossy (transcode) categories.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShitFormatModalData {
-    /// Lossless files (WAV, AIFF, APE, WV) - remux to FLAC
-    pub lossless_files: Vec<ShitFormatEntry>,
-    /// Lossy files (MP3, M4A, AAC, WMA) - transcode to Opus or capture to FLAC
-    pub lossy_files: Vec<ShitFormatEntry>,
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LosslessRemuxModalData {
+    /// Lossless files (WAV, AIFF, APE, WV) to remux to FLAC
+    pub files: Vec<RemuxCandidateEntry>,
     /// File counts by type (for display breakdown)
     pub file_counts: HashMap<String, i64>,
-    /// Opus bitrate in kbps (user-adjustable, for lossy only)
-    pub opus_bitrate_kbps: u32,
-    /// When true, lossy files are captured to FLAC instead of transcoded to Opus
-    pub lossy_to_flac: bool,
 }
 
-impl Default for ShitFormatModalData {
-    fn default() -> Self {
-        Self {
-            lossless_files: Vec::new(),
-            lossy_files: Vec::new(),
-            file_counts: HashMap::new(),
-            opus_bitrate_kbps: DEFAULT_OPUS_BITRATE,
-            lossy_to_flac: false,
-        }
-    }
-}
-
-impl ShitFormatModalData {
+impl LosslessRemuxModalData {
     /// Construct from pre-loaded data (used by modal_loaders).
     pub fn new_from_loaded(
-        lossless_files: Vec<ShitFormatEntry>,
-        lossy_files: Vec<ShitFormatEntry>,
+        files: Vec<RemuxCandidateEntry>,
         file_counts: HashMap<String, i64>,
     ) -> Self {
-        Self {
-            lossless_files,
-            lossy_files,
-            file_counts,
-            opus_bitrate_kbps: DEFAULT_OPUS_BITRATE,
-            lossy_to_flac: false,
-        }
+        Self { files, file_counts }
     }
 
-    /// Total number of shit format files.
+    /// Total number of remux candidate files.
     pub fn total_count(&self) -> usize {
-        self.lossless_files.len() + self.lossy_files.len()
+        self.files.len()
     }
 
-    /// Check if there are lossless files.
-    pub fn has_lossless(&self) -> bool {
-        !self.lossless_files.is_empty()
+    /// Check if there are any files to remux.
+    pub fn has_files(&self) -> bool {
+        !self.files.is_empty()
     }
 
-    /// Check if there are lossy files.
-    pub fn has_lossy(&self) -> bool {
-        !self.lossy_files.is_empty()
-    }
-
-    /// Get lossless file type breakdown as sorted vec.
-    pub fn lossless_breakdown(&self) -> Vec<(&str, i64)> {
+    /// Get file type breakdown as sorted vec.
+    pub fn format_breakdown(&self) -> Vec<(&str, i64)> {
         let mut breakdown: Vec<(&str, i64)> = self
             .file_counts
             .iter()
-            .filter(|(k, _)| LOSSLESS_FORMATS.contains(&k.to_lowercase().as_str()))
             .map(|(k, v)| (k.as_str(), *v))
             .collect();
         breakdown.sort_by(|a, b| b.1.cmp(&a.1));
         breakdown
     }
 
-    /// Get lossy file type breakdown as sorted vec.
-    pub fn lossy_breakdown(&self) -> Vec<(&str, i64)> {
-        let mut breakdown: Vec<(&str, i64)> = self
-            .file_counts
-            .iter()
-            .filter(|(k, _)| LOSSY_FORMATS.contains(&k.to_lowercase().as_str()))
-            .map(|(k, v)| (k.as_str(), *v))
-            .collect();
-        breakdown.sort_by(|a, b| b.1.cmp(&a.1));
-        breakdown
-    }
-
-    /// Adjust bitrate (within bounds).
-    pub fn adjust_bitrate(&mut self, delta: i32) {
-        let new_bitrate = (self.opus_bitrate_kbps as i32 + delta)
-            .max(MIN_OPUS_BITRATE as i32)
-            .min(MAX_OPUS_BITRATE as i32);
-        self.opus_bitrate_kbps = new_bitrate as u32;
-    }
-
-    /// Decrease bitrate by one step.
-    pub fn decrease_bitrate(&mut self) {
-        self.adjust_bitrate(-(BITRATE_STEP as i32));
-    }
-
-    /// Increase bitrate by one step.
-    pub fn increase_bitrate(&mut self) {
-        self.adjust_bitrate(BITRATE_STEP as i32);
-    }
-
-    /// Generate Transcode mutations for lossless files only (remux to FLAC).
-    pub fn lossless_mutations(&self, resolver: &PathResolver) -> Vec<mutations::Mutation> {
-        self.lossless_files
+    /// Generate Transcode mutations for all files (remux to FLAC).
+    pub fn mutations(&self, resolver: &PathResolver) -> Vec<mutations::Mutation> {
+        self.files
             .iter()
             .map(|file| {
                 let abs_path = resolver.resolve(std::path::Path::new(&file.corpus_path));
@@ -226,41 +134,6 @@ impl ShitFormatModalData {
                 })
             })
             .collect()
-    }
-
-    /// Generate Transcode mutations for lossy files only.
-    ///
-    /// When `lossy_to_flac` is true, captures to FLAC (lossless waveform capture).
-    /// Otherwise transcodes to Opus at the configured bitrate.
-    pub fn lossy_mutations(&self, resolver: &PathResolver) -> Vec<mutations::Mutation> {
-        let target = if self.lossy_to_flac {
-            TranscodeTarget::FlacLossyCapture
-        } else {
-            TranscodeTarget::Opus {
-                bitrate_kbps: self.opus_bitrate_kbps,
-            }
-        };
-
-        self.lossy_files
-            .iter()
-            .map(|file| {
-                let abs_path = resolver.resolve(std::path::Path::new(&file.corpus_path));
-
-                mutations::Mutation::Transcode(TranscodeMutation {
-                    inode: file.inode,
-                    source_path: abs_path,
-                    target_format: target,
-                    stash_name: "originals".to_string(),
-                })
-            })
-            .collect()
-    }
-
-    /// Generate Transcode mutations for all files.
-    pub fn all_mutations(&self, resolver: &PathResolver) -> Vec<mutations::Mutation> {
-        let mut mutations = self.lossless_mutations(resolver);
-        mutations.extend(self.lossy_mutations(resolver));
-        mutations
     }
 }
 

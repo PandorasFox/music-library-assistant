@@ -164,9 +164,9 @@ pub struct GetDirectoryClusterData;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetReleaseOverlapData;
 
-/// Shit format file data: non-Vorbis containers needing remux/transcode.
+/// Lossless remux candidate data: non-Vorbis lossless files needing remux to FLAC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetShitFormatData;
+pub struct GetLosslessRemuxData;
 
 /// Inbox corpus match data with configurable bitrate fuzz tolerance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -475,7 +475,7 @@ domain_query_protocol! {
     GetSubparDuplicateData("subpar-duplicate-data") => crate::views::health_modals::SubparDuplicateModalData,
     GetDirectoryClusterData("directory-cluster-data") => crate::views::cluster_deploy::DirectoryClusterModalData,
     GetReleaseOverlapData("release-overlap-data") => crate::views::cluster_deploy::DirectoryClusterModalData,
-    GetShitFormatData("shit-format-data") => crate::views::cluster_deploy::ShitFormatModalData,
+    GetLosslessRemuxData("lossless-remux-data") => crate::views::cluster_deploy::LosslessRemuxModalData,
     GetInboxCorpusMatchData("inbox-corpus-match-data") => crate::views::review_match::InboxCorpusMatchModalData,
     GetDeployData("deploy-data") => crate::views::cluster_deploy::DeployModalData,
     GetManualReviewData("manual-review-data") => crate::views::review_match::ManualReviewData,

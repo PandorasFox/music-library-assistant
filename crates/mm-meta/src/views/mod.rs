@@ -45,8 +45,8 @@ pub struct CorpusFilesBucket {
     pub files_relocated: usize,
     /// Files that are corrupt (unreadable tags or waveform decode failure)
     pub corrupt_files: usize,
-    /// Files in non-Vorbis container formats (MP3, M4A, AAC, WMA, etc.)
-    pub shit_format_files: usize,
+    /// Lossless non-Vorbis files (WAV, AIFF, APE, WV) — remux candidates
+    pub lossless_remux_candidates: usize,
     /// Corpus image files (sidecar art, etc.) with entries in image_info
     pub images_in_corpus: usize,
     /// Filetype breakdown for files_in_corpus

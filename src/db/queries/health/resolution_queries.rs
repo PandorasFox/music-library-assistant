@@ -25,15 +25,15 @@ impl Database {
         self.query_signal_paths("signal_corrupt_file")
     }
 
-    /// Get all ShitFormat signals with their inodes.
+    /// Get all LosslessRemux signals with their inodes.
     ///
-    /// Returns (inode, signal_path, file_type) for each shit_format signal.
+    /// Returns (inode, signal_path, file_type) for each lossless_remux signal.
     /// The signal_path may be stale if files were reorganized after signal emission;
     /// callers should look up the current path via inode from the files table.
-    pub fn get_shit_format_files(&self) -> Result<Vec<(i64, String, String)>> {
+    pub fn get_lossless_remux_files(&self) -> Result<Vec<(i64, String, String)>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT inode, path, file_type FROM signal_shit_format ORDER BY path")?;
+            .prepare("SELECT inode, path, file_type FROM signal_lossless_remux ORDER BY path")?;
 
         let results = stmt
             .query_map(params![], |row| {
@@ -48,12 +48,12 @@ impl Database {
         Ok(results)
     }
 
-    /// Get counts of shit format files grouped by file type.
+    /// Get counts of lossless remux files grouped by file type.
     ///
     /// Returns (file_type, count) pairs sorted by count descending.
-    pub fn get_shit_format_counts_by_type(&self) -> Result<Vec<(String, i64)>> {
+    pub fn get_lossless_remux_counts_by_type(&self) -> Result<Vec<(String, i64)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT file_type, COUNT(*) as cnt FROM signal_shit_format GROUP BY file_type ORDER BY cnt DESC"
+            "SELECT file_type, COUNT(*) as cnt FROM signal_lossless_remux GROUP BY file_type ORDER BY cnt DESC"
         )?;
 
         let results = stmt

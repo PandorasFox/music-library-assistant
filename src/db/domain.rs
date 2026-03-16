@@ -123,7 +123,7 @@ use crate::meta::views::{
 
 use crate::db::modal_loaders;
 use mm_meta::views::cluster_deploy::{
-    DeployModalData, DirectoryClusterModalData, ShitFormatModalData,
+    DeployModalData, DirectoryClusterModalData, LosslessRemuxModalData,
 };
 use mm_meta::views::health_modals::{
     CorruptFileModalData, MissingDirectoryModalData, MissingFileModalData,
@@ -353,8 +353,8 @@ impl_domain_query! {
 }
 
 impl_domain_query! {
-    GetShitFormatData => ShitFormatModalData, |db| {
-        modal_loaders::load_shit_format_data(db).ok().unwrap_or_default()
+    GetLosslessRemuxData => LosslessRemuxModalData, |db| {
+        modal_loaders::load_lossless_remux_data(db).ok().unwrap_or_default()
     }
 }
 
@@ -1009,7 +1009,7 @@ dispatch_domain_query_impl! {
     GetSubparDuplicateData,
     GetDirectoryClusterData,
     GetReleaseOverlapData,
-    GetShitFormatData,
+    GetLosslessRemuxData,
     GetInboxCorpusMatchData,
     GetDeployData,
     GetManualReviewData,
@@ -1232,12 +1232,11 @@ mod tests {
     }
 
     #[test]
-    fn get_shit_format_data_empty_db() {
+    fn get_lossless_remux_data_empty_db() {
         let db = test_db();
         let read_db = ReadOnlyDb::new(&db);
-        let result = GetShitFormatData.execute(&read_db);
-        assert!(result.lossless_files.is_empty());
-        assert!(result.lossy_files.is_empty());
+        let result = GetLosslessRemuxData.execute(&read_db);
+        assert!(result.files.is_empty());
     }
 
     #[test]
@@ -1367,7 +1366,7 @@ mod tests {
         t!(serde_json::to_string(&GetSubparDuplicateData.execute(&read_db)));
         t!(serde_json::to_string(&GetDirectoryClusterData.execute(&read_db)));
         t!(serde_json::to_string(&GetReleaseOverlapData.execute(&read_db)));
-        t!(serde_json::to_string(&GetShitFormatData.execute(&read_db)));
+        t!(serde_json::to_string(&GetLosslessRemuxData.execute(&read_db)));
         t!(serde_json::to_string(&GetInboxCorpusMatchData { bitrate_fuzz_percent: 5.0 }.execute(&read_db)));
         t!(serde_json::to_string(&GetManualReviewData {
             kind: mm_meta::views::review_match::ReviewKind::RedundantDuplicate,

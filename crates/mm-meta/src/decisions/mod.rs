@@ -43,7 +43,7 @@ pub enum DecisionKey {
     MissingFile,
     MissingDirectory,
     CorruptFile,
-    ShitFormat,
+    LosslessRemux,
     SubparDuplicate,
     DirectoryCluster { cluster_index: usize },
     InboxCorpusMatch,
@@ -68,7 +68,7 @@ impl DecisionKey {
             DecisionKey::MissingFile => Some(DecisionKeyKind::MissingFile),
             DecisionKey::MissingDirectory => Some(DecisionKeyKind::MissingDirectory),
             DecisionKey::CorruptFile => Some(DecisionKeyKind::CorruptFile),
-            DecisionKey::ShitFormat => Some(DecisionKeyKind::ShitFormat),
+            DecisionKey::LosslessRemux => Some(DecisionKeyKind::LosslessRemux),
             DecisionKey::SubparDuplicate => Some(DecisionKeyKind::SubparDuplicate),
             DecisionKey::InboxCorpusMatch => Some(DecisionKeyKind::InboxCorpusMatch),
             DecisionKey::IntakeIndex => Some(DecisionKeyKind::IntakeIndex),
@@ -107,8 +107,8 @@ impl DecisionKey {
             DecisionKey::MissingDirectory => &[DropDirectoryFromIndex],
             // Corrupt file → stash from zone + drop from index
             DecisionKey::CorruptFile => &[StashFromZone, DropFromIndex],
-            // Shit format → transcode
-            DecisionKey::ShitFormat => &[Transcode],
+            // Lossless remux → transcode to FLAC
+            DecisionKey::LosslessRemux => &[Transcode],
             // Subpar duplicate → stash from zone + drop from index
             DecisionKey::SubparDuplicate => &[StashFromZone, DropFromIndex],
             // Directory cluster → tag ops (organize directory structure)
@@ -166,7 +166,7 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::MissingFile => write!(f, "Missing File"),
             DecisionKey::MissingDirectory => write!(f, "Missing Directory"),
             DecisionKey::CorruptFile => write!(f, "Corrupt File"),
-            DecisionKey::ShitFormat => write!(f, "Format Conversion"),
+            DecisionKey::LosslessRemux => write!(f, "Lossless Remux"),
             DecisionKey::SubparDuplicate => write!(f, "Subpar Duplicate"),
             DecisionKey::DirectoryCluster { cluster_index } => {
                 write!(f, "Directory Cluster:{}", cluster_index)
@@ -206,7 +206,7 @@ pub enum DecisionKeyKind {
     MissingFile,
     MissingDirectory,
     CorruptFile,
-    ShitFormat,
+    LosslessRemux,
     SubparDuplicate,
     InboxCorpusMatch,
     IntakeIndex,

@@ -1,7 +1,7 @@
 //! Native audio transcoding.
 //!
-//! Decodes audio via symphonia and re-encodes to FLAC (via flac-codec, pure Rust) or
-//! Opus (via audiopus + ogg + rubato). No external subprocess required.
+//! Decodes audio via symphonia and re-encodes to FLAC (via flac-codec, pure Rust).
+//! No external subprocess required.
 
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -46,11 +46,8 @@ pub fn transcode(
 
     // Decode source with symphonia and encode to target
     match target {
-        TranscodeTarget::Flac | TranscodeTarget::FlacLossyCapture => {
+        TranscodeTarget::Flac => {
             encode_flac(source, dest)?;
-        }
-        TranscodeTarget::Opus { bitrate_kbps } => {
-            encode_opus(source, dest, bitrate_kbps)?;
         }
     }
 
@@ -141,231 +138,6 @@ fn encode_flac(source: &Path, dest: &Path) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("FLAC finalization failed: {}", e))?;
 
     Ok(())
-}
-
-// ============================================================================
-// Opus encoding (via audiopus + ogg + rubato)
-// ============================================================================
-
-fn encode_opus(source: &Path, dest: &Path, bitrate_kbps: u32) -> Result<()> {
-    use audiopus::coder::Encoder as OpusEncoder;
-    use audiopus::{Application, Bitrate, Channels as OpusChannels, SampleRate as OpusSampleRate};
-    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
-    use std::io::BufWriter;
-
-    const FRAME_SIZE: usize = 960; // 20ms at 48kHz
-
-    let crate::corpus::codecs::AudioSource {
-        mut format,
-        mut decoder,
-        sample_rate,
-        channels,
-        ..
-    } = crate::corpus::codecs::open_audio_source(source)?;
-
-    if channels > 2 {
-        return Err(anyhow::anyhow!(
-            "Opus encoding supports mono/stereo only, got {} channels",
-            channels
-        ));
-    }
-
-    // Collect all decoded samples
-    let mut all_samples: Vec<i16> = Vec::new();
-    while let Ok(packet) = format.next_packet() {
-        match decoder.decode(&packet) {
-            Ok(decoded) => {
-                let samples = convert_audio_buffer_to_i16(decoded, channels)?;
-                all_samples.extend_from_slice(&samples);
-            }
-            Err(symphonia::core::errors::Error::DecodeError(_)) => continue,
-            Err(e) => return Err(anyhow::anyhow!("Decode error: {}", e)),
-        }
-    }
-
-    if all_samples.is_empty() {
-        return Err(anyhow::anyhow!("No audio frames decoded from source"));
-    }
-
-    // Resample to 48kHz if needed (Opus requires specific sample rates)
-    let samples_48k = if sample_rate == 48000 {
-        all_samples
-    } else {
-        resample_to_48k(&all_samples, sample_rate, channels)?
-    };
-
-    // Set up Opus encoder
-    let opus_channels = if channels == 1 {
-        OpusChannels::Mono
-    } else {
-        OpusChannels::Stereo
-    };
-
-    let mut encoder = OpusEncoder::new(OpusSampleRate::Hz48000, opus_channels, Application::Audio)
-        .map_err(|e| anyhow::anyhow!("Failed to create Opus encoder: {:?}", e))?;
-
-    encoder
-        .set_bitrate(Bitrate::BitsPerSecond(bitrate_kbps as i32 * 1000))
-        .map_err(|e| anyhow::anyhow!("Failed to set Opus bitrate: {:?}", e))?;
-
-    let pre_skip = encoder
-        .lookahead()
-        .map_err(|e| anyhow::anyhow!("Failed to get Opus lookahead: {:?}", e))?;
-
-    // Set up OGG muxer
-    let file = File::create(dest)
-        .with_context(|| format!("Failed to create output file: {}", dest.display()))?;
-    let mut ogg = PacketWriter::new(BufWriter::new(file));
-    let serial: u32 = rand::random();
-
-    // OpusHead (ID header)
-    let opus_head = build_opus_head(channels as u8, pre_skip as u16, sample_rate);
-    ogg.write_packet(opus_head, serial, PacketWriteEndInfo::EndPage, 0)
-        .context("Failed to write OpusHead")?;
-
-    // OpusTags (comment header — lofty overwrites this in copy_tags)
-    let opus_tags = build_opus_tags();
-    ogg.write_packet(opus_tags, serial, PacketWriteEndInfo::EndPage, 0)
-        .context("Failed to write OpusTags")?;
-
-    // Encode audio in 960-sample frames
-    let samples_per_frame = FRAME_SIZE * channels;
-    let total_interleaved = samples_48k.len();
-    let total_frames_count = total_interleaved.div_ceil(samples_per_frame);
-
-    let mut packet_buf = vec![0u8; 4000];
-    let mut granule_pos: u64 = pre_skip as u64;
-
-    for i in 0..total_frames_count {
-        let start = i * samples_per_frame;
-        let end = std::cmp::min(start + samples_per_frame, total_interleaved);
-
-        // Pad last frame with silence if needed
-        let frame: std::borrow::Cow<[i16]> = if end - start < samples_per_frame {
-            let mut padded = vec![0i16; samples_per_frame];
-            padded[..end - start].copy_from_slice(&samples_48k[start..end]);
-            std::borrow::Cow::Owned(padded)
-        } else {
-            std::borrow::Cow::Borrowed(&samples_48k[start..end])
-        };
-
-        let encoded_len = encoder
-            .encode(&frame, &mut packet_buf)
-            .map_err(|e| anyhow::anyhow!("Opus encode failed: {:?}", e))?;
-
-        granule_pos += FRAME_SIZE as u64;
-
-        let is_last = i == total_frames_count - 1;
-        let end_info = if is_last {
-            PacketWriteEndInfo::EndStream
-        } else {
-            PacketWriteEndInfo::NormalPacket
-        };
-
-        ogg.write_packet(
-            packet_buf[..encoded_len].to_vec(),
-            serial,
-            end_info,
-            granule_pos,
-        )
-        .context("Failed to write Opus audio packet")?;
-    }
-
-    Ok(())
-}
-
-/// Build the 19-byte OpusHead identification header (RFC 7845 §5.1).
-fn build_opus_head(channels: u8, pre_skip: u16, input_sample_rate: u32) -> Vec<u8> {
-    let mut head = Vec::with_capacity(19);
-    head.extend_from_slice(b"OpusHead");
-    head.push(1); // version
-    head.push(channels);
-    head.extend_from_slice(&pre_skip.to_le_bytes());
-    head.extend_from_slice(&input_sample_rate.to_le_bytes());
-    head.extend_from_slice(&0u16.to_le_bytes()); // output gain
-    head.push(0); // mapping family 0 (mono/stereo)
-    head
-}
-
-/// Build a minimal OpusTags comment header (RFC 7845 §5.2).
-fn build_opus_tags() -> Vec<u8> {
-    let vendor = b"mm-native";
-    let mut tags = Vec::with_capacity(8 + 4 + vendor.len() + 4);
-    tags.extend_from_slice(b"OpusTags");
-    tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
-    tags.extend_from_slice(vendor);
-    tags.extend_from_slice(&0u32.to_le_bytes()); // 0 user comments
-    tags
-}
-
-/// Resample interleaved i16 audio from `source_rate` to 48000 Hz.
-fn resample_to_48k(samples: &[i16], source_rate: u32, channels: usize) -> Result<Vec<i16>> {
-    use rubato::{
-        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-    };
-
-    let ratio = 48000.0 / source_rate as f64;
-    let params = SincInterpolationParameters {
-        sinc_len: 256,
-        f_cutoff: 0.95,
-        oversampling_factor: 128,
-        interpolation: SincInterpolationType::Cubic,
-        window: WindowFunction::BlackmanHarris2,
-    };
-
-    let chunk_size = 1024;
-    let mut resampler = SincFixedIn::<f64>::new(ratio, 2.0, params, chunk_size, channels)
-        .map_err(|e| anyhow::anyhow!("Failed to create resampler: {:?}", e))?;
-
-    // Deinterleave i16 → per-channel f64
-    let total_frames = samples.len() / channels;
-    let mut channel_data: Vec<Vec<f64>> = vec![Vec::with_capacity(total_frames); channels];
-    for frame in 0..total_frames {
-        for ch in 0..channels {
-            channel_data[ch].push(samples[frame * channels + ch] as f64 / 32768.0);
-        }
-    }
-
-    // Process full chunks
-    let mut output_channels: Vec<Vec<f64>> = vec![Vec::new(); channels];
-    let mut pos = 0;
-    while pos + chunk_size <= total_frames {
-        let chunk: Vec<&[f64]> = channel_data
-            .iter()
-            .map(|ch| &ch[pos..pos + chunk_size])
-            .collect();
-        let resampled = resampler
-            .process(&chunk, None)
-            .map_err(|e| anyhow::anyhow!("Resample failed: {:?}", e))?;
-        for (ch_idx, ch_data) in resampled.into_iter().enumerate() {
-            output_channels[ch_idx].extend(ch_data);
-        }
-        pos += chunk_size;
-    }
-
-    // Process remaining samples (partial last chunk)
-    if pos < total_frames {
-        let chunk: Vec<&[f64]> = channel_data.iter().map(|ch| &ch[pos..]).collect();
-        let resampled = resampler
-            .process_partial(Some(&chunk), None)
-            .map_err(|e| anyhow::anyhow!("Resample tail failed: {:?}", e))?;
-        for (ch_idx, ch_data) in resampled.into_iter().enumerate() {
-            output_channels[ch_idx].extend(ch_data);
-        }
-    }
-
-    // Reinterleave f64 → i16
-    let output_frames = output_channels[0].len();
-    let mut result = Vec::with_capacity(output_frames * channels);
-    for frame_idx in 0..output_frames {
-        result.extend(
-            output_channels
-                .iter()
-                .map(|ch| (ch[frame_idx] * 32768.0).clamp(-32768.0, 32767.0) as i16),
-        );
-    }
-
-    Ok(result)
 }
 
 // ============================================================================
@@ -486,120 +258,12 @@ fn convert_audio_buffer_to_i32(
     }
 }
 
-/// Convert a symphonia AudioBufferRef to interleaved i16 samples for Opus encoding.
-fn convert_audio_buffer_to_i16(decoded: AudioBufferRef, channels: usize) -> Result<Vec<i16>> {
-    match decoded {
-        AudioBufferRef::S16(buf) => {
-            let frames = buf.frames();
-            let mut samples = Vec::with_capacity(frames * channels);
-            for frame in 0..frames {
-                for ch in 0..channels {
-                    samples.push(buf.chan(ch)[frame]);
-                }
-            }
-            Ok(samples)
-        }
-        AudioBufferRef::F32(buf) => {
-            let frames = buf.frames();
-            let mut samples = Vec::with_capacity(frames * channels);
-            for frame in 0..frames {
-                for ch in 0..channels {
-                    let sample = (buf.chan(ch)[frame] * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                    samples.push(sample);
-                }
-            }
-            Ok(samples)
-        }
-        AudioBufferRef::S32(buf) => {
-            let frames = buf.frames();
-            let mut samples = Vec::with_capacity(frames * channels);
-            for frame in 0..frames {
-                for ch in 0..channels {
-                    samples.push((buf.chan(ch)[frame] >> 16) as i16);
-                }
-            }
-            Ok(samples)
-        }
-        AudioBufferRef::F64(buf) => {
-            let frames = buf.frames();
-            let mut samples = Vec::with_capacity(frames * channels);
-            for frame in 0..frames {
-                for ch in 0..channels {
-                    let sample = (buf.chan(ch)[frame] * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                    samples.push(sample);
-                }
-            }
-            Ok(samples)
-        }
-        AudioBufferRef::U8(buf) => {
-            let frames = buf.frames();
-            let mut samples = Vec::with_capacity(frames * channels);
-            for frame in 0..frames {
-                for ch in 0..channels {
-                    samples.push(((buf.chan(ch)[frame] as i32 - 128) * 256) as i16);
-                }
-            }
-            Ok(samples)
-        }
-        AudioBufferRef::U16(buf) => {
-            let frames = buf.frames();
-            let mut samples = Vec::with_capacity(frames * channels);
-            for frame in 0..frames {
-                for ch in 0..channels {
-                    samples.push((buf.chan(ch)[frame] as i32 - 32768) as i16);
-                }
-            }
-            Ok(samples)
-        }
-        AudioBufferRef::S24(buf) => {
-            let frames = buf.frames();
-            let mut samples = Vec::with_capacity(frames * channels);
-            for frame in 0..frames {
-                for ch in 0..channels {
-                    samples.push((buf.chan(ch)[frame].inner() >> 8) as i16);
-                }
-            }
-            Ok(samples)
-        }
-        AudioBufferRef::U24(buf) => {
-            let frames = buf.frames();
-            let mut samples = Vec::with_capacity(frames * channels);
-            for frame in 0..frames {
-                for ch in 0..channels {
-                    samples.push(((buf.chan(ch)[frame].inner() as i32 - (1 << 23)) >> 8) as i16);
-                }
-            }
-            Ok(samples)
-        }
-        AudioBufferRef::U32(buf) => {
-            let frames = buf.frames();
-            let mut samples = Vec::with_capacity(frames * channels);
-            for frame in 0..frames {
-                for ch in 0..channels {
-                    samples.push(((buf.chan(ch)[frame] as i64 - (1i64 << 31)) >> 16) as i16);
-                }
-            }
-            Ok(samples)
-        }
-        AudioBufferRef::S8(buf) => {
-            let frames = buf.frames();
-            let mut samples = Vec::with_capacity(frames * channels);
-            for frame in 0..frames {
-                for ch in 0..channels {
-                    samples.push((buf.chan(ch)[frame] as i16) << 8);
-                }
-            }
-            Ok(samples)
-        }
-    }
-}
-
 /// Copy embedded pictures (album art) from source to destination.
 ///
 /// Reads pictures from any supported source format (MP3/ID3v2, M4A, etc.)
-/// and writes them into FLAC/Opus destination files. For FLAC destinations,
-/// pictures are stored as PICTURE metadata blocks via lofty's FlacFile API,
-/// which ensures they survive the subsequent text tag write step.
+/// and writes them into the FLAC destination file as PICTURE metadata blocks
+/// via lofty's FlacFile API, which ensures they survive the subsequent text
+/// tag write step.
 ///
 /// Silently succeeds if the source has no pictures.
 fn copy_pictures(source: &Path, dest: &Path) -> Result<()> {
@@ -654,10 +318,6 @@ fn copy_pictures(source: &Path, dest: &Path) -> Result<()> {
 
         flac.save_to_path(dest, WriteOptions::default())
             .with_context(|| format!("Failed to save pictures to FLAC: {}", dest.display()))?;
-        // Opus pictures are written inside VorbisComments by copy_tags; lofty's
-        // generic Tag → OggOpusFile write path handles this. For now, pictures
-        // for Opus targets are not copied here (they'd need to be base64-encoded
-        // into METADATA_BLOCK_PICTURE vorbis comment fields).
     }
 
     Ok(())

@@ -66,6 +66,7 @@ pub mod widgets;
 // Re-export for convenience
 pub(crate) use active_view::{
     ActiveView, ExitConfirmAction, ExitConfirmModalState,
+    LoginAction, LoginField, LoginScreenState,
     ViewAction,
 };
 use types::ProgressStatsUpdater;
@@ -148,6 +149,9 @@ pub(crate) struct App {
     /// Current route — synchronized after every view transition and state mutation.
     /// Used for Route-driven navigation and URL display.
     pub(crate) current_route: Option<mm_ui::route::Route>,
+
+    /// Set when the server returns InvalidSession — main loop breaks and re-enters login.
+    session_expired: bool,
 }
 
 impl App {
@@ -237,6 +241,7 @@ impl App {
             art_cache: widgets::AlbumArtCache::new(),
             tab_click_rects: Vec::new(),
             current_route: None,
+            session_expired: false,
         }
     }
 
@@ -259,9 +264,25 @@ impl App {
 
     /// Refresh the cached WitchStatus if the TTL has elapsed.
     fn refresh_status(&mut self) {
+        if self.session_token.is_none() {
+            return; // On login screen — no session to refresh.
+        }
         if self.cached_status_at.elapsed() >= Self::STATUS_TTL {
-            self.cached_status = self.witch_status_fetch();
-            self.cached_status_at = Instant::now();
+            // Use send_authenticated directly (not query()) so InvalidSession
+            // sets session_expired instead of panicking.
+            let body = mm_meta::protocol::AuthenticatedBody::Query(
+                mm_meta::protocol::QueryPayload::Status,
+            );
+            match self.send_authenticated(body) {
+                Ok(mm_meta::protocol::AuthenticatedResponse::Query(qr)) => {
+                    if let mm_meta::protocol::QueryResponse::Status(s) = *qr {
+                        self.cached_status = s;
+                        self.cached_status_at = Instant::now();
+                    }
+                }
+                // InvalidSession → session_expired flag already set by send_authenticated
+                _ => {}
+            }
         }
     }
 
@@ -402,6 +423,30 @@ impl App {
             ActiveView::DiscExtractionResolution(ref mut s) => dispatch_input!(DiscExtractionResolution, s),
             ActiveView::ManualReviewResolution(ref mut s) => dispatch_input!(ManualReviewResolution, s),
             ActiveView::TransactionReview(s) => dispatch_input_raw!(TransactionReview, s),
+            ActiveView::LoginScreen(s) => {
+                let a = match action {
+                    InputAction::NavDown | InputAction::FocusRight => {
+                        s.focus_next();
+                        s.error_message = None;
+                        LoginAction::None
+                    }
+                    InputAction::NavUp | InputAction::FocusLeft => {
+                        s.focus_next();
+                        s.error_message = None;
+                        LoginAction::None
+                    }
+                    InputAction::Confirm => LoginAction::AttemptLogin,
+                    _ => {
+                        match s.focused {
+                            LoginField::Username => { s.username.handle_input(&action); }
+                            LoginField::Password => { s.password.handle_input(&action); }
+                        }
+                        s.error_message = None;
+                        LoginAction::None
+                    }
+                };
+                ViewAction::LoginScreen(a)
+            }
         };
 
         // Post-dispatch: if no view produced a domain action and the input was Cancel,
@@ -817,6 +862,86 @@ impl App {
         }
     }
 
+    // =========================================================================
+    // Session Expiry → Login Screen
+    // =========================================================================
+
+    /// Transition to the in-app login screen.
+    pub(crate) fn enter_login_screen(&mut self, message: Option<&str>) {
+        self.session_token = None;
+        self.session_expired = false;
+        self.view_stack.clear();
+        self.view = ActiveView::LoginScreen(LoginScreenState::new(message.map(String::from)));
+    }
+
+    /// Send an unauthenticated wire request (for login from within the app).
+    fn send_unauthenticated(
+        &mut self,
+        body: mm_meta::protocol::UnauthenticatedBody,
+    ) -> Result<mm_meta::protocol::UnauthenticatedResponse, mm_meta::protocol::ProtocolError> {
+        let id = self.next_id();
+        let req = mm_meta::wire::WireRequest::Unauthenticated {
+            request_id: id,
+            body,
+        };
+        mm_meta::wire::write_frame(&mut self.socket, &req)
+            .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket write: {e}")))?;
+        let resp: mm_meta::wire::WireResponse = mm_meta::wire::read_frame(&mut self.socket)
+            .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket read: {e}")))?;
+        match resp {
+            mm_meta::wire::WireResponse::Unauthenticated { result, .. } => result,
+            _ => Err(mm_meta::protocol::ProtocolError::Internal(
+                "unexpected wire response type".to_string(),
+            )),
+        }
+    }
+
+    /// Attempt re-login using credentials from the LoginScreen view state.
+    pub(crate) fn attempt_relogin(&mut self) {
+        let (username, password) = if let ActiveView::LoginScreen(ref s) = self.view {
+            (s.username.value().trim().to_string(), s.password.value().to_string())
+        } else {
+            return;
+        };
+
+        if username.is_empty() {
+            if let ActiveView::LoginScreen(ref mut s) = self.view {
+                s.error_message = Some("Username required".to_string());
+            }
+            return;
+        }
+
+        use mm_meta::protocol::{AuthResponse, UnauthenticatedBody, UnauthenticatedResponse};
+        let result = self.send_unauthenticated(UnauthenticatedBody::Login {
+            username,
+            password,
+        });
+
+        match result {
+            Ok(UnauthenticatedResponse::Auth(AuthResponse::Token(token))) => {
+                self.session_token = Some(token);
+                self.cached_status_at = Instant::now() - Self::STATUS_TTL;
+                self.complete_startup();
+            }
+            Ok(UnauthenticatedResponse::Auth(AuthResponse::Failed(msg))) => {
+                if let ActiveView::LoginScreen(ref mut s) = self.view {
+                    s.error_message = Some(msg);
+                    s.password.clear();
+                }
+            }
+            Ok(_) => {
+                if let ActiveView::LoginScreen(ref mut s) = self.view {
+                    s.error_message = Some("Unexpected response".to_string());
+                }
+            }
+            Err(e) => {
+                if let ActiveView::LoginScreen(ref mut s) = self.view {
+                    s.error_message = Some(format!("{e}"));
+                }
+            }
+        }
+    }
+
 }
 
 // ============================================================================
@@ -848,12 +973,16 @@ impl App {
             .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket write: {e}")))?;
         let resp: mm_meta::wire::WireResponse = mm_meta::wire::read_frame(&mut self.socket)
             .map_err(|e| mm_meta::protocol::ProtocolError::Internal(format!("socket read: {e}")))?;
-        match resp {
+        let result = match resp {
             mm_meta::wire::WireResponse::Authenticated { result, .. } => *result,
             _ => Err(mm_meta::protocol::ProtocolError::Internal(
                 "unexpected wire response type".to_string(),
             )),
+        };
+        if matches!(&result, Err(mm_meta::protocol::ProtocolError::InvalidSession)) {
+            self.session_expired = true;
         }
+        result
     }
 
     pub(crate) fn query<Q: mm_meta::protocol::ProtocolQuery>(&mut self, q: Q) -> Q::Response {
@@ -973,6 +1102,7 @@ impl App {
             )),
         }
     }
+
 }
 
 // ============================================================================
@@ -1106,9 +1236,6 @@ pub fn run_tui(
 ) -> Result<()> {
     mm_meta::logging::log_general("=== MM TUI startup ===");
 
-    // Init the image picker (env-based detection, no stdin probing).
-    let art_picker = widgets::AlbumArtPicker::init();
-
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(
@@ -1141,8 +1268,11 @@ pub fn run_tui(
         }
 
         // Auth: login to obtain session token
-        session_token = startup::login::run_login_screen(&mut terminal, &mut startup)?;
+        session_token = startup::login::run_login_screen(&mut terminal, &mut startup, None)?;
     }
+
+    // Init the image picker (env-based detection, no stdin probing).
+    let art_picker = widgets::AlbumArtPicker::init();
 
     // Config + DB now guaranteed. App fetches config via protocol.
     let mut app = App::new(socket, session_token, art_picker);
@@ -1190,6 +1320,10 @@ fn run_app<B: ratatui::backend::Backend>(
 
     loop {
         app.refresh_status();
+
+        if app.session_expired {
+            app.enter_login_screen(Some("Session expired — please log in again"));
+        }
 
         if signal_received.swap(false, Ordering::SeqCst) {
             app.handle_input(InputAction::Cancel);

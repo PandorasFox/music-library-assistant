@@ -64,12 +64,15 @@ impl LoginState {
 
 /// Run the login screen, blocking until valid credentials are provided.
 ///
-/// Returns the session token on success.
+/// Returns the session token on success. An optional `initial_message` is
+/// shown as an error-style banner (e.g. "Session expired").
 pub fn run_login_screen<B: Backend>(
     terminal: &mut Terminal<B>,
     startup: &mut crate::StartupSocket<'_>,
+    initial_message: Option<&str>,
 ) -> Result<SessionToken> {
     let mut state = LoginState::new();
+    state.error_message = initial_message.map(String::from);
 
     loop {
         terminal.draw(|f| render_login(f, &state))?;
@@ -211,6 +214,100 @@ fn render_login(f: &mut ratatui::Frame, state: &LoginState) {
                 Span::styled(" login  ", Style::default().fg(Color::DarkGray)),
                 Span::styled("Esc", Style::default().fg(Color::DarkGray)),
                 Span::styled(" exit", Style::default().fg(Color::DarkGray)),
+            ])),
+            chunks[8],
+        );
+    }
+}
+
+/// Render the login screen for the in-app LoginScreen view (session expiry re-auth).
+///
+/// Uses the same visual layout as the startup login screen.
+pub fn render_login_view(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    state: &crate::LoginScreenState,
+) {
+    let dialog_width = 50.min(area.width.saturating_sub(4));
+    let dialog_height = 14.min(area.height.saturating_sub(4));
+
+    let dialog_area = Rect {
+        x: area.x + (area.width.saturating_sub(dialog_width)) / 2,
+        y: area.y + (area.height.saturating_sub(dialog_height)) / 2,
+        width: dialog_width,
+        height: dialog_height,
+    };
+
+    f.render_widget(Clear, dialog_area);
+
+    let block = Block::default()
+        .title(format!(" {} ", mm_meta::MM_TITLE))
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let form_area = block.inner(dialog_area);
+    f.render_widget(block, dialog_area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Title
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Username label
+            Constraint::Length(1), // Username input
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Password label
+            Constraint::Length(1), // Password input
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Error / controls
+        ])
+        .split(form_area);
+
+    f.render_widget(
+        Paragraph::new(" Login")
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .alignment(Alignment::Center),
+        chunks[0],
+    );
+
+    let label_style = if state.focused == crate::LoginField::Username {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    f.render_widget(
+        Paragraph::new(" Username:").style(label_style),
+        chunks[2],
+    );
+    render_login_field(f, chunks[3], &state.username, false);
+
+    let label_style = if state.focused == crate::LoginField::Password {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    f.render_widget(
+        Paragraph::new(" Password:").style(label_style),
+        chunks[5],
+    );
+    render_login_field(f, chunks[6], &state.password, true);
+
+    if let Some(ref err) = state.error_message {
+        f.render_widget(
+            Paragraph::new(format!(" {}", err)).style(Style::default().fg(Color::Red)),
+            chunks[8],
+        );
+    } else {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(" Tab", Style::default().fg(Color::Yellow)),
+                Span::styled(" next  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Enter", Style::default().fg(Color::Green)),
+                Span::styled(" login", Style::default().fg(Color::DarkGray)),
             ])),
             chunks[8],
         );

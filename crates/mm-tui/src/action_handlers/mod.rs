@@ -93,6 +93,14 @@ impl App {
             ViewAction::DiscExtractionResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::ManualReviewResolution(a) => a.handle(self, witness.as_ref()),
             ViewAction::TransactionReview(a) => a.handle(self, witness.as_ref()),
+            ViewAction::LoginScreen(a) => {
+                match a {
+                    crate::LoginAction::None => {}
+                    crate::LoginAction::AttemptLogin => {
+                        self.attempt_relogin();
+                    }
+                }
+            }
         }
     }
 

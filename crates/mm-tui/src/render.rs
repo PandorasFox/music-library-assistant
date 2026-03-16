@@ -235,6 +235,9 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::ManualReviewResolution(ref mut s) => {
             manual_review_modal::render_v3::render_v3(f, area, s);
         }
+        ActiveView::LoginScreen(ref state) => {
+            startup::login::render_login_view(f, area, state);
+        }
     }
 
     // Error popup overlay — renders on top of any view, dismissed on any key

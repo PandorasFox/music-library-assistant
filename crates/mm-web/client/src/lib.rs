@@ -205,6 +205,13 @@ fn mount_error(msg: &str) {
     mount(&tree.into());
 }
 
+/// Redirect to the login screen. Called by the api module on HTTP 401.
+pub(crate) fn redirect_to_login() {
+    stop_poll();
+    ACTIVE_RESOLUTION.with(|cell| cell.borrow_mut().take());
+    mount(&render_login(Some("Session expired")));
+}
+
 // ============================================================================
 // View Renderers (login / shell)
 // ============================================================================

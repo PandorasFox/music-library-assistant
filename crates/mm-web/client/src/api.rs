@@ -76,9 +76,10 @@ async fn fetch(method: &str, path: &str, body: Option<&str>) -> Result<serde_jso
     let text_js = JsFuture::from(text_promise).await?;
     let text = text_js.as_string().unwrap_or_default();
 
-    // 401 = token expired/invalid — clear it so refresh shows login.
+    // 401 = token expired/invalid — clear it and redirect to login immediately.
     if status == 401 {
         clear_token();
+        crate::redirect_to_login();
     }
 
     // Non-2xx with non-JSON body — surface the raw text.

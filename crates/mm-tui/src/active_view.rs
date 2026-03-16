@@ -83,6 +83,52 @@ pub(crate) enum ActiveView {
 
     // Transaction review (view stack holds suspended views)
     TransactionReview(transaction_review::TransactionReviewState),
+
+    // Login screen (shown on session expiry, re-authenticates in-place)
+    LoginScreen(LoginScreenState),
+}
+
+/// Focus state for the login form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoginField {
+    Username,
+    Password,
+}
+
+/// State for the in-app login screen (shown on session expiry).
+pub(crate) struct LoginScreenState {
+    pub username: crate::widgets::TextInputState,
+    pub password: crate::widgets::TextInputState,
+    pub focused: LoginField,
+    pub error_message: Option<String>,
+}
+
+impl LoginScreenState {
+    pub fn new(message: Option<String>) -> Self {
+        let mut username = crate::widgets::TextInputState::new();
+        username.focused = true;
+        Self {
+            username,
+            password: crate::widgets::TextInputState::new(),
+            focused: LoginField::Username,
+            error_message: message,
+        }
+    }
+
+    pub fn focus_next(&mut self) {
+        self.username.focused = false;
+        self.password.focused = false;
+        match self.focused {
+            LoginField::Username => {
+                self.focused = LoginField::Password;
+                self.password.focused = true;
+            }
+            LoginField::Password => {
+                self.focused = LoginField::Username;
+                self.username.focused = true;
+            }
+        }
+    }
 }
 
 impl ActiveView {
@@ -127,6 +173,7 @@ impl ActiveView {
             Self::DiscExtractionResolution(_) => Some("Disc Extraction"),
             Self::ManualReviewResolution(ref s) => Some(s.data.review_kind.title()),
             Self::TransactionReview(_) => Some("Transaction Review"),
+            Self::LoginScreen(_) => None,
         }
     }
 
@@ -251,6 +298,12 @@ pub(crate) enum ViewAction {
     DiscExtractionResolution(mm_ui::resolutions::disc_extraction::DiscExtractionAction),
     ManualReviewResolution(mm_ui::resolutions::manual_review::ReviewAction),
     TransactionReview(transaction_review::TransactionReviewAction),
+    LoginScreen(LoginAction),
+}
+
+pub(crate) enum LoginAction {
+    None,
+    AttemptLogin,
 }
 
 // ============================================================================

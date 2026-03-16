@@ -89,6 +89,49 @@ pub struct MissingDirectoryButtonCtx {
     pub has_directories: bool,
 }
 
+// ============================================================================
+// Dispatchable
+// ============================================================================
+
+impl super::dispatch::Dispatchable for MissingDirectoryState {
+    type Action = MissingDirectoryAction;
+
+    fn dispatch(
+        &self,
+        action: MissingDirectoryAction,
+        _resolver: &mm_meta::paths::PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use super::dispatch::DispatchResult;
+
+        match action {
+            MissingDirectoryAction::ConfirmDrop => {
+                let mutations = self.data.0.drop_mutations();
+                if mutations.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let ctx = self.data.button_ctx();
+                let key = MissingDirectoryButton::Drop
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: "Drop missing directories".into(),
+                    mutations,
+                }
+            }
+            MissingDirectoryAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "Missing directory resolution cancelled"
+    }
+}
+
 impl ModalButtons for MissingDirectoryButton {
     type Context = MissingDirectoryButtonCtx;
     type Action = MissingDirectoryAction;

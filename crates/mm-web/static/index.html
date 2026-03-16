@@ -76,6 +76,53 @@
             }
         };
 
+        // Wizard overlay: clicking 🪄 opens a centered overlay with detail content.
+        window.__mm_wizard_dismiss = function() {
+            var bd = document.getElementById('mm-wizard-backdrop');
+            var ov = document.getElementById('mm-wizard-overlay');
+            if (bd) bd.remove();
+            if (ov) ov.remove();
+            var prev = document.querySelector('.mm-wizard__toggle--active');
+            if (prev) prev.classList.remove('mm-wizard__toggle--active');
+        };
+        window.__mm_wizard_toggle = function(el) {
+            var wid = el.dataset.wizardId;
+            var dataEl = document.getElementById('mm-wd-' + wid);
+            if (!dataEl) return;
+            // If already showing this one, dismiss.
+            var existing = document.getElementById('mm-wizard-overlay');
+            if (existing && existing.dataset.activeWand === wid) {
+                window.__mm_wizard_dismiss();
+                return;
+            }
+            // Dismiss any existing overlay first.
+            window.__mm_wizard_dismiss();
+            // Build backdrop (click to dismiss).
+            var bd = document.createElement('div');
+            bd.id = 'mm-wizard-backdrop';
+            bd.className = 'mm-wizard-backdrop';
+            bd.onclick = window.__mm_wizard_dismiss;
+            document.body.appendChild(bd);
+            // Build overlay.
+            var ov = document.createElement('div');
+            ov.id = 'mm-wizard-overlay';
+            ov.className = 'mm-wizard-overlay';
+            ov.dataset.activeWand = wid;
+            var wtitle = el.dataset.wizardTitle || '';
+            var titleHtml = wtitle ? '<h3 class="mm-wizard-overlay__title">' + wtitle.replace(/</g,'&lt;') + '</h3>' : '';
+            ov.innerHTML = '<button class="mm-wizard-overlay__close" onclick="window.__mm_wizard_dismiss()">\u00d7</button>' + titleHtml + '<div class="mm-wizard-overlay__content">' + dataEl.innerHTML + '</div>';
+            document.body.appendChild(ov);
+            el.classList.add('mm-wizard__toggle--active');
+            // Esc to dismiss.
+            var escHandler = function(e) {
+                if (e.key === 'Escape') {
+                    window.__mm_wizard_dismiss();
+                    document.removeEventListener('keydown', escHandler);
+                }
+            };
+            document.addEventListener('keydown', escHandler);
+        };
+
         // Click-to-cursor: move cursor highlight to the clicked list item.
         window.__mm_list_click = function(ul, event) {
             var item = event.target.closest('.mm-list__item');
@@ -92,7 +139,10 @@
             mm_expand_session, mm_packing_browse, mm_setup,
             mm_queue_task, mm_search, mm_expand_dir,
             mm_config_save, mm_stage_decision, mm_approve_releases,
-            mm_index_now, mm_navigate_route, mm_deploy_tab
+            mm_index_now, mm_navigate_route, mm_deploy_tab,
+            mm_tag_save, mm_tag_add, mm_tag_delete,
+            mm_resolve_cancel, mm_resolve_action,
+            mm_resolve_page, mm_resolve_confirm_with_field
         } from '/static/pkg/mm_web_client.js';
         await init();
         window.__mm_login = mm_login;
@@ -113,6 +163,13 @@
         window.__mm_index_now = mm_index_now;
         window.__mm_navigate_route = mm_navigate_route;
         window.__mm_deploy_tab = mm_deploy_tab;
+        window.__mm_tag_save = mm_tag_save;
+        window.__mm_tag_add = mm_tag_add;
+        window.__mm_tag_delete = mm_tag_delete;
+        window.__mm_resolve_cancel = mm_resolve_cancel;
+        window.__mm_resolve_action = mm_resolve_action;
+        window.__mm_resolve_page = mm_resolve_page;
+        window.__mm_resolve_confirm_with_field = mm_resolve_confirm_with_field;
     </script>
 </body>
 </html>

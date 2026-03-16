@@ -8,6 +8,18 @@ use crate::tag_set::TagSet;
 use crate::text_input::TextInputState;
 
 // ============================================================================
+// FieldColumn
+// ============================================================================
+
+/// Which column has focus during navigation mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FieldColumn {
+    Name,
+    #[default]
+    Value,
+}
+
+// ============================================================================
 // FieldEditMode
 // ============================================================================
 
@@ -70,6 +82,8 @@ pub struct FieldFormState {
     pub visible_height: usize,
     /// Current editing mode.
     pub edit_mode: FieldEditMode,
+    /// Which column has focus during navigation mode.
+    pub active_column: FieldColumn,
     /// Text input for editing tag names.
     pub name_input: TextInputState,
     /// Text input for editing tag values.
@@ -91,6 +105,7 @@ impl FieldFormState {
             scroll_offset: 0,
             visible_height: 10,
             edit_mode: FieldEditMode::Navigating,
+            active_column: FieldColumn::default(),
             name_input: TextInputState::new(),
             value_input: TextInputState::new(),
             expansion: None,
@@ -135,6 +150,7 @@ impl FieldFormState {
         self.cursor = 0;
         self.scroll_offset = 0;
         self.edit_mode = FieldEditMode::Navigating;
+        self.active_column = FieldColumn::default();
         self.expansion = None;
     }
 
@@ -166,7 +182,23 @@ impl FieldFormState {
                     self.scroll_to_cursor();
                     FieldFormResult::CursorMoved
                 } else {
+                    FieldFormResult::Unhandled
+                }
+            }
+            InputAction::NavLeft => {
+                if self.active_column == FieldColumn::Value {
+                    self.active_column = FieldColumn::Name;
                     FieldFormResult::Consumed
+                } else {
+                    FieldFormResult::Unhandled
+                }
+            }
+            InputAction::NavRight => {
+                if self.active_column == FieldColumn::Name {
+                    self.active_column = FieldColumn::Value;
+                    FieldFormResult::Consumed
+                } else {
+                    FieldFormResult::Unhandled
                 }
             }
             InputAction::Confirm => {
@@ -179,14 +211,21 @@ impl FieldFormState {
                     self.edit_mode = FieldEditMode::EditingName;
                     self.scroll_to_cursor();
                     FieldFormResult::Modified
-                } else {
-                    // Start editing value of current entry
-                    if let Some(entry) = tag_set.get(self.cursor) {
-                        let first_value = entry.values.first().map(|s| s.as_str()).unwrap_or("");
-                        self.value_input.set_value(first_value);
-                        self.name_input.set_value(&entry.name);
-                        self.edit_mode = FieldEditMode::EditingValue;
+                } else if let Some(entry) = tag_set.get(self.cursor) {
+                    // Start editing the active column
+                    let first_value = entry.values.first().map(|s| s.as_str()).unwrap_or("");
+                    self.value_input.set_value(first_value);
+                    self.name_input.set_value(&entry.name);
+                    match self.active_column {
+                        FieldColumn::Name => {
+                            self.edit_mode = FieldEditMode::EditingName;
+                        }
+                        FieldColumn::Value => {
+                            self.edit_mode = FieldEditMode::EditingValue;
+                        }
                     }
+                    FieldFormResult::Consumed
+                } else {
                     FieldFormResult::Consumed
                 }
             }
@@ -477,9 +516,9 @@ mod tests {
         assert_eq!(r, FieldFormResult::CursorMoved);
         assert_eq!(form.cursor, 3);
 
-        // Can't go past sentinel
+        // Can't go past sentinel — returns Unhandled so caller can move focus
         let r = form.handle_input(&InputAction::NavDown, &mut ts);
-        assert_eq!(r, FieldFormResult::Consumed);
+        assert_eq!(r, FieldFormResult::Unhandled);
         assert_eq!(form.cursor, 3);
 
         let r = form.handle_input(&InputAction::NavUp, &mut ts);

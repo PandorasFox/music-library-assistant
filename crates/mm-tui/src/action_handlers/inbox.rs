@@ -52,30 +52,32 @@ impl HandleAction for InboxInsightAction {
 
 impl HandleAction for inbox_corpus_match_modal::InboxCorpusMatchAction {
     fn handle(self, app: &mut App, witness: Option<&witness::ConfirmationGesture>) {
-        match self {
-            inbox_corpus_match_modal::InboxCorpusMatchAction::ConfirmStash => {
+        use mm_ui::resolutions::dispatch::{Dispatchable, DispatchResult};
+
+        let result = {
+            let ActiveView::InboxCorpusMatchResolution(ref state) = app.view else {
+                return;
+            };
+            state.dispatch(self, &app.resolver)
+        };
+
+        match result {
+            DispatchResult::Stage { key, label, mutations } => {
                 let Some(w) = witness else { return };
-                let mutations = match &app.view {
-                    ActiveView::InboxCorpusMatchResolution(ref preview) => {
-                        preview.data.0.stash_and_drop_mutations(&app.resolver)
-                    }
-                    _ => Vec::new(),
+                app.stage_mutations_with_transaction(mutations, &label, key, w);
+                app.after_staging_decisions();
+            }
+            DispatchResult::Cancel => {
+                let msg = {
+                    let ActiveView::InboxCorpusMatchResolution(ref state) = app.view else {
+                        app.cancel_and_return_to_source("Resolution cancelled");
+                        return;
+                    };
+                    state.cancel_message()
                 };
-                app.stage_resolution(mutations, "Stash inbox corpus matches", decision_keys::inbox_corpus_match(), "No files to stash", w);
+                app.cancel_and_return_to_source(msg);
             }
-            inbox_corpus_match_modal::InboxCorpusMatchAction::ConfirmStashAll => {
-                let Some(w) = witness else { return };
-                let mutations = match &app.view {
-                    ActiveView::InboxCorpusMatchResolution(ref preview) => {
-                        preview.data.0.stash_all_mutations(&app.resolver)
-                    }
-                    _ => Vec::new(),
-                };
-                app.stage_resolution(mutations, "Stash all inbox duplicates", decision_keys::inbox_corpus_match(), "No files to stash", w);
-            }
-            inbox_corpus_match_modal::InboxCorpusMatchAction::Cancel => {
-                app.cancel_and_return_to_source("Inbox corpus match resolution cancelled");
-            }
+            _ => {}
         }
     }
 }

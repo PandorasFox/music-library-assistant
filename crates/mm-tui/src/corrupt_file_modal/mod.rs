@@ -12,5 +12,4 @@ pub mod types;
 
 pub use types::{
     CorruptFileAction, CorruptFileData, CorruptFileModalData, CorruptFileState,
-    stash_and_drop_mutations,
 };

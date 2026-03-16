@@ -10,7 +10,6 @@ use std::borrow::Cow;
 use ratatui::style::Color;
 
 use mm_meta::decisions::DecisionKey;
-use mm_meta::mutations::Mutation;
 use mm_meta::views::health_modals::CorruptFileModalData;
 
 use crate::modal_buttons::ModalButtons;
@@ -79,20 +78,51 @@ pub enum CorruptFileAction {
 }
 
 // ============================================================================
-// Mutation builder
-// ============================================================================
-
-/// Generate StashFromZone + DropFromIndex mutations for all corrupt files.
-pub fn stash_and_drop_mutations(
-    data: &CorruptFileModalData,
-    resolver: &mm_meta::paths::PathResolver,
-) -> Vec<Mutation> {
-    data.stash_and_drop_mutations(resolver)
-}
-
-// ============================================================================
 // Button enum
 // ============================================================================
+
+// ============================================================================
+// Dispatchable
+// ============================================================================
+
+impl super::dispatch::Dispatchable for CorruptFileState {
+    type Action = CorruptFileAction;
+
+    fn dispatch(
+        &self,
+        action: CorruptFileAction,
+        resolver: &mm_meta::paths::PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use super::dispatch::DispatchResult;
+
+        match action {
+            CorruptFileAction::ConfirmStashAll => {
+                let mutations = self.data.0.stash_and_drop_mutations(resolver);
+                if mutations.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let ctx = self.data.button_ctx();
+                let key = CorruptButton::StashAll
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: "Stash corrupt files".into(),
+                    mutations,
+                }
+            }
+            CorruptFileAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "Corrupt file resolution cancelled"
+    }
+}
 
 /// Lightweight context for button enablement/labels.
 pub struct CorruptButtonCtx {

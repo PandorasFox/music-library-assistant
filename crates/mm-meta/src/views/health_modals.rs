@@ -4,8 +4,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::mutations::file_ops::HardLinkMutation;
 use crate::mutations::indexing::{DropDirectoryFromIndexMutation, DropFromIndexMutation};
 use crate::mutations::Mutation;
+use crate::paths::PathResolver;
 
 // ============================================================================
 // Missing File Resolution
@@ -83,6 +85,18 @@ impl MissingFileModalData {
             })
         });
         from_restorable.chain(from_non_restorable).collect()
+    }
+
+    /// Generate HardLink mutations to restore restorable files from library to corpus.
+    pub fn restore_mutations(&self, resolver: &PathResolver) -> Vec<Mutation> {
+        self.restorable
+            .iter()
+            .map(|f| {
+                let source = resolver.resolve(std::path::Path::new(&f.library_path));
+                let destination = resolver.resolve(std::path::Path::new(&f.corpus_path));
+                Mutation::HardLink(HardLinkMutation { source, destination })
+            })
+            .collect()
     }
 }
 

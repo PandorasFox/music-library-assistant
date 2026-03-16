@@ -7,4 +7,4 @@
 pub mod preview;
 pub mod types;
 
-pub use types::{MissingFileAction, MissingFileModalData, MissingFilePreviewState, restore_mutations};
+pub use types::{MissingFileAction, MissingFileModalData, MissingFilePreviewState};

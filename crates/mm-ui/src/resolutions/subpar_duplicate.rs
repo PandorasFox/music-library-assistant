@@ -10,7 +10,6 @@ use std::borrow::Cow;
 use ratatui::style::Color;
 
 use mm_meta::decisions::DecisionKey;
-use mm_meta::mutations::Mutation;
 use mm_meta::views::health_modals::SubparDuplicateModalData;
 
 use crate::modal_buttons::ModalButtons;
@@ -74,20 +73,51 @@ pub enum SubparDuplicateAction {
 }
 
 // ============================================================================
-// Mutation builder
-// ============================================================================
-
-/// Generate StashFromZone + DropFromIndex mutations for all subpar files.
-pub fn stash_and_drop_mutations(
-    data: &SubparDuplicateModalData,
-    resolver: &mm_meta::paths::PathResolver,
-) -> Vec<Mutation> {
-    data.stash_and_drop_mutations(resolver)
-}
-
-// ============================================================================
 // Button enum
 // ============================================================================
+
+// ============================================================================
+// Dispatchable
+// ============================================================================
+
+impl super::dispatch::Dispatchable for SubparDuplicateState {
+    type Action = SubparDuplicateAction;
+
+    fn dispatch(
+        &self,
+        action: SubparDuplicateAction,
+        resolver: &mm_meta::paths::PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use super::dispatch::DispatchResult;
+
+        match action {
+            SubparDuplicateAction::ConfirmStashAll => {
+                let mutations = self.data.0.stash_and_drop_mutations(resolver);
+                if mutations.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let ctx = self.data.button_ctx();
+                let key = SubparButton::StashAll
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: "Stash subpar duplicates".into(),
+                    mutations,
+                }
+            }
+            SubparDuplicateAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "Subpar duplicate resolution cancelled"
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SubparButton {

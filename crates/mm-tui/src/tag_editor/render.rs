@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
 };
 
-use mm_ui::field_form::FieldEditMode;
+use mm_ui::field_form::{FieldColumn, FieldEditMode};
 use mm_ui::tag_editor_state::FocusPane;
 use mm_ui::tag_set::{AggregatedState, TagSet};
 
@@ -119,19 +119,22 @@ impl UnifiedTagEditorState {
             .build(area);
 
         self.render_context_list(f, layout.left.area);
-        self.render_tag_fields_pane(f, layout.middle.area);
 
-        let right_area = layout.right.area;
-        let right_chunks = Layout::default()
+        // Middle area: tag fields + button row at the bottom
+        let middle_area = layout.middle.area;
+        let middle_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(right_area.width.saturating_sub(2)),
-                Constraint::Min(8),
+                Constraint::Min(6),    // Tag fields
+                Constraint::Length(3), // Button row
             ])
-            .split(right_area);
+            .split(middle_area);
 
-        self.render_art_preview_pane(f, right_chunks[0], art_picker, art_cache, resolver);
-        self.render_action_panel(f, right_chunks[1]);
+        self.render_tag_fields_pane(f, middle_chunks[0]);
+        self.render_action_row(f, middle_chunks[1]);
+
+        // Right area: art preview only
+        self.render_art_preview_pane(f, layout.right.area, art_picker, art_cache, resolver);
     }
 
     fn render_context_list(&self, f: &mut Frame, area: Rect) {
@@ -340,8 +343,13 @@ impl UnifiedTagEditorState {
                 } else if form.edit_mode == FieldEditMode::EditingName {
                     (base.bg(Color::Cyan).fg(Color::Black), base.bg(Color::DarkGray))
                 } else {
-                    // Navigating — highlight the whole row
-                    (base.bg(Color::DarkGray), base.bg(Color::DarkGray))
+                    // Navigating — highlight the active column
+                    let active = base.bg(Color::DarkGray);
+                    let inactive = base.bg(Color::DarkGray).fg(Color::Gray);
+                    match form.active_column {
+                        FieldColumn::Name => (active, inactive),
+                        FieldColumn::Value => (inactive, active),
+                    }
                 }
             } else if is_modified {
                 let mod_style = Style::default().fg(Color::Yellow);
@@ -441,7 +449,13 @@ impl UnifiedTagEditorState {
                 } else if form.edit_mode == FieldEditMode::EditingName {
                     (base.bg(Color::Cyan).fg(Color::Black), base.bg(Color::DarkGray))
                 } else {
-                    (base.bg(Color::DarkGray), base.bg(Color::DarkGray))
+                    // Navigating — highlight the active column
+                    let active = base.bg(Color::DarkGray);
+                    let inactive = base.bg(Color::DarkGray).fg(Color::Gray);
+                    match form.active_column {
+                        FieldColumn::Name => (active, inactive),
+                        FieldColumn::Value => (inactive, active),
+                    }
                 }
             } else if is_modified {
                 let mod_style = Style::default().fg(Color::Yellow);
@@ -570,7 +584,7 @@ impl UnifiedTagEditorState {
         }
     }
 
-    fn render_action_panel(&mut self, f: &mut Frame, area: Rect) {
+    fn render_action_row(&mut self, f: &mut Frame, area: Rect) {
         use mm_ui::modal_buttons::ModalButtons;
         use mm_ui::tag_editor_state::TagEditorButton;
 
@@ -578,110 +592,61 @@ impl UnifiedTagEditorState {
         let ctx = self.core.button_ctx();
 
         self.actions_pane_rect = Some(area);
-        self.action_click_targets.clear();
-        let inner_area = Rect {
-            x: area.x + 1,
-            y: area.y + 1,
-            width: area.width.saturating_sub(2),
-            height: area.height.saturating_sub(2),
-        };
-        self.action_click_targets.set_list_area(inner_area);
 
-        let buttons = TagEditorButton::all();
-        for (idx, _) in buttons.iter().enumerate() {
-            let row_y = inner_area.y + 1 + idx as u16;
-            if row_y < inner_area.y + inner_area.height {
-                self.action_click_targets.add_row(idx.to_string(), row_y);
+        crate::widgets::modal_buttons::render_buttons(
+            &mut self.core.buttons,
+            f,
+            area,
+            &ctx,
+            is_focused,
+        );
+
+        // Show staged/pending count to the right of buttons
+        let staged = self.core.staged_decision_count;
+        let has_current = self.has_changes_for_current_item();
+        let count_text = if has_current && staged > 0 {
+            format!("{} staged + pending", staged)
+        } else if staged > 0 {
+            format!("{} staged", staged)
+        } else if has_current {
+            "pending changes".to_string()
+        } else {
+            String::new()
+        };
+
+        if !count_text.is_empty() {
+            // Render the status text in the rightmost portion of the row
+            let text_width = count_text.len() as u16 + 2;
+            if area.width > text_width {
+                let status_area = Rect {
+                    x: area.x + area.width - text_width,
+                    y: area.y,
+                    width: text_width,
+                    height: 1.min(area.height),
+                };
+                let status_line = Paragraph::new(Line::from(
+                    Span::styled(count_text, Style::default().fg(Color::Yellow)),
+                ));
+                f.render_widget(status_line, status_area);
             }
         }
 
-        let mut lines = vec![Line::from("")];
-
-        for &button in buttons {
-            let is_selected = button == self.core.buttons.selected;
-
-            let label = match button {
-                TagEditorButton::ReviewAll => {
-                    if self.is_embedded() {
-                        "Save & Return"
-                    } else {
-                        "Review All"
-                    }
+        // Update click targets for action buttons
+        self.action_click_targets.clear();
+        self.action_click_targets.set_list_area(area);
+        let buttons = TagEditorButton::all();
+        let enabled_count = buttons.iter().filter(|b| b.enabled(&ctx)).count();
+        if enabled_count > 0 {
+            let btn_width = area.width / enabled_count as u16;
+            let mut pos = 0u16;
+            for (idx, &button) in buttons.iter().enumerate() {
+                if button.enabled(&ctx) {
+                    let btn_x = area.x + pos * btn_width;
+                    self.action_click_targets.add_row(idx.to_string(), btn_x);
+                    pos += 1;
                 }
-                TagEditorButton::Revert => "Revert",
-                TagEditorButton::Cancel => "Cancel",
-            };
-
-            let enabled = button.enabled(&ctx);
-            let button_color = button.color(&ctx);
-
-            let style = if is_focused && is_selected {
-                if enabled {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(button_color)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::DarkGray)
-                        .add_modifier(Modifier::BOLD)
-                }
-            } else if is_selected {
-                if enabled {
-                    Style::default().fg(button_color)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                }
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            let text = if is_selected {
-                format!("[ {} ]", label)
-            } else {
-                format!("  {}  ", label)
-            };
-
-            lines.push(Line::from(text).style(style));
+            }
         }
-
-        // Change count from staged decision count
-        let staged = self.core.staged_decision_count;
-        let has_current = self.has_changes_for_current_item();
-        lines.push(Line::from(""));
-        if staged > 0 || has_current {
-            let count_text = if has_current && staged > 0 {
-                format!("{} staged + pending", staged)
-            } else if staged > 0 {
-                format!("{} staged", staged)
-            } else {
-                "pending changes".to_string()
-            };
-            lines.push(
-                Line::from(count_text).style(Style::default().fg(Color::Yellow)),
-            );
-        } else {
-            lines.push(
-                Line::from("no changes").style(Style::default().fg(Color::DarkGray)),
-            );
-        }
-
-        let border_style = if is_focused {
-            Style::default().fg(Color::Green)
-        } else {
-            Style::default()
-        };
-
-        let action_para = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Actions")
-                    .border_style(border_style),
-            )
-            .alignment(Alignment::Center);
-        f.render_widget(action_para, area);
     }
 
     fn render_modal(&self, f: &mut Frame, area: Rect, modal: &UnifiedTagEditorModal) {

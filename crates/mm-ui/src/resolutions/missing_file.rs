@@ -229,6 +229,70 @@ impl MissingFilePreviewState {
     }
 }
 
+// ============================================================================
+// Dispatchable
+// ============================================================================
+
+impl super::dispatch::Dispatchable for MissingFilePreviewState {
+    type Action = MissingFileAction;
+
+    fn dispatch(
+        &self,
+        action: MissingFileAction,
+        resolver: &mm_meta::paths::PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use super::dispatch::DispatchResult;
+
+        match action {
+            MissingFileAction::None => DispatchResult::Handled,
+            MissingFileAction::ConfirmRestore => {
+                let mutations = self.cached_data.restore_mutations(resolver);
+
+                if mutations.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let ctx = self.button_ctx();
+                let key = MissingFileButton::RestoreAll
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: "Restore missing files".into(),
+                    mutations,
+                }
+            }
+            MissingFileAction::ConfirmDrop => {
+                let mutations = self.cached_data.drop_all_missing();
+                if mutations.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let ctx = self.button_ctx();
+                let key = MissingFileButton::DropLost
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: "Drop missing files".into(),
+                    mutations,
+                }
+            }
+            MissingFileAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "Missing file resolution cancelled"
+    }
+}
+
 impl ModalFrameCore for MissingFilePreviewState {
     type Button = MissingFileButton;
 

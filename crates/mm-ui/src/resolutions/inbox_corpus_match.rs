@@ -76,6 +76,68 @@ pub enum InboxCorpusMatchAction {
 // Button enum
 // ============================================================================
 
+// ============================================================================
+// Dispatchable
+// ============================================================================
+
+impl super::dispatch::Dispatchable for InboxCorpusMatchState {
+    type Action = InboxCorpusMatchAction;
+
+    fn dispatch(
+        &self,
+        action: InboxCorpusMatchAction,
+        resolver: &mm_meta::paths::PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use super::dispatch::DispatchResult;
+
+        match action {
+            InboxCorpusMatchAction::ConfirmStash => {
+                let mutations = self.data.0.stash_and_drop_mutations(resolver);
+                if mutations.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let ctx = self.data.button_ctx();
+                let key = InboxMatchButton::StashEquivalents
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: "Stash inbox corpus matches".into(),
+                    mutations,
+                }
+            }
+            InboxCorpusMatchAction::ConfirmStashAll => {
+                let mutations = self.data.0.stash_all_mutations(resolver);
+                if mutations.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let ctx = self.data.button_ctx();
+                let key = InboxMatchButton::StashAll
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label: "Stash all inbox duplicates".into(),
+                    mutations,
+                }
+            }
+            InboxCorpusMatchAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "Inbox corpus match resolution cancelled"
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InboxMatchButton {
     StashEquivalents,

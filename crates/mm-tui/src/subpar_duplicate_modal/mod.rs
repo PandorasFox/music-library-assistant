@@ -8,5 +8,4 @@ pub mod types;
 
 pub use types::{
     SubparDuplicateAction, SubparDuplicateData, SubparDuplicateModalData, SubparDuplicateState,
-    stash_and_drop_mutations,
 };

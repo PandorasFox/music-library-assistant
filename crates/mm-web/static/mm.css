@@ -710,6 +710,57 @@ html, body {
     border-color: var(--c-yellow);
 }
 
+.mm-tag-header-action {
+    width: 2rem;
+}
+
+.mm-tag-delete {
+    padding: 0.1rem 0.4rem;
+    font-size: 1rem;
+    line-height: 1;
+    min-width: 2rem;
+    color: var(--c-red, #e06c75);
+}
+
+.mm-tag-name--editable {
+    background: var(--c-bg);
+    color: var(--c-fg);
+    border: 1px solid var(--c-fg-muted);
+    border-radius: 2px;
+    cursor: text;
+}
+
+.mm-tag-name--editable:focus {
+    outline: none;
+    border-color: var(--c-yellow);
+}
+
+.mm-tag-toolbar {
+    justify-content: flex-start;
+    padding: 0.5rem 0;
+    gap: 0.5rem;
+}
+
+.mm-tag-save-btn {
+    border-color: var(--c-green, #98c379);
+    color: var(--c-green, #98c379);
+}
+
+.mm-tag-status {
+    padding: 0.3rem 0.5rem;
+    margin: 0.3rem 0;
+    font-size: 0.85rem;
+    border-radius: 2px;
+}
+
+.mm-tag-status--ok {
+    color: var(--c-green, #98c379);
+}
+
+.mm-tag-status--error {
+    color: var(--c-red, #e06c75);
+}
+
 /* ============================================================
  * Alert Banner (intake surfacing)
  * ============================================================ */
@@ -826,4 +877,156 @@ html, body {
     padding-left: 1rem;
     border-left: 1px solid var(--c-fg-muted);
     margin-left: 0.4rem;
+}
+
+/* ============================================================
+ * Resolution Pagination
+ * ============================================================ */
+
+.mm-pagination {
+    margin-bottom: 0.8rem;
+}
+
+.mm-pagination__title {
+    color: var(--c-yellow);
+    font-weight: bold;
+    font-size: 1rem;
+    margin-bottom: 0.4rem;
+}
+
+.mm-pagination__nav {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+
+.mm-pagination__pos {
+    color: var(--c-fg-dim);
+    font-size: 0.9rem;
+    min-width: 8ch;
+    text-align: center;
+}
+
+.mm-pagination__btn {
+    min-width: 5rem;
+}
+
+/* ============================================================
+ * Decision Field (tag canonicity, compound split)
+ * ============================================================ */
+
+.mm-decision-field {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0;
+    margin-bottom: 0.5rem;
+}
+
+.mm-decision-field__label {
+    color: var(--c-fg-dim);
+    white-space: nowrap;
+    min-width: 10ch;
+}
+
+.mm-decision-field__input {
+    flex: 1;
+    max-width: 400px;
+    background: var(--c-bg);
+    color: var(--c-fg);
+    border: 1px solid var(--c-fg-muted);
+    border-radius: 2px;
+    padding: 0.3rem 0.5rem;
+    font-family: inherit;
+    font-size: inherit;
+}
+
+.mm-decision-field__input:focus {
+    outline: none;
+    border-color: var(--c-yellow);
+}
+
+/* ============================================================
+ * Resolution container
+ * ============================================================ */
+
+.mm-resolution {
+    max-width: 900px;
+}
+
+/* ============================================================
+ * Wizard overlay pane
+ * ============================================================ */
+
+.mm-wizard__toggle {
+    cursor: pointer;
+    margin-left: 0.4em;
+    opacity: 0.5;
+    transition: opacity 0.15s;
+}
+.mm-wizard__toggle:hover,
+.mm-wizard__toggle--active {
+    opacity: 1;
+}
+.mm-hidden { display: none !important; }
+.mm-wizard__data { display: none !important; }
+
+.mm-wizard-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+    background: rgba(0, 0, 0, 0.55);
+}
+.mm-wizard-overlay {
+    position: fixed;
+    z-index: 901;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(110em, 92vw);
+    max-height: 80vh;
+    overflow-y: auto;
+    background: var(--c-bg-raised, #3c3836);
+    border: 1px solid var(--c-fg-dim, #665c54);
+    padding: 1.2em 1.5em;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+.mm-wizard-overlay__close {
+    position: absolute;
+    top: 0.5em;
+    right: 0.8em;
+    cursor: pointer;
+    font-size: 1.2em;
+    color: var(--c-fg-dim, #a89984);
+    background: none;
+    border: none;
+    padding: 0.2em 0.4em;
+}
+.mm-wizard-overlay__close:hover {
+    color: var(--c-fg, #ebdbb2);
+}
+.mm-wizard-overlay__title {
+    margin: 0 0 0.4em 0;
+    font-size: 1.1em;
+    color: var(--c-green, #b8bb26);
+    border-bottom: 1px solid var(--c-fg-dim, #665c54);
+    padding-bottom: 0.4em;
+}
+.mm-wizard-overlay__content {
+    margin-top: 0.8em;
+    line-height: 1.6;
+}
+.mm-wizard__item {
+    padding: 0.2em 0.4em;
+    color: var(--c-fg, #ebdbb2);
+    border-bottom: 1px solid var(--c-bg, #282828);
+}
+.mm-wizard__item:last-child {
+    border-bottom: none;
+}
+.mm-wizard__item--tag {
+    color: var(--c-fg-dim, #a89984);
+    font-size: 0.9em;
+    border-bottom: none;
+    padding: 0.1em 0.4em 0.1em 1.2em;
 }

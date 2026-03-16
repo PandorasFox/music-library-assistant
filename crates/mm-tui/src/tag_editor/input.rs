@@ -253,14 +253,6 @@ impl UnifiedTagEditorState {
             return UnifiedTagEditorAction::RequestTransactionReview;
         }
 
-        // NavRight from content to buttons (only when navigating, not editing)
-        if matches!(action, InputAction::NavRight)
-            && self.core.form.edit_mode == FieldEditMode::Navigating
-        {
-            self.core.focus = FocusPane::Buttons;
-            return UnifiedTagEditorAction::None;
-        }
-
         // Check for multi-value Enter (open modal for multi-value tags)
         if matches!(action, InputAction::Confirm)
             && self.core.form.edit_mode == FieldEditMode::Navigating
@@ -283,7 +275,15 @@ impl UnifiedTagEditorState {
             self.core.current_file
         };
         if let Some(tag_set) = self.core.tag_sets.get_mut(idx) {
-            let _result = self.core.form.handle_input(action, tag_set);
+            let result = self.core.form.handle_input(action, tag_set);
+            // NavDown at the bottom of the field list falls through as Unhandled —
+            // switch focus to the buttons row.
+            if result == mm_ui::field_form::FieldFormResult::Unhandled {
+                if matches!(action, InputAction::NavDown) {
+                    self.core.focus = FocusPane::Buttons;
+                    return UnifiedTagEditorAction::None;
+                }
+            }
         }
         UnifiedTagEditorAction::None
     }
@@ -298,16 +298,25 @@ impl UnifiedTagEditorState {
         let ctx = self.core.button_ctx();
 
         match action {
-            InputAction::NavLeft | InputAction::Cancel => {
+            InputAction::Cancel => {
                 self.core.focus = FocusPane::Content;
                 UnifiedTagEditorAction::None
             }
             InputAction::NavUp => {
+                // Return focus to content (tag fields above)
+                self.core.focus = FocusPane::Content;
+                UnifiedTagEditorAction::None
+            }
+            InputAction::NavLeft => {
                 self.core.buttons.nav_left(&ctx);
                 UnifiedTagEditorAction::None
             }
-            InputAction::NavDown => {
+            InputAction::NavRight => {
                 self.core.buttons.nav_right(&ctx);
+                UnifiedTagEditorAction::None
+            }
+            InputAction::NavDown => {
+                // Already at the bottom — no-op
                 UnifiedTagEditorAction::None
             }
             InputAction::Confirm => {

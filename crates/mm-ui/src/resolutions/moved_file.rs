@@ -94,6 +94,55 @@ pub struct MovedFileButtonCtx {
     pub has_files: bool,
 }
 
+// ============================================================================
+// Dispatchable
+// ============================================================================
+
+impl super::dispatch::Dispatchable for MovedFileState {
+    type Action = MovedFileAction;
+
+    fn dispatch(
+        &self,
+        action: MovedFileAction,
+        _resolver: &mm_meta::paths::PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use super::dispatch::DispatchResult;
+
+        match action {
+            MovedFileAction::Acknowledge => {
+                if self.data.files.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let mutations: Vec<_> = self.data.files.iter().map(|f| f.to_update_mutation()).collect();
+                let label = format!(
+                    "Acknowledge {} moved file{}",
+                    mutations.len(),
+                    if mutations.len() == 1 { "" } else { "s" }
+                );
+
+                let ctx = self.data.button_ctx();
+                let key = MovedFileButton::Acknowledge
+                    .protocol_binding(&ctx)
+                    .decision_key()
+                    .unwrap()
+                    .clone();
+
+                DispatchResult::Stage {
+                    key,
+                    label,
+                    mutations,
+                }
+            }
+            MovedFileAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "Moved file acknowledgement cancelled"
+    }
+}
+
 impl ModalButtons for MovedFileButton {
     type Context = MovedFileButtonCtx;
     type Action = MovedFileAction;

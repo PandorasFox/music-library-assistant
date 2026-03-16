@@ -119,7 +119,8 @@ impl ModalButtons for OobButton {
 
     fn action(&self, _ctx: &Self::Context) -> OobAction {
         match self {
-            Self::ApplyDb | Self::AssimilateDisk => OobAction::Resolve,
+            Self::ApplyDb => OobAction::ApplyDb,
+            Self::AssimilateDisk => OobAction::AssimilateDisk,
             Self::Acknowledge => OobAction::Acknowledge,
             Self::Cancel => OobAction::Cancel,
         }
@@ -152,7 +153,8 @@ impl ModalButtons for OobButton {
 pub enum OobAction {
     None,
     Navigate,
-    Resolve,
+    ApplyDb,
+    AssimilateDisk,
     Acknowledge,
     Cancel,
 }
@@ -378,6 +380,125 @@ impl OobResolutionState {
             FrameInputResult::Action(a) => a,
             _ => OobAction::None,
         }
+    }
+}
+
+// ============================================================================
+// Dispatchable
+// ============================================================================
+
+impl super::dispatch::Dispatchable for OobResolutionState {
+    type Action = OobAction;
+
+    fn dispatch(
+        &self,
+        action: OobAction,
+        resolver: &mm_meta::paths::PathResolver,
+    ) -> super::dispatch::DispatchResult {
+        use mm_meta::db_types::Zone;
+        use mm_meta::mutations::indexing::{
+            AcknowledgeMtimeOnlyMutation, ApplyDbTagsToDiskMutation,
+            AssimilateDiskTagsToDbMutation,
+        };
+        use mm_meta::mutations::Mutation;
+        use super::dispatch::DispatchResult;
+
+        match action {
+            OobAction::None | OobAction::Navigate => DispatchResult::Handled,
+            OobAction::ApplyDb | OobAction::AssimilateDisk => {
+                let bucket_state = self.active_bucket_state();
+                let indices: Vec<usize> = if !bucket_state.list.selected.is_empty() {
+                    bucket_state.list.selected.iter().copied().collect()
+                } else {
+                    (0..bucket_state.files.len()).collect()
+                };
+
+                let tracks: Vec<(i64, std::path::PathBuf)> = indices
+                    .iter()
+                    .filter_map(|&idx| bucket_state.files.get(idx))
+                    .map(|f| (f.inode, resolver.resolve(std::path::Path::new(&f.path))))
+                    .collect();
+
+                if tracks.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let (label, mutations): (&str, Vec<Mutation>) = if action == OobAction::ApplyDb {
+                    (
+                        "Apply DB tags \u{2192} files",
+                        tracks
+                            .into_iter()
+                            .map(|(inode, path)| {
+                                Mutation::ApplyDbTagsToDisk(ApplyDbTagsToDiskMutation {
+                                    inode,
+                                    path,
+                                    zone: Zone::Corpus,
+                                })
+                            })
+                            .collect(),
+                    )
+                } else {
+                    (
+                        "Assimilate file tags \u{2192} DB",
+                        tracks
+                            .into_iter()
+                            .map(|(inode, path)| {
+                                Mutation::AssimilateDiskTagsToDb(AssimilateDiskTagsToDbMutation {
+                                    inode,
+                                    path,
+                                    zone: None,
+                                })
+                            })
+                            .collect(),
+                    )
+                };
+
+                let key = DecisionKey::OobResolution {
+                    bucket: self.active_bucket,
+                };
+
+                DispatchResult::Stage {
+                    key,
+                    label: label.into(),
+                    mutations,
+                }
+            }
+            OobAction::Acknowledge => {
+                let bucket_state = self.active_bucket_state();
+                let indices: Vec<usize> = if !bucket_state.list.selected.is_empty() {
+                    bucket_state.list.selected.iter().copied().collect()
+                } else {
+                    (0..bucket_state.files.len()).collect()
+                };
+
+                let tracks: Vec<(i64, std::path::PathBuf)> = indices
+                    .iter()
+                    .filter_map(|&idx| bucket_state.files.get(idx))
+                    .map(|f| (f.inode, resolver.resolve(std::path::Path::new(&f.path))))
+                    .collect();
+
+                if tracks.is_empty() {
+                    return DispatchResult::Handled;
+                }
+
+                let mutations = vec![Mutation::AcknowledgeMtimeOnly(
+                    AcknowledgeMtimeOnlyMutation { tracks },
+                )];
+
+                DispatchResult::Stage {
+                    key: DecisionKey::OobResolution {
+                        bucket: ConflictBucket::MtimeOnly,
+                    },
+                    label: "Acknowledge mtime changes".into(),
+                    mutations,
+                }
+            }
+            OobAction::Cancel => DispatchResult::Cancel,
+        }
+    }
+
+    fn cancel_message(&self) -> &'static str {
+        "OOB resolution closed"
     }
 }
 

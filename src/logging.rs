@@ -1,21 +1,20 @@
-//! Structured logging with category-based routing to separate log files.
+//! Structured logging with category-based routing.
 //!
 //! ## Architecture
 //!
 //! An early mpsc channel is created in `main()` before anything else.
 //! All log calls send through a global `OnceLock<Sender>`. When the Witch
 //! is created, She takes ownership of the receiver and spawns a dedicated
-//! logging thread that routes entries to separate files by category.
+//! logging thread that routes entries by category.
 //!
 //! Pre-Witch messages queue in the unbounded channel buffer and are
 //! drained when the logging thread starts.
 //!
-//! ## Log Files
+//! ## Routing
 //!
-//! All under `~/.local/share/mm/logs/`:
-//! - `general.log` - Startup, state transitions, compute, UI, db_thread
-//! - `mutations.log` - Mutation execution lifecycle, transaction details
-//! - `errors.log` - All errors and warnings (also mirrored to general.log)
+//! - General → stdout
+//! - Error → stderr
+//! - Mutation → `~/.local/share/mm/logs/mutations.log`
 
 // Re-export public logging API from mm-meta
 pub use mm_meta::logging::{
@@ -61,9 +60,9 @@ pub(crate) fn spawn_log_thread(rx: Receiver<LogOp>) -> LogThreadHandle {
     }
 }
 
-/// Main loop for the logging thread. Opens file handles and routes entries.
+/// Main loop for the logging thread. General → stdout, errors → stderr,
+/// mutations → file.
 fn run_log_thread(rx: Receiver<LogOp>) {
-    // Open log directory and files
     let logs_dir = match get_logs_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -72,11 +71,10 @@ fn run_log_thread(rx: Receiver<LogOp>) {
         }
     };
 
-    let mut general_file = open_log_file(&logs_dir, "general.log");
     let mut mutations_file = open_log_file(&logs_dir, "mutations.log");
-    let mut errors_file = open_log_file(&logs_dir, "errors.log");
+    let stdout = std::io::stdout();
+    let stderr = std::io::stderr();
 
-    // Drain the channel until shutdown or channel close
     while let Ok(op) = rx.recv() {
         match op {
             LogOp::Entry(entry) => {
@@ -88,15 +86,13 @@ fn run_log_thread(rx: Receiver<LogOp>) {
 
                 match entry.category {
                     LogCategory::General => {
-                        let _ = general_file.write_all(line.as_bytes());
+                        let _ = stdout.lock().write_all(line.as_bytes());
                     }
                     LogCategory::Mutation => {
                         let _ = mutations_file.write_all(line.as_bytes());
                     }
                     LogCategory::Error => {
-                        let _ = errors_file.write_all(line.as_bytes());
-                        // Mirror errors to general.log for timeline context
-                        let _ = general_file.write_all(line.as_bytes());
+                        let _ = stderr.lock().write_all(line.as_bytes());
                     }
                 }
             }
@@ -105,7 +101,7 @@ fn run_log_thread(rx: Receiver<LogOp>) {
                     "[{}] Log thread shutting down\n",
                     chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
                 );
-                let _ = general_file.write_all(shutdown_line.as_bytes());
+                let _ = stdout.lock().write_all(shutdown_line.as_bytes());
                 break;
             }
         }

@@ -345,16 +345,38 @@ pub fn execute_pack_releases(
 
             let recording_json = match read_only_db.get_mb_recording_cache(&row.recording_id) {
                 Ok(Some((json, _))) => json,
-                _ => {
+                Ok(None) => {
                     recording_parse_failures += 1;
+                    if recording_parse_failures <= 3 {
+                        log_general(format!(
+                            "[COMPUTE] PackReleases: cache miss for recording_id={} (inode={})",
+                            row.recording_id, inode
+                        ));
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    recording_parse_failures += 1;
+                    if recording_parse_failures <= 3 {
+                        log_general(format!(
+                            "[COMPUTE] PackReleases: DB error for recording_id={}: {}",
+                            row.recording_id, e
+                        ));
+                    }
                     continue;
                 }
             };
 
             let recording = match musicbrainz::parse_recording(&recording_json) {
                 Ok(r) => r,
-                Err(_) => {
+                Err(e) => {
                     recording_parse_failures += 1;
+                    if recording_parse_failures <= 3 {
+                        log_general(format!(
+                            "[COMPUTE] PackReleases: JSON parse error for recording_id={}: {}",
+                            row.recording_id, e
+                        ));
+                    }
                     continue;
                 }
             };

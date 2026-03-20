@@ -223,7 +223,7 @@ fn render_login(f: &mut ratatui::Frame, state: &LoginState) {
 /// Render the login screen for the in-app LoginScreen view (session expiry re-auth).
 ///
 /// Uses the same visual layout as the startup login screen.
-pub fn render_login_view(
+pub(crate) fn render_login_view(
     f: &mut ratatui::Frame,
     area: Rect,
     state: &crate::LoginScreenState,

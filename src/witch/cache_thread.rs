@@ -38,6 +38,8 @@ pub(super) enum CacheRequest {
     ReconnectDb,
     /// Update SQLite PRAGMA cache_size on the read thread's connection.
     SetCacheSize(i64),
+    /// Provide or update the shared config handle.
+    SetConfig(crate::config::SharedConfig),
     /// Shut down the read thread.
     Shutdown,
 }
@@ -81,6 +83,11 @@ impl CacheThreadHandle {
     /// Update SQLite PRAGMA cache_size on the read thread's connection.
     pub(crate) fn set_cache_size(&self, kb: i64) {
         let _ = self.request_tx.send(CacheRequest::SetCacheSize(kb));
+    }
+
+    /// Provide or update the shared config for queries that need it.
+    pub(super) fn set_config(&self, config: crate::config::SharedConfig) {
+        let _ = self.request_tx.send(CacheRequest::SetConfig(config));
     }
 }
 
@@ -129,16 +136,27 @@ fn read_thread_main(mut request_rx: tokio::sync::mpsc::UnboundedReceiver<CacheRe
     crate::logging::log_general("[READ_THREAD] Started");
 
     let mut db = open_read_only_db();
+    let mut shared_config: Option<crate::config::SharedConfig> = None;
+
+    let handle_one = |req: CacheRequest,
+                          db: &mut Option<Database>,
+                          sc: &mut Option<crate::config::SharedConfig>|
+                          -> bool {
+        if let CacheRequest::SetConfig(cfg) = req {
+            *sc = Some(cfg);
+            return false;
+        }
+        process_request(req, db, sc.as_ref())
+    };
 
     loop {
         match request_rx.blocking_recv() {
             Some(request) => {
-                if process_request(request, &mut db) {
+                if handle_one(request, &mut db, &mut shared_config) {
                     break;
                 }
-                // Drain queued requests
                 while let Ok(request) = request_rx.try_recv() {
-                    if process_request(request, &mut db) {
+                    if handle_one(request, &mut db, &mut shared_config) {
                         crate::logging::log_general("[READ_THREAD] Shutdown complete");
                         return;
                     }
@@ -160,12 +178,15 @@ fn read_thread_main(mut request_rx: tokio::sync::mpsc::UnboundedReceiver<CacheRe
 fn process_request(
     request: CacheRequest,
     db: &mut Option<Database>,
+    shared_config: Option<&crate::config::SharedConfig>,
 ) -> bool {
     match request {
         CacheRequest::DomainQuery { payload, reply } => {
             if let Some(ref db_conn) = db {
                 let read_db = ReadOnlyDb::new(db_conn);
-                let result = dispatch_domain_query(*payload, &read_db);
+                let config_guard = shared_config.map(|sc| sc.read().expect("config lock"));
+                let config_ref = config_guard.as_deref();
+                let result = dispatch_domain_query(*payload, &read_db, config_ref);
                 let response = crate::meta::protocol::AuthenticatedResponse::Query(
                     Box::new(crate::meta::protocol::QueryResponse::Domain(result)),
                 );
@@ -194,6 +215,9 @@ fn process_request(
                     kb
                 ));
             }
+        }
+        CacheRequest::SetConfig(_) => {
+            unreachable!("SetConfig handled in main loop")
         }
         CacheRequest::Shutdown => {
             return true;

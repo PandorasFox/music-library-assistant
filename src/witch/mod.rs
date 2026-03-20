@@ -580,6 +580,14 @@ impl Witch {
         match cmd {
             HandleCommand::Authenticated { token, body, reply } => {
                 let body = *body;
+                crate::logging::log_general(format!(
+                    "[DISPATCH] Authenticated request received, body variant: {}",
+                    match &body {
+                        AuthenticatedBody::Query(_) => "Query",
+                        AuthenticatedBody::Transaction(_) => "Transaction",
+                        AuthenticatedBody::Command(_) => "Command",
+                    }
+                ));
                 // Domain queries bypass synchronous dispatch — they forward
                 // the reply channel to the read thread so it replies directly.
                 if let AuthenticatedBody::Query(QueryPayload::Domain(domain_payload)) = body {
@@ -680,8 +688,15 @@ impl Witch {
                         // -- Command area --
                         AuthenticatedBody::Command(payload) => {
                             use crate::meta::protocol::BackgroundTask;
+                            crate::logging::log_general(format!(
+                                "[COMMAND] Received command: {:?}", *payload
+                            ));
                             let response = match *payload {
                                 CommandPayload::QueueTask(task) => {
+                                    crate::logging::log_general(format!(
+                                        "[COMMAND] QueueTask variant: {:?}, work_state before: {:?}",
+                                        task, w.work_state
+                                    ));
                                     match task {
                                         BackgroundTask::ExternalFetch => {
                                             match w.request_external_fetch() {
@@ -691,6 +706,10 @@ impl Witch {
                                         }
                                         BackgroundTask::ReleasePacking => {
                                             w.request_release_packing();
+                                            crate::logging::log_general(format!(
+                                                "[COMMAND] After request_release_packing, work_state: {:?}",
+                                                w.work_state
+                                            ));
                                             CommandResponse::Ok
                                         }
                                         BackgroundTask::SchemaReconciliation => {
@@ -711,6 +730,13 @@ impl Witch {
                         }
                     }
                 });
+                crate::logging::log_general(format!(
+                    "[DISPATCH] Gate result: {}",
+                    match &result {
+                        Ok(_) => "Ok".to_string(),
+                        Err(e) => format!("Err({:?})", e),
+                    }
+                ));
                 let is_shutdown = matches!(
                     result,
                     Ok(AuthenticatedResponse::Command(CommandResponse::Goodbye))
@@ -866,6 +892,7 @@ impl Witch {
     ///
     /// Called from `run_tui()` after both App and Witch are created.
     pub fn set_shared_config(&mut self, shared: SharedConfig) {
+        self.cache_thread_handle.set_config(shared.clone());
         self.shared_config = Some(shared);
     }
 

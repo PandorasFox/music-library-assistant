@@ -71,7 +71,7 @@ impl MusicBrainzClient {
         self.fetch_entity(&url).await
     }
 
-    /// Generic entity fetch — GET + return raw JSON bytes.
+    /// Generic entity fetch — GET + validate JSON + return raw bytes.
     async fn fetch_entity(&self, url: &str) -> Result<MbLookupOutcome> {
         let response = self.client.get(url).send().await;
 
@@ -95,6 +95,22 @@ impl MusicBrainzClient {
                     .bytes()
                     .await
                     .context("Failed to read MusicBrainz response body")?;
+
+                // Validate response is JSON, not an HTML error page.
+                // MB API responses always start with '{'. A web frontend
+                // misconfiguration (wrong base_url) returns HTML with 200 OK.
+                if body.first() != Some(&b'{') {
+                    let preview: String = body.iter()
+                        .take(120)
+                        .map(|&b| b as char)
+                        .collect();
+                    anyhow::bail!(
+                        "MusicBrainz response is not JSON (got {} bytes starting with: {})",
+                        body.len(),
+                        preview.trim(),
+                    );
+                }
+
                 Ok(MbLookupOutcome::Found(body.to_vec()))
             }
             Err(e) => Err(anyhow::anyhow!("MusicBrainz network error: {}", e)),

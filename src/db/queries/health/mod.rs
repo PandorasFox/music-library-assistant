@@ -357,7 +357,7 @@ impl Database {
     ///
     /// Reads `signal_external_match`, skips ExactMatch, buckets everything else
     /// by AcoustID confidence tier.
-    pub fn get_external_matches_data(&self) -> Result<crate::meta::views::ExternalMatchesData> {
+    pub fn get_external_matches_data(&self, config: &crate::config::Config) -> Result<crate::meta::views::ExternalMatchesData> {
         use crate::meta::signals::data::{ExternalMatchData, MatchClassification};
         use crate::meta::views::{
             ConfidenceBucket, ConfidenceTier, ExternalMatchReviewEntry, ExternalMatchesData,
@@ -464,30 +464,25 @@ impl Database {
             .unwrap_or(0);
 
         // Check staleness: any pinned release without a matching packed_release signal?
-        let pinned_releases_stale = match crate::config::load_config() {
-            Ok(cfg) => {
-                let pinned_ids: Vec<String> = cfg
-                    .source_dirs
-                    .iter()
-                    .filter_map(|sd| sd.pinned_release.clone())
-                    .collect();
-                if pinned_ids.is_empty() {
-                    false
-                } else {
-                    pinned_ids.iter().any(|rid| {
-                        let exists: bool = self
-                            .conn
-                            .query_row(
-                                "SELECT EXISTS(SELECT 1 FROM signal_packed_release WHERE key LIKE '%:' || ?1)",
-                                [rid],
-                                |row| row.get(0),
-                            )
-                            .unwrap_or(false);
-                        !exists
-                    })
-                }
-            }
-            Err(_) => false,
+        let pinned_ids: Vec<String> = config
+            .source_dirs
+            .iter()
+            .filter_map(|sd| sd.pinned_release.clone())
+            .collect();
+        let pinned_releases_stale = if pinned_ids.is_empty() {
+            false
+        } else {
+            pinned_ids.iter().any(|rid| {
+                let exists: bool = self
+                    .conn
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM signal_packed_release WHERE key LIKE '%:' || ?1)",
+                        [rid],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(false);
+                !exists
+            })
         };
 
         Ok(ExternalMatchesData {

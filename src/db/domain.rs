@@ -161,7 +161,10 @@ impl_domain_query! {
 }
 
 impl_domain_query! {
-    GetExternalMatches => ExternalMatchesData, db.get_external_matches_data()
+    GetExternalMatches => ExternalMatchesData, |_db| {
+        // Unreachable — dispatch_domain_query intercepts with server config.
+        unreachable!("GetExternalMatches handled in dispatch_domain_query")
+    }
 }
 
 impl_domain_query! {
@@ -1003,10 +1006,23 @@ macro_rules! dispatch_domain_query_impl {
     ( $( $query:ident ),+ $(,)? ) => {
         /// Server-side dispatch: execute a domain query payload against a read-only DB.
         /// Exhaustive match ensures compile-time coupling with mm-meta's enum variants.
+        ///
+        /// Config is provided for queries that need server-side config access
+        /// (e.g. pinned release IDs for external match staleness checks).
         pub fn dispatch_domain_query(
             payload: DomainQueryPayload,
             db: &ReadOnlyDb<'_>,
+            config: Option<&crate::config::Config>,
         ) -> DomainQueryResult {
+            // Queries needing server-side config are intercepted here.
+            if let DomainQueryPayload::GetExternalMatches(_) = &payload {
+                if let Some(cfg) = config {
+                    let result = db.get_external_matches_data(cfg).unwrap_or_default();
+                    return DomainQueryResult::GetExternalMatches(result);
+                }
+                // No config available — return empty data.
+                return DomainQueryResult::GetExternalMatches(ExternalMatchesData::default());
+            }
             match payload {
                 $( DomainQueryPayload::$query(q) => DomainQueryResult::$query(q.execute(db)), )+
             }

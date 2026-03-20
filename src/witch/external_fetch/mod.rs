@@ -201,6 +201,7 @@ async fn scheduler_loop(
                                             b.mb_queue.push_back(MbQueueItem {
                                                 kind: MbEntityKind::Recording,
                                                 mbid: row.recording_id.clone(),
+                                                error_retries: 0,
                                             });
                                             b.mb_stats.total += 1;
                                             b.mb_done = false;
@@ -233,7 +234,7 @@ async fn scheduler_loop(
                         send_progress(&message_tx, b);
                     }
 
-                    FetchResult::Mb { outcome, item } => {
+                    FetchResult::Mb { outcome, mut item } => {
                         b.mb_in_flight -= 1;
                         match outcome {
                             MbOutcome::Found { discovered_entities } => {
@@ -246,6 +247,7 @@ async fn scheduler_loop(
                                         b.mb_queue.push_back(MbQueueItem {
                                             kind: ek,
                                             mbid: eid,
+                                            error_retries: 0,
                                         });
                                         b.mb_stats.total += 1;
                                         b.mb_done = false;
@@ -272,7 +274,16 @@ async fn scheduler_loop(
                             }
                             MbOutcome::Error => {
                                 b.mb_stats.retries += 1;
-                                b.mb_stats.processed += 1;
+                                if item.error_retries < MB_MAX_ERROR_RETRIES {
+                                    item.error_retries += 1;
+                                    b.mb_queue.push_back(item);
+                                } else {
+                                    crate::logging::log_error(format!(
+                                        "[FETCH] MB {} {} permanently failed after {} retries",
+                                        item.kind.as_str(), item.mbid, item.error_retries
+                                    ));
+                                    b.mb_stats.processed += 1;
+                                }
                             }
                         }
                         send_progress(&message_tx, b);
@@ -656,7 +667,13 @@ struct AcoustIdQueueItem {
 struct MbQueueItem {
     kind: MbEntityKind,
     mbid: String,
+    /// How many times this item has been re-queued after a fetch error.
+    /// Incremented only on error re-insertion, not on initial queue or discovery.
+    error_retries: u8,
 }
+
+/// Max error re-queues before permanently dropping an MB fetch item.
+const MB_MAX_ERROR_RETRIES: u8 = 3;
 
 // ============================================================================
 // Queue Population Helpers
@@ -726,6 +743,7 @@ fn populate_mb_queue(db: &Database, ttl_secs: i64, queue: &mut VecDeque<MbQueueI
                 queue.push_back(MbQueueItem {
                     kind: MbEntityKind::Recording,
                     mbid: id,
+                    error_retries: 0,
                 });
             }
         }
@@ -749,6 +767,7 @@ fn populate_mb_queue(db: &Database, ttl_secs: i64, queue: &mut VecDeque<MbQueueI
                     queue.push_back(MbQueueItem {
                         kind: *entity_kind,
                         mbid: id,
+                        error_retries: 0,
                     });
                 }
             }

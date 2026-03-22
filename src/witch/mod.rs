@@ -1425,10 +1425,12 @@ impl Witch {
 
                 // Auto-index any unindexed corpus files discovered by derivation.
                 // Signal writes are flushed (queue drained before this callback).
-                self.auto_index_unindexed_files();
-
-                // Queue content analysis after full awakening
-                work.content_analysis = true;
+                // If files need indexing, skip content analysis — the post-mutation
+                // re-derivation cycle will trigger it once all files are indexed.
+                if !self.auto_index_unindexed_files() {
+                    // No unindexed files — go straight to content analysis.
+                    work.content_analysis = true;
+                }
             }
 
             // Normal operation: work completed while Full
@@ -1900,14 +1902,17 @@ impl Witch {
     /// Called at the Inodes→Full transition when all derivation signal writes
     /// have been flushed. Reads UnindexedFileSignal rows, creates
     /// IndexFileFromPath mutations, and queues them for execution.
-    fn auto_index_unindexed_files(&mut self) {
+    ///
+    /// Returns `true` if mutations were queued (caller should skip content
+    /// analysis — the post-mutation re-derivation cycle handles it).
+    fn auto_index_unindexed_files(&mut self) -> bool {
         let db_path = match config::get_db_path() {
             Ok(p) => p,
-            Err(_) => return,
+            Err(_) => return false,
         };
         let db = match Database::open_read_only(&db_path) {
             Ok(d) => d,
-            Err(_) => return,
+            Err(_) => return false,
         };
         let read_db = crate::db::ReadOnlyDb::new(&db);
 
@@ -1917,12 +1922,12 @@ impl Witch {
                 crate::logging::log_error(format!(
                     "[AUTO-INDEX] Failed to query unindexed signals: {}", e
                 ));
-                return;
+                return false;
             }
         };
 
         if unindexed.is_empty() {
-            return;
+            return false;
         }
 
         let resolver = crate::corpus::paths::get_resolver();
@@ -1951,6 +1956,7 @@ impl Witch {
             mutations,
             Some("Auto-index unindexed files".to_string()),
         );
+        true
     }
 
     // -------------------------------------------------------------------------

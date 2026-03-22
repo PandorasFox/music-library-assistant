@@ -380,16 +380,6 @@ impl App {
                 };
                 ViewAction::ExitConfirm(a)
             }
-            ActiveView::IntakeConfirmation(state) => {
-                let visible_height = crossterm::terminal::size()
-                    .map(|(_, h)| {
-                        startup::intake_confirmation::compute_list_visible_height(
-                            ratatui::layout::Rect::new(0, 0, 80, h),
-                        )
-                    })
-                    .unwrap_or(10);
-                ViewAction::IntakeConfirmation(startup::intake_confirmation::handle_input(state, &action, visible_height))
-            }
             ActiveView::UnifiedTagEditor(s) => dispatch_input_raw!(UnifiedTagEditor, s),
             ActiveView::Deploy(ref mut s) => dispatch_input!(Deploy, s),
             ActiveView::ExternalMatches(ref mut s) => dispatch_input!(ExternalMatches, s),

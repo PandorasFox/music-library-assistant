@@ -44,7 +44,6 @@ pub enum DecisionKey {
     DirectoryCluster { cluster_index: usize },
     MissingAlbum { group_index: usize },
     ManualReview { group_index: usize },
-    IntakeIndex,
     DiscExtraction { group_index: usize },
     EditReversal { session_label: String },
     ConfigEdit,
@@ -64,7 +63,6 @@ impl DecisionKey {
             DecisionKey::CorruptFile => Some(DecisionKeyKind::CorruptFile),
             DecisionKey::LosslessRemux => Some(DecisionKeyKind::LosslessRemux),
             DecisionKey::SubparDuplicate => Some(DecisionKeyKind::SubparDuplicate),
-            DecisionKey::IntakeIndex => Some(DecisionKeyKind::IntakeIndex),
             _ => None,
         }
     }
@@ -109,8 +107,6 @@ impl DecisionKey {
             DecisionKey::MissingAlbum { .. } => &[ApplyTagOps],
             // Manual review → tag ops
             DecisionKey::ManualReview { .. } => &[ApplyTagOps],
-            // Intake index → index files from path
-            DecisionKey::IntakeIndex => &[IndexFileFromPath],
             // Disc extraction → tag ops (disc number assignments)
             DecisionKey::DiscExtraction { .. } => &[ApplyTagOps],
             // Edit reversal → tag ops (undo previous tag edits)
@@ -161,7 +157,6 @@ impl std::fmt::Display for DecisionKey {
             DecisionKey::ManualReview { group_index } => {
                 write!(f, "Manual Review:{}", group_index)
             }
-            DecisionKey::IntakeIndex => write!(f, "Intake Index"),
             DecisionKey::DiscExtraction { group_index } => {
                 write!(f, "Disc Extraction:{}", group_index)
             }
@@ -190,7 +185,6 @@ pub enum DecisionKeyKind {
     CorruptFile,
     LosslessRemux,
     SubparDuplicate,
-    IntakeIndex,
 }
 
 // ============================================================================

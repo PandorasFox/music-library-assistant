@@ -10,7 +10,6 @@ pub mod external_matches;
 pub mod health_modals;
 pub mod inode_detail;
 pub mod review_match;
-pub mod startup_organize;
 
 use serde::{Deserialize, Serialize};
 

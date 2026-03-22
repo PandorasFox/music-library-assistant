@@ -3,7 +3,6 @@
 //! This module contains the UI components for startup flows:
 //! - First-time setup (directory picker, account creation) — runs pre-loop in `run_tui()`
 //! - Startup maintenance (non-interactive progress for schema reconciliation / vacuum)
-//! - Intake confirmation (index unindexed files)
 //!
 //! Schema reconciliation and vacuum are auto-run by the Witch during startup.
 //! The UI simply observes startup_state transitions and renders progress.
@@ -15,13 +14,11 @@
 //! handled by the unified `progress_screen` module.
 
 pub(crate) mod first_time_setup;
-pub mod intake_confirmation;
 pub mod login;
 pub mod migrations;
 pub mod vacuum;
 
 pub use first_time_setup::run_directory_picker;
-pub use intake_confirmation::{IntakeConfirmationAction, IntakeConfirmationState, IntakeSource};
 
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};

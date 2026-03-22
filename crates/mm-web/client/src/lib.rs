@@ -1777,38 +1777,8 @@ pub fn mm_index_now() {
 }
 
 async fn do_index_now() -> Result<(), JsValue> {
-    use mm_meta::decisions::Decision;
-    use mm_meta::views::startup_organize::IntakeConfirmationState;
-
-    // Fetch intake confirmation data.
-    let data = api::get_query_with("intake-confirmation", "source=Health&zone=Corpus").await?;
-    let intake: Option<IntakeConfirmationState> = serde_json::from_value(data)
-        .map_err(|e| JsValue::from_str(&format!("deserialize intake: {e}")))?;
-
-    let Some(intake) = intake else {
-        // Nothing to index.
-        load_from_hash().await.ok();
-        return Ok(());
-    };
-
-    let mutations = intake.create_index_mutations();
-    if mutations.is_empty() {
-        load_from_hash().await.ok();
-        return Ok(());
-    }
-
-    let label = "Index unindexed files";
-    let decision = Decision {
-        label: label.to_string(),
-        mutations,
-    };
-
-    // Start transaction, add decision, navigate to review.
-    api::tx_start(label).await?;
-    api::tx_add(&mm_ui::decision_keys::intake_index(), &decision).await?;
-
-    navigate_to(&Route::TransactionReview(route::TransactionReviewRoute::default()));
-    load_from_hash().await?;
+    // Auto-indexing is handled by the Witch — nothing to do client-side.
+    load_from_hash().await.ok();
     Ok(())
 }
 

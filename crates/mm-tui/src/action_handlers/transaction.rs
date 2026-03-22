@@ -173,18 +173,4 @@ impl App {
         review.set_decisions(decisions);
         self.push_and_switch(SuspendTarget::TransactionReview(review));
     }
-
-    /// Transition to transaction review modal with custom post-commit phase.
-    ///
-    /// Used for intake indexing which needs ContentAnalysis instead of SignalRefresh.
-    pub(super) fn start_transaction_review_with_phase(
-        &mut self,
-        phase: transaction_review::PostCommitPhase,
-    ) {
-        let decisions = transaction_review::fetch_decision_summaries(self);
-        let mut review =
-            transaction_review::TransactionReviewState::new().with_post_commit_phase(phase);
-        review.set_decisions(decisions);
-        self.push_and_switch(SuspendTarget::TransactionReview(review));
-    }
 }

@@ -175,7 +175,7 @@ impl InsightType {
             InsightType::CorpusMtimeOnly
             | InsightType::CorpusOobTagSync
             | InsightType::CorpusOobTagConflict => Some(DecisionKeyKind::OobResolution),
-            InsightType::CorpusFilesUnindexed => Some(DecisionKeyKind::IntakeIndex),
+            InsightType::CorpusFilesUnindexed => None, // auto-indexed by Witch
             InsightType::CorpusFilesMissing => Some(DecisionKeyKind::MissingFile),
             InsightType::CorpusDirectoriesMissing => Some(DecisionKeyKind::MissingDirectory),
             InsightType::CorpusFilesRelocated => Some(DecisionKeyKind::MovedFile),
@@ -308,7 +308,7 @@ impl CachedBucketEntries {
             BucketEntry::info(InsightType::CorpusFilesInCorpus, "Files in corpus", c.files_in_corpus, Color::Yellow),
             BucketEntry::info(InsightType::CorpusFilesIndexed, "Files indexed", c.files_indexed, Color::Green),
             BucketEntry::info(InsightType::CorpusImagesInCorpus, "Images in corpus", c.images_in_corpus, Color::Green),
-            BucketEntry::active(InsightType::CorpusFilesUnindexed, "Files unindexed", c.files_unindexed, Color::Yellow, Color::Green, InsightAction::LaunchIntakeConfirmation),
+            BucketEntry::info(InsightType::CorpusFilesUnindexed, "Files unindexed (auto-indexing)", c.files_unindexed, Color::Yellow),
             BucketEntry::active(InsightType::CorpusFilesMissing, "Files missing", c.files_missing, Color::Red, Color::Green, InsightAction::LaunchMissingFileResolution),
             BucketEntry::problem(InsightType::CorpusDirectoriesMissing, "Directories missing", c.directories_missing, Color::Red, InsightAction::LaunchMissingDirectoryResolution),
             BucketEntry::problem(InsightType::CorpusFilesRelocated, "Files relocated (moved)", c.files_relocated, Color::Yellow, InsightAction::LaunchMovedFileAcknowledge),
@@ -1082,7 +1082,6 @@ mod tests {
         handled.insert(DecisionKeyKind::MovedFile);
         handled.insert(DecisionKeyKind::CorruptFile);
         handled.insert(DecisionKeyKind::LosslessRemux);
-        handled.insert(DecisionKeyKind::IntakeIndex);
 
         state.data.update(None, None, &handled);
         state.interaction.list.clamp_cursor(&state.data.flat_items);

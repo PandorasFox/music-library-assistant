@@ -10,7 +10,7 @@ use crate::{
     history_view, insights_view,
     lossless_remux_modal, missing_directory_modal, missing_file_modal,
     moved_file_modal, oob_conflict_modal, progress_screen, progressive_worker,
-    release_review, startup, subpar_duplicate_modal, tabbed_transaction_review,
+    release_review, subpar_duplicate_modal, tabbed_transaction_review,
     tag_editor, tag_search, transaction_review, tree_browser,
 };
 
@@ -43,7 +43,6 @@ pub(crate) enum ActiveView {
 
     // Simple modals
     ExitConfirm(ExitConfirmModalState),
-    IntakeConfirmation(startup::IntakeConfirmationState),
 
     // Editors / previews
     UnifiedTagEditor(tag_editor::UnifiedTagEditorState),
@@ -144,7 +143,6 @@ impl ActiveView {
             Self::Progress { .. } => None,
             Self::ProgressiveWork(_) => Some("Processing"),
             Self::ExitConfirm(_) => Some("Exit Confirmation"),
-            Self::IntakeConfirmation(_) => Some("Intake Confirmation"),
             Self::UnifiedTagEditor(_) => Some("Tag Editor"),
             Self::MissingFileResolution(_) => Some("Missing File Resolution"),
             Self::MissingDirectoryResolution(_) => Some("Missing Directory Acknowledgment"),
@@ -263,7 +261,6 @@ pub(crate) enum ViewAction {
     Deploy(deploy_modal::DeployAction),
     ExternalMatches(external_match_view::ExternalMatchesAction),
     ExitConfirm(ExitConfirmAction),
-    IntakeConfirmation(startup::IntakeConfirmationAction),
     UnifiedTagEditor(tag_editor::UnifiedTagEditorAction),
     MissingFileResolution(missing_file_modal::MissingFileAction),
     MissingDirectoryResolution(missing_directory_modal::MissingDirectoryAction),

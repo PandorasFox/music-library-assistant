@@ -166,9 +166,6 @@ fn render_content(f: &mut Frame, app: &mut super::App, area: ratatui::layout::Re
         ActiveView::TagSearch(ref mut state) => {
             state.render(f, area);
         }
-        ActiveView::IntakeConfirmation(ref state) => {
-            super::startup::intake_confirmation::render(f, area, state);
-        }
         ActiveView::UnifiedTagEditor(ref mut editor) => {
             editor.render(f, area, &mut app.art_picker, &mut app.art_cache, &app.resolver);
         }

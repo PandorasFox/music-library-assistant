@@ -344,7 +344,7 @@ mod tests {
     fn make_decisions(n: usize) -> Vec<TestDecision> {
         (0..n)
             .map(|_| TestDecision {
-                key: DecisionKey::IntakeIndex,
+                key: DecisionKey::Deploy,
             })
             .collect()
     }
@@ -445,12 +445,12 @@ mod tests {
     #[test]
     fn removal_popup_confirm() {
         let mut interaction = TransactionInteraction::new();
-        interaction.pending_removal = Some(DecisionKey::IntakeIndex);
+        interaction.pending_removal = Some(DecisionKey::Deploy);
         let items = make_decisions(3);
         let action = interaction.handle_input_with(&InputAction::Confirm, &items);
         assert_eq!(
             action,
-            TransactionReviewAction::ConfirmRemoval(DecisionKey::IntakeIndex)
+            TransactionReviewAction::ConfirmRemoval(DecisionKey::Deploy)
         );
         assert!(interaction.pending_removal.is_none());
     }
@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn removal_popup_cancel() {
         let mut interaction = TransactionInteraction::new();
-        interaction.pending_removal = Some(DecisionKey::IntakeIndex);
+        interaction.pending_removal = Some(DecisionKey::Deploy);
         let items = make_decisions(3);
         let action = interaction.handle_input_with(&InputAction::Cancel, &items);
         assert_eq!(action, TransactionReviewAction::None);

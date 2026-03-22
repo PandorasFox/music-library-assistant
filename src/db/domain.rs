@@ -132,7 +132,6 @@ use mm_meta::views::health_modals::{
 use mm_meta::views::review_match::{
     ManualReviewData, RecordingDetail, RecordingSummary,
 };
-use mm_meta::views::startup_organize::IntakeConfirmationState;
 use mm_meta::views::canonicity_compound::{
     CompoundSplitResolutionData, TagCanonicityResolutionData,
 };
@@ -487,12 +486,6 @@ impl_domain_query! {
 // ============================================================================
 // Wave 5: Remaining closure conversions
 // ============================================================================
-
-impl_domain_query! {
-    GetIntakeConfirmation => Option<IntakeConfirmationState>, |s, db| {
-        modal_loaders::gather_intake_zone::<crate::zones::CorpusZone>(db, s.source)
-    }
-}
 
 impl_domain_query! {
     GetRecordingBatchData => RecordingBatchResult, |s, db| {
@@ -1027,7 +1020,6 @@ dispatch_domain_query_impl! {
     GetAllAudioFilesWithTags,
     GetSessionEditDetail,
     GetCurrentTagValues,
-    GetIntakeConfirmation,
     GetRecordingBatchData,
     GetReleaseStagingData,
     GetTagEditorFiles,

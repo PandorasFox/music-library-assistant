@@ -66,7 +66,6 @@ impl App {
             ViewAction::TagSearch(a) => a.handle(self, witness.as_ref()),
             ViewAction::TabbedTransactionReview(a) => a.handle(self, witness.as_ref()),
             ViewAction::ExitConfirm(a) => a.handle(self, witness.as_ref()),
-            ViewAction::IntakeConfirmation(a) => a.handle(self, witness.as_ref()),
             ViewAction::UnifiedTagEditor(a) => a.handle(self, witness.as_ref()),
             ViewAction::Deploy(a) => a.handle(self, witness.as_ref()),
             ViewAction::ExternalMatches(a) => a.handle(self, witness.as_ref()),
@@ -459,9 +458,6 @@ impl HandleAction for insights_view::HealthAction {
                     }
                     Some(insights_view::InsightAction::LaunchLosslessRemuxResolution) => {
                         app.start_lossless_remux_resolution();
-                    }
-                    Some(insights_view::InsightAction::LaunchIntakeConfirmation) => {
-                        app.start_intake_confirmation_from_health();
                     }
                     Some(insights_view::InsightAction::LaunchCrossSourceOverlapResolution) => {
                         app.start_directory_cluster_resolution_v3();

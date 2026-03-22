@@ -6,8 +6,8 @@
 //!
 //! The UI type files remain pure data structures (no DB imports).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::os::unix::fs::MetadataExt;
 
 use anyhow::Result;
@@ -1144,103 +1144,4 @@ pub fn load_compound_split_resolution(
     }
 }
 
-// ============================================================================
-// Intake Confirmation
-// ============================================================================
-
-/// Gather intake confirmation state for a specific zone.
-pub fn gather_intake_zone<Z: crate::zones::AudioZone>(
-    read_db: &ReadOnlyDb<'_>,
-    source: mm_meta::views::startup_organize::IntakeSource,
-) -> Option<mm_meta::views::startup_organize::IntakeConfirmationState> {
-    use crate::logging::log_general;
-    use mm_meta::views::startup_organize::{
-        DirectoryGroup, IntakeConfirmationState, UnindexedFileEntry,
-    };
-
-    let unindexed = match read_db.get_unindexed_signals_for::<Z>() {
-        Ok(u) => u,
-        Err(e) => {
-            crate::logging::log_error(format!(
-                "IntakeConfirmation::gather_zone<{}>: query failed: {:?}",
-                Z::ZONE_STR, e
-            ));
-            return None;
-        }
-    };
-
-    log_general(format!(
-        "IntakeConfirmation::gather_zone<{}>: found {} unindexed signals",
-        Z::ZONE_STR,
-        unindexed.len()
-    ));
-
-    if unindexed.is_empty() {
-        return None;
-    }
-
-    let resolver = paths::get_resolver();
-    let mut files: Vec<UnindexedFileEntry> = Vec::new();
-    let mut total_bytes: u64 = 0;
-    let mut directories: HashSet<PathBuf> = HashSet::new();
-    let mut dir_to_files: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-    for (_inode, rel_path_str) in &unindexed {
-        let rel_path = std::path::Path::new(rel_path_str);
-        let abs_path = resolver.resolve_for_zone(Z::ZONE, rel_path);
-
-        if abs_path.exists() && abs_path.is_file() {
-            if let Ok(meta) = std::fs::metadata(&abs_path) {
-                total_bytes += meta.len();
-            }
-
-            if let Some(parent) = abs_path.parent() {
-                directories.insert(parent.to_path_buf());
-            }
-
-            if let (Some(parent), Some(filename)) = (rel_path.parent(), rel_path.file_name()) {
-                let dir_str = parent.to_string_lossy().to_string();
-                let file_str = filename.to_string_lossy().to_string();
-                dir_to_files.entry(dir_str).or_default().push(file_str);
-            }
-
-            files.push(UnindexedFileEntry {
-                abs_path,
-            });
-        }
-    }
-
-    if files.is_empty() {
-        return None;
-    }
-
-    let grouped_files: Vec<DirectoryGroup> = dir_to_files
-        .into_iter()
-        .map(|(dir, mut filenames)| {
-            filenames.sort();
-            DirectoryGroup {
-                display_path: dir,
-                filenames,
-            }
-        })
-        .collect();
-
-    log_general(format!(
-        "IntakeConfirmation ({}): gathered {} files ({} bytes) from {} directories",
-        Z::ZONE_STR,
-        files.len(),
-        total_bytes,
-        directories.len()
-    ));
-
-    Some(IntakeConfirmationState {
-        file_count: files.len(),
-        total_bytes,
-        files,
-        source,
-        _directory_count: directories.len(),
-        grouped_files,
-        scroll_offset: 0,
-    })
-}
 

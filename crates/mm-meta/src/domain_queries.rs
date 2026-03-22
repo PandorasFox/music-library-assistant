@@ -240,12 +240,6 @@ pub struct GetCurrentTagValues {
 // Wave 5: Remaining closure conversions
 // ============================================================================
 
-/// Gather unindexed corpus files for intake confirmation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetIntakeConfirmation {
-    pub source: crate::views::startup_organize::IntakeSource,
-}
-
 /// Batch-load MB recording summaries and detail data from cache.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetRecordingBatchData {
@@ -478,7 +472,6 @@ domain_query_protocol! {
     GetCurrentTagValues("current-tag-values") => Vec<Option<String>>,
 
     // Wave 5
-    GetIntakeConfirmation("intake-confirmation") => Option<crate::views::startup_organize::IntakeConfirmationState>,
     GetRecordingBatchData("recording-batch-data") => crate::domain_query_types::RecordingBatchResult,
     GetReleaseStagingData("release-staging-data") => crate::domain_query_types::ReleaseStagingData,
     GetTagEditorFiles("tag-editor-files") => (Vec<crate::db_types::AudioFile>, usize),

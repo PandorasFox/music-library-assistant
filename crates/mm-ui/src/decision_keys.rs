@@ -25,10 +25,6 @@ pub fn config_edit() -> DecisionKey {
     DecisionKey::ConfigEdit
 }
 
-pub fn intake_index() -> DecisionKey {
-    DecisionKey::IntakeIndex
-}
-
 pub fn jettison_edit_history() -> DecisionKey {
     DecisionKey::JettisonEditHistory
 }

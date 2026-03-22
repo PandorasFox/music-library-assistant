@@ -1272,7 +1272,7 @@ fn run_app<B: ratatui::backend::Backend>(
         }
 
         if signal_received.swap(false, Ordering::SeqCst) {
-            app.handle_input(InputAction::Cancel);
+            app.handle_ctrl_c();
         }
 
         // Observe startup maintenance completion (Witch auto-runs reconciliation/vacuum)
@@ -1366,7 +1366,7 @@ fn run_app<B: ratatui::backend::Backend>(
                             .modifiers
                             .contains(crossterm::event::KeyModifiers::CONTROL)
                     {
-                        app.handle_input(InputAction::Cancel);
+                        app.handle_ctrl_c();
                     } else {
                         app.handle_input(input::map_key(key));
                     }

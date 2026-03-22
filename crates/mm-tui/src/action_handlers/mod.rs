@@ -189,6 +189,18 @@ impl App {
         }
     }
 
+    /// Handle Ctrl-C: show exit modal (pre-selecting Quit), or quit immediately if already showing.
+    pub(crate) fn handle_ctrl_c(&mut self) {
+        if matches!(self.view, ActiveView::ExitConfirm(_)) {
+            self.should_quit = true;
+        } else {
+            self.view = ActiveView::ExitConfirm(super::ExitConfirmModalState {
+                selected: 0, // pre-select "Quit" — the user is reaching for the eject handle
+                ..Default::default()
+            });
+        }
+    }
+
     /// Open an embedded tag editor for a set of inodes.
     ///
     /// Common helper for EditTracks/EditTracksAggregated actions across modals.
